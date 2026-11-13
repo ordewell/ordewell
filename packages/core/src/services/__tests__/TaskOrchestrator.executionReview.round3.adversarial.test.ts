@@ -84,14 +84,14 @@ describe('a late lease open after a cancel kept the worktree', () => {
     const first = env.orchestrator.forceStartTask('t1').then(() => 'ok', (err: unknown) => err);
     await held.opened;
     await env.orchestrator.cancelTask('t1');
-    const kept = env.orchestrator.runs.current?.tasks.t1;
+    const kept = env.orchestrator.runs.planIsolation?.run.tasks.t1;
     expect(kept?.status).toBe('kept');
     held.release();
     await first;
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1).toBe(kept);
-    expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBe(kept);
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
   });
 
   it('keeps the record a prepare still in flight at the cancel makes', async () => {
@@ -101,12 +101,12 @@ describe('a late lease open after a cancel kept the worktree', () => {
     const first = env.orchestrator.forceStartTask('t1').then(() => 'ok', (err: unknown) => err);
     await held.preparing;
     await env.orchestrator.cancelTask('t1');
-    expect(env.orchestrator.runs.current?.tasks.t1).toBeUndefined();
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBeUndefined();
     held.release();
     await first;
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
     expect(env.spawn).not.toHaveBeenCalled();
     expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('pending');
   });
@@ -124,7 +124,7 @@ describe('a late lease open after a Stop', () => {
     await first;
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
     expect(env.spawn).not.toHaveBeenCalled();
     expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('pending');
   });

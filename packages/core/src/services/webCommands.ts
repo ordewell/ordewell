@@ -1,7 +1,8 @@
 import { isIP } from 'node:net';
-import { dialectFor, lex, lexAll, type Segment } from './shellLexer';
+import type { Segment } from './shellLexer';
 import { unwrap } from './commandRunners';
 import type { ShellDialect } from './researchShell';
+import { ParsedLine } from './parsedLine';
 import { blockedAddressReason } from './egressGuard';
 import { EFFECT_ROUTE } from './effectRoute';
 
@@ -127,10 +128,10 @@ export function webCommand(seg: Segment, trustedResolves?: ReadonlySet<string>):
   return { urls, outboundTexts, ...(effect ? { effect } : {}), ...(perInvocation || redirects || (queryData && !getQuery) ? { perInvocation: true } : {}) };
 }
 
-export function disableWebCommandStartup(command: string, dialect?: ShellDialect): string {
-  const syntax = dialectFor(dialect);
+export function disableWebCommandStartup(line: ParsedLine): string {
+  const syntax = line.dialect;
   const edits: Array<{ end: number; flags: string }> = [];
-  for (const original of lex(command, [], syntax).segments) {
+  for (const original of line.topSegments) {
     const { seg } = unwrap(original, syntax);
     const binary = seg.binary.toLowerCase().replace(/\.exe$/, '');
     if (binary !== 'curl' && binary !== 'wget') continue;
@@ -139,17 +140,24 @@ export function disableWebCommandStartup(command: string, dialect?: ShellDialect
     const noProxy = syntax.escape === '^' ? '"*"' : "'*'";
     if (end !== undefined) edits.push({ end, flags: binary === 'curl' ? ` -q --noproxy ${noProxy}` : ' --no-config --no-hsts --no-proxy --no-netrc' });
   }
+  return insertAfterWords(line, edits);
+}
+
+/** Each edit's flags put in the line as given, after the word ending at `end` in the lexed text. */
+function insertAfterWords(line: ParsedLine, edits: Array<{ end: number; flags: string }>): string {
+  let command = line.raw;
   for (const { end, flags } of edits.sort((a, b) => b.end - a.end)) {
-    command = command.slice(0, end) + flags + command.slice(end);
+    const at = line.offset + end;
+    command = command.slice(0, at) + flags + command.slice(at);
   }
   return command;
 }
 
-export function pinWebCommandAddresses(command: string, addresses: ReadonlyMap<string, string>, dialect?: ShellDialect): { command: string; resolves: ReadonlySet<string> } {
-  const syntax = dialectFor(dialect);
+export function pinWebCommandAddresses(line: ParsedLine, addresses: ReadonlyMap<string, string>): { command: string; resolves: ReadonlySet<string> } {
+  const syntax = line.dialect;
   const resolves = new Set<string>();
   const edits: Array<{ end: number; flags: string }> = [];
-  for (const original of lex(command, [], syntax).segments) {
+  for (const original of line.topSegments) {
     const { seg } = unwrap(original, syntax);
     if (seg.binary.toLowerCase().replace(/\.exe$/, '') !== 'curl') continue;
     const web = webCommand(seg);
@@ -167,25 +175,32 @@ export function pinWebCommandAddresses(command: string, addresses: ReadonlyMap<s
     const end = ends[ends.length - seg.args.length - (seg.args[0] === '-q' ? 0 : 1)];
     if (end !== undefined && flags) edits.push({ end, flags });
   }
-  for (const { end, flags } of edits.sort((a, b) => b.end - a.end)) {
-    command = command.slice(0, end) + flags + command.slice(end);
-  }
-  return { command, resolves };
+  return { command: insertAfterWords(line, edits), resolves };
 }
 
-export function wgetVersionCommands(command: string, dialect?: ShellDialect): Array<string | undefined> {
-  const syntax = dialectFor(dialect);
-  const { segments } = lexAll(command, syntax, !!process.env.CDPATH);
+/**
+ * The `wget --version` probe for each wget on the line, run where that wget
+ * will run, or undefined for one whose working directory or executable cannot
+ * be named. Where the line's shell has `CDPATH` set no `cd` was followed, so a
+ * wget after one has no probe.
+ */
+export function wgetVersionCommands(line: ParsedLine): Array<string | undefined>;
+export function wgetVersionCommands(command: string, dialect?: ShellDialect): Array<string | undefined>;
+export function wgetVersionCommands(input: string | ParsedLine, dialect?: ShellDialect): Array<string | undefined> {
+  const line = typeof input === 'string' ? ParsedLine.parse(input, { dialect }) : input;
+  const syntax = line.dialect;
+  const { segments } = line;
   const quote = (word: string) => syntax.escape === '^' ? `"${word}"` : `'${word.replace(/'/g, "'\\''")}'`;
   return [...new Set(segments.flatMap((original) => {
     const { seg } = unwrap(original, syntax);
     if (seg.binary.toLowerCase().replace(/\.exe$/, '') !== 'wget') return [];
     if (seg.binaryPath !== undefined) return [undefined];
     const executable = seg.binary;
-    if (original.cwd === undefined && segments.some((s) => /^(cd|pushd|popd)$/i.test(s.binary))) return [undefined];
+    const cwd = line.edgeBreak ? undefined : original.cwd;
+    if (cwd === undefined && segments.some((s) => /^(cd|pushd|popd)$/i.test(s.binary))) return [undefined];
     // cmd quoting can expose metacharacters or expand variables when a probe is rebuilt.
-    if (syntax.escape === '^' && [...(original.cwd ?? []), executable].some((word) => /["%&|<>^()!]/.test(word))) return [undefined];
-    const navigation = (original.cwd ?? []).map((target) => `cd ${quote(target)} && `).join('');
+    if (syntax.escape === '^' && [...(cwd ?? []), executable].some((word) => /["%&|<>^()!]/.test(word))) return [undefined];
+    const navigation = (cwd ?? []).map((target) => `cd ${quote(target)} && `).join('');
     // Wget2 creates its data directory even for --version, before parsing flags.
     const env = syntax.escape === '^'
       ? 'set "XDG_DATA_HOME=/dev/null" && set "XDG_CONFIG_HOME=/dev/null" && set "LOCALAPPDATA=NUL" && '

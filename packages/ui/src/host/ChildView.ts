@@ -9,9 +9,8 @@ const VIEW_CHANGES: ReadonlySet<ChildFrame['type']> = new Set<ChildFrame['type']
 
 /**
  * The child plan a surface has open, as the chat's child pane draws it. Its
- * frames come from the root's in-process directory or from the child's own
- * daemon socket ({@link DaemonChildStream}); `now` is the child's view at the
- * moment it is asked, read off the handle or folded from the socket.
+ * frames come from the root's in-process directory; `now` is the child's view
+ * at the moment it is asked, read off the handle.
  */
 export class ChildView {
   private readonly conversation: ConversationViewHost;

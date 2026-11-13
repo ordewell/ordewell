@@ -1,11 +1,12 @@
 import { randomBytes } from 'crypto';
-import { partedPromptUsage, type UsageRecord } from '../../models/Usage';
+import { partedPromptUsage } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { LineBuffer, type AgentEvent, type PlannerAsk, type PlannerStartOptions, type TaskStartOptions } from './AgentAdapter';
 import { OPENCODE_ORDEWELL, OPENCODE_READ_TOOLS, OPENCODE_SEARCH_PROVIDER } from './openCodeOrdewell';
 import { PermissionLedger, type LedgerStance, type RaisedRequest } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { settleWithin } from './settleWithin';
+import type { CallUsage } from './usageBuilder';
 
 /**
  * The HTTP protocol work OpenCode's two server APIs share: 1.x (`/event`,
@@ -145,8 +146,8 @@ export interface OpenCodeTokens {
 export const SESSION_TITLE = { planner: 'Ordewell planner', task: 'Ordewell task' } as const;
 
 /**
- * One model call's usage. OpenCode's `input` counts only the uncached prompt —
- * cache reads and writes sit beside it, as with Anthropic
+ * One model call's usage, in a usage record's terms. OpenCode's `input` counts
+ * only the uncached prompt — cache reads and writes sit beside it, as with Anthropic
  * ({@link partedPromptUsage}): in the recordings `tokens.total` is input +
  * output + both cache counts. Its `output` excludes `reasoning` (a recorded
  * reply with text reports output 0 beside reasoning 127), and reasoning is
@@ -155,27 +156,20 @@ export const SESSION_TITLE = { planner: 'Ordewell planner', task: 'Ordewell task
  * context limit itself (`input + output + reasoning + cache.read +
  * cache.write`, read in the 2.0.32 binary) — so the prompt and output here.
  */
-export function usageRecord(tokens: OpenCodeTokens | undefined, call: { model?: string; cost?: number; subagentId?: string; purpose?: string }): UsageRecord | null {
-  if (!tokens) return null;
+export function openCodeCall(tokens: OpenCodeTokens | undefined, call: { model?: string; cost?: number; subagentId?: string; purpose?: string }): CallUsage | undefined {
+  if (!tokens) return undefined;
   const prompt = partedPromptUsage({ uncached: tokens.input, cacheRead: tokens.cache?.read, cacheWrite: tokens.cache?.write });
   const outputTokens = (tokens.output ?? 0) + (tokens.reasoning ?? 0);
-  // A call that failed before the provider answered reports all zeros. That
-  // is no measurement, and a zero prompt would read as an empty context.
-  if ((prompt.inputTokens ?? 0) + outputTokens === 0) return null;
-  const record: UsageRecord = { source: 'opencode', ...prompt, outputTokens };
-  if (call.model) record.model = call.model;
-  // OpenCode prices a call itself, from its model catalog, so a reported 0
-  // means a free model or one the catalog has no price for. Those cannot be
-  // told apart, so 0 is left unreported: a ledger may not claim a bill of
-  // nothing.
-  if (typeof call.cost === 'number' && call.cost > 0) record.reportedCost = { amount: call.cost, currency: 'USD', kind: 'estimate' };
-  if (call.purpose) {
-    // A title or compaction call's prompt is not the context the agent works in.
-    record.aggregate = true;
-    record.purpose = call.purpose;
-  } else if (call.subagentId) record.subagentId = call.subagentId;
-  else record.contextTokens = (prompt.inputTokens ?? 0) + outputTokens;
-  return record;
+  return {
+    ...prompt,
+    outputTokens,
+    contextTokens: (prompt.inputTokens ?? 0) + outputTokens,
+    ...(call.model ? { model: call.model } : {}),
+    // OpenCode prices a call itself, from its model catalog: an estimate.
+    ...(typeof call.cost === 'number' ? { cost: { amount: call.cost, kind: 'estimate' as const } } : {}),
+    ...(call.subagentId ? { subagentId: call.subagentId } : {}),
+    ...(call.purpose ? { purpose: call.purpose } : {}),
+  };
 }
 
 export type PermissionAnswer = 'once' | 'always' | 'reject';
@@ -333,10 +327,6 @@ export class ChildSessions<F> {
     const held = this.held.get(child) ?? [];
     this.held.delete(child);
     return held;
-  }
-
-  owns(callId: string): boolean {
-    return [...this.owners.values()].includes(callId);
   }
 }
 

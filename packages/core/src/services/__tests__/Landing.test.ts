@@ -26,7 +26,7 @@ async function setup(opts: { isolation?: FakeWorktreeIsolation; conflictRepairAt
   await runs.decide(async () => undefined);
   const landing = new Landing({ runs, config, tasks: store, ...(opts.plannedWith ? { plannedWith: opts.plannedWith } : {}) });
   const prepare = (t: Task) => runs.attemptCwd(t, 'fresh', runs.decision);
-  const record = (taskId: string) => runs.current?.tasks[taskId];
+  const record = (taskId: string) => runs.planIsolation?.run.tasks[taskId];
   return { landing, runs, isolation, listener, store, prepare, record };
 }
 
@@ -131,7 +131,7 @@ describe('Landing', () => {
       expect(await landing.landPassed(t1, { worktree: true, kind: CHANGE })).toEqual({
         kind: 'awaiting_user',
         reason: 'landing-failed',
-        messages: [{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work (its worktree is missing). Its worktree is kept for inspection.' }],
+        messages: [{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work (its worktree is missing). Its worktree is kept for inspection. Once git can, land its work (retry it from its session) to land what it kept without running it again.' }],
       });
       expect(record('t1')?.status).toBe('failed');
       expect(isolation.taskIdsFor('release')).toEqual([]);
@@ -148,7 +148,7 @@ describe('Landing', () => {
 
       const outcome = await landing.landPassed(t1, { worktree: true, kind: CHANGE });
 
-      expect(outcome.messages).toEqual([{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work in web, so none of it landed. Its worktrees are kept for inspection.' }]);
+      expect(outcome.messages).toEqual([{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work in web, so none of it landed. Its worktrees are kept for inspection. Once git can, land its work (retry it from its session) to land what it kept without running it again.' }]);
     });
 
     it('cannot land a worktree attempt whose record went with a discarded run', async () => {
@@ -324,7 +324,7 @@ describe('Landing', () => {
       store.markFailed(resolver.id);
       expect(landing.nextRepair('t1')).toBeNull();
 
-      store.markSkipped(resolver.id);
+      store.markSkipped(resolver.id, 'resolver');
       expect(landing.liveResolvers('t1')).toEqual([]);
       expect(landing.nextRepair('t1')).toEqual({ n: 1, limit: 2 });
 
@@ -381,7 +381,7 @@ describe('Landing', () => {
       const { runs } = await resolving();
       const t1 = task('t1', 1, { assignedModel: { modelId: 'opus', modelLabel: 'Opus', thinkingEffort: 'high' }, taskMode: 'acceptEdits' });
 
-      const resolver = conflictResolverTask(t1, runs.current);
+      const resolver = conflictResolverTask(t1, runs);
 
       expect(resolver).toMatchObject({
         title: 'Resolve merge conflict: Task t1',
@@ -400,9 +400,9 @@ describe('Landing', () => {
     it('is asked to end its merge message with the Planned-with trailer when the setting is on', async () => {
       const { runs } = await resolving();
 
-      expect(conflictResolverTask(task('t1', 1), runs.current, undefined, true)?.prompt)
+      expect(conflictResolverTask(task('t1', 1), runs, undefined, true)?.prompt)
         .toContain("git merge --no-ff -m 'Merge: Task t1 (resolve conflicts with integration)' -m 'Planned-with: Ordewell' ordewell/run1/1-t1");
-      expect(conflictResolverTask(task('t1', 1), runs.current)?.prompt).not.toContain('Planned-with');
+      expect(conflictResolverTask(task('t1', 1), runs)?.prompt).not.toContain('Planned-with');
     });
 
     it('is not built for a task that is not in conflict, or without a run', async () => {
@@ -410,8 +410,8 @@ describe('Landing', () => {
       const t2 = task('t2', 3);
       await prepare(t2);
 
-      expect(conflictResolverTask(t2, runs.current)).toBeNull();
-      expect(conflictResolverTask(task('t1', 1), null)).toBeNull();
+      expect(conflictResolverTask(t2, runs)).toBeNull();
+      expect(conflictResolverTask(task('t1', 1), { taskState: () => undefined, conflictOf: () => null, handoffBranch: null })).toBeNull();
     });
   });
 });

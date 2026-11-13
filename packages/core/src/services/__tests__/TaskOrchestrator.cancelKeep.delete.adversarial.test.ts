@@ -68,7 +68,7 @@ describe('a task deleted while its workspace is still being prepared', () => {
     await first;
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1).toBeUndefined();
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBeUndefined();
   });
 
   it('a stop then a delete leaves no kept record', async () => {
@@ -83,6 +83,6 @@ describe('a task deleted while its workspace is still being prepared', () => {
     await first;
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1).toBeUndefined();
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBeUndefined();
   });
 });

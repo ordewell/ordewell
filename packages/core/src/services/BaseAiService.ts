@@ -347,7 +347,11 @@ export abstract class BaseAiService {
       const refused = overLimit.get(i);
       if (refused !== undefined) return { success: false, output: refused, truncated: false };
       const outcome = await run();
-      if (readLimit && OWN_READ_TOOLS.has(toolCalls[i].name)) readLimit.charge(Buffer.byteLength(outcome.output));
+      if (readLimit && OWN_READ_TOOLS.has(toolCalls[i].name)) {
+        // A read the envelope refused read nothing, so it costs no call (ADR-0068 R1).
+        if (outcome.refused) readLimit.refund();
+        else readLimit.charge(Buffer.byteLength(outcome.output));
+      }
       return outcome;
     };
 

@@ -7,6 +7,7 @@ import type { RepairWait, TaskIsolationState } from '../interfaces/IWorktreeIsol
 import { taskOrderLabel, taskRefsOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
+import type { SkipOrigin } from '../models/SkipOrigin';
 import { checksOfBodies, loopRoundOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
 import { approvalLabel, attachingLabel, awaitingLabel, isTaskRunning, NOT_STARTED, receiptLabel, repairWaitLabel, resumeLabel, taskStatusKind, WAITS_FOR_APPROVAL_LABEL, type TaskStatusKind } from './status';
@@ -97,6 +98,8 @@ interface PlanRefTask {
   loop?: TaskLoop;
   loopRound?: number;
   verdict?: { outcome: string; reported?: string } | null;
+  /** Read on a loop's body, whose skip by a person stops the loop (ADR-0045 L7). */
+  skipOrigin?: SkipOrigin;
 }
 
 export interface TaskRowContext {
@@ -262,6 +265,7 @@ const filesOf = (files: string[] | undefined): string | null => (files?.length ?
 const asBlocking = (tasks: readonly PlanRefTask[]): BlockingSubject[] =>
   tasks.map((t) => ({
     id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []),
+    ...(t.skipOrigin ? { skipOrigin: t.skipOrigin } : {}),
     ...(t.loop ? { loop: t.loop, loopRound: t.loopRound, ...(t.verdict ? { verdict: t.verdict } : {}) } : {}),
   }));
 

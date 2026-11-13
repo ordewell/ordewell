@@ -7,6 +7,8 @@
  * order typed (Send now with the composer's text last), and Esc takes back only
  * the newest.
  */
+import type { DaemonErrorCode } from '../daemonContract';
+
 export type PromptHold = readonly string[];
 
 export const EMPTY_HOLD: PromptHold = [];
@@ -53,4 +55,17 @@ export function glued(texts: readonly string[]): string {
 /** Where an unsent prompt lands in the drafting input: above what is being typed, never replacing it. */
 export function aheadOfDraft(text: string, draft: string): string {
   return draft ? `${text}\n${draft}` : text;
+}
+
+/**
+ * Whether a Send now whose turn ended without answering gives what it took
+ * back to the composer (ADR-0017 Q2), read off why the turn ended as the
+ * daemon codes it. A refusal or a failure gives back: the message was never
+ * answered and is not lost with a turn that did not run. A stop does not: it
+ * ended the turn as asked, and the turn a Send now stops reports one too. Nor
+ * does a discarded turn: its session was left, and the composer now drafts
+ * for another. One rule for every surface, so none drifts from the others.
+ */
+export function sendNowGivesBack(code: DaemonErrorCode | undefined): boolean {
+  return code !== 'planner_turn_stopped' && code !== 'planner_turn_discarded';
 }

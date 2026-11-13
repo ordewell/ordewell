@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ExecutionCommands, type ExecutionCommand, type ExecutionHost } from '../ExecutionCommands';
+import { ExecutionCommands, type ApprovalReads, type ExecutionCommand, type ExecutionHost, type RunReads } from '../ExecutionCommands';
+import type { RunControls } from '../SessionSaves';
 import type { Escalation, EscalationOptionId } from '../escalations';
 
 /**
@@ -22,7 +23,7 @@ function setup(list: Escalation[], over: Partial<ExecutionHost> = {}) {
     continueRun: vi.fn(async () => {}),
     ...over,
   } as unknown as ExecutionHost;
-  const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+  const commands = new ExecutionCommands({ orchestrator: {} as RunReads, controls: {} as RunControls, approvals: {} as ApprovalReads, host, consent: { request: vi.fn() } });
   const run = vi.spyOn(commands, 'run').mockResolvedValue({ ok: true, message: 'done' });
   return { commands, run, host };
 }
@@ -36,6 +37,7 @@ const CASES: { [K in EscalationOptionId]?: [Partial<Escalation>, string | undefi
   reply: [{ kind: 'input' }, 'use port 8080', { command: 'message_task', task: 't1', text: 'use port 8080' }],
   resume: [{ kind: 'usage-limit' }, undefined, { command: 'retry_task', task: 't1', from: 'session' }],
   continue: [{ kind: 'failed' }, 'fix the lint too', { command: 'retry_task', task: 't1', from: 'session', message: 'fix the lint too' }],
+  land: [{ kind: 'landing-failed' }, undefined, { command: 'retry_task', task: 't1', from: 'session' }],
   retry: [{ kind: 'failed' }, undefined, { command: 'retry_task', task: 't1', from: 'fresh' }],
   run: [{ kind: 'unapproved' }, undefined, { command: 'run_task', task: 't1' }],
   'force-start': [{ kind: 'on-hold' }, undefined, { command: 'force_start', task: 't1' }],

@@ -1,12 +1,13 @@
 import { forbiddenFields } from '../models/TaskKind';
 import {
   Task, RunnerId, flattenTasks,
-  addTaskToPlan, removeTaskFromPlan, updateTaskInPlan, renumberTasks,
+  addTaskToPlan, updateTaskInPlan, renumberTasks,
   inheritedOps, waitsMidAttempt,
 } from '../models/Task';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveTaskRef } from './TaskRefs';
 import { taskPlacement } from './PlanTree';
+import * as PlanGraph from './PlanGraph';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { reshapeRefusal } from './TaskEditValidator';
 import type { AssignmentAdjustment, AssignmentCatalog } from './TaskAssignment';
@@ -14,6 +15,7 @@ import { plannedTask, newBreaches, taskWhere, type IntakeCatalog, type PlannedTa
 import { loopRemovalRefusal, loopReshapeRefusal, loopSpec } from '../models/Loop';
 import { freshAttempt } from '../models/TaskExecution';
 import { askedReadOnly, isReadOnly, prepareTaskEdit, UPDATABLE_FIELDS, type PlannerTaskSpec } from './TaskEdit';
+import { opShapeRefusal } from './TaskSpec';
 
 export { UPDATABLE_FIELDS, type PlannerTaskSpec } from './TaskEdit';
 
@@ -104,10 +106,10 @@ function parseTaskOpsObject(json: string, text: string): TaskOp[] {
   if (!Array.isArray(ops) || ops.length === 0) {
     throw new PlanParseError('"taskOps" must be a non-empty array', text);
   }
-  for (const op of ops) {
-    if (typeof op !== 'object' || op === null || typeof (op as { op?: unknown }).op !== 'string') {
-      throw new PlanParseError('Every task op needs an "op" field (update | add | remove | reorder | merge | split)', text);
-    }
+  // The shape edit_plan's schema takes: a malformed op is the planner's to fix, so it is asked again, never thrown at.
+  for (const [i, op] of ops.entries()) {
+    const refusal = opShapeRefusal(op, i);
+    if (refusal) throw new PlanParseError(refusal, text);
   }
   return ops as TaskOp[];
 }
@@ -163,11 +165,6 @@ function findTopLevel(tasks: Task[], id: string): Task | undefined {
   return tasks.find((t) => t.id === id);
 }
 
-/** A task the repair may not reposition: execution has already reached it. */
-function isPinned(t: Task): boolean {
-  return t.status === 'in_progress' || waitsMidAttempt(t) || t.status === 'completed';
-}
-
 /**
  * The first task in `parent`'s subtree execution has reached, if any: an op that
  * takes the parent out of the plan would take it too (ADR-0029). Subtasks are
@@ -188,69 +185,6 @@ function droppedSubtasksNote(tasks: readonly Task[]): string {
   walk(tasks.flatMap((t) => t.subtasks ?? []));
   if (!titles.length) return '';
   return `; dropped ${titles.length === 1 ? 'subtask' : 'subtasks'} ${titles.join(', ')} (only the subtasks the spec states are kept)`;
-}
-
-/**
- * Reorder top-level tasks so every dependency comes before its dependents,
- * moving as little as possible: pinned tasks keep the exact slot they are in,
- * and each free slot goes to the earliest-listed movable task whose
- * dependencies are already placed — so tasks the graph does not constrain keep
- * their relative order. Assumes an acyclic graph (the caller checks first).
- */
-function repairOrder(tasks: Task[]): { tasks: Task[] } | { error: string } {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const placed = new Set<string>();
-  const movable = tasks.filter((t) => !isPinned(t));
-  const result: Task[] = [];
-  // Dependencies outside this list (a subtask id) constrain nothing here.
-  const blockerOf = (t: Task): Task | undefined => {
-    const id = t.dependencies.find((d) => byId.has(d) && !placed.has(d));
-    return id ? byId.get(id) : undefined;
-  };
-  const place = (t: Task) => { result.push(t); placed.add(t.id); };
-
-  for (const occupant of tasks) {
-    if (isPinned(occupant)) {
-      const blocker = blockerOf(occupant);
-      if (blocker) return { error: pinnedRefusal(blocker, occupant, 'before') };
-      place(occupant);
-      continue;
-    }
-    const next = movable.findIndex((t) => !blockerOf(t));
-    if (next < 0) {
-      // Nothing is schedulable and the graph is acyclic, so every movable task
-      // left waits — directly or through others — on a pinned task further down
-      // that would have to come up to free this slot.
-      const [stuck, pin] = trailToPin(movable[0], blockerOf);
-      return { error: pinnedRefusal(stuck, pin, 'after') };
-    }
-    place(movable.splice(next, 1)[0]);
-  }
-  return { tasks: result };
-}
-
-/** Walk the waiting-on chain from `task` down to the pinned task holding it up. */
-function trailToPin(task: Task, blockerOf: (t: Task) => Task | undefined): [Task, Task] {
-  let at = task;
-  for (;;) {
-    const blocker = blockerOf(at);
-    if (!blocker || isPinned(blocker)) return [at, blocker ?? at];
-    at = blocker;
-  }
-}
-
-/** `"B" #2→#1, "A" #1→#3` for every task the repair actually moved, or null. */
-function describeMoves(before: Task[], after: Task[]): string | null {
-  const wasAt = new Map(before.map((t, i) => [t.id, i + 1]));
-  const moved = after
-    .map((t, i) => ({ t, from: wasAt.get(t.id)!, to: i + 1 }))
-    .filter((m) => m.from !== m.to);
-  return moved.length ? moved.map((m) => `"${m.t.title}" #${m.from}→#${m.to}`).join(', ') : null;
-}
-
-function pinnedRefusal(other: Task, pin: Task, side: 'before' | 'after'): string {
-  const word = pin.status === 'completed' ? 'completed' : 'running';
-  return `"${other.title}" would have to run ${side} "${pin.title}", which is ${word} and cannot be moved`;
 }
 
 /** Which op of a batch a refusal is about: its number among the ops the call wrote, from 1. */
@@ -329,6 +263,12 @@ export function applyTaskOps(
   // batch before anything mutates.
   const handleOwner = new Map<string, number>();
   const handleId = new Map<string, string>();
+  // Ops reach here from every route already shaped, but for a caller that skipped it: refused, never read as empty.
+  for (const [i, op] of ops.entries()) {
+    const shape = opShapeRefusal(op, i);
+    if (shape) errors.push({ message: shape });
+  }
+  if (errors.length) return refused(currentTasks, errors);
   for (const [i, op] of ops.entries()) {
     const handle = (op as { handle?: unknown }).handle;
     if (handle === undefined) continue;
@@ -495,7 +435,7 @@ export function applyTaskOps(
         // the same lock rule as the named one (ADR-0029).
         const locked = reshapeRefusal(target, 'removed') ?? lockedInSubtree(target, 'removed') ?? loopRemovalRefusal(target);
         if (locked) { errors.push({ op: label, message: `${locked}` }); break; }
-        tasks = removeTaskFromPlan(tasks, target.id);
+        tasks = PlanGraph.remove(tasks, target.id);
         summary.push(`Removed "${target.title}"`);
         break;
       }
@@ -558,22 +498,13 @@ export function applyTaskOps(
         const refused = refusalOf(planned);
         if (refused) { errors.push({ op: label, message: `${refused}` }); break; }
         adjustments.push(...planned.adjustments);
-        const built = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
+        const built = resolveTree(planned, i);
         if ('error' in built) { errors.push({ op: label, message: `${built.error}` }); break; }
-        const mergedTask: Task = { ...built.task, dependencies: ids };
+        // The merged tasks' outside dependencies, then the ones the spec states; a stated one on a task being merged away would be on itself.
+        const stated = built.task.dependencies.filter((d) => !idSet.has(d));
+        const mergedTask: Task = { ...built.task, dependencies: [...new Set([...ids, ...stated])] };
         const mergedId = mergedTask.id;
-        const firstId = toMerge[0].id;
-        const result: Task[] = [];
-        let inserted = false;
-        for (const t of tasks) {
-          if (idSet.has(t.id)) {
-            if (!inserted && t.id === firstId) { result.push(mergedTask); inserted = true; }
-            continue;
-          }
-          result.push({ ...t, dependencies: t.dependencies.map((d) => (idSet.has(d) ? mergedId : d)) });
-        }
-        if (!inserted) result.push(mergedTask);
-        tasks = renumberTasks(result);
+        tasks = PlanGraph.replace(tasks, idSet, [mergedTask], mergedId);
         if (op.handle) handleId.set(op.handle, mergedId);
         summary.push(`Merged ${toMerge.length} tasks into "${spec.title}"${droppedSubtasksNote(toMerge)}`);
         break;
@@ -625,20 +556,21 @@ export function applyTaskOps(
           const refused = refusalOf(planned);
           if (refused) { errors.push({ op: label, message: `split part ${p + 1}: ${refused}` }); buildError = true; break; }
           adjustments.push(...planned.adjustments);
-          const resolved = resolveTree({ ...planned, task: { ...planned.task, dependencies: [] } }, i);
+          const resolved = resolveTree(planned, i);
           if ('error' in resolved) { errors.push({ op: label, message: `split part ${p + 1}: ${resolved.error}` }); buildError = true; break; }
-          const nt: Task = { ...resolved.task, dependencies: deps };
+          // A part cannot follow the task that is going away; the chain already puts it after the part before.
+          if (resolved.task.dependencies.includes(target.id)) {
+            errors.push({ op: label, message: `split part ${p + 1} depends on "${target.title}", the task being split: name the part it follows instead` });
+            buildError = true;
+            break;
+          }
+          const nt: Task = { ...resolved.task, dependencies: [...new Set([...deps, ...resolved.task.dependencies])] };
           newTasks.push(nt);
           prevId = nt.id;
         }
         if (buildError) break;
         const tailId = newTasks[newTasks.length - 1].id;
-        const result: Task[] = [];
-        for (const t of tasks) {
-          if (t.id === target.id) { result.push(...newTasks); continue; }
-          result.push({ ...t, dependencies: t.dependencies.map((d) => (d === target.id ? tailId : d)) });
-        }
-        tasks = renumberTasks(result);
+        tasks = PlanGraph.replace(tasks, [target.id], newTasks, tailId);
         if (op.handle) handleId.set(op.handle, tailId);
         summary.push(`Split "${target.title}" into ${newTasks.length} tasks${droppedSubtasksNote([target])}`);
         break;
@@ -677,12 +609,11 @@ export function applyTaskOps(
   // the plan comes back with dependencies ahead of their dependents. The
   // planner never has to re-declare the whole order to move one task.
   if (!errors.length) {
-    const repaired = repairOrder(tasks);
+    const repaired = PlanGraph.repairOrder(tasks);
     if ('error' in repaired) {
       errors.push({ message: repaired.error });
     } else {
-      const moves = describeMoves(tasks, repaired.tasks);
-      if (moves) summary.push(`Reordered to keep dependencies first: ${moves}`);
+      if (repaired.moves) summary.push(`Reordered to keep dependencies first: ${repaired.moves}`);
       tasks = renumberTasks(repaired.tasks);
     }
   }

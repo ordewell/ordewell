@@ -43,7 +43,9 @@ async function main(): Promise<void> {
   if (sessionAt > 0 && argv[sessionAt + 1]) {
     argv[sessionAt + 1] = expandSessionId(argv[sessionAt + 1], flag(argv, '--workspace') || process.cwd());
   }
-  const handler = COMMANDS[command];
+  // hasOwn: `constructor` and `toString` are not commands, whatever the
+  // object's prototype says.
+  const handler = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined;
   if (!handler) {
     console.error(`Unknown command: ${command}`);
     const suggestion = suggestForLongDash(command);

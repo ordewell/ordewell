@@ -60,7 +60,7 @@ it('follows the latest main model serving a task while old attempts are viewed, 
     { type: 'usage', record: { source: 'opencode', model: 'third-party/old', inputTokens: 500 } },
   ] }).state;
   expect(footer(state).join(' ')).toContain('OpenCode Go 5h 24% used');
-  state = reduce(state, { type: 'taskUpdated', sessionId: 's', taskId: 't', changes: { assignedModel: { modelId: 'third-party/new', modelLabel: 'New' } } }).state;
+  state = reduce(state, { type: 'runMessage', message: { type: 'task_updated', taskId: 't', changes: { assignedModel: { modelId: 'third-party/new', modelLabel: 'New' } } }, sessionId: 's' }).state;
   expect(footer(state).join(' ')).not.toContain('OpenCode Go');
 });
 
@@ -76,17 +76,17 @@ it('keeps context first and exact frame geometry with wide labels and narrow dim
   expect(footer(state, 15)).toEqual(['Planner ctx 61…']);
 });
 
-it('adopts quota greetings independently of run stamps, including held empty reconnect snapshots', () => {
+it('adopts quota greetings independently of run stamps, including those that arrive while a session opens', async () => {
   let state = initialState({ sessionId: 's', plannerProvider: 'codex' });
   const inbound = createInbound((action) => { state = reduce(state, action).state; }, 's');
   const receive = inbound.receive;
   receive({ type: 'run_snapshot', sessionId: 's', stream: 'daemon', seq: 100, view: state.run });
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 1, limits: [codex] });
   expect(footer(state)).toEqual(['Codex 5h 24% used']);
-  inbound.holdSnapshot();
+  const opening = inbound.openFrom(async () => ({ apply: () => {} }));
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 2, limits: [] });
   expect(footer(state)).toEqual(['Codex 5h 24% used']);
-  inbound.releaseSnapshot(true);
+  await opening;
   expect(footer(state)).toEqual([]);
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 1, limits: [codex] });
   expect(footer(state)).toEqual([]);

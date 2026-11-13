@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import * as fsSync from 'fs';
 import * as path from 'path';
-import type { CommandPolicyOptions } from './commandPolicy';
+import type { LineShell } from './parsedLine';
 import { isInertDevice, type HostPath } from './pathScope';
 
 /**
@@ -77,6 +77,20 @@ export interface ShellLaunch {
   /** A sealed run's memory limit, which its result names if the run was ended at it (ADR-0036 S1). */
   memoryBytes?: number;
 }
+
+/**
+ * Git's discovery is told to take a bare repository only when named. A
+ * repository can commit a bare one of its own (`vendor/evil.git`), and
+ * `git -C vendor/evil.git diff` or a `cd` into it would otherwise run the
+ * `diff.external` or textconv program its config names, with the planner's
+ * silent, flag-checked `git` as the only gate. Every planner shell carries
+ * this, sandboxed or not.
+ */
+export const PLANNER_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'safe.bareRepository',
+  GIT_CONFIG_VALUE_0: 'explicit',
+};
 
 const POSIX_SHELL: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
 const CMD_SHELL: ResearchShell = { file: null, args: [], dialect: 'cmd', utilsDir: null };
@@ -335,11 +349,11 @@ export function researchShellWarning(shell: ResearchShell): string | null {
 }
 
 /**
- * What a research-shell command is classified under. One function, because a
- * subagent must never classify under different rules than its parent: the
- * shell's dialect, and whether a `CDPATH` in the environment can send a
- * relative `cd` somewhere the line never names.
+ * The shell a research-shell command line is parsed under. One function,
+ * because a subagent must never read a line under different rules than its
+ * parent: the shell's dialect, and whether a `CDPATH` in the environment can
+ * send a relative `cd` somewhere the line never names.
  */
-export function researchPolicyOptions(shell: ResearchShell): CommandPolicyOptions {
+export function researchLineShell(shell: ResearchShell): LineShell {
   return { dialect: shell.dialect, cdpathSet: !!process.env.CDPATH };
 }

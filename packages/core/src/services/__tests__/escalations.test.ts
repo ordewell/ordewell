@@ -58,7 +58,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     },
     onHold,
     approved: (id) => !(setup.added ?? []).includes(id),
-    runs: { openRecord: () => undefined, awaitsMerge: (id) => unmerged.has(id) },
+    runs: { openTaskState: () => undefined, awaitsMerge: (id) => unmerged.has(id) },
     merging: setup.merging ?? false,
     startsHeld: setup.startsHeld ?? false,
     completing: new Set(),
@@ -143,11 +143,23 @@ describe('a wait whose Retry a dependency has taken away', () => {
   it.each([
     ['a conflict', 'conflict', {}],
     ['changed files', 'files-changed', {}],
+    ['a refused landing', 'landing-failed', {}],
     ['a pause with no session', 'usage-limit', {}],
   ] as const)('names what holds it: %s', (_name, awaitingReason, over) => {
     const [entry] = listFor([task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason, dependencies: ['t1'], ...over })], { attempts: { t2: 1 } });
 
     expect(entry.reason).toContain('It waits on #1: nothing can start it again before then.');
+  });
+});
+
+describe('a passed task whose landing git refused', () => {
+  it('says its work is kept and what lands it, never that it conflicts', () => {
+    const [entry] = listFor([task('t1', 1, { status: 'awaiting_user', awaitingReason: 'landing-failed' })], { attempts: { t1: 1 } });
+
+    expect(entry.reason).toMatch(/git refused/);
+    expect(entry.reason).toMatch(/kept/);
+    expect(entry.reason).not.toMatch(/conflict/i);
+    expect(entry.options.find((o) => o.id === 'land')?.label).toBe('Land its work');
   });
 });
 
@@ -175,6 +187,10 @@ describe('what waits on a person, task by task', () => {
       [{ id: 'conflict:t1:1', kind: 'conflict', options: ['resolve-conflict', 'retry', 'skip', 'complete'] }]],
     ['a landing git refused, which holds no conflict to resolve', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'conflict' })], { attempts: { t1: 1 }, unresolvable: ['t1'] },
       [{ id: 'conflict:t1:1', kind: 'conflict', options: ['retry', 'skip', 'complete'] }]],
+    ['a passed task whose landing git refused, which lands its kept work once git can', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'landing-failed' })], { attempts: { t1: 1 } },
+      [{ id: 'landing-failed:t1:1', kind: 'landing-failed', options: ['land', 'retry', 'skip', 'complete'] }]],
+    ['a refused landing behind a dependency yet to run: landing kept work starts nothing', [task('t1', 1), task('t2', 2, { status: 'awaiting_user', awaitingReason: 'landing-failed', dependencies: ['t1'] })], { attempts: { t2: 1 } },
+      [{ id: 'landing-failed:t2:1', kind: 'landing-failed', options: ['land', 'skip', 'complete'] }]],
     ['an ops task that changed tracked files', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'files-changed', ops: true })], { attempts: { t1: 1 } },
       [{ id: 'files-changed:t1:1', kind: 'files-changed', options: ['retry', 'skip', 'complete'] }]],
     ['a usage-limit pause with no scheduled resume', [task('t1', 1, { status: 'awaiting_user', awaitingReason: 'usage-limit', ...continuable })], { attempts: { t1: 1 } },

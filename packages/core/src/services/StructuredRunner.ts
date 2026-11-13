@@ -877,6 +877,8 @@ export class StructuredSession extends AbstractRunnerSession {
     this.adapterStarted = true;
     if (this.exited || generation !== this.generation) return;
     adapter.onOutOfTurn?.((event) => this.handleOutOfTurn(adapter, generation, event));
+    // A turn this session opened itself (a background wake) owns what is spent while it runs.
+    adapter.onUsage?.((record) => this.handleOutOfTurn(adapter, generation, { type: 'usage', record }));
     adapter.onProcessExit((code, lastWords) => {
       if (generation !== this.generation) return;
       if (!this.adapterAttached) {

@@ -674,12 +674,12 @@ const YQ_SUBCOMMANDS = ['eval', 'e', 'eval-all', 'ea'];
 
 /** Why a jq or yq invocation is refused, or `undefined` when its program only filters what it is given. */
 export function jqRefusal(binary: string, args: string[]): string | undefined {
-  const programs = jqPrograms(binary, args);
+  const programs = jqProgramWords(binary, args);
   if (typeof programs === 'string') {
     return `"${binary} ${programs}" reads its program from a file this classifier cannot inspect. ${INSPECT_OR_TASK}`;
   }
-  for (const program of programs) {
-    const word = jqHazard(program);
+  for (const { text } of programs) {
+    const word = jqHazard(text);
     if (word === undefined) continue;
     return JQ_ENV_WORDS.includes(word) || word === '$ENV'
       ? `The "${binary}" program reads the environment ("${word}"), which holds credentials. Run printenv for the one variable you need, which asks first.`
@@ -689,26 +689,37 @@ export function jqRefusal(binary: string, args: string[]): string | undefined {
 }
 
 /**
- * The program text of an invocation, or the flag that names a program file.
- * jq takes options anywhere, so every token is read; the program is the first
- * operand, or what `--expression` gave. Value widths come from the flag
- * allowlist, which refuses any flag outside it before this reading matters.
+ * The index of the last word that decides which program a jq or yq invocation
+ * runs, as written: its program word, or the last word when none was found,
+ * since then a word the shell rewrites may yet become one.
  */
-function jqPrograms(binary: string, args: string[]): string[] | string {
+export function jqProgramEnd(binary: string, args: string[]): number {
+  const programs = jqProgramWords(binary, args);
+  return typeof programs === 'string' || programs.length === 0 ? args.length - 1 : Math.max(...programs.map(({ at }) => at));
+}
+
+/**
+ * Where an invocation's program text sits in `args`, or the flag that names a
+ * program file. jq takes options anywhere, so every token is read; the program
+ * is the first operand, or what `--expression` gave. Value widths come from
+ * the flag allowlist, which refuses any flag outside it before this reading
+ * matters.
+ */
+function jqProgramWords(binary: string, args: string[]): { at: number; text: string }[] | string {
   const values = new Set(FLAG_POLICY[binary]?.values ?? []);
-  const expressions: string[] = [];
-  const operands: string[] = [];
+  const expressions: { at: number; text: string }[] = [];
+  const operands: number[] = [];
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
-    if (token === '--') { operands.push(...args.slice(i + 1)); break; }
-    if (!/^-./.test(token)) { operands.push(token); continue; }
+    if (token === '--') { for (let j = i + 1; j < args.length; j++) operands.push(j); break; }
+    if (!/^-./.test(token)) { operands.push(i); continue; }
     if (token.startsWith('--')) {
       const eq = token.indexOf('=');
       const name = eq > 0 ? token.slice(0, eq) : token;
       if (name === '--from-file') return name;
       if (name === '--expression') {
-        const value = eq > 0 ? token.slice(eq + 1) : args[++i];
-        if (value !== undefined) expressions.push(value);
+        if (eq > 0) expressions.push({ at: i, text: token.slice(eq + 1) });
+        else if (++i < args.length) expressions.push({ at: i, text: args[i] });
       } else if (JQ_PAIR_FLAGS.includes(name)) {
         i += 2;
       } else if (values.has(name) && eq < 0) {
@@ -722,9 +733,9 @@ function jqPrograms(binary: string, args: string[]): string[] | string {
       if (values.has(short)) { if (j === token.length - 1) i++; break; }
     }
   }
-  if (binary === 'yq' && YQ_SUBCOMMANDS.includes(operands[0])) operands.shift();
+  if (binary === 'yq' && YQ_SUBCOMMANDS.includes(args[operands[0]])) operands.shift();
   if (expressions.length > 0) return expressions;
-  return operands.length > 0 ? [operands[0]] : [];
+  return operands.length > 0 ? [{ at: operands[0], text: args[operands[0]] }] : [];
 }
 
 /**

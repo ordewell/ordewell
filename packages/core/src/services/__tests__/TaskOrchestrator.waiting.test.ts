@@ -233,6 +233,21 @@ describe('the completion reminder', () => {
     expect(starts[0]?.text).not.toContain('full report as the summary');
   });
 
+  it('offers a loop\'s check the verdict `failed`, which the plain reminder never names', async () => {
+    const { structured } = await started({ loop: { body: ['fix'], maxRounds: 3 } });
+    structured.emitTurnEnd('completed');
+
+    expect(structured.fromOrdewell).toHaveLength(1);
+    expect(structured.fromOrdewell[0]).toContain('`failed` when you confirm any problem');
+  });
+
+  it('does not tell a task outside a loop about a verdict', async () => {
+    const { structured } = await started();
+    structured.emitTurnEnd('completed');
+
+    expect(structured.fromOrdewell[0]).not.toContain('`failed`');
+  });
+
   it('is sent once: the reminder\'s own turn ending without task_complete waits for input', async () => {
     const { orchestrator, structured, settled } = await started();
 

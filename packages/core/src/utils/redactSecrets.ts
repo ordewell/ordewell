@@ -117,9 +117,52 @@ const PROVIDER_KEY_PATTERNS: RegExp[] = [
   // npm, Hugging Face, Groq, GitLab, DigitalOcean, Shopify
   /(?<![A-Za-z0-9])(?:npm|hf|gsk|glpat|dop_v1|shpat|shpss)[_-][A-Za-z0-9]{20,}/g,
   /(?<![A-Za-z0-9])xai-[A-Za-z0-9]{20,}/g,
-  // Three-segment JWTs, whose payload segment is base64 for `{"`
-  /(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
+
+/**
+ * Chains of base64url segments joined by dots, the shape of a JWT. A pattern
+ * for the whole token restarts at every `eyJ` of one long run (`_eyJ_eyJ…`) and
+ * scans the run to its end from each, so the chain is walked once instead.
+ */
+const BASE64URL_CHAIN = /[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/g;
+
+/**
+ * Three-segment JWTs, whose payload segment is base64 for `{"`: the first
+ * segment holds `eyJ` (not inside a word), the second opens with it, and each
+ * has a key's length after it.
+ */
+function redactJwts(text: string): string {
+  let out = '';
+  let from = 0;
+  BASE64URL_CHAIN.lastIndex = 0;
+  for (let chain = BASE64URL_CHAIN.exec(text); chain; chain = BASE64URL_CHAIN.exec(text)) {
+    const segments = chain[0].split('.');
+    let offset = chain.index;
+    const starts = segments.map((segment) => {
+      const start = offset;
+      offset += segment.length + 1;
+      return start;
+    });
+    for (let i = 0; i + 2 < segments.length; i++) {
+      const head = jwtHeadAt(segments[i]);
+      if (head < 0 || !segments[i + 1].startsWith('eyJ') || segments[i + 1].length < 11 || segments[i + 2].length < 8) continue;
+      const start = starts[i] + head;
+      const end = starts[i + 2] + segments[i + 2].length;
+      out += text.slice(from, start) + marker('api key', end - start);
+      from = end;
+      i += 2;
+    }
+  }
+  return out + text.slice(from);
+}
+
+/** Where a JWT's first segment starts in `segment`: its first `eyJ` that no letter or digit runs into, with a key's length after it. */
+function jwtHeadAt(segment: string): number {
+  for (let at = segment.indexOf('eyJ'); at >= 0 && segment.length - at >= 11; at = segment.indexOf('eyJ', at + 1)) {
+    if (at === 0 || !/[A-Za-z0-9]/.test(segment[at - 1])) return at;
+  }
+  return -1;
+}
 
 /**
  * AWS-style access key identifiers. The four-character resource prefix plus a
@@ -129,6 +172,22 @@ const PROVIDER_KEY_PATTERNS: RegExp[] = [
  */
 const CLOUD_ACCESS_KEY_ID =
   /(?<![A-Za-z0-9])(?:A3T[A-Z0-9]{2}|AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|AROA)[A-Z0-9]{16}(?![A-Za-z0-9])/g;
+
+/**
+ * The password in a URL's userinfo, `scheme://user:password@host`, which a git
+ * error or a connection string prints with no credential name before it. Found
+ * from the `://` and not the scheme, so a long run of letters is not rescanned
+ * from each; the user and the password stop at the characters a URL parts them
+ * with, and at a quote, backtick or angle bracket, which end a URL in JSON,
+ * shell and markdown. The password may hold an `@` and is greedy, so it backs
+ * off to the last `@` before the host (as URL parsers read it) and none of the
+ * password is left outside the mask. A comma stays allowed inside it: masking
+ * too much is safer than leaking. A `docker://alpine:3.19@sha256:...` reference
+ * has its tag masked as a password; that is accepted.
+ */
+const URL_USERINFO = /(:\/\/[^\s/:@?#"'`<>]+:)([^\s/?#"'`<>]+)@/g;
+/** A password that is a placeholder or a reference, not a value: `${DB_PASS}`, `$PASS`, `<password>`, `***`, our own marker. */
+const URL_PASSWORD_PLACEHOLDER = /^[$<{*[]/;
 
 const PRIVATE_KEY_LABEL = String.raw`((?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)`;
 const PEM_BEGIN = new RegExp(`-----BEGIN ${PRIVATE_KEY_LABEL}-----`);
@@ -436,7 +495,8 @@ const CALLED_NAME = /(?=["'\x60])(?<=\([ \t]*)(["'\x60])(?<name>[A-Za-z_][A-Za-z
  * `gh secret set NAME --body v`. Prose sets names too (`set GITHUB_TOKEN
  * beforehand`), so a bare word is taken only with a key's length and shape.
  */
-const SET_COMMAND = /(?<![A-Za-z0-9_-])(?:setx|setenv|set|ENV)(?:[ \t]+(?:--?|\/)[A-Za-z]+)*[ \t]+(?<name>[A-Za-z_][A-Za-z0-9_.-]*)[ \t]+(?:(?:--body|-b)(?:[ \t]+|=))?/g;
+// At most six flags: each `ENV` of a line of `/ENV /ENV …` would otherwise read the rest of it as flags and give them back.
+const SET_COMMAND = /(?<![A-Za-z0-9_-])(?:setx|setenv|set|ENV)(?:[ \t]+(?:--?|\/)[A-Za-z]+){0,6}[ \t]+(?<name>[A-Za-z_][A-Za-z0-9_.-]*)[ \t]+(?:(?:--body|-b)(?:[ \t]+|=))?/g;
 /**
  * How a value is read after its name. `assigned`: `=` and its kin, to the
  * next space; `labelled`: after `:`, a lone word's value only when shaped
@@ -531,11 +591,24 @@ function quotedAt(text: string, at: number): Span | undefined {
   return { start: open + 1, end: Math.min(end, text.length) };
 }
 
-function bareUntil(text: string, at: number, ends: RegExp): Span {
+/** The last bare scan per end pattern: a later start inside it ends where it did, so it is not scanned again. */
+type BareScans = Map<RegExp, Span>;
+
+function bareUntil(text: string, at: number, ends: RegExp, scans?: BareScans): Span {
+  const scanned = scans?.get(ends);
+  if (scanned && scanned.start <= at && at <= scanned.end) return { start: at, end: scanned.end };
   let end = at;
   while (end < text.length && !ends.test(text[end])) end++;
+  scans?.set(ends, { start: at, end });
   return { start: at, end };
 }
+
+/**
+ * How much of an unquoted value is judged for its shape. A value past this is
+ * no word or path either way, and judging all of it again for each credential
+ * name inside a long run (`token:/token:/…`) would be quadratic.
+ */
+const SHAPE_WINDOW = 4096;
 
 /** Each quoted element of the list at `at`, `["a", "b"]`, as `apiKeys` holds them. */
 function listedAt(text: string, at: number): Span[] {
@@ -559,7 +632,7 @@ const BLOCK_INDICATOR = /[|>][1-9+-]{0,2}[ \t]*\r?(?:\n|$)/y;
  * or a block scalar is no value on this line: {@link valuesBelowNames} reads
  * what it holds.
  */
-function valuesAt(text: string, at: number, name: string, kind: ValueKind): Span[] {
+function valuesAt(text: string, at: number, name: string, kind: ValueKind, scans?: BareScans): Span[] {
   const quoted = quotedAt(text, at);
   if (quoted) return [quoted];
   if (kind === 'quoted' || text[at] === '\\') return [];
@@ -577,8 +650,8 @@ function valuesAt(text: string, at: number, name: string, kind: ValueKind): Span
     if (BLOCK_INDICATOR.test(text)) return [];
   }
   if (text[at] === '[' && (kind === 'labelled' || kind === 'assigned')) return listedAt(text, at);
-  const value = bareUntil(text, at, kind === 'assigned' ? ASSIGNED_VALUE_END : BARE_VALUE_END);
-  const shown = text.slice(value.start, value.end);
+  const value = bareUntil(text, at, kind === 'assigned' ? ASSIGNED_VALUE_END : BARE_VALUE_END, scans);
+  const shown = text.slice(value.start, Math.min(value.end, value.start + SHAPE_WINDOW));
   if (kind === 'labelled' && !DUMPED_NAME.test(name) && !keyShaped(shown)) return [];
   if (kind === 'shaped' && !keyShaped(shown)) return [];
   if (kind === 'spaced' && (shown.length < MIN_SPACED_VALUE || !keyShaped(shown))) return [];
@@ -613,13 +686,14 @@ function redactCredentialNamedValues(text: string): string {
 
 function redactNamedValues(text: string, pattern: RegExp, ruleKind: ValueKind | undefined): string {
   const names = new RegExp(pattern);
+  const scans: BareScans = new Map();
   let out = '';
   let from = 0;
   for (let found = names.exec(text); found; found = names.exec(text)) {
     const name = found.groups?.name ?? '';
     // The name first: a bare value runs on to its end, and on `a=a=a=…` every name would rescan the rest of the text.
     if (!credentialNamed(name)) continue;
-    const values = valuesAt(text, found.index + found[0].length, name, ruleKind ?? kindOf(found.groups?.sep))
+    const values = valuesAt(text, found.index + found[0].length, name, ruleKind ?? kindOf(found.groups?.sep), scans)
       .filter((value) => value.end > value.start && !markerAt(text, value.start) && !AUTH_SCHEME_WORD.test(text.slice(value.start, value.end)));
     for (const value of values) {
       out += text.slice(from, value.start) + marker('credential', value.end - value.start);
@@ -1451,9 +1525,14 @@ function redact(text: string, held: Iterable<string>, agentText: boolean): strin
   out = out.replace(AUTH_SCHEME_CREDENTIAL, (full, header: string | undefined, scheme: string, space: string, token: string) =>
     header || looksLikeToken(token) ? `${header ?? ''}${scheme}${space}${marker('token', token.length)}` : full);
 
+  out = out.replace(URL_USERINFO, (full, head: string, password: string) =>
+    URL_PASSWORD_PLACEHOLDER.test(password) ? full : `${head.slice(0, -1)}:${marker('credential', password.length)}@`);
+
   for (const pattern of PROVIDER_KEY_PATTERNS) {
     out = out.replace(pattern, (hit: string) => marker('api key', hit.length));
   }
+
+  out = redactJwts(out);
 
   out = out.replace(CLOUD_ACCESS_KEY_ID, (hit: string) => marker('access key id', hit.length));
 

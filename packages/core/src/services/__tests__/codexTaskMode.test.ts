@@ -525,18 +525,23 @@ describe('CodexAdapter task interrupt', () => {
     adapter.dispose();
   });
 
-  it('takes the runner\'s own end for an interrupted turn: a finish that raced the interrupt is a finish', async () => {
+  // A finish that raced an acknowledged interrupt ends the turn interrupted, by
+  // whichever end signal comes first (ADR-0018 W1).
+  it.each([
+    ['turn/completed', turnCompleted('turn-a', 'completed')],
+    ['the thread going idle', threadIdle()],
+  ])('ends a turn whose finish raced an acknowledged interrupt as interrupted, ended by %s', async (_name, end) => {
     const { adapter, proc } = await startedTask();
     const events: AgentEvent[] = [];
     const turn = adapter.send('go', (e) => e.type !== 'runner_loaded' && events.push(e));
     proc.emitStdout(turnStarted('turn-a'));
     const acknowledged = adapter.interrupt(1000);
     await until(() => sentNamed(proc.written, 'turn/interrupt').length > 0);
-    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} }) + turnCompleted('turn-a', 'completed'));
+    proc.emitStdout(line({ id: sentNamed(proc.written, 'turn/interrupt')[0].id, result: {} }) + end);
     await acknowledged;
     await turn;
 
-    expect(events).toEqual([{ type: 'turn_end' }]);
+    expect(events).toEqual([{ type: 'turn_end', interrupted: true }]);
     adapter.dispose();
   });
 

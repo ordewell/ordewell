@@ -5,7 +5,8 @@ import {
   type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
+import { RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
@@ -182,7 +183,7 @@ function isPlannerTurn(effect: Effect): boolean {
  * saved; say so rather than passing the daemon's bare wording through.
  */
 function explain(err: unknown): string {
-  if (err instanceof DaemonError && err.code === 'session_not_found') {
+  if (err instanceof DaemonRefusal && err.code === 'session_not_found') {
     return 'This server is no longer holding that session: it was deleted, or the server restarted. Reload it with /sessions if it is still listed.';
   }
   return err instanceof Error ? err.message : String(err);
@@ -190,7 +191,7 @@ function explain(err: unknown): string {
 
 /** The failure a rejected call becomes, carrying the daemon's reason when it gave one. */
 function failedFrom(err: unknown): Extract<Action, { type: 'failed' }> {
-  const code = err instanceof DaemonError ? err.code : undefined;
+  const code = err instanceof DaemonRefusal ? err.code : undefined;
   return { type: 'failed', message: explain(err), ...(code ? { code } : {}) };
 }
 
@@ -234,7 +235,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
         // a session the next reply belongs to.
-        if (err instanceof DaemonError && err.code === 'planner_turn_stopped') {
+        if (err instanceof DaemonRefusal && err.code === 'planner_turn_stopped') {
           await reloadSettings(deps, sessionId);
           throw err;
         }
@@ -499,7 +500,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       try {
         await api.execute(sessionId, { command: 'remove_queued', task: taskId, id: messageId });
       } catch (err) {
-        if (!(err instanceof DaemonError)) throw err;
+        if (!(err instanceof DaemonRefusal)) throw err;
         deps.dispatch({ type: 'taskMessageKept', sessionId, taskId, messageId, ...(filled !== undefined ? { filled } : {}), message: explain(err) });
       }
       return;
@@ -685,39 +686,44 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const shown = shownSession(deps.api);
       // The daemon greets a live session's socket with its run before this
       // session is the one on screen, where the reducer would drop it as stale;
-      // it is held, with every broadcast after it, until the session is on
-      // screen and drawn from its transcript — which holds no approval card,
-      // so the requests the snapshot says are waiting go on after it.
+      // the link holds it, with every broadcast after it, until the session is
+      // on screen and drawn from its transcript, then delivers them on top (a
+      // plan landed meanwhile replaces the one read, an end heard meanwhile
+      // frees the turn or compaction just joined). The transcript holds no
+      // approval card, so the requests the snapshot says are waiting go on
+      // after it.
       const link = sessionLink(deps, effect.sessionId);
-      const { inbound } = link;
-      inbound.holdSnapshot();
-      await link.ensure();
-      // Adopting registers the session with the daemon, which is what makes the
-      // restored plan executable — `getSession` alone only reads the file.
-      let adopted: Awaited<ReturnType<OrdewellApi['adoptSession']>>;
+      let goal: string | undefined;
       try {
-        adopted = await api.adoptSession(effect.sessionId, workspace);
+        await link.openFrom(async () => {
+          // Adopting registers the session with the daemon, which is what makes the
+          // restored plan executable — `getSession` alone only reads the file.
+          const adopted = await api.adoptSession(effect.sessionId, workspace);
+          const { plan, run } = adopted;
+          return {
+            ...(adopted.position ? { position: adopted.position } : {}),
+            ...(run ? { run } : {}),
+            apply: () => {
+              goal = adopted.goal;
+              dispatch({ type: 'sessionLoaded', sessionId: effect.sessionId, goal: adopted.goal });
+              dispatch(restoredChat(plan, effect.sessionId));
+              dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
+              if (run) dispatch({ type: 'runSnapshot', view: run, sessionId: effect.sessionId });
+              // After the turn-settling `planUpdated`, which would otherwise read the
+              // planner as free.
+              if (adopted.plannerTurnId) dispatch({ type: 'turnJoined', turnId: adopted.plannerTurnId, sessionId: effect.sessionId });
+              if (adopted.plannerCompaction) dispatch({ type: 'sessionMessage', message: adopted.plannerCompaction, sessionId: effect.sessionId });
+            },
+          };
+        });
       } catch (err) {
-        inbound.releaseSnapshot(false);
         // The TUI stays on the session it showed, so it goes on following that one.
         if (shown) await sessionLink(deps, shown).ensure();
         else link.close();
         throw err;
       }
-      const { plan, goal, run } = adopted;
-      dispatch({ type: 'sessionLoaded', sessionId: effect.sessionId, goal });
-      dispatch(restoredChat(plan, effect.sessionId));
-      dispatch({ type: 'planUpdated', plan, sessionId: effect.sessionId });
-      if (run) dispatch({ type: 'runSnapshot', view: run, sessionId: effect.sessionId });
-      // After the turn-settling `planUpdated`, which would otherwise read the
-      // planner as free.
-      if (adopted.plannerTurnId) dispatch({ type: 'turnJoined', turnId: adopted.plannerTurnId, sessionId: effect.sessionId });
-      if (adopted.plannerCompaction) dispatch({ type: 'sessionMessage', message: adopted.plannerCompaction, sessionId: effect.sessionId });
-      // What was held is newer than what the load read, so it goes on top, in
-      // the order it was sent: a plan landed meanwhile replaces the one read,
-      // and an end heard meanwhile frees the turn or compaction just joined.
-      // All in one synchronous pass, so no key lands in between.
-      inbound.releaseSnapshot(true);
+      // The link closed under the load: nothing was drawn.
+      if (goal === undefined) return;
       // The restored session has its own run settings, seeded when it opened;
       // the file's values belong to whatever session starts next (ADR-0030).
       await reloadSettings(deps, effect.sessionId);
@@ -818,9 +824,12 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         merged = await api.mergeRun(effect.sessionId, given);
       } catch (err) {
         // A question for the user, with the checks or the ops tasks named: not a failure (ADR-0055 D9, ADR-0020).
-        if (!(err instanceof DaemonError)) throw err;
-        const asked = err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null;
-        if (!asked) throw err;
+        const asked = err instanceof DaemonRefusal ? err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null : null;
+        if (!asked || !(err instanceof DaemonRefusal)) {
+          // Nothing was merged, so no result will come to be taken for the answer to this request.
+          dispatch({ type: 'mergeAbandoned', sessionId: effect.sessionId });
+          throw err;
+        }
         dispatch({ type: 'mergeHeld', message: err.message, asked, ...(Object.keys(given).length > 0 ? { given } : {}), sessionId: effect.sessionId });
         return;
       }
@@ -998,7 +1007,7 @@ async function refusable(deps: EffectDeps, childId: string, call: () => Promise<
   } catch (err) {
     // Anything else is the daemon being away, which `runEffect` revives; a
     // refusal is the daemon's word on this plan, and the person's text is theirs.
-    if (!(err instanceof DaemonError)) throw err;
+    if (!(err instanceof DaemonRefusal)) throw err;
     deps.dispatch({ type: 'childFailed', sessionId: childId, message: err.message, ...(err.code ? { code: err.code } : {}), ...(text ? { text } : {}) });
   }
 }
@@ -1129,13 +1138,13 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
     // run settings may be the file's now, not the copy this view held (ADR-0030).
     await reloadSettings(deps, sessionId);
   } catch (err) {
-    if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
+    if (err instanceof DaemonRefusal && err.code === 'session_not_found' && how.opening) {
       sessionLink(deps, sessionId).close();
       deps.dispatch({ type: 'sessionCleared', sessionId });
       deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true, sessionId });
       return;
     }
-    if (how.turnEnded || (err instanceof DaemonError && err.code === 'session_not_found')) {
+    if (how.turnEnded || (err instanceof DaemonRefusal && err.code === 'session_not_found')) {
       deps.dispatch({ ...failedFrom(err), turn: true, sessionId });
       return;
     }

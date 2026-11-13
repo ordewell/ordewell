@@ -1,6 +1,8 @@
 import type { AgentEvent } from './AgentAdapter';
 import type { UsageRecord } from '../../models/Usage';
 import type { AcpSessionUpdate, AcpToolCall, AcpTokenUsage } from './acpSchema';
+import type { TurnOutcome } from './turnOutcome';
+import { UsageRecordBuilder } from './usageBuilder';
 
 /**
  * The turn-by-turn translation of an ACP agent's `session/update`
@@ -66,9 +68,9 @@ export function reduceUpdate(turn: AcpTurn, update: AcpSessionUpdate): AcpStep {
       return toolCall(closeRuns(turn), update);
     case 'usage_update': {
       // A context meter, and `cost` is the session's running total: neither
-      // adds up per turn, so only the meter is reported.
-      const record: UsageRecord = { source: turn.source, contextTokens: update.used, contextWindow: update.size };
-      if (turn.model !== undefined) record.model = turn.model;
+      // adds up per turn, so only the meter is reported. `used` is required, so
+      // the meter always has a measure to report.
+      const record = new UsageRecordBuilder(turn.source).meter({ model: turn.model, contextTokens: update.used, contextWindow: update.size })!;
       return { turn, events: [{ type: 'usage', record }] };
     }
     // user_message_chunk only replays history on session/load. The rest hold
@@ -219,21 +221,21 @@ const NOTE: Readonly<Record<string, string>> = {
 
 /**
  * The one place a turn ends, on the response to `session/prompt`.
- * `cancelSent` is whether Ordewell sent `session/cancel` for this turn: an
+ * `outcome` says whether Ordewell sent `session/cancel` for this turn: an
  * agent can answer `end_turn` to a cancel that crossed its own finish, and
- * the turn was still interrupted. A reason Ordewell does not know ends the
+ * the turn was still interrupted (ADR-0018 W1). A reason Ordewell does not know ends the
  * turn the way `end_turn` does, with the reason named, since the agent did stop.
  * An answer with no stop reason to read (`unreadable`, the parse error) says
  * nothing of why the agent stopped, so it ends the turn as an error rather
  * than passing for a normal end.
  */
-export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string }, usage: AcpTokenUsage | null | undefined, cancelSent: boolean): AgentEvent[] {
+export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string }, usage: AcpTokenUsage | null | undefined, outcome: TurnOutcome): AgentEvent[] {
   const events: AgentEvent[] = [];
 
-  // A call still open has no result coming: the turn it belonged to is over.
+  // A call still open has no result coming. It is announced, and the turn's
+  // end settles it as not executed, as for every runner.
   for (const [id, call] of Object.entries(turn.open)) {
     if (!call.announced) events.push(announce(id, call));
-    events.push(result(id, call, 'The turn ended before this call reported a result.', false));
   }
   for (const run of turn.thoughts) events.push({ type: 'thinking', text: run.text });
   for (const run of turn.messages) events.push({ type: 'assistant_text', runId: run.runId, text: run.text });
@@ -241,36 +243,38 @@ export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string
   const record = usageRecord(turn, usage);
   if (record) events.push({ type: 'usage', record });
 
-  if (cancelSent || stopReason === 'cancelled') {
-    events.push({ type: 'turn_end', interrupted: true });
+  // ACP has an agent answer a cancelled prompt `cancelled`; whatever else it
+  // answers after Ordewell's cancel is still that cancel, not a failure of the turn.
+  if (stopReason === 'cancelled' || outcome.requested) {
+    events.push(outcome.settle('interrupted'));
   } else if (typeof stopReason === 'object') {
-    events.push({ type: 'error', message: `The agent ended the turn with an answer Ordewell cannot read: ${stopReason.unreadable}` });
+    events.push(outcome.settle('completed', { message: `The agent ended the turn with an answer Ordewell cannot read: ${stopReason.unreadable}` }));
   } else if (stopReason === 'refusal') {
     // An error alone ends the turn, as for the other runners.
-    events.push({ type: 'error', message: 'The agent refused to continue this turn.' });
+    events.push(outcome.settle('completed', { message: 'The agent refused to continue this turn.' }));
   } else {
     if (stopReason !== 'end_turn') {
       events.push({ type: 'command_output', text: NOTE[stopReason] ?? `The agent stopped the turn with the reason "${stopReason}".` });
     }
-    events.push({ type: 'turn_end' });
+    events.push(outcome.settle('completed'));
   }
   return events;
 }
 
 // A measure the agent leaves out stays out of the record: unknown, not zero.
 // `thoughtTokens` has no place in a record, and `totalTokens` is only a sum.
-function usageRecord(turn: AcpTurn, usage: AcpTokenUsage | null | undefined): UsageRecord | undefined {
-  if (!usage) return undefined;
-  const record: UsageRecord = { source: turn.source };
-  if (turn.model !== undefined) record.model = turn.model;
-  let reported = false;
-  const take = (value: number | null | undefined, set: (n: number) => void) => {
-    if (typeof value !== 'number') return;
-    set(value);
-    reported = true;
-  };
-  take(usage.inputTokens, (n) => (record.inputTokens = n));
-  take(usage.outputTokens, (n) => (record.outputTokens = n));
-  take(usage.cachedReadTokens, (n) => (record.cachedInputTokens = n));
-  return reported ? record : undefined;
+// The reducer keeps no state across turns and ACP names no call, so each
+// turn's builder has nothing to count twice.
+function usageRecord(turn: AcpTurn, usage: AcpTokenUsage | null | undefined): UsageRecord | null {
+  if (!usage) return null;
+  const measure = (value: number | null | undefined) => (typeof value === 'number' ? value : undefined);
+  const inputTokens = measure(usage.inputTokens);
+  const outputTokens = measure(usage.outputTokens);
+  const cachedInputTokens = measure(usage.cachedReadTokens);
+  return new UsageRecordBuilder(turn.source).call({
+    ...(turn.model !== undefined ? { model: turn.model } : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+  });
 }

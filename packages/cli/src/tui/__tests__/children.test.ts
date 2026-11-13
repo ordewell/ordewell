@@ -1,6 +1,6 @@
 import { createTask, reduceRun, serializePlan, type ChildPlanEntry, type ChildPlanView, EMPTY_RUN, type SurfacePlan } from '@ordewell/core';
 import { describe, expect, it, vi } from 'vitest';
-import { reduce, initialState, type Action, type Effect } from '../reducer';
+import { reduce, initialState, type Action, type Effect, type RunMessage } from '../reducer';
 import type { TuiState } from '../state';
 import { style } from '../ansi';
 import type { Key } from '../keys';
@@ -135,7 +135,7 @@ describe('opening a child plan', () => {
 
 /** The viewed child, with a question on it: `status_update` is what carries one, a read does not (ChildDirectory.view). */
 const statuses = (sessionId: string, ...tasks: Array<{ id: string; status: 'pending' | 'running' | 'failed' | 'awaiting_user'; continuable?: boolean; awaitingReason?: 'checkpoint'; checkpoint?: string }>): Action =>
-  ({ type: 'statusUpdate', sessionId, tasks: tasks.map((task) => ({ verdict: null, attempted: true, ...task })) }) as Action;
+  ({ type: 'runMessage', message: { type: 'status_update', tasks: tasks.map((task) => ({ verdict: null, attempted: true, ...task })) }, sessionId }) as Action;
 
 const asked = (state: TuiState, sessionId: string, taskId: string, checkpoint: string): TuiState =>
   step(state, statuses(sessionId, { id: taskId, status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint }));
@@ -1078,12 +1078,12 @@ describe('a branch and a block below the root', () => {
   const HANDOFF = {
     repos: [{ path: '/repo', integrationBranch: 'ordewell/child', baseRef: 'abc1234', baseBranch: 'main', landed: [{ taskId: 'a', order: 1, title: 'Write a' }] }],
     landed: [{ taskId: 'a', order: 1, title: 'Write a' }],
-  } satisfies Extract<Action, { type: 'isolationHandoff' }>['handoff'];
+  } satisfies Omit<Extract<RunMessage, { type: 'isolation_handoff' }>, 'type'>;
 
   it('does not raise the root\'s merge over a child, whose branch lands through its task above', () => {
     const state = inChild();
 
-    const next = step(state, { type: 'isolationHandoff', handoff: HANDOFF, sessionId: state.sessionId! });
+    const next = step(state, { type: 'runMessage', message: { type: 'isolation_handoff', ...HANDOFF }, sessionId: state.sessionId! });
 
     expect(next.overlay).toBeNull();
     expect(said(next)).not.toContain('/handoff');
@@ -1092,13 +1092,13 @@ describe('a branch and a block below the root', () => {
   it('keeps announcing a root\'s own run, which is the person\'s to land', () => {
     const state = atRoot();
 
-    const next = step(state, { type: 'isolationHandoff', handoff: HANDOFF, sessionId: state.sessionId! });
+    const next = step(state, { type: 'runMessage', message: { type: 'isolation_handoff', ...HANDOFF }, sessionId: state.sessionId! });
 
     expect(next.overlay?.kind).toBe('handoff');
   });
 
   it('shows the root\'s branch on the root\'s overlay when the root\'s run lands beneath a child', () => {
-    const state = step(inChild(), { type: 'isolationHandoff', handoff: HANDOFF, sessionId: 'root' });
+    const state = step(inChild(), { type: 'runMessage', message: { type: 'isolation_handoff', ...HANDOFF }, sessionId: 'root' });
 
     expect(state.overlay?.kind).toBe('handoff');
     expect(screen(state)).toContain('ordewell/child');

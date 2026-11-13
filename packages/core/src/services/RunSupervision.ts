@@ -58,6 +58,8 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   landedWork(): 'merged' | 'pending' | null;
   /** Where a merge of this run's work goes, as an update names it. */
   mergeTarget?(): string;
+  /** What git said when it refused to land a passed task's work, as the run record keeps it. */
+  landingError?(taskId: string): string | undefined;
   /** The last few lines a task's runner wrote. */
   recentOutput(taskId: string): string | undefined;
   /** The tail of a task's output a report carries; see {@link taskReport}. */
@@ -480,6 +482,10 @@ export class RunSupervision {
         return { kind: 'waiting_input', taskId, detail: `at a checkpoint${question ? `: ${question}` : ''}` };
       }
       case 'conflict': return { kind: 'landing_conflict', taskId };
+      case 'landing-failed': {
+        const refused = this.host.landingError?.(taskId);
+        return { kind: 'landing_failed', taskId, ...(refused ? { detail: refused } : {}) };
+      }
       case 'files-changed':
         return { kind: 'waiting_input', taskId, detail: 'the ops task changed tracked files in the user\'s checkout; nothing was committed, and the user marks it complete or retries it' };
       // Heard from the orchestrator's wait, with the runner and its reset.

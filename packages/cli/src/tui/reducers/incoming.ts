@@ -104,6 +104,7 @@ function runTaskToView(t: RunTask): TaskView {
     awaitingReason: t.status === 'awaiting_user' && isAwaitingReason(t.awaitingReason) ? t.awaitingReason : undefined,
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && typeof t.resumeAt === 'string' ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'skipped' && typeof t.skipReason === 'string' ? { skipReason: sanitize(t.skipReason) } : {}),
+    ...(t.status === 'skipped' && t.skipOrigin ? { skipOrigin: t.skipOrigin } : {}),
     checkpoint: typeof t.checkpoint === 'string' ? sanitize(t.checkpoint) : undefined,
     continuable: t.continuable === true,
     awaitingApproval: t.awaitingApproval,

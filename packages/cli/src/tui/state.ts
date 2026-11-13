@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type DecisionRecordEntry, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type DecisionRecordEntry, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SkipOrigin, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -61,6 +61,8 @@ export interface TaskView {
   resumeAt?: string;
   /** Why a `skipped` task was skipped; absent when no reason was given. */
   skipReason?: string;
+  /** Who skipped a `skipped` task; read by the loop rules (ADR-0045 L7). */
+  skipOrigin?: SkipOrigin;
   /** The whole question of the checkpoint the task waits at, while it does. */
   checkpoint?: string;
   /** A finished structured task the daemon can continue in its saved session (ADR-0018, K1). */
@@ -477,6 +479,13 @@ export interface TuiState {
    * plan refresh therefore keeps every status-only field the stream reported.
    */
   run: RunView;
+  /**
+   * Set from the moment this pane sends a Merge all until the merge it made is
+   * heard on the stream: that result is worded by the request's own answer, and
+   * any other (an automatic merge, the supervisor's, another window's) by the
+   * reducer.
+   */
+  mergeAsked: boolean;
   /** Derived from `run`; the pane's own shape for a run task. */
   tasks: TaskView[];
   /** What the planner has recorded as it went (ADR-0067), every entry, superseded ones included. */
@@ -882,6 +891,7 @@ export const STATE_SCOPE = {
   workspace: 'workspace',
   handoff: 'session',
   runMerge: 'session',
+  mergeAsked: 'session',
   plannerResend: 'session',
   plannerPause: 'session',
   // An approval prompt is the session's, and `leaveSession` drops it; any other
@@ -1000,6 +1010,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     exiting: false,
     spinnerFrame: 0,
     now: 0,
+    mergeAsked: false,
     ...overrides,
     run: seedRun(overrides),
   };

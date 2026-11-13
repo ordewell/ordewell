@@ -163,6 +163,14 @@ describe('the queue across a stop', () => {
     expect(state.editor.text).toBe('use Postgres\nand also');
   });
 
+  it('gives nothing back when the forced turn was discarded with its session left, as every surface rules', () => {
+    const sent = reduce(withDraft(planning(), 'use Postgres'), ctrlS).state;
+    const { state } = reduce(withDraft(sent, 'and also'), { type: 'failed', message: 'discarded', code: 'planner_turn_discarded', turn: true });
+
+    expect(state.editor.text).toBe('and also');
+    expect(state.forceSendPending).toBeNull();
+  });
+
   it('puts the glued queued prompts back in the composer, above what was typed since, when the send failed', () => {
     const sent = reduce(planning({ queuedPrompts: ['one', 'two', 'three'] }), ctrlS).state;
     expect(sent.queuedPrompts).toEqual([]);

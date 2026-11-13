@@ -1,5 +1,5 @@
 import type { PlannerAllowlist } from '../services/plannerAllowlist';
-import type { CommandPolicyOptions } from '../services/commandPolicy';
+import type { PolicyInputs } from '../services/commandPolicy';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
 
 /**
@@ -111,7 +111,7 @@ export interface IApproval {
   request(req: ApprovalRequest, opts?: { signal?: AbortSignal }): Promise<boolean>;
   /** The standing approvals a command is classified against, when this approval has any (ADR-0026). */
   allowlist?(): PlannerAllowlist;
-  commandPolicy?(): Pick<CommandPolicyOptions, 'autonomous' | 'approvalMode'>;
+  commandPolicy?(): Pick<PolicyInputs, 'autonomous' | 'approvalMode'>;
   /** Surface a decision reached before `request` was called, as `request`'s own are. */
   record?(req: ApprovalRequest, granted: boolean, source: ApprovalSource): void;
   /**

@@ -14,7 +14,8 @@ import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../i
 import type { QueuedTaskMessage } from '../interfaces/IRunner';
 import { canContinue } from './continuation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
-import { blockingFailures } from './blocking';
+import { blockingFailures, type BlockingSubject } from './blocking';
+import type { SkipOrigin } from '../models/SkipOrigin';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -47,6 +48,8 @@ export type SerializedTaskStatus = {
   resumeAt?: string;
   /** Why a `skipped` task was skipped; absent when no reason was given, and on any other status. */
   skipReason?: string;
+  /** Who skipped a `skipped` task (ADR-0045 L7), which a surface's loop rules read; absent on any other status and on a skip saved before origins, unless it was the loop's. */
+  skipOrigin?: SkipOrigin;
   /** The whole question of the checkpoint the task waits at; absent when it waits at none. */
   checkpoint?: string;
   /** Messages waiting for a structured task's turn to end, oldest first; absent when there are none. */
@@ -125,6 +128,7 @@ export type SerializedTask = {
   resumeAt?: string;
   /** As on {@link SerializedTaskStatus}: only while the task is `skipped`. */
   skipReason?: string;
+  skipOrigin?: SkipOrigin;
   /** Set only on an ops task (ADR-0020). */
   ops?: true;
   research?: boolean;
@@ -495,6 +499,7 @@ export function serializeTask(t: SurfaceTask): SerializedTask {
     ...(t.status === 'awaiting_user' && t.awaitingReason ? { awaitingReason: t.awaitingReason } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
+    ...(t.status === 'skipped' && t.skipOrigin ? { skipOrigin: t.skipOrigin } : {}),
     ...(t.ops ? { ops: true as const } : {}),
     ...(t.research !== undefined ? { research: t.research } : {}),
     ...(t.handoff ? { handoff: structuredClone(t.handoff) } : {}),
@@ -577,6 +582,7 @@ export function serializeTaskStatus(
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'usage-limit' && t.resumeAt ? { resumeAt: t.resumeAt } : {}),
     ...(t.status === 'awaiting_user' && t.awaitingReason === 'checkpoint' && checkpoint ? { checkpoint } : {}),
     ...(t.status === 'skipped' && t.skipReason ? { skipReason: t.skipReason } : {}),
+    ...(t.status === 'skipped' && t.skipOrigin ? { skipOrigin: t.skipOrigin } : {}),
     ...(queued.length > 0 ? { queued: queued.map((m) => ({ ...m })) } : {}),
     ...(canContinue(t) ? { continuable: true as const } : {}),
     ...(awaitingApproval > 0 ? { awaitingApproval } : {}),
@@ -715,7 +721,8 @@ export interface ExecutionSummary {
   skipped: number;
 }
 
-export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
+// Structural, so a run view's tasks are counted by the same rule as the store's.
+export function executionSummary(tasks: readonly BlockingSubject[]): ExecutionSummary {
   const blocked = blockingFailures(tasks);
   return {
     total: tasks.length,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EMPTY_HOLD, aheadOfDraft, glued, holdPrompt, unsendAll, unsendLatest } from '../promptHold';
+import { EMPTY_HOLD, aheadOfDraft, glued, holdPrompt, sendNowGivesBack, unsendAll, unsendLatest } from '../promptHold';
 
 describe('prompt hold', () => {
   it('takes back the newest prompt and leaves the older ones to send', () => {
@@ -26,5 +26,13 @@ describe('prompt hold', () => {
   it('puts an unsent prompt back above the draft being typed', () => {
     expect(aheadOfDraft('take this back', 'half a thought')).toBe('take this back\nhalf a thought');
     expect(aheadOfDraft('take this back', '')).toBe('take this back');
+  });
+
+  it('gives a Send now back on a refusal or a failure, never on a stop or a left session', () => {
+    expect(sendNowGivesBack('planner_not_ready')).toBe(true);
+    expect(sendNowGivesBack('conversation_busy')).toBe(true);
+    expect(sendNowGivesBack(undefined)).toBe(true);
+    expect(sendNowGivesBack('planner_turn_stopped')).toBe(false);
+    expect(sendNowGivesBack('planner_turn_discarded')).toBe(false);
   });
 });

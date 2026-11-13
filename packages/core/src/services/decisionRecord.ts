@@ -40,8 +40,9 @@ const unquoted = (text: string) => text.replace(/^["'“‘](.*)["'”’]$/s, '
 
 /** Adds a batch whole or not at all, so a refusal leaves nothing half-recorded for the planner to reconcile. */
 export function addToRecord(record: readonly DecisionRecordEntry[], inputs: readonly DecisionRecordInput[], context: RecordContext): RecordResult {
-  if (record.length + inputs.length > RECORD_LIMIT) {
-    return { ok: false, errors: [`The record holds its limit of ${RECORD_LIMIT} entries: supersede what no longer stands rather than add to it.`] };
+  // A superseding entry replaces a live one, so it adds nothing net; counting it (or the superseded) would freeze a full record, where superseding is the way out.
+  if (live(record).length + inputs.filter((input) => input.supersedes === undefined).length > RECORD_LIMIT) {
+    return { ok: false, errors: [`The record holds its limit of ${RECORD_LIMIT} live entries: supersede what no longer stands rather than add to it.`] };
   }
   const heard = context.userWords.map(squeeze);
   const next = [...record];

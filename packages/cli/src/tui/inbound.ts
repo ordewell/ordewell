@@ -1,5 +1,7 @@
-import { StreamOrder, stampOf } from '@ordewell/core';
-import type { Placement, ReplyRun, RunSnapshotFrame, SessionMessage, SessionNotice, StreamStamp } from '@ordewell/core';
+import { DaemonStream, stampOf } from '@ordewell/core';
+import type {
+  AccountLimitsFrame, ChildTreeFrame, DaemonFrame, ReplyRun, RunSnapshotFrame, RunView, SessionMessage, SessionNotice, StreamStamp,
+} from '@ordewell/core';
 import type { WsEvent } from '../apiClient';
 import type { Action } from './reducer';
 
@@ -13,13 +15,10 @@ import type { Action } from './reducer';
  * message shows: the conversation view for anything a planner said or did,
  * the run's own handling for task lifecycle.
  *
- * Dedupe is by the broadcast's place in the session's stream (`StreamStamp`):
- * the first copy of a sequence number is shown, any other is dropped. One
- * socket delivers each broadcast once, but a reconnect's new socket can greet
- * with what the old one still drained, and a run snapshot can lag a broadcast
- * already shown. Every broadcast is stamped (a daemon older than the stamp is
- * refused at connect, `drivable`); what is not — the socket's greetings of a
- * compaction or detection in progress — changes nothing when applied twice.
+ * Ordering, dedupe, the hold behind a load and the gap's reread are core's
+ * `DaemonStream` (ADR-0017), the base the desktop's session stream shares; what
+ * is left here is what only a terminal does: batch a stream of deltas into one
+ * repaint, and route each message to the reducer action that draws it.
  */
 
 export type Dispatch = (action: Action) => void;
@@ -52,11 +51,11 @@ const CONVERSATION_TYPES: ReadonlySet<string> = new Set<ConversationMessage['typ
   'execution_action',
 ]);
 
-function isStreamed(event: WsEvent): event is Streamed {
+function isStreamed(event: { type: string }): event is Streamed {
   return event.type === 'planner_text_delta' || event.type === 'planner_thinking_delta' || event.type === 'plan_token';
 }
 
-function isConversation(event: WsEvent): event is ConversationMessage {
+function isConversation(event: { type: string }): event is ConversationMessage {
   return CONVERSATION_TYPES.has(event.type);
 }
 
@@ -105,6 +104,15 @@ class WindowSet {
   }
 }
 
+/** What a load read: the redraw to apply and how much of the stream it accounts for. */
+export interface TuiRead {
+  position?: StreamStamp;
+  /** The run the read holds, for a greeting snapshot's approvals to ride on when the read covers it. */
+  run?: RunView;
+  /** Draws it. Called once, when the read is the one the stream goes on from. */
+  apply(): void;
+}
+
 export interface SessionInbound {
   /** One frame from the session's socket, or from a reconnect's socket that overlaps it. */
   receive(event: WsEvent): void;
@@ -119,181 +127,217 @@ export interface SessionInbound {
   /** A burst held for batching goes out now, in order. */
   flush(): void;
   /**
-   * Keeps the connect snapshot instead of delivering it, and every broadcast
-   * after it. A load follows the session before it is the one on screen, so
-   * anything dispatched at once would meet the reducer's stale check and be
-   * dropped — a request answered elsewhere meanwhile among them.
+   * Opens the session from a read, holding every frame behind it: a session
+   * is followed before it is the one on screen, so a greeting dispatched at
+   * once would meet the reducer's stale check and be dropped — a request
+   * answered elsewhere meanwhile among them. The read draws the session; what
+   * the stream sent meanwhile goes on top, in order, unless the read says it
+   * already holds it. Rejects with the read's own failure.
    */
-  holdSnapshot(): void;
-  /**
-   * Delivers the snapshot held and what came after it, in order (when
-   * `deliver`), then hands them out as they come again. A load releases them
-   * on top of what it read: they are newer.
-   */
-  releaseSnapshot(deliver: boolean): void;
+  openFrom(read: () => Promise<TuiRead>): Promise<void>;
 }
 
-/** One session's inbound stream. Its dedupe state lives as long as the session's link. */
-export function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
-  const delivered = new StreamOrder();
+/** What a stream's reader consults, shared with its constructor because `super` runs before `this` exists. */
+interface Reader {
+  custom: (() => Promise<TuiRead>) | null;
+}
+
+const DELTA_DEBOUNCE_MS = 75;
+
+/**
+ * One session's inbound stream. It starts whole: the TUI draws a session it
+ * opens itself (a new one has no transcript to read), and a load is asked for
+ * by `openFrom`, or by the base on a gap.
+ */
+class TuiStream extends DaemonStream<TuiRead> {
   // Replies already on screen. A backfill with a timestamp is told by its key:
   // a fixed reply that repeats ("Tasks updated") is the same words, not the
   // same reply. One without can only be told by its words.
-  const shown = new WindowSet(64);
-  const shownTexts = new WindowSet(64);
-  // Entries a redraw or a backfill already accounts for; the next matching copy is stale.
-  const pending = new WindowSet(16);
-
+  private readonly shown = new WindowSet(64);
+  private readonly shownTexts = new WindowSet(64);
+  // Entries a backfill already accounts for; the next matching copy is stale.
+  private readonly pending = new WindowSet(16);
   // A burst of deltas is held and dispatched as one, so a fast stream repaints
   // once per burst rather than once per token.
-  const DELTA_DEBOUNCE_MS = 75;
-  let held: Streamed | null = null;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let holdingSnapshot = false;
-  let heldSnapshot: RunSnapshotFrame | null = null;
-  let limitsPosition: { stream: string; revision: number } | null = null;
-  let heldAfter: (() => void)[] = [];
+  private burst: Streamed | null = null;
+  private burstTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A load of this surface's own is out: the session is not on screen yet. */
+  private opening = false;
+  /** The newest greeting snapshot with approvals seen while opening: no read returns them. */
+  private approvals: RunSnapshotFrame | null = null;
+  /** Frames the reducer would drop as stale before the session is on screen, said once it is. */
+  private deferred: Array<() => void> = [];
 
-  const flush = (): void => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
+  constructor(private readonly dispatch: Dispatch, private readonly sessionId: string, private readonly reader: Reader = { custom: null }) {
+    // A gap needs no read of its own: the reducer's `streamGap` reads the
+    // conversation back, or not, by whether a turn is drawing it (the effect
+    // is gated there, not here), and what the frames hold goes on after it.
+    super(
+      () => reader.custom ? reader.custom() : Promise.resolve(gapRead(dispatch, sessionId)),
+      () => {},
+    );
+    this.assumeWhole();
+  }
+
+  override receive(frame: DaemonFrame): void {
+    if (frame.type === 'run_snapshot') {
+      if (this.opening && frame.approvals) this.approvals = frame;
+      // Only a fixture sends a snapshot without its stamp (a daemon older than
+      // it is refused at connect), and it has nothing to order it by.
+      if (!this.opening && stampOf(frame) === null) {
+        this.snapshot(frame);
+        return;
+      }
     }
-    if (held === null) return;
-    const message = held;
-    held = null;
-    dispatch({ type: 'sessionMessage', message, sessionId });
-  };
+    super.receive(frame);
+  }
 
-  // Anything that is not the same stream's next piece flushes the held burst
-  // first, so dispatch order stays exactly the order the session sent.
-  const hold = (event: Streamed): void => {
-    const joined = held && joinStreamed(held, event);
-    if (joined) {
-      held = joined;
-      return;
+  async openFrom(read: () => Promise<TuiRead>): Promise<void> {
+    const outcome: { error?: unknown; failed: boolean } = { failed: false };
+    const mine = async (): Promise<TuiRead> => {
+      try {
+        outcome.failed = false;
+        return await read();
+      } catch (error) {
+        outcome.failed = true;
+        outcome.error = error;
+        throw error;
+      }
+    };
+    this.reader.custom = mine;
+    this.opening = true;
+    this.approvals = null;
+    try {
+      await this.reload();
+    } finally {
+      if (this.reader.custom === mine) {
+        this.reader.custom = null;
+        this.opening = false;
+        this.approvals = null;
+        const later = this.deferred;
+        this.deferred = [];
+        for (const run of later) run();
+      }
     }
-    flush();
-    held = event;
-    timer = setTimeout(flush, DELTA_DEBOUNCE_MS);
-  };
+    if (outcome.failed) throw outcome.error;
+  }
 
-  const showReply = (message: Extract<SessionMessage, { type: 'planner_message' }>): void => {
-    shown.add(replyKey(message.content, message.timestamp));
-    shownTexts.add(message.content);
-    dispatch({ type: 'sessionMessage', message, sessionId });
-  };
+  backfill(content: string, timestamp?: string, runs?: ReplyRun[]): void {
+    if (timestamp ? this.shown.has(replyKey(content, timestamp)) : this.shownTexts.has(content)) return;
+    const message = { type: 'planner_message' as const, content, timestamp: timestamp ?? new Date().toISOString(), ...(runs ? { runs } : {}) };
+    this.showReply(message);
+    // A copy still in flight — the REST answer can beat the socket frame —
+    // is this same reply, so the next matching copy is swallowed.
+    if (timestamp) this.pending.add(replyKey(content, timestamp));
+  }
 
-  // A number past the next one is a broadcast this surface missed — a socket
-  // that blipped and reconnected — so the conversation is read back.
-  const placed = (placement: Placement): boolean => {
-    if (placement.keep && placement.jump) dispatch({ type: 'streamGap', sessionId });
-    return placement.keep;
-  };
-
-  /** Whether this delivery is the first of a broadcast this surface has not shown. */
-  const fresh = (event: Partial<StreamStamp> & { type: string }): boolean => {
-    const stamp = stampOf(event);
-    return stamp ? placed(delivered.first(stamp, event.type)) : true;
-  };
-
-  const acceptReply = (event: Extract<ConversationMessage, { type: 'planner_message' }>): void => {
-    if (fresh(event) && !pending.take(replyKey(event.content, event.timestamp))) showReply(event);
-  };
-
-  const deliverSnapshot = ({ view, approvals }: RunSnapshotFrame): void => {
-    dispatch({ type: 'runSnapshot', view, ...(approvals ? { approvals } : {}), sessionId });
-  };
-
-  const deliverConversation = (event: ConversationMessage): void => {
-    if (event.type === 'planner_message') {
-      acceptReply(event);
-      return;
+  flush(): void {
+    if (this.burstTimer !== null) {
+      clearTimeout(this.burstTimer);
+      this.burstTimer = null;
     }
-    if (!fresh(event)) return;
-    if (event.type === 'plan_generated') {
-      dispatch({ type: 'sessionMessage', message: event, sessionId });
-      // Every plan a turn lands, one this surface did not send included (a
-      // supervisor's edit, an input replayed after a reload), and whichever
-      // socket's copy came first. With this surface's own turn out, the
-      // reducer only draws it: `converse` settles the plan it gets back, and
-      // ending the turn here would send the held prompts early.
-      dispatch({ type: 'planBroadcast', plan: event.plan, sessionId });
-      return;
-    }
-    dispatch({ type: 'sessionMessage', message: event, sessionId });
-  };
+    if (this.burst === null) return;
+    const message = this.burst;
+    this.burst = null;
+    this.dispatch({ type: 'sessionMessage', message, sessionId: this.sessionId });
+  }
 
-  const receive = (event: WsEvent): void => {
-    // The daemon greets every socket with the run as it stands, so a client
-    // that joins mid-run has it before the next update. Never counted as a
-    // copy: a reconnect greets with a view identical to an earlier one, and
-    // adopting a snapshot twice changes nothing. One older than a broadcast
-    // already shown came in late on a newer socket, and is passed over.
-    if (event.type === 'run_snapshot') {
-      flush();
-      const stamp = stampOf(event);
-      if (stamp && !placed(delivered.adopt(stamp))) return;
-      if (holdingSnapshot) heldSnapshot = event;
-      else deliverSnapshot(event);
-      return;
+  protected loaded(read: TuiRead): StreamStamp | undefined {
+    read.apply();
+    // A read that covers the greeting drops it, and with it the approvals only
+    // a snapshot carries; the transcript just drawn holds no approval card.
+    const greeting = this.approvals;
+    if (greeting?.approvals) {
+      this.dispatch({ type: 'runSnapshot', view: read.run ?? greeting.view, approvals: greeting.approvals, sessionId: this.sessionId });
     }
-    if (holdingSnapshot) {
-      heldAfter.push(() => receive(event));
-      return;
-    }
-    // Whole each time and unstamped: the latest one is all of it, copies included.
-    if (event.type === 'child_tree') {
-      if (event.sessionId === sessionId) dispatch({ type: 'childTree', sessionId, children: event.children });
-      return;
-    }
-    if (event.type === 'account_limits') {
-      if (event.sessionId !== sessionId) return;
-      if (limitsPosition?.stream === event.stream && event.revision <= limitsPosition.revision) return;
-      limitsPosition = { stream: event.stream, revision: event.revision };
-      dispatch({ type: 'accountLimits', limits: event.limits, sessionId });
-      return;
-    }
+    return read.position;
+  }
+
+  protected snapshot({ view, approvals }: RunSnapshotFrame): void {
+    this.flush();
+    this.dispatch({ type: 'runSnapshot', view, ...(approvals ? { approvals } : {}), sessionId: this.sessionId });
+  }
+
+  protected tree(frame: ChildTreeFrame): void {
+    if (frame.sessionId !== this.sessionId) return;
+    this.later(() => this.dispatch({ type: 'childTree', sessionId: this.sessionId, children: frame.children }));
+  }
+
+  protected limits(frame: AccountLimitsFrame): void {
+    if (frame.sessionId !== this.sessionId) return;
+    this.later(() => this.dispatch({ type: 'accountLimits', limits: frame.limits, sessionId: this.sessionId }));
+  }
+
+  protected broadcast(frame: SessionMessage | SessionNotice): void {
+    const event = frame as LifecycleMessage | ConversationMessage;
     // Whoever started the turn: a wake-up's prose streams as a sent turn's does.
+    // Anything that is not the same stream's next piece flushes the burst
+    // first, so dispatch order stays exactly the order the session sent.
     if (isStreamed(event)) {
-      if (fresh(event)) hold(event);
+      this.hold(event);
       return;
     }
-    flush();
+    this.flush();
     if (isConversation(event)) {
-      deliverConversation(event);
+      this.conversation(event);
       return;
     }
-    if (!fresh(event)) return;
-    dispatchLifecycle(dispatch, event, sessionId);
-  };
+    dispatchLifecycle(this.dispatch, event, this.sessionId);
+  }
 
+  private later(run: () => void): void {
+    if (this.opening) this.deferred.push(run);
+    else run();
+  }
+
+  private hold(event: Streamed): void {
+    const joined = this.burst && joinStreamed(this.burst, event);
+    if (joined) {
+      this.burst = joined;
+      return;
+    }
+    this.flush();
+    this.burst = event;
+    this.burstTimer = setTimeout(() => this.flush(), DELTA_DEBOUNCE_MS);
+  }
+
+  private showReply(message: Extract<SessionMessage, { type: 'planner_message' }>): void {
+    this.shown.add(replyKey(message.content, message.timestamp));
+    this.shownTexts.add(message.content);
+    this.dispatch({ type: 'sessionMessage', message, sessionId: this.sessionId });
+  }
+
+  private conversation(event: ConversationMessage): void {
+    if (event.type === 'planner_message') {
+      if (!this.pending.take(replyKey(event.content, event.timestamp))) this.showReply(event);
+      return;
+    }
+    this.dispatch({ type: 'sessionMessage', message: event, sessionId: this.sessionId });
+    if (event.type !== 'plan_generated') return;
+    // Every plan a turn lands, one this surface did not send included (a
+    // supervisor's edit, an input replayed after a reload), and whichever
+    // socket's copy came first. With this surface's own turn out, the
+    // reducer only draws it: `converse` settles the plan it gets back, and
+    // ending the turn here would send the held prompts early.
+    this.dispatch({ type: 'planBroadcast', plan: event.plan, sessionId: this.sessionId });
+  }
+}
+
+/** The read a gap owes: the reducer decides whether the conversation is read back (`streamGap`); frames are the news after it. */
+function gapRead(dispatch: Dispatch, sessionId: string): TuiRead {
+  dispatch({ type: 'streamGap', sessionId });
+  return { apply: () => {} };
+}
+
+/** One session's inbound stream. Its ordering state lives as long as the session's link. */
+export function createInbound(dispatch: Dispatch, sessionId: string): SessionInbound {
+  const stream = new TuiStream(dispatch, sessionId);
+  // Bound, since callers hand `receive` on as a callback.
   return {
-    receive,
-    backfill: (content, timestamp, runs) => {
-      if (timestamp ? shown.has(replyKey(content, timestamp)) : shownTexts.has(content)) return;
-      const message = { type: 'planner_message' as const, content, timestamp: timestamp ?? new Date().toISOString(), ...(runs ? { runs } : {}) };
-      showReply(message);
-      // A copy still in flight — the REST answer can beat the socket frame —
-      // is this same reply, so the next matching copy is swallowed.
-      if (timestamp) pending.add(replyKey(content, timestamp));
-    },
-    flush,
-    holdSnapshot: () => {
-      holdingSnapshot = true;
-      heldSnapshot = null;
-      heldAfter = [];
-    },
-    releaseSnapshot: (deliver) => {
-      holdingSnapshot = false;
-      const snapshot = heldSnapshot;
-      const after = heldAfter;
-      heldSnapshot = null;
-      heldAfter = [];
-      if (!deliver) return;
-      if (snapshot) deliverSnapshot(snapshot);
-      for (const next of after) next();
-    },
+    receive: (event) => stream.receive(event),
+    backfill: (content, timestamp, runs) => stream.backfill(content, timestamp, runs),
+    flush: () => stream.flush(),
+    openFrom: (read) => stream.openFrom(read),
   };
 }
 
@@ -305,43 +349,27 @@ export function createInbound(dispatch: Dispatch, sessionId: string): SessionInb
  */
 function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionId: string): void {
   switch (event.type) {
+    // Whole, for core to fold into the run and word (`runNotice`): the reducer
+    // adds only what the terminal has of its own. A merge's result is worded
+    // there too, unless this pane asked for the merge itself, and whether it
+    // ended the run is the Session's to say, in `run_closed`.
     case 'status_update':
-      dispatch({
-        type: 'statusUpdate',
-        tasks: event.tasks,
-        ...(event.runMerge ? { runMerge: event.runMerge } : {}),
-        ...(event.usage ? { usage: event.usage } : {}),
-        ...(event.activity ? { activity: event.activity } : {}),
-        ...(event.escalations ? { escalations: event.escalations } : {}),
-        sessionId,
-      });
-      return;
-
     case 'task_started':
-      dispatch({ type: 'taskStarted', taskId: String(event.taskId), order: event.order, title: String(event.title ?? event.taskId), runner: event.runner, sessionId });
+    case 'task_updated':
+    case 'review_needed':
+    case 'review_approved':
+    case 'execution_complete':
+    case 'execution_stopped':
+    case 'isolation_handoff':
+    case 'isolation_merge':
+    case 'run_closed':
+      dispatch({ type: 'runMessage', message: event, sessionId });
       return;
 
     // The extension shows these in its checkpoint panel; here they are a
     // transcript line, and the task view carries the card that answers them.
     case 'checkpoint':
       dispatch({ type: 'taskCheckpoint', taskId: String(event.taskId), title: String(event.taskTitle), summary: event.summary, sessionId });
-      return;
-
-    case 'review_needed':
-      dispatch({ type: 'notice', message: 'Plan needs your sign-off: /approve to continue.', sessionId });
-      return;
-
-    case 'review_approved':
-      dispatch({ type: 'notice', message: 'Plan approved.', sessionId });
-      return;
-
-    case 'execution_complete':
-      dispatch({ type: 'executionComplete', summary: event.summary, sessionId });
-      return;
-
-    // A stop carries no tally — the reducer counts the pane instead.
-    case 'execution_stopped':
-      dispatch({ type: 'executionComplete', stopped: true, sessionId });
       return;
 
     // Nothing started; the user chooses how to go on.
@@ -354,10 +382,6 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'notice', message: event.message, level: event.level, sessionId });
       return;
 
-    case 'isolation_handoff':
-      dispatch({ type: 'isolationHandoff', handoff: { repos: event.repos, landed: event.landed, ...(event.deferredTo ? { deferredTo: event.deferredTo } : {}) }, sessionId });
-      return;
-
     // A structured task's log as it happens (ADR-0018, P1): the task view is
     // its only reader, and the reducer drops it unless that view is open on
     // this task. The run's watcher itself does nothing with it.
@@ -365,24 +389,10 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'taskLog', taskId: String(event.taskId), attempt: event.attempt, events: event.events, position: stampOf(event) ?? undefined, sessionId });
       return;
 
-    case 'task_updated':
-      dispatch({ type: 'taskUpdated', taskId: String(event.taskId), changes: event.changes, sessionId });
-      return;
-
     // Raw runner chatter. Listed rather than defaulted, so a new lifecycle
     // variant fails to compile here until someone decides what a run's watcher
     // does with it.
     case 'task_output':
-      return;
-
-    // Its asker already has the words, from the merge request itself. Whether
-    // the merge ended the run is the Session's to say, in `run_closed`.
-    case 'isolation_merge':
-      dispatch({ type: 'isolationMerged', result: event.result, sessionId });
-      return;
-
-    case 'run_closed':
-      dispatch({ type: 'runClosed', sessionId });
       return;
 
     default: {

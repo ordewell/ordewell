@@ -6,6 +6,7 @@ import { flattenTasksWithParents, type Task, type TaskWithParent } from '../mode
 import { manualOverrideConfirmation, pastGateConfirmation } from '../taskRow/texts';
 import { holdLabel } from '../taskRow/status';
 import { canContinue } from './continuation';
+import { checkStart, type CheckStart } from './LoopRounds';
 import { waitOf, type StartWait, type StartWaitKind } from './readiness';
 import type { ExecutionCommand } from './ExecutionCommands';
 import type { PendingApproval } from './PendingApprovals';
@@ -13,7 +14,7 @@ import type { RunMergeView } from './SessionMessage';
 
 /**
  * What an escalation waits on (ADR-0053). `approval`, `checkpoint`, `input`,
- * `conflict`, `files-changed` and `usage-limit` are a task's wait; `failed` and
+ * `conflict`, `landing-failed`, `files-changed` and `usage-limit` are a task's wait; `failed` and
  * `out-of-rounds` its end; `merge-gate`, `unapproved`, `on-hold`, `no-prompt`
  * and `by-hand` what alone keeps a task from starting; `merge-all` and
  * `blocked-run` are the run's own.
@@ -23,6 +24,7 @@ export type EscalationKind =
   | 'checkpoint'
   | 'input'
   | 'conflict'
+  | 'landing-failed'
   | 'files-changed'
   | 'usage-limit'
   | 'failed'
@@ -44,6 +46,7 @@ export type EscalationOptionId =
   | 'reply'
   | 'resume'
   | 'continue'
+  | 'land'
   | 'retry'
   | 'run'
   | 'force-start'
@@ -304,6 +307,13 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
         options: [...(input.resolvable(task.id) ? [{ id: 'resolve-conflict' as const, label: 'Add a resolver task' }] : []), ...retry(row, input), SKIP, ...completeOption(row, input.run)],
       };
     }
+    case 'landing-failed':
+      // It passed and its work is kept: landing it starts nothing, so what holds a new start does not hold it.
+      return {
+        kind: 'landing-failed',
+        reason: naming(row, 'It passed, but git refused to land its work, which is kept. Fix what git said, then land it.', input, rows),
+        options: [{ id: 'land', label: 'Land its work' }, ...retry(row, input), SKIP, ...completeOption(row, input.run)],
+      };
     case 'files-changed':
       return { kind: 'files-changed', reason: naming(row, 'It changed tracked files in your checkout, and nothing was committed.', input, rows), options: [...retry(row, input), SKIP, ...completeOption(row, input.run)] };
     case 'input':
@@ -321,13 +331,14 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
  * holds any start of it holds a retry and a continue too, so it is named and
  * none of them is offered.
  */
-function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: Rows): Wait {
+function stranded(row: TaskWithParent, start: Extract<CheckStart, { kind: 'fix-unlanded' | 'next-round' }>, input: EscalationInput, rows: Rows): Wait {
+  const repeating = start.wait;
   const round = `round ${repeating.round} of ${repeating.maxRounds}`;
   const refOf = (id: string) => rows.get(id)?.ref ?? id;
   const behind = inFront(row, input);
   const waitsOn = behind.map(refOf).join(', ');
   const options = startedOver(row, input);
-  if (repeating.waiting.length === 0) {
+  if (start.kind === 'next-round') {
     if (behind.length > 0) return { kind: 'failed', reason: `Its fix has landed, and its ${round} waits on ${waitsOn}: nothing runs it now. Execute the plan and the loop goes on.`, options };
     return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...options] };
   }
@@ -348,7 +359,9 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   if (outOfRounds(task)) return { kind: 'out-of-rounds', ...ended(row, `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, input, rows) };
   if (!betweenRounds(task)) return { kind: 'failed', ...ended(row, task.verdict?.reason || 'It failed.', input, rows) };
   const repeating = waitOf(input.waits.get(task.id) ?? [], 'repeating');
-  if (repeating) return input.loopRunsOn(task.id) ? null : stranded(row, repeating, input, rows);
+  const start = checkStart(repeating, !!repeating && input.loopRunsOn(task.id));
+  if (start.kind === 'loop-runs-it') return null;
+  if (start.kind !== 'own') return stranded(row, start, input, rows);
   const body = [...rows.values()].filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
   return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
@@ -516,6 +529,7 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'reply': return command({ command: 'message_task', task, text: note ?? '' });
     case 'resume':
     case 'continue': return command({ command: 'retry_task', task, from: 'session', ...(said ? { message: said } : {}) });
+    case 'land': return command({ command: 'retry_task', task, from: 'session' });
     case 'retry': return command({ command: 'retry_task', task, from: 'fresh' });
     case 'run': return command({ command: 'run_task', task });
     case 'force-start': return command({ command: 'force_start', task });

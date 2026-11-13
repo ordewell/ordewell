@@ -16,12 +16,13 @@ export { approvalKindText, approvalStatusText, compactionText, handoffFindingsTe
 export type { HandoffPeekSubject } from './labels';
 export type { DiffRow, DiffRowKind } from './format';
 export type { OutputPreview } from './format';
-export { EMPTY_HOLD, holdPrompt, unsendLatest, unsendAll, aheadOfDraft, glued } from './promptHold';
+export { EMPTY_HOLD, holdPrompt, unsendLatest, unsendAll, aheadOfDraft, glued, sendNowGivesBack } from './promptHold';
 export type { PromptHold, TakenPrompt } from './promptHold';
 export { NO_TURN, followTurn, stopTurn, closeTurn } from './turnGate';
 export type { TurnGate, GatedConversation } from './turnGate';
 export { hasHiddenDetail } from './detail';
-export { taskStartedNotice } from './notices';
+export { runNotice, taskStartedNotice } from './notices';
+export type { RunNoticeOptions } from './notices';
 export { wakeUpItems, hasLongReport, REPORT_PREVIEW_LINES } from './wakeUp';
 export type { WakeUpItem } from './wakeUp';
 export { skillTokens, loadedSkillTokens } from './skillTokens';

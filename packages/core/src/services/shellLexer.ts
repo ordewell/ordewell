@@ -58,6 +58,12 @@ export interface Dialect {
    */
   hereDocuments: boolean;
   /**
+   * What ends a word. A POSIX shell splits on blanks alone: U+00A0, U+2003, a
+   * lone CR and the like stay inside the word, so `cat<NBSP>x/y` names the file
+   * `./cat<NBSP>x/y`, which splitting it on JS's `\s` would run as `cat x/y`.
+   */
+  wordBlank: RegExp;
+  /**
    * Characters that end a command name with no space before them. cmd.exe
    * reads `cmd/c del x` as `cmd /c del x`, and skips `,` and `=` like spaces,
    * so `,del x` runs `del`. Read by `nameDelimiter` in {@link lex}.
@@ -75,6 +81,7 @@ const POSIX_DIALECT: Dialect = {
   expansion: /^\$[A-Za-z_{0-9@*#?$!-]/,
   dollarQuotes: true,
   hereDocuments: true,
+  wordBlank: /[ \t]/,
   nameDelimiters: '',
   strippedExtensions: [],
 };
@@ -87,6 +94,7 @@ const CMD_DIALECT: Dialect = {
   expansion: /^[%!][A-Za-z_]/,
   dollarQuotes: false,
   hereDocuments: false,
+  wordBlank: /\s/,
   nameDelimiters: '/,=',
   // Without this, `del.exe` and `C:\bin\del.exe` both missed the refusal list.
   strippedExtensions: ['.exe', '.cmd', '.bat', '.com', '.ps1', '.msc'],
@@ -655,7 +663,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
       continue;
     }
 
-    if (/\s/.test(c)) { endToken(false); i++; continue; }
+    if (dialect.wordBlank.test(c)) { endToken(false); i++; continue; }
     if (quote === '' && nameDelimiter(c)) { i++; continue; }
 
     // A `#` at a word boundary opens a comment for the rest of this line; only
@@ -706,6 +714,116 @@ function isComputedWord(token: string, dialect: Dialect): boolean {
   if (/[$`]/.test(token) || /\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(token)) return true;
   for (let i = 0; i < token.length; i++) if (dialect.expansion.test(token.slice(i, i + 2))) return true;
   return false;
+}
+
+/** One piece of a word as the shell may expand it: a literal character, any one character, or any run. */
+type WordPart = string | 'one' | 'any';
+
+/**
+ * A word's shape once the shell has expanded it, or `anything` when an
+ * expansion may stand for any text, extra words included (`$X` splits).
+ *
+ * Read per segment, not per word: quotes are gone, so a quoted `*` sitting
+ * beside an unquoted glob counts as one too. That only ever over-reads a word,
+ * which is the safe side for a flag check. A brace list stands for any run,
+ * and a closed bracket expression for any text from it to the word's end;
+ * whose members they hold is not worth modelling for a check that refuses.
+ */
+function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
+  if (seg.expandable && (/[$`]/.test(word) || /%[A-Za-z_][^%]*%|![A-Za-z_][^!]*!/.test(word))) return 'anything';
+  // Read loosely: an escaped or quoted brace is not one to bash, and its
+  // backslash or quotes are gone, so `{x\},-exec}` reads `{x},-exec}`.
+  const braces = seg.expandable && /\{.*(?:,|\.\.).*\}/s.test(word);
+  const parts: WordPart[] = [];
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i];
+    if (braces && c === '{') {
+      let depth = 0;
+      let j = i;
+      for (; j < word.length; j++) {
+        if (word[j] === '{') depth++;
+        else if (word[j] === '}' && --depth === 0) break;
+      }
+      // A close the braces seen do not balance, or a `}` after the one they
+      // do, means some brace was a member: where the list opens and closes is
+      // unknowable, so nothing from here on is trusted (bash expands
+      // `{x\},-exec}` to `x}` and `-exec`, and `-exec{\},}` to `-exec}` and
+      // `-exec`).
+      if (j >= word.length || word.includes('}', j + 1)) { parts.push('any'); return parts; }
+      parts.push('any'); i = j; continue;
+    }
+    if (seg.globbed && c === '*') { parts.push('any'); continue; }
+    if (seg.globbed && c === '?') { parts.push('one'); continue; }
+    if (seg.globbed && c === '[') {
+      let from = i + 1;
+      if (word[from] === '!' || word[from] === '^') from++;
+      // A `]` first in the set is a member, not the close.
+      if (word[from] === ']') from++;
+      // Where the bracket truly closes is unknowable here, so nothing from it
+      // on is trusted. An escaped or quoted `]` is a member, not the close, and
+      // its backslash or quotes are gone (`[x\]-]exec` is `-exec`); a `[` in
+      // the set may open `[:class:]`, `[.c.]` or `[=c=]`, whose own `]` does
+      // not close it either (`[[:punct:]]exec`). An unclosed `[` is literal.
+      if (word.indexOf(']', from) > 0) { parts.push('any'); return parts; }
+    }
+    parts.push(c);
+  }
+  return parts;
+}
+
+// A table rather than backtracking, which a word of many `*` makes exponential.
+function shapeMatches(parts: WordPart[], target: string, prefixOnly: boolean): boolean {
+  // reach[t]: some way through the parts so far consumes exactly `t` characters of target.
+  let reach: boolean[] = new Array<boolean>(target.length + 1).fill(false);
+  reach[0] = true;
+  for (const part of parts) {
+    const next: boolean[] = new Array<boolean>(target.length + 1).fill(false);
+    for (let t = 0; t <= target.length; t++) {
+      if (!reach[t]) continue;
+      if (t === target.length && prefixOnly) return true;
+      if (part === 'any') for (let u = t; u <= target.length; u++) next[u] = true;
+      else if (t < target.length && (part === 'one' || part === target[t])) next[t + 1] = true;
+    }
+    reach = next;
+  }
+  return reach[target.length];
+}
+
+/** Whether the shell may replace `word` with text the command line does not spell. */
+export function shellRewrites(seg: Segment, word: string): boolean {
+  const shape = wordShape(seg, word);
+  return shape === 'anything' || shape.some((part) => part === 'one' || part === 'any');
+}
+
+/**
+ * Whether `word`, once the shell has expanded it, may begin with `prefix`.
+ *
+ * The literal `startsWith` a flag check would write trusts the word as
+ * written, and the shell does not: `printf -[v] PATH .` runs `printf -v` once
+ * a file named `-v` exists, and the repository being read decides that
+ * (ADR-0008).
+ */
+export function mayBeginWith(seg: Segment, word: string, prefix: string): boolean {
+  const shape = wordShape(seg, word);
+  return shape === 'anything' || shapeMatches(shape, prefix, true);
+}
+
+/** Whether `word`, once the shell has expanded it, may be exactly `target`. See {@link mayBeginWith}. */
+export function mayExpandTo(seg: Segment, word: string, target: string): boolean {
+  const shape = wordShape(seg, word);
+  return shape === 'anything' || shapeMatches(shape, target, false);
+}
+
+/** A word the shell may rewrite into a flag: an expansion whose result may begin with a dash. */
+export function mayBecomeFlag(seg: Segment, word: string): boolean {
+  const shape = wordShape(seg, word);
+  if (shape !== 'anything' && /^--[A-Za-z0-9][\w-]*=/.test(word)) {
+    // A glob or brace list after a literal `--name=` rewrites only the value,
+    // and its results are never split into further words, so the flag stays
+    // the one written (`--include=*.ts`). A variable may split, so it stays.
+    return false;
+  }
+  return shellRewrites(seg, word) && mayBeginWith(seg, word, '-');
 }
 
 export function toSegment(tokens: string[], piped: boolean, dialect: Dialect): Segment {

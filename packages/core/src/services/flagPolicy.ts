@@ -5,7 +5,7 @@
  * with; an unrecognised flag is refused, not prompted.
  */
 
-import type { Segment } from './shellLexer';
+import { mayBecomeFlag, shellRewrites, type Segment } from './shellLexer';
 
 /**
  * Flags known to be read-only, per permitted binary.
@@ -462,7 +462,10 @@ FlagShape | undefined {
  */
 export function takesNextToken(next: string | undefined): boolean {
   if (next === undefined) return false;
-  return !/^-./.test(next) || /^-\d/.test(next);
+  // getopt hands a value flag the next word whatever it says, so `tree -I -- -o
+  // out` gives `-I` the `--` and still reads `-o`. Reading `--` as the end of
+  // the flags would leave that `-o` an operand.
+  return !/^-./.test(next) || /^-\d/.test(next) || next === '--';
 }
 
 /** The flag as the refusal should name it: `--output`, not `--output=out.diff`. */
@@ -479,6 +482,18 @@ export interface FlagScan {
   operands: string[];
   /** Where each operand sits in the segment's arguments, so a flag's value equal to it is never mistaken for it. */
   operandAt: number[];
+  /**
+   * The first word, before the flags end, that the shell may expand into a
+   * flag (`*`, `-[o]`, `$X`): the allowlist above only ever saw it as written.
+   */
+  rewritten?: string;
+  /**
+   * Where in the arguments the first operand or flag value sits that the shell
+   * may expand into several words or none (`r*`, `{a,b}`, `$X`). From it on,
+   * how many operands there are and which one sits where is the shell's to
+   * decide: `git -C r* log` runs `git -C res rm log`.
+   */
+  spreadAt?: number;
 }
 
 /**
@@ -496,7 +511,20 @@ export function scanFlags(seg: Segment): FlagScan | undefined {
   const values = new Set(spec.values ?? []);
   const operands: string[] = [];
   const operandAt: number[] = [];
-  const operand = (at: number) => { operands.push(seg.args[at]); operandAt.push(at); };
+  let spreadAt: number | undefined;
+  const counts = (at: number) => { if (spreadAt === undefined && shellRewrites(seg, seg.args[at])) spreadAt = at; };
+  const operand = (at: number) => { counts(at); operands.push(seg.args[at]); operandAt.push(at); };
+  // A flag's value counts too: `sort -k *` hands `-k` the first file name and
+  // reads every later one as a flag. An expression binary is left to its own
+  // guard, since there any word may be a predicate.
+  let rewritten: string | undefined;
+  const judge = (token: string | undefined) => {
+    if (rewritten === undefined && token !== undefined && !spec.expressionArgs && mayBecomeFlag(seg, token)) rewritten = token;
+  };
+  const found = (): Pick<FlagScan, 'rewritten' | 'spreadAt'> => ({
+    ...(rewritten !== undefined ? { rewritten } : {}),
+    ...(spreadAt !== undefined ? { spreadAt } : {}),
+  });
 
   let i = 0;
   while (i < seg.args.length) {
@@ -509,13 +537,16 @@ export function scanFlags(seg: Segment): FlagScan | undefined {
       for (let j = i + 1; j < seg.args.length; j++) operand(j);
       break;
     }
+    judge(token);
     if (!/^-./.test(token)) { operand(i); i++; continue; }
 
     const shape = matchFlag(spec, booleans, values, token);
-    if (shape === undefined) return { unknown: flagLabel(token), operands, operandAt };
-    i += shape === 'value' && takesNextToken(seg.args[i + 1]) ? 2 : 1;
+    if (shape === undefined) return { unknown: flagLabel(token), operands, operandAt, ...found() };
+    const consumes = shape === 'value' && takesNextToken(seg.args[i + 1]);
+    if (consumes) { judge(seg.args[i + 1]); counts(i + 1); }
+    i += consumes ? 2 : 1;
   }
-  return { operands, operandAt };
+  return { operands, operandAt, ...found() };
 }
 
 /**
@@ -534,6 +565,19 @@ export function scanFlags(seg: Segment): FlagScan | undefined {
  */
 export function subcommandOf(seg: Segment): string | undefined {
   const scan = scanFlags(seg);
-  if (scan) return scan.operands[0];
+  if (scan) return subcommandShifter(seg, scan) === undefined ? scan.operands[0] : undefined;
   return seg.args.find((a) => !a.startsWith('-'));
+}
+
+/**
+ * A word before a multiplexer's subcommand that the shell may expand into
+ * several words or none, so that which word lands where the subcommand goes is
+ * the shell's to decide: with a directory `res` and a file `rm`, `git -C r*
+ * log` runs `git -C res rm log`. Only a flag's value can sit there, since the
+ * first operand is the subcommand itself.
+ */
+export function subcommandShifter(seg: Segment, scan: FlagScan | undefined = scanFlags(seg)): string | undefined {
+  if (scan?.spreadAt === undefined) return undefined;
+  const at = scan.operandAt[0];
+  return at === undefined || scan.spreadAt < at ? seg.args[scan.spreadAt] : undefined;
 }

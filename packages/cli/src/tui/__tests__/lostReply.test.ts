@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fromTranscript, type SurfacePlan } from '@ordewell/core';
-import { DaemonError, UnreadableResponseError } from '../../apiClient';
+import { UnreadableResponseError } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import type { TuiState } from '../state';
@@ -14,7 +15,7 @@ import { messagesOf } from './chat';
  */
 
 const timedOut = () => new Error('Request timed out');
-const sessionGone = () => new DaemonError('Session not found', 404, 'session_not_found');
+const sessionGone = () => new DaemonRefusal('Session not found', 404, { code: 'session_not_found' });
 
 const planWith = (...history: Array<{ role: 'user' | 'assistant'; content: string }>): SurfacePlan =>
   ({ tasks: [], conversationHistory: history } as unknown as SurfacePlan);
@@ -142,7 +143,7 @@ describe('an opening turn whose reply was lost', () => {
   });
 
   it('still clears the session when the daemon answered with a refusal', async () => {
-    const t = tui({ startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)) });
+    const t = tui({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key', 400)) });
     await t.run({ type: 'startConversation', goal: 'x' });
 
     expect(types(t.actions)).toContain('sessionCleared');
@@ -225,7 +226,7 @@ describe('a later turn whose reply was lost', () => {
   });
 
   it('reports a daemon refusal as a failed turn, as before', async () => {
-    const t = tui({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) }, turnOpen('s1'));
+    const t = tui({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonRefusal('planner down', 500)) }, turnOpen('s1'));
     await t.run({ type: 'sendMessage', sessionId: 's1', message: 'first' });
 
     expect(types(t.actions)).toContain('failed');
@@ -415,7 +416,7 @@ describe('a turn that ends after another session was loaded', () => {
   });
 
   it.each([
-    ['refused', new DaemonError('no key configured', 400), {}, /no key configured/],
+    ['refused', new DaemonRefusal('no key configured', 400), {}, /no key configured/],
     ['lost, and the daemon holds no session for it', timedOut(), { adoptSession: vi.fn().mockRejectedValue(sessionGone()) }, /holds no session for it/],
   ] as [string, unknown, Partial<OrdewellApi>, RegExp][])('an opening turn %s', async (_, err, api, foreign) => {
     const start = held();
@@ -432,7 +433,7 @@ describe('a turn that ends after another session was loaded', () => {
   // The guard above must not swallow the failure of the session that let
   // itself go: it is reported on the welcome it left, and ends the turn there.
   it('an opening turn refused with nothing else loaded still says why and ends the turn', async () => {
-    const t = tui({ startConversation: vi.fn().mockRejectedValue(new DaemonError('no key configured', 400)) });
+    const t = tui({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key configured', 400)) });
     t.type('goal c');
     expect(t.state.planner).toBe('planning');
 

@@ -1501,7 +1501,7 @@ describe('ClaudeCodeAdapter — an interrupt and the turn it is for', () => {
     adapter.dispose();
   });
 
-  it('reports a failure of the turn the runner opens itself, however an earlier interrupt ended', async () => {
+  it('ends a turn whose finish raced an acknowledged interrupt as interrupted, and still reports a failure of a turn the runner opens itself', async () => {
     const { processDeps, spawned } = deps([(written, proc) => { void written; void proc; }, (written, proc) => proc.emitStdout(ack(written) + result('success'))]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start(taskStart());
@@ -1513,12 +1513,38 @@ describe('ClaudeCodeAdapter — an interrupt and the turn it is for', () => {
 
     await expect(adapter.interrupt(1000)).resolves.toBe(true);
     await turn;
-    // The interrupt lost the race: the turn finished on its own.
-    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    // The model finished as the interrupt landed: the interrupt still ends it (ADR-0018 W1).
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
     expect(await adapter.steer('m1', 'next')).toBe(true);
 
     spawned.processes[0].emitStdout(speaking + result('error_during_execution'));
     expect(wake.filter((e) => e.type === 'turn_end' || e.type === 'error')).toEqual([{ type: 'error', message: 'Usage limit reached' }]);
+    adapter.dispose();
+  });
+
+  // The interrupt cuts the subagent's `Agent` call short, so its tool result
+  // comes back an error: that is the stop that was asked for, not a failure.
+  it('finishes a foreground subagent the interrupt cut short as stopped, and one that failed on its own as failed', async () => {
+    const agentCall = (id: string) => line({ type: 'assistant', session_id: 'sess-1', message: { id: `msg_${id}`, role: 'assistant', content: [{ type: 'tool_use', id, name: 'Agent', input: { description: 'Read the README' } }] } });
+    const agentError = (id: string, content: string) => line({ type: 'user', session_id: 'sess-1', parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: true }] } });
+    const { processDeps } = deps([
+      agentCall('toolu_cut'),
+      (written, proc) => proc.emitStdout(ack(written) + agentError('toolu_cut', 'Interrupted by user') + result('error_during_execution')),
+      agentCall('toolu_broke') + agentError('toolu_broke', 'Agent crashed') + result('success'),
+    ]);
+    const adapter = new ClaudeCodeAdapter(processDeps);
+    await adapter.start(taskStart());
+    const cut: AgentEvent[] = [];
+    const turn = adapter.send('look around', (e) => cut.push(e));
+    await tick();
+
+    await expect(adapter.interrupt(1000)).resolves.toBe(true);
+    await turn;
+    expect(cut.filter((e) => e.type === 'subagent_finished')).toEqual([{ type: 'subagent_finished', subagentId: 'toolu_cut', outcome: 'stopped', digest: 'Interrupted by user' }]);
+
+    const broke: AgentEvent[] = [];
+    await adapter.send('again', (e) => broke.push(e));
+    expect(broke.filter((e) => e.type === 'subagent_finished')).toEqual([{ type: 'subagent_finished', subagentId: 'toolu_broke', outcome: 'failed', digest: 'Agent crashed' }]);
     adapter.dispose();
   });
 

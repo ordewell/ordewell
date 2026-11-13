@@ -264,7 +264,7 @@ function renderLoopVerdict(loop: TaskLoop, round: number | undefined): string {
 }
 
 /** A continued check's session holds the block already; a long one may have compacted it away. */
-const LOOP_VERDICT_REMINDER = 'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem and `done` only when you confirm none.';
+export const LOOP_VERDICT_REMINDER = 'You are this loop\'s check: your `task_complete` status is its verdict, `failed` when you confirm any problem and `done` only when you confirm none.';
 
 const CHECKPOINT_INSTRUCTION = [
   '## Human-in-the-loop checkpoints',

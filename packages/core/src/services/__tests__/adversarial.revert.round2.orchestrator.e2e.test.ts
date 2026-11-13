@@ -77,7 +77,7 @@ describe.skipIf(!hasGit)('ADVERSARIAL: revert and retry through the real pipelin
     const done = (id: string) => vi.waitFor(() => expect(orchestrator.storeInstance.get(id)!.status).toBe('completed'), { timeout: 20000 });
     await done('t1');
     await done('t2');
-    const run = orchestrator.runs.current!;
+    const run = orchestrator.runs.planIsolation!.run;
     const integration = run.repos[0].integrationBranch;
     expect(git(root, 'ls-tree', '--name-only', integration).split('\n').sort()).toEqual(['README.md', 'one.txt', 'two.txt']);
 

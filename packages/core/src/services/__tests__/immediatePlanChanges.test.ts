@@ -80,6 +80,41 @@ describe('a submit_plan call', () => {
   });
 });
 
+describe('a submit_plan call over a finished task that waits on an unfinished one', () => {
+  // "x" ran before "y", which was re-armed since: a rewrite is judged with x as it stands, its dependency kept.
+  async function restating() {
+    const planner = heldPlanner();
+    const session = makeSession({ aiService: planner.aiService });
+    session.loadPlan(plan([task('y', 1), task('x', 2, { status: 'completed', dependencies: ['y'] })], { status: 'draft' }), 'build it', process.cwd());
+    void session.continueConversation('restate the plan');
+    await until(() => planner.calls.length === 1);
+    return { session, planner };
+  }
+  const spec = (id: string, dependencies: string[] = []) => ({ id, title: `Task ${id}`, description: id, type: 'ai', prompt: `do ${id}`, dependencies, sliceType: 'AFK', autonomy: 'AFK', assignedRunner: 'claude-code' });
+
+  it('is refused for listing it ahead of its dependency, and leaves the plan open to the next edit', async () => {
+    const { session, planner } = await restating();
+
+    const submitted = await planner.tools().submitPlan!({ tasks: [spec('x'), spec('y')] } as never, ctx);
+    const edited = await planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 'y', changes: { title: 'Again' } }] }, ctx);
+
+    expect(submitted.isError).toBe(true);
+    expect(edited.isError).toBeFalsy();
+    expect(session.planTasks.map((t) => [t.id, t.title])).toEqual([['y', 'Again'], ['x', 'Task x']]);
+    expect(session.planTasks[1].status).toBe('completed');
+  });
+
+  it('is refused for the cycle the kept dependency closes', async () => {
+    const { session, planner } = await restating();
+
+    const submitted = await planner.tools().submitPlan!({ tasks: [spec('x'), spec('y', ['x'])] } as never, ctx);
+
+    expect(submitted.isError).toBe(true);
+    expect(body(submitted).errors).toEqual([expect.objectContaining({ message: expect.stringMatching(/^Dependency cycle detected: /) })]);
+    expect(session.planTasks.map((t) => t.dependencies)).toEqual([[], ['y']]);
+  });
+});
+
 describe('successive edit_plan calls in one reply', () => {
   it('are batches of their own: a refused one leaves the one before it committed', async () => {
     const { session, planner } = await openTurn();

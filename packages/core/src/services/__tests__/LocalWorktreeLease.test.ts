@@ -46,7 +46,7 @@ describe('LocalWorktreeLease (ADR-0059 L4)', () => {
     const { backend, runs, isolation } = setup();
     isolation.availability = { active: false, reason: 'disabled' };
     const decision = await runs.decide(async () => undefined);
-    if (typeof decision === 'string') throw new Error(decision);
+    if (typeof decision === 'string' || 'refused' in decision) throw new Error(JSON.stringify(decision));
     const lease = reserved(backend.reserve(attemptOf()));
     await runs.close();
     if (next !== 'close') {
@@ -84,7 +84,7 @@ describe('LocalWorktreeLease (ADR-0059 L4)', () => {
     isolation.availability = { active: false, reason: 'disabled' };
     const decision = await runs.decide(async () => undefined);
     expect(decision).toEqual({ epoch: 1, mode: 'shared' });
-    if (typeof decision === 'string') throw new Error(decision);
+    if (typeof decision === 'string' || 'refused' in decision) throw new Error(JSON.stringify(decision));
 
     const opened = await reserved(backend.reserve(attemptOf())).open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh', decision }, required: [] }, new AbortController().signal);
 
@@ -100,7 +100,7 @@ describe('LocalWorktreeLease (ADR-0059 L4)', () => {
   it('refuses the claim\'s isolation decision after its run is replaced by a shared run', async () => {
     const { backend, runs, isolation } = setup();
     const decision = await runs.decide(async () => undefined);
-    if (typeof decision === 'string') throw new Error(decision);
+    if (typeof decision === 'string' || 'refused' in decision) throw new Error(JSON.stringify(decision));
     const lease = reserved(backend.reserve(attemptOf()));
     runs.interrupt();
     isolation.availability = { active: false, reason: 'disabled' };
@@ -146,7 +146,7 @@ describe('LocalWorktreeLease (ADR-0059 L4)', () => {
     await open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh' } });
     const { workspace } = await open({ task: t1, workspace: { kind: 'checkout' } });
     expect(workspace).toEqual({ cwd: '/repo', worktree: false });
-    expect(runs.current?.tasks.t1).toBeUndefined();
+    expect(runs.planIsolation?.run.tasks.t1).toBeUndefined();
     expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: false });
   });
 

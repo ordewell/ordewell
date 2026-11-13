@@ -36,6 +36,7 @@ const AWAITING_LABELS: Record<AwaitingReason, string> = {
   checkpoint: 'Checkpoint',
   'question-lost': 'Question lost in a restart',
   conflict: 'Merge conflict',
+  'landing-failed': 'Work could not land',
   'files-changed': 'Changed tracked files',
   'usage-limit': 'Paused on a usage limit',
 };

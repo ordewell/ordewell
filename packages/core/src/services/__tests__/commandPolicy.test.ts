@@ -437,9 +437,10 @@ describe('classifyCommand', () => {
     });
 
     // A bare assignment executes nothing, and refusing the segment it sits in
-    // would move `x=/etc/passwd; cat $x` off the prompt tier it belongs on.
+    // would move `x=/etc/passwd; cat -- $x` off the prompt tier it belongs on.
+    // (Without the `--`, `$x` may hold a flag, which refuses on its own.)
     it('leaves a segment that is only an assignment to the following command', () => {
-      expect(classifyCommand('x=/etc/passwd; cat $x').tier).toBe('ask');
+      expect(classifyCommand('x=/etc/passwd; cat -- $x').tier).toBe('ask');
     });
   });
 
@@ -602,7 +603,6 @@ describe('wrappers are classified by the command they run', () => {
     'timeout 5 rg --files',
     'busybox ls -la',
     'command cat package.json',
-    'env -i git log --oneline -5',
   ])('keeps a wrapped read-only command unprompted: %s', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('auto');
   });
@@ -772,6 +772,201 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     expect(classifyCommand('echo ---').tier).toBe('auto');
     expect(classifyCommand('echo "--- files changed vs main ---"').tier).toBe('auto');
     expect(classifyCommand('printf -- "%s\\n" one').tier).toBe('auto');
+  });
+
+  // bash's `printf -v NAME` assigns a shell variable, so `printf -v PATH bin`
+  // makes the next bare command run the repository's own file, and
+  // `printf -v CDPATH` sends a bare-name `cd` outside the workspace.
+  it.each([
+    'printf -v PATH . && cd bin && cat x',
+    'printf -v PATH bin && cat README.md',
+    "printf -v CDPATH ':\\057' && cd etc && cat passwd",
+    'printf -vPATH bin && cat README.md',
+    "printf '-v' PATH bin && cat README.md",
+    'command printf -v PATH bin && cat README.md',
+  ])('does not run printf -v unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).not.toBe('auto');
+  });
+
+  // The shell expands an unquoted glob or brace list before printf sees it, so
+  // `-[v]` becomes `-v` once the repository commits a file named `-v`.
+  it.each([
+    'printf -[v] PATH . && cd bin && cat x',
+    "printf -[v] CDPATH ':\\057' && cd etc && cat passwd",
+    'printf -? PATH . && cd bin && cat x',
+    'printf [-]v PATH . && cd bin && cat x',
+    'printf -v* . && cd bin && cat x',
+    'printf * . && cd bin && cat x',
+    'printf -{v,v} PATH . && cd bin && cat x',
+  ])('does not run a printf whose first word may expand to -v: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // The same rewrite reaches every flag compare: a word the shell expands can
+  // become any flag a file name in the repository spells.
+  it.each([
+    'sort -k1 * README.md',
+    'rg foo [-]-pre=x',
+    'grep -r foo -[r] .',
+    'find . [-]exec sh {} +',
+    'find . -de[l]ete',
+    'sed -n 1p [-]i README.md',
+    'enable [-]f x.so x',
+    'git branch -l [-]D main',
+    'git tag -l -[d] v1',
+    'awk -[f] x.awk README.md',
+    'awk -i inplac[e] 1 README.md',
+    'node -[e] 1',
+    // A POSIX class, collating symbol or equivalence class inside a bracket
+    // holds its own `]`, so the first `]` does not close the bracket.
+    'find . [[:punct:]]exec bin/x {} +',
+    'find . -maxdepth 1 [[:punct:]]delete',
+    'find . [[.-.]]exec bin/x {} +',
+    'find . [[=-=]]exec bin/x {} +',
+    'find . [![:alnum:]]exec bin/x {} +',
+    'printf [[:punct:]]v PATH . && cd bin && cat x',
+    'printf [[.-.]]v PATH . && cd bin && cat x',
+  ])('treats a word the shell can rewrite as possibly any flag: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // An escaped or quoted `]` is a member of the set to bash and dash, not its
+  // close, and the lexer has dropped the backslash or quotes by the time the
+  // word is read: `[x\]-]exec` is `-exec` once the repository commits that file.
+  it.each([
+    'find . [x\\]-]exec bin/x {} +',
+    'find . [-\\]]exec bin/x {} +',
+    "find . [x']'-]exec bin/x {} +",
+    'find . [x"]"-]exec bin/x {} +',
+    'printf [x\\]-]v PATH . && cd bin && cat x',
+    "printf [x']'-]v PATH . && cd bin && cat x",
+    'printf [x"]"-]v PATH . && cd bin && cat x',
+  ])('reads a word from its first closed bracket as any text: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // A glob or brace list is one word as written and any number once expanded,
+  // so a check that counts operands or takes one by position must not count it
+  // as one: with `notes1.txt` and `notes2.txt`, `uniq notes*.txt` writes the
+  // second, and with a directory `res` and a file `rm`, `git -C r* log` runs
+  // `git -C res rm log`.
+  it.each([
+    'uniq notes*.txt',
+    'uniq notes/*.txt',
+    'uniq -f 1* names.txt',
+    'uniq {a,b}.txt',
+    'git -C r* log',
+    'git -C r* status',
+    'git --git-dir r* log',
+    'git -C r*',
+    'git -C {res,rm} log',
+    'git -C $DIR log',
+    'git branch --contains r*',
+    'git symbolic-ref r*',
+  ])('reads a word the shell may split as possibly several operands: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // A wrapper's own value or positional splits the same way: with a directory
+  // `a` holding `b.sh`, `env -C ./* cat x` runs `env -C ./a ./b.sh …`, and
+  // env executes the repository's script.
+  it.each([
+    'env -C ./* cat x',
+    'env --chdir ./* cat x',
+    'env -C {a,b.sh} cat x',
+    'env -C $D cat x',
+    'env -C $DIR git ls-remote origin',
+    'nice -n 1* cat x',
+    'timeout 1* cat x',
+  ])('reads a wrapper argument the shell may split as possibly the command: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'env -C src cat x',
+    'env -C src cat src/*.ts',
+    'timeout 10 cat src/*.ts',
+  ])('keeps a wrapper whose own arguments are literal unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
+  // An escaped or quoted brace is not one to bash and the lexer has dropped
+  // the backslash, so where the list opens and closes is not knowable: bash
+  // expands `{x\},-exec}` to `x}` and `-exec`.
+  it.each([
+    'find . -not -name {x\\},-exec} touch pwned \\;',
+    'find . -not -name {\\{,-exec} touch pwned \\;',
+    'find . -not -name -exec{\\},} touch pwned \\;',
+  ])('reads a brace list it cannot close as any text: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'git log -- *.ts',
+    'git -C packages/core log --oneline -3',
+    'uniq -c names.txt',
+  ])('keeps a split that lands after every counted position unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
+  // getopt hands a value flag the next word even when it is `--`, so the words
+  // after it are still options: `tree -I -- -o out` writes `out`.
+  it.each([
+    'tree -I -- -o out',
+    'rg -e -- --pre=./x foo',
+  ])('reads past a "--" a value flag consumed: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // Narrowing stays where a rewrite cannot reach a flag: a literal head that is
+  // no dash, or a glob after `--`.
+  it.each([
+    'cat docs/*.md',
+    'cat ./*.md',
+    'cat -- *.md',
+    'ls src/?.ts',
+    'grep -n foo -- *.ts',
+    'printf "%s\\n" *.md',
+    'ls src/[ab]*.ts',
+    'cat src/[ab].ts',
+    'find . -name *.ts',
+  ])('keeps a glob that cannot become a flag unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
+  // The bare-repository pin reaches git only through GIT_CONFIG_* in the
+  // environment (PLANNER_GIT_ENV), so an `env` that edits the environment can
+  // drop it and let a committed bare repository's config run.
+  it.each([
+    'env -u GIT_CONFIG_COUNT git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env -i git -C vendor/evil.git diff HEAD~1 HEAD',
+    'cd vendor/evil.git && env -i git diff HEAD~1 HEAD',
+    'env --unset=GIT_CONFIG_COUNT git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env --unset GIT_CONFIG_COUNT git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env -uGIT_CONFIG_COUNT git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env --ignore-environment git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env - git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env -0i git -C vendor/evil.git diff HEAD~1 HEAD',
+    'nice env -i git log --oneline -5',
+    'env -i git log --oneline -5',
+    'env -u HOME git ls-remote origin',
+    'env [-]i git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env -[u] GIT_CONFIG_COUNT git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env $FLAG git -C vendor/evil.git diff HEAD~1 HEAD',
+    'env [-] git -C vendor/evil.git diff HEAD~1 HEAD',
+  ])('refuses an env that edits the environment: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // A shell keeps U+00A0 and the other Unicode spaces inside a word, so
+  // `cat<NBSP>x/y` is one word with a slash: the file `./cat<NBSP>x/y`.
+  it.each([
+    ['no-break space', '\u00a0'], ['em space', '\u2003'], ['ideographic space', '\u3000'],
+    ['byte order mark', '\ufeff'], ['carriage return', '\r'], ['form feed', '\f'], ['vertical tab', '\v'],
+  ])('does not split a word on a %s', (_name, space) => {
+    const cmd = `cat${space}x/y`;
+    expect(classifyCommand(cmd).tier).not.toBe('auto');
+    expect(classifyCommand(`ls${space}x/y`).tier).not.toBe('auto');
   });
 
   // Membership in the permitted set is not enough on its own: a binary with no
@@ -1010,7 +1205,6 @@ describe('the remote-listing subcommand prompts for a configured remote, scoped 
     ['posix', 'git ls-remote origin ~'],
     ['posix', 'git ls-remote origin x=~/y'],
     ['posix', 'git -C $DIR ls-remote origin'],
-    ['posix', 'env -C $DIR git ls-remote origin'],
     ['posix', 'nice git ls-remote --tags origin $MY_SECRET_TOKEN'],
     ['posix', 'echo $(git ls-remote origin $MY_SECRET_TOKEN)'],
     ['posix', 'git.exe ls-remote origin $MY_SECRET_TOKEN'],
@@ -1109,7 +1303,7 @@ describe('a git grant is scoped by the subcommand it runs, past leading flags', 
 
   // A wrapper's own words never reach a scope, and `env -C` picks the
   // repository as `-C` does: `env -C packages/evil` shared the grant of
-  // `env -C packages/web`. `env -u HOME` changes which config git reads.
+  // `env -C packages/web`.
   it.each([
     'env -C packages/web git ls-remote --heads origin',
     'env -Cpackages/web git ls-remote --heads origin',
@@ -1117,7 +1311,6 @@ describe('a git grant is scoped by the subcommand it runs, past leading flags', 
     'env --chdir packages/web git ls-remote origin --heads',
     'nice env -C packages/web git ls-remote origin',
     'timeout 5 env -C packages/web git -C . ls-remote origin',
-    'env -u HOME git ls-remote origin',
     'nice git ls-remote origin',
     'env -C packages/web git.exe ls-remote origin',
   ])('holds the wrapped listing %s to its line', (cmd) => {
@@ -1429,6 +1622,35 @@ describe('jq and yq programs are read for the environment and files they reach',
   ])('keeps an ordinary filter unprompted: %s', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('auto');
   });
+
+  // The program was read as written, and the shell rewrites it first: with a
+  // repository file named `env`, `jq -n e*` runs `jq -n env` and prints the
+  // environment. A word before the program moves it: `-L e*` beside a
+  // directory `e` and a file `env` becomes `-L e env`, and `env` is the program.
+  it.each([
+    'jq -n e*',
+    'jq -n en?',
+    'jq -n [e]nv',
+    'jq -n {e,f}nv',
+    'jq -n -L e* .',
+    'jq -n --arg x e* .',
+    'jq --indent 2* .',
+    'yq -n e*',
+    'yq -n --indent 2* .',
+  ])('refuses a program the shell may rewrite: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'jq . data.json',
+    "jq -n '{a:1}'",
+    "jq --arg x y '.a' f.json",
+    "yq '.a' f.yaml",
+    "jq '.a' f*.json",
+    "jq -r '.name' packages/*/package.json",
+  ])('leaves a glob after the program to path confinement: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
 });
 
 describe('an input redirect names a file the shell opens, not an argument', () => {
@@ -1563,6 +1785,23 @@ describe('pathLikeArgs — patterns and programs are not paths', () => {
 
   // An unknown flag might consume the next token or not, so nothing after the
   // binary can be called a pattern with certainty.
+  // From the first word the shell may split, which word is the pattern is the
+  // shell's to decide: `grep -v --exclude src/* /etc/passwd` runs with
+  // `src/b.ts` as the pattern and prints /etc/passwd, and `grep -e /etc/p* src`
+  // searches /etc/profile.
+  it('calls nothing a pattern from the first word the shell may split', () => {
+    expect(pathLikeArgs('grep -v --exclude src/* /etc/passwd')).toContain('/etc/passwd');
+    expect(pathLikeArgs('grep -v --exclude {a,b} /etc/passwd')).toContain('/etc/passwd');
+    expect(pathLikeArgs('rg -v -g src/* /etc/passwd')).toContain('/etc/passwd');
+    expect(pathLikeArgs('grep -e /etc/p* src')).toEqual(['/etc/p*']);
+    expect(pathLikeArgs('git log --grep /etc/* -S /x/')).toEqual(['/etc/*']);
+    expect(pathLikeArgs('grep /api/ src/*')).toEqual([]);
+    expect(pathLikeArgs('grep -e /api/ src/*')).toEqual([]);
+    expect(classifyCommand('grep -r .? src').tier).toBe('ask');
+    expect(classifyCommand('grep -r -e .[.] src').tier).toBe('ask');
+    expect(classifyCommand('grep -r foo* src').tier).toBe('auto');
+  });
+
   it('treats every argument as a possible path past a flag it does not know', () => {
     expect(pathLikeArgs('grep --unknown /api/ src')).toEqual(['/api/']);
   });
@@ -1638,8 +1877,10 @@ describe('classifyCommand under the cmd.exe dialect', () => {
 
   it('treats %VAR% as an expansion that disqualifies the silent fast path', () => {
     // Same rule the POSIX dialect applies to `$VAR`: arguments that are not
-    // fully visible at classification time cannot be auto-approved.
-    expect(classifyCommand('cat %USERPROFILE%\\.ssh\\id_rsa', cmd).tier).toBe('ask');
+    // fully visible at classification time cannot be auto-approved. Before a
+    // `--` the expansion may be a flag, which refuses.
+    expect(classifyCommand('cat -- %USERPROFILE%\\.ssh\\id_rsa', cmd).tier).toBe('ask');
+    expect(classifyCommand('cat %USERPROFILE%\\.ssh\\id_rsa', cmd).tier).toBe('refuse');
   });
 
   it('still classifies read-only inspection as auto', () => {
@@ -1901,7 +2142,7 @@ describe('remaining lexer gaps', () => {
   });
 
   it('still reads a substitution holding a plain parameter expansion', () => {
-    expect(classifyCommand('echo "$(basename ${PWD})"').tier).toBe('ask');
+    expect(classifyCommand('echo "$(basename -- ${PWD})"').tier).toBe('ask');
     expect(classifyCommand('echo $(echo ${x%.ts})').tier).toBe('ask');
   });
 
@@ -1919,7 +2160,7 @@ describe('remaining lexer gaps', () => {
   });
 
   it('still asks for a closed ANSI-C quoted argument', () => {
-    expect(classifyCommand("cat $'/etc/passwd'").tier).toBe('ask');
+    expect(classifyCommand("cat -- $'/etc/passwd'").tier).toBe('ask');
     expect(classifyCommand("echo $'a\\'b' | head -1").tier).toBe('ask');
   });
 

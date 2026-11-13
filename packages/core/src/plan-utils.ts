@@ -6,6 +6,8 @@
  */
 export { canSetDependencies, dependencyCandidates, dependentsOf } from './services/PlanTree';
 export { summarizeToolCall } from './services/researchStepSummary';
+// A daemon refusal flattened once, so the desktop renderer reads it as the CLI does.
+export { DaemonRefusal, refusalOf } from './utils/daemonRefusal';
 // Which agent tools write a file, so a surface's summary of a run of calls
 // counts an edit the way a row's diff is decided.
 export { isFileEditTool } from './services/harness/agentTools';
@@ -73,5 +75,8 @@ export { rejoinPlanTree } from './models/Task';
 export { clampThinkingEffort } from './services/ModelAllowlistResolver';
 // The order a session's stamped broadcasts arrive in (ADR-0017), read the same by the TUI and the desktop.
 export { StreamOrder, stampOf, type Placement } from './utils/streamOrder';
+// Following a daemon socket behind a REST read, and when to follow it again, one way for every surface.
+export { DaemonStream, type ConnectedFrame, type DaemonFrame } from './utils/daemonStream';
+export { ReconnectBackoff } from './utils/reconnectBackoff';
 // The daemon's routes, from which the desktop derives the allowlist its renderer calls through (ADR-0063 H4).
 export { DAEMON_ROUTES, type DaemonRoute, type DaemonRouteId, type HttpMethod, type RouteBody, type RouteResponse, type RouteSpec } from './daemonRoutes';

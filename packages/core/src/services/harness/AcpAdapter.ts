@@ -37,6 +37,7 @@ import { describeSignIn, signInOf, TERMINAL_UI_SIGN_IN } from '../signInHint';
 import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
 import { dirname } from 'path';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
+import { TurnOutcome } from './turnOutcome';
 
 const DEFAULT_INIT_TIMEOUT_MS = 30_000;
 
@@ -136,8 +137,8 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * is still Ordewell's and never counted as a read (ADR-0068, R4).
    */
   private readonly ordewellNames = new Set<string>();
-  /** Whether this turn's `session/cancel` went out, which makes whatever ends the turn an interrupt. */
-  private cancelSent = false;
+  /** Whether this turn's `session/cancel` went out, and so how its answer ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
   /** Settles when the agent answers this turn's prompt: true with an answer, false when the process went first. */
   private turnAnswered: Promise<boolean> | null = null;
   private answerTurn: ((answered: boolean) => void) | null = null;
@@ -639,7 +640,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     this.callKinds = new Map();
     this.askedCalls = new Set();
     this.ordewellCalls = new Set();
-    this.cancelSent = false;
+    this.outcome.open();
     this.noteModelCommand(message);
     this.turnAnswered = new Promise<boolean>((resolve) => { this.answerTurn = resolve; });
     const text = this.preamble ? `${this.preamble}\n\n${message}` : message;
@@ -667,15 +668,15 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
       if (response.ok) {
         const parsed = parseAcp(promptResponseSchema, response.result);
         const { stopReason, usage } = parsed.ok ? parsed.value : { stopReason: { unreadable: parsed.error }, usage: undefined };
-        const background = this.restricted && !this.cancelSent && subagentStillWorking(turn);
-        for (const event of endTurn(turn, stopReason, usage, this.cancelSent)) if (!(background && event.type === 'turn_end')) this.announce(event);
+        const background = this.restricted && !this.outcome.requested && subagentStillWorking(turn);
+        for (const event of endTurn(turn, stopReason, usage, this.outcome)) if (!(background && event.type === 'turn_end')) this.announce(event);
         if (background) this.failBackgroundSubagent();
-      } else if (this.cancelSent) {
+      } else if (this.outcome.requested) {
         // Some agents answer a cancelled prompt with an error rather than a
         // `cancelled` stop: it is still the interrupt we asked for.
-        for (const event of endTurn(turn, 'cancelled', undefined, true)) this.announce(event);
+        for (const event of endTurn(turn, 'cancelled', undefined, this.outcome)) this.announce(event);
       } else {
-        this.announce({ type: 'error', message: isAuthRequired(response) ? this.signedOut() : `${this.name} could not run the turn: ${this.reason(response)}` });
+        this.announce(this.outcome.settle('completed', { message: isAuthRequired(response) ? this.signedOut() : `${this.name} could not run the turn: ${this.reason(response)}` }));
       }
     }
     answered?.(true);
@@ -842,7 +843,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const { toolCall, options } = parsed.value;
     // A request that crossed this turn's session/cancel was pending when the
     // agent read it: ACP has the client answer it `cancelled`, never ask anyone.
-    if (this.cancelSent && this.turn) return Promise.resolve({ outcome: CANCELLED });
+    if (this.outcome.requested && this.turn) return Promise.resolve({ outcome: CANCELLED });
     const id = String(rpcId);
     const report = this.reports.get(toolCall.toolCallId);
     const ordewell = this.binding.isOrdewellAsk(report ? { request: toolCall, report } : { request: toolCall });
@@ -920,7 +921,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   async interrupt(timeoutMs: number): Promise<boolean> {
     if (!this.process || this.exited || !this.turn || !this.turnAnswered) return false;
-    this.cancelSent = true;
+    this.outcome.request();
     this.rpc.notify('session/cancel', { sessionId: this.sessionId });
     this.cancelPermissions();
     return settleWithin(this.turnAnswered, { timeoutMs, onTimeout: () => false, ended: this.processEnded, onEnded: () => false });

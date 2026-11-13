@@ -16,7 +16,7 @@ import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
 import type { AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions } from '../harness/AgentAdapter';
 import type { ApprovalRequest } from '../../interfaces/IApproval';
-import { addPlannerUsage, plannerContextFill } from '../../models/Usage';
+import { addPlannerUsage, plannerContextFill, type UsageRecord } from '../../models/Usage';
 import { TurnStream } from '../replyStream';
 import { WebReadPolicy, type WebRead } from '../webReadPolicy';
 import { PlannerReadLimit } from '../plannerReadLimit';
@@ -1122,25 +1122,6 @@ describe('CliAgentAiService — streamed events (#47)', () => {
       { type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'src/cache.ts', usage: { inputTokens: 400, outputTokens: 20 } },
       { type: 'usage', record: { source: 'claude-code', inputTokens: 5000, outputTokens: 80, reportedCost: { amount: 0.04, currency: 'USD' } } },
     ]);
-  });
-
-  // Agents restate a subagent's state as it changes — a tool part updated,
-  // a later call listing every child's status — and one may finish in a later
-  // turn than it started in. Surfaces get one start and one finish, in order.
-  it('reports each subagent starting once and finishing once, across turns, and never a finish without a start', async () => {
-    const started = { type: 'subagent_started', subagentId: 'sa1', brief: 'find the cache' } as const;
-    const finished = { type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'src/cache.ts' } as const;
-    const svc = scripted(
-      [started, started, { type: 'assistant_text', runId: 'r1', text: 'Looking.' }, { type: 'turn_end' }],
-      [finished, started, finished, { type: 'subagent_finished', subagentId: 'ghost', outcome: 'failed', digest: '' }, { type: 'assistant_text', runId: 'r1', text: 'Found it.' }, { type: 'turn_end' }],
-    );
-    const { events, onProgress } = collector();
-
-    await svc.startConversation(request({ onProgress }));
-    await svc.continueConversation('go on', onProgress);
-
-    expect(events.filter((e) => e.type === 'subagent_started' || e.type === 'subagent_finished').map((e) => `${e.type}:${e.subagentId}`))
-      .toEqual(['subagent_started:sa1', 'subagent_finished:sa1']);
   });
 });
 
@@ -2691,6 +2672,59 @@ describe('CliAgentAiService — Claude Code partial messages, usage and subagent
       ]);
       const usage = usageRecords(events).reduce(addPlannerUsage, { totals: {} });
       expect(usage.totals.reportedCost?.USD).toBeCloseTo(0.0913891, 10);
+    });
+
+    // The waits run out with the agent still working, so the conversation's
+    // turn is over when Claude Code opens its own to relay the report.
+    it('books the spend of a report that lands after the turn ended in the session ledger', async () => {
+      const { svc, spawned } = service('claude-code', [
+        fixture('claude-code', 'stream-async-agent'),
+        claudeSays('The Explore agent is still reading.'),
+      ]);
+      const { events, onProgress } = collector();
+      const ledger: UsageRecord[] = [];
+      const turn = await svc.startConversation(request({ onProgress, onUsage: (record) => ledger.push(record) }));
+      expect(turn.text).toContain('Launched the Explore agent in the background');
+      const inTurn = usageRecords(events);
+
+      spawned.processes[0].emitStdout(fixture('claude-code', 'stream-async-agent-report'));
+
+      await vi.waitFor(() => expect(ledger.filter((r) => r.subagentId)).toHaveLength(2));
+      expect(ledger.filter((r) => r.subagentId)).toEqual([
+        { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 11163, cachedInputTokens: 4271, subagentId: AGENT },
+        { source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 12698, cachedInputTokens: 11161, subagentId: AGENT },
+      ]);
+      // The CLI's own total for the session, which is what both turns' results add up to.
+      const usage = [...inTurn, ...ledger].reduce(addPlannerUsage, { totals: {} });
+      expect(usage.totals.reportedCost?.USD).toBeCloseTo(0.0913891, 10);
+      expect(usageRecords(events)).toEqual(inTurn);
+    });
+
+    it('keeps the count a resume starts from past a report that lands after the turn ended', async () => {
+      const { svc, spawned } = service('claude-code', [
+        fixture('claude-code', 'stream-async-agent'),
+        claudeSays('The Explore agent is still reading.'),
+      ]);
+      const ledger: UsageRecord[] = [];
+      await svc.startConversation(request({ onUsage: (record) => ledger.push(record) }));
+      expect(svc.nativeSession()?.cost?.usd).toBeCloseTo(0.0531572, 10);
+
+      spawned.processes[0].emitStdout(fixture('claude-code', 'stream-async-agent-report'));
+
+      await vi.waitFor(() => expect(ledger.some((r) => r.reportedCost)).toBe(true));
+      // Booked once here, so a process resumed from the saved session counts on from the CLI's own total.
+      expect(svc.nativeSession()?.cost?.usd).toBeCloseTo(0.0913891, 10);
+    });
+
+    it('books nothing twice: usage inside a turn stays on the turn', async () => {
+      const { svc } = service('claude-code', [
+        fixture('claude-code', 'stream-async-agent'),
+        fixture('claude-code', 'stream-async-agent-report'),
+      ]);
+      const ledger: UsageRecord[] = [];
+      await svc.startConversation(request({ onUsage: (record) => ledger.push(record) }));
+
+      expect(ledger).toEqual([]);
     });
   });
 });

@@ -47,7 +47,7 @@ function editor(tasks = plan()) {
     catalog,
     mutate: (op) => (op() ? state : null),
     scheduler: { tick: async () => undefined, releaseTask: async () => undefined, releaseMovedResume: (_taskId, changes) => changes, planEdited: () => undefined, resolverRefusal: () => null, startWhenAllowed: () => undefined },
-    runs: { current: null, linkResolver: () => undefined },
+    runs: { taskState: () => undefined, conflictOf: () => null, handoffBranch: null, linkResolver: () => undefined },
     broadcast: () => undefined,
     taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
     notice: () => undefined,

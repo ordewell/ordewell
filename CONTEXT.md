@@ -75,7 +75,7 @@ tree, Merge all, clean up or discard a run, a task message, force sending or
 withdrawing a queued one, interrupting a structured turn, a checkpoint answer,
 cancelling a scheduled resume)
 are saved before any surface hears of them too: a synchronous one holds its
-`status_update` until the save, and an asynchronous one (`withSave`) saves
+`status_update` until the save, and an asynchronous one (`SessionSaves.control`) saves
 before each `status_update` announced while it runs, and once more when it
 ends — a hold across its spawns and git work would stall every task's status
 and let an `execution_complete` it causes overtake the update held back. All
@@ -109,7 +109,10 @@ the plan's owner).
 Every save goes through one save seam, `SessionSaves`: a save an act depends on
 refuses the act when the disk refuses it, while a save made after the act has
 happened never throws and the user is told once per failing stretch that the
-disk is behind. Each save is made before the announcement it is owed for.
+disk is behind. Each save is made before the announcement it is owed for:
+`SessionSaves` alone holds the relay's status updates, and one table of its
+own says what each orchestrator event owes the disk before the relay or the
+Session announces it.
 A Session is one *tree node* (see there): its funds, its reading of the plans
 around it and its seat under a parent are chosen once, at construction.
 Session boundaries are hard: every way a plan stops being the Session's ends
@@ -137,7 +140,8 @@ under another, and which runner and mode capabilities it has.
 
 **Start ledger** (`StartLedger`) — the orchestrator's one record of what is owed
 a start: holds (`chosen` or `failed-start`), queued starts, owed repairs, kept
-resumes, owed reopens, kept children and carried loops and checks. A path reports
+resumes, owed reopens, kept children and carried checks; the carried loops are
+`LoopRounds`'. A path reports
 what happened (retried, forced, completed, skipped, left, a Stop, a plan load) and
 the ledger decides what that event ends; nothing edits an entry by hand. One
 drain (`offer`) offers every owed start to the orchestrator, which answers that it
@@ -149,13 +153,31 @@ budget ledger is `NodeFunding` (a root opens the tree's log and is charged
 nothing; a child holds what its parent carved), what it reads of its own plan,
 the plans below it and its board is `NodeReading` (each read made afresh), and
 where it sits under its parent is `NodeSeat`. Each has a root and a child variant
-chosen at construction, so the Session never asks its depth.
+chosen at construction, so the Session never asks its depth. The choice is made
+once, by `createSession`, as the node's `NodePosition` (`RootPosition` or
+`ChildPosition`): it builds those three, and owns the state root, the save
+target, the lease, the refusals a start meets at the node, and how a child is
+seated, opened and discarded. Building the child Session itself stays
+`createSession`'s, which the position is handed.
 
 **StreamOrder** (`utils/streamOrder.ts`) — the pure, per-session record of which
 stamped broadcasts a client has delivered (a 256-number window), which run frames
 a snapshot covers, and where a gap or daemon restart means the client must read
 the session again. The TUI and the desktop share it; the TUI reads the session
 back on a gap while no turn of its own is out.
+
+**Daemon stream** (`DaemonStream`, `utils/daemonStream.ts`) — one daemon socket
+followed behind a REST read: its frames are ordered by StreamOrder, held while
+the read is out, and the read is made again on a gap or a restarted daemon. The
+read names its **stream position** (`SessionResponse.position`,
+`AdoptSessionResponse.position`, `ChildPlanResponse.position`), the last
+broadcast it accounts for, and every held frame at or below it is dropped, so
+nothing the read holds is drawn twice. A surface subclasses it with what it
+draws; when it follows the socket again after a drop is **ReconnectBackoff**
+(`utils/reconnectBackoff.ts`), the one wait every surface uses. ui's
+`DaemonSessionStream` is the desktop's, and `tui/inbound.ts`'s is the TUI's: it
+batches streamed deltas into one repaint and opens a session or child plan from
+its own read.
 
 **Session link** (`tui/sessionLink.ts`) — the TUI's one socket per (client,
 session): it owns the follow socket, its reconnect with backoff, the run's end and
@@ -1834,10 +1856,16 @@ complete takes it out of the state. The user may skip any task that is not
 running or completed, a reason optional; the supervisor only at Act, with a
 reason, and only a task that failed, is blocked or is waiting for input — and
 it never runs a skipped task again (ADR-0029).
+Who skipped it is stored as `skipOrigin` (`user`, `supervisor`, `loop` or
+`resolver`), set where the skip is made and never read off the reason's words;
+only a loop's own skips, which a new set of rounds undoes, carry `loop`. A plan
+saved before the field gets `loop` on load for a skip whose `skipReason` is one
+of the loop's four texts (ADR-0045 L7).
 *Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
 a cancel returns a task to pending.
 
-**Loop** (`Task.loop`, `models/Loop.ts`; ADR-0045) — a *Loop check* that
+**Loop** (`Task.loop`, `models/Loop.ts`, its rounds run by `LoopRounds`;
+ADR-0045) — a *Loop check* that
 repeats with its fix until it passes, declared on it as `loop: { body, maxRounds }`.
 Ordewell runs it with no planner turn: the check runs; while it fails with
 rounds left, its *body* runs with its report and then the check runs again.
@@ -2105,8 +2133,14 @@ rather than building on part of a task. `merged` always means the whole task
 landed, and a dependent starts only then. `conflictRepo` names the repo that
 stopped it. A landing that does not go through never fails the task, so it
 blocks nothing: a conflict gets a *conflict repair* or waits on the user, and
-one git refuses (`failed`) leaves the task `awaiting_user` with its verdict,
-worktree and branch kept (ADR-0013).
+one git refuses (`failed`), a *landing failure*, leaves the task `awaiting_user`
+(`landing-failed`) with its verdict, worktree and branch kept (ADR-0013). A
+landing failure is told as what git said and its fix, never as a conflict: a
+commit git cannot author for want of `user.name`/`user.email` is the common
+one, and an isolated run checks for it (`git var GIT_AUTHOR_IDENT`) before it
+claims its first task, refusing the start rather than inventing an identity.
+Once the cause is fixed, landing the kept work (`retry_task` from `session`)
+lands it without running the task again.
 The `Landing` module (`services/Landing.ts`) owns it, and conflict repair,
 between the scheduler and the *isolation run controller*: given a passed
 attempt it lands through the controller and answers `landed`,
@@ -2118,6 +2152,19 @@ It also builds the task `resolveConflictAsTask` adds (`conflictResolverTask`).
 "rollback" for anything done to a user's branch — Ordewell never resets one;
 "revert" for what a landing that stopped does to its own merges: that is a
 rollback, and it leaves no trace, where a *revert* adds to the branch.
+
+**Landing ledger** (`LandingLedger`, ADR-0054) — what an isolated run keeps of
+who landed what across every attempt, once a retry has dropped a record or a
+task has left the plan: each task's merges by repo (`landings`), the tips of
+work another task's merge carried (`carried`), what each landed task was called
+(`landedTasks`) and stood on (`landedOn`), and whether the run kept every
+landing from its start (`keepsEveryLanding`) or has had a revert (`reverted`).
+One pure module reads and writes it: git hands it what a merge made, and it
+answers what a revert takes and whether one may go ahead. A run with no
+`carried` record started on an older build, and every revert of it is refused.
+*Avoid:* "landing" for the ledger — a *Landing* is one task's merges as they
+happen; "history" — the ledger is not git's log, and a revert takes entries
+out of it.
 
 **Conflict repair** — a bounded, automatic response to a conflicted landing
 (ADR-0015): a new attempt of the same task, in its kept worktree, on its own
@@ -2352,8 +2399,11 @@ listener (changed, blocked, handoff, notice, worktrees about to go) — it never
 emits orchestrator events or schedules work itself. A blocked start is handed
 back to the caller to replay. An activation a Stop interrupts opens nothing: one
 interrupted while git mints its run never installs that run over a newer
-activation's, and discards it. The scheduler reads isolation state only through
-it (`openRecord`, `isolating`, `current`). Session and the event relay reach its
+activation's, and discards it. The rest of the plan reads isolation state only
+through its named queries (`taskState`, `openTaskState`, `conflictOf`,
+`taskRepos`, `isolating` and the like), never the run record's shape, which
+stays the controller's, `isolationRecord`'s and `LandingLedger`'s; the record
+itself leaves only as `planIsolation`, the state a plan saves. Session and the event relay reach its
 Merge all, review, clean-up and discard directly — there is no pass-through on
 the orchestrator — and its `requireRun` is the one guard for "no isolated run
 to act on", throwing `PlanEditError`. Git stays in `WorktreeIsolation`.
@@ -2587,6 +2637,18 @@ dependencies on every id in its subtree and releases every descendant runner.
 `dependentsOf` names the surviving tasks whose edges that removal detaches.
 `TaskRefs` renders and resolves references using the same traversal.
 
+**Plan graph (`PlanGraph`)** — the one module that rewrites a plan's dependency
+edges and display order, where `PlanTree` says which edges may exist. `remove`
+(which `removeTaskFromPlan` and so `PlanEditor.removeTask` call) detaches every
+edge into a removed subtree and prunes loop bodies; `replace(ids, newTasks,
+tailId)` swaps tasks for others, which take the first one's slot, and points
+every dependent at the tail, at any depth, each id once; `repairOrder` is the
+planner batch's post-pass. A merge or split therefore rewires a subtask that
+depended on the task as it does a top-level one, and a task that depended on
+both of two merged tasks depends on the merged one once. An edge into a subtask
+that a merge or split drops is not rewired: it dangles and the plan invariants
+refuse the batch.
+
 **Dependency edit (`dependencyCandidates` + `canSetDependencies` +
 `Session.setTaskDependencies`)** — dependencies may name any task in the plan
 except the task itself, its ancestors and its descendants, provided no cycle
@@ -2594,10 +2656,13 @@ forms. The planner and user follow this same rule, across branches and at every
 depth. `PlanTree` owns the target restrictions and cycle check; direct edits,
 planner batches and whole-plan intake all read them. A planner batch is checked
 on its final graph, so a later op may finish an earlier rewire. Its post-pass
-`repairOrder` places top-level dependencies before their dependents, keeping
-unrelated tasks in relative order and running or completed tasks in their slots;
-a batch that requires moving a pinned task is refused, naming it. Display order
-is not a requirement on a user's dependency edit.
+`PlanGraph.repairOrder` places top-level dependencies before their dependents,
+keeping unrelated tasks in relative order and running or completed tasks in their
+slots; a batch that requires moving a pinned task is refused, naming it. Display
+order is not a requirement on a user's dependency edit. A `merged` or `parts[i]`
+spec's own `dependencies` are read like any task's and joined to what the merged
+tasks or the split task had, each id once; a part that names the task being split
+is refused, since the part before it already stands for what it did.
 
 `dependencyCandidates` takes the whole tree and offers earlier siblings of the
 target (all top-level tasks when the id is omitted for a new task). Pickers may
@@ -2638,6 +2703,12 @@ completed set, which is safe because `removeTaskFromPlan` detaches the
 dependents in the same op. A direct edit sets only the fields the planner may
 change (`UPDATABLE_FIELDS`): a task's status, verdict and subtasks are
 execution's and the plan tree's, never a patch's.
+A task card's field edit (`CardEdit`) reaches the plan through one
+`Session.cardEdit`, which derives the card's not-started precondition itself
+from the run's facts (`runHoldsEditors`, `cardEditNeedsUnstarted`): a surface
+sends the edit, never decides the precondition, and the daemon's `card-edit`
+route is what the desktop app calls where `PUT /tasks/:taskId` is the wider
+direct edit.
 Both routes prepare an edit through one `prepareTaskEdit`, whose only differing
 input is the actor. The planner's vocabulary (no `taskMode`, `readOnly`,
 `thinkingEffort`, delegated fields), the lock (lifted by a rearm), the
@@ -2668,7 +2739,14 @@ every other task keeps its status and skip reason, and one the rewrite adds
 starts `pending`. A planner restates tasks, it never witnessed one run, so no
 status is ever read
 from a rewrite. Without this, a planner that answered "add a task" with the
-full plan echoed finished tasks as `pending` and they ran again.
+full plan echoed finished tasks as `pending` and they ran again. The overlay is
+the first step of the **Plan change check** as the rewrite commits, so its rules
+judge what will land, not what the planner wrote: the dependency graph with
+each settled task's own dependencies (a cycle they close is refused), and the
+order, which is repaired dependencies-first as an edit's is, with settled tasks
+kept in their slots. A rewrite that lists a finished task ahead of an
+unfinished one it depends on is refused. A rule a settled task already broke is
+not held against the rewrite, since nothing the planner writes changes that task.
 *Avoid:* "regenerating" the plan for an edit — only `generatePlan` and the
 first plan commit start from zero, and only `rearm` or Mark not done re-runs a
 finished task.
@@ -2720,6 +2798,21 @@ lives only on the task's model (`assignedModel.thinkingEffort`); `edit_plan`'s
 `thinkingEffort` change is a name for it.
 *Avoid:* building a task from planner JSON anywhere else, and "fixing" a task
 the planner wrote by substitution — what it may not have is refused.
+
+**Task spec** (`services/TaskSpec.ts`) — the one table of the fields a planner
+writes on a task, and each one's shape: what `submit_plan` lists, what judges
+an `edit_plan` op or a `taskOps` reply's op (its `changes`, `task`, `merged` and
+`parts`), and `readSpec`, which the *Planned task* intake and a planner's edit
+read first. A field in a shape the table refuses is refused, naming the field,
+the value and what it must be, never read as something else: a string of
+`dependencies` is not a list of none. On the text route a malformed op is a
+parse error the planner is asked to fix, as `edit_plan`'s schema refuses it. In
+an edit, `null` passes the table, for the edit's own rules to read. The table
+judges shape only: a field whose shape another rule owns (a script's body, a
+loop, a delegated task's fields) or whose reader takes any value by design
+(`ops`, `skills`) is left to it, and what a field means, and which writer may
+set it, stays with the *Plan change check* and *Direct edit vs planner edit*.
+*Avoid:* a schema of task fields anywhere else, and coercing a wrong-typed field.
 
 **Plan change check** (`PlanChangeCheck`, `services/PlanChangeCheck.ts`) — the
 one check a planner's change to the plan meets: a whole plan or a batch of task
@@ -3222,7 +3315,10 @@ probe; a subplanner's turn then also waits for a slot of the tree. It holds one
 turn lease from admission to the turn's end, however many times it takes the
 conversation. Every turn admitted beside it passes on that lease and meets the
 conversation's own refusal, so no waiter is stranded when a slot frees. A Stop, a
-newer goal, the plan scope ending or the caller's abort ends a wait at once.
+newer goal, the plan scope ending or the caller's abort ends a wait at once. The
+queue's turns (`PlanTurns`) are admitted without waiting: the queue is pumped
+again when the probe answers or a slot frees, and a Retry compaction at a full
+tree is refused, not queued.
 *Avoid:* "slot waiter", "room waiter"; "turn gate" for it — that is the
 surfaces' stop rule above.
 
@@ -3267,7 +3363,11 @@ Every measure is optional because backends report different subsets; absent
 means "not reported", never zero. A turn's `result` states its own token sum:
 a call whose usage did not stream is taken from it once, as a turn total
 (`aggregate`) that adds to no meter — only a call says what the context was
-left at.
+left at. Every runner adapter builds its records through one
+`UsageRecordBuilder`, mapping only its own protocol's fields into it: the
+builder counts a call with an id once, records no call that reported only
+zeros (one that failed before its provider answered), and gives only the main
+thread's calls a context or a window.
 *Avoid:* filling a missing number from a price table or an estimate made by
 Ordewell — prices go stale and a subscription runner has no per-token price at
 all (ADR-0017);
@@ -3987,7 +4087,7 @@ compile on the other. It lives in core because both packages already depend on
 it; the CLI must never import the daemon's runtime. A refusal travels as a stable
 `code`, mapped from core's typed errors (`SessionNotFoundError`, `NoPlanError`,
 `AlreadyExecutingError`, `ConversationBusyError`, `PlannerTurnStoppedError`, …) in one table
-(`routes/errors.ts`) and surfaced to callers as `DaemonError.code`. The REST plan
+(`routes/errors.ts`) and surfaced to callers as `DaemonRefusal.code`. The REST plan
 is the session's own plan state, not the `SerializedPlan` a socket carries.
 `PATCH /api/settings` also answers `switchRecall` — which model a planner switch
 landed on and why — only when the write changed the planner.

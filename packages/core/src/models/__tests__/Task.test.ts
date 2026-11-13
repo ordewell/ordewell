@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason } from '../Task';
+import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason, migrateLoadedTasks } from '../Task';
 import { serializeTask, serializeTaskStatus, surfaceTask } from '../../services/SessionMessage';
-import type { LegacyPlanState, PlanState, Message, TaskSnapshot } from '../Task';
+import type { LegacyPlanState, Task, PlanState, Message, TaskSnapshot } from '../Task';
 
 describe('LegacyPlanState conversation fields', () => {
   it('createEmptyPlan carries no dialogue or PRD markdown by default', () => {
@@ -515,5 +515,36 @@ describe('what an awaiting_user task waits on (ADR-0018, W1)', () => {
   it('a reason left on a task that no longer waits never reaches a surface', () => {
     const task = { ...createTask({ id: 't1', title: 'T', status: 'in_progress' }), awaitingReason: 'input' as const };
     expect(serializeTaskStatus(task)).not.toHaveProperty('awaitingReason');
+  });
+});
+
+describe('migrateLoadedTasks: who skipped a task', () => {
+  // createTask keeps no execution state, so a saved skip is laid over a fresh task as a load finds it.
+  const skipped = (over: Partial<Task>): Task => ({ ...createTask({ id: over.id ?? 't', order: 1 }), status: 'skipped', ...over });
+
+  it.each([
+    'not needed: its check passed',
+    'not run: the loop ran out of rounds',
+    'not needed: its check was marked complete',
+    'not needed: its check was skipped',
+  ])('gives a skip saved before origins with the loop\'s text "%s" the loop origin', (skipReason) => {
+    const tasks = [skipped({ skipReason })];
+    migrateLoadedTasks(tasks);
+    expect(tasks[0].skipOrigin).toBe('loop');
+  });
+
+  it('leaves any other skip without an origin, and keeps one a plan already holds', () => {
+    const tasks = [skipped({ skipReason: 'not worth it' }), skipped({ id: 'u' }), skipped({ id: 's', skipReason: 'not needed: its check passed', skipOrigin: 'supervisor' })];
+    migrateLoadedTasks(tasks);
+    expect(tasks[0]).not.toHaveProperty('skipOrigin');
+    expect(tasks[1]).not.toHaveProperty('skipOrigin');
+    expect(tasks[2].skipOrigin).toBe('supervisor');
+  });
+
+  it('reads a subtask the same way, and a task that is not skipped never gets one', () => {
+    const tasks = [{ ...createTask({ id: 'p', order: 1, status: 'completed', subtasks: [skipped({ id: 'c', skipReason: 'not needed: its check passed' })] }), skipReason: 'not needed: its check passed' }];
+    migrateLoadedTasks(tasks);
+    expect(tasks[0]).not.toHaveProperty('skipOrigin');
+    expect(tasks[0].subtasks[0].skipOrigin).toBe('loop');
   });
 });

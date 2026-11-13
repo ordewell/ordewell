@@ -664,6 +664,28 @@ describe('OpenCodeAdapter task mode — interrupt', () => {
     adapter.dispose();
   });
 
+  it('ends a turn whose finish raced the abort as interrupted (ADR-0018 W1)', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    await until(() => server.requests.some((r) => r.path === `/session/${SES}/prompt_async`));
+
+    server.status[SES] = { type: 'busy' };
+    const acknowledged = adapter.interrupt(2000);
+    await until(() => server.requests.some((r) => r.method === 'POST' && r.path === `/session/${SES}/abort`));
+    delete server.status[SES];
+    stream.push(assistant('msg_a', { time: { created: 1, completed: 2 } }));
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    adapter.dispose();
+  });
+
   it('reports a turn that failed for its own reason after an interrupt as failed, and only the abort itself as interrupted', async () => {
     const server = fakeServer();
     const { adapter } = await startTask(server);
@@ -683,6 +705,39 @@ describe('OpenCodeAdapter task mode — interrupt', () => {
     expect(await acknowledged).toBe(true);
     await turn;
     expect(events.at(-1)).toEqual({ type: 'error', message: 'Usage limit reached' });
+    adapter.dispose();
+  });
+
+  // The abort cuts the `task` tool short, so its part ends in `error`: the stop
+  // that was asked for, not a failure of the subagent.
+  it('finishes a subagent the abort cut short as stopped, and one that errored on its own as failed', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    await until(() => server.requests.some((r) => r.path === `/session/${SES}/prompt_async`));
+    const taskCall = (callID: string, state: Record<string, unknown>) => ({
+      type: 'message.part.updated',
+      properties: { sessionID: SES, part: { id: `prt_${callID}`, messageID: 'msg_a', type: 'tool', tool: 'task', callID, state } },
+    });
+    const metadata = (sessionId: string) => ({ sessionId });
+    stream.push(taskCall('call_own', { status: 'error', input: { description: 'Break by itself' }, error: 'boom', metadata: metadata('ses_own') }));
+    await until(() => events.some((e) => e.type === 'subagent_finished'));
+
+    server.status[SES] = { type: 'busy' };
+    const acknowledged = adapter.interrupt(2000);
+    await until(() => server.requests.some((r) => r.method === 'POST' && r.path === `/session/${SES}/abort`));
+    delete server.status[SES];
+    stream.push(taskCall('call_cut', { status: 'running', input: { description: 'Look around' }, metadata: metadata('ses_cut') }));
+    stream.push(taskCall('call_cut', { status: 'error', input: { description: 'Look around' }, error: 'Tool execution aborted', metadata: metadata('ses_cut') }));
+    stream.push(assistant('msg_a', { error: { name: 'MessageAbortedError', data: { message: 'Aborted' } } }));
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.filter((e) => e.type === 'subagent_finished').map((e) => [e.subagentId, e.outcome])).toEqual([['call_own', 'failed'], ['call_cut', 'stopped']]);
     adapter.dispose();
   });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { Button, Kbd } from '@ordewell/ui/design';
 import type { AppInfo, DaemonStatus, RecentWorkspace } from '../shared/bridge';
@@ -110,7 +110,9 @@ export function Welcome({ status }: { status: DaemonStatus | undefined }): JSX.E
   }, [say]);
 
   const platform = info?.platform;
-  useEffect(() => {
+  // A layout effect, so the key is armed in the commit that names it on the
+  // button: a passive one left a moment where the old platform's key opened it.
+  useLayoutEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       const mod = platform === 'darwin' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
       if (!mod || event.shiftKey || event.altKey || event.key.toLowerCase() !== 'o') return;

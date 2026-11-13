@@ -256,6 +256,20 @@ describe('DaemonManager: own', () => {
     expect(daemon.current()).toMatchObject({ state: 'failed', message: 'The bundled daemon did not answer within 0s.' });
   });
 
+  it('stops the child it gave up on, so Retry cannot mistake it for someone else\'s daemon', async () => {
+    const w = world({ kind: 'unreachable' });
+    w.state.answerAfter = 1_000_000;
+    const { daemon } = manager(w, { readyTimeoutMs: 30 });
+    await daemon.connect();
+    expect(w.children).toHaveLength(1);
+    expect(w.children[0]?.stop).toHaveBeenCalledTimes(1);
+    // A second start forks anew; the first is not left running beside it.
+    w.state.answerAfter = 0;
+    await daemon.retry();
+    expect(w.children.filter((child) => !child.stopped)).toHaveLength(daemon.owned ? 1 : 0);
+    expect(daemon.current()).toMatchObject({ state: 'connected', owned: true });
+  });
+
   it('judges a daemon that won the port race as a stranger', async () => {
     const w = world({ kind: 'unreachable' });
     w.state.answerAfter = 1_000;

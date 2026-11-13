@@ -8,13 +8,12 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { delegatedWorkNote, summarizeOutput } from './promptAugment';
+import { delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
-import { SELF_REPO } from './isolationRecord';
 import { TaskStartConfig } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
@@ -41,6 +40,7 @@ import { augmentedPath } from '../utils/shellPath';
 import type { ApplyPatchArgs, McpToolReply, PostArgs } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
+import { attemptLeaves, endKeeps, keptLate } from './attemptLeaves';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 import { KeptWorkError, type ExecutionBackend, type OpenLease, type ReservedLease } from './executionLease';
@@ -296,7 +296,7 @@ export interface AttemptsDeps {
   store: PlanStore;
   output: TaskOutputSource;
   /** The run an attempt works in. */
-  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch' | 'stillToLetGo'>;
+  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openWorktreesOf' | 'skillLayout' | 'inRepoGroup' | 'taskRepos' | 'workspaceOf' | 'epoch' | 'stillToLetGo'>;
   /** What becomes of a workspace an attempt ended while opening, and how work kept elsewhere comes back to one. */
   leases: Pick<ExecutionBackend, 'letGo' | 'collect'>;
   /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
@@ -793,7 +793,7 @@ export class Attempts {
     if (attempt.worktree) this.host.emit('onIsolationChanged');
     this.host.emit('onTaskChanged');
     if (attempt.kind.kind === 'repair') {
-      const group = this.deps.runs.current?.repos.some((r) => r.path !== SELF_REPO);
+      const group = this.deps.runs.inRepoGroup;
       const { n, limit } = attempt.kind.repair;
       this.host.tell('info', `Repairing the conflict of task "${task.title}" in its own ${group ? 'worktrees' : 'worktree'} (repair ${n} of ${limit}).`);
     } else {
@@ -832,7 +832,7 @@ export class Attempts {
       // A fresh attempt by any route starts its child over; a Continue, which is another kind, reopens it.
       if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
       if (!attempt.script && kind.kind === 'repair') {
-        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
+        const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       const intent = attemptWorkspace(kind);
@@ -851,7 +851,7 @@ export class Attempts {
       attempt.worktree = worktree;
       // A read-only task withholds project configuration (ADR-0046), so none reaches it.
       if (!attempt.script && kind.kind !== 'repair' && !landsNothing(kind)) {
-        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
+        const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
@@ -1066,7 +1066,7 @@ export class Attempts {
     if (landsNothing(kind)) {
       // Each repo worktree's `.git` must stay the repository's, so a sealed run
       // cannot plant one for the runner's own git to load (ADR-0046).
-      const worktrees = writable ? Object.values(runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+      const worktrees = writable ? runs.openWorktreesOf(task.id).map((r) => r.worktree) : [];
       attempt.shell = this.deps.taskShell?.({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) }) ?? null;
       const fetcher = this.deps.taskWebFetcher?.(task.title);
       attempt.web = fetcher ? new TaskWebReader(fetcher) : null;
@@ -1169,7 +1169,7 @@ export class Attempts {
    */
   private applyPatch(task: Task, attempt: TaskAttempt, args: ApplyPatchArgs): Promise<McpToolReply> {
     if (attempt.opened?.placement) return Promise.resolve({ text: 'apply_patch is not available in a container: the patch would merge into a worktree this attempt does not work in.', isError: true });
-    const repos = Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {});
+    const repos = this.deps.runs.openWorktreesOf(task.id);
     return applySavedPatch(args, {
       callerId: task.id,
       plan: this.deps.store.planTasks,
@@ -1187,7 +1187,7 @@ export class Attempts {
    * which sits below the root when the workspace is a folder of the repo.
    */
   private linkedPaths(taskId: string, cwd: string | null): string[] {
-    const repos = Object.values(this.deps.runs.openRecord(taskId)?.repos ?? {});
+    const repos = this.deps.runs.openWorktreesOf(taskId);
     if (repos.length !== 1 || cwd === null) return [];
     const [{ worktree, linked }] = repos;
     const prefix = path.relative(worktree, cwd).split(path.sep).join('/');
@@ -1233,7 +1233,7 @@ export class Attempts {
    * nothing to start it.
    */
   private sealedShell(task: Task, cwd: string, writable: string | undefined): TaskShell {
-    const worktrees = writable ? Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+    const worktrees = writable ? this.deps.runs.openWorktreesOf(task.id).map((r) => r.worktree) : [];
     const shell = this.deps.taskShell?.({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) });
     if (!shell?.hold) throw new Error(`Task "${task.title}" must run sealed, and this host has no sealed shell to run it in: make it a read-only AI task.`);
     return shell;
@@ -1338,7 +1338,7 @@ export class Attempts {
    */
   private async leaveEnded(task: Task, attempt: TaskAttempt, session?: IRunnerSession): Promise<false> {
     session?.kill();
-    const keep = () => attempt.kind.kind === 'repair' || attempt.endKeeps;
+    const keep = () => keptLate(attempt.kind, attempt.endKeeps);
     const made = (await this.deps.runs.stillToLetGo(task.id, attempt.isolationDecision, keep)) ?? attempt.worktree;
     if (made && !this.live.has(task.id) && !this.host.completing(task.id)) {
       await this.deps.leases.letGo(task.id, { keep: keep(), reason: 'ended while opening' });
@@ -1360,7 +1360,7 @@ export class Attempts {
     attempt.shell?.end();
     attempt.web?.end();
     if (this.live.has(task.id) || this.host.completing(task.id) || store.get(task.id)?.status !== 'in_progress') return;
-    if (attempt.kind.kind === 'repair') store.markAwaitingUser(task.id, 'conflict');
+    if (attemptLeaves('abandoned', attempt.kind).status === 'conflict') store.markAwaitingUser(task.id, 'conflict');
     else store.markPending(task.id);
     this.host.emit('onTaskChanged');
   }
@@ -1394,7 +1394,10 @@ export class Attempts {
     }
     if (reason === 'completed' && !attempt.reminded) {
       attempt.reminded = true;
-      this.message(taskId, COMPLETION_REMINDER, 'message', (live, message) => live.sendMessage(message, 'ordewell'));
+      // The generic reminder offers only `done` and `blocked`: a check that finished its review with problems would call `done`, and the round would pass.
+      const task = store.get(taskId);
+      const text = task?.type === 'ai' && task.loop ? `${COMPLETION_REMINDER} ${LOOP_VERDICT_REMINDER}` : COMPLETION_REMINDER;
+      this.message(taskId, text, 'message', (live, message) => live.sendMessage(message, 'ordewell'));
       return;
     }
     // The task waits for the person either way; flagging the agent is what
@@ -1614,8 +1617,8 @@ export class Attempts {
 
   private endAll(reason: 'stop' | 'load'): TaskAttempt[] {
     const ended = [...this.live.values()];
-    // A Stop keeps worktrees as a cancel does (ADR-0013); a loaded plan replaced the one that would land them.
-    for (const { taskId } of ended) this.end(taskId, reason, { keep: reason === 'stop' });
+    const keep = endKeeps(reason === 'stop' ? 'stopped' : 'loaded');
+    for (const { taskId } of ended) this.end(taskId, reason, { keep });
     this.verifier.reset();
     if (reason === 'load') this.deps.output.reset();
     return ended;

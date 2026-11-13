@@ -48,8 +48,8 @@ they cause (timeouts, container and sandbox tests) are unrelated to your change
 and send tasks back to re-run everything. Run only what proves your own change:
 vitest on the test files covering the files you changed, the typecheck, and lint
 on what you touched. If you changed core, build it first, since the other
-packages compile against its `dist/`. Write test output to a file inside your
-worktree and wait on the PID you started. Outside such a run, or when your
+packages compile against its `dist/`. Write test output to a file under `.scratch/` in your
+worktree (gitignored) and wait on the PID you started. Outside such a run, or when your
 brief names no integration check, `test:changed` stays the inner loop.
 
 The integration check runs on the merged checkout, where there are no

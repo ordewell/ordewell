@@ -339,6 +339,90 @@ describe('Merge all at the end of the run', () => {
   });
 });
 
+describe('the run settles while a Merge all is in flight', () => {
+  const second = createTask({ id: 'c3', order: 3, prompt: 'second' });
+
+  /** A merge that takes what has landed when it starts, as git does, and ends when the test says. */
+  function heldMerge(iso: FakeWorktreeIsolation) {
+    const merge = iso.mergeIntoCheckedOut.bind(iso);
+    const gate = { entered: 0, release: [] as (() => void)[] };
+    iso.mergeIntoCheckedOut = async (run) => {
+      gate.entered++;
+      const result = await merge(run);
+      await new Promise<void>((resolve) => { gate.release.push(resolve); });
+      return result;
+    };
+    return gate;
+  }
+
+  async function settleDuringMerge(automatic: boolean) {
+    const iso = new FakeWorktreeIsolation();
+    const gate = heldMerge(iso);
+    const h = harness(iso);
+    mergesAtGatesIn(h.session, automatic);
+    h.session.loadPlan(plans([change, second]), 'goal', '/repo');
+    await h.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    h.pass('c1');
+    await vi.waitFor(() => expect(h.session.planTasks[0].status).toBe('completed'));
+    const merging = h.session.execute({ command: 'merge_all' }, { kind: 'user' });
+    await vi.waitFor(() => expect(gate.entered).toBe(1));
+    h.pass('c3');
+    await vi.waitFor(() => expect(h.session.planTasks[1].status).toBe('completed'));
+    return { ...h, iso, gate, merging };
+  }
+
+  it.each([false, true])('closes the run once, after the merge ends, with one handoff or none (automatic: %s)', async (automatic) => {
+    const { session, messages, gate, merging, iso } = await settleDuringMerge(automatic);
+    // The run is not told closed, nor handed over, while git is still merging.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(handoffs(messages)).toEqual([]);
+    expect(messages).not.toContainEqual({ type: 'run_closed' });
+
+    while (gate.release.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    gate.release.shift()!();
+    // Automatic: the run's own Merge all takes c3 next; let that one through too.
+    if (automatic) {
+      await vi.waitFor(() => expect(gate.release).toHaveLength(1));
+      gate.release.shift()!();
+    }
+    await merging;
+    await vi.waitFor(() => expect(messages.some((m) => m.type === 'execution_complete')).toBe(true));
+
+    if (automatic) {
+      expect(handoffs(messages)).toEqual([]);
+      expect(merged(iso)).toHaveLength(2);
+      expect(messages.filter((m) => m.type === 'run_closed')).toHaveLength(1);
+      expect(session.isolationView()).toBeNull();
+    } else {
+      expect(handoffs(messages)).toEqual([expect.objectContaining({ landed: [expect.objectContaining({ taskId: 'c3' })] })]);
+      expect(session.isolationView()?.handoff.landed.map((l) => l.taskId)).toEqual(['c3']);
+    }
+  });
+
+  it('still closes the run, handing everything over, when the merge it waited for throws', async () => {
+    const iso = new FakeWorktreeIsolation();
+    let fail!: () => void;
+    iso.mergeIntoCheckedOut = () => new Promise((_, reject) => { fail = () => reject(new Error('git went away')); });
+    const { session, pass, messages } = harness(iso);
+    mergesAtGatesIn(session, false);
+    session.loadPlan(plans([change, second]), 'goal', '/repo');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    pass('c1');
+    await vi.waitFor(() => expect(session.planTasks[0].status).toBe('completed'));
+    const merging = session.execute({ command: 'merge_all' }, { kind: 'user' });
+    await vi.waitFor(() => expect(fail).toBeDefined());
+    pass('c3');
+    await vi.waitFor(() => expect(session.planTasks[1].status).toBe('completed'));
+    expect(handoffs(messages)).toEqual([]);
+
+    fail();
+    await merging;
+
+    expect(handoffs(messages)).toHaveLength(1);
+    expect(handoffs(messages)[0]).toMatchObject({ landed: [expect.objectContaining({ taskId: 'c1' }), expect.objectContaining({ taskId: 'c3' })] });
+  });
+});
+
 describe('who opened the run', () => {
   const other = createTask({ id: 'c3', order: 3, prompt: 'other' });
 

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { taskRowView, loopRowParts, loopLeaveNotice, type TaskRowSubject } from '..';
 import { createTask } from '../../models/Task';
 import { serializeTaskStatus } from '../../services/SessionMessage';
+import type { SkipOrigin } from '../../models/SkipOrigin';
 
 interface Node {
   id: string;
@@ -12,6 +13,7 @@ interface Node {
   loop?: { body: string[]; maxRounds: number };
   loopRound?: number;
   verdict?: { outcome: string; reported?: string } | null;
+  skipOrigin?: SkipOrigin;
 }
 
 const check = (over: Partial<Node> = {}): Node => ({ id: 'c', order: 1, title: 'Review', status: 'pending', dependencies: [], loop: { body: ['f'], maxRounds: 3 }, ...over });
@@ -86,6 +88,12 @@ describe('a loop\'s check row (ADR-0045)', () => {
   it('reads a skipped body task as stopping the loop too', () => {
     const node = check({ status: 'failed', loopRound: 2, verdict: found });
     expect(rowOf(node, [node, fix({ status: 'skipped' })]).loop).toMatchObject({ state: 'stopped' });
+  });
+
+  it('reads the skip a loop made itself as no stop: a new round undoes it (L7)', () => {
+    const node = check({ status: 'failed', loopRound: 2, verdict: found });
+    expect(rowOf(node, [node, fix({ status: 'skipped', skipOrigin: 'loop' })]).loop).toMatchObject({ state: 'repeating' });
+    expect(rowOf(node, [node, fix({ status: 'skipped', skipOrigin: 'user' })]).loop).toMatchObject({ state: 'stopped' });
   });
 
   it('has nothing to say of its loop once it is skipped, but how many rounds it had', () => {

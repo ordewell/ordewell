@@ -38,7 +38,7 @@ function setup(opts: { run?: 'idle' | 'scheduling'; tasks?: Task[] } = {}) {
     waitChanged: (wait) => waits.push(wait),
     changed: () => undefined,
     unawaited: (work) => { void work; },
-    keepWorktree: async (taskId) => { steps.push(`keep ${taskId}`); },
+    leaveWorktree: async (taskId) => { steps.push(`keep ${taskId}`); },
     settled: async (taskId) => { steps.push(`settled ${taskId}`); },
     resume: async (taskId, now) => {
       resumes.push({ taskId, ...(now ? { now } : {}) });

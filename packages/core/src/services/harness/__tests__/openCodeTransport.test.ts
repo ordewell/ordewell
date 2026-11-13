@@ -6,10 +6,11 @@ import { mcpClientConfig } from '../../mcp';
 import { sseResponse } from '../../__tests__/harnessTestKit';
 import {
   ChildSessions, PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, openEventStream, permissionReply, plannerSystem, raiseOnce, settleTurn,
-  splitModelId, turnLatch, usageRecord, withDeadline,
+  openCodeCall, splitModelId, turnLatch, withDeadline,
 } from '../openCodeTransport';
 import { OPENCODE_ORDEWELL, OPENCODE_PLANNER_PERMISSION } from '../openCodeOrdewell';
 import type { LedgerStance, RaisedRequest } from '../permissionLedger';
+import { UsageRecordBuilder } from '../usageBuilder';
 
 /**
  * The protocol work OpenCode 1.x and 2.x share, driven directly. The adapter
@@ -76,7 +77,9 @@ describe('permissionReply', () => {
   });
 });
 
-describe('usageRecord', () => {
+describe('openCodeCall', () => {
+  const usageRecord = (...args: Parameters<typeof openCodeCall>) => new UsageRecordBuilder('opencode').call(openCodeCall(...args));
+
   it('counts cache writes as uncached prompt and reasoning as output', () => {
     expect(usageRecord({ input: 3, output: 10, reasoning: 5, cache: { read: 100, write: 20 } }, { model: 'p/m', cost: 0.5, subagentId: 'call_1' })).toEqual({
       source: 'opencode', inputTokens: 123, cachedInputTokens: 100, outputTokens: 15, model: 'p/m', reportedCost: { amount: 0.5, currency: 'USD', kind: 'estimate' }, subagentId: 'call_1',
@@ -210,11 +213,9 @@ describe('ChildSessions', () => {
 
     expect(children.claim('ses_c', 'f1')).toBeNull();
     expect(children.claim('ses_c', 'f2')).toBeNull();
-    expect(children.owns('call_1')).toBe(false);
     expect(children.adopt('ses_c', 'call_1')).toEqual(['f1', 'f2']);
     expect(children.adopt('ses_c', 'call_1')).toBeNull();
     expect(children.claim('ses_c', 'f3')).toBe('call_1');
-    expect(children.owns('call_1')).toBe(true);
   });
 
   it('adopts a child whose creation it never saw, and keeps a second creation from untying it', () => {

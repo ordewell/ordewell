@@ -57,6 +57,7 @@ const RENDERER_ROUTES = [
   'plans.checkpointReject',
   'plans.resolveConflict',
   'plans.addTask',
+  'plans.cardEdit',
   'plans.updateTask',
   'plans.deleteTask',
   'plans.approveReview',

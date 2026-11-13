@@ -28,7 +28,7 @@ afterEach(async () => {
   vi.useRealTimers();
   for (const orchestrator of orchestrators.splice(0)) {
     orchestrator.stop();
-    if (orchestrator.runs.current) await orchestrator.runs.discard();
+    if (orchestrator.runs.planIsolation) await orchestrator.runs.discard();
   }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });

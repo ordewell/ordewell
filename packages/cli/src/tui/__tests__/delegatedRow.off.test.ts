@@ -21,7 +21,7 @@ describe('a delegated task\'s row where delegation is not offered', () => {
     });
     const loaded = reduce(initialState({ sessionId: 's1', rows: 40, cols: 100, focus: 'plan' }), { type: 'planUpdated', plan, sessionId: 's1' }).state;
     const delegation = { tasks: { completed: 2, running: 1, waiting: 0, pending: 1, failed: 0, skipped: 0 }, tokens: { budget: 2_000_000, left: 1_300_000 }, stopping: true as const };
-    const updated = reduce(loaded, { type: 'statusUpdate', tasks: [{ id: 'd', status: 'pending', verdict: null, delegation }], sessionId: 's1' }).state;
+    const updated = reduce(loaded, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'd', status: 'pending', verdict: null, delegation }] }, sessionId: 's1' }).state;
     const text = planLayout(updated, 40, 100).lines.join('\n');
     expect(text).toContain('Import ledger');
     expect(text).not.toMatch(/tokens left|of 4 done|stopping|winding/);

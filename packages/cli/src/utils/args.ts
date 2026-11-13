@@ -16,6 +16,15 @@ export function flag(args: string[], name: string): string | undefined {
 }
 
 /**
+ * Whether `name` is written at all, with or without a value. `flag` returns
+ * undefined both for an absent flag and for a trailing one, and a command that
+ * must not read a valueless `--type $EMPTY` as "not given" tells them apart here.
+ */
+export function flagGiven(args: string[], name: string): boolean {
+  return args.some((arg) => arg === name || inlineValue(arg, name) !== undefined);
+}
+
+/**
  * The directory `--workspace` names, absolute. The daemon keeps the cwd of the
  * command that first started it, so a relative path sent as typed would be
  * resolved there instead of where the user is.

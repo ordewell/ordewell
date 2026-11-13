@@ -189,7 +189,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
 
     sessionFor('t1')!.reportComplete({ status: 'done', summary: 'Next: wire it up.', commit: { subject: 'Greet the user', body: 'Why it changed.' } });
     await vi.waitFor(() => expect(isolation.taskIdsFor('integrate')).toEqual(['t1']));
-    expect(orchestrator.runs.current?.tasks.t1.commit).toEqual({ subject: 'Greet the user', body: 'Why it changed.' });
+    expect(orchestrator.runs.planIsolation?.run.tasks.t1.commit).toEqual({ subject: 'Greet the user', body: 'Why it changed.' });
 
     openMerge();
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
@@ -244,7 +244,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user'));
 
     expect(orchestrator.storeInstance.get('t1')!.verdict!.outcome).toBe('pass');
-    expect(orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('conflict');
+    expect(orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('landing-failed');
     expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'kept' });
     expect(isolation.taskIdsFor('release')).toEqual([]);
     expect(vi.mocked(notifications.error).mock.calls.flat().join('\n')).toMatch(/integrat/i);
@@ -373,7 +373,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     // A cancel keeps the worktree (ADR-0013), the one its attempt made after it too.
     expect(spawn).not.toHaveBeenCalled();
     expect(isolation.calls.filter((c) => c.op === 'release')).toEqual([{ op: 'release', taskId: 't1', keep: true }]);
-    expect(orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
   });
 
   it('keeps an interrupted task\'s worktree when the run is stopped', async () => {
@@ -390,7 +390,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     const { orchestrator, isolation } = setup();
     orchestrator.loadPlan([task('t1', 1)]);
     await orchestrator.approveReview();
-    const stoppedRun = orchestrator.runs.current!;
+    const stoppedRun = orchestrator.runs.planIsolation!.run;
     const changed: unknown[] = [];
     orchestrator.subscribe({ onIsolationChanged: (run) => changed.push(run) });
     // The next plan's run carries a record under the same id: ids are only unique within a plan.
@@ -637,7 +637,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.storeInstance.get('t1')!.verdict!.outcome).toBe('pass');
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'kept', conflictRepo: 'api' });
       expect(vi.mocked(notifications.error).mock.calls.map((c) => String(c[0]))).toContain(
-        'Task "Task t1" passed, but git could not integrate its work in api, so none of it landed. Its worktrees are kept for inspection.',
+        'Task "Task t1" passed, but git could not integrate its work in api, so none of it landed. Its worktrees are kept for inspection. Once git can, land its work (retry it from its session) to land what it kept without running it again.',
       );
     });
 

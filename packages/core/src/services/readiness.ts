@@ -75,11 +75,11 @@ export interface StartRuleInput {
   /** The user's approval record (ADR-0035). */
   approved: (taskId: string) => boolean;
   /**
-   * The open isolated run's records — `openRecord` answers undefined for a
+   * Where each task stands in the open isolated run — `openTaskState` answers undefined for a
    * shared-root run — and which landed work still waits to be merged into
    * the user's branch.
    */
-  runs: Pick<IsolationRunController, 'openRecord' | 'awaitsMerge'>;
+  runs: Pick<IsolationRunController, 'openTaskState' | 'awaitsMerge'>;
   /** A Merge all is under way, so no work it excludes may start (ADR-0020). */
   merging: boolean;
   /** A planner turn holds new starts (ADR-0029). */
@@ -252,7 +252,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
  * unchecked (ADR-0045 L5, L7). The loop's own next round waits for its whole
  * body to land already, so this holds only a start of the check from outside.
  */
-function bodyAtWork(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isCompleted'>, runs: Pick<IsolationRunController, 'openRecord'>): string[] {
+function bodyAtWork(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isCompleted'>, runs: Pick<IsolationRunController, 'openTaskState'>): string[] {
   return (task.loop?.body ?? []).filter((id) => {
     const status = store.get(id)?.status;
     return status === 'in_progress' || status === 'awaiting_user' || (status === 'completed' && !landed(id, store, runs));
@@ -292,7 +292,7 @@ function heldTo(task: Readonly<Pick<Task, 'dependencies'> & Partial<Pick<Task, '
 export function unmetDependencies(
   task: Readonly<Pick<Task, 'dependencies'> & Partial<Pick<Task, 'id'>>>,
   store: DependencyStore,
-  runs: Pick<IsolationRunController, 'openRecord'>,
+  runs: Pick<IsolationRunController, 'openTaskState'>,
 ): string[] {
   return waitingBehind(heldTo(task, store), store, runs, { pastFailures: false });
 }
@@ -312,7 +312,7 @@ type JudgedBlocks = { blocked: ReadonlyMap<string, string[]>; repeating: Readonl
 function waitingBehind(
   depIds: readonly string[],
   store: DependencyStore,
-  runs: Pick<IsolationRunController, 'openRecord'>,
+  runs: Pick<IsolationRunController, 'openTaskState'>,
   opts: { pastFailures: boolean; plan?: () => JudgedBlocks },
 ): string[] {
   const seen = new Set<string>();
@@ -341,10 +341,10 @@ function waitingBehind(
 }
 
 /** Completed, and in an isolated run merged into the integration branch. */
-export function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<IsolationRunController, 'openRecord'>): boolean {
+export function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: Pick<IsolationRunController, 'openTaskState'>): boolean {
   if (!store.isCompleted(id)) return false;
-  const record = runs.openRecord(id);
-  return !record || record.status === 'merged';
+  const state = runs.openTaskState(id);
+  return state === undefined || state === 'merged';
 }
 
 /**

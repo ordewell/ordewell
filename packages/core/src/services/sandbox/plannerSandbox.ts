@@ -2,7 +2,7 @@ import * as fsSync from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { timeLimitText } from '../../models/ScriptTask';
-import type { ResearchShell, ShellLaunch } from '../researchShell';
+import { PLANNER_GIT_ENV, type ResearchShell, type ShellLaunch } from '../researchShell';
 import { SEALED_RUN_MARK } from '../researchStepSummary';
 import { BubblewrapBackend, findBubblewrap } from './bubblewrap';
 import { SANDBOX_EXEC, SeatbeltBackend } from './seatbelt';
@@ -169,7 +169,7 @@ export function plannerShellProfile(
     read: 'host',
     masked: opts.network ? [] : host.services,
     network: opts.network,
-    env: opts.scratch ? scratchEnv(opts.scratch, host.platform) : {},
+    env: { ...(opts.scratch ? scratchEnv(opts.scratch, host.platform) : {}), ...PLANNER_GIT_ENV },
   };
 }
 
@@ -272,7 +272,7 @@ export function sealedShellProfile(
     ...(opts.keychain === undefined ? {} : { keychain: opts.keychain }),
     ...(opts.localNetwork === undefined ? {} : { localNetwork: opts.localNetwork }),
     privateTmp: true,
-    env: opts.scratch ? { ...scratchEnv(opts.scratch, host.platform), HOME: opts.scratch } : {},
+    env: { ...(opts.scratch ? { ...scratchEnv(opts.scratch, host.platform), HOME: opts.scratch } : {}), ...PLANNER_GIT_ENV },
     inheritEnv: SEALED_ENV,
     limits: opts.limits ?? SEALED_LIMITS,
   };
@@ -505,7 +505,7 @@ export class PlannerShellSandbox {
     const availability = await this.resolve();
     if (!availability.available) {
       this.say(availability.notice);
-      return { launch: shell, sandboxed: false };
+      return { launch: { ...shell, env: { ...process.env, ...PLANNER_GIT_ENV } }, sandboxed: false };
     }
     if (!availability.sealed.available) this.say(availability.sealed.notice);
     const launch = availability.backend.wrap(

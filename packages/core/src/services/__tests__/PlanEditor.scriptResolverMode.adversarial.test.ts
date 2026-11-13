@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PlanEditor, type PlanEditCatalog } from '../PlanEditor';
 import { PlanStore } from '../PlanStore';
-import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -21,10 +20,11 @@ describe('conflict resolver of a script task on an ACP runner', () => {
     expect(script.taskMode).toBeUndefined();
     store.load([script], ['qwen-code']);
     const plan: LegacyPlanState = { tasks: [], generatedAt: now, status: 'approved', runners: ['qwen-code'], lastUpdated: now };
-    const run: IsolationRun = {
-      id: 'run1', workspaceRoot: '/repo', shared: [], sharedRepos: [],
-      repos: [{ path: '.', root: '/repo', baseRef: 'abc', integrationBranch: 'ordewell/run1/integration' }],
-      tasks: { t1: { taskId: 't1', order: 1, title: 'Codegen', branch: 'ordewell/run1/1-t1', workspace: '/wt/1', status: 'conflict', conflictRepo: '.', repos: { '.': { worktree: '/wt/1', linked: [] } } } },
+    const runs = {
+      taskState: () => 'conflict' as const,
+      conflictOf: () => ({ branch: 'ordewell/run1/1-t1', subject: { title: 'Codegen' }, changedRepos: [], repairRepos: [], conflictRepo: '.' }),
+      handoffBranch: 'ordewell/run1/integration',
+      linkResolver: vi.fn(),
     };
     const catalog: PlanEditCatalog = {
       edit: () => ({ modelsByRunner: { 'qwen-code': [] }, runnerModes: { 'qwen-code': QWEN_CODE_MANIFEST.modes ?? [] } }),
@@ -35,7 +35,7 @@ describe('conflict resolver of a script task on an ACP runner', () => {
       store, plan: () => plan, catalog,
       mutate: vi.fn((op: () => boolean) => (op() ? plan : null)),
       scheduler: { releaseMovedResume: (_id: string, c: object) => c, tick: vi.fn(async () => {}), releaseTask: vi.fn(async () => {}), planEdited: vi.fn(), resolverRefusal: vi.fn(() => null), startWhenAllowed: vi.fn() } as never,
-      runs: { current: run, linkResolver: vi.fn() },
+      runs,
       broadcast: () => {},
       taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
       notice: vi.fn(),
@@ -68,7 +68,7 @@ describe('a script task made AI by a hand edit, on a Qwen plan', () => {
       catalog: { edit: () => ({ modelsByRunner: { 'qwen-code': [] }, runnerModes: { 'qwen-code': QWEN_CODE_MANIFEST.modes ?? [] } }), runner: vi.fn(async () => ({ models: [], modes: QWEN_CODE_MANIFEST.modes ?? [] })), admit: vi.fn() },
       mutate: vi.fn((op: () => boolean) => (op() ? plan : null)),
       scheduler: { releaseMovedResume: (_id: string, c: object) => c, tick: vi.fn(async () => {}), releaseTask: vi.fn(async () => {}), planEdited: vi.fn(), resolverRefusal: vi.fn(() => null), startWhenAllowed: vi.fn() } as never,
-      runs: { current: null, linkResolver: vi.fn() },
+      runs: { taskState: () => undefined, conflictOf: () => null, handoffBranch: null, linkResolver: vi.fn() },
       broadcast: () => {}, taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }), notice: vi.fn(), approve: vi.fn(),
     });
     await editor.updateTask('t1', { type: 'ai', prompt: 'generate' });

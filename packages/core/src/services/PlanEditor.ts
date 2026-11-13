@@ -47,7 +47,7 @@ export interface PlanEditorDeps {
    */
   mutate: (op: () => boolean, notify?: () => void) => LegacyPlanState | null;
   scheduler: Pick<TaskOrchestrator, 'tick' | 'releaseTask' | 'releaseMovedResume' | 'planEdited' | 'resolverRefusal' | 'startWhenAllowed'>;
-  runs: Pick<IsolationRunController, 'current' | 'linkResolver'>;
+  runs: Pick<IsolationRunController, 'taskState' | 'conflictOf' | 'handoffBranch' | 'linkResolver'>;
   broadcast: SessionBroadcaster;
   /** The workspace's skill catalog under its repo group's layout, which a hand-set skill list is checked against. */
   taskSkills: () => SkillLookup;
@@ -423,7 +423,7 @@ export class PlanEditor {
     const refused = this.scheduler.resolverRefusal(taskId);
     if (refused) throw new PlanEditError(refused);
     const task = this.store.get(taskId);
-    const draft = task ? conflictResolverTask(task, this.runs.current, this.store.planTasks, this.plannedWith()) : null;
+    const draft = task ? conflictResolverTask(task, this.runs, this.store.planTasks, this.plannedWith()) : null;
     if (!task || !draft) throw new PlanEditError('Only a task whose merge conflicted can be resolved as a task');
     return { task, draft };
   }

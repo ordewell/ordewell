@@ -2,6 +2,7 @@ import type { LegacyPlanState, PendingPlanTurn, PlannerContextPause, PlanTurnSou
 import { ConversationBusyError, ConversationEditError, PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError } from './PlannerConversation';
 import { PlannerResend, type PlannerLimit } from './PlannerResend';
 import type { TurnFailure } from './runnerExit';
+import type { TryAdmission } from './TurnGate';
 import type { SkillInvocation } from './skillInvocation';
 
 /**
@@ -74,12 +75,15 @@ export interface PlanTurnsHost {
   /** Hold the scheduler's new starts; the returned release is idempotent. */
   holdStarts(): () => void;
   /**
-   * Whether a slot of the tree is this turn's, taken for it if so. False, the
-   * pool has kept this Session and calls {@link PlanTurns.pump} when one frees
-   * (ADR-0055 D18). Absent, a turn takes none.
+   * Admit the turn about to open, without waiting (ADR-0059 L1): throws why no
+   * turn may open now — {@link PlannerNotReadyError} when the planner in use
+   * cannot plan, or the refusal of a session another host holds (ADR-0049 L5);
+   * otherwise the planner is still being found, the tree has no slot (the
+   * pool calls {@link PlanTurns.pump} when one frees, ADR-0055 D18), or the
+   * turn is admitted and holds the lease its end gives back.
    */
-  turnRoom?(): boolean;
-  /** A turn of these is over, whether or not the conversation ever held it: what {@link turnRoom} took goes back. */
+  tryAdmit(): TryAdmission;
+  /** A turn of these is over, whether or not the conversation ever held it: the lease {@link tryAdmit} took goes back. */
   turnSettled?(): void;
   /** Tick after a release, so what became ready during the turn starts: the armed scheduler's work, and queued force starts. */
   resumeStarts(): Promise<void>;
@@ -91,14 +95,6 @@ export interface PlanTurnsHost {
   run(prompt: TurnPrompt, opts: { taken: () => void; signal?: AbortSignal }): Promise<LegacyPlanState>;
   /** Tell the user what no caller is waiting to hear: a replayed input's failed turn, a resume that failed. */
   notice(message: string): void;
-  /**
-   * Settles once the planner a turn would use is known (ADR-0009); null when
-   * it already is. Opened before, a turn plans with the fallback the
-   * installed-planner probe may replace.
-   */
-  plannerDetecting(): Promise<void> | null;
-  /** Throws why no turn may open now: {@link PlannerNotReadyError} when the planner in use cannot plan, or the refusal of a session another host holds (ADR-0049 L5). */
-  assertPlannerReady(): void;
   /** The runner the planner runs as now, whose account a usage limit belongs to; null when it is not a coding agent. */
   plannerRunner(): RunnerId | null;
 }
@@ -114,6 +110,8 @@ interface Running {
   release: () => void;
   /** The inputs it took, which stay on the plan until it ends. */
   ids: ReadonlySet<string>;
+  /** The inputs themselves, for a pause to put back what a planner tool's commit already took. */
+  batch: readonly PendingPlanTurn[];
   /** A force send stopped it. */
   forceStopped?: true;
   /** It retries a pause on the planner's context, which stays saved until the turn lands or is stopped. */
@@ -210,11 +208,21 @@ export class PlanTurns {
    * A turn ended with the planner paused on its context (ADR-0002): the pause
    * is armed on the inputs it took, which stay pending, and no turn opens
    * until the user's Retry compaction or Stop. Saved with the failure the turn
-   * records.
+   * records. When a planner tool's change in the turn (`committed`) already
+   * took its inputs, they are put back, since a Retry compaction can only
+   * reopen the turn on inputs that still wait, and the pause is `landed`:
+   * they are in the transcript already, so neither the retry nor a Stop's
+   * next turn sends or writes them again. A retry of a landed pause that
+   * pauses again is still on those inputs.
    */
-  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause {
-    const pause: PlannerContextPause = { ...details, at: new Date().toISOString(), inputs: [...(this.running?.ids ?? [])] };
+  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>, committed = false): PlannerContextPause {
     const plan = this.host.plan();
+    const landed = committed || (this.running?.recovery === true && plan?.plannerContextPause?.landed === true);
+    const pause: PlannerContextPause = { ...details, at: new Date().toISOString(), inputs: [...(this.running?.ids ?? [])], ...(landed ? { landed: true } : {}) };
+    if (plan && committed && this.running) {
+      const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
+      plan.pendingTurns = [...this.running.batch.filter((t) => !waiting.has(t.id)), ...(plan.pendingTurns ?? [])];
+    }
     if (plan) plan.plannerContextPause = pause;
     return pause;
   }
@@ -252,14 +260,24 @@ export class PlanTurns {
     const pause = plan?.plannerContextPause;
     if (!plan || !pause) throw new ConversationEditError('The planner is not paused on its context: there is nothing to retry.');
     if (this.running || this.detecting || this.host.conversationBusy()) throw new ConversationBusyError('retry compaction');
-    const detecting = this.host.plannerDetecting();
-    if (detecting) await detecting;
-    if (this.host.plan() !== plan || plan.plannerContextPause !== pause) throw new PlannerTurnDiscardedError();
-    if (this.running || this.host.conversationBusy()) throw new ConversationBusyError('retry compaction');
-    this.host.assertPlannerReady();
+    // Opened before the probe answered, a turn plans with the fallback it may replace: wait for it, and judge afresh.
+    let admission = this.host.tryAdmit();
+    if (admission.kind === 'probing') {
+      await admission.answered;
+      if (this.host.plan() !== plan || plan.plannerContextPause !== pause) throw new PlannerTurnDiscardedError();
+      if (this.running || this.host.conversationBusy()) throw new ConversationBusyError('retry compaction');
+      admission = this.host.tryAdmit();
+    }
+    // Not queued for a slot as the pump's turns are: a retry the user asked for is answered now.
+    if (admission.kind === 'full') throw new Error(admission.why);
+    // The probe answered above, so it cannot be pending again; this narrows the type.
+    if (admission.kind === 'probing') throw new ConversationBusyError('retry compaction');
     const kept = new Set(pause.inputs);
     const batch = (plan.pendingTurns ?? []).filter((t) => kept.has(t.id));
-    if (batch.length === 0) throw new ConversationEditError('What the paused turn was answering no longer waits: stop the planner to clear the pause.');
+    if (batch.length === 0) {
+      this.host.turnSettled?.();
+      throw new ConversationEditError('What the paused turn was answering no longer waits: stop the planner to clear the pause.');
+    }
     this.restored = false;
     this.quiet = false;
     const outcome = await this.run(plan, batch, { recovery: pause, signal });
@@ -317,7 +335,10 @@ export class PlanTurns {
    * rejection reaches them, and a Stop or a discard would pass in silence.
    */
   heldWithoutCaller(): readonly PendingPlanTurn[] {
-    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
+    // A landed pause's inputs are in the transcript: dropping them loses nothing.
+    const pause = this.host.plan()?.plannerContextPause;
+    const landed = new Set(pause?.landed ? pause.inputs : []);
+    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !landed.has(t.id) && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
   }
 
   /** Whether a turn this module opened is in flight. */
@@ -424,23 +445,23 @@ export class PlanTurns {
     if (!plan || this.host.conversationBusy()) return;
     const batch = this.liveBatch(plan);
     if (batch.length === 0) return;
-    const detecting = this.host.plannerDetecting();
-    if (detecting) {
+    let admission: TryAdmission;
+    try {
+      admission = this.host.tryAdmit();
+    } catch (err) {
+      this.refuse(plan, err);
+      return;
+    }
+    if (admission.kind === 'probing') {
       this.detecting = true;
-      void detecting.then(() => {
+      void admission.answered.then(() => {
         this.detecting = false;
         this.pump();
       });
       return;
     }
-    try {
-      this.host.assertPlannerReady();
-    } catch (err) {
-      this.refuse(plan, err);
-      return;
-    }
     this.refusalTold = null;
-    this.awaitingSlot = this.host.turnRoom?.() === false;
+    this.awaitingSlot = admission.kind === 'full';
     if (this.awaitingSlot) return;
     void this.run(plan, batch);
   }
@@ -509,10 +530,12 @@ export class PlanTurns {
    * The user's Stop of a planner paused on its context: the paused turn ends
    * as a stopped one would — the user's inputs waiting dropped, each caller
    * told — and the pause goes with it. Wake-ups stay undelivered, as behind
-   * any stopped turn, for the next input to carry.
+   * any stopped turn, for the next input to carry, but for those a planner
+   * tool's change already landed: the planner was told them.
    */
   private dropPause(plan: LegacyPlanState): boolean {
-    const stopped = (plan.pendingTurns ?? []).filter((t) => t.source === 'user');
+    const landed = new Set(plan.plannerContextPause?.landed ? plan.plannerContextPause.inputs : []);
+    const stopped = (plan.pendingTurns ?? []).filter((t) => t.source === 'user' || landed.has(t.id));
     if (stopped.length < (plan.pendingTurns ?? []).length) this.quiet = true;
     this.take(plan, new Set(stopped.map((t) => t.id)));
     delete plan.plannerContextPause;
@@ -579,7 +602,7 @@ export class PlanTurns {
 
   private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[], opts: { recovery?: PlannerContextPause; signal?: AbortSignal } = {}): Promise<Outcome> {
     const ids = new Set(batch.map((t) => t.id));
-    const running: Running = { release: this.host.holdStarts(), ids, ...(opts.recovery ? { recovery: true } : {}) };
+    const running: Running = { release: this.host.holdStarts(), ids, batch, ...(opts.recovery ? { recovery: true } : {}) };
     this.running = running;
     const timeout = setTimeout(() => {
       running.release();
@@ -615,10 +638,11 @@ export class PlanTurns {
       // A turn that landed nothing still had its say; the user's inputs go
       // with it. A failure, or a force send, leaves the wake-ups undelivered,
       // and a usage limit or a pause on the planner's context leaves
-      // everything, to be sent again.
+      // everything, to be sent again. A retry's landed inputs were delivered
+      // with the change that landed them, so no force send keeps one.
       const dropped = kept
         ? new Set<string>()
-        : outcome.ok || (isInterruption(outcome.err) && !forceStopped)
+        : outcome.ok || (isInterruption(outcome.err) && !forceStopped) || opts.recovery?.landed
           ? ids
           : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
       const took = this.take(plan, dropped);
