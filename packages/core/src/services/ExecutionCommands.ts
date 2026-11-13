@@ -262,6 +262,8 @@ export interface ExecutionHost {
   /** End the task as skipped, landing nothing of it; see {@link TaskOrchestrator.skipTask}. */
   skipTask(taskId: string, reason: string | undefined, actor: ExecutionActor): Promise<void>;
   continueTask(taskId: string, message: string, actor: ExecutionActor): Promise<void>;
+  /** Land what a passed task kept when git refused its landing; see {@link TaskOrchestrator.landKeptWork}. */
+  landKept(taskId: string): Promise<void>;
   /** Resume a task paused on a usage limit now; see {@link TaskOrchestrator.resumeNow}. */
   resumeNow(taskId: string, message: string | undefined, actor: ExecutionActor): Promise<void>;
   messageTask(taskId: string, text: string): string;
@@ -419,6 +421,8 @@ interface Located {
   ref: string;
   /** Paused on its runner's usage limit as the call arrived: a continue of it is a resume, worded as one once it has run. */
   paused: boolean;
+  /** Passed, with work git refused to land, as the call arrived: a retry of it from its session lands that work, and runs nothing. */
+  landsKept: boolean;
 }
 
 interface Acted {
@@ -952,7 +956,9 @@ export class ExecutionCommands {
       case 'run_task': return this.prepareStart(located!, actor, 'run', tasks);
       case 'retry_task': return command.from === 'fresh'
         ? this.prepareStart(located!, actor, 'retry', tasks)
-        : located!.paused ? this.prepareResume(located!, actor, command.message) : this.prepareContinue(located!, actor, command.message);
+        : located!.paused ? this.prepareResume(located!, actor, command.message)
+          : located!.landsKept ? this.prepareLandKept(located!, actor)
+          : this.prepareContinue(located!, actor, command.message);
       case 'stop_task': return this.prepareStop(located!, actor);
       case 'stop_run': return this.prepareStopRun(actor);
       case 'message_task': return this.prepareMessage(located!, command, actor);
@@ -1085,7 +1091,7 @@ export class ExecutionCommands {
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
         ? voice.answerOrRetry
-        : located.paused ? voice.resume : voice.retry;
+        : located.paused ? voice.resume : located.landsKept ? voice.landKept : voice.retry;
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
     const waits = this.host.startWaits(task);
@@ -1371,6 +1377,27 @@ export class ExecutionCommands {
         await this.host.continueTask(task.id, message, actor);
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         return { message: `Continuing ${label} in its saved session with your message.` };
+      },
+    };
+  }
+
+  /**
+   * Its verdict passed and only its landing did not: what it kept lands, as
+   * the pass already owed, and nothing runs again. A message has nothing to
+   * go to, so none is needed (ADR-0013).
+   */
+  private prepareLandKept(located: Located, actor: ExecutionActor): Prepared {
+    const { task } = located;
+    const label = describe(located);
+    const voice = this.voiceOf(actor);
+    const completing = this.completingRefusal(located);
+    if (completing) return { refusal: completing };
+    return {
+      act: async () => {
+        await this.host.landKept(task.id);
+        const now = this.located(task.id)?.task;
+        if (now?.status !== 'completed') return { message: `${capitalize(label)}'s kept work still did not land: git refused it again. ${voice.landKept}` };
+        return { message: `Landed the kept work of ${label}, without running it again.` };
       },
     };
   }
@@ -1683,7 +1710,9 @@ export class ExecutionCommands {
     switch (command.command) {
       case 'run_plan': return 'run the plan';
       case 'run_task': return `start ${label}`;
-      case 'retry_task': return command.from === 'fresh' ? `retry ${label}` : `${located?.paused ? 'resume' : 'continue'} ${label} in its saved session`;
+      case 'retry_task': return command.from === 'fresh' ? `retry ${label}`
+        : located?.landsKept ? `land the kept work of ${label}`
+        : `${located?.paused ? 'resume' : 'continue'} ${label} in its saved session`;
       case 'stop_task': return `stop ${label}`;
       case 'stop_run': return 'stop the run';
       case 'message_task': return `message ${label}`;
@@ -1721,11 +1750,11 @@ export class ExecutionCommands {
       ...script,
       at: this.now(),
     };
-    this.host.record(record, describeExecution(record, command, located?.paused));
+    this.host.record(record, describeExecution(record, command, located?.paused ? 'resume' : located?.landsKept ? 'land' : 'continue'));
   }
 
   private all(tasks: readonly Task[] = this.host.tasks() ?? []): Located[] {
-    return flattenTasksWithParents(tasks).map(({ task, ref }) => ({ task, ref, paused: pausedOnLimit(task) }));
+    return flattenTasksWithParents(tasks).map(({ task, ref }) => ({ task, ref, paused: pausedOnLimit(task), landsKept: landingRefused(task) }));
   }
 
   private located(id: string, tasks?: readonly Task[]): Located | undefined {
@@ -1788,6 +1817,8 @@ interface Voice {
   resume: string;
   /** What to do with a failed or skipped task instead of running it. */
   retry: string;
+  /** What lands a passed task's work git refused, once git can. */
+  landKept: string;
   /** What gets a task past its merge gate. */
   passGate: string;
   /** What starts a task over that cannot go on in its saved session. */
@@ -1812,6 +1843,7 @@ function modelVoice(controls: SurfaceControls, mergesByThemselves: boolean): Voi
     answerOrRetry: 'Answer it with message_task, or start a new attempt with retry_task.',
     resume: 'Resume it in its saved session with retry_task from "session".',
     retry: 'Start a new attempt with retry_task.',
+    landKept: 'Once git can commit, land its kept work with retry_task from "session"; it runs nothing again.',
     // Asking the user for a merge automatic merging makes would ask for what needs no one.
     passGate: mergesByThemselves
       ? `Automatic merging merges that work at the gate by itself; let it, or ask the user to force start it (${controls.forceStart}).`
@@ -1840,6 +1872,7 @@ const USER_VOICE: Voice = {
   answerOrRetry: 'Answer it with a message, or Retry it.',
   resume: 'Resume it now in its saved session, or wait for its reset.',
   retry: 'Retry it to start a new attempt.',
+  landKept: 'Once git can commit, land its work: it runs nothing again.',
   passGate: 'Merge all first, or force start it.',
   startOver: 'Retry starts it over from its prompt.',
   startAgain: 'Run the plan or a task to start again.',
@@ -1904,6 +1937,7 @@ function statusWords(task: Readonly<Task>): string {
   if (task.status === 'awaiting_user' && task.awaitingReason === 'input') return 'is waiting for input';
   if (task.status === 'awaiting_user' && task.awaitingReason === 'checkpoint') return 'is waiting at a checkpoint for the user';
   if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') return 'is waiting on a merge conflict';
+  if (landingRefused(task)) return 'passed, and waits to land the work git refused';
   if (pausedOnLimit(task)) return 'is paused on its runner\'s usage limit';
   return STATUS_WORDS[task.status];
 }
@@ -1911,6 +1945,13 @@ function statusWords(task: Readonly<Task>): string {
 /** Why a dependency does not count as finished yet; a completed one is done but its work has not landed. */
 function depState(task: Readonly<Task>): string {
   return task.status === 'completed' ? 'done, not landed yet' : statusWords(task).replace(/^(is|has) /, '');
+}
+
+/** What a retry from its session did, by the task as the call arrived. */
+type FromSession = 'continue' | 'resume' | 'land';
+
+function landingRefused(task: Readonly<Task>): boolean {
+  return task.status === 'awaiting_user' && task.awaitingReason === 'landing-failed';
 }
 
 /** The extra a record keeps for a call that went through: the message it sent, or the note a denial carried. */
@@ -1931,17 +1972,17 @@ const WHO: Record<ExecutionActor['kind'], string> = {
 };
 
 /** The timeline's line for one call: who asked, what, and how it ended. */
-function describeExecution(record: ExecutionRecord, command: ExecutionCommand, paused = false): string {
+function describeExecution(record: ExecutionRecord, command: ExecutionCommand, fromSession: FromSession = 'continue'): string {
   const who = record.person ? 'A person' : WHO[record.actor];
   // A refusal for a task the plan does not have names it as the caller did.
   const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : 'task' in command ? `"${command.task}"` : '';
-  const continued = command.command === 'retry_task' && command.from === 'session' ? (paused ? 'resume' : 'continue') : null;
+  const continued = command.command === 'retry_task' && command.from === 'session' ? fromSession : null;
   if (record.ended) return `Script ${label}, which ${WHO[record.actor].toLowerCase()} ran, ${SCRIPT_ENDED[record.result ?? 'stopped']}`;
   if (record.outcome !== 'done') {
     const asked = {
       run_plan: 'run the plan',
       run_task: `start ${label}`,
-      retry_task: continued ? `${continued} ${label}` : `retry ${label}`,
+      retry_task: continued === 'land' ? `land the kept work of ${label}` : continued ? `${continued} ${label}` : `retry ${label}`,
       stop_task: `stop ${label}`,
       stop_run: 'stop the run',
       message_task: `message ${label}`,
@@ -1972,12 +2013,14 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, p
 }
 
 /** What a call that went through did, and what follows it in the line: a full stop, the quoted message, or the note. */
-function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: string, continued: 'resume' | 'continue' | null): { action: string; tail: string } {
+function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: string, continued: FromSession | null): { action: string; tail: string } {
   const quoted = record.detail ? `: "${record.detail}"` : '.';
   switch (command.command) {
     case 'run_plan': return { action: 'started the plan', tail: '.' };
     case 'run_task': return { action: `started ${label}`, tail: '.' };
-    case 'retry_task': return continued ? { action: `${continued}d ${label} in its saved session`, tail: quoted } : { action: `retried ${label}`, tail: '.' };
+    case 'retry_task':
+      if (continued === 'land') return { action: `landed the kept work of ${label}`, tail: '.' };
+      return continued ? { action: `${continued}d ${label} in its saved session`, tail: quoted } : { action: `retried ${label}`, tail: '.' };
     case 'stop_task': return { action: `stopped ${label}`, tail: '.' };
     case 'stop_run': return { action: 'stopped the run', tail: '.' };
     case 'message_task': return { action: `${command.force ? 'force sent' : 'sent'} ${label} a message`, tail: quoted };

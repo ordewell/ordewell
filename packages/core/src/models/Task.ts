@@ -81,14 +81,15 @@ export type TaskMode = string;
 /**
  * Why an `awaiting_user` task waits (ADR-0018, W1): a structured turn that
  * ended without a `task_complete` call, a checkpoint question, work that did not
- * land, an ops task that changed tracked files (ADR-0020), or its runner's
- * usage limit. Saved, so no surface has to guess it from whether an attempt
- * is live.
+ * land because it conflicts (`conflict`) or because git refused to commit or
+ * merge it for some other reason, such as no author identity (`landing-failed`),
+ * an ops task that changed tracked files (ADR-0020), or its runner's usage
+ * limit. Saved, so no surface has to guess it from whether an attempt is live.
  */
-export type AwaitingReason = 'input' | 'checkpoint' | 'question-lost' | 'conflict' | 'files-changed' | 'usage-limit';
+export type AwaitingReason = 'input' | 'checkpoint' | 'question-lost' | 'conflict' | 'landing-failed' | 'files-changed' | 'usage-limit';
 
 export function isAwaitingReason(value: unknown): value is AwaitingReason {
-  return value === 'input' || value === 'checkpoint' || value === 'question-lost' || value === 'conflict' || value === 'files-changed' || value === 'usage-limit';
+  return value === 'input' || value === 'checkpoint' || value === 'question-lost' || value === 'conflict' || value === 'landing-failed' || value === 'files-changed' || value === 'usage-limit';
 }
 
 export interface TaskModelAssignment {

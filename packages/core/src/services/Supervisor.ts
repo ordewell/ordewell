@@ -2,6 +2,8 @@ import type { SupervisorLevel } from '../models/Execution';
 import type { TurnAuthority } from '../models/Task';
 import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_ALONG_CHARS, SINCE_LAST, WAKE_MAX_CHARS, type RunEvent, type RunEventKind, type WakeBatch, type WakeHostFacts, type WakePolicy, type WakePolicySnapshot } from './WakePolicy';
 import { classifyRunnerStop } from './runnerExit';
+import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
+import { LAND_KEPT_HINT } from './taskReport';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
 
@@ -689,6 +691,7 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   approval_denied: 'denied a request',
   task_idle: 'gone quiet',
   landing_conflict: 'in conflict',
+  landing_failed: 'with a landing git refused',
   usage_limit: 'at a usage limit',
   auto_merge_stopped: 'with a merge stopped',
   start_refused: 'refused a start',
@@ -764,6 +767,11 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     case 'approval_denied': return `${task}'s runner asked for something nobody here may allow, and was denied${colon}`;
     case 'task_idle': return `${task} has gone quiet${detail ? ` (${detail})` : ''}`;
     case 'landing_conflict': return `${task} finished, but its work conflicts and could not land${colon}`;
+    // Not a conflict: no repair lands it, only fixing what git refused. The fix is said whole, outside the cut detail.
+    case 'landing_failed': {
+      const cause = lacksIdentity(event.detail) ? ` ${IDENTITY_FIX}. That is the user's to set: never invent one.` : '';
+      return `${task} passed, but git refused to land its work, which is kept${detail ? ` (${detail})` : ''}.${cause} Once that is fixed, ${LAND_KEPT_HINT}`;
+    }
     case 'auto_merge_stopped': return event.taskId === undefined
       ? `automatic Merge all at the end of the run stopped${colon}; the run is handed over to the user to merge`
       : `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;

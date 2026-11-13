@@ -37,6 +37,7 @@ describe('a capped turn names what it leaves out (ADR-0057 R5)', () => {
   it.each([
     ['task_report', { kind: 'task_report', taskId: 't1', report: { authority: 'supervisor', text: 'r'.repeat(6000), passed: true } }, 'has ended'],
     ['landing_conflict', { kind: 'landing_conflict', taskId: 't1' }, 'could not land'],
+    ['landing_failed', { kind: 'landing_failed', taskId: 't1', detail: 'git commit failed: Author identity unknown' }, 'git refused to land'],
     ['auto_merge_stopped', { kind: 'auto_merge_stopped', taskId: 't1' }, 'stopped'],
     ['waiting_approval', { kind: 'waiting_approval', taskId: 't1', detail: 'd'.repeat(300) }, 'waiting for approval'],
     ['task_idle', { kind: 'task_idle', taskId: 't1', detail: 'd'.repeat(300) }, 'gone quiet'],

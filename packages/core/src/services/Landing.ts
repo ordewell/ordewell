@@ -11,6 +11,7 @@ import { landsNothing, type AttemptKind } from './attemptKind';
 import type { HandoffCommit } from '../models/Handoff';
 import { landingMessage } from './landingMessage';
 import { underProtectedPath } from '../models/Delegation';
+import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -68,6 +69,12 @@ export interface LandingDeps {
 
 const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] };
 
+/** What lands work git refused, once the user has fixed what it said: the work is kept, so it is landed, never redone. */
+export function landingFix(landingError: string | undefined): string {
+  const cause = lacksIdentity(landingError) ? ` ${IDENTITY_FIX}.` : '';
+  return `${cause} Once git can, land its work (retry it from its session) to land what it kept without running it again.`;
+}
+
 /**
  * Landing and Conflict repair (ADR-0013, ADR-0014, ADR-0015): a passed
  * attempt's work onto the run's integration branches through the
@@ -113,6 +120,17 @@ export class Landing {
     if (this.runs.current?.tasks[task.id]?.readOnly) return this.discard(task, true);
     if (!this.hasUnlandedWork(task.id)) return NOTHING_TO_LAND;
     const landing = await this.runs.integrate(task);
+    return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
+  }
+
+  /**
+   * Land what a passed task kept when git refused its landing, once git can:
+   * the verdict it earned stands and the commit its handoff stated is the one
+   * written, so nothing runs again (ADR-0013).
+   */
+  async landKept(task: Task): Promise<LandingOutcome> {
+    if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
+    const landing = await this.runs.integrate(task, task.handoff?.commit);
     return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
   }
 
@@ -280,9 +298,10 @@ export class Landing {
       reason: 'landing-failed',
       messages: [{
         level: 'error',
-        text: inRepo
+        text: (inRepo
           ? `Task "${task.title}" passed, but git could not integrate its work in ${inRepo}${why}, so none of it landed. Its worktrees are kept for inspection.`
-          : `Task "${task.title}" passed, but git could not integrate its work${why}. Its worktree is kept for inspection.`,
+          : `Task "${task.title}" passed, but git could not integrate its work${why}. Its worktree is kept for inspection.`)
+          + landingFix(record?.landingError),
       }],
     };
   }

@@ -22,6 +22,7 @@ const KIND_WORDS: Readonly<Record<Escalation['kind'], string>> = {
   checkpoint: 'checkpoint',
   input: 'input',
   conflict: 'conflict',
+  'landing-failed': 'landing failed',
   'files-changed': 'files changed',
   'usage-limit': 'usage limit',
   failed: 'failed',
@@ -47,6 +48,7 @@ export function kindTone(kind: Escalation['kind']): KindTone {
     case 'failed':
     case 'out-of-rounds':
     case 'conflict':
+    case 'landing-failed':
       return 'failed';
     case 'blocked-run':
       return 'blocked';
