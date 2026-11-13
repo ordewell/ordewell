@@ -886,6 +886,13 @@ export interface PlannerContextPause {
   done?: string[];
   /** More such calls ran than `done` keeps: the refusal could not list all of them, and a retry without the live context stays refused. */
   doneTruncated?: true;
+  /**
+   * A planner tool's change in the paused turn landed its inputs with it:
+   * the transcript holds them already, and they wait only for a retry to
+   * answer. A retry writes none of them again, and a Stop drops every one,
+   * wake-ups included, since the planner has been told them.
+   */
+  landed?: true;
 }
 
 /**
