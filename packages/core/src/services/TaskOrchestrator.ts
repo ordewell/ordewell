@@ -33,9 +33,10 @@ import { Attempts, type Admitted, type AttemptEnvironment, type AttemptEnded, ty
 import { TaskControlError } from './TaskControlError';
 import { landed, planStartWaits, selectReadyTasks, startWaits, waitOf, type ForcedStart, type Readiness, type StartRuleInput, type StartWait, type StartWaitKind } from './readiness';
 import type { ResearchTasks } from './ResearchTasks';
-import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
-import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
-import { LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED, LOOP_OUT_OF_ROUNDS, LOOP_PASSED, stopsLoop } from '../models/SkipOrigin';
+import { blockingFailures, planBlocks } from './blocking';
+import { loopRoundOf, outOfRounds } from '../models/Loop';
+import { LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED, LOOP_PASSED } from '../models/SkipOrigin';
+import { LEFT_UNDONE, LoopRounds } from './LoopRounds';
 import { decidesIsolation, handoffKept, mergeExcludes, type Continuation } from './attemptKind';
 import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
@@ -373,7 +374,7 @@ export class TaskOrchestrator {
   private gateNotice = '';
   /**
    * The owed-start ledger: each task's hold, the starts owed with no
-   * scheduler to make them, and the loops and checks carried on without one,
+   * scheduler to make them, and the delegated tasks' checks carried on without one,
    * told what happened to the task rather than edited by hand. Its drain
    * calls back here to judge and claim each; a tick starts what it carries.
    */
@@ -382,6 +383,8 @@ export class TaskOrchestrator {
     repair: (id, admission) => this.offerRepair(id, admission),
     resume: (id) => this.offerResume(id),
   });
+  /** A loop's rounds and the loops carried on with no scheduler (ADR-0045 L5–L7). */
+  private readonly loops: LoopRounds;
   /** What was last said of a carried loop's approvals, so it is said once. */
   private loopNotice = '';
   /**
@@ -414,7 +417,6 @@ export class TaskOrchestrator {
   private landing: Landing;
 
   private observers: OrchestratorObserver[] = [];
-  private previousRounds = new Map<string, { round: number; report?: string }>();
   private runSettings: () => SchedulerRunSettings | undefined;
   private isApproved: (taskId: string) => boolean;
   private mayMergeUnasked: () => boolean;
@@ -433,13 +435,29 @@ export class TaskOrchestrator {
     this.isApproved = deps.isApproved;
     this.mayMergeUnasked = deps.mayMergeUnasked;
     this.store.checksOf = (task) => checksOf(this.store.allTasks, task, this.checkRules);
+    this.loops = new LoopRounds({
+      store: this.store,
+      atWork: (taskId) => this.attempts.has(taskId),
+      scheduling: () => this.isScheduling,
+      scheduledRun: () => this.scheduledRun,
+      landed: (taskId) => landed(taskId, this.store, this.runs),
+      startWaits: (task) => this.startWaits(task),
+      roundStarted: (taskId) => this.starts.roundStarted(taskId),
+      skip: (taskId, reason) => {
+        this.store.markSkipped(taskId, 'loop', reason);
+        this.retireResolvers(taskId);
+        this.starts.skipped(taskId);
+      },
+      tell: (message) => this.tell('info', message),
+      info: (message) => this.notifications.info(message),
+    });
     this.attempts = new Attempts({
       ...env,
       host: {
         settle: (ended) => this.deciding(() => this.settle(ended)),
         completing: (taskId) => this.completing.has(taskId),
         retried: (taskId) => (this.retryCounts.get(taskId) ?? 0) > 0,
-        previousRound: (taskId) => this.previousRounds.get(taskId),
+        previousRound: (taskId) => this.loops.previousRound(taskId),
         emit: (event, ...args) => this.emit(event, ...args),
         tell: (level, message) => this.tell(level, message),
         unawaited: (work, failure) => this.unawaited(work, failure),
@@ -787,7 +805,7 @@ export class TaskOrchestrator {
    * passes would resume it: a Stop is owed to it too (ADR-0045 L7).
    */
   get loopCarried(): boolean {
-    return this.starts.carried({ loop: (id) => !!this.store.get(id)?.loop, check: () => false }).length > 0;
+    return this.loops.anyCarried;
   }
 
   /**
@@ -1145,8 +1163,8 @@ export class TaskOrchestrator {
     this.transition({ type: 'load' });
     this.reviewApproved = false;
     this.retryCounts.clear();
-    this.previousRounds.clear();
-    this.starts.planLoaded({ has: (id) => !!this.store.get(id), hasLoop: (id) => !!this.store.get(id)?.loop }, { keepsChosen: keepsHolds, edited });
+    this.loops.planLoaded(edited);
+    this.starts.planLoaded({ has: (id) => !!this.store.get(id) }, { keepsChosen: keepsHolds, edited });
     // Saved on the task, so another process does not run what the user took back (ADR-0054).
     for (const t of this.store.allTasks) if (t.reverted) this.starts.hold(t.id, REVERTED_HOLD, 'chosen');
     this.recoverOrphans();
@@ -1230,15 +1248,10 @@ export class TaskOrchestrator {
     this.store.releaseMadeManual((id) => this.attempts.has(id));
     this.retireResolversLeft(before);
     this.retireChildrenLeft(before);
-    const was = new Map(before.map((task) => [task.id, task]));
-    for (const check of this.store.allTasks) {
-      if (!outOfRounds(check)) continue;
-      const prior = was.get(check.id);
-      if (prior && outOfRounds(prior)) continue;
-      this.closeLoop(check, LOOP_OUT_OF_ROUNDS);
+    for (const checkId of this.loops.planEdited(before)) {
       // Outside a run there is no supervisor to settle it for, and the next
       // run starts a failed check's rounds over; the close still stands.
-      if (this.isRunning) this.emit('onTaskSettled', { taskId: check.id });
+      if (this.isRunning) this.emit('onTaskSettled', { taskId: checkId });
     }
     // An edit may have taken the last task waiting on a reset out of the plan, or ended its pause.
     this.limitPauses.recount();
@@ -1364,6 +1377,7 @@ export class TaskOrchestrator {
     }
     this.runs.interrupt();
     this.starts.stopped(reason);
+    this.loops.runEnded();
     this.withdrawRepairs();
     this.loopNotice = '';
     if (reason === 'user') this.reholdReverted();
@@ -1490,9 +1504,10 @@ export class TaskOrchestrator {
         // starts a round instead is no failure yet (ADR-0045 L3).
         this.store.markFailed(task.id);
         // A runner that stopped on its login is told as the way back in (ADR-0052).
-        if (!this.startRound(task.id)) this.notifications.error(ended.unresumed ?? withSignInHint(ended.signedOut, failureText(this.store.get(task.id) ?? task, verdict)));
-        // A Stop since it was claimed ended its loop with it.
-        else if (!this.isScheduling && ended.attempt.admission.current()) this.starts.carryLoop(task.id);
+        // With no scheduler the loop is carried on, unless a Stop since it was claimed ended it.
+        if (!this.loops.checkFailed(task.id, !this.isScheduling && ended.attempt.admission.current())) {
+          this.notifications.error(ended.unresumed ?? withSignInHint(ended.signedOut, failureText(this.store.get(task.id) ?? task, verdict)));
+        }
         if (ended.attempt.worktree) await this.leases.letGo(task.id, { keep: true, reason: 'failed' });
         this.logAndArchive(task, verdict);
         break;
@@ -1589,7 +1604,7 @@ export class TaskOrchestrator {
     if (!completesTask(outcome)) return this.settleUnlanded(task, outcome, admission);
     this.store.markCompleted(task.id);
     this.retireResolvers(task.id);
-    this.closeLoop(task, LOOP_PASSED);
+    this.loops.close(task, LOOP_PASSED);
     this.carryChecks(task, admission);
     onLanded();
     this.say(outcome.messages);
@@ -1936,7 +1951,7 @@ export class TaskOrchestrator {
     if (completesTask(landing)) {
       this.store.markCompleted(taskId);
       this.retireResolvers(taskId);
-      this.closeLoop(task, LOOP_CHECK_MARKED_COMPLETE);
+      this.loops.close(task, LOOP_CHECK_MARKED_COMPLETE);
     } else this.settleUnlanded(task, landing, admission);
     this.logAndArchive(task, verdict);
     if (completesTask(landing)) {
@@ -2082,7 +2097,7 @@ export class TaskOrchestrator {
       // Skipped itself, a resolver leaves its conflict free for another worker.
       this.runs.takeResolver(taskId);
       this.retireResolvers(taskId);
-      this.closeLoop(task, LOOP_CHECK_SKIPPED);
+      this.loops.close(task, LOOP_CHECK_SKIPPED);
       this.starts.skipped(taskId);
       this.notifications.info(`Task "${task.title}" skipped: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done.`);
       this.emit('onTaskChanged');
@@ -2411,8 +2426,7 @@ export class TaskOrchestrator {
       // Nothing else would run a check whose fix has landed, so this is its next
       // round. Forced again after any other failure, a check starts its rounds
       // over, as a retry does (ADR-0045 L5, L7).
-      if (task && this.ownsNextRound(task)) this.repeatCheck(task);
-      else if (this.store.isFailed(taskId)) this.store.startRoundsOver(taskId);
+      this.loops.forced(taskId);
       // A force start is the user's own act, so it ends the task's pause: its
       // resume goes, and the hold with it once nothing else waits (U1).
       this.limitPauses.cancel(taskId);
@@ -2702,7 +2716,7 @@ export class TaskOrchestrator {
     // that would otherwise end under it. Its release ticks again.
     if (this.startHolds > 0) return;
 
-    this.repeatChecks();
+    if (this.loops.repeatDue()) this.emit('onTaskChanged');
     let readiness = this.readiness();
     // Work merged by hand opens a gate as Merge all does; only git can tell.
     // A user task's gate counts too, though the scheduler never starts one.
@@ -2878,95 +2892,17 @@ export class TaskOrchestrator {
   }
 
   /**
-   * A loop's check failed (ADR-0045). With `failed` evidence and rounds left,
-   * a round starts: its body runs again as new attempts, each from the
-   * integration tip, so it builds on what earlier rounds landed, and true says
-   * the failure is the round's, not the task's. Approval is not spent by a
-   * run, so the plan's approval of the body covers every round. Out of
-   * rounds, the body still to run will not run. A body task a person or a supervisor skipped
-   * has stopped the loop (L7): no round starts, and the skip stands. One they
-   * reverted keeps its hold, which a round takes as any start does (L5, ADR-0054):
-   * the rest of the body runs, and the loop waits for them to say.
-   */
-  private startRound(checkId: string): boolean {
-    const check = this.store.get(checkId);
-    if (!check?.loop) return false;
-    if (outOfRounds(check)) {
-      this.closeLoop(check, LOOP_OUT_OF_ROUNDS);
-      return false;
-    }
-    if (!betweenRounds(check)) return false;
-    const body = check.loop.body.flatMap((id) => this.store.get(id) ?? []);
-    if (body.some(stopsLoop)) return false;
-    const [taken, runs] = [body.filter((t) => t.reverted), body.filter((t) => !t.reverted)];
-    for (const task of runs.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
-      this.store.retry(task.id);
-      this.starts.roundStarted(task.id);
-    }
-    const fixes = runs.length === 0 ? '' : ` ${quotedList(runs.map((t) => t.title))} ${runs.length === 1 ? 'runs' : 'run'} to fix what it found, then it checks again.`;
-    const held = taken.length === 0 ? '' : ` ${quotedList(taken.map((t) => t.title))} ${taken.length === 1 ? 'was' : 'were'} reverted, so the loop waits for you to start ${taken.length === 1 ? 'it' : 'them'} again.`;
-    this.tell('info', `Task "${check.title}" failed round ${loopRoundOf(check)} of ${check.loop.maxRounds}:${fixes}${held}`);
-    return true;
-  }
-
-  /**
-   * The loop is over (ADR-0045 L6): its check passed, or will run no more.
-   * What of its body has not run, or did not pass, is not waited for: it ends
-   * skipped, with why. A body task at work is left to finish.
-   */
-  private closeLoop(check: Readonly<Task>, reason: string): void {
-    this.starts.loopEnded(check.id);
-    for (const id of check.loop?.body ?? []) {
-      const task = this.store.get(id);
-      if (!task || this.attempts.has(id) || !LEFT_UNDONE.has(task.status)) continue;
-      this.store.markSkipped(id, 'loop', reason);
-      this.retireResolvers(id);
-      this.starts.skipped(id);
-    }
-  }
-
-  /**
-   * A check whose round's body has all passed and landed runs again, as the
-   * next round (ADR-0045 L5). Read off the plan at each tick rather than at a
-   * body's verdict, so whatever finishes the body — a verdict, a retry, a Mark
-   * complete, a reload in between — resumes the loop alike.
-   */
-  private repeatChecks(): void {
-    let repeated = false;
-    for (const id of repeatingChecks(this.store.planTasks)) {
-      const check = this.store.get(id);
-      if (!check?.loop || !(this.isScheduling || this.starts.carriesLoop(id)) || this.attempts.has(id) || !check.loop.body.every((b) => landed(b, this.store, this.runs))) continue;
-      this.repeatCheck(check);
-      repeated = true;
-    }
-    if (repeated) this.emit('onTaskChanged');
-  }
-
-  private repeatCheck(check: Task): void {
-    this.previousRounds.set(check.id, { round: loopRoundOf(check), report: check.outputSummary?.report });
-    this.store.repeat(check.id);
-    this.starts.roundStarted(check.id);
-    this.notifications.info(`The fix for task "${check.title}" has landed: it checks again, round ${loopRoundOf(check)} of ${check.loop?.maxRounds}.`);
-  }
-
-  /**
    * Something will run this check between rounds without being asked: a
    * scheduler, the one a reset gives back, or its loop carried on (ADR-0045
    * L5). What the seam reads before it says so to anyone.
    */
   loopRunsOn(checkId: string): boolean {
-    return this.scheduledRun || this.starts.carriesLoop(checkId);
+    return this.loops.runsOn(checkId);
   }
 
-  /** A start of this task would be its loop's next round: between rounds, its body landed, and nothing else will run it. */
-  private ownsNextRound(task: Readonly<Task>): boolean {
-    return this.loopStranded(task.id) && waitOf(this.startWaits(task), 'repeating')?.waiting.length === 0;
-  }
-
-  /** A check between rounds that nothing will run: it waits on a person, its failure no longer one its loop answers (ADR-0045 L5, ADR-0053). */
+  /** A check between rounds that nothing will run; see {@link LoopRounds.stranded}. */
   loopStranded(taskId: string): boolean {
-    const task = this.store.get(taskId);
-    return !!task?.loop && !!waitOf(this.startWaits(task), 'repeating') && !this.loopRunsOn(taskId);
+    return this.loops.stranded(taskId);
   }
 
   /** A tick starts something: the scheduler the plan, or what is carried on, those tasks alone. */
@@ -2975,10 +2911,9 @@ export class TaskOrchestrator {
   }
 
   /**
-   * What is owed with no scheduler, the ledger's carried work that has some
-   * now. A carried loop: a check between rounds whose loop goes on, or a round
-   * waiting to start; one a body task stopped is not here until that task
-   * passes (L7). A delegated task's carried check: ready to start, since
+   * What is owed with no scheduler, the carried work that has some now: the
+   * carried loops {@link LoopRounds.carriedOwed} counts, then the ledger's
+   * carried checks. A delegated task's carried check: ready to start, since
    * whatever start ended that task, a run with no scheduler would otherwise
    * close under it with its merge still held (ADR-0055 D8, D9); one behind a
    * failure or other unfinished work is not here, nothing is moving towards
@@ -2987,19 +2922,10 @@ export class TaskOrchestrator {
    */
   private carriedOn(): Task[] {
     if (this.isScheduling || this.runState.kind === 'held') return [];
-    let repeating: ReadonlySet<string> | undefined;
-    const ids = this.starts.carried({
-      loop: (id) => {
-        const check = this.store.get(id);
-        if (!check?.loop) return false;
-        repeating ??= repeatingChecks(this.store.planTasks);
-        return repeating.has(id) || check.status === 'pending' || check.status === 'approved';
-      },
-      check: (id) => {
-        const check = this.store.get(id);
-        return !!check && !this.startWaits(check).some((wait) => CHECK_NOT_READY.has(wait.kind));
-      },
-    });
+    const ids = [...this.loops.carriedOwed(), ...this.starts.carried((id) => {
+      const check = this.store.get(id);
+      return !!check && !this.startWaits(check).some((wait) => CHECK_NOT_READY.has(wait.kind));
+    })];
     return ids.flatMap((id) => this.store.get(id) ?? []);
   }
 
@@ -3016,6 +2942,7 @@ export class TaskOrchestrator {
    */
   private endCarriedLoops(): void {
     this.starts.runEnded();
+    this.loops.runEnded();
     this.loopNotice = '';
   }
 
@@ -3201,12 +3128,6 @@ const REVERTED_HOLD = 'reverted; retry or force start to run it again';
 
 /** Why a resolver ends skipped once its conflict has ended some other way (ADR-0015). */
 const RESOLVER_NOT_NEEDED = 'not needed: the conflict it was added for is gone';
-
-/** A body task a round runs again: not at work, and not waiting on the user. */
-const REPEATABLE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'completed', 'failed', 'skipped']);
-
-/** A body task a closed loop leaves undone: it has not run, or it did not pass. */
-const LEFT_UNDONE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'failed']);
 
 /** A failure's notice, then the way back into the agent where it stopped on its login. */
 function withSignInHint(hint: string | null, text: string): string {

@@ -10,6 +10,7 @@ import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
 import { waitOf, type StartWait } from './readiness';
 import { escalationAct, type Escalation } from './escalations';
+import { checkStart, type CheckStart } from './LoopRounds';
 import { mergeBesideOpsConfirmation, mergePastChecksConfirmation } from './mergeWording';
 import { revertStopped, type RevertScope } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
@@ -124,6 +125,9 @@ export type EffectAllowlist = (body: ScriptBody) => string | null;
 
 /** No effect is pre-approved until the user's rules are read: the allowlist has no built-in entries. */
 const NO_EFFECTS: EffectAllowlist = () => null;
+
+/** A start that leaves its loop's rounds as they are: the user's retry, which starts them over (ADR-0045 L7). */
+const OWN_START: CheckStart = { kind: 'own' };
 
 /** How long `run_script` waits for its task to end before it answers that it is still running (ADR-0035). */
 export const SCRIPT_ANSWER_WAIT_MS = 60_000;
@@ -1072,10 +1076,11 @@ export class ExecutionCommands {
     if (skipped) return { refusal: skipped };
     // Only the user's retry starts a check's rounds over (ADR-0045 L7).
     const keepsRounds = how === 'run' || actor.kind !== 'user';
-    const repeating = keepsRounds ? this.betweenRounds(located, tasks) : null;
+    const start = keepsRounds ? this.checkStart(task) : OWN_START;
+    const repeating = this.betweenRounds(located, start, tasks);
     if (repeating) return { refusal: repeating };
     // Past that refusal, nothing else will run a check between rounds: this start is its next round.
-    const nextRound = keepsRounds ? waitOf(this.host.startWaits(task), 'repeating') : undefined;
+    const nextRound = start.kind === 'own' ? undefined : start.wait;
     const settled = !nextRound && (task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped');
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
@@ -1347,10 +1352,10 @@ export class ExecutionCommands {
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
     if (actor.kind !== 'user') {
-      const repeating = this.betweenRounds(located);
+      const start = this.checkStart(task);
+      const repeating = this.betweenRounds(located, start);
       if (repeating) return { refusal: repeating };
-      const nextRound = waitOf(this.host.startWaits(task), 'repeating');
-      if (nextRound) return { refusal: `${capitalize(label)} is between rounds of its loop, and nothing runs it on its own now, so a continue would start its rounds over: start it with run_task, which runs round ${nextRound.round} of ${nextRound.maxRounds}.` };
+      if (start.kind !== 'own') return { refusal: `${capitalize(label)} is between rounds of its loop, and nothing runs it on its own now, so a continue would start its rounds over: start it with run_task, which runs round ${start.wait.round} of ${start.wait.maxRounds}.` };
     }
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} ${voice.startOver}` };
@@ -1573,18 +1578,23 @@ export class ExecutionCommands {
    * Why a loop's check between rounds is not started from the seam: something
    * will run it, once its body has landed, or nothing will and its body has
    * yet to land (ADR-0045 L5). Each says only what is true of it. Null for any
-   * other task, and for a check whose fix has landed that nothing else will
+   * other start, and for a check whose fix has landed that nothing else will
    * run, which a start runs as its next round rather than leave it stranded.
    */
-  private betweenRounds(located: Located, tasks?: readonly Task[]): string | null {
-    const repeating = waitOf(this.host.startWaits(located.task), 'repeating');
-    if (!repeating) return null;
-    const fix = repeating.waiting.flatMap((id) => this.located(id, tasks) ?? []);
-    const round = `round ${repeating.round} of ${repeating.maxRounds}`;
+  private betweenRounds(located: Located, start: CheckStart, tasks?: readonly Task[]): string | null {
+    if (start.kind !== 'loop-runs-it' && start.kind !== 'fix-unlanded') return null;
+    const fix = start.wait.waiting.flatMap((id) => this.located(id, tasks) ?? []);
+    const round = `round ${start.wait.round} of ${start.wait.maxRounds}`;
     const landed = `once ${named(fix)} ${fix.length === 1 ? 'has' : 'have'} passed and landed`;
     const between = `${capitalize(describe(located))} is between rounds of its loop`;
-    if (this.host.loopRunsOn(located.task.id)) return `${between}: it runs again on its own, as ${round}, ${fix.length > 0 ? landed : 'next'}. Leave it to the loop.`;
+    if (start.kind === 'loop-runs-it') return `${between}: it runs again on its own, as ${round}, ${fix.length > 0 ? landed : 'next'}. Leave it to the loop.`;
     return fix.length > 0 ? `${between}, and nothing runs it on its own now: it can start as ${round} ${landed}.` : null;
+  }
+
+  /** What a start of the task does to its loop's rounds; see {@link checkStart}. */
+  private checkStart(task: Readonly<Task>): CheckStart {
+    const wait = waitOf(this.host.startWaits(task), 'repeating');
+    return checkStart(wait, !!wait && this.host.loopRunsOn(task.id));
   }
 
   /**
@@ -1608,7 +1618,7 @@ export class ExecutionCommands {
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
       const waits = this.host.startWaits(task);
       // A check between rounds needs no one while something runs it on (ADR-0045 L3); stranded, it is failed like any task.
-      if (waitOf(waits, 'repeating') && this.host.loopRunsOn(task.id)) return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
+      if (this.checkStart(task).kind === 'loop-runs-it') return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
       const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(waits, 'blocked') !== undefined;
       if (!needsSomeone) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }

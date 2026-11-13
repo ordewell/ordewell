@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import { StartLedger, type CarriedOwes, type LoadedPlan, type Offer, type QueuedStart, type StartClaimant } from '../StartLedger';
+import { StartLedger, type LoadedPlan, type Offer, type QueuedStart, type StartClaimant } from '../StartLedger';
 
 const RELEASES = ['retried', 'forced', 'moved', 'roundStarted', 'completed', 'skipped', 'left'] as const;
 
 const AT_GATE: QueuedStart = { pastGate: [] };
 const REOPEN = { message: 'go on', resumeSessionId: 's1' };
 
-/** A plan that has the tasks `has` names, each a loop's check unless `loops` says otherwise. */
-function planOf(has: (taskId: string) => boolean, loops: (checkId: string) => boolean = has): LoadedPlan {
-  return { has, hasLoop: loops };
+/** A plan that has the tasks `has` names. */
+function planOf(has: (taskId: string) => boolean): LoadedPlan {
+  return { has };
 }
 
-const ALL_OWED: CarriedOwes = { loop: () => true, check: () => true };
+const ALL_OWED = (): boolean => true;
 
 /** A claimant that answers each owed start from a table, recording what it was offered. */
 function claimant(answers: { queued?: Record<string, Offer<() => Promise<void>>>; repair?: Record<string, Offer<() => void>>; resume?: Record<string, Offer<() => void>> } = {}) {
@@ -386,66 +386,37 @@ describe('StartLedger carried work', () => {
   it('carries nothing at first', () => {
     const { ledger } = ledgerOf();
     expect(ledger.carried(ALL_OWED)).toEqual([]);
-    expect(ledger.carriesLoop('l')).toBe(false);
     expect(ledger.carriesCheck('c')).toBe(false);
   });
 
-  it('lists the carried loops, then the carried checks, that the reader counts as owed now', () => {
+  it('lists the carried checks that the reader counts as owed now', () => {
     const { ledger } = ledgerOf();
     ledger.carryCheck('c1');
-    ledger.carryLoop('l1');
     ledger.carryCheck('c2');
-    ledger.carryLoop('l2');
-    expect(ledger.carried(ALL_OWED)).toEqual(['l1', 'l2', 'c1', 'c2']);
-    expect(ledger.carried({ loop: (id) => id === 'l2', check: (id) => id === 'c1' })).toEqual(['l2', 'c1']);
-    // Counted as owed or not, each stays carried: a loop a body task stopped is resumed by its retry (ADR-0045 L7).
-    expect(ledger.carriesLoop('l1')).toBe(true);
+    expect(ledger.carried(ALL_OWED)).toEqual(['c1', 'c2']);
+    expect(ledger.carried((id) => id === 'c1')).toEqual(['c1']);
+    // Counted as owed or not, each stays carried.
     expect(ledger.carriesCheck('c2')).toBe(true);
-  });
-
-  it('keeps loops and checks apart: a loop carried is no check carried, nor the other way round', () => {
-    const { ledger } = ledgerOf();
-    ledger.carryLoop('a');
-    ledger.carryCheck('b');
-    expect(ledger.carriesCheck('a')).toBe(false);
-    expect(ledger.carriesLoop('b')).toBe(false);
-    expect(ledger.carried({ loop: () => false, check: () => true })).toEqual(['b']);
   });
 
   it('carries a task once however often it is carried', () => {
     const { ledger } = ledgerOf();
-    ledger.carryLoop('l');
-    ledger.carryLoop('l');
     ledger.carryCheck('c');
     ledger.carryCheck('c');
-    expect(ledger.carried(ALL_OWED)).toEqual(['l', 'c']);
+    expect(ledger.carried(ALL_OWED)).toEqual(['c']);
   });
 
-  it('a loop that ended is carried no more; its checks and the other loops are', () => {
+  it('a claim starts a carried check', () => {
     const { ledger } = ledgerOf();
-    ledger.carryLoop('l1');
-    ledger.carryLoop('l2');
-    ledger.carryCheck('l1');
-    ledger.loopEnded('l1');
-    expect(ledger.carriesLoop('l1')).toBe(false);
-    expect(ledger.carriesLoop('l2')).toBe(true);
-    expect(ledger.carriesCheck('l1')).toBe(true);
-  });
-
-  it('a claim starts a carried check, and leaves its loop carried: a loop goes on across its rounds', () => {
-    const { ledger } = ledgerOf();
-    ledger.carryLoop('a');
     ledger.carryCheck('a');
     ledger.carryCheck('b');
     expect(ledger.claimed('a')).toBeNull();
     expect(ledger.carriesCheck('a')).toBe(false);
     expect(ledger.carriesCheck('b')).toBe(true);
-    expect(ledger.carriesLoop('a')).toBe(true);
   });
 
   it('the run ending ends everything it carried, and owes no start it owed', () => {
     const { ledger } = ledgerOf();
-    ledger.carryLoop('l');
     ledger.carryCheck('c');
     ledger.oweRepair('r');
     ledger.queue('q', AT_GATE);
@@ -457,26 +428,23 @@ describe('StartLedger carried work', () => {
 
   it.each(['user', 'restart'] as const)('a %s stop ends everything carried', (reason) => {
     const { ledger } = ledgerOf();
-    ledger.carryLoop('l');
     ledger.carryCheck('c');
     ledger.stopped(reason);
     expect(ledger.carried(ALL_OWED)).toEqual([]);
   });
 
-  it('an edit keeps a loop whose check is still a loop\'s and a check still in the plan; another plan keeps none', () => {
+  it('an edit keeps a check still in the plan; another plan keeps none', () => {
     const { ledger } = ledgerOf();
-    for (const id of ['looped', 'unlooped', 'gone']) ledger.carryLoop(id);
     for (const id of ['kept', 'gone']) ledger.carryCheck(id);
-    ledger.planLoaded(planOf((id) => id !== 'gone', (id) => id === 'looped'), { keepsChosen: true, edited: true });
-    expect(ledger.carried(ALL_OWED)).toEqual(['looped', 'kept']);
+    ledger.planLoaded(planOf((id) => id !== 'gone'), { keepsChosen: true, edited: true });
+    expect(ledger.carried(ALL_OWED)).toEqual(['kept']);
 
     ledger.planLoaded(planOf(() => true), { keepsChosen: true, edited: false });
     expect(ledger.carried(ALL_OWED)).toEqual([]);
   });
 
-  it('a carried loop or check counts as no owed start: the drain does not offer it, and pendingUnasked does not count it', async () => {
+  it('a carried check counts as no owed start: the drain does not offer it, and pendingUnasked does not count it', async () => {
     const { ledger, offered } = ledgerOf();
-    ledger.carryLoop('l');
     ledger.carryCheck('c');
     await ledger.offer('now');
     expect(offered).toEqual([]);
@@ -485,12 +453,10 @@ describe('StartLedger carried work', () => {
 
   it('the events of a task\'s other entries leave what it carries', () => {
     const { ledger } = ledgerOf();
-    ledger.carryLoop('a');
     ledger.carryCheck('a');
     for (const event of RELEASES) ledger[event]('a');
     ledger.cancelled('a');
     ledger.forcedNow('a');
-    expect(ledger.carriesLoop('a')).toBe(true);
     expect(ledger.carriesCheck('a')).toBe(true);
   });
 });

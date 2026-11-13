@@ -49,14 +49,6 @@ type StopReason = 'user' | 'restart';
 /** The plan a load brought in, as the ledger judges what of the last one it keeps. */
 export interface LoadedPlan {
   has(taskId: string): boolean;
-  /** The task is a loop's check (ADR-0045). */
-  hasLoop(checkId: string): boolean;
-}
-
-/** Which carried work the reader counts as owed now: the ledger keeps what is carried, the plan says what of it has work. */
-export interface CarriedOwes {
-  loop(checkId: string): boolean;
-  check(checkId: string): boolean;
 }
 
 /**
@@ -78,12 +70,11 @@ export interface CarriedOwes {
  * claim takes over: a Continue's message for a child it reopens, and the
  * children a Continue could not reopen, which the next run keeps failed.
  *
- * And it keeps the work carried on with no scheduler, which a tick starts
- * itself rather than the drain: the loops whose check failed a round in a run
- * the scheduler was not driving (ADR-0045 L5), and the checks of a delegated
- * task that passed with nothing scheduled after it (ADR-0055 D8). Held here
- * and not on the plan, because a Stop ends them and a reload does not bring
- * them back; an edit does neither.
+ * And it keeps the checks carried on with no scheduler, which a tick starts
+ * itself rather than the drain: those of a delegated task that passed with
+ * nothing scheduled after it (ADR-0055 D8). Held here and not on the plan,
+ * because a Stop ends them and a reload does not bring them back; an edit
+ * does neither. The loops carried on so are `LoopRounds`' (ADR-0045 L5).
  */
 export class StartLedger<Admission> {
   private readonly held = new Map<string, { reason: string; kind: HoldKind }>();
@@ -92,7 +83,6 @@ export class StartLedger<Admission> {
   private readonly resumes = new Set<string>();
   private readonly reopens = new Map<string, Continuation>();
   private readonly kept = new Set<string>();
-  private readonly loops = new Set<string>();
   private readonly checks = new Set<string>();
 
   constructor(private readonly claimant: StartClaimant<Admission>) {}
@@ -140,43 +130,23 @@ export class StartLedger<Admission> {
     this.hold(taskId, reason, 'chosen');
   }
 
-  /**
-   * The check failed a round with no scheduler, so nothing else would start
-   * what its loop owes: the loop goes on, carried (ADR-0045 L5). It stays
-   * carried while a body task the user stopped holds it, so a retry of that
-   * task that passes resumes it (L7).
-   */
-  carryLoop(checkId: string): void {
-    this.loops.add(checkId);
-  }
-
-  /** A check of a delegated task that passed with no scheduler to start it (ADR-0055 D8): carried as a loop is, never queued, since one that stops being ready simply stops being owed. */
+  /** A check of a delegated task that passed with no scheduler to start it (ADR-0055 D8): carried, never queued, since one that stops being ready simply stops being owed. */
   carryCheck(checkId: string): void {
     this.checks.add(checkId);
   }
 
-  /** The loop is over (ADR-0045 L6): its check passed, or will run no more. */
-  loopEnded(checkId: string): void {
-    this.loops.delete(checkId);
-  }
-
   /** The run that carried them is over, by what gives it up or clears it up: what it carried goes with it. */
   runEnded(): void {
-    this.loops.clear();
     this.checks.clear();
-  }
-
-  carriesLoop(checkId: string): boolean {
-    return this.loops.has(checkId);
   }
 
   carriesCheck(checkId: string): boolean {
     return this.checks.has(checkId);
   }
 
-  /** The carried loops, then the carried checks, that `owes` counts as owed now. */
-  carried(owes: CarriedOwes): string[] {
-    return [...[...this.loops].filter((id) => owes.loop(id)), ...[...this.checks].filter((id) => owes.check(id))];
+  /** The carried checks that `owed` counts as owed now: the ledger keeps what is carried, the plan says what of it has work. */
+  carried(owed: (checkId: string) => boolean): string[] {
+    return [...this.checks].filter((id) => owed(id));
   }
 
   owesRepair(taskId: string): boolean {
@@ -318,8 +288,7 @@ export class StartLedger<Admission> {
    * begun again, so a chosen hold of a task it still has stays; only a retry,
    * a force start or another plan releases one. Every other hold goes.
    * `edited`: the plan is the one the queued starts were asked of, so those of
-   * tasks it still has stay, and so does what it carried on: a loop whose check
-   * is still a loop's, a check still in the plan. The repairs and resumes it
+   * tasks it still has stay, and so do the checks it carried on that it still has. The repairs and resumes it
    * owed are judged again from the plan; what a Continue owed outlasts the
    * load, which is how its run begins.
    */
@@ -330,7 +299,6 @@ export class StartLedger<Admission> {
     for (const id of [...this.waiting.keys()]) if (!opts.edited || !plan.has(id)) this.waiting.delete(id);
     this.repairs.clear();
     this.resumes.clear();
-    for (const id of [...this.loops]) if (!opts.edited || !plan.hasLoop(id)) this.loops.delete(id);
     for (const id of [...this.checks]) if (!opts.edited || !plan.has(id)) this.checks.delete(id);
   }
 

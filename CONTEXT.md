@@ -137,7 +137,8 @@ under another, and which runner and mode capabilities it has.
 
 **Start ledger** (`StartLedger`) — the orchestrator's one record of what is owed
 a start: holds (`chosen` or `failed-start`), queued starts, owed repairs, kept
-resumes, owed reopens, kept children and carried loops and checks. A path reports
+resumes, owed reopens, kept children and carried checks; the carried loops are
+`LoopRounds`'. A path reports
 what happened (retried, forced, completed, skipped, left, a Stop, a plan load) and
 the ledger decides what that event ends; nothing edits an entry by hand. One
 drain (`offer`) offers every owed start to the orchestrator, which answers that it
@@ -1855,7 +1856,8 @@ of the loop's four texts (ADR-0045 L7).
 *Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
 a cancel returns a task to pending.
 
-**Loop** (`Task.loop`, `models/Loop.ts`; ADR-0045) — a *Loop check* that
+**Loop** (`Task.loop`, `models/Loop.ts`, its rounds run by `LoopRounds`;
+ADR-0045) — a *Loop check* that
 repeats with its fix until it passes, declared on it as `loop: { body, maxRounds }`.
 Ordewell runs it with no planner turn: the check runs; while it fails with
 rounds left, its *body* runs with its report and then the check runs again.
