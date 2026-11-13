@@ -1,4 +1,4 @@
-import { taskKinds } from '../../models/TaskKind';
+import { taskOpSchema, taskRef, taskSpecSchema } from '../TaskSpec';
 import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
@@ -138,7 +138,6 @@ const spawnResearchAgentInput = z.object({
   prompt: z.string().trim().min(1).describe('A self-contained research task: the area or question, the paths or symbols to start from, and exactly what the digest must report back.'),
 });
 
-const taskRef = z.union([z.string().min(1), z.number().int().min(0)]).describe('A task id, "#order" ("#2.1" for a subtask), a bare order, or a title.');
 
 const readTaskInput = z.object({
   task: taskRef,
@@ -166,67 +165,15 @@ const applyPatchInput = z.object({
   attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
 });
 
-const modelAssignment = z.looseObject({
-  modelId: z.string(),
-  modelLabel: z.string().optional(),
-  thinkingEffort: z.string().optional().describe("A variant id from that model's variants list."),
-});
-
-// Loose on purpose: a plan from either route meets one check (`PlanChangeCheck`,
-// ADR-0022 P2), this tool's through it and the plan envelope's parse against
-// its intake, and a schema stricter than that check would make the two routes
-// disagree about the same tasks.
-const planTask = z.looseObject({
-  id: z.string().optional(),
-  order: z.number().optional(),
-  title: z.string(),
-  description: z.string().optional(),
-  type: z.enum(taskKinds(false)).optional(),
-  dependencies: z.array(z.string()).optional(),
-  prompt: z.string().optional(),
-  userSteps: z.array(z.looseObject({ order: z.number().optional(), instruction: z.string() })).optional(),
-  assignedRunner: z.string().optional(),
-  assignedModel: modelAssignment.optional(),
-  readOnly: z.boolean().optional().describe('True for a task that must not change any file. Ordewell picks every mode; there is no taskMode.'),
-  autonomy: z.enum(['AFK', 'HITL']).optional(),
-  sliceType: z.enum(['AFK', 'HITL']).optional(),
-  ops: z.boolean().optional(),
-  userStoriesCovered: z.array(z.string()).optional(),
-  skills: z.array(z.string()).optional()
-    .describe('Task skills (applies-to: task) by name; their bodies go in the runner\'s prompt. A subtask lists its own.'),
-  subtasks: z.array(z.record(z.string(), z.unknown())).optional(),
-  // ADR-0035. Their shape is the plan's rule to judge, as the other fields' is.
-  commands: z.array(z.array(z.string())).optional()
-    .describe('A script task\'s argument vectors, run in order with no shell, stopping at the first that fails. Exactly one of commands or script.'),
-  script: z.string().optional().describe('A script task\'s script, run by the research shell. Exactly one of commands or script.'),
-  timeoutMs: z.number().optional().describe('A script task\'s time limit in milliseconds; ten minutes when left out.'),
-  // ADR-0045. Loose like the rest: the plan's rules judge the body and the rounds.
-  research: z.boolean().optional().describe('A top-level read-only AI task whose report wakes the planner (ADR-0037 R1). Never in a loop body.'),
-  loop: z.looseObject({
-    body: z.array(z.string()).describe('The ids of the top-level tasks that fix what this check finds; each depends on this task.'),
-    maxRounds: z.number().optional().describe('The most times this check runs, 1 to 10; 3 when left out.'),
-  }).optional().describe('Makes this task a loop\'s check: while it fails with rounds left, Ordewell runs the body with its report, then runs it again.'),
-});
-
+// One table shapes a task's fields for every route (`TaskSpec`), so this tool
+// and a text reply take the same tasks; what a field means is the plan's rules'
+// to judge (`PlanChangeCheck`, ADR-0022 P2), by the message that says why.
 const submitPlanInput = z.object({
-  tasks: z.array(planTask).min(1).describe('The whole plan, in order.'),
+  tasks: z.array(taskSpecSchema()).min(1).describe('The whole plan, in order.'),
 });
-
-const taskFields = z.record(z.string(), z.unknown());
-const handle = z.string().optional();
-
-const taskOp = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('update'), taskId: taskRef, changes: taskFields }),
-  z.object({ op: z.literal('add'), task: taskFields, handle }),
-  z.object({ op: z.literal('remove'), taskId: taskRef }),
-  z.object({ op: z.literal('reorder'), taskIds: z.array(taskRef) }),
-  z.object({ op: z.literal('merge'), taskIds: z.array(taskRef), merged: taskFields, handle }),
-  z.object({ op: z.literal('split'), taskId: taskRef, parts: z.array(taskFields), handle }),
-  z.object({ op: z.literal('rearm'), taskId: taskRef, changes: taskFields.optional() }),
-]);
 
 const editPlanInput = z.object({
-  ops: z.array(taskOp).min(1).describe('Applied as one batch, whole or not at all; every ref resolves against the plan as it stands when the call is made, before any op runs.'),
+  ops: z.array(taskOpSchema()).min(1).describe('Applied as one batch, whole or not at all; every ref resolves against the plan as it stands when the call is made, before any op runs.'),
 });
 
 const taskQueryInput = z.object({
@@ -824,20 +771,8 @@ export const PLANNER_RESEARCH_AGENT = tool<PlannerToolHandler, typeof spawnResea
   spawnResearchAgentInput, (h) => h.spawnResearchAgent?.bind(h), PLANNER_READ_ONLY);
 
 /** A task as a planner that may delegate writes it: the same list, and `type` takes one more value (ADR-0055 D1). */
-const delegatingPlanTask = planTask.extend({
-  type: z.enum(taskKinds(true)).optional(),
-  goal: z.string().optional().describe('A delegated task\'s goal: what its child plan must achieve, in place of a prompt.'),
-  budget: z.looseObject({ tokens: z.number(), wallClockMs: z.number().optional() }).optional()
-    .describe('A delegated task\'s budget, required: tokens, and a time limit in milliseconds if it has one. Carved from what this plan has left.'),
-  protectedPaths: z.array(z.string()).optional()
-    .describe('The paths a delegated task\'s child may not change: what its check runs and the configuration that runs it. Relative to the repository; `*` is the one wildcard. Required unless it is readOnly.'),
-  grants: z.array(z.string()).optional().describe('What a delegated task asks for past the floor, by name: research, delegate or effect.'),
-  scope: z.looseObject({ paths: z.array(z.string()).optional(), provides: z.array(z.string()).optional(), consumes: z.array(z.string()).optional() }).optional()
-    .describe('What a delegated task declares it works on. Advisory.'),
-});
-
 const delegatingSubmitPlanInput = z.object({
-  tasks: z.array(delegatingPlanTask).min(1).describe('The whole plan, in order.'),
+  tasks: z.array(taskSpecSchema({ delegates: true })).min(1).describe('The whole plan, in order.'),
 });
 
 const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({

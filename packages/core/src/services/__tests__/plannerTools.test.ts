@@ -1430,6 +1430,39 @@ describe('one intake for submit_plan and edit_plan', () => {
   const errorsOf = (answer: Answer) => (answer.body as { errors?: { op?: number; message: string }[] }).errors ?? [];
   const sub = (title: string, extra: Record<string, unknown> = {}) => ({ title, type: 'ai', sliceType: 'AFK', autonomy: 'AFK', ...extra });
 
+  // Bug: edit_plan took a string where a list of refs belongs, read it as no dependencies, and cleared the task's,
+  // while submit_plan refused the same field, and refused a numeric ref the text route read.
+  it('refuses a dependencies field that is not a list, on both tools, and changes nothing', async () => {
+    let edit: { isError: boolean; text: string } | undefined;
+    let submit: { isError: boolean; text: string } | undefined;
+    const raw = async (mcp: Client, name: string, args: Record<string, unknown>) => {
+      const result = await mcp.callTool({ name, arguments: args });
+      return { isError: result.isError === true, text: (result.content as { text: string }[])[0].text };
+    };
+    const planner = await planThen(async (mcp) => {
+      edit = await raw(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { dependencies: '#1' } }] });
+      submit = await raw(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { dependencies: 'b' })] });
+      return 'Done.';
+    });
+    const before = planner.session.planTasks.map((t) => t.dependencies);
+
+    await planner.session.continueConversation('EDIT NOW');
+
+    expect(edit).toEqual({ isError: true, text: expect.stringMatching(/dependencies/) });
+    expect(submit).toEqual({ isError: true, text: expect.stringMatching(/dependencies/) });
+    expect(planner.session.planTasks.map((t) => t.dependencies)).toEqual(before);
+  });
+
+  it('reads a numeric dependency ref on both tools, as the text route does', async () => {
+    const submit = await viaSubmit([planTask('1', 1, 'claude-code', 'claude-sonnet-4'), planTask('2', 2, 'claude-code', 'claude-sonnet-4', { dependencies: [1] })]);
+    const edit = await viaEdit([{ op: 'add', task: { title: 'Docs', dependencies: [1] } }]);
+
+    expect(submit.answer.isError).toBe(false);
+    expect(submit.tasks[1].dependencies).toEqual([submit.tasks[0].id]);
+    expect(edit.answer.isError).toBe(false);
+    expect(edit.tasks[2].dependencies).toEqual([edit.tasks[0].id]);
+  });
+
   it('refuses a task or subtask on a runner that is not enabled, never moving it to another', async () => {
     const submit = await viaSubmit([planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [sub('Child', { assignedRunner: 'nope' })] })]);
     const editSub = await viaEdit([{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', { assignedRunner: 'nope' })] } }]);

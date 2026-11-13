@@ -1214,3 +1214,56 @@ describe('research task type flips', () => {
     expect(result.tasks[0].research).toBeFalsy();
   });
 });
+
+// A wrong-typed field was read as empty, so an edit "succeeded" by clearing what it meant to set;
+// and a malformed op threw out of the text route instead of being refused for the planner to fix.
+describe('a malformed task op is refused, never coerced or thrown', () => {
+  it('refuses an update whose dependencies are a string, leaving the task as it was', () => {
+    const plan = samplePlan();
+    const result = applyTaskOps(plan, [{ op: 'update', taskId: '#3', changes: { dependencies: '#2' as unknown as string[] } }], ['claude-code']);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/dependencies" is "#[23]", which must be a list of task refs/);
+    expect(result.tasks.find((t) => t.id === 'c')?.dependencies).toEqual(['b']);
+  });
+
+  it('refuses an added task whose dependencies are a string', () => {
+    const result = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Ship', prompt: 'ship', dependencies: '#3' as unknown as string[] } }], ['claude-code']);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/dependencies" is "#[23]", which must be a list of task refs/);
+  });
+
+  it('reads numeric dependency refs as the orders they name', () => {
+    const result = applyTaskOps(samplePlan(), [{ op: 'update', taskId: '#3', changes: { dependencies: [1] as unknown as string[] } }], ['claude-code']);
+    expect(result.ok).toBe(true);
+    expect(result.tasks.find((t) => t.id === 'c')?.dependencies).toEqual(['a']);
+  });
+
+  it('refuses ops whose changes, taskIds or parts are not what they hold', () => {
+    const malformed = [
+      { op: 'update', taskId: '#2', changes: 'title: x' },
+      { op: 'reorder', taskIds: '#1,#2,#3' },
+      { op: 'merge', taskIds: '#1', merged: { title: 'Both' } },
+      { op: 'split', taskId: '#2', parts: 'two halves' },
+    ] as unknown as TaskOp[];
+    for (const op of malformed) {
+      const result = applyTaskOps(samplePlan(), [op], ['claude-code']);
+      expect(result.ok, JSON.stringify(op)).toBe(false);
+    }
+  });
+
+  it('turns a malformed op in a text reply into a parse error the planner is asked to fix', () => {
+    for (const reply of [
+      '{"taskOps":[{"op":"update","taskId":"#2","changes":"title: x"}]}',
+      '{"taskOps":[{"op":"reorder","taskIds":"#1,#2,#3"}]}',
+      '{"taskOps":[{"op":"update","taskId":"#3","changes":{"dependencies":"#2"}}]}',
+    ]) {
+      expect(() => parseTaskOpsJson(reply), reply).toThrow(PlanParseError);
+    }
+    expect(() => parseTaskOpsJson('{"taskOps":[{"op":"update","taskId":"#3","changes":{"dependencies":"#2"}}]}')).toThrow(/dependencies/);
+  });
+
+  it('accepts numeric dependency refs in a text reply, as edit_plan does', () => {
+    expect(parseTaskOpsJson('{"taskOps":[{"op":"update","taskId":3,"changes":{"dependencies":[1]}}]}'))
+      .toEqual([{ op: 'update', taskId: 3, changes: { dependencies: [1] } }]);
+  });
+});

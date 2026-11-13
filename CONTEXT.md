@@ -2721,6 +2721,21 @@ lives only on the task's model (`assignedModel.thinkingEffort`); `edit_plan`'s
 *Avoid:* building a task from planner JSON anywhere else, and "fixing" a task
 the planner wrote by substitution — what it may not have is refused.
 
+**Task spec** (`services/TaskSpec.ts`) — the one table of the fields a planner
+writes on a task, and each one's shape: what `submit_plan` lists, what judges
+an `edit_plan` op or a `taskOps` reply's op (its `changes`, `task`, `merged` and
+`parts`), and `readSpec`, which the *Planned task* intake and a planner's edit
+read first. A field in a shape the table refuses is refused, naming the field,
+the value and what it must be, never read as something else: a string of
+`dependencies` is not a list of none. On the text route a malformed op is a
+parse error the planner is asked to fix, as `edit_plan`'s schema refuses it. In
+an edit, `null` passes the table, for the edit's own rules to read. The table
+judges shape only: a field whose shape another rule owns (a script's body, a
+loop, a delegated task's fields) or whose reader takes any value by design
+(`ops`, `skills`) is left to it, and what a field means, and which writer may
+set it, stays with the *Plan change check* and *Direct edit vs planner edit*.
+*Avoid:* a schema of task fields anywhere else, and coercing a wrong-typed field.
+
 **Plan change check** (`PlanChangeCheck`, `services/PlanChangeCheck.ts`) — the
 one check a planner's change to the plan meets: a whole plan or a batch of task
 ops, on either route (`submit_plan` and the plan envelope, `edit_plan` and
