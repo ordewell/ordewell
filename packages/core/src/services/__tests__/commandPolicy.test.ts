@@ -867,6 +867,29 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 
+  // A wrapper's own value or positional splits the same way: with a directory
+  // `a` holding `b.sh`, `env -C ./* cat x` runs `env -C ./a ./b.sh …`, and
+  // env executes the repository's script.
+  it.each([
+    'env -C ./* cat x',
+    'env --chdir ./* cat x',
+    'env -C {a,b.sh} cat x',
+    'env -C $D cat x',
+    'env -C $DIR git ls-remote origin',
+    'nice -n 1* cat x',
+    'timeout 1* cat x',
+  ])('reads a wrapper argument the shell may split as possibly the command: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'env -C src cat x',
+    'env -C src cat src/*.ts',
+    'timeout 10 cat src/*.ts',
+  ])('keeps a wrapper whose own arguments are literal unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
   // An escaped or quoted brace is not one to bash and the lexer has dropped
   // the backslash, so where the list opens and closes is not knowable: bash
   // expands `{x\},-exec}` to `x}` and `-exec`.
@@ -1182,7 +1205,6 @@ describe('the remote-listing subcommand prompts for a configured remote, scoped 
     ['posix', 'git ls-remote origin ~'],
     ['posix', 'git ls-remote origin x=~/y'],
     ['posix', 'git -C $DIR ls-remote origin'],
-    ['posix', 'env -C $DIR git ls-remote origin'],
     ['posix', 'nice git ls-remote --tags origin $MY_SECRET_TOKEN'],
     ['posix', 'echo $(git ls-remote origin $MY_SECRET_TOKEN)'],
     ['posix', 'git.exe ls-remote origin $MY_SECRET_TOKEN'],
@@ -1734,6 +1756,23 @@ describe('pathLikeArgs — patterns and programs are not paths', () => {
 
   // An unknown flag might consume the next token or not, so nothing after the
   // binary can be called a pattern with certainty.
+  // From the first word the shell may split, which word is the pattern is the
+  // shell's to decide: `grep -v --exclude src/* /etc/passwd` runs with
+  // `src/b.ts` as the pattern and prints /etc/passwd, and `grep -e /etc/p* src`
+  // searches /etc/profile.
+  it('calls nothing a pattern from the first word the shell may split', () => {
+    expect(pathLikeArgs('grep -v --exclude src/* /etc/passwd')).toContain('/etc/passwd');
+    expect(pathLikeArgs('grep -v --exclude {a,b} /etc/passwd')).toContain('/etc/passwd');
+    expect(pathLikeArgs('rg -v -g src/* /etc/passwd')).toContain('/etc/passwd');
+    expect(pathLikeArgs('grep -e /etc/p* src')).toEqual(['/etc/p*']);
+    expect(pathLikeArgs('git log --grep /etc/* -S /x/')).toEqual(['/etc/*']);
+    expect(pathLikeArgs('grep /api/ src/*')).toEqual([]);
+    expect(pathLikeArgs('grep -e /api/ src/*')).toEqual([]);
+    expect(classifyCommand('grep -r .? src').tier).toBe('ask');
+    expect(classifyCommand('grep -r -e .[.] src').tier).toBe('ask');
+    expect(classifyCommand('grep -r foo* src').tier).toBe('auto');
+  });
+
   it('treats every argument as a possible path past a flag it does not know', () => {
     expect(pathLikeArgs('grep --unknown /api/ src')).toEqual(['/api/']);
   });
