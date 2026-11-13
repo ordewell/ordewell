@@ -1,10 +1,4 @@
-/**
- * Option+Left/Right in the real app on macOS, through the real preload, main,
- * node-pty and the login shell, in its emacs and its vi mode. In vi mode the
- * old bytes did their damage to what was typed next (ESC f swallowed it, and
- * ESC[1;3C deleted the rest of the line), so each step types and deletes after
- * the chord and checks what the shell ran (wordKeys.ts).
- */
+/** Verify the disabled macOS chord through Electron and a real shell. */
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
@@ -44,7 +38,7 @@ test.afterAll(async () => {
 // Option is the word chord only on macOS; elsewhere it is Ctrl, which xterm sends as it is.
 test.skip(process.platform !== 'darwin', 'the Option chord is macOS\'s');
 
-test('Option+Left/Right moves a word in emacs and vi mode, and typing and deleting go on as usual', async () => {
+test('Option+Left/Right leaves the shell line and subsequent input intact', async () => {
   if (!app || !sandbox) throw new Error('the app did not launch');
   let win: Page = await app.firstWindow();
   win = await openFolder(app, win, sandbox.repo);
@@ -55,7 +49,7 @@ test('Option+Left/Right moves a word in emacs and vi mode, and typing and deleti
     await win.keyboard.type(`clear; ${command}`);
     await win.keyboard.press('Enter');
   }
-  /** Presses the chord once the shell has drawn the last key, since the chord reads the word off the screen, as the user does. */
+  /** Press the chord after the shell draws the line. */
   async function option(arrow: 'ArrowLeft' | 'ArrowRight'): Promise<void> {
     await win.waitForTimeout(300);
     await win.keyboard.press(`Alt+${arrow}`);
@@ -81,25 +75,10 @@ test('Option+Left/Right moves a word in emacs and vi mode, and typing and deleti
 
       await win.keyboard.type('echo one two three');
       await option('ArrowLeft');
+      await option('ArrowRight');
       await option('ArrowLeft');
-      await win.waitForTimeout(300);
-      await win.keyboard.type('X');
-      await ran('one Xtwo three');
-
-      await win.keyboard.type('echo one two three');
-      for (let i = 0; i < 3; i++) await option('ArrowLeft');
-      await option('ArrowRight');
-      await win.waitForTimeout(300);
-      await win.keyboard.type('YZ');
-      await win.keyboard.press('Backspace');
-      await ran('oneY two three');
-
-      // Past the last word the chord sends nothing, so the next key is typed, not read as a vi command.
-      await win.keyboard.type('echo one two');
-      await option('ArrowRight');
-      await win.waitForTimeout(300);
-      await win.keyboard.type('.x');
-      await ran('one two.x');
+      await win.keyboard.type('XY');
+      await ran('one two threeXY');
     });
   }
 });

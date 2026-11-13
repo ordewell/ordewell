@@ -69,35 +69,14 @@ async function terminal(mac: boolean): Promise<Term> {
 }
 
 describe('the terminal keyboard on macOS', () => {
-  // xterm parses what is written on a later tick, so each expectation waits for the screen to show it.
-  it('moves Option+Left/Right over the word on screen with plain arrows, which every shell keymap binds', async () => {
+  it('sends nothing for either Option arrow regardless of cursor and application modes', async () => {
     const term = await terminal(true);
-    term.write('$ echo one two');
-    await vi.waitFor(() => expect(term.press({ ...LEFT, alt: true })).toEqual({ sent: ['\x1b[D'.repeat(3)], prevented: true }));
-    // Past the last word there is nowhere to go: the chord is swallowed, not sent as anything a vi mode reads.
-    expect(term.press({ ...RIGHT, alt: true })).toEqual({ sent: [], prevented: true });
-    term.write('\x1b[7D');
-    await vi.waitFor(() => expect(term.press({ ...RIGHT, alt: true }).sent).toEqual(['\x1b[C'.repeat(3)]));
-  });
-
-  it('sends the arrows as ESC O x once the program asks for application cursor keys', async () => {
-    const term = await terminal(true);
-    term.write('$ echo one two\x1b[?1h');
-    await vi.waitFor(() => expect(term.press({ ...LEFT, alt: true }).sent).toEqual(['\x1bOD'.repeat(3)]));
-  });
-
-  it('sends Meta+B / Meta+F to a program that hides the cursor, until it shows it or the terminal resets', async () => {
-    const term = await terminal(true);
-    term.write('> one two\x1b[?25l');
-    await vi.waitFor(() => expect(term.press({ ...LEFT, alt: true })).toEqual({ sent: ['\x1bb'], prevented: true }));
-    expect(term.press({ ...RIGHT, alt: true })).toEqual({ sent: ['\x1bf'], prevented: true });
-    term.write('\x1b[?25h');
-    await vi.waitFor(() => expect(term.press({ ...LEFT, alt: true }).sent).toEqual(['\x1b[D'.repeat(3)]));
-    term.write('\x1b[?25l\x1b[!p> one');
-    await vi.waitFor(() => expect(term.press({ ...LEFT, alt: true }).sent).toEqual(['\x1b[D'.repeat(3)]));
-    term.write('\x1b[?25l\x1bc');
-    // RIS clears the screen too, so there is no word left to move over.
-    await vi.waitFor(() => expect(term.press({ ...LEFT, alt: true })).toEqual({ sent: [], prevented: true }));
+    for (const output of ['$ echo one two', '\x1b[?25l\x1b[?1h', '\x1b[?25h\x1bc']) {
+      term.write(output);
+      expect(term.press({ ...LEFT, alt: true })).toEqual({ sent: [], prevented: true });
+      expect(term.press({ ...RIGHT, alt: true })).toEqual({ sent: [], prevented: true });
+    }
+    expect(term.press({ key: 'x', keyCode: 88 }).sent).toEqual(['x']);
   });
 
   it('leaves the other keys as xterm sends them', async () => {

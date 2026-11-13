@@ -7,7 +7,7 @@ import { defineConfig } from '@playwright/test';
  * daemons, so it is its own spec in the same project, run after it, as is
  * switching project from a window, which opens several repositories, and the
  * terminal's copy and paste, which drives the system clipboard, its tabs'
- * shells following the panel's size, and Option+Arrow's word moves.
+ * shells following the panel's size, and the disabled Option+Arrow chord.
  * The visual tour walks the same run for screenshots and layout checks: its own
  * project, so neither script runs the other's spec.
  */
