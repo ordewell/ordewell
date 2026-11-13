@@ -14,6 +14,7 @@ import type {
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
 import { SELF_REPO } from './repoPath';
+import { marksRevertible, mergedIn, recordlessRevertible } from './LandingLedger';
 
 export { SELF_REPO };
 
@@ -74,26 +75,6 @@ export function changedReposOf(record: IsolationTaskRecord): string[] {
   return Object.entries(record.repos).filter(([, r]) => r.changed).map(([repoPath]) => repoPath);
 }
 
-/** Whether a landed task has work in a repo: a later attempt's record says nothing of the merges before it. */
-export function landedInRepo(run: IsolationRun, record: IsolationTaskRecord, repoPath: string): boolean {
-  return !!record.repos[repoPath]?.changed || run.landings?.[record.taskId]?.[repoPath] !== undefined;
-}
-
-/**
- * Landed work a revert can undo (ADR-0054): a merge of its own in every repo it
- * changed, none of it in the user's branch yet, and nothing of it carried in by
- * a resolver. `landings` are the task's merges in {@link IsolationRun.landings},
- * which a later attempt's record says nothing of: a task at work again keeps its
- * mark off, and a revert would refuse it. A run with no `carried` record, or
- * none given, offers nothing: every revert of such a run is refused.
- */
-function revertible(record: IsolationTaskRecord, run?: Pick<IsolationRun, 'landings' | 'carried'>): boolean {
-  if (record.inHead || record.status === 'active' || record.status === 'repairing' || !run?.carried || run.carried[record.taskId]) return false;
-  const landings = run?.landings?.[record.taskId];
-  const changed = record.status === 'merged' ? changedReposOf(record) : [];
-  return (changed.length > 0 || landings !== undefined) && changed.every((repo) => record.repos[repo].landedTip || landings?.[repo]);
-}
-
 /**
  * `repairLimit` is `conflictRepairAttempts` as it stands now, which is what the
  * next repair will be held to. Without one — a saved plan never carries server
@@ -109,7 +90,7 @@ export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: numbe
     ...(record.conflictFiles?.length ? { conflictFiles: record.conflictFiles } : {}),
     ...(record.repairs && repairLimit !== undefined ? { repair: { attempt: record.repairs, limit: repairLimit } } : {}),
     ...(record.repairedFiles?.length ? { repairedFiles: record.repairedFiles } : {}),
-    ...(revertible(record, run) ? { revertible: true as const } : {}),
+    ...(marksRevertible(record, run) ? { revertible: true as const } : {}),
   };
 }
 
@@ -121,9 +102,7 @@ export function taskIsolationOf(record: IsolationTaskRecord, repairLimit?: numbe
  */
 export function taskIsolationsOf(run: IsolationRun, repairLimit?: number): Record<string, TaskIsolation> {
   const tasks: Record<string, TaskIsolation> = {};
-  for (const taskId of Object.keys(run.landings ?? {})) {
-    if (run.carried && !run.carried[taskId]) tasks[taskId] = { state: 'none', revertible: true };
-  }
+  for (const taskId of recordlessRevertible(run)) tasks[taskId] = { state: 'none', revertible: true };
   for (const [taskId, record] of Object.entries(run.tasks)) {
     if (isKnownStatus(record.status)) tasks[taskId] = taskIsolationOf(record, repairLimit, run);
   }
@@ -150,7 +129,7 @@ export function handoffOf(run: IsolationRun): IsolationHandoff {
       baseRef: repo.baseRef,
       ...(repo.baseBranch ? { baseBranch: repo.baseBranch } : {}),
       ...(repo.startedDetached ? { startedDetached: true as const } : {}),
-      landed: merged.filter((r) => landedInRepo(run, r, repo.path)).map(entry),
+      landed: merged.filter((r) => mergedIn(run, r, repo.path)).map(entry),
     })),
     landed: merged.map(entry),
   };

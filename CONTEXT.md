@@ -2150,6 +2150,19 @@ It also builds the task `resolveConflictAsTask` adds (`conflictResolverTask`).
 "revert" for what a landing that stopped does to its own merges: that is a
 rollback, and it leaves no trace, where a *revert* adds to the branch.
 
+**Landing ledger** (`LandingLedger`, ADR-0054) — what an isolated run keeps of
+who landed what across every attempt, once a retry has dropped a record or a
+task has left the plan: each task's merges by repo (`landings`), the tips of
+work another task's merge carried (`carried`), what each landed task was called
+(`landedTasks`) and stood on (`landedOn`), and whether the run kept every
+landing from its start (`keepsEveryLanding`) or has had a revert (`reverted`).
+One pure module reads and writes it: git hands it what a merge made, and it
+answers what a revert takes and whether one may go ahead. A run with no
+`carried` record started on an older build, and every revert of it is refused.
+*Avoid:* "landing" for the ledger — a *Landing* is one task's merges as they
+happen; "history" — the ledger is not git's log, and a revert takes entries
+out of it.
+
 **Conflict repair** — a bounded, automatic response to a conflicted landing
 (ADR-0015): a new attempt of the same task, in its kept worktree, on its own
 runner, model and mode (ADR-0001 — a repair is not a new task, so nothing

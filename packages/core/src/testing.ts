@@ -32,6 +32,7 @@ import { GUARANTEES, refuseUnproven, type ExecutionBackend, type Guarantee, type
 import type { EventStore } from './services/eventStore';
 import { isWithin, type NodePath, type TreeEvent, type TreeFact } from './models/TreeEvent';
 import { handoffOf, integrationBranchFor, noRemoval, SELF_REPO } from './services/isolationRecord';
+import { forgetReverted, freshLedger, landedReposOf, landedTaskOf, recordLanding } from './services/LandingLedger';
 import type { SeaModule } from './utils/seaRuntime';
 import { glued } from './conversation/promptHold';
 
@@ -599,8 +600,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
       shared: [...this.shared],
       sharedRepos: [...this.sharedRepos],
       tasks: {},
-      keepsEveryLanding: true,
-      carried: {},
+      ...freshLedger(),
     };
   }
 
@@ -662,10 +662,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     if (outcome === 'merged') {
       delete record.conflictRepo;
       delete record.conflictFiles;
-      for (const repo of changed) {
-        ((run.landings ??= {})[task.id] ??= {})[repo] = [...run.landings?.[task.id]?.[repo] ?? [], `tip-${repo}`];
-        (run.landedTasks ??= {})[task.id] = { taskId: task.id, order: task.order, title: task.title };
-      }
+      recordLanding(run, record, changed.map((repo) => [repo, `tip-${repo}`] as const));
     } else {
       record.conflictRepo = this.stopsIn.get(task.id) ?? changed[0] ?? SELF_REPO;
       const files = this.conflictFiles.get(task.id);
@@ -678,11 +675,8 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   /** Newest landing first, read as the plan's highest order: scheduling tests land in plan order. */
   async readLanded(run: IsolationRun, taskIds: readonly string[]): Promise<LandedWork> {
     this.log({ op: 'readLanded', taskIds });
-    const records = taskIds.flatMap((id) => run.tasks[id] ?? run.landedTasks?.[id] ?? []).sort((a, b) => b.order - a.order);
-    const tasks = records.map((r) => ({
-      taskId: r.taskId, order: r.order, title: r.title,
-      repos: Object.keys(run.landings?.[r.taskId] ?? {}),
-    }));
+    const records = taskIds.flatMap((id) => landedTaskOf(run, id) ?? []).sort((a, b) => b.order - a.order);
+    const tasks = records.map((r) => ({ taskId: r.taskId, order: r.order, title: r.title, repos: landedReposOf(run, r.taskId) }));
     return { ok: true, tasks, inBranch: records.flatMap((r) => this.inBranch.get(r.taskId) ?? []) };
   }
 
@@ -701,15 +695,7 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
     run.landing = { taskId: taskIds[0], tips: {}, reverts: {} };
     watch.persist();
     delete run.landing;
-    for (const id of taskIds) {
-      // Like git: a later attempt's record that did not land stays for its worktree, its conflict over.
-      if (run.tasks[id]?.status === 'merged') delete run.tasks[id];
-      else if (run.tasks[id]?.status === 'conflict') run.tasks[id].status = 'kept';
-      delete run.landings?.[id];
-      delete run.landedTasks?.[id];
-      delete run.landedOn?.[id];
-    }
-    run.reverted = true;
+    forgetReverted(run, taskIds);
     watch.settled(taskIds);
     return { outcome: 'reverted', tasks: landed.tasks };
   }

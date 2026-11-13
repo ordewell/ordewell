@@ -206,7 +206,10 @@ The git behaviour runs against real scratch repositories
 commit. The scheduling runs against `FakeWorktreeIsolation`
 (`TaskOrchestrator.revert.test.ts`), which asserts the task's state, the hold,
 the gate and what starts meanwhile; the seam's own rules go through a Session
-(`executionCommands.revert.test.ts`).
+(`executionCommands.revert.test.ts`). What the run keeps of who landed what, and
+what a revert reads of it, is one pure module, `LandingLedger`, that the git
+isolation and the fake both write through, so its rules run without git
+(`LandingLedger.test.ts`).
 
 ## Out of scope
 
@@ -364,3 +367,4 @@ the gate and what starts meanwhile; the seam's own rules go through a Session
 - 2026-10-31 — every ancestor read goes through one yes, no or unknown helper; a warning beside a ref list is no answer; a landing keeps a tip it cannot read as carried, and stops when it cannot say what a task brings.
 - 2026-10-31 — a run with no `carried` record refuses every revert and offers none; every run holds the record from its start, and a landing never adds it to a run without one.
 - 2026-11-01 — a revert of a delegated task takes its check back (ADR-0055 D8).
+- 2026-11-13 — the landing ledger's rules have unit tests of their own: they live in `LandingLedger`, which `FakeWorktreeIsolation` calls too.
