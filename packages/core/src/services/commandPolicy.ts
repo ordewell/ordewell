@@ -422,7 +422,7 @@ export function pathRefs(command: string, opts: CommandPolicyOptions = {}): Path
   const dialect = dialectFor(opts.dialect);
   // Lexed exactly as `classifyCommand` lexes it, so a leading newline cannot change what is followed.
   return lexAll(command.trim(), dialect, opts.cdpathSet).segments.flatMap((seg) => {
-    const patterns = patternArgs(seg);
+    const { patterns } = patternArgs(seg);
     const cwd = seg.cwd ?? [];
     return [...seg.args.filter((_, i) => !patterns.has(i)), ...seg.inputs]
       .flatMap(pathIn)
@@ -540,42 +540,70 @@ const PATTERN_ARGS: Record<string, PatternSpec> = {
   },
 };
 
+/** Which of `seg.args` stand where a pattern or filter program does. */
+interface PatternWords {
+  /** Never opened as files: kept out of confinement and the climb check. */
+  patterns: Set<number>;
+  /**
+   * In a pattern's place, but the shell may make the word several: the first
+   * is the pattern and the rest are opened, so `grep -e /etc/p* src` searches
+   * /etc/profile. Such a word is confined like a path.
+   */
+  split: Set<number>;
+}
+
 /**
- * Indices of `seg.args` that are patterns or filter programs, not paths.
+ * Where `seg.args` holds patterns or filter programs, not paths.
  *
  * Fails closed: a flag outside the binary's declared set might take the next
  * token or not, so past one nothing is called a pattern. Mistaking a path for a
  * pattern would skip confinement; the reverse costs one prompt.
  */
-function patternArgs(seg: Segment): Set<number> {
-  if (SED_FAMILY.includes(seg.binary)) return new Set(sedProgramArgs(seg.binary, seg.args));
-  if (AWK_FAMILY.includes(seg.binary)) return new Set(awkProgramArgs(seg.binary, seg.args));
+function patternArgs(seg: Segment): PatternWords {
+  const none: PatternWords = { patterns: new Set(), split: new Set() };
+  if (SED_FAMILY.includes(seg.binary)) return { ...none, patterns: new Set(sedProgramArgs(seg.binary, seg.args)) };
+  if (AWK_FAMILY.includes(seg.binary)) return { ...none, patterns: new Set(awkProgramArgs(seg.binary, seg.args)) };
   const rule = PATTERN_ARGS[seg.binary];
   const spec = FLAG_POLICY[seg.binary];
-  if (!rule || !spec) return new Set();
+  if (!rule || !spec) return none;
 
   const booleans = new Set([...(spec.booleans ?? []), ...UNIVERSAL_FLAGS]);
   const values = new Set(spec.values ?? []);
-  const found = new Set<number>();
+  const { patterns, split } = { patterns: new Set<number>(), split: new Set<number>() };
+  // An expression binary is left out: there a shifted or split pattern lands
+  // as a stray word after the expression, which find rejects.
+  const splits = (at: number) => !spec.expressionArgs && shellRewrites(seg, seg.args[at]);
   const operands: number[] = [];
   let patternGiven = false;
+  // From the first operand or flag value the shell may split, which operand is
+  // the leading pattern is the shell's to decide: `grep -v --exclude src/*
+  // /etc/passwd` makes `src/b.ts` the pattern and reads /etc/passwd. A flag's
+  // own value is not moved by it, since a split word that may become a flag or
+  // `--` is refused (scanFlags).
+  let spreadAt = Infinity;
+  const counts = (at: number) => { if (at < spreadAt && splits(at)) spreadAt = at; };
 
   for (let i = 0; i < seg.args.length; i++) {
     const token = seg.args[i];
     if (token === '--' && !spec.expressionArgs) {
-      for (let j = i + 1; j < seg.args.length; j++) operands.push(j);
+      for (let j = i + 1; j < seg.args.length; j++) { counts(j); operands.push(j); }
       break;
     }
-    if (!/^-./.test(token)) { operands.push(i); continue; }
+    if (!/^-./.test(token)) { counts(i); operands.push(i); continue; }
 
     const inSubcommand = rule.subcommand !== undefined && seg.args[operands[0]] === rule.subcommand;
     if (inSubcommand && rule.subcommandBooleans?.includes(token)) continue;
     const shape = matchFlag(spec, booleans, values, token);
-    if (shape === undefined) return new Set();
+    if (shape === undefined) return none;
     const flag = valueFlagIn(token, booleans, values) ?? flagLabel(token);
     if (rule.leadingUnless?.includes(flag)) patternGiven = true;
     const consumes = shape === 'value' && takesNextToken(seg.args[i + 1]);
-    if (rule.flags.includes(flag) && values.has(flag)) found.add(consumes ? i + 1 : i);
+    if (consumes) counts(i + 1);
+    if (rule.flags.includes(flag) && values.has(flag)) {
+      // A glob after `--name=` stays that one flag's value, however many words it becomes.
+      if (consumes) (splits(i + 1) ? split : patterns).add(i + 1);
+      else patterns.add(i);
+    }
     if (consumes) i++;
   }
 
@@ -583,9 +611,9 @@ function patternArgs(seg: Segment): Set<number> {
     const leading = rule.subcommand
       ? seg.args[operands[0]] === rule.subcommand ? operands[1] : undefined
       : operands[0];
-    if (leading !== undefined) found.add(leading);
+    if (leading !== undefined && leading <= spreadAt) (leading === spreadAt ? split : patterns).add(leading);
   }
-  return found;
+  return { patterns, split };
 }
 
 
@@ -680,8 +708,11 @@ function scopeWord(word: string): string {
  */
 function climbsByGlob(seg: Segment): boolean {
   if (!seg.globbed) return false;
-  const patterns = patternArgs(seg);
-  return [...seg.args.filter((_, i) => !patterns.has(i)), ...seg.inputs]
+  const { patterns, split } = patternArgs(seg);
+  // A split pattern is checked by what it may become: read with the rough test
+  // below, a quoted regex beside a glob (`grep -E ".*TODO" src/*.ts`) would ask.
+  if ([...split].some((i) => seg.args[i].split(/[\\/]/).some((part) => part.startsWith('.') && mayExpandTo(seg, part, '..')))) return true;
+  return [...seg.args.filter((_, i) => !patterns.has(i) && !split.has(i)), ...seg.inputs]
     .some((a) => /(^|[\\/])\.[*?[]/.test(a));
 }
 

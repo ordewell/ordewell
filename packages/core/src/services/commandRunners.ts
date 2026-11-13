@@ -5,7 +5,7 @@
  * nice rm -rf x` has to be reduced to the `rm` before any tier is consulted.
  */
 
-import { mayBecomeFlag, toSegment, type Dialect, type Segment } from './shellLexer';
+import { mayBecomeFlag, shellRewrites, toSegment, type Dialect, type Segment } from './shellLexer';
 
 /**
  * How a wrapper's own arguments are skipped to reach the command it will run.
@@ -255,6 +255,16 @@ export function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[
   const assignments: string[] = [];
   let positionals = spec.positionals ?? 0;
   let i = 0;
+  // The table skips a value or positional as one word, and the shell may make
+  // it several or none: with a directory `a` holding `b.sh`, `env -C ./* cat x`
+  // runs `env -C ./a ./b.sh …`, and env executes the repository's script.
+  const splits = (word: string | undefined): WrapperScan | undefined =>
+    seg && word !== undefined && shellRewrites(seg, word)
+      ? {
+        kind: 'refuse',
+        reason: `The shell may expand "${word}" into several words or none, so this classifier cannot tell which command the wrapper "${binary}" would run. Write the wrapper's arguments literally, and re-run.`,
+      }
+      : undefined;
 
   while (i < args.length) {
     const token = args[i];
@@ -292,7 +302,12 @@ export function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[
         };
       }
       if ((spec.booleanFlags ?? []).includes(name) || spec.booleanPattern?.test(token)) { i++; continue; }
-      if (valueFlags.includes(name)) { i += selfContained ? 1 : 2; continue; }
+      if (valueFlags.includes(name)) {
+        const split = selfContained ? undefined : splits(args[i + 1]);
+        if (split) return split;
+        i += selfContained ? 1 : 2;
+        continue;
+      }
       if (joinedShortFlag(valueFlags, token)) { i++; continue; }
       return {
         kind: 'refuse',
@@ -302,7 +317,11 @@ export function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[
 
     // `env` takes any word holding a `=` as an assignment, not only a shell-valid name.
     if (spec.acceptsAssignments && token.includes('=')) { assignments.push(token); i++; continue; }
-    if (positionals > 0) { positionals--; i++; continue; }
+    if (positionals > 0) {
+      const split = splits(token);
+      if (split) return split;
+      positionals--; i++; continue;
+    }
     break;
   }
 
