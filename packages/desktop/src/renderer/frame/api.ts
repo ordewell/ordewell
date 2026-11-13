@@ -72,6 +72,8 @@ export interface Command {
   title: string;
   /** A chord in parseChord's syntax, "Mod+Shift+A"; shown in the palette and bound while registered. */
   keys?: string;
+  /** A chord shown beside the command but not bound: a native menu accelerator already handles it. */
+  hint?: string;
   /** Listed in the title bar's ⋯ menu too: the session's secondary actions. */
   more?: boolean;
   /** Hidden from the palette and its keys unbound while this says no. */

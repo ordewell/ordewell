@@ -27,6 +27,7 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
           onRecentsChange: (cb) => window.ordewell.app.onRecentsChange(cb),
           // Main answers with a dialog of its own when it cannot; nothing comes back for the page to show.
           open: (folder, options) => { void window.ordewell.app.openWorkspace(folder, options).catch(() => undefined); },
+          newWindow: () => { void window.ordewell.app.newWindow().catch(() => undefined); },
           openDropped: (file) => window.ordewell.app.openDroppedFolder(file),
         },
       }));

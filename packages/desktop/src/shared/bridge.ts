@@ -250,6 +250,8 @@ export interface OrdewellBridge {
      * Undefined when nothing was opened.
      */
     openWorkspace(path?: string, options?: OpenWorkspaceOptions): Promise<string | undefined>;
+    /** The welcome window beside whatever is open, as File → New Window does. */
+    newWindow(): Promise<void>;
     recentWorkspaces(): Promise<RecentWorkspace[]>;
     /** The recents changed in another window or from the menu, so a list drawn from them is stale. */
     onRecentsChange(cb: () => void): Unsubscribe;
@@ -339,6 +341,7 @@ export const CHANNELS = {
   appInfo: 'ordewell:app.info',
   appContext: 'ordewell:app.context',
   appOpenWorkspace: 'ordewell:app.openWorkspace',
+  appNewWindow: 'ordewell:app.newWindow',
   appRecentWorkspaces: 'ordewell:app.recentWorkspaces',
   appForgetWorkspace: 'ordewell:app.forgetWorkspace',
   appUnforgetWorkspace: 'ordewell:app.unforgetWorkspace',

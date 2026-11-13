@@ -65,6 +65,8 @@ export function registerFrameCommands(store: FrameStore): Unregister {
     { id: 'settings.open', title: 'Open Settings', keys: 'Mod+,', run: () => api.openTab(SETTINGS_TAB) },
     // No keys: Mod+O is the File menu's accelerator, which main sees before the page does.
     { id: 'project.openFolder', title: 'Open Folder…', run: () => store.projects.open(undefined, { newWindow: false }) },
+    // Hint only: File → New Window's accelerator is main's, so a keydown binding here would fire twice.
+    { id: 'window.new', title: 'New window', hint: 'Mod+Shift+N', more: true, run: () => store.projects.newWindow() },
     { id: 'project.switch', title: 'Switch Project…', run: () => store.setOverlay('project') },
     ...THEME_CHOICES.map(({ value, label }): Command => ({
       id: `theme.${value}`,

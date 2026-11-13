@@ -152,6 +152,8 @@ export function registerIpc(deps: IpcDeps): void {
     if (!recent || recent.missing) return undefined;
     return deps.projects.open(from, recent.path, choice);
   });
+  // Names no folder, so there is nothing for a page to choose: it only asks for the welcome window.
+  handle(CHANNELS.appNewWindow, () => { windows.openWelcome(); });
   handle(CHANNELS.appOpenDroppedFolder, async (event, path) => {
     const dropped = droppedFolder(path);
     if (!dropped.ok) return { ok: false, message: dropped.message };

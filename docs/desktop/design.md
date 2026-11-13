@@ -160,7 +160,8 @@ left, where VS Code users look for it.
   the panels' widths.
   - The breadcrumb names the workspace, the repository and the branch, with
     each as a menu: the workspace's is the project switcher (the other recent
-    folders, Open Folder… and Open in new window). Then come the scope switcher, the Needs
+    folders, Open Folder… and Open in new window; ⌘/Ctrl-click or ⌘/Ctrl+Enter on a
+    recent opens it in a new window). Then come the scope switcher, the Needs
     you button and the primary action, with the rest in a `⋯` menu.
   - On macOS the traffic lights are inset in the bar. On Windows and Linux the
     bar is a title-bar overlay, with the native window controls on the right.
