@@ -1,5 +1,5 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
-import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type DecisionRecordEntry, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type DecisionRecordEntry, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SkipOrigin, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -61,6 +61,8 @@ export interface TaskView {
   resumeAt?: string;
   /** Why a `skipped` task was skipped; absent when no reason was given. */
   skipReason?: string;
+  /** Who skipped a `skipped` task; read by the loop rules (ADR-0045 L7). */
+  skipOrigin?: SkipOrigin;
   /** The whole question of the checkpoint the task waits at, while it does. */
   checkpoint?: string;
   /** A finished structured task the daemon can continue in its saved session (ADR-0018, K1). */

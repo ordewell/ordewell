@@ -6,6 +6,7 @@ import {
 import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
+import type { SkipOrigin } from '../models/SkipOrigin';
 import { handoffDigest, type StoredHandoff } from '../models/Handoff';
 import { ATTEMPT_FIELDS, freshAttempt, type AttemptField } from '../models/TaskExecution';
 
@@ -282,10 +283,13 @@ export class PlanStore {
     this.setStatus(id, 'failed');
   }
 
-  markSkipped(id: string, reason?: string): void {
+  /** The origin is the skip's own record of who ended the task; the reason is only what they said (ADR-0045 L7). */
+  markSkipped(id: string, origin: SkipOrigin, reason?: string): void {
     this.setStatus(id, 'skipped');
     const task = this.edit(id);
-    if (task && reason) task.skipReason = reason;
+    if (!task) return;
+    task.skipOrigin = origin;
+    if (reason) task.skipReason = reason;
   }
 
   markInProgress(id: string): void {
@@ -320,6 +324,7 @@ export class PlanStore {
     else delete task.awaitingReason;
     delete task.resumeAt;
     delete task.skipReason;
+    delete task.skipOrigin;
   }
 
   /** When a task paused on a usage limit resumes on its own; undefined leaves it to a manual retry. */
@@ -404,7 +409,7 @@ export class PlanStore {
     if (task.status !== status && task.status !== 'in_progress') this.endWait(task.id);
   }
 
-  /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it; any status drops a skip's reason. */
+  /** A reason outlives nothing: any status but `awaiting_user` drops it, and the resume time with it; any status drops a skip's reason and origin. */
   private setStatus(id: string, status: Exclude<TaskStatus, 'awaiting_user'>): void {
     const task = this.edit(id);
     if (!task) return;
@@ -414,6 +419,7 @@ export class PlanStore {
     delete task.parkedQuestion;
     delete task.resumeAt;
     delete task.skipReason;
+    delete task.skipOrigin;
     delete task.reverted;
   }
 

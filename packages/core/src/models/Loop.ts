@@ -1,4 +1,5 @@
 import { flattenTasksWithParents, type Task } from './Task';
+import type { SkipOrigin } from './SkipOrigin';
 
 /*
  * A loop (ADR-0045): a check that repeats with its fix until it passes. The
@@ -30,6 +31,8 @@ export interface LoopSubject {
   /** The round of the check's latest run; absent is round 1. */
   loopRound?: number;
   verdict?: { outcome: string; reported?: string };
+  /** Who skipped it, when it is skipped; a body task skipped by anyone but the loop has stopped the loop (ADR-0045 L7). */
+  skipOrigin?: SkipOrigin;
 }
 
 /** The round of a check's latest run, or the one it is running. */

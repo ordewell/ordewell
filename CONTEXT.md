@@ -1834,6 +1834,11 @@ complete takes it out of the state. The user may skip any task that is not
 running or completed, a reason optional; the supervisor only at Act, with a
 reason, and only a task that failed, is blocked or is waiting for input — and
 it never runs a skipped task again (ADR-0029).
+Who skipped it is stored as `skipOrigin` (`user`, `supervisor`, `loop` or
+`resolver`), set where the skip is made and never read off the reason's words;
+only a loop's own skips, which a new set of rounds undoes, carry `loop`. A plan
+saved before the field gets `loop` on load for a skip whose `skipReason` is one
+of the loop's four texts (ADR-0045 L7).
 *Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
 a cancel returns a task to pending.
 

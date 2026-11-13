@@ -324,7 +324,7 @@ describe('Landing', () => {
       store.markFailed(resolver.id);
       expect(landing.nextRepair('t1')).toBeNull();
 
-      store.markSkipped(resolver.id);
+      store.markSkipped(resolver.id, 'resolver');
       expect(landing.liveResolvers('t1')).toEqual([]);
       expect(landing.nextRepair('t1')).toEqual({ n: 1, limit: 2 });
 

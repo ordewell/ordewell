@@ -53,6 +53,7 @@ export * from './models/AccountLimits';
 export * from './models/TaskLog';
 export * from './models/Handoff';
 export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
+export type { SkipOrigin } from './models/SkipOrigin';
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, inLoop, loopRemovalRefusal, DEFAULT_LOOP_ROUNDS, MAX_LOOP_ROUNDS, type TaskLoop, type LoopSubject } from './models/Loop';
 export * from './models/RunnerCommand';
 export * from './models/Execution';
