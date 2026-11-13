@@ -21,6 +21,11 @@ vi.mock('@xterm/xterm', () => ({
     rows = 24;
     element?: HTMLElement;
     buffer = { active: { getLine: () => undefined } };
+    modes = { applicationCursorKeysMode: false };
+    parser = {
+      registerCsiHandler(): void { /* cursor visibility is the word chord's, not this test's */ },
+      registerEscHandler(): void { /* nor the reset */ },
+    };
     loadAddon(): void { /* the fit addon */ }
     onData(): void { /* typing is not this test's */ }
     registerLinkProvider(): void { /* links are not this test's */ }
