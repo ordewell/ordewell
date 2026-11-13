@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
 import type { SessionHeld } from '../sessionLease';
-import { SessionSaves, type SavedEvent } from '../SessionSaves';
+import { SessionSaves, type RunControls, type SavedEvent } from '../SessionSaves';
 import type { OrchestratorObserver } from '../TaskOrchestrator';
 
 const plan: LegacyPlanState = {
@@ -166,6 +166,39 @@ describe('SessionSaves', () => {
     const { saves, sent, oweStatus } = harness();
     saves.sync(oweStatus);
     expect(sent).toEqual(['save', 'status']);
+  });
+
+  describe('the orchestrator\'s run controls', () => {
+    /** The orchestrator's side: each control owes a status and keeps what it was asked on its own `this`. */
+    function orchestrator(oweStatus: () => void) {
+      return {
+        asked: [] as unknown[][],
+        async retryTask(taskId: string, origin: string) { this.asked.push(['retryTask', taskId, origin]); oweStatus(); },
+        sendTaskMessage(taskId: string, text: string) { this.asked.push(['sendTaskMessage', taskId, text]); oweStatus(); return 'm1'; },
+      };
+    }
+
+    it('saves an asynchronous control once it has acted, then sends its status at once', async () => {
+      const { saves, sent, oweStatus } = harness();
+      const fake = orchestrator(oweStatus);
+      const controls = saves.controls(fake as unknown as RunControls);
+
+      const acting = controls.retryTask('t1', 'user');
+      expect(sent).toEqual([]);
+      await acting;
+
+      expect(fake.asked).toEqual([['retryTask', 't1', 'user']]);
+      expect(sent).toEqual(['save', 'status']);
+    });
+
+    it('holds a synchronous control\'s status until its save, and answers what the control did', () => {
+      const { saves, sent, oweStatus } = harness();
+      const fake = orchestrator(oweStatus);
+
+      expect(saves.controls(fake as unknown as RunControls).sendTaskMessage('t1', 'go on')).toBe('m1');
+      expect(fake.asked).toEqual([['sendTaskMessage', 't1', 'go on']]);
+      expect(sent).toEqual(['save', 'status']);
+    });
   });
 
   it('makes one save of all an act asks for, even when the act throws', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ExecutionCommands, type ExecutionCommand, type ExecutionHost } from '../ExecutionCommands';
+import { ExecutionCommands, type ApprovalReads, type ExecutionCommand, type ExecutionHost, type RunReads } from '../ExecutionCommands';
+import type { RunControls } from '../SessionSaves';
 import type { Escalation, EscalationOptionId } from '../escalations';
 
 /**
@@ -22,7 +23,7 @@ function setup(list: Escalation[], over: Partial<ExecutionHost> = {}) {
     continueRun: vi.fn(async () => {}),
     ...over,
   } as unknown as ExecutionHost;
-  const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+  const commands = new ExecutionCommands({ orchestrator: {} as RunReads, controls: {} as RunControls, approvals: {} as ApprovalReads, host, consent: { request: vi.fn() } });
   const run = vi.spyOn(commands, 'run').mockResolvedValue({ ok: true, message: 'done' });
   return { commands, run, host };
 }

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTask, type Task } from '../../models/Task';
 import type { ExecutionActor, ExecutionCommandName, SupervisorLevel } from '../../models/Execution';
-import { ExecutionCommands, type Consent, type ExecutionHost } from '../ExecutionCommands';
+import { ExecutionCommands, type ApprovalReads, type Consent, type ExecutionHost, type RunReads } from '../ExecutionCommands';
+import type { RunControls } from '../SessionSaves';
 import { SURFACE_CONTROLS } from '../surfaceControls';
 
 /**
@@ -64,7 +65,7 @@ const COMMANDS: readonly ExecutionCommandName[] = [...SHARED, ...Object.keys(USE
 
 function seam(settings: { autonomous: boolean; autorun: boolean }, covered = false): ExecutionCommands {
   const host = { autonomous: () => settings.autonomous, autorun: () => settings.autorun, userControls: () => SURFACE_CONTROLS.tui, mergesByThemselves: () => false } as unknown as ExecutionHost;
-  return new ExecutionCommands({ host, consent: { request: vi.fn() }, effects: () => (covered ? 'git push origin *' : null) });
+  return new ExecutionCommands({ orchestrator: {} as RunReads, controls: {} as RunControls, approvals: {} as ApprovalReads, host, consent: { request: vi.fn() }, effects: () => (covered ? 'git push origin *' : null) });
 }
 
 describe('a flat run answers what it always answered (ADR-0056)', () => {
