@@ -86,7 +86,8 @@ describe('commandGate: the planner', () => {
     expect(denied).toMatchObject({ kind: 'refuse', reason: expect.stringMatching(/^Command not approved: npm test\nIt is outside the auto-allowed read-only set/) });
     expect(denied).not.toMatchObject({ reason: expect.stringContaining('sed -n') });
 
-    const sed = await settle(await decide(line("sed 's/a/b/' a.md"), site('planner', approval)), approval);
+    // Double quotes quote under cmd.exe too, the host default on Windows; single ones do not.
+    const sed = await settle(await decide(line('sed "s/a/b/" a.md'), site('planner', approval)), approval);
     expect(sed).toMatchObject({ kind: 'refuse', reason: expect.stringContaining(`"sed -n '10,40p' FILE" run without approval`) });
   });
 
@@ -312,6 +313,8 @@ describe('commandGate: a research subagent, command by command (ADR-0008 T6)', (
   const NO_SANDBOX = 'this machine has no sandbox to run a command sealed in';
   const EXCLUDED = 'an exclusion holds for a sealed run too';
   const DENIED = 'a denial holds for a sealed run too';
+  // The rewrite quotes for the line's dialect: these lines take the host default, cmd.exe on Windows.
+  const CURL = `curl -q --noproxy ${process.platform === 'win32' ? '"*"' : "'*'"} https://example.com/`;
 
   /** What each command meets: on a host that seals, on one that cannot, and when the agent asked for a sealed run. */
   const TABLE: Array<{ command: string; sealable: object; unsealable: object; asked: object }> = [
@@ -332,7 +335,7 @@ describe('commandGate: a research subagent, command by command (ADR-0008 T6)', (
     { command: "sed -i 's/a/b/' a.md", sealable: sealed("sed -i 's/a/b/' a.md"), unsealable: refuses('Command refused: "sed -i" edits files in place'), asked: sealed("sed -i 's/a/b/' a.md") },
     // A standing grant is the planner's: the subagent has none, so it is what would ask.
     { command: 'gh issue list', sealable: sealed('gh issue list'), unsealable: refuses(UNAPPROVED), asked: sealed('gh issue list') },
-    { command: 'curl https://example.com/', sealable: sealed("curl -q --noproxy '*' https://example.com/"), unsealable: refuses(UNAPPROVED), asked: sealed("curl -q --noproxy '*' https://example.com/") },
+    { command: 'curl https://example.com/', sealable: sealed(CURL), unsealable: refuses(UNAPPROVED), asked: sealed(CURL) },
   ];
 
   async function fixture() {
