@@ -382,7 +382,7 @@ export interface PlannerConversationHost {
    */
   usageLimit(said: TurnFailure, answered: boolean): PlannerLimit;
   /** A turn ended with the planner paused on its context: arm the pause on the inputs it took, saved with the failure it records. */
-  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause;
+  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>, committed?: boolean): PlannerContextPause;
 }
 
 /** What the conversation is built with besides its host. */
@@ -1351,7 +1351,7 @@ export class PlannerConversation {
       reason: `${err.message} ${action}`,
       ...(listed.length > 0 ? { done: listed.slice(0, PAUSE_DONE_LIMIT) } : {}),
       ...(listed.length > PAUSE_DONE_LIMIT ? { doneTruncated: true } : {}),
-    });
+    }, userTurn.committed === true);
     this.host.mutate(() => {
       this.recordFailure(pause.reason);
       return true;

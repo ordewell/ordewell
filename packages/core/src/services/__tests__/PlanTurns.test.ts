@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
 import { PlanTurns, turnPrompt, type PlanTurnsHost, type TurnPrompt } from '../PlanTurns';
-import { ConversationBusyError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
+import { ConversationBusyError, PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
 import { flushMicrotasks } from '../../testing';
 
 function plan(): LegacyPlanState {
@@ -650,5 +650,35 @@ describe('an input about tasks the user stopped (ADR-0029)', () => {
     await flushMicrotasks();
 
     expect(turns).toHaveLength(0);
+  });
+});
+
+describe('a context pause after a planner tool committed in the turn', () => {
+  it('keeps the inputs the commit took retryable, so Retry compaction opens the turn again', async () => {
+    const current = { plan: plan() as LegacyPlanState | null };
+    const { host, turns } = fakeHost(current);
+    const queue = new PlanTurns(host);
+
+    const asked = queue.enqueue({ source: 'user', text: 'restructure the plan' });
+    // A planner tool's commit takes the turn's inputs; a later call then overflows the window.
+    const committedTaken = host.run.mock.calls[0][1].taken;
+    committedTaken();
+    expect(current.plan!.pendingTurns ?? []).toEqual([]);
+    const pause = queue.contextPaused({ model: 'm', reason: 'full', done: [] }, true);
+    turns[0].fail(new PlannerContextPausedError(pause));
+    await asked;
+
+    expect(current.plan!.plannerContextPause).toBe(pause);
+    expect((current.plan!.pendingTurns ?? []).map((t) => t.text)).toEqual(['restructure the plan']);
+    expect(pause.inputs).toHaveLength(1);
+
+    const retried = queue.retryCompaction();
+    await flushMicrotasks();
+    expect(turns).toHaveLength(2);
+    expect(turns[1].prompt.text).toBe('restructure the plan');
+    turns[1].land();
+    await retried;
+    expect(current.plan!.plannerContextPause).toBeUndefined();
+    expect(current.plan!.pendingTurns ?? []).toEqual([]);
   });
 });

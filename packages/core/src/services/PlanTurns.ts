@@ -114,6 +114,8 @@ interface Running {
   release: () => void;
   /** The inputs it took, which stay on the plan until it ends. */
   ids: ReadonlySet<string>;
+  /** The inputs themselves, for a pause to put back what a planner tool's commit already took. */
+  batch: readonly PendingPlanTurn[];
   /** A force send stopped it. */
   forceStopped?: true;
   /** It retries a pause on the planner's context, which stays saved until the turn lands or is stopped. */
@@ -210,11 +212,17 @@ export class PlanTurns {
    * A turn ended with the planner paused on its context (ADR-0002): the pause
    * is armed on the inputs it took, which stay pending, and no turn opens
    * until the user's Retry compaction or Stop. Saved with the failure the turn
-   * records.
+   * records. When a planner tool's change in the turn (`committed`) already
+   * took its inputs, they are put back, since a Retry compaction can only
+   * reopen the turn on inputs that still wait.
    */
-  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>): PlannerContextPause {
+  contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>, committed = false): PlannerContextPause {
     const pause: PlannerContextPause = { ...details, at: new Date().toISOString(), inputs: [...(this.running?.ids ?? [])] };
     const plan = this.host.plan();
+    if (plan && committed && this.running) {
+      const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
+      plan.pendingTurns = [...this.running.batch.filter((t) => !waiting.has(t.id)), ...(plan.pendingTurns ?? [])];
+    }
     if (plan) plan.plannerContextPause = pause;
     return pause;
   }
@@ -579,7 +587,7 @@ export class PlanTurns {
 
   private async run(plan: LegacyPlanState, batch: readonly PendingPlanTurn[], opts: { recovery?: PlannerContextPause; signal?: AbortSignal } = {}): Promise<Outcome> {
     const ids = new Set(batch.map((t) => t.id));
-    const running: Running = { release: this.host.holdStarts(), ids, ...(opts.recovery ? { recovery: true } : {}) };
+    const running: Running = { release: this.host.holdStarts(), ids, batch, ...(opts.recovery ? { recovery: true } : {}) };
     this.running = running;
     const timeout = setTimeout(() => {
       running.release();
