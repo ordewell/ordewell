@@ -693,6 +693,16 @@ export function handleSessionMessage(
   if (cue) applySessionCue(cue, deps);
 }
 
+/**
+ * A regenerate turn has the Session swap in a new plan (and session id) before
+ * `startPlanning` returns, so until then the host's copy is the old plan: a
+ * cue would draw it, and a reload would save it under the new id.
+ */
+function adoptSessionPlan(deps: PlanManagerDeps): void {
+  const plan = deps.session.planState;
+  if (plan && plan !== deps.getCurrentPlan()) deps.setCurrentPlan(plan);
+}
+
 function applySessionCue(cue: SessionCue, deps: PlanManagerDeps): void {
   const { chatProvider, session } = deps;
   switch (cue.type) {
@@ -703,11 +713,13 @@ function applySessionCue(cue: SessionCue, deps: PlanManagerDeps): void {
       chatProvider.reveal();
       return;
     case 'plan':
+      adoptSessionPlan(deps);
       chatProvider.showPlan(deps.getCurrentPlan(), cue.dock === 'run'
         ? session.isExecuting ? 'running' : session.status === 'completed' ? 'completed' : 'draft'
         : cue.dock);
       return;
     case 'settled':
+      adoptSessionPlan(deps);
       chatProvider.showPlan(deps.getCurrentPlan(), cue.dock);
       chatProvider.showRunActivity(session.activity);
       deps.persistState();
