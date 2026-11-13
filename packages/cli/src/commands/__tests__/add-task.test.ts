@@ -66,3 +66,29 @@ describe('add-task --depends-on', () => {
     }
   });
 });
+
+describe('add-task --type', () => {
+  it.each(['User', 'usr', 'human', ''])('refuses %j rather than creating an AI task an agent would run', async (type) => {
+    const api = client([]);
+    const exit = captureExit();
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a.join(' ')); });
+    try {
+      await expect(handleAddTask(['--title', 'New', '--type', type, '--session-id', 's1'], api)).rejects.toThrow('exit:1');
+    } finally {
+      exit.restore();
+      vi.restoreAllMocks();
+    }
+
+    expect(api.addTask).not.toHaveBeenCalled();
+    expect(errors.join('\n')).toContain('--type');
+  });
+
+  it.each([['user', 'user'], ['ai', 'ai']])('accepts %s', async (given, sent) => {
+    const api = client([]);
+
+    await handleAddTask(['--title', 'New', '--type', given, '--session-id', 's1'], api);
+
+    expect(api.addTask).toHaveBeenCalledWith('s1', expect.objectContaining({ type: sent }));
+  });
+});

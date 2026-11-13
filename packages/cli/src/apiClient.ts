@@ -349,6 +349,14 @@ export class ApiClient {
         // across two chunks into U+FFFD.
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+        // A daemon that dies mid-reply closes the socket before the body ends.
+        // Node destroys the response without 'end' (and without 'error', when
+        // nothing listens), so without this the call never settles and a
+        // one-shot command exits 0 with no output.
+        res.on('error', reject);
+        res.on('close', () => {
+          if (!res.complete) reject(new Error('The daemon closed the connection before it finished its reply.'));
+        });
         res.on('end', () => {
           const data = Buffer.concat(chunks).toString('utf8');
           try {

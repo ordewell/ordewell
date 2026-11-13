@@ -22,7 +22,15 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
     sessionId = last.sessionId;
   }
 
-  const type = flag(subArgs, '--type') === 'user' ? 'user' : 'ai';
+  // An unrecognised value must not fall back to 'ai': that task is one an
+  // agent will go on to run.
+  const typeFlag = flag(subArgs, '--type');
+  if (typeFlag !== undefined && typeFlag !== 'ai' && typeFlag !== 'user') {
+    console.error(`Invalid --type "${typeFlag}". Use ai or user.`);
+    process.exit(1);
+    return;
+  }
+  const type = typeFlag === 'user' ? 'user' : 'ai';
   const description = flag(subArgs, '--description') || title;
   const dependencyRefs = flags(subArgs, '--depends-on').filter(Boolean) as string[];
 
