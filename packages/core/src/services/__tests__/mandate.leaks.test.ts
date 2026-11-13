@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutionCommandName } from '../../models/Execution';
 import { FakeWorktreeIsolation, fakeConfig } from '../../testing';
-import { ExecutionCommands, type ExecutionHost } from '../ExecutionCommands';
+import { ExecutionCommands, type ApprovalReads, type ExecutionHost, type RunReads } from '../ExecutionCommands';
+import type { RunControls } from '../SessionSaves';
 import { SURFACE_CONTROLS } from '../surfaceControls';
 import { COMMAND_GRANTS, FLOOR_GRANTS, GRANTS, type Grant, type Mandate, type NodeAuthority } from '../Mandate';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
@@ -35,7 +36,7 @@ const child = (grants: readonly Grant[], over: Partial<Mandate> = {}, depth = 1)
 
 const SUBPLANNER = { kind: 'subplanner', depth: 1 } as const;
 
-const seamAt = (node: NodeAuthority) => new ExecutionCommands({ host: { autonomous: () => true, autorun: () => true, userControls: () => SURFACE_CONTROLS.tui, mergesByThemselves: () => false } as unknown as ExecutionHost, consent: { request: vi.fn() }, authority: node });
+const seamAt = (node: NodeAuthority) => new ExecutionCommands({ orchestrator: {} as RunReads, controls: {} as RunControls, approvals: {} as ApprovalReads, host: { autonomous: () => true, autorun: () => true, userControls: () => SURFACE_CONTROLS.tui, mergesByThemselves: () => false } as unknown as ExecutionHost, consent: { request: vi.fn() }, authority: node });
 
 describe('a subplanner at the seam (ADR-0056 M6)', () => {
   const COMMANDS = Object.keys(COMMAND_GRANTS) as ExecutionCommandName[];

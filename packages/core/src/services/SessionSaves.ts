@@ -1,7 +1,7 @@
 import type { LegacyPlanState } from '../models/Task';
 import type { PlanStore } from './PlanStore';
 import type { StatusGate } from './SessionEventRelay';
-import type { OrchestratorObserver } from './TaskOrchestrator';
+import type { OrchestratorObserver, TaskOrchestrator } from './TaskOrchestrator';
 import { describeHeld, type SessionHeld } from './sessionLease';
 
 /**
@@ -61,6 +61,39 @@ const SAVE_OWED = {
   // Session operation.
   onTaskSettled: 'once',
 } as const satisfies { readonly [E in keyof OrchestratorObserver]?: SavePolicy };
+
+/** How a run control is saved: an async one as it settles ({@link SessionSaves.control}), a sync one under a status hold ({@link SessionSaves.sync}). */
+type ControlSave<F> = F extends (...args: never[]) => Promise<unknown> ? 'control' : F extends (...args: never[]) => unknown ? 'sync' : never;
+
+/**
+ * The orchestrator's controls a user's act reaches, each saved before any
+ * surface hears of it (ADR-0029). The type holds each to the save its return
+ * owes: a control that awaits spawns and git must not hold every status back.
+ */
+const CONTROL_SAVES = {
+  forceStartTask: 'control',
+  markTaskComplete: 'control',
+  markTaskIncomplete: 'control',
+  revertTask: 'control',
+  interruptTask: 'control',
+  cancelTask: 'control',
+  skipTask: 'control',
+  landKeptWork: 'control',
+  resumeNow: 'control',
+  retryTask: 'control',
+  continueTask: 'control',
+  cancelScheduledResume: 'control',
+  approveReview: 'control',
+  approveCheckpoint: 'sync',
+  rejectCheckpoint: 'sync',
+  sendTaskMessage: 'sync',
+  forceSendTaskMessage: 'sync',
+  forceSendQueuedTaskMessage: 'sync',
+  removeQueuedTaskMessage: 'sync',
+} as const satisfies { readonly [K in keyof TaskOrchestrator]?: ControlSave<TaskOrchestrator[K]> };
+
+/** The orchestrator's run controls, as {@link SessionSaves.controls} hands them out: each saved as {@link CONTROL_SAVES} says. */
+export type RunControls = Pick<TaskOrchestrator, keyof typeof CONTROL_SAVES>;
 
 /** An event {@link SAVE_OWED} gives a save. */
 export type SavedEvent = keyof typeof SAVE_OWED;
@@ -265,6 +298,18 @@ export class SessionSaves {
       onTaskSettled: saved('onTaskSettled', effects.onTaskSettled, announce.onTaskSettled),
     };
     return { ...announce, ...wired };
+  }
+
+  /** `orchestrator`'s run controls, each saved before what it changed is announced, as {@link CONTROL_SAVES} says. */
+  controls(orchestrator: RunControls): RunControls {
+    const saved: Partial<Record<keyof RunControls, unknown>> = {};
+    for (const name of Object.keys(CONTROL_SAVES) as (keyof RunControls)[]) {
+      const act = orchestrator[name] as (...args: unknown[]) => unknown;
+      saved[name] = CONTROL_SAVES[name] === 'control'
+        ? (...args: unknown[]) => this.control(async () => act.apply(orchestrator, args))
+        : (...args: unknown[]) => this.sync(() => act.apply(orchestrator, args));
+    }
+    return saved as RunControls;
   }
 
   /** The next failed save is said, whatever the ones before it already said: a Stop is answered on its own. */

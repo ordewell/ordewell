@@ -62,7 +62,7 @@ import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
 import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
-import { SessionSaves } from './SessionSaves';
+import { SessionSaves, type RunControls } from './SessionSaves';
 import { SubagentRuns } from './SubagentRuns';
 import { listTaskLogAttempts, prepareTaskOutputFile, readTaskLog, readTaskPatch, saveTaskPatch, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import { digestTaskLog, type TaskLogEvent } from '../models/TaskLog';
@@ -739,6 +739,8 @@ export class Session {
   /** One live host per session (ADR-0049): no save, and no run, without it. */
   private readonly lease: SessionLease;
   private readonly saves: SessionSaves;
+  /** The orchestrator's run controls, each saved before what it changed is announced. */
+  private readonly controls: RunControls;
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
   private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
@@ -877,6 +879,7 @@ export class Session {
       status: this.events,
       notice: (message) => this.notice('error', message),
     });
+    this.controls = this.saves.controls(this.orchestrator);
 
     this.conversation = parts.conversation({
       plan: () => this.plan,
@@ -1049,6 +1052,9 @@ export class Session {
     });
 
     this.commands = new ExecutionCommands({
+      orchestrator: this.orchestrator,
+      controls: this.controls,
+      approvals: this.record,
       host: this.executionHost(),
       // A Guarded start asks on the card the planner's other requests use.
       consent: { request: (request) => this.approvals.ask(request) },
@@ -1190,60 +1196,33 @@ export class Session {
   }
 
   /**
-   * What the seam reads and calls: the operations the surfaces' buttons run,
-   * less the approval a button press gives, which the seam decides itself.
+   * What only the Session answers at the seam: the orchestrator's reads, its
+   * saved controls and the approval record go to the seam as they are.
    */
   private executionHost(): ExecutionHost {
     return {
       tasks: () => (this.plan ? this.store.planTasks : null),
-      planApproved: () => this.record.planApproved,
-      taskApproved: (taskId) => this.record.isApproved(taskId),
-      waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
-      approve: (taskIds) => this.record.approve(taskIds),
-      approvePlan: () => this.record.approvePlan(),
       autonomous: () => this.autonomous(),
       userControls: () => SURFACE_CONTROLS[surfaceOf(this.lease.host?.())],
       mergesByThemselves: () => this.automaticMerging() === 'on',
       autorun: () => this.userRunSettings().autorun,
-      scheduling: () => this.orchestrator.isScheduling,
-      startsHeld: () => this.orchestrator.startsHeld,
-      hasLiveWork: () => this.orchestrator.hasLiveWork,
-      holdsSlot: (taskId) => this.orchestrator.holdsSlot(taskId),
-      runHeld: () => this.orchestrator.runHeld,
-      scheduledRun: () => this.orchestrator.scheduledRun,
-      startsPending: () => this.orchestrator.startsPending,
-      loopCarried: () => this.orchestrator.loopCarried,
-      awaitsResume: () => this.orchestrator.awaitsResume,
       submittedStartWaits: () => this.turnEffects.startWaits && this.userRunSettings().autorun,
-      loopRunsOn: (taskId) => this.orchestrator.loopRunsOn(taskId),
-      advancesOnItsOwn: () => this.orchestrator.advancesOnItsOwn,
-      admitStart: () => this.orchestrator.admitStart(),
-      running: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
-      repairOwed: (taskId) => this.orchestrator.repairWait(taskId) !== null,
       maxParallel: () => this.config.maxParallelSessions,
       runBlocked: () => this.runs.blocked,
       heldRefusal: () => {
         const held = this.heldElsewhere();
         return held && describeHeld(held);
       },
-      startWaits: (task) => this.orchestrator.startWaits(task),
       waitingRequests: (taskId) => this.approvals.outstanding()
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor), this.failuresLeftBy(actor)),
       joinRun: (approved, left) => this.joinRun(approved, left),
-      readyFailed: () => this.orchestrator.readyFailed(),
       startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
-      forceStart: (taskId) => this.saves.control(() => this.orchestrator.forceStartTask(taskId, 'user')),
-      markComplete: (taskId) => this.saves.control(() => this.orchestrator.markTaskComplete(taskId)),
-      markNotDone: (taskId) => this.saves.control(() => this.orchestrator.markTaskIncomplete(taskId)),
-      revertScope: (taskId) => this.orchestrator.revertScope(taskId),
-      revertTask: (taskId) => this.saves.control(() => this.orchestrator.revertTask(taskId)),
-      interrupt: (taskId) => this.saves.control(() => this.orchestrator.interruptTask(taskId)),
       stopTask: (taskId, actor) => {
         // Before it ends: its release can outlast a held event's timer, which must find the stop.
         if (actorAuthority(actor.kind) === 'user') this.supervision.taskStoppedByUser(taskId);
-        return this.saves.control(() => this.orchestrator.cancelTask(taskId));
+        return this.controls.cancelTask(taskId);
       },
       stopRun: (actor) => this.stopExecution(actor),
       stopAsked: () => {
@@ -1252,27 +1231,10 @@ export class Session {
         this.saves.after();
       },
       startAsked: (actor) => { if (actorAuthority(actor.kind) === 'user') this.supervision.userStarting(); },
-      retryTask: (taskId, actor) => this.restartTask(taskId, runOrigin(actor)),
       checksDelegatedTask: (taskId) => {
         const task = this.store.get(taskId);
         return task !== undefined && checksDelegatedTask(this.store.planTasks, task, { runnerModes: this.catalog.edit().runnerModes });
       },
-      skipTask: (taskId, reason, actor) => this.saves.control(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
-      continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
-      landKept: (taskId) => this.saves.control(() => this.orchestrator.landKeptWork(taskId)),
-      resumeNow: (taskId, message, actor) => this.saves.control(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
-      messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
-      forceMessage: (taskId, text) => this.forceSendTaskMessage(taskId, text),
-      forceSendQueued: (taskId, id) => this.forceSendQueuedTaskMessage(taskId, id),
-      removeQueued: (taskId, id) => this.removeQueuedTaskMessage(taskId, id),
-      cancelResume: (taskId) => this.cancelScheduledResume(taskId),
-      awaitsCheckpoint: (taskId) => this.awaitsCheckpoint(taskId),
-      approveReview: async () => {
-        // The plan's own mark beside the record the seam keeps: planner starts read it (ADR-0029).
-        this.record.approvePlan();
-        await this.saves.control(() => this.orchestrator.approveReview('user'));
-      },
-      answerCheckpoint: (taskId, approve, reason, note) => (approve ? this.approveCheckpoint(taskId, note) : this.rejectCheckpoint(taskId, reason)),
       raiseChild: (taskId, tokens) => this.funds.raise(taskId, tokens),
       mergeHold: () => this.mergeHold(),
       answerRequest: (requestId, decision) => this.resolveApproval(requestId, decision),
@@ -1284,7 +1246,6 @@ export class Session {
       turnHandle: (name) => this.conversation.turnHandle(name),
       draftScript: (call, actor) => this.draftScript(call, actor),
       addScript: (task, actor) => this.addScript(task, actor),
-      startAtGate: (taskId) => this.orchestrator.startAtGate(taskId),
       awaitEnd: (taskId, ms, signal) => this.awaitEnd(taskId, ms, signal),
       owe: (taskId, to) => this.oweReport(taskId, to),
       reportTail: (taskId) => this.reportTail(taskId),
@@ -2715,7 +2676,7 @@ export class Session {
   private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {
     if (!this.plan) return;
     this.requireTask(taskId);
-    await this.saves.control(() => this.orchestrator.forceStartTask(taskId, origin));
+    await this.controls.forceStartTask(taskId, origin);
   }
 
   /**
@@ -2730,14 +2691,6 @@ export class Session {
   /** Start whatever the scheduler can now fit — after the parallel limit was raised mid-run, say. */
   async reschedule(): Promise<void> {
     await this.saves.control(() => this.orchestrator.tick());
-  }
-
-  private async restartTask(taskId: string, origin: RunOrigin): Promise<void> {
-    await this.saves.control(() => this.orchestrator.retryTask(taskId, origin));
-  }
-
-  private async resumeTask(taskId: string, message: string, origin: RunOrigin): Promise<void> {
-    await this.saves.control(() => this.orchestrator.continueTask(taskId, message, origin));
   }
 
   /**
@@ -2764,11 +2717,6 @@ export class Session {
    */
   cancelPlannerResend(): boolean {
     return this.turns.cancelResend();
-  }
-
-  /** Keep a task paused on a usage limit from resuming on its own; see {@link TaskOrchestrator.cancelScheduledResume}. */
-  private cancelScheduledResume(taskId: string): Promise<boolean> {
-    return this.saves.control(() => this.orchestrator.cancelScheduledResume(taskId));
   }
 
   /**
@@ -2809,34 +2757,9 @@ export class Session {
     this.onNotice?.({ type: 'notice', level, message });
   }
 
-  private approveCheckpoint(taskId: string, note?: string): void {
-    this.saves.sync(() => this.orchestrator.approveCheckpoint(taskId, note));
-  }
-
-  private rejectCheckpoint(taskId: string, reason?: string): void {
-    this.saves.sync(() => this.orchestrator.rejectCheckpoint(taskId, reason));
-  }
-
   /** Whether an answer would reach the task: it waits at a checkpoint and a runner is left to hear it. */
   awaitsCheckpoint(taskId: string): boolean {
     return this.orchestrator.awaitsCheckpoint(taskId);
-  }
-
-  /**
-   * A user message to a structured task (ADR-0018, M1); throws
-   * `TaskControlError` for one that cannot take it. A task waiting for input
-   * is back in progress, and saved so before any surface is told.
-   */
-  private sendTaskMessage(taskId: string, text: string): string {
-    return this.saves.sync(() => this.orchestrator.sendTaskMessage(taskId, text));
-  }
-
-  /**
-   * Force send (ADR-0023, F1): interrupt the task's running turn and deliver
-   * this message next. Throws `TaskControlError` where a plain message would.
-   */
-  private forceSendTaskMessage(taskId: string, text: string): string {
-    return this.saves.sync(() => this.orchestrator.forceSendTaskMessage(taskId, text));
   }
 
   /**
@@ -2847,14 +2770,6 @@ export class Session {
    */
   invokeTaskCommand(taskId: string, name: string, args = ''): string {
     return this.saves.sync(() => this.orchestrator.invokeTaskCommand(taskId, name, args));
-  }
-
-  private forceSendQueuedTaskMessage(taskId: string, id: string): boolean {
-    return this.saves.sync(() => this.orchestrator.forceSendQueuedTaskMessage(taskId, id));
-  }
-
-  private removeQueuedTaskMessage(taskId: string, id: string): boolean {
-    return this.saves.sync(() => this.orchestrator.removeQueuedTaskMessage(taskId, id));
   }
 
   /** Replay a run a dirty tree blocked, after stashing the tracked changes. */
