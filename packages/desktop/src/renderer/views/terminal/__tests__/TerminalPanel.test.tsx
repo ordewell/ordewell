@@ -75,8 +75,8 @@ let offs: Array<() => void> = [];
 beforeEach(() => { offs = []; terms.length = 0; });
 afterEach(() => { for (const off of offs) off(); vi.restoreAllMocks(); });
 
-async function mount(): Promise<void> {
-  store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
+async function mount(platform = 'linux'): Promise<void> {
+  store = new FrameStore({ workspace: '/work/acme', platform });
   offs.push(registerFrameCommands(store), registerViews(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
 }
@@ -107,6 +107,15 @@ describe('the terminal panel', () => {
     expect(tab).toHaveTextContent('Your checkout');
     expect(w.open).toHaveBeenCalledTimes(1);
     expect(w.ptys[0]?.spec).toMatchObject({ repo: '.', scope: { kind: 'checkout' } });
+  });
+
+  it('describes the unavailable shortcut on macOS', async () => {
+    world();
+    await mount('darwin');
+    toggle();
+    await screen.findByRole('tab', { name: /zsh/ });
+    expect(within(panel()).getByRole('tabpanel')).toHaveAccessibleDescription(/Option\+Left\/Right is temporarily unavailable/);
+    expect(within(panel()).getByText(/Option\+Left\/Right is temporarily unavailable/)).toBeVisible();
   });
 
   it('opens the panel for a login and runs it in the checkout, ending when its process does', async () => {

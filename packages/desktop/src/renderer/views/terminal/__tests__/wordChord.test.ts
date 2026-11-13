@@ -6,15 +6,7 @@ import type { IPty } from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTerm, type TermHandle } from '../xterm';
 
-/**
- * Option+Left/Right end to end on macOS: a real shell or program on a real pty,
- * drawn by the real xterm.js behind createTerm, with the chord pressed as
- * Chromium delivers it. The chord reads the word off the screen, so only here
- * are the screen, the bytes it sends and the program's line editor all in the
- * loop. Each case types after the chord, because in a vi-mode shell the old
- * bytes (ESC f, ESC[1;3C) did their damage to what came next, not to the line
- * as it stood (see main/terminal/__tests__/wordMovement.test.ts).
- */
+/** A real PTY checks that swallowing the chord leaves the next input intact. */
 
 const REQUIRED_TOOLS = new Set((process.env.ORDEWELL_REQUIRE_TOOLS ?? '').split(/[\s,]+/).filter(Boolean));
 const PROMPT = '$ ';
@@ -146,79 +138,43 @@ describe.skipIf(process.platform === 'win32')('Option+Left/Right through real xt
     }
 
     describe(title, () => {
-      it('moves a word back on Option+Left with plain arrows, and what is typed next is inserted there', async () => {
+      it('leaves the line and subsequent input intact after both chords', async () => {
         const s = await shellWith(file, shell, 'one two three');
-        expect(await s.option(LEFT)).toBe('\x1b[D'.repeat(5));
-        expect(await s.option(LEFT)).toBe('\x1b[D'.repeat(4));
-        s.type('X');
-        expect(await ran(s)).toBe('one Xtwo three');
-      });
-
-      it('moves a word forward on Option+Right, and typing goes on in insert mode', async () => {
-        const s = await shellWith(file, shell, 'one two three');
-        for (let i = 0; i < 3; i++) await s.option(LEFT);
-        expect(await s.option(RIGHT)).toBe('\x1b[C'.repeat(3));
-        s.type('XY');
-        expect(await ran(s)).toBe('oneXY two three');
-      });
-
-      it('deletes only what Backspace is pressed for after the move', async () => {
-        const s = await shellWith(file, shell, 'one two three');
-        await s.option(LEFT);
-        s.type('\x7f\x7fZ');
-        expect(await ran(s)).toBe('one twZthree');
-      });
-
-      it('sends nothing past the last word, so the line is left as it is', async () => {
-        const s = await shellWith(file, shell, 'one two three');
+        expect(await s.option(LEFT)).toBe('');
         expect(await s.option(RIGHT)).toBe('');
-        s.type('!');
-        expect(await ran(s)).toBe('one two three!');
-      });
-
-      it('crosses the rows of a command line longer than the terminal is wide', async () => {
-        // 80 columns, xterm's own: `$ echo one ` and then the long word runs past the first row's edge.
-        const long = 'two'.repeat(30);
-        const s = await shellWith(file, shell, `one ${long} three`);
-        await s.option(LEFT);
-        expect(await s.option(LEFT)).toBe('\x1b[D'.repeat(long.length + 1));
-        s.type('X');
-        expect(await ran(s)).toBe(`one X${long} three`);
+        expect(await s.option(LEFT)).toBe('');
+        s.type('XY');
+        expect(await ran(s)).toBe('one two threeXY');
       });
     });
   }
 
   const vim = onPath('vim');
   describe.skipIf(!vim)('vim, on the alternate screen with application cursor keys', () => {
-    it('moves over the word on screen in normal mode and leaves insert mode to the user', async () => {
+    it('does not trigger custom arrow mappings or consume subsequent input', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'word-chord-'));
       const text = join(dir, 'words.txt');
       writeFileSync(text, 'one two three\n');
       const s = await session(vim!, ['-u', 'NONE', '-i', 'NONE', '-N', '-n', text], {});
       await s.waitFor(/words\.txt/);
+      s.type(':nnoremap <Left> dd\r:nnoremap <Right> dd\r');
       await s.settle();
-      // vim asks for DECCKM (keypad transmit), so the arrows are ESC O C.
-      expect(await s.option(RIGHT)).toBe('\x1bOC'.repeat(3));
-      s.type('iX\x1b');
-      await s.settle();
-      // Normal mode's block cursor sits on the X it left, so the word it is in ends one along.
-      expect(await s.option(RIGHT)).toBe('\x1bOC');
-      expect(await s.option(RIGHT)).toBe('\x1bOC'.repeat(4));
-      s.type('iY\x1b:wq\r');
-      await vi.waitFor(() => { expect(readFileSync(text, 'utf8')).toBe('oneX twoY three\n'); });
+      expect(await s.option(LEFT)).toBe('');
+      expect(await s.option(RIGHT)).toBe('');
+      s.type('iX\x1b:wq\r');
+      await vi.waitFor(() => { expect(readFileSync(text, 'utf8')).toBe('Xone two three\n'); });
     });
   });
 
   const sh = onPath('sh');
   describe.skipIf(!sh)('a program that hides the cursor and draws its own caret', () => {
-    it('gets Meta+B / Meta+F, since the screen does not say where its caret is', async () => {
-      const s = await session(sh!, ['-c', String.raw`printf 'ready one two\033[?25l'; stty raw -echo; head -c 4 | od -An -c; stty sane`], {});
-      await s.waitFor(/ready one two/);
-      await s.settle();
-      expect(await s.option(LEFT)).toBe('\x1bb');
-      expect(await s.option(RIGHT)).toBe('\x1bf');
-      const dumped = await s.waitFor(/033\s+b\s+033\s+f/);
-      expect(dumped[0]).toMatch(/033/);
+    it('also sends nothing while the cursor is hidden', async () => {
+      const s = await session(sh!, ['-c', String.raw`printf 'ready\033[?25l'; stty raw -echo; head -c 1 | od -An -c; stty sane`], {});
+      await s.waitFor(/ready/);
+      expect(await s.option(LEFT)).toBe('');
+      expect(await s.option(RIGHT)).toBe('');
+      s.type('X');
+      await s.waitFor(/X/);
     });
   });
 });

@@ -220,8 +220,9 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
         {menu && <NewTerminalMenu scopes={scopes} terminals={terminals} anchor={menuButton} onClose={() => setMenu(false)} />}
       </div>
       {banner && <p className="terminal-banner" role="status">{banner}</p>}
+      {api.platform === 'darwin' && active && <p className="terminal-banner" id="terminal-word-keys">Option+Left/Right is temporarily unavailable in the terminal.</p>}
       <div className="terminal-stage">
-        <div className="terminal-host" ref={host} role="tabpanel" aria-label={active ? `${tabTitle(active)}, ${active.scopeLabel}` : 'Terminal'} hidden={!active || active.phase === 'failed'} />
+        <div className="terminal-host" ref={host} role="tabpanel" aria-describedby={api.platform === 'darwin' && active ? 'terminal-word-keys' : undefined} aria-label={active ? `${tabTitle(active)}, ${active.scopeLabel}` : 'Terminal'} hidden={!active || active.phase === 'failed'} />
         {active?.phase === 'failed' && <p className="terminal-failed" role="alert"><CircleAlert size={16} aria-hidden="true" /><span>{active.message}</span></p>}
         {!active && <EmptyState className="terminal-empty" icon={SquareTerminal} title="No terminal is open" body="The plus button opens one in your checkout. Ctrl+` shows or hides this panel." />}
       </div>

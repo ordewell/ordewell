@@ -1,7 +1,7 @@
 import '@xterm/xterm/css/xterm.css';
 import { clipboardChord } from './clipboard';
 import { findLinks } from './links';
-import { cursorLine, wordMove, type WordScreen } from './wordKeys';
+import { unavailableWordChord } from './wordKeys';
 import { buildTerminalTheme, TERMINAL_FONT, TERMINAL_FONT_SIZE, type TerminalTheme } from './terminalTheme';
 
 /**
@@ -75,31 +75,12 @@ export async function createTerm(options: TermOptions, mac: boolean): Promise<Te
     void options.readClipboard().then((text) => { if (text) term.paste(text); }, failed('Could not paste'));
   };
 
-  // xterm keeps DECTCEM (CSI ?25 h/l) to itself, so it is watched on the way past; every
-  // handler returns false, leaving the sequence to xterm. RIS and DECSTR show the cursor again.
-  let cursorVisible = true;
-  const cursorMode = (show: boolean) => (params: (number | number[])[]): boolean => {
-    if (params.includes(25)) cursorVisible = show;
-    return false;
-  };
-  term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, cursorMode(true));
-  term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, cursorMode(false));
-  term.parser.registerCsiHandler({ intermediates: '!', final: 'p' }, () => { cursorVisible = true; return false; });
-  term.parser.registerEscHandler({ final: 'c' }, () => { cursorVisible = true; return false; });
-  const screen = (): WordScreen => ({
-    cursorVisible,
-    applicationCursorKeys: term.modes.applicationCursorKeysMode,
-    ...cursorLine(term.buffer.active, term.cols),
-  });
-
   term.attachCustomKeyEventHandler((event) => {
     if (event.type !== 'keydown') return true;
     // Ctrl+` toggles the panel (the frame's command), so it must reach the window, not the shell.
     if (event.key === '`' && event.ctrlKey && !event.metaKey && !event.altKey) return false;
-    const word = wordMove(event, mac, screen);
-    if (word !== undefined) {
+    if (unavailableWordChord(event, mac)) {
       event.preventDefault();
-      if (word) term.input(word);
       return false;
     }
     const chord = clipboardChord(event, mac);
