@@ -11,8 +11,9 @@ import {
   type TaskShellSite,
 } from '../interfaces/IFileSystem';
 import { IApproval, DENY_ALL, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
-import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs, type CommandPolicyOptions } from './commandPolicy';
-import { resolveResearchShell, researchShellWarning, researchPolicyOptions, type ResearchShell, type ShellLaunch } from './researchShell';
+import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs } from './commandPolicy';
+import { ParsedLine } from './parsedLine';
+import { resolveResearchShell, researchShellWarning, researchLineShell, type ResearchShell, type ShellLaunch } from './researchShell';
 import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedMemoryLimitNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
 import { parseAllowlist } from './plannerAllowlist';
 import { resolveWithin, resolveRef, grantScopeFor } from './pathScope';
@@ -300,9 +301,9 @@ export abstract class BaseFileSystem implements IFileSystem {
    * closes for `readFile`/`glob`/`grep`. Each escaping path is scoped to its
    * containing directory, one entry per distinct scope.
    */
-  private outsidePaths(command: string, root: string): { outside: Array<{ abs: string; scope: string }>; unfollowable?: string } {
+  private outsidePaths(line: ParsedLine, root: string): { outside: Array<{ abs: string; scope: string }>; unfollowable?: string } {
     const found = new Map<string, string>();
-    for (const ref of pathRefs(command, this.policyOptions())) {
+    for (const ref of pathRefs(line)) {
       const { abs, inside, device, unfollowable } = resolveRef(root, ref, this.researchShell.hostPath);
       if (unfollowable) return { outside: [], unfollowable: ref.path };
       if (inside || device) continue;
@@ -312,8 +313,9 @@ export abstract class BaseFileSystem implements IFileSystem {
     return { outside: [...found].map(([scope, abs]) => ({ abs, scope })) };
   }
 
-  private policyOptions(): CommandPolicyOptions {
-    return researchPolicyOptions(this.researchShell);
+  /** A command line read under the research shell: every check of one command reads this one value. */
+  private parse(command: string): ParsedLine {
+    return ParsedLine.parse(command, researchLineShell(this.researchShell));
   }
 
   private plannerSite(): ShellSite {
@@ -397,14 +399,15 @@ export abstract class BaseFileSystem implements IFileSystem {
 
   private async runIn(site: ShellSite, command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
     if (site.task?.stopped) return refusal(`Command not run: ${site.task.stopped}.\n${TASK_CONTINUE}`);
-    command = disableWebCommandStartup(command, this.researchShell.dialect);
+    command = disableWebCommandStartup(this.parse(command));
+    const line = this.parse(command);
     const { approval, root } = site;
     const allow = approval.allowlist?.();
-    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, outboundTexts } = classifyCommand(command, {
-      ...this.policyOptions(), ...approval.commandPolicy?.(), ...(allow ? { allow } : {}),
+    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, outboundTexts } = classifyCommand(line, {
+      ...approval.commandPolicy?.(), ...(allow ? { allow } : {}),
     });
 
-    const { outside, unfollowable } = this.outsidePaths(command, root);
+    const { outside, unfollowable } = this.outsidePaths(line, root);
     const asks = tier === 'ask';
     const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
     const touched = outside.map((o) => o.abs).join(', ');
@@ -422,7 +425,7 @@ export abstract class BaseFileSystem implements IFileSystem {
 
     if (opts.sealed) {
       if (!(await site.sandbox.canSeal())) return refusal(`Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`);
-      return this.runSealed(site, command, request, 'asked', signal);
+      return this.runSealed(site, line, request, 'asked', signal);
     }
 
     // A sealed run may have written what a later command reads: a script the
@@ -430,10 +433,10 @@ export abstract class BaseFileSystem implements IFileSystem {
     // outside the sealed profile, that command would read the whole host, and
     // an allowlisted one would have the network, so once a sealed run has
     // started every later command of the attempt runs sealed (ADR-0046).
-    if (site.task?.sealed) return this.runSealed(site, command, request, 'after', signal);
+    if (site.task?.sealed) return this.runSealed(site, line, request, 'after', signal);
 
-    if (tier === 'refuse') return this.sealedInstead(site, command, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
-    if (unfollowable !== undefined) return this.sealedInstead(site, command, request, refusal(`Command refused: ${unfollowableReason(unfollowable)}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
+    if (tier === 'refuse') return this.sealedInstead(site, line, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
+    if (unfollowable !== undefined) return this.sealedInstead(site, line, request, refusal(`Command refused: ${unfollowableReason(unfollowable)}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
 
     const outbound = [...(outboundTexts ?? []), ...(webUrls ?? []).map((url) => url.href)];
     if (outbound.length && carriesSecret(outbound, [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
@@ -455,21 +458,21 @@ export abstract class BaseFileSystem implements IFileSystem {
       // the mode's refusal is recorded as it always was. A read-only task's
       // mode refuses whatever would ask (ADR-0046).
       const standing = approval.peek?.(request);
-      if (standing?.decision === 'deny' && standing.source === 'mode' && await site.sandbox.canSeal()) return this.runSealed(site, command, request, 'refused', signal);
+      if (standing?.decision === 'deny' && standing.source === 'mode' && await site.sandbox.canSeal()) return this.runSealed(site, line, request, 'refused', signal);
       if (!(await (signal ? approval.request(request, { signal }) : approval.request(request)))) {
         if (site.task) return refusal(`Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`);
         return refusal(outside.length > 0
-          ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(command, this.policyOptions()) ? CD_HINT : ''}`
+          ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(line) ? CD_HINT : ''}`
           : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`);
       }
     }
 
     if (webUrls?.length) {
-      const latest = classifyCommand(command, { ...this.policyOptions(), ...approval.commandPolicy?.(), allow: approval.allowlist?.() });
+      const latest = classifyCommand(line, { ...approval.commandPolicy?.(), allow: approval.allowlist?.() });
       if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
     }
 
-    for (const probe of wgetVersionCommands(command, this.researchShell.dialect)) {
+    for (const probe of wgetVersionCommands(line)) {
       if (!probe) return refusal(`Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`);
       const version = await this.runShell(site, probe, false, signal);
       if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
@@ -477,10 +480,10 @@ export abstract class BaseFileSystem implements IFileSystem {
       }
     }
 
-    const pinned = pinWebCommandAddresses(command, vettedAddresses, this.researchShell.dialect);
+    const pinned = pinWebCommandAddresses(line, vettedAddresses);
     command = pinned.command;
     if (webUrls?.length) {
-      const latest = classifyCommand(command, { ...this.policyOptions(), ...approval.commandPolicy?.(), allow: approval.allowlist?.(), trustedWebResolves: pinned.resolves });
+      const latest = classifyCommand(this.parse(command), { ...approval.commandPolicy?.(), allow: approval.allowlist?.(), trustedWebResolves: pinned.resolves });
       if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
     }
     // The network follows the tier (ADR-0011 B3): an `ask` command got here
@@ -497,19 +500,19 @@ export abstract class BaseFileSystem implements IFileSystem {
    * under its own scope, so wrapping a denied command never routes around the
    * denial.
    */
-  private deniedInnerScope(approval: IApproval, command: string): string | undefined {
+  private deniedInnerScope(approval: IApproval, line: ParsedLine): string | undefined {
     const peek = approval.peek;
     if (!peek) return undefined;
-    for (const scope of innerCommandScopes(command, this.policyOptions())) {
-      const standing = peek.call(approval, { kind: 'shell_command', subject: command, scope });
+    for (const scope of innerCommandScopes(line)) {
+      const standing = peek.call(approval, { kind: 'shell_command', subject: line.raw, scope });
       if (standing.decision === 'deny' && standing.source === 'remembered') return scope;
     }
     return undefined;
   }
 
   /** A refusal the envelope reached without asking anyone, run sealed where this host can (ADR-0036 S2), or `refused` as it was (S6). */
-  private async sealedInstead(site: ShellSite, command: string, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
-    return (await site.sandbox.canSeal()) ? this.runSealed(site, command, request, 'refused', signal) : refused;
+  private async sealedInstead(site: ShellSite, line: ParsedLine, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
+    return (await site.sandbox.canSeal()) ? this.runSealed(site, line, request, 'refused', signal) : refused;
   }
 
   /**
@@ -518,10 +521,11 @@ export abstract class BaseFileSystem implements IFileSystem {
    * a `!` exclusion naming the command or a path it touches, and a denial
    * given on the card this session.
    */
-  private async runSealed(site: ShellSite, command: string, request: ApprovalRequest | undefined, why: SealedRunReason, signal?: AbortSignal): Promise<ToolOutcome> {
+  private async runSealed(site: ShellSite, line: ParsedLine, request: ApprovalRequest | undefined, why: SealedRunReason, signal?: AbortSignal): Promise<ToolOutcome> {
     const { approval } = site;
+    const command = line.raw;
     const allow = approval.allowlist?.();
-    const rule = allow ? excludedBy(command, allow, this.policyOptions()) : undefined;
+    const rule = allow ? excludedBy(line, allow) : undefined;
     if (rule) return refusal(`Command refused: the planner allowlist excludes it ("${rule}"), and an exclusion holds for a sealed run too.`);
     const standing = request ? approval.peek?.(request) : undefined;
     if (request && standing?.decision === 'deny' && standing.source === 'excluded') {
@@ -535,7 +539,7 @@ export abstract class BaseFileSystem implements IFileSystem {
     // it carries a command the user said no to (S3). Only the person's denial
     // ('remembered'); a scope the approval mode alone would refuse is what a
     // sealed run is for (S2).
-    const denied = this.deniedInnerScope(approval, command);
+    const denied = this.deniedInnerScope(approval, line);
     if (denied) return refusal(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
 
     const sealed = await this.sealedRun(site, command, site.root, signal);

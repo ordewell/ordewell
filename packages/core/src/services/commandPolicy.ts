@@ -42,8 +42,8 @@
  * classifying something else. See {@link Dialect}.
  */
 
-import type { ShellDialect } from './researchShell';
-import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
+import { ParsedLine, type LineShell } from './parsedLine';
+import { SHELL_STATE_COMMANDS, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqProgramEnd, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
@@ -318,29 +318,23 @@ const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotne
 
 
 /**
- * Options threaded through classification.
- *
- * `dialect` is keyed to the interpreter rather than the OS on purpose: a Windows
- * host that has Git Bash runs the planner's commands in a POSIX shell (see
- * {@link resolveResearchShell}), and classifying those under cmd.exe rules
- * would be the same mismatch in the other direction. Callers pass the dialect of
- * the shell they are actually going to use; omitting it falls back to the host
- * default.
+ * What classification weighs beyond the line itself. The shell the line runs
+ * in is not here: it is read once into the {@link ParsedLine}.
  */
-export interface CommandPolicyOptions {
-  dialect?: ShellDialect;
+export interface PolicyInputs {
   /** Only flags generated from vetted DNS answers by BaseFileSystem, never caller input. */
   trustedWebResolves?: ReadonlySet<string>;
   autonomous?: boolean;
   approvalMode?: 'ask' | 'allow' | 'deny';
-  /**
-   * `CDPATH` is set in the environment the command will run in. A relative
-   * `cd` may then land in a directory the command line never names, so `cd`
-   * stops being navigation the classifier can follow.
-   */
-  cdpathSet?: boolean;
   /** The planner's standing approvals (ADR-0026); an `ask` command they cover carries {@link CommandClassification.allowedBy}. */
   allow?: PlannerAllowlist;
+}
+
+/** A string line's shell with the policy inputs, for a caller that classifies one line once. */
+export type CommandPolicyOptions = PolicyInputs & LineShell;
+
+function lineOf(line: string | ParsedLine, shell: LineShell): ParsedLine {
+  return typeof line === 'string' ? ParsedLine.parse(line, shell) : line;
 }
 
 export type CommandTier = 'auto' | 'ask' | 'refuse';
@@ -418,10 +412,10 @@ function looksLikePath(arg: string): boolean {
  * read-only, but their arguments can still point anywhere on disk, which is
  * exactly the escape path confinement closes for `readFile`/`glob`/`grep`.
  */
-export function pathRefs(command: string, opts: CommandPolicyOptions = {}): PathRef[] {
-  const dialect = dialectFor(opts.dialect);
-  // Lexed exactly as `classifyCommand` lexes it, so a leading newline cannot change what is followed.
-  return lexAll(command.trim(), dialect, opts.cdpathSet).segments.flatMap((seg) => {
+export function pathRefs(line: ParsedLine): PathRef[];
+export function pathRefs(command: string, shell?: LineShell): PathRef[];
+export function pathRefs(line: string | ParsedLine, shell: LineShell = {}): PathRef[] {
+  return lineOf(line, shell).segments.flatMap((seg) => {
     const { patterns } = patternArgs(seg);
     const cwd = seg.cwd ?? [];
     return [...seg.args.filter((_, i) => !patterns.has(i)), ...seg.inputs]
@@ -436,9 +430,10 @@ export function pathRefs(command: string, opts: CommandPolicyOptions = {}): Path
  * classification: a line the classifier refuses unread can still run sealed,
  * and the user's exclusion holds for it all the same.
  */
-export function excludedBy(command: string, allow: PlannerAllowlist, opts: CommandPolicyOptions = {}): string | undefined {
-  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
-  for (const seg of segments) {
+export function excludedBy(line: ParsedLine, allow: PlannerAllowlist): string | undefined;
+export function excludedBy(command: string, allow: PlannerAllowlist, shell?: LineShell): string | undefined;
+export function excludedBy(line: string | ParsedLine, allow: PlannerAllowlist, shell: LineShell = {}): string | undefined {
+  for (const seg of lineOf(line, shell).segments) {
     const rule = commandExcludedBy(allow, [seg.binary, ...seg.args]);
     if (rule) return rule;
   }
@@ -454,11 +449,12 @@ export function excludedBy(command: string, allow: PlannerAllowlist, opts: Comma
  * run sealed under a request that names the whole loop. Read-only segments
  * carry no scope and are left out, as they are never asked about.
  */
-export function innerCommandScopes(command: string, opts: CommandPolicyOptions = {}): string[] {
-  const dialect = dialectFor(opts.dialect);
-  const { segments } = lexAll(command.trim(), dialect, opts.cdpathSet);
+export function innerCommandScopes(line: ParsedLine): string[];
+export function innerCommandScopes(command: string, shell?: LineShell): string[];
+export function innerCommandScopes(input: string | ParsedLine, shell: LineShell = {}): string[] {
+  const line = lineOf(input, shell);
   const scopes = new Set<string>();
-  for (const seg of segments) {
+  for (const seg of line.segments) {
     // The lexer keeps a compound-command opener as the segment's first word and
     // the command it heads among the words after it (`do npm test` is one
     // segment). Step past the openers, then unwrap any runner, so the command a
@@ -468,8 +464,8 @@ export function innerCommandScopes(command: string, opts: CommandPolicyOptions =
     let args = seg.args;
     while (SHELL_KEYWORDS.includes(binary) && args.length > 0) [binary, ...args] = args;
     if (SHELL_KEYWORDS.includes(binary)) continue;
-    const { seg: inner, runner } = unwrap({ ...seg, binary, args, binaryPath: undefined }, dialect);
-    if (runner !== undefined || !isAuto(inner, opts)) scopes.add(scopeFor(inner));
+    const { seg: inner, runner } = unwrap({ ...seg, binary, args, binaryPath: undefined }, line.dialect);
+    if (runner !== undefined || !isAuto(inner, line)) scopes.add(scopeFor(inner));
   }
   return [...scopes];
 }
@@ -479,14 +475,14 @@ export function innerCommandScopes(command: string, opts: CommandPolicyOptions =
  * judged from the workspace root: worth saying in a refusal, since the model
  * otherwise sees a path it never meant.
  */
-export function cdUnfollowed(command: string, opts: CommandPolicyOptions = {}): boolean {
-  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
+export function cdUnfollowed(line: ParsedLine): boolean {
+  const { segments } = line;
   return segments.some((seg, i) => !seg.nested && literalCdTarget(seg) !== undefined
     && segments.slice(i + 1).some((later) => !later.nested && !later.cwd?.length));
 }
 
-export function pathLikeArgs(command: string, opts: CommandPolicyOptions = {}): string[] {
-  return pathRefs(command, opts).map((r) => r.path);
+export function pathLikeArgs(command: string, shell: LineShell = {}): string[] {
+  return pathRefs(command, shell).map((r) => r.path);
 }
 
 function pathIn(a: string): string[] {
@@ -716,13 +712,13 @@ function climbsByGlob(seg: Segment): boolean {
     .some((a) => /(^|[\\/])\.[*?[]/.test(a));
 }
 
-function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
+function isAuto(seg: Segment, line: ParsedLine): boolean {
   // Navigation is read-only, but only a target the command line spells out, on
   // a line where nothing else can steer it. Its effect on later commands is
   // followed by `followCd`, or ignored in the fallback, where a path judged
   // from the workspace root is never more permissive than from a deeper
   // directory the root contains.
-  if (seg.binary === 'cd') return !opts.cdpathSet && !seg.cdSteered && literalCdTarget(seg) !== undefined;
+  if (seg.binary === 'cd') return !line.cdpathSet && !seg.cdSteered && literalCdTarget(seg) !== undefined;
   const printsLines = SED_FAMILY.includes(seg.binary) && sedOnlyPrints(seg.args);
   if (!AUTO_COMMANDS.includes(seg.binary) && !printsLines) return false;
   // `./cat` is whatever file the repository ships under that name, not `cat`.
@@ -1062,12 +1058,14 @@ function withWrapperNote(reason: string, wrappers: string[]): string {
  * target provably writes nothing — `/dev/null`, or an fd duplication like
  * `2>&1` — since a planner that writes files has stopped being a planner.
  */
-export function classifyCommand(command: string, opts: CommandPolicyOptions = {}): CommandClassification {
-  const trimmed = command.trim();
+export function classifyCommand(line: ParsedLine, opts?: PolicyInputs): CommandClassification;
+export function classifyCommand(command: string, opts?: CommandPolicyOptions): CommandClassification;
+export function classifyCommand(input: string | ParsedLine, opts: CommandPolicyOptions = {}): CommandClassification {
+  const line = lineOf(input, opts);
+  const { text: trimmed, dialect } = line;
   if (!trimmed) return { tier: 'refuse', scope: '', reason: 'Empty command.' };
 
-  const dialect = dialectFor(opts.dialect);
-  const { segments, unsafeRedirect, processSubstitution, unbalanced, unreadable, arithmetic, switchName, truncated } = lexAll(trimmed, dialect, opts.cdpathSet);
+  const { segments, unsafeRedirect, processSubstitution, unbalanced, unreadable, arithmetic, switchName, truncated } = line.lexed;
 
   if (arithmetic) {
     return {
@@ -1168,7 +1166,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   }
 
   if (unwrapped.some(({ seg }) => programName(seg.binary) === 'wget')
-    && wgetVersionCommands(command, opts.dialect).includes(undefined)) {
+    && wgetVersionCommands(line).includes(undefined)) {
     return { tier: 'refuse', scope: '', reason: `The wget executable cannot be checked safely in this working directory. ${READ_REFUSAL_HINT}` };
   }
 
@@ -1179,7 +1177,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // that it can only grow, and the silent tier must not grow with it.
   const nonAuto = unwrapped.filter((u) => u.runner !== undefined
     || u.wrappers.some((w) => w !== w.toLowerCase())
-    || !isAuto(u.seg, opts));
+    || !isAuto(u.seg, line));
   if (nonAuto.length === 0) return { tier: 'auto', scope: '' };
 
   // A `cd` that asks, or a builtin that can move the shell, is one confinement

@@ -1,6 +1,6 @@
 import { approvalScopes, type IApproval, type ApprovalKind, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
 import { parseAllowlist, scopeAllowed, scopeExcluded, toolAllowed, type PlannerAllowlist } from './plannerAllowlist';
-import type { CommandPolicyOptions } from './commandPolicy';
+import type { PolicyInputs } from './commandPolicy';
 
 /**
  * Decides whether one out-of-envelope capability may run, and remembers the
@@ -167,7 +167,7 @@ export class ApprovalPolicy implements IApproval {
     return decide(answer, 'asked');
   }
 
-  commandPolicy(): Pick<CommandPolicyOptions, 'autonomous' | 'approvalMode'> {
+  commandPolicy(): Pick<PolicyInputs, 'autonomous' | 'approvalMode'> {
     return { autonomous: this.autonomousOf(), approvalMode: this.modeOf('shell_command') };
   }
 
