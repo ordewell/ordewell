@@ -1,4 +1,5 @@
 import type { Prefs, SavedLayout } from '../shared/bridge';
+import { isAbsolute } from 'node:path';
 import { readJsonFile, writeJsonFile } from './jsonFile';
 
 export const DEFAULT_PREFS: Prefs = {
@@ -7,6 +8,8 @@ export const DEFAULT_PREFS: Prefs = {
   layouts: {},
   notifications: true,
   keepRunningInTray: false,
+  reopenProjects: true,
+  openProjects: [],
   settingsAdvancedOpen: false,
   editorCommand: '',
 };
@@ -20,6 +23,16 @@ const MAX_PANE = 4000;
 export const MAX_LAYOUTS = 50;
 
 const MAX_PATH = 4096;
+
+/** Past this many the rest of last session's windows are not reopened: a corrupt file, not a desk. */
+export const MAX_OPEN_PROJECTS = 32;
+
+/** Last session's project windows, absolute paths only; refused whole if any entry is not one. */
+function openProjects(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_OPEN_PROJECTS) return undefined;
+  const valid = value.every((path) => typeof path === 'string' && path.length > 0 && path.length <= MAX_PATH && !path.includes('\0') && isAbsolute(path));
+  return valid ? [...new Set(value as string[])] : undefined;
+}
 
 function savedLayout(value: unknown): SavedLayout | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -67,7 +80,11 @@ function mergeLayouts(stored: Record<string, SavedLayout>, change: Record<string
   return merged;
 }
 
-/** `editorCommand` is deliberately not here: it is a program to run, so only the user's own file sets it. */
+/**
+ * `editorCommand` is deliberately not in `validPref`: it is a program to run,
+ * so only the user's own file sets it. `openProjects` is main's own record of
+ * the windows it had open, which no page may rewrite.
+ */
 const FILE_ONLY: ReadonlySet<string> = new Set(['editorCommand']);
 
 /** A key and value as a renderer sent them, checked before anything is written. */
@@ -75,6 +92,7 @@ export function validPref(key: unknown, value: unknown): Partial<Prefs> | undefi
   if (key === 'theme' && typeof value === 'string' && THEMES.has(value)) return { theme: value as Prefs['theme'] };
   if (key === 'notifications' && typeof value === 'boolean') return { notifications: value };
   if (key === 'keepRunningInTray' && typeof value === 'boolean') return { keepRunningInTray: value };
+  if (key === 'reopenProjects' && typeof value === 'boolean') return { reopenProjects: value };
   if (key === 'settingsAdvancedOpen' && typeof value === 'boolean') return { settingsAdvancedOpen: value };
   if (key === 'layouts') {
     const valid = layouts(value);
@@ -94,6 +112,7 @@ export class PrefsStore {
       for (const [key, value] of Object.entries(stored)) {
         Object.assign(prefs, validPref(key, value));
         if (FILE_ONLY.has(key) && typeof value === 'string' && value.length <= 500) Object.assign(prefs, { [key]: value });
+        if (key === 'openProjects') Object.assign(prefs, { openProjects: openProjects(value) ?? [] });
       }
     }
     return prefs;

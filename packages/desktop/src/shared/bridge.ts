@@ -148,6 +148,10 @@ export interface Prefs {
   notifications: boolean;
   /** Keep the app running in the tray when its last window closes and no run is live (H5). */
   keepRunningInTray: boolean;
+  /** Reopen, on a launch with no folder named, the project windows open when the app last quit. */
+  reopenProjects: boolean;
+  /** The project windows open when the app last quit. Main writes it; a page cannot. */
+  openProjects: string[];
   /** Whether Settings' Advanced section is open; it starts closed and stays as the user left it. */
   settingsAdvancedOpen: boolean;
   /**
