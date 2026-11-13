@@ -178,9 +178,14 @@ const CLOUD_ACCESS_KEY_ID =
  * error or a connection string prints with no credential name before it. Found
  * from the `://` and not the scheme, so a long run of letters is not rescanned
  * from each; the user and the password stop at the characters a URL parts them
- * with.
+ * with, and at a quote, backtick or angle bracket, which end a URL in JSON,
+ * shell and markdown. The password may hold an `@` and is greedy, so it backs
+ * off to the last `@` before the host (as URL parsers read it) and none of the
+ * password is left outside the mask. A comma stays allowed inside it: masking
+ * too much is safer than leaking. A `docker://alpine:3.19@sha256:...` reference
+ * has its tag masked as a password; that is accepted.
  */
-const URL_USERINFO = /(:\/\/[^\s/:@?#]+:)([^\s/@?#]+)@/g;
+const URL_USERINFO = /(:\/\/[^\s/:@?#"'`<>]+:)([^\s/?#"'`<>]+)@/g;
 /** A password that is a placeholder or a reference, not a value: `${DB_PASS}`, `$PASS`, `<password>`, `***`, our own marker. */
 const URL_PASSWORD_PLACEHOLDER = /^[$<{*[]/;
 
