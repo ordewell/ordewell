@@ -61,6 +61,8 @@ export function sessionsRoute(pool: OrchestratorPool) {
         ...(run ? { run } : {}),
         ...(plannerTurnId ? { plannerTurnId } : {}),
         ...(plannerCompaction ? { plannerCompaction } : {}),
+        // Taken in the same turn as the read, so a client drops exactly the held frames it already holds.
+        ...(live ? { position: pool.streamPosition(id) } : {}),
       } satisfies SessionResponse);
     } catch (err) {
       return failure(c, err, 'read session');
@@ -87,6 +89,7 @@ export function sessionsRoute(pool: OrchestratorPool) {
         ...(run ? { run } : {}),
         ...(plannerTurnId ? { plannerTurnId } : {}),
         ...(plannerCompaction ? { plannerCompaction } : {}),
+        position: pool.streamPosition(id),
       } satisfies AdoptSessionResponse);
     } catch (err: unknown) {
       return failure(c, err, 'load session', { message: 'Failed to load session' });

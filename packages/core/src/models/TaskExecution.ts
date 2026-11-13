@@ -46,6 +46,7 @@ export const TASK_FIELDS = {
   resumeAt: 'attempt',
   carriedFrom: 'attempt',
   skipReason: 'attempt',
+  skipOrigin: 'attempt',
   reverted: 'attempt',
   // A plan field, but where a failed task ran is fixed once it has run (ADR-0020): see `keepExecutionState`.
   ops: 'plan',

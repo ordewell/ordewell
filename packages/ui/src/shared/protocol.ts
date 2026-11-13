@@ -1,6 +1,6 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
   AiProvider, RunnerAuth, RunnerCommand, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
-  TaskModelAssignment, ChildPlanEntry, ChildPlanView,
+  TaskModelAssignment, ChildPlanEntry, ChildPlanView, CardEdit,
 } from '@ordewell/core';
 
 /*
@@ -55,20 +55,8 @@ export type ChatState = 'empty' | 'planDraft' | 'approved';
 
 export type SystemCommand = 'cancel' | 'cancelResume' | 'cancelPlannerResend' | 'retryPlannerCompaction' | 'resumeNow' | 'skip' | 'retry' | 'forceStart' | 'runTask' | 'markComplete' | 'markIncomplete' | 'revertTask' | 'stopExecution' | 'executePlan';
 
-/**
- * One field edit from a task card. Named by kind rather than read off which
- * keys a payload happens to carry: that guess let an emptied mode fall
- * through to removing the task.
- */
-export type TaskEdit =
-  | { kind: 'runner'; runner: RunnerId }
-  | { kind: 'model'; assignment: TaskModelAssignment }
-  | { kind: 'mode'; mode: string }
-  | { kind: 'prompt'; prompt: string }
-  | { kind: 'dependencies'; dependencies: string[] }
-  | { kind: 'skills'; skills: string[] }
-  /** Change versus ops (ADR-0020); the session refuses it once the task has started. */
-  | { kind: 'ops'; ops: boolean };
+/** One field edit from a task card; core owns it, with the not-started precondition it carries. */
+export type TaskEdit = CardEdit;
 
 /** A hand-written task from the add form: only what a user can fill in. */
 export interface TaskDraft {

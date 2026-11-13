@@ -2,8 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { makeSession, FakeRunnerSession, taskOf, fakeConfig, testWorkspace } from './sessionTestKit';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
-import { cardEditable, cardEditNeedsUnstarted, runHoldsEditors } from '../../taskRow';
+import { cardEditable, runHoldsEditors } from '../../taskRow';
 import type { Session } from '../createSession';
+import type { CardEdit } from '../CardEdit';
 
 const deferred = <T = void>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; };
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
@@ -31,15 +32,11 @@ function rig(holdSkills = false) {
   return { session, sessions, spawn, skillGit, load };
 }
 
-/** What the VS Code card and host each ask, from the Session's own facts. */
+/** What the card shows, from the Session's own facts; the edit's precondition is the Session's alone. */
 function held(session: Session): boolean {
   return runHoldsEditors(session.isExecuting, session.activity);
 }
-function hostRequiresUnstarted(session: Session, taskId: string): boolean {
-  return cardEditNeedsUnstarted(held(session), taskOf(session, taskId)!);
-}
-const cardEdit = (session: Session, taskId: string, patch: Partial<Task>) =>
-  session.updateTask(taskId, patch, ...(hostRequiresUnstarted(session, taskId) ? [{ requireUnstarted: true }] as const : []));
+const cardEdit = (session: Session, taskId: string, edit: CardEdit) => session.cardEdit(taskId, edit);
 
 describe('a card edit against a real Session', () => {
   it('still reaches the failed task after a run ended on that failure, so it can be fixed and retried', async () => {
@@ -53,11 +50,11 @@ describe('a card edit against a real Session', () => {
     expect(r.session.activity.resumable).toBe(true);
     expect(held(r.session)).toBe(false);
     expect(cardEditable(held(r.session), taskOf(r.session, 't1')!)).toBe(true);
-    await cardEdit(r.session, 't1', { prompt: 'fixed' });
+    await cardEdit(r.session, 't1', { kind: 'prompt', prompt: 'fixed' });
     expect(taskOf(r.session, 't1')!.prompt).toBe('fixed');
   });
 
-  it('holds a settled task read-only while the scheduler waits on a manual task, and the host agrees', async () => {
+  it('holds a settled task read-only while the scheduler waits on a manual task', async () => {
     const r = rig();
     r.load([task('t0', 1), task('u1', 2, { type: 'user', dependencies: ['t0'], userSteps: [{ order: 1, instruction: 'do', completed: false }] }), task('t2', 3, { dependencies: ['u1'] })]);
     await r.session.execute({ command: 'run_plan' }, { kind: 'user' });
@@ -70,7 +67,7 @@ describe('a card edit against a real Session', () => {
     expect(held(r.session)).toBe(true);
     expect(cardEditable(held(r.session), taskOf(r.session, 't0')!)).toBe(false);
     expect(cardEditable(held(r.session), taskOf(r.session, 't2')!)).toBe(true);
-    await cardEdit(r.session, 't2', { prompt: 'later' });
+    await cardEdit(r.session, 't2', { kind: 'prompt', prompt: 'later' });
     expect(taskOf(r.session, 't2')!.prompt).toBe('later');
     r.session.stopExecution();
   });
@@ -80,7 +77,7 @@ describe('a card edit against a real Session', () => {
     r.load([task('t1', 1)]);
     expect(held(r.session)).toBe(false);
 
-    const edit = cardEdit(r.session, 't1', { skills: ['cache'] });
+    const edit = cardEdit(r.session, 't1', { kind: 'skills', skills: ['cache'] });
     const refused = expect(edit).rejects.toThrow(/started before/);
     await r.session.execute({ command: 'run_plan' }, { kind: 'user' });
     await vi.waitFor(() => expect(r.spawn.mock.calls.some(([o]) => o.taskId === 't1')).toBe(true));
@@ -88,5 +85,50 @@ describe('a card edit against a real Session', () => {
     await refused;
     expect(taskOf(r.session, 't1')!.skills ?? []).toEqual([]);
     r.session.stopExecution();
+  });
+
+  // Nothing is live while the scheduler waits on a manual task, yet the next
+  // claim can land on a settled or pending task mid-edit.
+  it('holds a settled task of a run that waits on a manual task to the unstarted precondition', async () => {
+    const r = rig();
+    r.load([task('t0', 1), task('u1', 2, { type: 'user', dependencies: ['t0'], userSteps: [{ order: 1, instruction: 'do', completed: false }] })]);
+    await r.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    r.sessions.filter((s) => s.taskId === 't0').at(-1)!.reportComplete({ status: 'done', summary: '' });
+    await vi.waitFor(() => expect(taskOf(r.session, 't0')!.status).toBe('completed'));
+    await vi.waitFor(() => expect(r.session.activity.running).toBe(false));
+
+    await expect(cardEdit(r.session, 't0', { kind: 'skills', skills: ['cache'] })).rejects.toThrow(/started before/);
+    r.session.stopExecution();
+  });
+
+  it('refuses an edit of a task the run is running', async () => {
+    const r = rig();
+    r.load([task('t1', 1)]);
+    await r.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(r.spawn.mock.calls.some(([o]) => o.taskId === 't1')).toBe(true));
+
+    await expect(cardEdit(r.session, 't1', { kind: 'prompt', prompt: 'changed under it' })).rejects.toThrow(/started before/);
+    expect(taskOf(r.session, 't1')!.prompt).toBe('do t1');
+    r.session.stopExecution();
+  });
+
+  it('leaves the wider direct edit alone for a settled task when no run is live', async () => {
+    const r = rig();
+    r.load([task('t1', 1, { status: 'completed' })]);
+    expect(held(r.session)).toBe(false);
+
+    await cardEdit(r.session, 't1', { kind: 'prompt', prompt: 'Later' });
+    expect(taskOf(r.session, 't1')!.prompt).toBe('Later');
+  });
+
+  it('maps each card edit to its field on a task that has not started', async () => {
+    const r = rig();
+    r.load([task('t1', 1), task('t2', 2)]);
+
+    await cardEdit(r.session, 't2', { kind: 'dependencies', dependencies: ['t1'] });
+    await cardEdit(r.session, 't1', { kind: 'mode', mode: 'plan' });
+    await cardEdit(r.session, 't1', { kind: 'prompt', prompt: 'New prompt' });
+    expect(taskOf(r.session, 't2')!.dependencies).toEqual(['t1']);
+    expect(taskOf(r.session, 't1')).toMatchObject({ taskMode: 'plan', prompt: 'New prompt', description: 'New prompt' });
   });
 });

@@ -57,7 +57,7 @@ round *r* and round *r* + 1 the body runs once.
    tasks that have not run end skipped ("not run: the loop ran out of rounds"),
    its dependents are blocked (ADR-0034), and the supervisor gets one attention
    event that says how many rounds it ran.
-6. **A body task fails, or the user skips one**: the loop stops there. The
+6. **A body task fails, or a person or a supervisor skips one**: the loop stops there. The
    check stays failed and its dependents blocked. Retrying the body task until
    it passes resumes the loop where it stopped.
 
@@ -191,8 +191,13 @@ round *r* and round *r* + 1 the body runs once.
   starts a new set, and so does a force start of a check whose body is neither
   landed nor at work.
   A new round revives only the skips the loop made itself, the body that went
-  unrun when the loop closed; a body task the user skipped stays skipped, and
-  keeps stopping the loop, until they retry it.
+  unrun when the loop closed; a body task the user or a supervisor skipped
+  stays skipped, and keeps stopping the loop, until they retry it. Who skipped
+  is stored on the task (`skipOrigin`: `loop`, `user`, `supervisor` or
+  `resolver`), set where the skip is made, and the blocked rule and the round
+  both read it: never the reason's words, which a person may write to read like
+  the loop's. A plan saved before the field gets `loop` on load for a skip
+  whose reason is one of the loop's four texts.
 - **Removing a body task takes it out of its loop; a check is not removed
   (L8).** A body task removed from the plan leaves its loop's body, as it
   leaves dependency lists, and a loop left with no body is dropped. A check
@@ -330,3 +335,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-11-01 — a new attempt of a delegated task takes its check back, and its rounds start over (L7; ADR-0055 D8).
 - 2026-11-01 — the task tool is `read` ([ADR-0057](0057-information-moves-by-reference.md) R11).
 - 2026-11-07 — Ordewell tells an AI check on every round that its status is the verdict, not only through the planner's prompt for it (L2).
+- 2026-11-13 — who skipped a task is a stored `skipOrigin`, not read off the skip's text; the blocked rule and a new round agree on which skips stop a loop (L7).

@@ -1,5 +1,6 @@
 import type { ApprovalDecision } from './interfaces/IApproval';
 import type { Task } from './models/Task';
+import type { CardEdit } from './services/CardEdit';
 import type { ExecutionCommand } from './services/ExecutionCommands';
 import type { GlobalRunSettings } from './services/runSettingsDefaults';
 import type { ContainerChange, ContainerStatus } from './services/container/containerSetup';
@@ -177,6 +178,7 @@ export const DAEMON_ROUTES = {
   'plans.checkpointReject': row<OkResponse, CheckpointRequest | undefined>()({ method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/checkpoint/reject', query: WS, live: 'sessionId' }),
   'plans.resolveConflict': row<ResolveConflictResponse>()({ method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/resolve-conflict', query: WS, live: 'sessionId' }),
   'plans.addTask': row<OkResponse, Partial<Task>>()({ method: 'POST', path: '/api/plans/:sessionId/tasks', query: WS, live: 'sessionId' }),
+  'plans.cardEdit': row<OkResponse, CardEdit>()({ method: 'POST', path: '/api/plans/:sessionId/tasks/:taskId/card-edit', query: WS, live: 'sessionId' }),
   'plans.updateTask': row<OkResponse, Partial<Task>>()({ method: 'PUT', path: '/api/plans/:sessionId/tasks/:taskId', query: WS, live: 'sessionId' }),
   'plans.deleteTask': row<OkResponse>()({ method: 'DELETE', path: '/api/plans/:sessionId/tasks/:taskId', query: WS, live: 'sessionId' }),
   'plans.approveReview': row<ApproveReviewResponse>()({ method: 'POST', path: '/api/plans/:sessionId/review/approve', query: WS, live: 'sessionId' }),

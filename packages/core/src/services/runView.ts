@@ -33,7 +33,7 @@ function refresh(previous: readonly RunTask[], tasks: readonly SerializedTask[])
 }
 
 /** A plan carries the task's wait, usage and loop round too, but a status update is the newer word on them. */
-function withStatus({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _skipped, attemptUsage: _usage, loopRound: _round, ...plan }: PlanFields, { id: _id, ...status }: SerializedTaskStatus): Omit<RunTask, 'subtasks'> {
+function withStatus({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _skipped, skipOrigin: _skippedBy, attemptUsage: _usage, loopRound: _round, ...plan }: PlanFields, { id: _id, ...status }: SerializedTaskStatus): Omit<RunTask, 'subtasks'> {
   return { ...plan, ...status };
 }
 
@@ -61,7 +61,7 @@ function changeTask(tasks: RunTask[], taskId: string, change: (task: RunTask) =>
 
 const PATCHABLE: ReadonlySet<string> = new Set<keyof PlanFields>([
   'order', 'title', 'type', 'status', 'description', 'dependencies', 'assignedRunner', 'assignedModel', 'taskMode', 'prompt',
-  'userSteps', 'autonomy', 'sliceType', 'userStoriesCovered', 'awaitingReason', 'resumeAt', 'skipReason', 'ops', 'skills', 'addedBy', 'attemptUsage',
+  'userSteps', 'autonomy', 'sliceType', 'userStoriesCovered', 'awaitingReason', 'resumeAt', 'skipReason', 'skipOrigin', 'ops', 'skills', 'addedBy', 'attemptUsage',
   'commands', 'script', 'timeoutMs', 'loop', 'loopRound', 'research', 'goal',
 ]);
 
@@ -76,7 +76,7 @@ function startTask(task: RunTask): RunTask {
   return task.status === 'in_progress' ? task : running(task);
 }
 
-function running({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _skipped, checkpoint: _checkpoint, ...task }: RunTask): RunTask {
+function running({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: _skipped, skipOrigin: _skippedBy, checkpoint: _checkpoint, ...task }: RunTask): RunTask {
   return { ...task, status: 'in_progress' };
 }
 

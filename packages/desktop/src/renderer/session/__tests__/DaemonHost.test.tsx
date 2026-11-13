@@ -241,6 +241,18 @@ describe('DaemonHost', () => {
     expect(daemon.calls('plans.deleteTask')).toEqual([[{ sessionId: 's1', taskId: 't1' }, undefined]]);
   });
 
+  it('sends a card edit whole to the daemon, whose session holds it to the unstarted precondition', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: PLAN, goal: 'g' }), 'plans.cardEdit': ok({ ok: true }) });
+    const host = hostWith();
+    await opened(daemon, host);
+    await waitFor(() => expect(host.getSnapshot().state.plan?.tasks).toHaveLength(2));
+
+    await act(() => host.handle({ type: 'editTask', taskId: 't1', edit: { kind: 'prompt', prompt: 'Do it differently' } }));
+
+    expect(daemon.calls('plans.cardEdit')).toEqual([[{ sessionId: 's1', taskId: 't1' }, { kind: 'prompt', prompt: 'Do it differently' }]]);
+    expect(daemon.calls('plans.updateTask')).toEqual([]);
+  });
+
   it('keeps its session when another host holds the one asked for, and says who', async () => {
     const sessionHeld = { holder: { host: { kind: 'vscode', pid: 4242 }, acquiredAt: '2026-11-03T09:00:00.000Z' } };
     const daemon = fakeDaemon({
@@ -1358,5 +1370,63 @@ describe('DaemonHost with a session a VS Code window holds', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(daemon.calls('sessions.get')).toHaveLength(reads);
+  });
+});
+
+// The plan list opens a session on every click and never waits for the last
+// one, so two opens race and the window must end on the newer click.
+describe('DaemonHost opening one session after another', () => {
+  const later = <T,>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+
+  it('stays on the session clicked last when the first one\'s load answers after it', async () => {
+    const loads = { s1: later<ReturnType<typeof ok>>(), s2: later<ReturnType<typeof ok>>() };
+    const daemon = fakeDaemon({ 'sessions.load': (params) => loads[(params as { id: 's1' | 's2' }).id].promise });
+    const host = hostWith();
+
+    let opening!: Promise<unknown>;
+    await act(async () => {
+      opening = Promise.all([host.open('s1'), host.open('s2')]);
+      loads.s2.resolve(ok({ ok: true, plan: PLAN, goal: 'Second' }));
+      await loads.s2.promise;
+      loads.s1.resolve(ok({ ok: true, plan: PLAN, goal: 'First' }));
+      await opening;
+    });
+
+    expect(host.sessionId).toBe('s2');
+    expect(host.getSnapshot().goal).toBe('Second');
+    expect(daemon.subscribe).toHaveBeenLastCalledWith('s2', expect.any(Function));
+    expect(daemon.subscribe.mock.calls.some(([id]) => id === 's1')).toBe(false);
+  });
+
+  it('lets go of a held session it joined once a newer open has superseded it', async () => {
+    const SINCE = '2026-11-04T10:00:00.000Z';
+    const held = { holder: { hostId: 'h1', pid: 48200, host: { kind: 'daemon', port: 49213, ownerPid: 48120 }, since: SINCE, heartbeatAt: SINCE, runnerGroups: [] } };
+    const joining = later<{ ok: true; holder: HolderView }>();
+    const daemon = fakeDaemon({
+      'sessions.load': (params) => (params as { id: string }).id === 's1'
+        ? { ok: false, status: 409, error: 'Conflict', data: { ok: false, error: 'held', code: 'session_held', sessionHeld: held } }
+        : ok({ ok: true, plan: PLAN, goal: 'Second' }),
+      'sessions.get': ok({ meta: { id: 's1', goal: 'First' }, plan: { status: 'approved', phase: 'planning', pendingTasks: PLAN.tasks } }),
+    });
+    daemon.join.mockImplementation(async () => joining.promise);
+    const host = hostWith();
+
+    await act(async () => {
+      const first = host.open('s1');
+      await vi.waitFor(() => expect(daemon.join).toHaveBeenCalledWith('s1'));
+      const second = host.open('s2');
+      await second;
+      joining.resolve({ ok: true, holder: { port: 49213, pid: 48200, ownerPid: 48120, version: '0.12.3', contract: 1, since: SINCE } });
+      await first;
+    });
+
+    expect(host.sessionId).toBe('s2');
+    expect(host.getSnapshot().link).toBeNull();
+    expect(daemon.leave).toHaveBeenCalledWith('s1');
+    expect(daemon.subscribe.mock.calls.some(([id]) => id === 's1')).toBe(false);
   });
 });

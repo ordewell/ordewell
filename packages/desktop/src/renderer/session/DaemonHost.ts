@@ -5,7 +5,7 @@ import type {
 } from '@ordewell/core';
 import {
   checkoutRule, confirmedOverride, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
-  rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
+  ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
@@ -15,7 +15,7 @@ import {
 } from '@ordewell/ui/host';
 import {
   isBuiltinSlashCommand, resolveSlashAlias, slashHelp,
-  type HostToWebview, type IsolationActionKind, type SettingsChange, type TaskEdit, type WebviewToHost,
+  type HostToWebview, type IsolationActionKind, type SettingsChange, type WebviewToHost,
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
@@ -140,9 +140,6 @@ export interface DaemonHostOptions {
   now?: () => number;
 }
 
-const REJOIN_MIN_MS = 1000;
-const REJOIN_MAX_MS = 30_000;
-
 const SYSTEM_TASK_ACTIONS = {
   cancel: 'cancel',
   cancelResume: 'cancel-resume',
@@ -204,19 +201,6 @@ function holderViewOf(record: SessionHeld['holder']): HolderView {
   };
 }
 
-/** A field edit from a card, as the daemon's task PUT takes it: the extension's own mapping (PlanManager). */
-function taskChanges(edit: TaskEdit): Partial<Task> {
-  switch (edit.kind) {
-    case 'runner': return { assignedRunner: edit.runner };
-    case 'model': return { assignedModel: edit.assignment };
-    case 'mode': return { taskMode: edit.mode };
-    case 'prompt': return { prompt: edit.prompt, description: edit.prompt || undefined };
-    case 'dependencies': return { dependencies: edit.dependencies };
-    case 'skills': return { skills: edit.skills };
-    case 'ops': return { ops: edit.ops };
-  }
-}
-
 /**
  * Keeps the newest of one kind of read in flight at most once, with one more
  * queued behind it: plan cues come with every status tick of a run, and each
@@ -247,7 +231,7 @@ class SessionStream extends DaemonSessionStream {
     super(sessionView, post, hooks);
   }
 
-  protected override loaded(state: DaemonSessionState): undefined {
+  protected override loaded(state: DaemonSessionState): StreamStamp | undefined {
     if (!this.fresh()) return super.loaded(state);
     if (state.run) this.sessionView.adopt({ run: state.run });
     return undefined;
@@ -285,7 +269,7 @@ export class DaemonHost {
   /** What each chat instance keeps across a remount, by the place it is drawn in. */
   private readonly savedStates = new Map<string, unknown>();
   private rejoin: (() => void) | null = null;
-  private rejoinDelay = REJOIN_MIN_MS;
+  private readonly rejoinBackoff = new ReconnectBackoff();
   /** Continue here is adopting the session: a second click is the same takeover, not another. */
   private continuing = false;
   private navigator: SessionNavigator | null = null;
@@ -298,6 +282,12 @@ export class DaemonHost {
   private dock: 'draft' | null = null;
   /** The session main has joined a holder's daemon for on this window's behalf, until the window leaves it. */
   private holderSession: string | null = null;
+  /**
+   * The newest request to show a session, numbered. The plan list opens a
+   * session on every click without waiting for the last, so two loads race and
+   * the one that answers last would win; only the newest request may draw.
+   */
+  private shown = 0;
   private stopWatching: (() => void) | null = null;
   /** A refused join's holder is watched for its exit, so Continue here can be offered (W16). */
   private stopHolderWatch: (() => void) | null = null;
@@ -503,24 +493,32 @@ export class DaemonHost {
    * and the frame offers what to do about it (W16).
    */
   async open(sessionId: string): Promise<void> {
+    const request = ++this.shown;
+    // A newer open (or New session) supersedes this one. What it loaded stays
+    // with the daemon, which keeps every session it has loaded live; it is
+    // just never drawn here, nor its error shown over the newer session.
+    const superseded = (): boolean => request !== this.shown;
     // Read before the load: a session this daemon already holds is live, and a
     // load of a saved one always answers with a run. This is what tells a
     // restored session (W17) from one that was already at work.
     const wasLive = await this.savedIsLive(sessionId);
+    if (superseded()) return;
     let adopted: AdoptSessionResponse;
     try {
       adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
     } catch (error) {
+      if (superseded()) return;
       const held = heldOf(error);
       if (held) {
-        if (held.holder.host?.kind === 'daemon') { await this.join(sessionId, held); return; }
+        if (held.holder.host?.kind === 'daemon') { await this.join(sessionId, held, superseded); return; }
         this.update({ held, link: null });
-        await this.viewHeld(sessionId);
+        await this.viewHeld(sessionId, superseded);
         return;
       }
       this.showError(error);
       return;
     }
+    if (superseded()) return;
     this.adopt(sessionId, adopted, wasLive);
   }
 
@@ -536,11 +534,16 @@ export class DaemonHost {
    * session's calls and socket there, so it stays the session's one live host
    * (ADR-0049). A join main refuses shows why, over the saved state.
    */
-  private async join(sessionId: string, held: SessionHeld): Promise<void> {
+  private async join(sessionId: string, held: SessionHeld, superseded: () => boolean): Promise<void> {
     this.cancelHolderWatch();
     const host = held.holder.host;
     if (host?.kind === 'daemon') this.update({ held, link: { kind: 'joining', port: host.port } });
     const joined = await window.ordewell.daemon.join(sessionId);
+    // A join main made for a window that has moved on is let go, so main closes the holder's connection once nothing else uses it.
+    if (superseded()) {
+      if (joined.ok && this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
+      return;
+    }
     if (!joined.ok) {
       this.update({ held, link: { kind: 'refused', reason: joined.reason, message: joined.message } });
       await this.viewHeld(sessionId);
@@ -552,8 +555,13 @@ export class DaemonHost {
       saved = await this.readJoined(sessionId);
     } catch (error) {
       if (this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
+      if (superseded()) return;
       this.update({ link: null });
       this.showError(error);
+      return;
+    }
+    if (superseded()) {
+      if (this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
       return;
     }
     this.switchTo(sessionId, false, saved?.meta.goal ?? '', { held, link: { kind: 'joined', holder: joined.holder } });
@@ -593,13 +601,14 @@ export class DaemonHost {
    * (W16). Every write is refused while it is drawn; taking the session over
    * is the way out (ADR-0049).
    */
-  async viewHeld(sessionId: string): Promise<void> {
+  async viewHeld(sessionId: string, superseded: () => boolean = () => false): Promise<void> {
     try {
       const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
+      if (superseded()) return;
       this.showReadOnly(sessionId, saved);
       this.watch(sessionId, JSON.stringify(saved));
     } catch (error) {
-      this.showError(error);
+      if (!superseded()) this.showError(error);
     }
   }
 
@@ -740,6 +749,7 @@ export class DaemonHost {
 
   /** A blank session: nothing is created on the daemon until the first message starts the planner. */
   newSession(): void {
+    this.shown++;
     this.switchTo(mintSessionId(), true, '');
     this.emit({ type: 'setState', state: 'empty' });
   }
@@ -898,7 +908,7 @@ export class DaemonHost {
         return;
       }
       case 'editTask':
-        await this.planEdit(callDaemon('plans.updateTask', { sessionId: this.sessionId, taskId: msg.taskId }, taskChanges(msg.edit)));
+        await this.planEdit(callDaemon('plans.cardEdit', { sessionId: this.sessionId, taskId: msg.taskId }, msg.edit));
         return;
       case 'removeTask':
         await this.removeTask(msg.taskId);
@@ -1745,7 +1755,7 @@ export class DaemonHost {
         return;
       }
       if (!isFrame(event.frame)) return;
-      this.rejoinDelay = REJOIN_MIN_MS;
+      this.rejoinBackoff.reset();
       const wasGenerating = this.generating;
       stream.receive(event.frame);
       this.toTaskLogs(event.frame);
@@ -1771,8 +1781,7 @@ export class DaemonHost {
     const offStatus = window.ordewell.daemon.onStatus((status) => { if (status.state === 'connected') again(); });
     const timer = setTimeout(() => {
       void window.ordewell.daemon.status().then((status) => { if (status.state === 'connected') again(); });
-    }, this.rejoinDelay);
-    this.rejoinDelay = Math.min(this.rejoinDelay * 2, REJOIN_MAX_MS);
+    }, this.rejoinBackoff.next());
     this.rejoin = () => { offStatus(); clearTimeout(timer); };
   }
 
@@ -1789,7 +1798,7 @@ export class DaemonHost {
     const joined = await window.ordewell.daemon.join(sessionId);
     if (sessionId !== this.sessionId || this.snapshot.link !== link) return;
     if (joined.ok) {
-      this.rejoinDelay = REJOIN_MIN_MS;
+      this.rejoinBackoff.reset();
       this.update({ link: { kind: 'joined', holder: joined.holder } });
       this.dispose();
       this.follow(sessionId);
@@ -1805,8 +1814,7 @@ export class DaemonHost {
     if (joined.reason === 'unreachable') {
       // Its pid still holds the lease: the holder is away, not gone, and nothing may continue it here yet.
       if (!link.away) this.update({ link: { ...link, away: true } });
-      const timer = setTimeout(() => { void this.rejoinHolder(sessionId); }, this.rejoinDelay);
-      this.rejoinDelay = Math.min(this.rejoinDelay * 2, REJOIN_MAX_MS);
+      const timer = setTimeout(() => { void this.rejoinHolder(sessionId); }, this.rejoinBackoff.next());
       this.rejoin = () => clearTimeout(timer);
       return;
     }
@@ -1834,6 +1842,7 @@ export class DaemonHost {
         conversation: saved.conversation ?? {},
         ...(saved.run ? { run: saved.run } : {}),
         ...(saved.plannerTurnId ? { plannerTurnId: saved.plannerTurnId } : {}),
+        ...(saved.position ? { position: saved.position } : {}),
       };
     }
     const adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
@@ -1842,6 +1851,7 @@ export class DaemonHost {
       conversation: adopted.plan,
       ...(adopted.run ? { run: adopted.run } : {}),
       ...(adopted.plannerTurnId ? { plannerTurnId: adopted.plannerTurnId } : {}),
+      ...(adopted.position ? { position: adopted.position } : {}),
     };
   }
 

@@ -128,6 +128,19 @@ describe('GET /api/sessions/:id', () => {
     expect(await res.json()).not.toHaveProperty('run');
   });
 
+  // A client holds the socket's frames behind this read and drops those the read already accounts for.
+  it('names the stream position the live session\'s read accounts for', async () => {
+    const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
+
+    expect(((await res.json()) as { position?: unknown }).position).toEqual({ stream: 'daemon', seq: 12 });
+  });
+
+  it('names no stream position for a saved file nobody here holds', async () => {
+    const res = await appWith(fakePool({ holds: vi.fn().mockReturnValue(false) })).request('/api/sessions/s1?workspace=/ws');
+
+    expect(await res.json()).not.toHaveProperty('position');
+  });
+
   it('falls back to the saved plan when no live session holds that id', async () => {
     const res = await appWith(fakePool()).request('/api/sessions/s1?workspace=/ws');
 
@@ -179,6 +192,13 @@ describe('POST /api/sessions/:id/load', () => {
     const res = await app.request('/api/sessions/s1/load?workspace=/ws', { method: 'POST' });
 
     expect(((await res.json()) as { run?: unknown }).run).toEqual(view);
+  });
+
+  it('names the stream position the adopted session\'s answer accounts for', async () => {
+    const res = await app.request('/api/sessions/s1/load?workspace=/ws', { method: 'POST' });
+
+    expect(((await res.json()) as { position?: unknown }).position).toEqual({ stream: 'daemon', seq: 12 });
+    expect(pool.streamPosition).toHaveBeenCalledWith('s1');
   });
 
   it('registers the saved session with the pool so its tasks become live', async () => {

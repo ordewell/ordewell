@@ -78,3 +78,19 @@ describe('a socket held on a plan', () => {
     expect(lastMessage(state)).toMatchObject({ role: 'error', text: said });
   });
 });
+
+describe('a merge the socket carries', () => {
+  it('hands on who made it: an automatic merge says why it ran', () => {
+    const actions: Action[] = [];
+    const onEvent = createInbound((action) => { actions.push(action); }, 's1').receive;
+    const result = { outcome: 'merged' as const };
+
+    onEvent({ type: 'isolation_merge', result, trigger: { kind: 'gate', taskId: 't1' } } as WsEvent);
+    onEvent({ type: 'isolation_merge', result } as WsEvent);
+
+    expect(actions).toEqual([
+      { type: 'isolationMerged', result, trigger: { kind: 'gate', taskId: 't1' }, sessionId: 's1' },
+      { type: 'isolationMerged', result, sessionId: 's1' },
+    ]);
+  });
+});

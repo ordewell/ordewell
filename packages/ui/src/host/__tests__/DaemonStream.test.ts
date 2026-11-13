@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   EMPTY_RUN, reduceRun,
-  type ChildFrame, type ChildPlanEntry, type ChildPlanResponse, type ChildPlanView, type RunSnapshotFrame, type RunView,
-  type SerializedTask, type SessionFrame, type SessionMessage,
+  type DaemonFrame, type RunSnapshotFrame, type RunView, type SerializedTask, type SessionFrame, type SessionMessage,
 } from '@ordewell/core';
-import { ChildView } from '../ChildView';
-import { DaemonChildStream, DaemonSessionStream, type DaemonFrame, type DaemonSessionState } from '../DaemonStream';
+import { DaemonSessionStream, type DaemonSessionState } from '../DaemonStream';
 import { SessionView, type SessionCue } from '../SessionView';
 import type { SavedConversation } from '../ConversationViewHost';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type HostToWebview, type PatchedView } from '../../protocol';
@@ -244,6 +242,34 @@ describe('DaemonSessionStream', () => {
     expect(got.screen.run()).toEqual(EMPTY_RUN);
   });
 
+  // A turn that ended while the read was out is in the transcript the read returned, and on the socket behind it.
+  it('draws once what the read already holds, by the position it read at', async () => {
+    const conversation: SavedConversation = {
+      conversationHistory: [
+        { role: 'user', content: 'add a parser', timestamp: '2025-12-31T23:59:00.000Z' },
+        { role: 'assistant', content: 'Reading the code.', timestamp: '2026-01-01T00:00:00.000Z' },
+      ],
+      researchLog: [],
+    };
+    let resolve!: (state: DaemonSessionState) => void;
+    const got = daemon(() => new Promise((r) => { resolve = r; }));
+    got.feed(...RECORDED.slice(0, 5).map((msg, i) => stamped(msg, i + 1)));
+
+    resolve({ conversation, position: { stream: 'd1', seq: 5 } });
+    await settle();
+    vi.runAllTimers();
+
+    const want = webview();
+    new SessionView(want.post).reload(conversation);
+    vi.runAllTimers();
+    expect(got.screen.blocks()).toEqual(want.blocks());
+    expect(JSON.stringify(got.screen.blocks()).split('Reading the code.')).toHaveLength(2);
+
+    // What came after the read is news.
+    got.feed(stamped(RECORDED[5]!, 6));
+    expect(got.cues).toEqual([{ type: 'plan' }]);
+  });
+
   it('passes the tree and account limits on unheld, each limit revision once', () => {
     const got = daemon();
     const limits = [{ runner: 'claude-code', windows: [] }] as unknown as Extract<DaemonFrame, { type: 'account_limits' }>['limits'];
@@ -273,114 +299,5 @@ describe('DaemonSessionStream', () => {
     got.feed(stamped(RECORDED[8]!, 2));
     expect(got.cues).toEqual([]);
     expect(got.hooks.load).toHaveBeenCalledTimes(1);
-  });
-});
-
-const ENTRY: ChildPlanEntry = { sessionId: 'c1', node: 'n1', parent: 'root', taskId: 't1', title: 'Parser', depth: 1, state: 'working' };
-
-/** What a child says on its own socket. */
-const CHILD: ChildFrame[] = [
-  { type: 'planner_turn_started', turnId: 'ct', prompt: 'split it' },
-  { type: 'planner_text_delta', turnId: 'ct', segmentId: 's1', text: 'Splitting.' },
-  { type: 'planner_turn_ended', turnId: 'ct', outcome: 'plan' },
-  { type: 'plan_generated', plan: { tasks: [planned('c-a', 1)], runners: ['claude-code'], generatedAt: 'x' }, goal: 'split', runners: ['claude-code'] },
-  { type: 'task_started', taskId: 'c-a', order: 1, title: 'Task c-a', runner: 'claude-code' },
-  { type: 'notice', level: 'info', message: 'Child slot taken.' },
-  { type: 'status_update', tasks: [{ id: 'c-a', status: 'completed', verdict: null }] },
-  { type: 'execution_complete', summary: { completed: 1, failed: 0, skipped: 0, total: 1 } as unknown as Extract<ChildFrame, { type: 'execution_complete' }>['summary'] },
-];
-
-const CHILD_START: ChildPlanView = { child: ENTRY, goal: 'split', plan: null, run: EMPTY_RUN };
-
-function childDaemon(position = { stream: 'd1', seq: 0 }) {
-  const screen = webview();
-  const hooks = { load: vi.fn((): Promise<ChildPlanResponse> => Promise.resolve({ ...CHILD_START, position })), failed: vi.fn() };
-  const stream = new DaemonChildStream('c1', screen.post, hooks);
-  return { screen, hooks, stream, feed: (...frames: DaemonFrame[]) => frames.forEach((f) => stream.receive(f)) };
-}
-
-describe('DaemonChildStream', () => {
-  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
-  afterEach(() => { vi.useRealTimers(); });
-
-  it('draws a child as the in-process pane does from its handle', async () => {
-    const want = webview();
-    let handle = CHILD_START;
-    const pane = new ChildView('c1', want.post, () => handle);
-    pane.open();
-    for (const frame of CHILD) {
-      // The handle's run moves before its watchers hear of the frame.
-      if (frame.type !== 'notice') handle = { ...handle, run: reduceRun(handle.run, frame) };
-      pane.receive(frame);
-    }
-    vi.runAllTimers();
-
-    const got = childDaemon();
-    got.feed({ type: 'connected', sessionId: 'c1' });
-    got.feed(stamped(CHILD[0] as SessionMessage, 1));
-    await settle();
-    CHILD.slice(1).forEach((frame, i) => got.feed({ ...frame, stream: 'd1', seq: i + 2 }));
-    vi.runAllTimers();
-
-    expect(got.screen.posts).toEqual(want.posts);
-    expect(got.screen.posts.filter((m) => m.type === 'childView').at(-1)).toEqual({ type: 'childView', view: handle });
-  });
-
-  it('skips what the load already holds, by the position it read at', async () => {
-    const got = childDaemon({ stream: 'd1', seq: 4 });
-    got.feed(stamped(CHILD[3] as SessionMessage, 4));
-    got.feed(snapshotAt(EMPTY_RUN, 4));
-    await settle();
-    got.feed(stamped(CHILD[4] as SessionMessage, 5));
-
-    const views = got.screen.posts.flatMap((m) => (m.type === 'childView' ? [m.view] : []));
-    // The open, then task_started: plan_generated at 4 was in the read and is not folded again.
-    expect(views).toHaveLength(2);
-    expect(views.at(-1)?.run.tasks).toEqual([]);
-  });
-
-  it('drops a root\'s approval on a child socket', async () => {
-    const got = childDaemon();
-    got.feed(snapshotAt(EMPTY_RUN, 0));
-    await settle();
-    vi.runAllTimers();
-    const before = got.screen.posts.length;
-    got.feed(stamped({ type: 'approval_request', id: 'a1', kind: 'shell_command', subject: 'rm', scope: 'once' }, 1));
-    vi.runAllTimers();
-    expect(got.screen.posts).toHaveLength(before);
-  });
-
-  it('follows its entry in the root\'s tree, and closes when it leaves it', async () => {
-    const got = childDaemon();
-    got.feed(snapshotAt(EMPTY_RUN, 0));
-    await settle();
-
-    got.stream.tree([{ ...ENTRY, state: 'parked' }]);
-    expect(got.screen.posts.at(-1)).toEqual({ type: 'childView', view: { ...CHILD_START, child: { ...ENTRY, state: 'parked' } } });
-
-    got.stream.tree([]);
-    expect(got.screen.posts.slice(-2)).toEqual([
-      { type: 'childClosed' },
-      { type: 'childNotice', childId: 'c1', message: 'The child plan is no longer open.' },
-    ]);
-    const after = got.screen.posts.length;
-    got.feed(stamped(CHILD[3] as SessionMessage, 1));
-    await settle();
-    expect(got.screen.posts).toHaveLength(after);
-  });
-
-  it('sends a returning webview the card and every block again, and nothing before it loaded', async () => {
-    const got = childDaemon();
-    got.stream.resend();
-    expect(got.screen.posts).toEqual([]);
-
-    got.feed(stamped(CHILD[1] as SessionMessage, 1));
-    await settle();
-    vi.runAllTimers();
-    const before = got.screen.posts.length;
-    got.stream.resend();
-    const sent = got.screen.posts.slice(before);
-    expect(sent[0]).toEqual({ type: 'childView', view: CHILD_START });
-    expect(sent.some((m) => m.type === 'childConversation')).toBe(true);
   });
 });

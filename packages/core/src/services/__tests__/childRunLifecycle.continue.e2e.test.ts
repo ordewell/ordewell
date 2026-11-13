@@ -12,6 +12,8 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, wr
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { LeaseHost } from '../sessionLease';
+import { PendingApprovals } from '../PendingApprovals';
+import type { SlotPool } from '../SlotPool';
 import { taskRowView } from '../../taskRow';
 import type { IRunner } from '../../interfaces/IRunner';
 import { createTask } from '../../models/Task';
@@ -200,6 +202,41 @@ describe('a Continue (ADR-0055 D17)', () => {
     await vi.waitFor(() => expect(taskOf(parent, 'd').verdict).toMatchObject({ reported: 'blocked', reason: expect.stringContaining('has moved') }), { timeout: 20_000 });
     expect(planner.asked).toHaveLength(asked);
     await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.stringContaining('has moved')), { timeout: 20_000 });
+    parent.destroy();
+  });
+
+  it('leaves the tree\'s pool and its approval feed when the child it built could not load its plan', async () => {
+    const runner = fakeRunner({ a: ['a.txt'] }, { held: ['a'] });
+    const errors = vi.fn();
+    const unlistens: { off: () => void; called: boolean }[] = [];
+    const listen = PendingApprovals.prototype.listen;
+    const spy = vi.spyOn(PendingApprovals.prototype, 'listen').mockImplementation(function (this: PendingApprovals, listener) {
+      const off = listen.call(this, listener);
+      const record = { called: false, off: () => { record.called = true; off(); } };
+      unlistens.push(record);
+      return record.off;
+    });
+    const { root, parent } = tree([SUBMIT([childTask('a', 1)])], { runner, notifications: { info: vi.fn(), warn: vi.fn(), error: errors, confirm: vi.fn().mockResolvedValue(undefined) } });
+    const pool = (parent as unknown as { orchestrator: { slotPool: SlotPool } }).orchestrator.slotPool;
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(runner.spawned).toContain('a'), { timeout: 20_000 });
+    parent.stopExecution();
+    await parent.stopSubtree();
+    expect(pool.shared).toBe(false);
+    // The disk holds a plan that passes the move check but that its child refuses to load.
+    const place = { baseDir: root, rootSessionId: 'session-root', sessionId: childIdOf(parent, 'd')! };
+    const saved = loadChildSession(place)!;
+    saved.plan.tasks[0].assignedRunner = 'not-in-the-plan' as never;
+    saveChildSession(saved.plan, saved.meta.goal, place);
+    const listeners = unlistens.length;
+
+    expect(await parent.execute({ command: 'retry_task', task: 'd', from: 'session', message: 'go on' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.stringContaining('not in the plan\'s runner set')), { timeout: 20_000 });
+    spy.mockRestore();
+
+    expect(unlistens).toHaveLength(listeners + 1);
+    expect(unlistens.at(-1)!.called).toBe(true);
+    expect(pool.shared).toBe(false);
     parent.destroy();
   });
 

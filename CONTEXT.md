@@ -157,6 +157,17 @@ a snapshot covers, and where a gap or daemon restart means the client must read
 the session again. The TUI and the desktop share it; the TUI reads the session
 back on a gap while no turn of its own is out.
 
+**Daemon stream** (`DaemonStream`, `utils/daemonStream.ts`) — one daemon socket
+followed behind a REST read: its frames are ordered by StreamOrder, held while
+the read is out, and the read is made again on a gap or a restarted daemon. The
+read names its **stream position** (`SessionResponse.position`,
+`AdoptSessionResponse.position`, `ChildPlanResponse.position`), the last
+broadcast it accounts for, and every held frame at or below it is dropped, so
+nothing the read holds is drawn twice. A surface subclasses it with what it
+draws; when it follows the socket again after a drop is **ReconnectBackoff**
+(`utils/reconnectBackoff.ts`), the one wait every surface uses. ui's
+`DaemonSessionStream` is the desktop's.
+
 **Session link** (`tui/sessionLink.ts`) — the TUI's one socket per (client,
 session): it owns the follow socket, its reconnect with backoff, the run's end and
 a lost run. A planner turn the TUI did not send (a wake-up, a resend, another
@@ -1834,6 +1845,11 @@ complete takes it out of the state. The user may skip any task that is not
 running or completed, a reason optional; the supervisor only at Act, with a
 reason, and only a task that failed, is blocked or is waiting for input — and
 it never runs a skipped task again (ADR-0029).
+Who skipped it is stored as `skipOrigin` (`user`, `supervisor`, `loop` or
+`resolver`), set where the skip is made and never read off the reason's words;
+only a loop's own skips, which a new set of rounds undoes, carry `loop`. A plan
+saved before the field gets `loop` on load for a skip whose `skipReason` is one
+of the loop's four texts (ADR-0045 L7).
 *Avoid:* "completed" or "done" for it — nothing of it landed; "cancelled" —
 a cancel returns a task to pending.
 
@@ -2638,6 +2654,12 @@ completed set, which is safe because `removeTaskFromPlan` detaches the
 dependents in the same op. A direct edit sets only the fields the planner may
 change (`UPDATABLE_FIELDS`): a task's status, verdict and subtasks are
 execution's and the plan tree's, never a patch's.
+A task card's field edit (`CardEdit`) reaches the plan through one
+`Session.cardEdit`, which derives the card's not-started precondition itself
+from the run's facts (`runHoldsEditors`, `cardEditNeedsUnstarted`): a surface
+sends the edit, never decides the precondition, and the daemon's `card-edit`
+route is what the desktop app calls where `PUT /tasks/:taskId` is the wider
+direct edit.
 Both routes prepare an edit through one `prepareTaskEdit`, whose only differing
 input is the actor. The planner's vocabulary (no `taskMode`, `readOnly`,
 `thinkingEffort`, delegated fields), the lock (lifted by a rearm), the

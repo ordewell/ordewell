@@ -641,3 +641,50 @@ describe('a run over a repo group', () => {
     expect(items.find((i) => i.id === 'shared')?.detail).toBe('this run only, in your working tree');
   });
 });
+
+describe('a merge result the pane did not ask for', () => {
+  const blocked = { outcome: 'blocked' as const, blocked: [{ repo: '.', reason: 'conflict' as const, files: ['a.ts'] }] };
+
+  it('says why an automatic Merge all stopped, in the words of /merge', () => {
+    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: blocked, trigger: { kind: 'run_end' }, sessionId: 's1' });
+
+    expect(lastMessage(state)).toMatchObject({ role: 'error', text: expect.stringContaining('Merged nothing, so every tree is as it was: . would conflict in a.ts') });
+  });
+
+  it('says where an automatic Merge all landed', () => {
+    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: { outcome: 'merged' }, trigger: { kind: 'gate', taskId: 't1' }, sessionId: 's1' });
+
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: expect.stringContaining('Merged ordewell/r1/integration into your checked-out branch') });
+  });
+
+  it('says what a supervisor\'s or another window\'s Merge all did, which carries no trigger', () => {
+    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: blocked, sessionId: 's1' });
+
+    expect(lastMessage(state)?.text).toContain('would conflict in a.ts');
+  });
+
+  it('stays silent on the answer to the /merge it asked for, whose words the request brings', () => {
+    const asked = apply(withHandoff({ overlay: { kind: 'confirm', title: 't', message: 'm', action: { kind: 'merge-run' } } }), key('enter')).state;
+    const before = messagesOf(asked).length;
+
+    const { state } = apply(asked, { type: 'isolationMerged', result: blocked, sessionId: 's1' });
+
+    expect(messagesOf(state)).toHaveLength(before);
+  });
+
+  it('speaks again once the request it asked for is answered', () => {
+    const asked = apply(withHandoff({ overlay: { kind: 'confirm', title: 't', message: 'm', action: { kind: 'merge-run' } } }), key('enter')).state;
+    const answered = apply(apply(asked, { type: 'isolationMerged', result: blocked, sessionId: 's1' }).state, { type: 'isolationMerged', result: blocked, sessionId: 's1' }).state;
+
+    expect(lastMessage(answered)?.text).toContain('would conflict in a.ts');
+  });
+
+  it('speaks again when its request failed before any merge was made', () => {
+    const asked = apply(withHandoff({ overlay: { kind: 'confirm', title: 't', message: 'm', action: { kind: 'merge-run' } } }), key('enter')).state;
+    const abandoned = apply(asked, { type: 'mergeAbandoned', sessionId: 's1' }).state;
+
+    const { state } = apply(abandoned, { type: 'isolationMerged', result: blocked, sessionId: 's1' });
+
+    expect(lastMessage(state)?.text).toContain('would conflict in a.ts');
+  });
+});

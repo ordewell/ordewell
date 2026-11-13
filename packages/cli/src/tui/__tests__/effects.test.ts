@@ -2365,6 +2365,14 @@ describe('worktree isolation', () => {
       expect(messageOf(h.actions, 'failed')).toContain('The run is still running');
       expect(h.actions.some((a) => a.type === 'mergeHeld')).toBe(false);
     });
+
+    it('tells the pane its request will get no merge result, so the next one heard is not taken for its answer', async () => {
+      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonError('The run is still running', 400, 'refused')) } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+      expect(h.actions).toContainEqual({ type: 'mergeAbandoned', sessionId: 's1' });
+    });
   });
 
   describe('a Merge all beside a running ops task (ADR-0020)', () => {

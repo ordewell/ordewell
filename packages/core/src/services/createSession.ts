@@ -97,6 +97,8 @@ import type { TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { IsolationHandoff, IsolationMergeResult, IsolationView, IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
 import type { IsolationRunController } from './IsolationRunController';
 import { PlanEditor, type TaskEditOptions } from './PlanEditor';
+import { cardEditPatch, type CardEdit } from './CardEdit';
+import { cardEditNeedsUnstarted, runHoldsEditors } from '../taskRow';
 import type { PlannerDelegation, SubplannerBrief } from './PlanPrompts';
 import { PlanEditError } from './PlanEditError';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -1934,13 +1936,16 @@ export class Session {
     this.store.setTaskRunnerSessionId(task.id, placement.sessionId, this.store.resolveTaskRunner(task));
     this.saves.after();
     const saved = reopening ? loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId: reopening }) : null;
+    let child: Session | undefined;
     try {
       // Its run is tied to this path: moved, it would mint a new one and leave what it had landed behind, with its tasks still reading as done.
       if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
-      const child = this.childSession({ task, cwd, placement, authority, brief, link });
+      child = this.childSession({ task, cwd, placement, authority, brief, link });
       if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
       return child.seat.asNode(task, mandate, (await this.reading.board())?.pins() ?? []);
     } catch (err) {
+      // A built child joined the tree's slot pool as it was made, and only its destroy leaves it: left, it counts as a sibling and is ticked for good.
+      try { child?.destroy(); } catch { /* the refusal that sent us here is the one to report */ }
       budget.tree.close(budget.path);
       throw err;
     }
@@ -3343,6 +3348,23 @@ export class Session {
   /** Patch one task's fields, checked as the planner's task ops are; see {@link PlanEditor.updateTask}. */
   async updateTask(taskId: string, changes: Partial<Task>, options?: TaskEditOptions): Promise<LegacyPlanState | null> {
     return this.editor.updateTask(taskId, changes, options);
+  }
+
+  /**
+   * A field edit from a task card, with the card's own precondition derived
+   * here from the run's facts instead of by each host: a run that could still
+   * move a task on holds its editors to a task that has not started, and a task
+   * that has not started is held to it in an idle plan too, since a start can
+   * claim it while the edit waits on discovery or a skills check. The editor
+   * checks it again after those waits, so a task claimed meanwhile is left
+   * untouched and the edit is refused. A settled task of an idle plan, a failed
+   * one a run ended on included, keeps the wider direct-edit contract.
+   */
+  async cardEdit(taskId: string, edit: CardEdit): Promise<LegacyPlanState | null> {
+    const target = flattenTasks(this.store.planTasks as Task[]).find((t) => t.id === taskId);
+    const held = runHoldsEditors(this.isExecuting, this.activity);
+    const requireUnstarted = target ? cardEditNeedsUnstarted(held, target) : held;
+    return this.editor.updateTask(taskId, cardEditPatch(edit), { requireUnstarted });
   }
 
   /** Move one task onto a different runner, re-deriving what is scoped to it; see {@link PlanEditor.setTaskRunner}. */

@@ -1,4 +1,5 @@
 import { betweenRounds, type LoopSubject } from '../models/Loop';
+import { stopsLoop } from '../models/SkipOrigin';
 
 /**
  * What the blocked rule reads of a task; structural, so a surface's own task
@@ -46,7 +47,8 @@ export function repeatingChecks(tasks: readonly BlockingSubject[]): Set<string> 
  * The blocked rule with loops in it (ADR-0045 L3, L7). A check between rounds
  * is stored as failed, but it is no failure while its loop goes on: its own
  * body takes it as its input, and its other dependents wait for it as for a
- * task under way. The loop goes on until a body task fails, is skipped, or is
+ * task under way. The loop goes on until a body task fails, is skipped by a person or a
+ * supervisor (not by the loop itself, whose skips a new round undoes), or is
  * blocked; then the check is the failure it is stored as, and blocks its
  * dependents until what stopped the loop is retried.
  */
@@ -70,7 +72,7 @@ export function planBlocks(tasks: readonly BlockingSubject[]): PlanBlocks {
     stopped.set(check.id, false);
     const halted = (check.loop?.body ?? []).some((id) => {
       const body = byId.get(id);
-      return !!body && (body.status === 'failed' || body.status === 'skipped' || failuresOf(id, new Set()).length > 0);
+      return !!body && (body.status === 'failed' || stopsLoop(body) || failuresOf(id, new Set()).length > 0);
     });
     stopped.set(check.id, halted);
     return !halted;

@@ -8,8 +8,6 @@ export { ConversationViewHost, type SavedConversation } from './host/Conversatio
 export { RunViewHost } from './host/RunViewHost';
 export { SessionView, type SessionCue, type SessionSnapshot } from './host/SessionView';
 export { ChildView } from './host/ChildView';
-export {
-  DaemonChildStream, DaemonSessionStream,
-  type ConnectedFrame, type DaemonChildHooks, type DaemonFrame, type DaemonSessionHooks, type DaemonSessionState,
-} from './host/DaemonStream';
+export { DaemonSessionStream, type DaemonSessionHooks, type DaemonSessionState } from './host/DaemonStream';
+export type { ConnectedFrame, DaemonFrame } from '@ordewell/core/plan-utils';
 export * from './host/confirmations';

@@ -7,6 +7,7 @@ import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
+import { legacySkipOrigin, type SkipOrigin } from './SkipOrigin';
 import type { HandoffDigest } from './Handoff';
 import type { DelegatedBudget, TaskScope } from './Delegation';
 import { executionStateOf } from './TaskExecution';
@@ -126,6 +127,9 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
     const effort = (task as { thinkingEffort?: unknown }).thinkingEffort;
     if (typeof effort === 'string' && task.assignedModel && !task.assignedModel.thinkingEffort) task.assignedModel.thinkingEffort = effort;
     delete (task as { thinkingEffort?: unknown }).thinkingEffort;
+    // A loop's own skip was told from a person's by its text; it now says so itself (ADR-0045 L7).
+    const origin = legacySkipOrigin(task);
+    if (origin) task.skipOrigin = origin;
     migrateLoadedTasks(task.subtasks ?? []);
   }
 }
@@ -331,6 +335,13 @@ export interface Task {
   carriedFrom?: RunnerId;
   /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
   skipReason?: string;
+  /**
+   * Who skipped it, set with `skipReason` and only while `status` is `skipped`.
+   * A plan saved before this field has it only on a loop's own skips, which
+   * loading gives it from their text ({@link migrateLoadedTasks}); any other
+   * skip of such a plan has none, and reads as not the loop's.
+   */
+  skipOrigin?: SkipOrigin;
   /**
    * The user reverted its landed work (ADR-0054): saved with the plan, so the
    * hold that keeps it from running again outlives this process. Set only

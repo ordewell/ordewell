@@ -218,6 +218,24 @@ describe('the loop\'s derived state (ADR-0045 L3)', () => {
     expect(repeatingChecks([between, body({ status: 'skipped' }), ship])).toEqual(new Set());
   });
 
+  it.each(['user', 'supervisor'] as const)('stops the loop at a body task the %s skipped, whatever reason they gave, and not at one the loop skipped itself (L7)', (by) => {
+    const between = check({ status: 'failed', verdict: failed('failed') });
+    const reason = 'not needed: its check passed';
+    const stopped: Task = { ...body(), status: 'skipped', skipReason: reason, skipOrigin: by };
+    expect(repeatingChecks([between, stopped, ship])).toEqual(new Set());
+    expect(blockingFailures([between, stopped, ship])).toEqual(new Map([['ship', ['review']]]));
+
+    const closed: Task = { ...body(), status: 'skipped', skipReason: reason, skipOrigin: 'loop' };
+    expect(repeatingChecks([between, closed, ship])).toEqual(new Set(['review']));
+  });
+
+  it('carries who skipped a task on the wire, only while it is skipped', () => {
+    const skipped: Task = { ...body(), status: 'skipped', skipReason: 'no', skipOrigin: 'supervisor' };
+    expect(serializeTaskStatus(skipped)).toMatchObject({ skipOrigin: 'supervisor' });
+    expect(serializeTask(skipped)).toMatchObject({ skipOrigin: 'supervisor' });
+    expect(serializeTaskStatus(body({ status: 'pending' }))).not.toHaveProperty('skipOrigin');
+  });
+
   it('reads a saved plan without loops as before', () => {
     const plain = [createTask({ id: 'a', order: 1, status: 'failed', verdict: failed('failed') }), createTask({ id: 'b', order: 2, dependencies: ['a'] })];
     expect(blockingFailures(plain)).toEqual(new Map([['b', ['a']]]));

@@ -1,4 +1,4 @@
-import type { AccountLimitSnapshot } from '@ordewell/core';
+import type { AccountLimitSnapshot, AutoMergeTrigger } from '@ordewell/core';
 import type { AiProvider, ChildPlanEntry, ChildPlanView, Escalation, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
@@ -202,7 +202,9 @@ export type Action =
   | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
   /** The run and its record are gone; nothing is left to hand off or to mark. */
-  | { type: 'isolationMerged'; result: IsolationMergeResult; sessionId?: string }
+  | { type: 'isolationMerged'; result: IsolationMergeResult; trigger?: AutoMergeTrigger; sessionId?: string }
+  /** A merge request this pane made ended without a merge to answer it (a transport failure), so the next merge result is not its own. */
+  | { type: 'mergeAbandoned'; sessionId?: string }
   /**
    * The daemon would not merge until asked: past a check that has not passed
    * (ADR-0055 D9), or beside an ops task running in the checkout (ADR-0020).

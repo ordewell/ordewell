@@ -35,6 +35,7 @@ import { landed, planStartWaits, selectReadyTasks, startWaits, waitOf, type Forc
 import type { ResearchTasks } from './ResearchTasks';
 import { blockingFailures, planBlocks, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
+import { LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED, LOOP_OUT_OF_ROUNDS, LOOP_PASSED, stopsLoop } from '../models/SkipOrigin';
 import { decidesIsolation, handoffKept, mergeExcludes, type Continuation } from './attemptKind';
 import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
@@ -358,6 +359,8 @@ export class TaskOrchestrator {
   /** The run closed with its merge held, which it would otherwise have made itself. */
   private mergeOwedAtClose = false;
   private mergesInFlight = 0;
+  /** The run settled while a Merge all was in flight; the tick that merge ends with closes it, so nothing hands over a run that is still merging. */
+  private closeOwedToMerge = false;
   /*
    * Retry counts describe a task across attempts, so they deliberately live
    * outside the attempt record: ending an attempt must not forget how often
@@ -866,6 +869,7 @@ export class TaskOrchestrator {
     this.merging = true;
     let result: IsolationMergeResult;
     let lease: ReservedLease | undefined;
+    let refused: { error: unknown } | undefined;
     try {
       // An automatic merge passes here as Merge all does: it reaches a checkout, and no claim would ever see it (ADR-0059 L1).
       const reserved = this.leases.reserve(this.leaseRequest('merge'));
@@ -873,12 +877,17 @@ export class TaskOrchestrator {
       lease = reserved.lease;
       result = await this.runs.merge();
     } catch (err) {
-      if (!trigger) throw err;
+      if (!trigger) refused = { error: err };
       result = { outcome: 'failed', repo: SELF_REPO };
-      this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
+      if (trigger) this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       lease?.release('merged');
       this.merging = --this.mergesInFlight > 0;
+    }
+    if (refused) {
+      // No tick follows a merge that threw, and one that settled the run in the meantime still owes it its close.
+      if (this.closeOwedToMerge && !this.merging) await this.tick();
+      throw refused.error;
     }
     if (!trigger && result.outcome === 'merged') this.autoMergeBlocked = false;
     if (trigger) {
@@ -902,6 +911,11 @@ export class TaskOrchestrator {
    * over as before.
    */
   private async closeRun(): Promise<void> {
+    if (this.merging) {
+      this.closeOwedToMerge = true;
+      return;
+    }
+    this.closeOwedToMerge = false;
     this.mergeOwedAtClose = false;
     if (this.mergesAtClose) await this.mergeLanded({ kind: 'run_end' });
     else this.mergeOwedAtClose = this.mergesAutomatically() && !this.autoMergeBlocked && this.mergeHold.length > 0;
@@ -1651,7 +1665,7 @@ export class TaskOrchestrator {
   private retireResolver(id: string): void {
     const resolver = this.store.get(id);
     if (!resolver || this.attempts.has(id) || !LEFT_UNDONE.has(resolver.status)) return;
-    this.store.markSkipped(id, RESOLVER_NOT_NEEDED);
+    this.store.markSkipped(id, 'resolver', RESOLVER_NOT_NEEDED);
     this.starts.skipped(id);
     this.tell('info', `Task "${resolver.title}" was skipped: the conflict it was added for is gone.`);
   }
@@ -2064,7 +2078,7 @@ export class TaskOrchestrator {
       this.limitPauses.cancel(taskId);
       const ended = this.attempts.end(taskId, 'skip');
       this.attempts.clear(task);
-      this.store.markSkipped(taskId, reason?.trim() || undefined);
+      this.store.markSkipped(taskId, origin === 'supervisor' ? 'supervisor' : 'user', reason?.trim() || undefined);
       // Skipped itself, a resolver leaves its conflict free for another worker.
       this.runs.takeResolver(taskId);
       this.retireResolvers(taskId);
@@ -2869,7 +2883,7 @@ export class TaskOrchestrator {
    * integration tip, so it builds on what earlier rounds landed, and true says
    * the failure is the round's, not the task's. Approval is not spent by a
    * run, so the plan's approval of the body covers every round. Out of
-   * rounds, the body still to run will not run. A body task the user skipped
+   * rounds, the body still to run will not run. A body task a person or a supervisor skipped
    * has stopped the loop (L7): no round starts, and the skip stands. One they
    * reverted keeps its hold, which a round takes as any start does (L5, ADR-0054):
    * the rest of the body runs, and the loop waits for them to say.
@@ -2883,7 +2897,7 @@ export class TaskOrchestrator {
     }
     if (!betweenRounds(check)) return false;
     const body = check.loop.body.flatMap((id) => this.store.get(id) ?? []);
-    if (body.some((t) => t.status === 'skipped' && !LOOP_SKIPS.has(t.skipReason ?? ''))) return false;
+    if (body.some(stopsLoop)) return false;
     const [taken, runs] = [body.filter((t) => t.reverted), body.filter((t) => !t.reverted)];
     for (const task of runs.filter((t) => !this.attempts.has(t.id) && REPEATABLE.has(t.status))) {
       this.store.retry(task.id);
@@ -2905,7 +2919,7 @@ export class TaskOrchestrator {
     for (const id of check.loop?.body ?? []) {
       const task = this.store.get(id);
       if (!task || this.attempts.has(id) || !LEFT_UNDONE.has(task.status)) continue;
-      this.store.markSkipped(id, reason);
+      this.store.markSkipped(id, 'loop', reason);
       this.retireResolvers(id);
       this.starts.skipped(id);
     }
@@ -3185,17 +3199,8 @@ const LIMIT_RESET_MESSAGE = 'Your usage limit has reset. Carry on with the task 
 
 const REVERTED_HOLD = 'reverted; retry or force start to run it again';
 
-/** Why a loop's body that did not run ends skipped once its loop is over (ADR-0045 L6). */
-const LOOP_PASSED = 'not needed: its check passed';
-const LOOP_OUT_OF_ROUNDS = 'not run: the loop ran out of rounds';
-const LOOP_CHECK_MARKED_COMPLETE = 'not needed: its check was marked complete';
-const LOOP_CHECK_SKIPPED = 'not needed: its check was skipped';
-
 /** Why a resolver ends skipped once its conflict has ended some other way (ADR-0015). */
 const RESOLVER_NOT_NEEDED = 'not needed: the conflict it was added for is gone';
-
-/** The skips a loop made itself, which a new set of rounds undoes; any other is the user's, and stops the loop (L7). */
-const LOOP_SKIPS: ReadonlySet<string> = new Set([LOOP_PASSED, LOOP_OUT_OF_ROUNDS, LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED]);
 
 /** A body task a round runs again: not at work, and not waiting on the user. */
 const REPEATABLE: ReadonlySet<Task['status']> = new Set<Task['status']>(['pending', 'approved', 'completed', 'failed', 'skipped']);
