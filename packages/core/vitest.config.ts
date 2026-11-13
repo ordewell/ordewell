@@ -35,6 +35,7 @@ export default defineConfig({
         'src/plugins/builtin/gemini-cli.manifest.ts': floor(100, 100, 100),
         'src/plugins/builtin/cursor-agent.manifest.ts': floor(100, 100, 100),
         'src/plugins/builtin/qwen.manifest.ts': floor(100, 100, 100),
+        'src/services/LandingLedger.ts': floor(100, 94, 100),
         'src/services/PlanEditError.ts': floor(100, 100, 100),
         'src/services/PlanEditor.ts': floor(100, 92, 100),
         'src/services/StartLedger.ts': floor(100, 100, 100),

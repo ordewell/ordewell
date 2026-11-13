@@ -33,6 +33,7 @@ import { describeMergeResult, repairedLanded } from './mergeResultNotice';
 import type { ChildSessionPlace } from '../utils/sessionStore';
 import { quotedList } from '../utils/quotedList';
 import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
+import { hasReverted, keepLandedOn } from './LandingLedger';
 import { handoffBranchName } from './mergeWording';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
@@ -651,7 +652,7 @@ export class IsolationRunController {
   }
 
   private keepLandedOn(run: IsolationRun, taskId: string): void {
-    (run.landedOn ??= {})[taskId] = [...new Set([...run.landedOn?.[taskId] ?? [], ...this.landedOn(taskId)])];
+    keepLandedOn(run, taskId, this.landedOn(taskId));
   }
 
   /** What a conflict repair's work shows (ADR-0015); git that cannot tell counts against it. */
@@ -1103,7 +1104,7 @@ export class IsolationRunController {
    */
   private continuableRun(root: string): IsolationRun | null {
     const run = this.run;
-    return run && run.workspaceRoot === root && (run.reverted || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
+    return run && run.workspaceRoot === root && (hasReverted(run) || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
   }
 
   /**

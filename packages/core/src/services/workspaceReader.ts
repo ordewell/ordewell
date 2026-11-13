@@ -18,6 +18,7 @@ import { readTaskPatch } from '../utils/taskLogStore';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn, type GitInvoker } from './gitExec';
 import { repoRootOf, SELF_REPO } from './isolationRecord';
+import { landingsIn } from './LandingLedger';
 import { hasGitEntry, workspaceRepoGroup } from './repoGroup';
 import { stateRootOf } from './stateRoot';
 import {
@@ -262,7 +263,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const { run, repo: entry } = runOf(target, repo);
     const commit = await branchTip(entry.root, entry.integrationBranch);
     if (commit === null) gone(`The integration branch ${entry.integrationBranch} is gone: the run was merged or discarded.`);
-    const landings = Object.entries(run.landings ?? {}).flatMap(([taskId, byRepo]) => (byRepo[repo] ?? []).filter((merge) => SHA.test(merge)).map((merge) => ({ taskId, merge })));
+    const landings = landingsIn(run, repo).filter(({ merge }) => SHA.test(merge));
     return {
       at: { repo, scope: 'integration', source: 'commit', commit, branch: entry.integrationBranch },
       root: null, cwd: entry.root, prefix: await prefixOf(entry.root, repo), base: SHA.test(entry.baseRef) ? entry.baseRef : null,
