@@ -817,6 +817,15 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     'awk -[f] x.awk README.md',
     'awk -i inplac[e] 1 README.md',
     'node -[e] 1',
+    // A POSIX class, collating symbol or equivalence class inside a bracket
+    // holds its own `]`, so the first `]` does not close the bracket.
+    'find . [[:punct:]]exec bin/x {} +',
+    'find . -maxdepth 1 [[:punct:]]delete',
+    'find . [[.-.]]exec bin/x {} +',
+    'find . [[=-=]]exec bin/x {} +',
+    'find . [![:alnum:]]exec bin/x {} +',
+    'printf [[:punct:]]v PATH . && cd bin && cat x',
+    'printf [[.-.]]v PATH . && cd bin && cat x',
   ])('treats a word the shell can rewrite as possibly any flag: %s', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('refuse');
   });

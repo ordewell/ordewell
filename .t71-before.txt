@@ -1,0 +1,49 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+ RUN  v2.1.9 /home/alessandro/projects/ordewell3/.ordewell/worktrees/5db894ce/71-fix-command-policy-bypasses-from-the-re/packages/core
+
+ ❯ src/services/__tests__/commandPolicy.test.ts (853 tests | 7 failed | 834 skipped) 38ms
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [[:punct:]]exec bin/x {} + 14ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . -maxdepth 1 [[:punct:]]delete 2ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [[.-.]]exec bin/x {} + 1ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [[=-=]]exec bin/x {} + 1ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [![:alnum:]]exec bin/x {} + 1ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: printf [[:punct:]]v PATH . && cd bin && cat x 1ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+   × flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: printf [[.-.]]v PATH . && cd bin && cat x 1ms
+     → expected 'auto' to be 'refuse' // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [[:punct:]]exec bin/x {} +
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . -maxdepth 1 [[:punct:]]delete
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [[.-.]]exec bin/x {} +
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [[=-=]]exec bin/x {} +
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: find . [![:alnum:]]exec bin/x {} +
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: printf [[:punct:]]v PATH . && cd bin && cat x
+ FAIL  src/services/__tests__/commandPolicy.test.ts > flags on permitted binaries are an allowlist, not an afterthought > treats a word the shell can rewrite as possibly any flag: printf [[.-.]]v PATH . && cd bin && cat x
+AssertionError: expected 'auto' to be 'refuse' // Object.is equality
+
+Expected: "refuse"
+Received: "auto"
+
+ ❯ src/services/__tests__/commandPolicy.test.ts:830:39
+    828|     'printf [[.-.]]v PATH . && cd bin && cat x',
+    829|   ])('treats a word the shell can rewrite as possibly any flag: %s', (…
+    830|     expect(classifyCommand(cmd).tier).toBe('refuse');
+       |                                       ^
+    831|   });
+    832| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 12 passed | 834 skipped (853)
+   Start at  02:49:27
+   Duration  903ms (transform 275ms, setup 42ms, collect 277ms, tests 38ms, environment 0ms, prepare 145ms)
+
