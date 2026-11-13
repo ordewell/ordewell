@@ -16,8 +16,8 @@ export interface SessionCatalogDeps {
   config: Pick<IConfig, 'enabledRunners' | 'autonomousMode' | 'aiProvider'>;
   /** Whether a task's mode defaults to its runner's autonomous one: a child's mandate says, the config's level unless set (ADR-0056 M6). */
   autonomous?: () => boolean;
-  /** The runners and models a child's mandate holds it to, which a live setting can only narrow (ADR-0056 M3). Unset at a root: the settings are what it holds. */
-  held?: () => Pick<MandateLimits, 'runners' | 'models'>;
+  /** The runners and models a child's mandate holds it to, which a live setting can only narrow (ADR-0056 M3). Unset, or undefined, at a root: the settings are what it holds. */
+  held?: () => Pick<MandateLimits, 'runners' | 'models'> | undefined;
   registry: Pick<RunnerRegistry, 'getManifest'>;
   modelResolver: Pick<ModelResolver, 'modelsForRunners' | 'getCachedRunnerModels'>;
   /** Read at each call: a toggle or allowlist edit made since the session was built counts (#69). */

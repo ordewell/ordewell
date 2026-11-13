@@ -1,19 +1,25 @@
+import type { ExecutionActor } from '../models/Execution';
 import type { LegacyPlanState, Task } from '../models/Task';
+import type { UsageRecord } from '../models/Usage';
 import type { INotification } from '../interfaces/INotification';
 import type { IConfig } from '../interfaces/IConfig';
 import type { IWorktreeIsolation } from '../interfaces/IWorktreeIsolation';
+import type { PlannerToolsOffer } from './AiService';
 import type { ApprovalModeSetting } from './ApprovalPolicy';
 import { ChildDirectory } from './ChildDirectory';
 import { ownedRunner, type ChildNode, type SubplannerLink } from './ChildPlanRunner';
 import type { ChildPlacement, SaveSession, SessionDeps, SessionRuntimeSettings } from './createSession';
 import type { EventStore } from './eventStore';
 import type { IsolationRunController } from './IsolationRunController';
-import { heldMandate, mandateRefusalText, type Mandate, type NodeAuthority } from './Mandate';
+import type { TaskRunnerConfig } from './harness/AgentAdapter';
+import { SCRIPT_PAST_THE_RULES, heldMandate, mandateRefusalText, rootAuthority, withheldPlannerTools, type Mandate, type MandateLimits, type NodeAuthority, type RootSettings } from './Mandate';
 import { ChildFunding, RootFunding, type FundingHost, type NodeFunding } from './NodeFunding';
 import { ChildReading, RootReading, type NodeReading, type ReadingHost } from './NodeReading';
 import { ChildSeat, RootSeat, type ChildSeatHost, type NodeSeat } from './NodeSeat';
+import { runsSealed } from './PlanChangeCheck';
 import type { PlanStore } from './PlanStore';
 import type { SubplannerBrief } from './PlanPrompts';
+import type { PlannerToolHandler } from './mcp';
 import { NODE_REPORTED } from './plannerTools';
 import { providerForRunner } from './ProviderRegistry';
 import { childLease, processLeaseHost, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
@@ -90,6 +96,17 @@ export interface NodeHost {
 /** What a node's run is composed with at its place: a child runs inside its root's state, slots and isolation (ADR-0055 D11, D18). */
 export type PlacedRun = Pick<TaskOrchestratorOptions, 'stateRoot' | 'pool' | 'budget' | 'planNode' | 'decided' | 'nodeRefusal'>;
 
+/** What a parent hands the node it opens, besides its seat: each is absent at the root. */
+export interface NodeGiven {
+  /** What it may do, held under every level above it (ADR-0056 M1). */
+  authority?: NodeAuthority;
+  /** What its planner is told of the delegated task it plans (ADR-0055 D5). */
+  brief?: SubplannerBrief;
+}
+
+/** The planner tools a node's own planner is offered beyond the root's: what its grants withhold, and a subplanner's token and setup. */
+export type PlacedPlannerTools = Pick<PlannerToolsOffer, 'withheld' | 'subplanner' | 'noSubagents' | 'runnerConfig'>;
+
 interface Bound {
   host: NodeHost;
   funds: NodeFunding;
@@ -109,8 +126,15 @@ export abstract class NodePosition {
   /** The subplanner was told a start was refused; a raise makes it news again (ADR-0056 M5). */
   private toldStartRefused = false;
 
-  /** How this node answers to its parent's attempt (ADR-0055 D5); none at the root, or for a child seated without one. */
-  protected constructor(protected readonly link: SubplannerLink | undefined) {}
+  private readonly given: NodeAuthority | undefined;
+  /** What its planner is told of the delegated task it plans; none at the root. */
+  readonly brief: SubplannerBrief | undefined;
+
+  /** `link` is how this node answers to its parent's attempt (ADR-0055 D5); none at the root, or for a child seated without one. */
+  protected constructor(protected readonly link: SubplannerLink | undefined, { authority, brief }: NodeGiven) {
+    this.given = authority;
+    this.brief = brief;
+  }
 
   /** Where this session's own files live (ADR-0055 D11): its workspace, unless it is a child, whose code root goes with a worktree. */
   abstract stateRoot(workspace: string): string;
@@ -174,6 +198,98 @@ export abstract class NodePosition {
     this.toldStartRefused = false;
     this.host.raised();
   }
+
+  /** What this node may do, read at each check: what its parent gave it, or the root's settings at the level each caller names (ADR-0056 M1). */
+  authority(rootSettings: () => Omit<RootSettings, 'level'>): NodeAuthority {
+    return this.given ?? rootAuthority(rootSettings);
+  }
+
+  /** What a change below the root is held to, a commit included (ADR-0056 M6); undefined at the root, whose person approves. */
+  heldAuthority(): NodeAuthority | undefined {
+    return this.given;
+  }
+
+  /** Whether its runners take their autonomous modes (ADR-0056 M6): below the root its mandate's `autonomy` says, and at it the global setting, which the root's mandate reads too. */
+  autonomous(setting: boolean): boolean {
+    return this.given ? this.given.mandate('off').autonomy === 'full' : setting;
+  }
+
+  /** The runners and models its catalog is held to; undefined at the root, whose catalog is the user's (ADR-0056 M1). */
+  heldLimits(): Pick<MandateLimits, 'runners' | 'models'> | undefined {
+    return this.given?.mandate('off').limits;
+  }
+
+  /** What no landing here may touch, set above it (ADR-0056 M1); nothing beyond the user's own rules at the root. */
+  inheritedProtectedPaths(): readonly string[] {
+    return this.given?.mandate('off').exclusions.protectedPaths ?? [];
+  }
+
+  /** Why a script of this node's may not land what it does unsealed, as the rules stand now: an effect withdrawn since it landed goes with them (ADR-0056 M9). Never at the root. */
+  unsealedRefusal(task: Readonly<Task>): string | null {
+    const given = this.given;
+    return given && runsSealed(given.mandate('off'), task) ? `Level ${given.depth} refused Task "${task.title}": ${SCRIPT_PAST_THE_RULES}.` : null;
+  }
+
+  /** At the root the user's setting is the consent, at any level (ADR-0029); `merge` is what a child's asks (ADR-0056 M6). */
+  mayMergeUnasked(): boolean {
+    return !this.given || this.given.mandate('off').grants.has('merge');
+  }
+
+  /** Whether a runner's request may wait on a person: nobody below the root may allow one, and absent is denial (ADR-0056 M8). */
+  get mayAskAPerson(): boolean {
+    return this.given === undefined;
+  }
+
+  /** Who its own planner speaks as at the seam, on every call it makes: below the root, the subplanner at its depth; the turn decides at the root. */
+  plannerActor(): ExecutionActor | undefined {
+    return this.given ? { kind: 'subplanner', depth: this.given.depth } : undefined;
+  }
+
+  /** What its planner is offered beyond the root's tools: its grants' withholdings, and a subplanner's token and process setup (ADR-0056 M6, ADR-0057 R11). */
+  plannerTools(runnerConfig: TaskRunnerConfig | undefined): PlacedPlannerTools {
+    const mandate = this.given?.mandate('off');
+    return {
+      ...(mandate ? { withheld: withheldPlannerTools(mandate) } : {}),
+      ...(this.link ? { subplanner: true } : {}),
+      // Nothing refuses what a harness's own subagents spend, so they come only with `research`.
+      ...(mandate && !mandate.grants.has('research') ? { noSubagents: true } : {}),
+      ...(this.link ? { runnerConfig: runnerConfig ?? 'minimal' } : {}),
+    };
+  }
+
+  /** Its planner's tools, and for a subplanner the two its parent's attempt answers (ADR-0055 D5). */
+  offeredTools(handler: PlannerToolHandler): PlannerToolHandler {
+    const link = this.link;
+    if (!link) return handler;
+    return { ...handler, taskComplete: (report) => link.taskComplete(report), checkpoint: ({ question }) => Promise.resolve(link.checkpoint(question)) };
+  }
+
+  /** Its planner answers to its parent's attempt, not to a person: it reads its inbox, presses no control and is woken as a subplanner (ADR-0055 D5). */
+  get answersToParent(): boolean {
+    return this.link !== undefined;
+  }
+
+  /** Where its run's merge lands, as its planner is told. */
+  mergeTarget(): string {
+    return this.link ? 'the delegated task\'s branch' : 'the user\'s branch';
+  }
+
+  /** Its parent's attempt hears something changed that a verdict or the completion reminder may read; nobody above the root does. */
+  changed(): void {
+    this.link?.changed();
+  }
+
+  /** What a child below it spent, rolled up to its parent's attempt (ADR-0055 D20). */
+  passUsageUp(record: UsageRecord): void {
+    this.link?.usage(record);
+  }
+
+  /**
+   * A child's planner turn takes one of its tree's slots, and between turns its
+   * row is parked with no process; the limit it meets is its account's, and so
+   * the tree's (ADR-0055 D18). A root's turn holds no slot.
+   */
+  abstract readonly turnsTakeTreeSlots: boolean;
 
   /** Why nothing may start here, what is in flight finishing first (ADR-0056 M10). */
   withdrawn(): string | null {
@@ -297,6 +413,8 @@ export abstract class NodePosition {
 /** What a root is placed from: the seams a host or a test may fill. */
 export interface RootPositionDeps {
   saveSession?: SaveSession;
+  /** Only a test gives a root an authority from above, to hold a node to a child's mandate with no seat. */
+  authority?: NodeAuthority;
   leaseHost?: LeaseHost;
   /** Where its tree keeps its log (ADR-0058 S3). */
   eventLog: (rootSessionId: string, stateRoot: string) => EventStore;
@@ -307,10 +425,11 @@ export class RootPosition extends NodePosition {
   readonly save: SaveSession;
   readonly budget = undefined;
   readonly isolation = undefined;
+  readonly turnsTakeTreeSlots = false;
   private directory: ChildDirectory | undefined;
 
   constructor(private readonly deps: RootPositionDeps) {
-    super(undefined);
+    super(undefined, deps.authority ? { authority: deps.authority } : {});
     this.save = deps.saveSession ?? saveSession;
   }
 
@@ -363,7 +482,7 @@ export class RootPosition extends NodePosition {
 }
 
 /** What a child is placed from: the place its parent seated it in, and the attempt it answers to. */
-export interface ChildPositionDeps {
+export interface ChildPositionDeps extends NodeGiven {
   placement: ChildPlacement;
   /** Absent only for a child a test seats without an attempt: it holds a root's seat and refuses nothing. */
   link?: SubplannerLink;
@@ -376,10 +495,11 @@ export interface ChildPositionDeps {
 export class ChildPosition extends NodePosition {
   readonly save: SaveSession;
   readonly budget: NodeBudget | undefined;
+  readonly turnsTakeTreeSlots = true;
   private readonly placement: ChildPlacement;
 
-  constructor({ placement, link, workspace, saveSession: save }: ChildPositionDeps) {
-    super(link);
+  constructor({ placement, link, workspace, saveSession: save, ...given }: ChildPositionDeps) {
+    super(link, given);
     // Where a child is built, so no merge below can reach the user's branch (ADR-0055 D12).
     refuseUsersCheckout(workspace, placement.stateRoot);
     this.placement = placement;
@@ -448,10 +568,11 @@ export class ChildPosition extends NodePosition {
 }
 
 /** The position `deps` place a Session at: a child where its parent gave it a placement, the root otherwise. */
-export function nodePosition(deps: Pick<SessionDeps, 'placement' | 'subplanner' | 'saveSession' | 'leaseHost' | 'workspaceRoot'> & RootPositionDeps): NodePosition {
-  const { placement, subplanner, saveSession: save, leaseHost, eventLog } = deps;
-  if (placement) return new ChildPosition({ placement, workspace: deps.workspaceRoot(), ...(subplanner ? { link: subplanner } : {}), ...(save ? { saveSession: save } : {}) });
-  return new RootPosition({ eventLog, ...(save ? { saveSession: save } : {}), ...(leaseHost ? { leaseHost } : {}) });
+export function nodePosition(deps: Pick<SessionDeps, 'placement' | 'subplanner' | 'child' | 'brief' | 'saveSession' | 'leaseHost' | 'workspaceRoot'> & Omit<RootPositionDeps, 'authority'>): NodePosition {
+  const { placement, subplanner, child: authority, brief, saveSession: save, leaseHost, eventLog } = deps;
+  const given = authority ? { authority } : {};
+  if (placement) return new ChildPosition({ placement, workspace: deps.workspaceRoot(), ...given, ...(brief ? { brief } : {}), ...(subplanner ? { link: subplanner } : {}), ...(save ? { saveSession: save } : {}) });
+  return new RootPosition({ eventLog, ...given, ...(save ? { saveSession: save } : {}), ...(leaseHost ? { leaseHost } : {}) });
 }
 
 /** A subplanner a guard lowered or that failed its restart is Act again on a Continue, which is the plan above picking it up (ADR-0056 M8). */

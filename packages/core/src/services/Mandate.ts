@@ -358,14 +358,6 @@ export interface NodeAuthority {
   mandate(level: SupervisorLevel): Mandate;
 }
 
-/**
- * Whether a node's runners take their autonomous modes (M6): a child reads its
- * `autonomy`, and the root the global level, which `rootMandate` reads too.
- */
-export function autonomousAt(child: NodeAuthority | undefined, global: boolean): boolean {
-  return child ? child.mandate('off').autonomy === 'full' : global;
-}
-
 /** The root: its settings read as each check asks, the level included, which each caller names. */
 export function rootAuthority(settings: () => Omit<RootSettings, 'level'>): NodeAuthority {
   return { depth: 0, mandate: (level) => rootMandate({ ...settings(), level }) };

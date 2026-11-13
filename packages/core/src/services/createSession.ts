@@ -6,7 +6,7 @@ import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
-import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
+import { PlanChangeCheck, type PlanChangeScope } from './PlanChangeCheck';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
@@ -31,7 +31,7 @@ import { PlanStore } from './PlanStore';
 import { ApprovalPolicy, effectiveApprovalMode } from './ApprovalPolicy';
 import { DEFAULT_PLANNER_ALLOWLIST } from './plannerAllowlist';
 import { effectRuleFor, parseEffectAllowlist, type EffectRules } from './effectAllowlist';
-import { SCRIPT_PAST_THE_RULES, autonomousAt, rootAuthority, withheldPlannerTools, type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
+import { type Mandate, type MandateRequest, type NodeAuthority, type RootSettings } from './Mandate';
 import type { Carved, NodeBudget, TreeLedger } from './TreeLedger';
 import type { NodeFunding } from './NodeFunding';
 import type { NodeSeat } from './NodeSeat';
@@ -299,7 +299,7 @@ export interface SessionDeps {
   eventLog?: (rootSessionId: string, stateRoot: string) => EventStore;
   /** How this session answers to its parent's attempt, as a subplanner (ADR-0055 D5); absent at the root. */
   subplanner?: SubplannerLink;
-  /** What this child was given to do, for its prompt. */
+  /** What this child was given to do, for its prompt; read only with a `placement`, as `subplanner` is. */
   brief?: SubplannerBrief;
   /** Whether a planner may write a delegated task here; the build's own switch (ADR-0055 D21) unless a test sets it. */
   delegationOffered?: boolean;
@@ -382,7 +382,7 @@ export function createSession(deps: SessionDeps): Session {
     openChild: (...open) => session.openChild(...open),
     changedPaths: (taskId, names) => session.changedPaths(taskId, names),
     stopped: () => session.underStop || session.reported,
-    passUp: (record) => deps.subplanner?.usage(record),
+    passUp: (record) => position.passUsageUp(record),
     moved: () => events.rowsMoved(session.planState),
   };
   const childPlans = new ChildPlanRunner(childHost);
@@ -404,8 +404,7 @@ export function createSession(deps: SessionDeps): Session {
   const approvals = new PendingApprovals({
     onRequest: ({ id, request }) => {
       if (isRunnerApproval(request)) {
-        // Nobody below the root may allow a runner's request, and absent is denial (ADR-0056 M8).
-        if (deps.child) {
+        if (!position.mayAskAPerson) {
           approvals.resolve(id, { decision: 'deny', note: 'A person cannot be asked here: do it another way, or report that it needs one.' });
           return;
         }
@@ -445,8 +444,9 @@ export function createSession(deps: SessionDeps): Session {
     ...position.run(),
     ...(execution ? { execution } : {}),
     startRefused: (why) => session.startRefused(why),
-    autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
-    ...(deps.child ? { inheritedProtectedPaths: () => deps.child?.mandate('off').exclusions.protectedPaths ?? [], unsealedRefusal: (task: Readonly<Task>) => session.unsealedRefusal(task) } : {}),
+    autonomous: () => position.autonomous(deps.config.autonomousMode),
+    inheritedProtectedPaths: () => position.inheritedProtectedPaths(),
+    unsealedRefusal: (task) => position.unsealedRefusal(task),
     discardChild: (task) => session.discardChild(task),
     subtree: () => session.reading.subtree(),
     board: () => session.reading.board(),
@@ -468,8 +468,7 @@ export function createSession(deps: SessionDeps): Session {
     research: {
       started: (task) => session.research.started(task),
     },
-    // At the root the user's setting is the consent, at any level (ADR-0029); `merge` is what a child's asks (ADR-0056 M6).
-    mayMergeUnasked: () => !deps.child || deps.child.mandate('off').grants.has('merge'),
+    mayMergeUnasked: () => position.mayMergeUnasked(),
     // The planner's command rules, at the read-only task's own working directory (ADR-0046).
     taskShell: (site) => deps.fsAdapter.taskShell?.(site),
     // The planner's web-read policy with a budget per attempt, never prompting (ADR-0046).
@@ -558,8 +557,8 @@ export function createSession(deps: SessionDeps): Session {
 
   const catalog = new SessionCatalog({
     config: deps.config,
-    autonomous: () => autonomousAt(deps.child, deps.config.autonomousMode),
-    ...(deps.child ? { held: () => deps.child!.mandate('off').limits } : {}),
+    autonomous: () => position.autonomous(deps.config.autonomousMode),
+    held: () => position.heldLimits(),
     registry: deps.registry,
     modelResolver: deps.modelResolver,
     settings: deps.settings,
@@ -598,10 +597,6 @@ export function createSession(deps: SessionDeps): Session {
     conversation: (host) => (conversation = new PlannerConversation(host, {
       heldSecrets: () => [...namedConfigSecrets(deps.config), ...outboundSecrets().map((value) => ({ value }))],
     })),
-    child: deps.child,
-    placement: deps.placement,
-    subplanner: deps.subplanner,
-    brief: deps.brief,
     runnerConfig: () => deps.settings().taskRunnerConfig,
     delegationOffered: deps.delegationOffered ?? DELEGATION_OFFERED,
     childPlans,
@@ -670,12 +665,6 @@ export interface SessionParts {
   position: NodePosition;
   /** The conversation's host is the Session itself, so only the Session can make it. */
   conversation: (host: PlannerConversationHost) => PlannerConversation;
-  /** The node this session is, below the root. */
-  child?: NodeAuthority;
-  /** Where it sits below the root. */
-  placement?: ChildPlacement;
-  subplanner?: SubplannerLink;
-  brief?: SubplannerBrief;
   runnerConfig: () => TaskRunnerConfig | undefined;
   delegationOffered: boolean;
   childPlans: Pick<ChildPlanRunner, 'stopEvery' | 'activeCount' | 'progressOf'>;
@@ -753,13 +742,8 @@ export class Session {
   /** A whole-plan start opening; a second Execute joins it rather than resetting the run under it. */
   private runOpening: Promise<void> | null = null;
   private unsubObserver: (() => void) | null;
-  /** This session's node below the root; undefined at the root, where a person remains. */
-  private readonly child: NodeAuthority | undefined;
-  private readonly placement: ChildPlacement | undefined;
+  /** What this node may do, as its position holds it: given from above, or the root's settings (ADR-0056 M1). */
   private readonly authority: NodeAuthority;
-  /** How this session answers to its parent's attempt; undefined at the root (ADR-0055 D5). */
-  private readonly subplanner: SubplannerLink | undefined;
-  private readonly brief: SubplannerBrief | undefined;
   private readonly runnerConfig: () => TaskRunnerConfig | undefined;
   private readonly delegationOffered: boolean;
   private readonly childPlans: SessionParts['childPlans'];
@@ -794,7 +778,7 @@ export class Session {
   private turnEffects = new TurnEffects();
   private unlistenApprovals: (() => void) | null;
   /** The one check of a planner's change to the plan; an Act supervisor's edits meet its guard. */
-  private readonly planChanges = new PlanChangeCheck({ ...this.changeScope(() => this.supervisorEditing()), child: () => this.child });
+  private readonly planChanges = new PlanChangeCheck({ ...this.changeScope(() => this.supervisorEditing()), child: () => this.position.heldAuthority() });
   private readonly plannerTools: PlannerToolHandler = plannerToolHandler({
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
@@ -806,7 +790,7 @@ export class Session {
       return this.planChanges.check({ kind: 'plan', tasks }, 'submit');
     },
     submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
-    unread: () => this.subplanner !== undefined,
+    unread: () => this.position.answersToParent,
     editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),
     record: (entries, turn) => this.conversation.recordFromTool(entries, turn),
     tasks: () => this.store.planTasks,
@@ -847,12 +831,8 @@ export class Session {
     // A planner shell without an OS sandbox is said once, here, rather than in every command's output (ADR-0011 B5).
     this.fsAdapter.setNotice?.((message) => this.notice('warn', message));
     this.modelResolver = parts.modelResolver;
-    this.child = parts.child;
-    this.placement = parts.placement;
-    this.authority = parts.child ?? rootAuthority(() => this.rootSettings());
-    this.subplanner = parts.subplanner;
+    this.authority = parts.position.authority(() => this.rootSettings());
     this.runnerConfig = parts.runnerConfig;
-    this.brief = parts.brief;
     this.delegationOffered = parts.delegationOffered;
     this.childPlans = parts.childPlans;
     this.childSession = parts.childSession;
@@ -906,7 +886,7 @@ export class Session {
       onProgress: (p) => this.events.progress(p),
       opening: (runners) => this.conversationOpening(runners),
       catalog: () => this.catalog.current(),
-      subplanner: () => this.subplanner !== undefined,
+      subplanner: () => this.position.answersToParent,
       assignmentScope: () => this.catalog.scope(),
       autorun: () => this.userRunSettings().autorun,
       surfaceFacts: () => {
@@ -944,16 +924,16 @@ export class Session {
         this.gate.released();
         this.backend.settle();
         queueMicrotask(() => this.turns.pump());
-        this.subplanner?.changed();
+        this.position.changed();
       },
       turnDropped: () => {
         this.gate.released();
-        this.subplanner?.changed();
+        this.position.changed();
       },
       usageLimit: (said, answered) => {
         const limit = this.turns.usageLimit(said, answered);
         const runner = runnerForProvider(this.config.aiProvider);
-        if (this.placement && limit.resendAt && runner) this.orchestrator.plannerLimited(runner, limit.resendAt);
+        if (this.position.turnsTakeTreeSlots && limit.resendAt && runner) this.orchestrator.plannerLimited(runner, limit.resendAt);
         return limit;
       },
       contextPaused: (details) => this.turns.contextPaused(details),
@@ -961,7 +941,7 @@ export class Session {
 
     this.gate = new TurnGate({
       reserve: () => this.orchestrator.reserveTurn(),
-      placed: () => this.placement !== undefined,
+      placed: () => this.position.turnsTakeTreeSlots,
       plannerAnswered: installedPlannerAnswered,
       plannerDetected: installedPlannerDetected,
       detecting: (waiting) => this.broadcast({ type: 'planner_detection', waiting }),
@@ -969,7 +949,7 @@ export class Session {
       queuedTurnRunning: () => this.turns.turnRunning,
       conversationBusy: () => this.conversation.isTurnInFlight,
       parked: () => {
-        if (this.placement) this.backend.current().restart?.();
+        if (this.position.turnsTakeTreeSlots) this.backend.current().restart?.();
         this.funds.parked();
       },
       pump: () => this.turns.pump(),
@@ -1017,14 +997,14 @@ export class Session {
 
     this.supervision = new RunSupervision({
       plan: () => this.plan,
-      subplanner: () => this.subplanner !== undefined,
+      subplanner: () => this.position.answersToParent,
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,
       startWaits: () => this.orchestrator.planStartWaits(),
       plannerCache: () => ({ ttlMs: this.backend.current().promptCacheTtlMs?.(), requestAt: this.conversation.lastRequestAt }),
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       landedWork: () => (this.runMergeView() ? 'pending' : this.runs.mergedRun ? 'merged' : null),
-      mergeTarget: () => (this.subplanner ? 'the delegated task\'s branch' : 'the user\'s branch'),
+      mergeTarget: () => this.position.mergeTarget(),
       landingError: (taskId) => this.runs.current?.tasks[taskId]?.landingError,
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
       reportTail: (taskId) => this.reportTail(taskId),
@@ -1050,7 +1030,7 @@ export class Session {
     this.unlistenApprovals = this.approvals.listen(({ request }) => {
       if (isRunnerApproval(request) && request.taskId) {
         // Denied by the time this hears of it, below the root (ADR-0056 M8).
-        this.supervision.observe({ kind: this.child ? 'approval_denied' : 'waiting_approval', taskId: request.taskId, detail: request.subject });
+        this.supervision.observe({ kind: this.position.mayAskAPerson ? 'waiting_approval' : 'approval_denied', taskId: request.taskId, detail: request.subject });
       }
     });
 
@@ -1442,7 +1422,8 @@ export class Session {
    * report turn for a task that turn started acts as (ADR-0037, R3).
    */
   private turnActor(): ExecutionActor {
-    if (this.child) return { kind: 'subplanner', depth: this.child.depth };
+    const placed = this.position.plannerActor();
+    if (placed) return placed;
     const wakeUp = this.conversation.currentWakeUp;
     if (!wakeUp) return { kind: 'planner-turn' };
     return wakeUp.actor?.() ?? { kind: 'supervisor', level: this.supervision.level };
@@ -1466,7 +1447,7 @@ export class Session {
    * which presses no control.
    */
   private surfaceSettings(): SurfaceSettings | null {
-    if (this.subplanner !== undefined) return null;
+    if (this.position.answersToParent) return null;
     return {
       surface: surfaceOf(this.lease.host?.()),
       automaticMerging: this.automaticMerging(),
@@ -1494,11 +1475,6 @@ export class Session {
     return this.authority.mandate(this.supervision.level);
   }
 
-  /** Why this child's script may not land what it does unsealed, as the rules stand now: an effect withdrawn since it landed goes with them (ADR-0056 M9). */
-  unsealedRefusal(task: Readonly<Task>): string | null {
-    return runsSealed(this.mandate(), task) ? `Level ${this.authority.depth} refused Task "${task.title}": ${SCRIPT_PAST_THE_RULES}.` : null;
-  }
-
   /** Each value where it lives today; the level is the caller's to name (ADR-0056 M1). */
   private rootSettings(): Omit<RootSettings, 'level'> {
     const { autorun, delegationTokens, delegationDepth, delegatedTasksPerPlan, tasksPerChildPlan } = this.userRunSettings();
@@ -1519,7 +1495,7 @@ export class Session {
 
   /** Whether this node's tasks default to their runner's autonomous mode. */
   private autonomous(): boolean {
-    return autonomousAt(this.child, this.config.autonomousMode);
+    return this.position.autonomous(this.config.autonomousMode);
   }
 
   /**
@@ -2541,15 +2517,12 @@ export class Session {
       onUsage: (record) => this.events.progress({ type: 'usage', record }),
       plannerTools: {
         sessionId: this.sessionId,
-        handler: this.offeredTools(),
-        ...(this.child ? { withheld: withheldPlannerTools(this.child.mandate('off')) } : {}),
+        handler: this.position.offeredTools(this.plannerTools),
         ...(this.delegates ? { delegates: true } : {}),
-        ...(this.subplanner ? { subplanner: true } : {}),
-        ...(this.child && !this.child.mandate('off').grants.has('research') ? { noSubagents: true } : {}),
-        ...(this.subplanner ? { runnerConfig: this.runnerConfig() ?? 'minimal' } : {}),
+        ...this.position.plannerTools(this.runnerConfig()),
       },
       ...(this.delegates ? { delegation: this.delegationBrief() } : {}),
-      ...(this.brief ? { subplanner: this.brief } : {}),
+      ...(this.position.brief ? { subplanner: this.position.brief } : {}),
       skills: this.workspaceSkills().listSkills(),
     };
   }
@@ -2565,13 +2538,6 @@ export class Session {
     const outcome = await this.fsAdapter.bash(command, signal, opts);
     this.readLimit.charge(Buffer.byteLength(outcome.output));
     return outcome;
-  }
-
-  /** A planner's tools, and for a subplanner the two its parent's attempt answers (ADR-0055 D5). */
-  private offeredTools(): PlannerToolHandler {
-    const { subplanner } = this;
-    if (!subplanner) return this.plannerTools;
-    return { ...this.plannerTools, taskComplete: (report) => subplanner.taskComplete(report), checkpoint: ({ question }) => Promise.resolve(subplanner.checkpoint(question)) };
   }
 
   /** What the prompt says of this node's limits, as it stands when the planner starts (ADR-0055 D19): what a carve could take then, which a child's limit overstates by what it keeps for its own turns. */
