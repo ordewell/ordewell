@@ -123,7 +123,7 @@ round *r* and round *r* + 1 the body runs once.
   check goes on waiting for that task until they start it.
   They run however the check was started. A check that fails a round in a run
   the scheduler is not driving, started by `run_task` or a force start, is
-  carried on by that run (`TaskOrchestrator.carriedLoops`): each tick starts
+  carried on by that run (`LoopRounds`, which owns a loop's rounds end to end): each tick starts
   what its loop owes, the body and then the next round with the count kept,
   and nothing else. Its other dependents and the rest of the plan do not start.
   The run stays open while the loop goes on, as a scheduled run stays open on
@@ -132,7 +132,7 @@ round *r* and round *r* + 1 the body runs once.
   and when the loop ends it settles as a lone start does.
   What is carried is held in memory, not on the plan: a Stop ends it, one a body
   task stopped included, which is a run to stop though nothing of it starts by
-  itself (`TaskOrchestrator.loopCarried`). So does whatever else ends its run: a
+  itself (`LoopRounds.anyCarried`). So does whatever else ends its run: a
   discard, a clean-up, a Merge all that clears the run up
   ([ADR-0013](../isolation/0013-worktree-isolation.md)) or the session's lease
   lost ([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)); a Merge
@@ -159,8 +159,8 @@ round *r* and round *r* + 1 the body runs once.
   closes the loop as its last round failing does: the body task that has not
   run ends skipped ("not run: the loop ran out of rounds"), and the check
   settles once more, so the supervisor hears one attention event
-  (`TaskOrchestrator.planEdited`, called from `reconcilePlan` and from
-  `PlanEditor.commit`).
+  (`LoopRounds.planEdited`, through `TaskOrchestrator.planEdited`, called from
+  `reconcilePlan` and from `PlanEditor.commit`).
 - **What stops a loop, and what starts its rounds over (L7).** A body task that
   fails, is skipped or is blocked stops the loop: the check is then the
   failure it is stored as, and its dependents are blocked until what stopped
@@ -175,7 +175,8 @@ round *r* and round *r* + 1 the body runs once.
   and the identical-retry guard (ADR-0029) count none of its rounds. A resume
   after a usage limit goes on in the round it was in.
   A start of a check between rounds depends on whether anything will run it
-  (`TaskOrchestrator.loopRunsOn`): a scheduler, the one a usage-limit reset
+  (`LoopRounds.runsOn`; `checkStart` is the one answer to what the start does,
+  which the seam, the supervisor's escalations and a force start all ask): a scheduler, the one a usage-limit reset
   gives back, or its carried loop. While something will, a supervisor's or
   planner's start, and anyone's `run_task`, is refused with the line that the
   loop runs it again itself, and the supervisor does not skip it: it needs no
@@ -220,6 +221,8 @@ before.
 
 ## Testing decisions
 
+- `LoopRounds.test.ts` holds the round, close, carried, forced-start and skip
+  rules to tables over plain task shapes and a fake host.
 - `TaskOrchestrator.loop.test.ts` drives the rounds through
   `FakeRunnerSession` (`reportComplete`, `reportScriptExit`) on a shared-root
   run and, for landing, on `FakeWorktreeIsolation` with `holdIntegration`, as
@@ -336,3 +339,4 @@ as check or body; a user editing a loop's `loop` field by hand from a surface.
 - 2026-11-01 — the task tool is `read` ([ADR-0057](0057-information-moves-by-reference.md) R11).
 - 2026-11-07 — Ordewell tells an AI check on every round that its status is the verdict, not only through the planner's prompt for it (L2).
 - 2026-11-13 — who skipped a task is a stored `skipOrigin`, not read off the skip's text; the blocked rule and a new round agree on which skips stop a loop (L7).
+- 2026-11-13 — a loop's rounds, its close, the carried loops and what a start of its check does are decided in one module, `LoopRounds` (L5–L7).

@@ -6,6 +6,7 @@ import { flattenTasksWithParents, type Task, type TaskWithParent } from '../mode
 import { manualOverrideConfirmation, pastGateConfirmation } from '../taskRow/texts';
 import { holdLabel } from '../taskRow/status';
 import { canContinue } from './continuation';
+import { checkStart, type CheckStart } from './LoopRounds';
 import { waitOf, type StartWait, type StartWaitKind } from './readiness';
 import type { ExecutionCommand } from './ExecutionCommands';
 import type { PendingApproval } from './PendingApprovals';
@@ -321,13 +322,14 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
  * holds any start of it holds a retry and a continue too, so it is named and
  * none of them is offered.
  */
-function stranded(row: TaskWithParent, repeating: Extract<StartWait, { kind: 'repeating' }>, input: EscalationInput, rows: Rows): Wait {
+function stranded(row: TaskWithParent, start: Extract<CheckStart, { kind: 'fix-unlanded' | 'next-round' }>, input: EscalationInput, rows: Rows): Wait {
+  const repeating = start.wait;
   const round = `round ${repeating.round} of ${repeating.maxRounds}`;
   const refOf = (id: string) => rows.get(id)?.ref ?? id;
   const behind = inFront(row, input);
   const waitsOn = behind.map(refOf).join(', ');
   const options = startedOver(row, input);
-  if (repeating.waiting.length === 0) {
+  if (start.kind === 'next-round') {
     if (behind.length > 0) return { kind: 'failed', reason: `Its fix has landed, and its ${round} waits on ${waitsOn}: nothing runs it now. Execute the plan and the loop goes on.`, options };
     return { kind: 'failed', reason: `Its fix has landed, and nothing runs its ${round}.`, options: [{ id: 'run', label: `Start ${round}` }, ...options] };
   }
@@ -348,7 +350,9 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   if (outOfRounds(task)) return { kind: 'out-of-rounds', ...ended(row, `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, input, rows) };
   if (!betweenRounds(task)) return { kind: 'failed', ...ended(row, task.verdict?.reason || 'It failed.', input, rows) };
   const repeating = waitOf(input.waits.get(task.id) ?? [], 'repeating');
-  if (repeating) return input.loopRunsOn(task.id) ? null : stranded(row, repeating, input, rows);
+  const start = checkStart(repeating, !!repeating && input.loopRunsOn(task.id));
+  if (start.kind === 'loop-runs-it') return null;
+  if (start.kind !== 'own') return stranded(row, start, input, rows);
   const body = [...rows.values()].filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
   return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
