@@ -47,7 +47,7 @@ import { ensureStateDirIgnored, STATE_DIR } from '../utils/fsHelpers';
 import { sanitizeSlug } from '../utils/prdStore';
 import { absorbRemoval, handoffOf, integrationBranchFor, landedInRepo, noRemoval, PrepareFailedError, repoRootOf, SELF_REPO } from './isolationRecord';
 import { isTaskWorkspaceOf, refuseUsersCheckout, stateRootOf, worktreesDirOf } from './stateRoot';
-import { defaultExecFile, git, isAncestor, tryGit, withoutHooks, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
+import { defaultExecFile, git, inEnglish, isAncestor, tryGit, withoutHooks, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
 import { IDENTITY_FIX, identityRefusal, lacksIdentity } from './gitIdentity';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
@@ -370,7 +370,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
   constructor(private readonly deps: WorktreeIsolationDeps) {
     this.resolvePath = deps.resolvePath ?? (() => augmentedPath());
-    const exec = deps.execFileImpl ?? defaultExecFile;
+    const exec = inEnglish(deps.execFileImpl ?? defaultExecFile);
     this.gitInvoker = { exec: deps.noHooks ? withoutHooks(exec) : exec, resolvePath: this.resolvePath };
     this.platform = deps.platform ?? process.platform;
     this.mintRunId = deps.mintRunId ?? (() => randomBytes(4).toString('hex'));
