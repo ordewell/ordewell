@@ -4,7 +4,7 @@ import type {
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  checkoutRule, confirmedOverride, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
+  checkoutRule, confirmedOverride, DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
   ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
@@ -21,7 +21,7 @@ import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
 import { askForKey, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
-import { callDaemon, DaemonError, messageOf } from './daemon';
+import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
 import { openLoginTerminal, type OpenLoginTerminal } from './loginTerminal';
 import { revealTask as revealInPlan } from './selection';
@@ -176,8 +176,7 @@ function planOfSaved(state: SurfacePlanState): SurfacePlan {
 
 /** The holder a load was refused for, when the refusal is the lease's (ADR-0049). */
 function heldOf(error: unknown): SessionHeld | null {
-  if (!(error instanceof DaemonError) || error.code !== 'session_held' || !isRecord(error.body) || !isRecord(error.body.sessionHeld)) return null;
-  return error.body.sessionHeld as unknown as SessionHeld;
+  return error instanceof DaemonRefusal && error.code === 'session_held' ? error.sessionHeld ?? null : null;
 }
 
 /** Whether anything has happened in this plan: a run, or a task that left `pending`. */
@@ -574,7 +573,7 @@ export class DaemonHost {
     try {
       return await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
     } catch (error) {
-      if (error instanceof DaemonError && error.code === 'session_not_found') return null;
+      if (error instanceof DaemonRefusal && error.code === 'session_not_found') return null;
       throw error;
     }
   }
@@ -983,7 +982,7 @@ export class DaemonHost {
     }, (error) => {
       this.showError(error);
       // A stop or a left session ended the turn on purpose; anything else refused it, and what it carried is not lost.
-      if (!(error instanceof DaemonError && (error.code === 'planner_turn_stopped' || error.code === 'planner_turn_discarded'))) refused?.();
+      if (!(error instanceof DaemonRefusal && (error.code === 'planner_turn_stopped' || error.code === 'planner_turn_discarded'))) refused?.();
     });
   }
 
@@ -1588,7 +1587,7 @@ export class DaemonHost {
         await callDaemon('plans.isolationMerge', { sessionId }, { ...yes });
         return true;
       } catch (error) {
-        if (!(error instanceof DaemonError) || (error.code !== 'merge_past_check' && error.code !== 'merge_beside_ops')) throw error;
+        if (!(error instanceof DaemonRefusal) || (error.code !== 'merge_past_check' && error.code !== 'merge_beside_ops')) throw error;
         const [flag, question] = questions[error.code];
         if (yes[flag]) throw error;
         if (await this.ask(question(error.message, target)) !== 'merge') return false;

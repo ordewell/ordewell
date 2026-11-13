@@ -1,5 +1,6 @@
 import { hasFlag, positionals } from '../utils';
-import { DaemonError, type ApiClient } from '../apiClient';
+import { type ApiClient } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { DELEGATION_OFFERED, checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, isolationViewOfPlan, mergeOutcome, mergeTarget, repairedLanded, repairedNotice, repoResultLines } from '@ordewell/core';
 import { HANDOFF_ACTIONS } from '../tui/handoff';
 import { adopted } from './conversation';
@@ -72,7 +73,7 @@ export async function handleHandoff(
           try {
             return await api.mergeRun(sessionId, { ...(yes.pastChecks ? { pastChecks: true } : {}), ...(yes.besideOps ? { besideOps: true } : {}) });
           } catch (err) {
-            if (!(err instanceof DaemonError)) throw err;
+            if (!(err instanceof DaemonRefusal)) throw err;
             const asked = err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null;
             // A question already answered yes and asked again is not one a person can settle here.
             if (asked === null || yes[asked]) throw err;

@@ -1,9 +1,10 @@
-import type { ConfirmValue, LandingBranchHeld } from '@ordewell/core';
+import type { ConfirmDifference, LandingBranchHeld } from '@ordewell/core';
+import { DaemonRefusal } from '@ordewell/core/plan-utils';
 import type { FrameApi } from '../../frame/api';
 import { PLANNER_TAB } from '../../frame/layout';
 import { daemonHost } from '../../session/DaemonHost';
 import { confirmWith } from '../../session/ConfirmDialog';
-import { DaemonError, messageOf } from '../../session/daemon';
+import { messageOf } from '../../session/daemon';
 import { readLog, runGitAction, type BranchInfo, type Branches, type GitAction, type StashInfo } from './gitData';
 import { notifyCheckoutChange } from '../checkout/checkoutEvents';
 import { plural, repoDisplay, splitUpstream } from './gitModel';
@@ -99,22 +100,7 @@ export async function openRun(api: FrameApi, owner: { sessionId: string; taskId?
   else api.openTab(PLANNER_TAB);
 }
 
-type Outcome = { done: true } | { stale: { field: string; shown: ConfirmValue; now: ConfirmValue } } | { done: false };
-
-function staleOf(body: unknown): { field: string; shown: ConfirmValue; now: ConfirmValue } | undefined {
-  if (typeof body !== 'object' || body === null) return undefined;
-  const stale: unknown = Reflect.get(body, 'confirmStale');
-  if (typeof stale !== 'object' || stale === null || typeof Reflect.get(stale, 'field') !== 'string') return undefined;
-  return { field: Reflect.get(stale, 'field') as string, shown: (Reflect.get(stale, 'shown') ?? null) as ConfirmValue, now: (Reflect.get(stale, 'now') ?? null) as ConfirmValue };
-}
-
-function heldOf(body: unknown): LandingBranchHeld | undefined {
-  if (typeof body !== 'object' || body === null) return undefined;
-  const held: unknown = Reflect.get(body, 'landingBranchHeld');
-  if (typeof held !== 'object' || held === null) return undefined;
-  const { sessionId, runId, repo, branch } = held as Record<string, unknown>;
-  return typeof sessionId === 'string' && typeof runId === 'string' && typeof repo === 'string' && typeof branch === 'string' ? { sessionId, runId, repo, branch } : undefined;
-}
+type Outcome = { done: true } | { stale: ConfirmDifference } | { done: false };
 
 /**
  * Sends one action. `verb` completes "Can’t …" and "Could not …"; `done` is
@@ -132,10 +118,10 @@ async function perform(ctx: GitContext, action: GitAction, verb: string, done: s
     if (result.warning) say(ctx, 'warning', done, result.warning);
     return { done: true };
   } catch (error) {
-    if (error instanceof DaemonError) {
-      const held = error.code === 'landing_branch_held' ? heldOf(error.body) : undefined;
+    if (error instanceof DaemonRefusal) {
+      const held = error.code === 'landing_branch_held' ? error.landingBranchHeld : undefined;
       if (held) { await refuse(ctx, verb, held); return { done: false }; }
-      const stale = error.code === 'confirm_stale' ? staleOf(error.body) : undefined;
+      const stale = error.code === 'confirm_stale' ? error.confirmStale : undefined;
       if (stale) return { stale };
       // A stash that is gone, a branch Ordewell made, git's own refusal: the lists may have moved, so they are read again.
       void store.refresh(ctx.repo);

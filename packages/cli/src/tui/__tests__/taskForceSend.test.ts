@@ -6,7 +6,7 @@ import { footerHints, helpLayout } from '../layout';
 import { decodeKey } from '../keys';
 import { openTaskView } from '../reducers/taskView';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
-import { DaemonError } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import type { Action } from '../reducer';
 import type { TaskLogState, TaskView, TuiState } from '../state';
 
@@ -193,7 +193,7 @@ describe('the force send effects', () => {
     expect(execute).toHaveBeenCalledWith('s1', { command: 'force_send_queued', task: 't1', id: 'm1' });
     expect(actions).toEqual([]);
 
-    const refusal = new DaemonError('That message to task #1 "Build" was already delivered.', 400, 'refused');
+    const refusal = new DaemonRefusal('That message to task #1 "Build" was already delivered.', 400, { code: 'refused' });
     const late = deps({ execute: vi.fn().mockRejectedValue(refusal) });
     await runEffect({ type: 'forceSendQueuedTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1' }, late.effectDeps);
     expect(late.actions).toEqual([{ type: 'failed', message: refusal.message, code: 'refused' }]);

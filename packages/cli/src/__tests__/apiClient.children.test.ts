@@ -1,7 +1,8 @@
 import http from 'http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { ApiClient, DaemonError } from '../apiClient';
+import { ApiClient } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 
 const path = (req: http.IncomingMessage) => new URL(req.url ?? '', 'http://x').pathname;
 
@@ -133,7 +134,7 @@ describe('ApiClient: the plans below a root', () => {
 
     const refused = await srv.client.messageChild('root', 'c1', 'hello').catch((err: unknown) => err);
 
-    expect(refused).toBeInstanceOf(DaemonError);
+    expect(refused).toBeInstanceOf(DaemonRefusal);
     expect(refused).toMatchObject({ code: 'child_view_only', status: 409, message: 'This plan has ended.' });
   });
 });

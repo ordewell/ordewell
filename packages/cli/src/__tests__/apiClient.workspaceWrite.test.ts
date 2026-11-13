@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import http from 'http';
-import { ApiClient, DaemonError } from '../apiClient';
+import { ApiClient } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 
 type Seen = { method?: string; url?: string; body?: unknown };
 
@@ -70,7 +71,7 @@ describe('ApiClient user git actions', () => {
     const held = { sessionId: 's1', runId: 'r1', repo: '.', branch: 'main' };
     const { api } = await client(409, { error: 'A run lands on main.', code: 'landing_branch_held', landingBranchHeld: held });
     const err = await api.gitSwitch({}, 'f').catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(DaemonError);
+    expect(err).toBeInstanceOf(DaemonRefusal);
     expect(err).toMatchObject({ status: 409, code: 'landing_branch_held', message: 'A run lands on main.', landingBranchHeld: held });
   });
 

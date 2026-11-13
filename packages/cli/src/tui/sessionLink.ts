@@ -1,5 +1,6 @@
 import { ReconnectBackoff } from '@ordewell/core';
-import { DaemonError, type ApiClient, type SessionSocket, type SocketEnd } from '../apiClient';
+import { type ApiClient, type SessionSocket, type SocketEnd } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { createInbound, type Dispatch, type SessionInbound, type TuiRead } from './inbound';
 
 /*
@@ -297,7 +298,7 @@ class ChildLink {
       });
     } catch (err) {
       if (this.closed || this.socket !== socket) return;
-      if (err instanceof DaemonError && err.code === 'child_not_found') {
+      if (err instanceof DaemonRefusal && err.code === 'child_not_found') {
         this.gone(NO_LONGER_LISTED);
         return;
       }
@@ -330,7 +331,7 @@ class ChildLink {
     }
     if (end.code === 4404) {
       const read = await this.deps.api.getChild(this.rootId, this.childId).then(() => 'there' as const, (err: unknown) => err);
-      if (read instanceof DaemonError && read.code === 'child_not_found') {
+      if (read instanceof DaemonRefusal && read.code === 'child_not_found') {
         this.gone(NO_LONGER_LISTED);
         return;
       }

@@ -5,7 +5,8 @@ import {
   type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { DaemonError, RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
+import { RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
 import type { Action, Effect } from './reducer';
@@ -182,7 +183,7 @@ function isPlannerTurn(effect: Effect): boolean {
  * saved; say so rather than passing the daemon's bare wording through.
  */
 function explain(err: unknown): string {
-  if (err instanceof DaemonError && err.code === 'session_not_found') {
+  if (err instanceof DaemonRefusal && err.code === 'session_not_found') {
     return 'This server is no longer holding that session: it was deleted, or the server restarted. Reload it with /sessions if it is still listed.';
   }
   return err instanceof Error ? err.message : String(err);
@@ -190,7 +191,7 @@ function explain(err: unknown): string {
 
 /** The failure a rejected call becomes, carrying the daemon's reason when it gave one. */
 function failedFrom(err: unknown): Extract<Action, { type: 'failed' }> {
-  const code = err instanceof DaemonError ? err.code : undefined;
+  const code = err instanceof DaemonRefusal ? err.code : undefined;
   return { type: 'failed', message: explain(err), ...(code ? { code } : {}) };
 }
 
@@ -234,7 +235,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
         // a session the next reply belongs to.
-        if (err instanceof DaemonError && err.code === 'planner_turn_stopped') {
+        if (err instanceof DaemonRefusal && err.code === 'planner_turn_stopped') {
           await reloadSettings(deps, sessionId);
           throw err;
         }
@@ -499,7 +500,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       try {
         await api.execute(sessionId, { command: 'remove_queued', task: taskId, id: messageId });
       } catch (err) {
-        if (!(err instanceof DaemonError)) throw err;
+        if (!(err instanceof DaemonRefusal)) throw err;
         deps.dispatch({ type: 'taskMessageKept', sessionId, taskId, messageId, ...(filled !== undefined ? { filled } : {}), message: explain(err) });
       }
       return;
@@ -823,8 +824,8 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         merged = await api.mergeRun(effect.sessionId, given);
       } catch (err) {
         // A question for the user, with the checks or the ops tasks named: not a failure (ADR-0055 D9, ADR-0020).
-        const asked = err instanceof DaemonError ? err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null : null;
-        if (!asked || !(err instanceof DaemonError)) {
+        const asked = err instanceof DaemonRefusal ? err.code === 'merge_past_check' ? 'pastChecks' : err.code === 'merge_beside_ops' ? 'besideOps' : null : null;
+        if (!asked || !(err instanceof DaemonRefusal)) {
           // Nothing was merged, so no result will come to be taken for the answer to this request.
           dispatch({ type: 'mergeAbandoned', sessionId: effect.sessionId });
           throw err;
@@ -1006,7 +1007,7 @@ async function refusable(deps: EffectDeps, childId: string, call: () => Promise<
   } catch (err) {
     // Anything else is the daemon being away, which `runEffect` revives; a
     // refusal is the daemon's word on this plan, and the person's text is theirs.
-    if (!(err instanceof DaemonError)) throw err;
+    if (!(err instanceof DaemonRefusal)) throw err;
     deps.dispatch({ type: 'childFailed', sessionId: childId, message: err.message, ...(err.code ? { code: err.code } : {}), ...(text ? { text } : {}) });
   }
 }
@@ -1137,13 +1138,13 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
     // run settings may be the file's now, not the copy this view held (ADR-0030).
     await reloadSettings(deps, sessionId);
   } catch (err) {
-    if (err instanceof DaemonError && err.code === 'session_not_found' && how.opening) {
+    if (err instanceof DaemonRefusal && err.code === 'session_not_found' && how.opening) {
       sessionLink(deps, sessionId).close();
       deps.dispatch({ type: 'sessionCleared', sessionId });
       deps.dispatch({ type: 'failed', message: 'The reply was lost and the server holds no session for it. Send your goal again to start over.', code: err.code, turn: true, sessionId });
       return;
     }
-    if (how.turnEnded || (err instanceof DaemonError && err.code === 'session_not_found')) {
+    if (how.turnEnded || (err instanceof DaemonRefusal && err.code === 'session_not_found')) {
       deps.dispatch({ ...failedFrom(err), turn: true, sessionId });
       return;
     }

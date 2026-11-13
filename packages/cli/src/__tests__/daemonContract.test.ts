@@ -21,7 +21,8 @@ import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
 import { createApp } from '../../../web/server/app';
 import { createRequestListener } from '../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../web/server/pool/orchestratorPool';
-import { ApiClient, DaemonError, WorkspaceInitNeededError } from '../apiClient';
+import { ApiClient, WorkspaceInitNeededError } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { handleCheckpoint, handleCancel, handleForceStart } from '../commands/task-control';
 import { handleSkip, handleMarkComplete, handleUncomplete } from '../commands/mark-complete';
 import { handleStop } from '../commands/stop';
@@ -116,10 +117,10 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
     vi.restoreAllMocks();
   });
 
-  async function refusal(call: Promise<unknown>): Promise<DaemonError> {
+  async function refusal(call: Promise<unknown>): Promise<DaemonRefusal> {
     const err = await call.then(() => undefined, (e: unknown) => e);
-    expect(err).toBeInstanceOf(DaemonError);
-    return err as DaemonError;
+    expect(err).toBeInstanceOf(DaemonRefusal);
+    return err as DaemonRefusal;
   }
 
   describe('workspaces', () => {

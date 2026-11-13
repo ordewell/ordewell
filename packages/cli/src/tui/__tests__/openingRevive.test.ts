@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GlobalRunSettings, SettingsResponse, SurfacePlan } from '@ordewell/core';
-import { DaemonError, WorkspaceInitNeededError, type SessionSocket } from '../../apiClient';
+import { WorkspaceInitNeededError, type SessionSocket } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import type { TuiState } from '../state';
@@ -350,7 +351,7 @@ describe('an opening retried after a revived daemon', () => {
     const h = tui(
       {
         startConversation: vi.fn().mockRejectedValueOnce(refused()).mockResolvedValue({ tasks: [], conversationHistory: [] }),
-        cancelPlanning: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')),
+        cancelPlanning: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })),
       },
       { reviveDaemon: vi.fn(() => revive.promise) },
     );
@@ -465,7 +466,7 @@ describe('an opening retried after a revived daemon', () => {
       adoptSession: vi.fn(async (id: string) => {
         if (id === 'B') return { plan: B_PLAN, goal: 'Plan B', plannerTurnId: 'turn-b' };
         await readBack.promise;
-        throw new DaemonError('internal error', 500);
+        throw new DaemonRefusal('internal error', 500);
       }),
     });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import http from 'http';
-import { ApiClient, DaemonError } from '../apiClient';
+import { ApiClient } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 
 type Seen = { method?: string; url?: string };
 
@@ -57,7 +58,7 @@ describe('ApiClient workspace reads', () => {
   it('carries a refusal\'s code, so a surface tells gone from refused', async () => {
     const { api } = await client(410, { error: 'The task\'s worktree was pruned.', code: 'gone' });
     const err = await api.getFileTree({ scope: 'task', sessionId: 's1', taskId: 't1' }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(DaemonError);
+    expect(err).toBeInstanceOf(DaemonRefusal);
     expect(err).toMatchObject({ status: 410, code: 'gone', message: 'The task\'s worktree was pruned.' });
   });
 });
