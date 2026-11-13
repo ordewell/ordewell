@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The standalone binary has no server file beside it: it is its own daemon,
 // started as `<binary> __daemon ...` (ADR-0065). Which argv each mode spawns is
@@ -13,7 +13,7 @@ vi.mock('child_process', async (original) => {
     ...actual,
     spawn: vi.fn((file: string, args: string[]) => {
       spawned.calls.push({ file, args });
-      return Object.assign(new EventEmitter(), { pid: 4242, unref: () => {} });
+      return Object.assign(new EventEmitter(), { pid: 4242, unref: () => {}, kill: () => true });
     }),
   };
 });
@@ -27,9 +27,21 @@ vi.mock('@ordewell/core', async (original) => {
 import { daemonCommand, startDaemon } from '../daemon';
 import { handleWeb } from '../commands/web';
 
+// `ordewell web` relays these to its child; left installed, a signal the
+// worker gets after this file would reach a fake child that is long gone.
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+let baseline: Record<string, Array<(...a: unknown[]) => void>>;
+
 beforeEach(() => {
   spawned.calls = [];
   sea.value = false;
+  baseline = Object.fromEntries(SIGNALS.map((s) => [s, process.listeners(s) as Array<(...a: unknown[]) => void>]));
+});
+
+afterEach(() => {
+  for (const signal of SIGNALS) {
+    for (const listener of process.listeners(signal)) if (!baseline[signal].includes(listener as never)) process.off(signal, listener);
+  }
 });
 
 describe('daemonCommand', () => {

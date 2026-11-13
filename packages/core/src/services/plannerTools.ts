@@ -38,6 +38,12 @@ export interface PlannerToolsHost {
   liveCatalog(): Promise<TaskQueryCatalog>;
   /** A submitted plan held to the one check of a plan change (`PlanChangeCheck`), against the live catalog. */
   checkPlan(tasks: unknown): Promise<CheckedChange>;
+  /**
+   * Why wake-up turn `turnId` may take no whole plan (ADR-0029), asked
+   * before the plan is checked so a refused one is not first told to fix
+   * its tasks. Undefined when it may.
+   */
+  planRefused?(turnId: string): string | undefined;
   /** Commit a checked plan now, in the planner turn `turn` the call was made in (ADR-0022 P2). */
   submitPlan(tasks: Task[], turn: string): Promise<PlanEditOutcome>;
   /** No person reads this planner's replies, so an answer asks for one line (ADR-0057 R5). */
@@ -204,6 +210,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async submitPlan({ tasks }) {
       const turn = host.turnId();
       if (turn === undefined) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
+      const refused = host.planRefused?.(turn);
+      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const checked = await host.checkPlan(tasks);
       if (host.turnId() !== turn) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: PLANNER_TURN_ENDED }] }) };
       const outcome = checked.ok ? await host.submitPlan(checked.tasks, turn) : checked;

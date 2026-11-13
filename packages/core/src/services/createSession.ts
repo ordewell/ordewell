@@ -791,6 +791,7 @@ export class Session {
       await this.liveCatalog();
       return this.planChanges.check({ kind: 'plan', tasks }, 'submit');
     },
+    planRefused: (turn) => this.conversation.toolWakeUpRefusal(turn, 'plan'),
     submitPlan: (tasks, turn) => this.submitPlanFromTool(tasks, turn),
     unread: () => this.position.answersToParent,
     editPlan: (ops, turn) => this.editPlanFromTool(ops, turn),

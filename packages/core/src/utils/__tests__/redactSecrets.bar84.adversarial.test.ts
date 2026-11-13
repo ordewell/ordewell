@@ -37,7 +37,7 @@ describe('64k of one motif redacts in under a second', () => {
   }
 
   it('still redacts a JWT that follows an underscore-joined run', () => {
-    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlVXNlciJ9.fakeSignature123456';
+    const jwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJmYWtlVXNlciJ9', 'fakeSignature123456'].join('.');
     for (const redact of [redactSourceText, redactAgentText]) {
       expect(redact(`x ${jwt} y`)).not.toContain('fakeSignature123456');
       expect(redact(`${fill('_eyJ').slice(0, 2000)} ${jwt}`)).not.toContain('fakeSignature123456');

@@ -917,6 +917,17 @@ export class PlannerConversation {
     return kind === 'plan' && this.host.isExecuting() ? WHOLE_PLAN_WHILE_RUNNING : undefined;
   }
 
+  /**
+   * The wake-up level's part of {@link changeRefusal} for a tool call in the
+   * open turn `turnId`, asked before its change is checked: a turn that may
+   * make no such change has nothing in it to fix (ADR-0029). The rest of the
+   * rule waits for the commit, so a plan's own faults, a missing grant among
+   * them, are still what a running or reported node is told first.
+   */
+  toolWakeUpRefusal(turnId: string | undefined, kind: PlannerSubmission['kind']): string | undefined {
+    return this.toolTurn(turnId)?.wakeUp?.refused(kind === 'plan' ? 'plan' : 'edit');
+  }
+
   /** The task an edit committed in the open turn named by this handle; undefined when none did. */
   turnHandle(name: string): string | undefined {
     return this.openTurn?.handles.get(name);
