@@ -8,7 +8,9 @@ import { FakeEventStore, FakeWorktreeIsolation, flushMicrotasks } from '../../te
 import { ChildDirectory } from '../ChildDirectory';
 import type { ChildNode, SubplannerLink } from '../ChildPlanRunner';
 import type { ChildPlacement, SessionRuntimeSettings } from '../createSession';
-import { rootMandate, type Mandate } from '../Mandate';
+import { rootMandate, SCRIPT_PAST_THE_RULES, withheldPlannerTools, type Grant, type Mandate, type NodeAuthority, type RootSettings } from '../Mandate';
+import type { PlannerToolHandler } from '../mcp';
+import type { SubplannerBrief } from '../PlanPrompts';
 import { ChildFunding, RootFunding } from '../NodeFunding';
 import { ChildPosition, nodePosition, RootPosition, type BuiltChild, type NodeHost, type NodePosition, type SeatHost } from '../NodePosition';
 import { ChildReading, RootReading } from '../NodeReading';
@@ -464,5 +466,126 @@ describe('choosing a position', () => {
     const eventLog = () => new FakeEventStore();
     expect(nodePosition({ placement: placementUnder(stateRoot), workspaceRoot: () => workspace, eventLog })).toBeInstanceOf(ChildPosition);
     expect(nodePosition({ workspaceRoot: () => stateRoot, eventLog })).toBeInstanceOf(RootPosition);
+  });
+
+  it('hands a child the authority and the brief it was given, and a root only the authority', () => {
+    const stateRoot = stateDir();
+    const workspace = worktreeOf(stateRoot);
+    const eventLog = () => new FakeEventStore();
+    const given = authorityAt(1, heldBelow());
+    const child = nodePosition({ placement: placementUnder(stateRoot), workspaceRoot: () => workspace, eventLog, child: given, brief });
+    expect([child.heldAuthority(), child.brief]).toEqual([given, brief]);
+    const root = nodePosition({ workspaceRoot: () => stateRoot, eventLog, child: given, brief });
+    expect([root.heldAuthority(), root.brief]).toEqual([given, undefined]);
+  });
+});
+
+/** A child's mandate: what a delegating root may hand down, narrowed by `over`. */
+const heldBelow = (over: Partial<Mandate> & { granted?: readonly Grant[] } = {}): Mandate => {
+  const { granted = ['observe', 'steer', 'control', 'replan', 'approve'], ...rest } = over;
+  return { ...delegating(R), grants: new Set(granted), autonomy: 'guarded', ...rest };
+};
+const authorityAt = (depth: number, mandate: Mandate): NodeAuthority => ({ depth, mandate: () => mandate });
+const brief: SubplannerBrief = { protectedPaths: ['secrets'], readOnly: false, runner: 'claude-code' };
+const rootSettings = (): Omit<RootSettings, 'level'> => ({ autorun: false, autonomous: false, delegationTokens: 0, runners: ['claude-code'], models: {} });
+const push = (): Task => createTask({ id: 'push', order: 1, title: 'Push', type: 'script', commands: [['git', 'push']] });
+const noTools: PlannerToolHandler = {};
+
+describe('what a node may do and whom it answers to', () => {
+  it('holds the root to its settings and its person', () => {
+    const position = new RootPosition({ eventLog: () => new FakeEventStore() });
+    expect(position.authority(rootSettings).depth).toBe(0);
+    expect(position.authority(rootSettings).mandate('watch')).toEqual(rootMandate({ ...rootSettings(), level: 'watch' }));
+    expect(position.heldAuthority()).toBeUndefined();
+    expect([position.autonomous(true), position.autonomous(false)]).toEqual([true, false]);
+    expect(position.heldLimits()).toBeUndefined();
+    expect(position.inheritedProtectedPaths()).toEqual([]);
+    expect(position.unsealedRefusal(push())).toBeNull();
+    expect(position.mayMergeUnasked()).toBe(true);
+    expect(position.mayAskAPerson).toBe(true);
+    expect(position.plannerActor()).toBeUndefined();
+    expect(position.plannerTools('user')).toEqual({});
+    expect(position.offeredTools(noTools)).toBe(noTools);
+    expect(position.answersToParent).toBe(false);
+    expect(position.mergeTarget()).toBe('the user\'s branch');
+    expect(position.turnsTakeTreeSlots).toBe(false);
+    expect(position.brief).toBeUndefined();
+    expect(() => { position.changed(); position.passUsageUp(used(5)); }).not.toThrow();
+  });
+
+  it('holds a child to the mandate it was given, whatever the root settings say', () => {
+    const stateRoot = stateDir();
+    const mandate = heldBelow({ exclusions: { protectedPaths: ['secrets'] } });
+    const given = authorityAt(2, mandate);
+    const position = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot), authority: given, brief, link: link().link });
+    expect(position.authority(rootSettings)).toBe(given);
+    expect(position.heldAuthority()).toBe(given);
+    expect(position.autonomous(true)).toBe(false);
+    expect(position.heldLimits()).toBe(mandate.limits);
+    expect(position.inheritedProtectedPaths()).toEqual(['secrets']);
+    expect(position.mayMergeUnasked()).toBe(false);
+    expect(position.mayAskAPerson).toBe(false);
+    expect(position.plannerActor()).toEqual({ kind: 'subplanner', depth: 2 });
+    expect(position.brief).toBe(brief);
+    expect(position.turnsTakeTreeSlots).toBe(true);
+  });
+
+  it('reads autonomy and merge from a child\'s grants as they stand', () => {
+    const stateRoot = stateDir();
+    let mandate = heldBelow();
+    const position = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot), authority: { depth: 1, mandate: () => mandate } });
+    expect([position.autonomous(false), position.mayMergeUnasked()]).toEqual([false, false]);
+    mandate = heldBelow({ autonomy: 'full', granted: ['observe', 'merge'] });
+    expect([position.autonomous(false), position.mayMergeUnasked()]).toEqual([true, true]);
+  });
+
+  it('refuses a child\'s script that would run unsealed, naming its level', () => {
+    const stateRoot = stateDir();
+    const position = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot), authority: authorityAt(2, heldBelow()) });
+    expect(position.unsealedRefusal(push())).toBe(`Level 2 refused Task "Push": ${SCRIPT_PAST_THE_RULES}.`);
+  });
+
+  it('offers a subplanner what its grants leave it, its token and a minimal setup unless one is asked', () => {
+    const stateRoot = stateDir();
+    const mandate = heldBelow();
+    const position = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot), authority: authorityAt(1, mandate), link: link().link });
+    expect(position.plannerTools(undefined)).toEqual({ withheld: withheldPlannerTools(mandate), subplanner: true, noSubagents: true, runnerConfig: 'minimal' });
+    const researching = heldBelow({ granted: ['observe', 'research'] });
+    const asked = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot), authority: authorityAt(1, researching), link: link().link });
+    expect(asked.plannerTools('user')).toEqual({ withheld: withheldPlannerTools(researching), subplanner: true, runnerConfig: 'user' });
+  });
+
+  it('answers its parent\'s attempt through its link: completion, checkpoints, changes and spend', async () => {
+    const stateRoot = stateDir();
+    const { link: given } = link({ taskComplete: vi.fn(() => Promise.resolve({ text: 'taken' })), checkpoint: vi.fn(() => ({ text: 'yes' })) });
+    const position = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot), link: given });
+    const tools = position.offeredTools(noTools);
+    const context = { signal: new AbortController().signal };
+    await expect(tools.taskComplete?.({ status: 'done', summary: 'did it' }, context)).resolves.toEqual({ text: 'taken' });
+    expect(given.taskComplete).toHaveBeenCalledWith({ status: 'done', summary: 'did it' });
+    await expect(tools.checkpoint?.({ question: 'ship?' }, context)).resolves.toEqual({ text: 'yes' });
+    expect(given.checkpoint).toHaveBeenCalledWith('ship?');
+    position.changed();
+    expect(given.changed).toHaveBeenCalledOnce();
+    position.passUsageUp(used(7));
+    expect(given.usage).toHaveBeenCalledWith(used(7));
+    expect(position.answersToParent).toBe(true);
+    expect(position.mergeTarget()).toBe('the delegated task\'s branch');
+  });
+
+  it('seats a child with neither link nor authority as answering to nobody, though its turns take its tree\'s slots', () => {
+    const stateRoot = stateDir();
+    const position = new ChildPosition({ placement: placementUnder(stateRoot), workspace: worktreeOf(stateRoot) });
+    expect([position.answersToParent, position.mayAskAPerson, position.turnsTakeTreeSlots]).toEqual([false, true, true]);
+    expect(position.plannerTools(undefined)).toEqual({});
+    expect(position.offeredTools(noTools)).toBe(noTools);
+  });
+
+  it('holds a root a test gave an authority to that mandate, with no parent to answer', () => {
+    const mandate = heldBelow();
+    const position = new RootPosition({ eventLog: () => new FakeEventStore(), authority: authorityAt(1, mandate) });
+    expect([position.mayAskAPerson, position.answersToParent, position.turnsTakeTreeSlots]).toEqual([false, false, false]);
+    expect(position.plannerActor()).toEqual({ kind: 'subplanner', depth: 1 });
+    expect(position.plannerTools(undefined)).toEqual({ withheld: withheldPlannerTools(mandate), noSubagents: true });
   });
 });
