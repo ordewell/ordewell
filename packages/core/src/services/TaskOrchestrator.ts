@@ -359,6 +359,8 @@ export class TaskOrchestrator {
   /** The run closed with its merge held, which it would otherwise have made itself. */
   private mergeOwedAtClose = false;
   private mergesInFlight = 0;
+  /** The run settled while a Merge all was in flight; the tick that merge ends with closes it, so nothing hands over a run that is still merging. */
+  private closeOwedToMerge = false;
   /*
    * Retry counts describe a task across attempts, so they deliberately live
    * outside the attempt record: ending an attempt must not forget how often
@@ -867,6 +869,7 @@ export class TaskOrchestrator {
     this.merging = true;
     let result: IsolationMergeResult;
     let lease: ReservedLease | undefined;
+    let refused: { error: unknown } | undefined;
     try {
       // An automatic merge passes here as Merge all does: it reaches a checkout, and no claim would ever see it (ADR-0059 L1).
       const reserved = this.leases.reserve(this.leaseRequest('merge'));
@@ -874,12 +877,17 @@ export class TaskOrchestrator {
       lease = reserved.lease;
       result = await this.runs.merge();
     } catch (err) {
-      if (!trigger) throw err;
+      if (!trigger) refused = { error: err };
       result = { outcome: 'failed', repo: SELF_REPO };
-      this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
+      if (trigger) this.tell('error', `Automatic Merge all could not finish: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       lease?.release('merged');
       this.merging = --this.mergesInFlight > 0;
+    }
+    if (refused) {
+      // No tick follows a merge that threw, and one that settled the run in the meantime still owes it its close.
+      if (this.closeOwedToMerge && !this.merging) await this.tick();
+      throw refused.error;
     }
     if (!trigger && result.outcome === 'merged') this.autoMergeBlocked = false;
     if (trigger) {
@@ -903,6 +911,11 @@ export class TaskOrchestrator {
    * over as before.
    */
   private async closeRun(): Promise<void> {
+    if (this.merging) {
+      this.closeOwedToMerge = true;
+      return;
+    }
+    this.closeOwedToMerge = false;
     this.mergeOwedAtClose = false;
     if (this.mergesAtClose) await this.mergeLanded({ kind: 'run_end' });
     else this.mergeOwedAtClose = this.mergesAutomatically() && !this.autoMergeBlocked && this.mergeHold.length > 0;
