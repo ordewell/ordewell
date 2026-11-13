@@ -77,7 +77,10 @@ holds the token.**
   `runAsNode` fuse off.
 - **A version handshake before anything else (H3).** `GET /api/server` answers
   the daemon's package `version` and a `contract` number, raised whenever the
-  daemon contract or the socket frames change incompatibly. Main compares the
+  daemon contract or the socket frames change incompatibly, and whenever a
+  client comes to need a route, or a value on an existing one, that an older
+  daemon lacks or refuses: the same contract would attach, and the client would
+  meet a 404 or a refusal it cannot tell from a real one. Main compares the
   contract with the one it was built against before it relays a single request.
   The same contract attaches, whatever the patch version, and the status bar
   shows the daemon's version. A different contract, or a daemon too old to
@@ -569,3 +572,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-06 — H11: `scripts/publish-tap.sh` writes the tap for `homebrew` and the manual re-publish `homebrew-publish.yml`, the token by an extraheader, and `homebrew-verify` installs the formula with brew on four runners.
 - 2026-11-09 — H3, H5: a live run is read from the session list's run activity; restart is refused for runs this daemon holds or `live` work, and an owned quit stops only the runs it holds, naming another host's as going on.
 - 2026-11-13 — H6: a launch opens the folder it names or, with `--new-window`, the welcome window, and a second launch hands its arguments to the running app; a plain first launch reopens last session's project windows.
+- 2026-11-13 — H3: the contract is also raised when a client needs a route, or a value on one, that an older daemon lacks or refuses.
