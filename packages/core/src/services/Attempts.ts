@@ -14,7 +14,6 @@ import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
-import { SELF_REPO } from './isolationRecord';
 import { TaskStartConfig } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
@@ -297,7 +296,7 @@ export interface AttemptsDeps {
   store: PlanStore;
   output: TaskOutputSource;
   /** The run an attempt works in. */
-  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openRecord' | 'skillLayout' | 'current' | 'epoch' | 'stillToLetGo'>;
+  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openWorktreesOf' | 'skillLayout' | 'inRepoGroup' | 'taskRepos' | 'workspaceOf' | 'epoch' | 'stillToLetGo'>;
   /** What becomes of a workspace an attempt ended while opening, and how work kept elsewhere comes back to one. */
   leases: Pick<ExecutionBackend, 'letGo' | 'collect'>;
   /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
@@ -794,7 +793,7 @@ export class Attempts {
     if (attempt.worktree) this.host.emit('onIsolationChanged');
     this.host.emit('onTaskChanged');
     if (attempt.kind.kind === 'repair') {
-      const group = this.deps.runs.current?.repos.some((r) => r.path !== SELF_REPO);
+      const group = this.deps.runs.inRepoGroup;
       const { n, limit } = attempt.kind.repair;
       this.host.tell('info', `Repairing the conflict of task "${task.title}" in its own ${group ? 'worktrees' : 'worktree'} (repair ${n} of ${limit}).`);
     } else {
@@ -833,7 +832,7 @@ export class Attempts {
       // A fresh attempt by any route starts its child over; a Continue, which is another kind, reopens it.
       if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
       if (!attempt.script && kind.kind === 'repair') {
-        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
+        const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       const intent = attemptWorkspace(kind);
@@ -852,7 +851,7 @@ export class Attempts {
       attempt.worktree = worktree;
       // A read-only task withholds project configuration (ADR-0046), so none reaches it.
       if (!attempt.script && kind.kind !== 'repair' && !landsNothing(kind)) {
-        const paths = await this.startConfig.check(runs.current, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
+        const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
@@ -1067,7 +1066,7 @@ export class Attempts {
     if (landsNothing(kind)) {
       // Each repo worktree's `.git` must stay the repository's, so a sealed run
       // cannot plant one for the runner's own git to load (ADR-0046).
-      const worktrees = writable ? Object.values(runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+      const worktrees = writable ? runs.openWorktreesOf(task.id).map((r) => r.worktree) : [];
       attempt.shell = this.deps.taskShell?.({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) }) ?? null;
       const fetcher = this.deps.taskWebFetcher?.(task.title);
       attempt.web = fetcher ? new TaskWebReader(fetcher) : null;
@@ -1170,7 +1169,7 @@ export class Attempts {
    */
   private applyPatch(task: Task, attempt: TaskAttempt, args: ApplyPatchArgs): Promise<McpToolReply> {
     if (attempt.opened?.placement) return Promise.resolve({ text: 'apply_patch is not available in a container: the patch would merge into a worktree this attempt does not work in.', isError: true });
-    const repos = Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {});
+    const repos = this.deps.runs.openWorktreesOf(task.id);
     return applySavedPatch(args, {
       callerId: task.id,
       plan: this.deps.store.planTasks,
@@ -1188,7 +1187,7 @@ export class Attempts {
    * which sits below the root when the workspace is a folder of the repo.
    */
   private linkedPaths(taskId: string, cwd: string | null): string[] {
-    const repos = Object.values(this.deps.runs.openRecord(taskId)?.repos ?? {});
+    const repos = this.deps.runs.openWorktreesOf(taskId);
     if (repos.length !== 1 || cwd === null) return [];
     const [{ worktree, linked }] = repos;
     const prefix = path.relative(worktree, cwd).split(path.sep).join('/');
@@ -1234,7 +1233,7 @@ export class Attempts {
    * nothing to start it.
    */
   private sealedShell(task: Task, cwd: string, writable: string | undefined): TaskShell {
-    const worktrees = writable ? Object.values(this.deps.runs.openRecord(task.id)?.repos ?? {}).map((r) => r.worktree) : [];
+    const worktrees = writable ? this.deps.runs.openWorktreesOf(task.id).map((r) => r.worktree) : [];
     const shell = this.deps.taskShell?.({ cwd, ...(writable ? { writable } : {}), ...(worktrees.length ? { worktrees } : {}) });
     if (!shell?.hold) throw new Error(`Task "${task.title}" must run sealed, and this host has no sealed shell to run it in: make it a read-only AI task.`);
     return shell;

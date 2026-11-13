@@ -26,7 +26,7 @@ describe('an attempt its own failed spawn ended', () => {
     await orchestrator.forceStartTask('t1').catch((): undefined => undefined);
     await flushMicrotasks(20);
 
-    expect(orchestrator.runs.current?.tasks.t1).toBeUndefined();
+    expect(orchestrator.runs.planIsolation?.run.tasks.t1).toBeUndefined();
     expect(attempts.unspawned.size).toBe(0);
   });
 });

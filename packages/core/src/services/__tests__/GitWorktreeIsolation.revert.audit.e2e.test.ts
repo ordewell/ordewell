@@ -129,7 +129,7 @@ describe('AUDIT revert: the integration branch checked out for review', () => {
     });
 
     expect(await controller.adopt({ run, resolvers: {} })).not.toBe('cleared');
-    expect(controller.current?.tasks[landed.id]).toMatchObject({ status: 'merged' });
+    expect(controller.planIsolation?.run.tasks[landed.id]).toMatchObject({ status: 'merged' });
     expect(run.tasks[landed.id].inHead).toBeUndefined();
     expect(git(root, 'branch', '--list', integration)).toContain(integration);
   });

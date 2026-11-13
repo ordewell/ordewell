@@ -13,6 +13,7 @@ import type {
   IsolationRun,
   IsolationTaskRecord,
   IsolationTaskRef,
+  IsolationTaskStatus,
   IsolationView,
   IWorktreeIsolation,
   LandedWork,
@@ -32,8 +33,10 @@ import { discardChildRun } from './childRuns';
 import { describeMergeResult, repairedLanded } from './mergeResultNotice';
 import type { ChildSessionPlace } from '../utils/sessionStore';
 import { quotedList } from '../utils/quotedList';
-import { handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
-import { hasReverted, keepLandedOn } from './LandingLedger';
+import { changedReposOf, handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
+import { hasReverted, keepLandedOn, revertReach } from './LandingLedger';
+import type { LandingSubject } from './landingMessage';
+import { revertScope, type RevertScope, type RevertScopeInput } from './taskRevert';
 import { handoffBranchName } from './mergeWording';
 import type { IsolatedExecution } from './plannerModes';
 import { PlanEditError } from './PlanEditError';
@@ -93,6 +96,43 @@ export interface AttemptWorkspace {
   workspace?: string;
   /** Set for a `restore` in a worktree; absent in the checkout, where the previous attempt's edits remain. */
   previousWork?: PreviousWork;
+}
+
+/**
+ * What a task's landing left to resolve, as its repair, its resolver and the
+ * words about it ask (ADR-0013, ADR-0015). Read whatever the record's status:
+ * a repair reads it once `reopen` has recorded the tips it must bring in.
+ */
+export interface TaskConflict {
+  /** The task's branch: what a repair or a resolver merges. */
+  branch: string;
+  /** What the merge commit of a repair or a resolver is written from. */
+  subject: LandingSubject;
+  /** The repos the task's work changed. */
+  changedRepos: string[];
+  /** The repos whose integration tips a repair brings in. */
+  repairRepos: string[];
+  conflictRepo?: string;
+  conflictFiles?: string[];
+}
+
+/** One repo of a task's isolated work: where its worktree is and the branches it is between. */
+export interface TaskRepo {
+  path: string;
+  root: string;
+  baseRef: string;
+  worktree: string;
+  branch: string;
+  integrationBranch: string;
+  /** What Ordewell linked into the worktree from the checkout, relative to the task's working directory. */
+  linked: readonly string[];
+}
+
+/** A task the run holds a record for, and the worktrees that record names. */
+export interface RecordedTask {
+  taskId: string;
+  status: IsolationTaskStatus;
+  worktrees: string[];
 }
 
 /**
@@ -285,9 +325,6 @@ export class IsolationRunController {
     this.landedOn = deps.landedOn;
   }
 
-  /** The plan's run record, open or not; null when the plan has not isolated. */
-  get current(): IsolationRun | null { return this.run; }
-
   /** What a child works through: this run's own, so a tree takes one admin lock (ADR-0055 D11). */
   get childIsolation(): IWorktreeIsolation { return this.isolation; }
 
@@ -336,8 +373,115 @@ export class IsolationRunController {
     return this.run;
   }
 
-  /** A task's record in the open run, only while that run isolates. */
-  openRecord(taskId: string): IsolationTaskRecord | undefined {
+  // The queries below are what the rest of the plan asks of the run record,
+  // so its shape stays this module's, isolationRecord's and LandingLedger's.
+  // Each reads the plan's run, open or not, unless its name says `open`.
+
+  /** Where a task's record stands; undefined when the run holds none for it. */
+  taskState(taskId: string): IsolationTaskStatus | undefined {
+    return this.run?.tasks[taskId]?.status;
+  }
+
+  /** {@link taskState} in the open run, only while that run isolates. */
+  openTaskState(taskId: string): IsolationTaskStatus | undefined {
+    return this.openRecord(taskId)?.status;
+  }
+
+  /** The task ran read-only in its worktree, so nothing it did lands (ADR-0046). */
+  isReadOnly(taskId: string): boolean {
+    return this.run?.tasks[taskId]?.readOnly === true;
+  }
+
+  /** What the task's landing left to resolve; null when the run holds no record for it. */
+  conflictOf(taskId: string): TaskConflict | null {
+    const record = this.run?.tasks[taskId];
+    if (!record) return null;
+    return {
+      branch: record.branch,
+      subject: { title: record.title, ...(record.commit ? { commit: record.commit } : {}) },
+      changedRepos: changedReposOf(record),
+      repairRepos: Object.keys(record.repairBase ?? {}),
+      ...(record.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
+      ...(record.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
+    };
+  }
+
+  /** Why git could not land the task's work, as it said. */
+  landingErrorOf(taskId: string): string | undefined {
+    return this.run?.tasks[taskId]?.landingError;
+  }
+
+  /** The conflict repairs the task has had. */
+  repairsOf(taskId: string): number {
+    return this.run?.tasks[taskId]?.repairs ?? 0;
+  }
+
+  /** The files the task's last repair resolved. */
+  repairedFilesOf(taskId: string): string[] {
+    return this.run?.tasks[taskId]?.repairedFiles ?? [];
+  }
+
+  /** The directory the task's runner starts in, below its worktrees; undefined before one was prepared. */
+  workspaceOf(taskId: string): string | undefined {
+    return this.run?.tasks[taskId]?.workspace;
+  }
+
+  /** The task's worktree in each repo of the run, in the run's repo order. */
+  taskRepos(taskId: string): TaskRepo[] {
+    const record = this.run?.tasks[taskId];
+    if (!this.run || !record) return [];
+    return this.run.repos.flatMap((repo) => {
+      const entry = record.repos[repo.path];
+      return entry ? [{ path: repo.path, root: repo.root, baseRef: repo.baseRef, worktree: entry.worktree, branch: record.branch, integrationBranch: repo.integrationBranch, linked: entry.linked }] : [];
+    });
+  }
+
+  /** The task's branch in each repo its record names. */
+  branchesOf(taskId: string): Record<string, string> {
+    const record = this.run?.tasks[taskId];
+    return record ? Object.fromEntries(Object.keys(record.repos).map((repo) => [repo, record.branch])) : {};
+  }
+
+  /** The task's worktrees in the open run, only while that run isolates, with what was linked into each. */
+  openWorktreesOf(taskId: string): { worktree: string; linked: readonly string[] }[] {
+    return Object.values(this.openRecord(taskId)?.repos ?? {}).map(({ worktree, linked }) => ({ worktree, linked }));
+  }
+
+  /** Every task the run holds a record for. */
+  recordedTasks(): RecordedTask[] {
+    return Object.values(this.run?.tasks ?? {}).map((record) => ({
+      taskId: record.taskId,
+      status: record.status,
+      worktrees: Object.values(record.repos).map((repo) => repo.worktree),
+    }));
+  }
+
+  /** The run's repositories, each by its path in the workspace and its root. */
+  get repoRoots(): { path: string; root: string }[] {
+    return (this.run?.repos ?? []).map(({ path, root }) => ({ path, root }));
+  }
+
+  /** The run isolates a repo group: some repo other than the workspace's own (ADR-0014). */
+  get inRepoGroup(): boolean {
+    return this.run?.repos.some((r) => r.path !== SELF_REPO) ?? false;
+  }
+
+  /** The integration branches a handoff names, every repo's; null when the plan has no run. */
+  get handoffBranch(): string | null {
+    return this.run ? handoffBranchName(this.run) : null;
+  }
+
+  /** What reverting the task would take, as far as the run's ledger says (ADR-0054). */
+  revertScope(taskId: string, plan: Omit<RevertScopeInput, 'run'>): RevertScope {
+    return revertScope(taskId, { ...plan, run: this.run });
+  }
+
+  /** The task and the landed dependents a revert of it reaches. */
+  revertReach(taskId: string, tasks: readonly Readonly<Task>[]): ReadonlySet<string> {
+    return revertReach(taskId, tasks, this.run);
+  }
+
+  private openRecord(taskId: string): IsolationTaskRecord | undefined {
     return this.mode === 'isolated' ? this.run?.tasks[taskId] : undefined;
   }
 

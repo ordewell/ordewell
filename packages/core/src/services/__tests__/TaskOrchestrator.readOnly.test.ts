@@ -51,7 +51,7 @@ function setup(opts: { config?: Partial<IConfig> } = {}) {
   const spawned = (taskId: string) => requests.filter((r) => r.taskId === taskId);
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
-  const record = (taskId: string) => orchestrator.runs.current?.tasks[taskId];
+  const record = (taskId: string) => orchestrator.runs.planIsolation?.run.tasks[taskId];
   return { orchestrator, isolation, spawned, latest, status, record, sites, shells };
 }
 

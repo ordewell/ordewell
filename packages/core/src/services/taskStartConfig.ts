@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync, type BigIntStats } from 'fs';
-import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
+import type { IsolationRunController } from './IsolationRunController';
 import { defaultExecFile, tryGit } from './gitExec';
 import { repositoryRunnerConfigPaths, RUNNER_CONFIG_ROOTS } from './repositoryRunnerConfig';
 import { augmentedPath } from '../utils/shellPath';
@@ -91,6 +91,9 @@ function readDirs(root: string): Array<{ dir: string; prefix: string }> {
   return dirs;
 }
 
+/** What a check reads of the run: where a task's worktrees are and the base each one started from. */
+export type StartConfigRuns = Pick<IsolationRunController, 'taskRepos' | 'workspaceOf'>;
+
 /**
  * Configuration that reaches a task's launch without the user having consented
  * to it (ADR-0028): what differs, in the directories the runner reads, from
@@ -115,8 +118,8 @@ export class TaskStartConfig {
    * in; `cwd` is where the runner starts, and `worktree` whether that is a
    * worktree prepared for it.
    */
-  async check(run: IsolationRun | null, taskId: string, where: { epoch: number; root: string; cwd: string | null; worktree: boolean }): Promise<string[]> {
-    const found = where.worktree ? await this.gitDifferences(run, taskId) : [];
+  async check(runs: StartConfigRuns, taskId: string, where: { epoch: number; root: string; cwd: string | null; worktree: boolean }): Promise<string[]> {
+    const found = where.worktree ? await this.gitDifferences(runs, taskId) : [];
     const id = String(where.epoch);
     const checkout = readDirs(where.root).flatMap(({ dir, prefix }) =>
       this.liveDifferences(`${id}:checkout:${dir}`, dir).map((name) => `${prefix}${name}`));
@@ -125,7 +128,7 @@ export class TaskStartConfig {
       // The runner's own directory, where the checkout's links land; the
       // worktree root only stands in for a repair, which starts before its
       // directory is resolved.
-      const cwd = where.cwd ?? run?.tasks[taskId]?.workspace;
+      const cwd = where.cwd ?? runs.workspaceOf(taskId);
       if (cwd) found.push(...this.worktreeDifferences(id, cwd, where.root));
     }
     return [...new Set(found)].sort();
@@ -170,12 +173,11 @@ export class TaskStartConfig {
     return [...now].filter(([name, hash]) => before.get(name) !== hash).map(([name]) => name);
   }
 
-  private async gitDifferences(run: IsolationRun | null, taskId: string): Promise<string[]> {
-    if (!run) return [];
+  private async gitDifferences(runs: StartConfigRuns, taskId: string): Promise<string[]> {
     const invoker = { exec: defaultExecFile, resolvePath: augmentedPath };
     const found: string[] = [];
-    for (const repo of run.repos) {
-      const cwd = run.tasks[taskId]?.repos[repo.path]?.worktree;
+    for (const repo of runs.taskRepos(taskId)) {
+      const cwd = repo.worktree;
       if (!cwd || !repo.baseRef || !existsSync(cwd)) continue;
       // A workspace below its repository's top starts the runner there, and Claude reads that directory's own config.
       const prefix = repo.path === '.' ? (await tryGit(invoker, repo.root, ['rev-parse', '--show-prefix'])).stdout.trim() : '';

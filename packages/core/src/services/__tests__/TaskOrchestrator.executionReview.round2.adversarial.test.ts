@@ -63,14 +63,14 @@ describe('a late prepare after a later start ended kept', () => {
     await vi.waitFor(() => expect(env.spawn).toHaveBeenCalledTimes(1));
     // The second start runs in the new run; stop it, which keeps its worktree, unawaited.
     env.orchestrator.stop();
-    await vi.waitFor(() => expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept'));
-    const kept = env.orchestrator.runs.current?.tasks.t1;
+    await vi.waitFor(() => expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept'));
+    const kept = env.orchestrator.runs.planIsolation?.run.tasks.t1;
     release();
     await Promise.all([first, second]);
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1).toBe(kept);
-    expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBe(kept);
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
   });
 });
 
@@ -88,7 +88,7 @@ describe('a late prepare after a later start landed', () => {
     await Promise.all([first, second]);
     await flushMicrotasks(20);
 
-    expect(env.orchestrator.runs.current?.tasks.t1).toMatchObject({ status: 'merged' });
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toMatchObject({ status: 'merged' });
   });
 });
 
@@ -114,14 +114,14 @@ describe('a late shared open after the next run isolated', () => {
     const second = env.orchestrator.forceStartTask('t1').then(() => 'ok', (err: unknown) => err);
     await vi.waitFor(() => expect(env.spawn).toHaveBeenCalledTimes(1));
     env.orchestrator.stop();
-    await vi.waitFor(() => expect(runs.current?.tasks.t1?.status).toBe('kept'));
-    const kept = runs.current?.tasks.t1;
+    await vi.waitFor(() => expect(runs.planIsolation?.run.tasks.t1?.status).toBe('kept'));
+    const kept = runs.planIsolation?.run.tasks.t1;
     release();
     await Promise.all([first, second]);
     await flushMicrotasks(20);
 
-    expect(runs.current?.tasks.t1).toBe(kept);
-    expect(runs.current?.tasks.t1?.status).toBe('kept');
+    expect(runs.planIsolation?.run.tasks.t1).toBe(kept);
+    expect(runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
   });
 });
 
@@ -162,19 +162,19 @@ describe('a late lease open after a later start in the same run ended kept', () 
     await held.opened;
     // A cancel ends the attempt and leaves the run open, so the next start prepares in the same run.
     await env.orchestrator.cancelTask('t1');
-    const run = env.orchestrator.runs.current;
+    const run = env.orchestrator.runs.planIsolation?.run;
     const second = env.orchestrator.forceStartTask('t1').then(() => 'ok', (err: unknown) => err);
     await vi.waitFor(() => expect(env.spawn).toHaveBeenCalledTimes(1));
     await env.orchestrator.cancelTask('t1');
-    const kept = env.orchestrator.runs.current?.tasks.t1;
-    expect(env.orchestrator.runs.current).toBe(run);
+    const kept = env.orchestrator.runs.planIsolation?.run.tasks.t1;
+    expect(env.orchestrator.runs.planIsolation?.run).toBe(run);
     expect(kept?.status).toBe('kept');
     held.release();
     await Promise.all([first, second]);
     await flushMicrotasks(20);
 
     expect(env.spawn).toHaveBeenCalledTimes(1);
-    expect(env.orchestrator.runs.current?.tasks.t1).toBe(kept);
-    expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBe(kept);
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
   });
 });
