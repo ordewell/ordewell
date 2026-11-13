@@ -214,7 +214,7 @@ describe('a planner edit that makes a failed task manual', () => {
 
   it('between runs leaves it the user\'s to do, its dependents free to follow', async () => {
     const env = await supervised([failedTask(), task('t2', 2, { dependencies: ['t1'] })], { execute: false, settings: { supervisorLevel: 'off' } });
-    await editTurn(env, [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'] } }]);
+    await editTurn(env, [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: [{ instruction: 'do it by hand' }] } }]);
 
     expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'pending' });
     env.session.destroy();
@@ -226,7 +226,7 @@ describe('a planner edit that makes a failed task manual', () => {
     env.run.of('t1').reportComplete({ status: 'failed', summary: 'No.', reason: 'No.' });
     await until(() => taskOf(env.session, 't1')?.status === 'failed');
     await settled();
-    await editTurn(env, [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'] } }]);
+    await editTurn(env, [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: [{ instruction: 'do it by hand' }] } }]);
 
     expect(taskOf(env.session, 't1')).toMatchObject({ type: 'user', status: 'pending' });
     expect(env.session.escalations().find((e) => e.task?.id === 't1')?.options.map((o) => o.id)).not.toContain('retry');
@@ -594,7 +594,7 @@ describe('a stranded check with something else in front of its next round', () =
 });
 
 describe('autorun with a run under way and nothing live', () => {
-  const manualTask = (id: string) => ({ id, title: `Task ${id}`, description: 'd', type: 'user', userSteps: [{ text: 'do it' }], autonomy: 'HITL', sliceType: 'HITL', dependencies: [] });
+  const manualTask = (id: string) => ({ id, title: `Task ${id}`, description: 'd', type: 'user', userSteps: [{ instruction: 'do it' }], autonomy: 'HITL', sliceType: 'HITL', dependencies: [] });
 
   async function submitted(env: Awaited<ReturnType<typeof supervised>>, tasks: unknown[]): Promise<void> {
     void env.session.continueConversation('change the plan');
@@ -713,7 +713,7 @@ describe('an awaiting task an edit makes manual', () => {
     await settled();
     void env.session.continueConversation('change it');
     await until(() => env.planner.calls.length === 1);
-    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'] } }] } as never, ctx)).isError).toBeFalsy();
+    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: [{ instruction: 'do it by hand' }] } }] } as never, ctx)).isError).toBeFalsy();
     env.planner.calls[0].finish(prose('Changed.'));
     await settled();
     return env;
@@ -775,7 +775,7 @@ describe('a task made manual on a usage limit', () => {
     await settled();
     void env.session.continueConversation('make it manual');
     await until(() => env.planner.calls.length === 1);
-    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'] } }] } as never, ctx)).isError).toBeFalsy();
+    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: [{ instruction: 'do it by hand' }] } }] } as never, ctx)).isError).toBeFalsy();
     env.planner.calls[0].finish(prose('Changed.'));
     await settled();
     await env.session.execute({ command: 'message_task', task: 't1', text: 'carry on' }, USER);

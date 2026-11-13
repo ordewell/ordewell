@@ -100,7 +100,7 @@ describe('a direct edit that makes a paused task manual', () => {
 
     void env.session.continueConversation('make it manual');
     await until(() => env.planner.calls.length === 1);
-    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: ['do it by hand'], assignedRunner: 'codex' } }] } as never, ctx)).isError).toBeFalsy();
+    expect((await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: 't1', changes: { type: 'user', userSteps: [{ instruction: 'do it by hand' }], assignedRunner: 'codex' } }] } as never, ctx)).isError).toBeFalsy();
     env.planner.calls[0].finish(prose('Changed.'));
     await settled();
 

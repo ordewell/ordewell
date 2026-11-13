@@ -22,6 +22,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **Daemon:** the daemon contract is now 2. The desktop app's card edits use a
+  new `card-edit` route that a 0.13.1 daemon does not serve, so the app and the
+  CLI no longer drive a daemon of an earlier contract: they offer to restart
+  it with their own version (an idle one is replaced, as before).
 - **Planner:** a task's first message no longer carries a plan map (the
   sibling titles, statuses and runners, and the "do ONLY the task marked" line),
   and `ORDEWELL_PLAN_MAP_ENABLED` is gone. The planner is told that each brief

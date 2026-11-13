@@ -2743,8 +2743,11 @@ describe('following the session', () => {
   it('lands the connect snapshot of a loaded session even though it arrives before the session is adopted', async () => {
     const view = { tasks: [{ id: 'a', order: 1, title: 'A', type: 'ai', status: 'in_progress', dependencies: [], subtasks: [] }], runMerge: null, handoff: null, mergeResult: null };
     const h: ReturnType<typeof following> = following({
+      // Stamped, as a daemon's connect snapshot is: an unstamped one is a jump
+      // the read out cannot be said to cover, so every read it rode on would
+      // be asked again, and this read emits it again.
       adoptSession: vi.fn().mockImplementation(async () => {
-        h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view });
+        h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view, stream: 'd1', seq: 1 });
         return { plan: { tasks: [{ id: 'a' }] }, goal: 'g' };
       }),
     });
