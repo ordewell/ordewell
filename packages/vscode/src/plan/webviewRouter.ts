@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { latestTaskCommands } from '../shared/taskCommands';
 import type { RunnerId } from '@ordewell/core';
 import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '@ordewell/ui/protocol';
+import { ChatSessionHost } from '@ordewell/ui/host';
 import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
@@ -96,11 +97,10 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     // Typed while the webview saw a turn in flight. If the turn has ended by
     // the time it lands, there is nothing left to wait for.
     case 'holdPrompt':
-      if (deps.isGeneratingPlan()) deps.chatProvider.conversation.holdPrompt(msg.text);
-      else await sendChat(msg.text, true, undefined, deps);
+      if (!chatSession(deps).hold(msg.text)) await sendChat(msg.text, true, undefined, deps);
       return;
     case 'unsendPrompt':
-      deps.chatProvider.conversation.unsendPrompt(msg.toComposer);
+      chatSession(deps).unsend(msg.toComposer);
       return;
     case 'sendMessageNow':
       await sendChatNow(msg.text, deps);
@@ -109,7 +109,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     // else releases what was typed while it ran.
     case 'sendSystemCommand':
       await handleSystemCommand(msg.command, msg.taskId ?? '', deps, msg.requestId);
-      sendNextHeldPrompt(deps);
+      await chatSession(deps).release();
       return;
     case 'editTask':
       await handleTaskEdit(msg.taskId, msg.edit, deps);
@@ -203,66 +203,60 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
   }
 }
 
-async function sendChat(text: string, typed: boolean, runners: RunnerId[] | undefined, deps: WebviewRouterDeps): Promise<void> {
-  const command = text.startsWith('/') && isKnownSlashCommand(text);
-  // A prompt that reaches the host while a turn is still its own — typed in
-  // the gap before the webview saw the turn close, or just after a stop that
-  // has not unwound — waits for it: starting another turn now would race it.
-  if (typed && !command && deps.isGeneratingPlan()) {
-    deps.chatProvider.conversation.holdPrompt(text);
-    return;
-  }
-  if (typed && text.trim()) deps.chatProvider.conversation.note('user', text);
-  if (command) {
-    try {
-      await deps.extension.runSlashCommand(text);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      deps.log(`[ERROR] slash command "${text}" failed: ${message}`);
-      void vscode.window.showErrorMessage(`Command failed: ${message}`);
-    }
-  } else {
-    await handleSendMessage(text, deps, runners ?? deps.getPendingRunners(), deps.setPendingRunners);
-  }
-  sendNextHeldPrompt(deps);
+/**
+ * The chat's prompt actions over the in-process Session (ADR-0017 Q2). The
+ * hold lives in the chat's conversation, so one is built per message.
+ */
+function chatSession(deps: WebviewRouterDeps): ChatSessionHost {
+  return new ChatSessionHost(deps.chatProvider.conversation, {
+    generating: () => deps.isGeneratingPlan(),
+    // The Session's busy state is the turn itself, with no frame to trail it.
+    answering: () => deps.isGeneratingPlan(),
+    converse: async (text, turn) => {
+      if (turn.now) return handleSendMessageNow(text, deps);
+      await handleSendMessage(text, deps, turn.runners ? [...turn.runners] : deps.getPendingRunners(), deps.setPendingRunners);
+      // Only a Send now's outcome is read, for its give-back; this turn reported its own failure.
+      return { ok: true };
+    },
+  });
 }
 
 /**
- * Send now (ADR-0017 Q2, ADR-0023 F5). Everything held goes with it, glued in
- * the order typed with the composer's text — which may be empty — last, as one
- * message. A planner turn in flight is stopped and that message answered in
- * the turn that replaces it; with none in flight it is a plain send, so the
- * same key works before a turn opens. A slash command is the extension's to
- * run, not a prompt: it takes nothing from the hold.
+ * A known slash command is the extension's to run, not a prompt: it is never
+ * held, and takes nothing from the hold. A handler that returns mid-turn sends
+ * nothing held: the turn still generating releases it when it ends.
  */
+async function sendChat(text: string, typed: boolean, runners: RunnerId[] | undefined, deps: WebviewRouterDeps): Promise<void> {
+  const chat = chatSession(deps);
+  if (!(text.startsWith('/') && isKnownSlashCommand(text))) {
+    await chat.send(text, typed, runners);
+    return;
+  }
+  if (typed) deps.chatProvider.conversation.note('user', text);
+  try {
+    await deps.extension.runSlashCommand(text);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log(`[ERROR] slash command "${text}" failed: ${message}`);
+    void vscode.window.showErrorMessage(`Command failed: ${message}`);
+  }
+  await chat.release();
+}
+
+/** Send now (ADR-0017 Q2, ADR-0023 F5); a slash command is a plain send. */
 async function sendChatNow(text: string, deps: WebviewRouterDeps): Promise<void> {
   if (text.startsWith('/') && isKnownSlashCommand(text)) {
     await sendChat(text, true, undefined, deps);
     return;
   }
-  const all = deps.chatProvider.conversation.takeAll(text);
-  if (!all.trim()) return;
-  if (!deps.isGeneratingPlan()) {
-    await sendChat(all, true, undefined, deps);
-    return;
-  }
-  deps.chatProvider.conversation.note('user', all);
-  // A refused forced turn gives back what it took, held prompts and draft alike, as the TUI's restoreForced does.
-  if (await handleSendMessageNow(all, deps)) deps.chatProvider.conversation.giveBack(all);
-  sendNextHeldPrompt(deps);
+  await chatSession(deps).sendNow(text);
 }
 
 /**
- * The turn is over once its handler has returned — its abort cleared, its
- * plan applied — so everything held goes now, as one message. A handler that returns
- * mid-turn (a slash command) sends nothing: the turn still generating drains
- * the queue when it ends. The one place a held prompt is released, whoever ran
- * the turn: the Command Palette's compaction calls it too. Released twice for
- * one turn, as `/compact` is, the second finds the planner busy with the
- * first prompt's turn and sends nothing.
+ * A planner turn the chat did not send has returned (the Command Palette's
+ * compaction): everything held goes now, as one message, unless the planner
+ * is busy with another turn, whose end releases it instead.
  */
 export function sendNextHeldPrompt(deps: WebviewRouterDeps): void {
-  if (deps.isGeneratingPlan()) return;
-  const next = deps.chatProvider.conversation.nextPrompt();
-  if (next !== undefined) sendChat(next, true, undefined, deps).catch((err: unknown) => reportFailure('sendMessage', err, deps));
+  chatSession(deps).release().catch((err: unknown) => reportFailure('sendMessage', err, deps));
 }

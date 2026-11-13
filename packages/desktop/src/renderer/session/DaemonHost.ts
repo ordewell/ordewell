@@ -9,9 +9,9 @@ import {
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
-  DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
+  ChatSessionHost, DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
   overrideConfirmation, removeTaskConfirmation, revertConfirmation, runSettingRiskConfirmations, startPastGateConfirmation,
-  type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue,
+  type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue, type TurnOutcome,
 } from '@ordewell/ui/host';
 import {
   isBuiltinSlashCommand, resolveSlashAlias, slashHelp,
@@ -247,6 +247,7 @@ class SessionStream extends DaemonSessionStream {
  */
 export class DaemonHost {
   private readonly view: SessionView;
+  private readonly chat: ChatSessionHost;
   private readonly ports = new Set<(msg: HostToWebview) => void>();
   private readonly sticky = new Map<HostToWebview['type'], HostToWebview>();
   private readonly taskLogs = new Map<string, TaskLogHost>();
@@ -299,6 +300,11 @@ export class DaemonHost {
     this.options = options;
     this.watchMs = options.watchMs ?? WATCH_MS;
     this.view = new SessionView((msg) => this.emit(msg));
+    this.chat = new ChatSessionHost(this.view.conversation, {
+      generating: () => this.generating,
+      answering: () => this.turnsIn(this.sessionId) > 0,
+      converse: (text, turn) => this.turn(text, turn.now, turn.runners),
+    });
     this.agents = new AgentDetection(workspace, (msg) => this.emit(msg), options.detectionTimeoutMs, () => this.sessionId);
     const sessionId = mintSessionId();
     this.snapshot = { sessionId, goal: '', state: INITIAL_HOST_STATE, held: null, restored: false, readOnly: false, link: null };
@@ -832,9 +838,7 @@ export class DaemonHost {
             return;
           }
         }
-        // A prompt typed while a turn is still the planner's waits for it, as in the extension's sendChat.
-        if (msg.typed && this.generating) { this.view.conversation.holdPrompt(msg.text); return; }
-        await (msg.typed ? this.say(msg.text, false, msg.runners) : this.turn(msg.text, false, msg.runners));
+        await this.chat.send(msg.text, msg.typed ?? false, msg.runners);
         return;
       }
       case 'loginPlanner':
@@ -852,24 +856,16 @@ export class DaemonHost {
       case 'changeSettings':
         await this.changeSettings(msg.change);
         return;
-      // Send now (ADR-0017 Q2): everything held goes with the composer's text,
-      // as one message. Only a turn in flight is stopped for it; with none, it
-      // is a plain send, as in the extension's sendChatNow.
-      case 'sendMessageNow': {
-        const text = this.view.conversation.takeAll(msg.text);
-        if (!text.trim()) return;
-        if (!this.generating) { await this.say(text, false); return; }
-        // A forced turn that is refused gives back what it took, as in the extension's sendChatNow.
-        await this.say(text, true, undefined, () => this.view.conversation.giveBack(text));
+      case 'sendMessageNow':
+        await this.chat.sendNow(msg.text);
         return;
-      }
-      // Typed while the chat saw a turn in flight: one that has ended since leaves nothing to wait for, as in the extension.
+      // Typed while the chat saw a turn in flight: one that has ended since
+      // leaves nothing to wait for, and it goes as typed, a slash command included.
       case 'holdPrompt':
-        if (this.generating) this.view.conversation.holdPrompt(msg.text);
-        else await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
+        if (!this.chat.hold(msg.text)) await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
         return;
       case 'unsendPrompt':
-        this.view.conversation.unsendPrompt(msg.toComposer);
+        this.chat.unsend(msg.toComposer);
         return;
       case 'stopResearch':
         this.view.conversation.stop();
@@ -919,7 +915,7 @@ export class DaemonHost {
         await this.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
         // A Retry compaction is a planner turn the chat did not send, so no
         // turn() of ours ends to release what was typed while it ran.
-        if (!this.generating) await this.sendHeldPrompt();
+        await this.chat.release();
         return;
       }
       case 'sendTaskMessage':
@@ -962,8 +958,13 @@ export class DaemonHost {
     return this.turns.get(sessionId) ?? 0;
   }
 
-  /** One planner turn: the first of a fresh session starts it, every later one is a message. */
-  private async turn(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
+  /**
+   * One planner turn: the first of a fresh session starts it, every later one
+   * is a message. A turn whose session was left meanwhile ended well enough:
+   * nothing is given back into another session's composer.
+   */
+  private async turn(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<TurnOutcome> {
+    let outcome: TurnOutcome = { ok: true };
     await this.plannerTurn(async (sessionId) => {
       let response: PlanResponse;
       if (this.fresh) {
@@ -981,14 +982,15 @@ export class DaemonHost {
       this.showPlan(response.plan);
     }, (error) => {
       this.showError(error);
-      // A stop or a left session ended the turn on purpose; anything else refused it, and what it carried is not lost.
-      if (!(error instanceof DaemonRefusal && (error.code === 'planner_turn_stopped' || error.code === 'planner_turn_discarded'))) refused?.();
+      outcome = { ok: false, ...(error instanceof DaemonRefusal ? { code: error.code } : {}) };
     });
+    return outcome;
   }
 
   /**
-   * A call that is a planner turn: what is typed meanwhile is held, and the
-   * held prompts go once it ends, as one message, whoever asked for the turn.
+   * A call that is a planner turn, counted while it runs so what is typed
+   * meanwhile is held. Its caller releases the hold once it returns: the chat's
+   * own turns through `chat`, after a Send now's give-back.
    */
   private async plannerTurn(run: (sessionId: string) => Promise<void>, failed: (error: unknown) => void): Promise<void> {
     const sessionId = this.sessionId;
@@ -1002,20 +1004,6 @@ export class DaemonHost {
       if (left > 0) this.turns.set(sessionId, left);
       else this.turns.delete(sessionId);
     }
-    if (sessionId !== this.sessionId) return;
-    if (this.turnsIn(sessionId) === 0) await this.sendHeldPrompt();
-  }
-
-  /** Every prompt typed while the planner was busy, glued and sent now that it is not. */
-  private async sendHeldPrompt(): Promise<void> {
-    const next = this.view.conversation.nextPrompt();
-    if (next !== undefined) await this.say(next, false);
-  }
-
-  /** A prompt the user sent, shown as theirs and answered in a turn, as the extension's sendChat does (webviewRouter). */
-  private async say(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
-    if (text.trim()) this.view.conversation.note('user', text);
-    await this.turn(text, now, runners, refused);
   }
 
   /**
@@ -1115,10 +1103,13 @@ export class DaemonHost {
   /** The session's own events draw the compaction where it happens (ADR-0017); the answer only carries the plan. */
   private async compact(): Promise<void> {
     if (this.plannerIsAnswering()) return;
+    const condensed = this.sessionId;
     await this.plannerTurn(async (sessionId) => {
       const response = await callDaemon('plans.compact', { sessionId });
       if (sessionId === this.sessionId) this.showPlan(response.plan);
     }, (error) => this.showError(new Error(`Could not condense the conversation: ${messageOf(error)}: nothing was changed.`)));
+    // What was typed while it condensed waits for it like any turn's.
+    if (condensed === this.sessionId) await this.chat.turnEnded();
   }
 
   /**
@@ -1760,7 +1751,7 @@ export class DaemonHost {
       this.toTaskLogs(event.frame);
       // A turn's ended frame can trail the answer of the route that ran it, so
       // the frame releases what that answer could not (a Retry compaction's).
-      if (wasGenerating && !this.generating) void this.sendHeldPrompt();
+      if (wasGenerating && !this.generating) void this.chat.release();
     });
   }
 

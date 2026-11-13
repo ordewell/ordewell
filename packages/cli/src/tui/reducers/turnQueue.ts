@@ -1,4 +1,4 @@
-import { aheadOfDraft, unsendAll, unsendLatest as unsendNewest } from '@ordewell/core';
+import { aheadOfDraft, sendNowGivesBack, unsendAll, unsendLatest as unsendNewest, type DaemonErrorCode } from '@ordewell/core';
 import { commit } from '../editor';
 import { plannerInFlight, planPaneOpen, type TuiState } from '../state';
 import { cutTurn, say } from '../transcript';
@@ -32,11 +32,14 @@ export function drainQueue(state: TuiState, settled: TuiState): Step {
 /**
  * A force send that never started its turn gives its message back to the
  * composer, above what was typed since: the queued prompts it carried come
- * back with it, as one draft, rather than resending on their own.
+ * back with it, as one draft, rather than resending on their own. Whether it
+ * gives back is the rule every surface reads (`sendNowGivesBack`, ADR-0017 Q2):
+ * a turn discarded with its session left keeps nothing to give back.
  */
-export function restoreForced(state: TuiState): TuiState {
+export function restoreForced(state: TuiState, code: DaemonErrorCode | undefined): TuiState {
   const { forceSendPending: forced } = state;
   if (!forced) return state;
+  if (!sendNowGivesBack(code)) return { ...state, forceSendPending: null };
   const text = aheadOfDraft(forced.text, state.editor.text);
   return { ...state, forceSendPending: null, editor: { ...state.editor, text, cursor: text.length } };
 }

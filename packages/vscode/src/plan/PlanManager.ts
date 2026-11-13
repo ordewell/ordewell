@@ -12,7 +12,7 @@ import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import {
-  overrideConfirmation, removeTaskConfirmation, revertConfirmation, startPastGateConfirmation, type SessionCue,
+  overrideConfirmation, removeTaskConfirmation, revertConfirmation, startPastGateConfirmation, type SessionCue, type TurnOutcome,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
 import { handleIsolationBlocked } from './isolation';
@@ -98,25 +98,33 @@ export function finishPlannerTurn(
   deps.saveCurrentSession();
 }
 
-/** Whether `err` refused the turn, as opposed to a stop the user asked for or a session already left. */
-export function reportPlannerError(err: unknown, deps: PlanManagerDeps): boolean {
-  // Message text is not evidence: a real failure can mention "aborted" (a
-  // runner's "transaction aborted"). Core converts a stop, whatever the backend
-  // named its error, to PlannerTurnStoppedError; only that and a platform
-  // AbortError count.
-  const isAbort = err instanceof PlannerTurnDiscardedError || err instanceof PlannerTurnStoppedError || (err instanceof Error && err.name === 'AbortError');
+/**
+ * How a planner turn that threw ended, in the codes the daemon answers with,
+ * so the chat reads one vocabulary on every surface (ADR-0017 Q2). Message
+ * text is not evidence: a real failure can mention "aborted" (a runner's
+ * "transaction aborted"). Core converts a stop, whatever the backend named its
+ * error, to PlannerTurnStoppedError; only that and a platform AbortError count.
+ */
+function failedTurn(err: unknown): Extract<TurnOutcome, { ok: false }> {
+  if (err instanceof PlannerTurnStoppedError || (err instanceof Error && err.name === 'AbortError')) return { ok: false, code: 'planner_turn_stopped' };
+  if (err instanceof PlannerTurnDiscardedError) return { ok: false, code: 'planner_turn_discarded' };
+  if (err instanceof PlannerNotReadyError) return { ok: false, code: 'planner_not_ready' };
+  return { ok: false };
+}
+
+export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
+  const { code } = failedTurn(err);
   // The stop already ended the turn on screen; a discarded turn belonged to a
   // session the user has already left.
-  if (isAbort) return false;
+  if (code === 'planner_turn_stopped' || code === 'planner_turn_discarded') return;
   // The session refuses a turn on a planner that cannot plan; the chat says
   // so with its own commands, and as the way out rather than a failure.
   if (err instanceof PlannerNotReadyError) {
     deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS));
-    return true;
+    return;
   }
   const message = err instanceof Error ? err.message : String(err);
   deps.chatProvider.showError(`Planner failed: ${message}`);
-  return true;
 }
 
 /**
@@ -161,13 +169,13 @@ export function recheckSignedOutPlanner(
  * session could not see read as idle, and a prompt typed during it started
  * over as a new goal.
  */
-/** Whether the turn was refused: it failed, and not because it was stopped or its session left. */
-async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>): Promise<boolean> {
+async function inPlannerTurn(deps: PlanManagerDeps, run: () => Promise<void>): Promise<TurnOutcome> {
   try {
     await run();
-    return false;
+    return { ok: true };
   } catch (err) {
-    return reportPlannerError(err, deps);
+    reportPlannerError(err, deps);
+    return failedTurn(err);
   }
 }
 
@@ -227,11 +235,10 @@ export async function handleContinueConversation(
  * untouched. `text` already carries the host's held prompts, glued ahead of
  * what was typed, so nothing is left held to follow it.
  */
-/** Resolves whether the planner refused the forced turn, so the caller can give its message back. */
 export async function handleSendMessageNow(
   text: string,
   deps: PlanManagerDeps,
-): Promise<boolean> {
+): Promise<TurnOutcome> {
   const recheck = recheckSignedOutPlanner(deps);
   if (recheck) await recheck;
   return inPlannerTurn(deps, async () => {
