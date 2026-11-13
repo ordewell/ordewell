@@ -75,9 +75,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A disk that refuses a save is now told once** while it keeps refusing,
   instead of the plan stopping on an error or failing silently.
 - **Option+Left/Right moves a word in the desktop app's terminal on macOS
-  again.** The terminal sends them as Meta+B / Meta+F, as Terminal.app does,
-  which the stock zsh and bash move a word on; before, they beeped and typed
-  `;3D` into the command line.
+  again, in emacs and vi mode alike.** The terminal moves the cursor over the
+  word it shows with plain arrow keys, which every mode of zsh and bash moves on
+  without changing mode. Before, they beeped and typed `;3D` into the command
+  line, and in vi mode Option+Right deleted to the end of the line. A program
+  that hides the cursor and draws its own still gets Meta+B / Meta+F.
 
 ## [0.13.1] - 2026-11-07
 
