@@ -415,6 +415,18 @@ describe('panels, banners and the title bar', () => {
     expect(screen.queryByRole('region', { name: 'Terminal' })).not.toBeInTheDocument();
   });
 
+  it('opens the terminal from the activity bar button, outside the Views tablist', () => {
+    mount('darwin');
+    const toggle = screen.getByRole('button', { name: 'Toggle terminal' });
+    expect(toggle).toHaveAttribute('title', 'Toggle terminal (⌃`)');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(within(views()).queryByRole('button', { name: 'Toggle terminal' })).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('region', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle terminal' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Hide terminal' })).toHaveAttribute('title', 'Hide terminal (Ctrl+`)');
+  });
+
   it('resizes a pane from the keyboard and keeps the size', () => {
     const { persist } = mount();
     const sash = screen.getByRole('separator', { name: 'Resize sidebar' });

@@ -2288,7 +2288,7 @@ strokes converging on a teal dot. They are drawn on a 24 px grid, with a
 | ⌘⌥B / Ctrl+Alt+B | Toggle the plan panel (rail when collapsed) |
 | ⌘L / Ctrl+L | Go to the planner tab and focus its composer |
 | ⌘⇧G / Ctrl+Shift+G | Open the plan graph tab |
-| Ctrl+\` | Toggle the terminal panel |
+| Ctrl+\` | Toggle the terminal panel (also the activity bar's terminal button, View > Toggle Terminal, and the title bar's More actions) |
 | ⌘⇧A / Ctrl+Shift+A | Open Needs you |
 | ⌘⇧⏎ / Ctrl+Shift+Enter | The primary action, always through its confirm |
 | ⌘O / Ctrl+O | Open folder (Welcome, and the File menu) |

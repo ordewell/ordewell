@@ -71,6 +71,8 @@ export function menuTemplate({ platform, dev, appName, recents, actions }: MenuO
         ...(dev ? [{ role: 'reload' } as const, { role: 'toggleDevTools' } as const, separator] : []),
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, separator,
         { role: 'togglefullscreen' }, separator,
+        // No accelerator: the menu would take Ctrl+` before the page's own handler sees it, and Windows ignores registerAccelerator: false.
+        { label: 'Toggle Terminal', click: () => command('terminal.toggle') },
         { label: 'Reset Layout', click: () => command('layout.reset') },
       ],
     },

@@ -96,6 +96,7 @@ export function registerFrameCommands(store: FrameStore): Unregister {
     {
       id: 'terminal.toggle',
       title: 'Toggle terminal',
+      more: true,
       keys: 'Ctrl+`',
       run: () => {
         store.dispatch({ type: 'toggleTerminal' });
