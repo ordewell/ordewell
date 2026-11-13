@@ -273,6 +273,10 @@ export class DaemonManager {
         return;
       }
       if (Date.now() >= deadline) {
+        // Giving the child up means stopping it: left running, a later Retry
+        // would find it answering and call this app's own daemon someone
+        // else's, or fork a second one beside it.
+        await this.stopChild();
         this.fail(`The bundled daemon did not answer within ${Math.round(this.readyTimeoutMs / 1000)}s.`);
         return;
       }

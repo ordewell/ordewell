@@ -11,7 +11,7 @@ import type { ActionResult, ShellTarget } from '../shared/bridge';
  */
 
 export interface ShellActions {
-  /** Electron's `shell.openPath`: the OS default; resolves to an error text, '' on success. */
+  /** Electron's `shell.openPath`: the OS default (only used where that opens a file as text); resolves to an error text, '' on success. */
   openPath(path: string): Promise<string>;
   showItemInFolder(path: string): void;
   /** Starts the configured editor detached; rejects when the program cannot start. */
@@ -83,6 +83,7 @@ export class Shell {
   constructor(
     private readonly actions: ShellActions,
     private readonly editorCommand: () => string,
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {}
 
   async openInEditor(workspace: string, target: unknown): Promise<ActionResult> {
@@ -97,6 +98,19 @@ export class Shell {
         return { ok: true };
       } catch (err) {
         return { ok: false, message: `Could not start “${invocation.program}”: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    // With no editor set, the OS default action would run a .bat, .js or
+    // .command file instead of showing it: ask for a text editor by name.
+    const fallback = this.platform === 'darwin' ? { program: 'open', args: ['-t', resolved.path] }
+      : this.platform === 'win32' ? { program: 'notepad.exe', args: [resolved.path] }
+      : undefined;
+    if (fallback) {
+      try {
+        await this.actions.launch(fallback.program, fallback.args);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, message: `Could not start “${fallback.program}”: ${err instanceof Error ? err.message : String(err)}` };
       }
     }
     const failure = await this.actions.openPath(resolved.path);
