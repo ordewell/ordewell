@@ -8,7 +8,7 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { delegatedWorkNote, summarizeOutput } from './promptAugment';
+import { delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -1395,7 +1395,10 @@ export class Attempts {
     }
     if (reason === 'completed' && !attempt.reminded) {
       attempt.reminded = true;
-      this.message(taskId, COMPLETION_REMINDER, 'message', (live, message) => live.sendMessage(message, 'ordewell'));
+      // The generic reminder offers only `done` and `blocked`: a check that finished its review with problems would call `done`, and the round would pass.
+      const task = store.get(taskId);
+      const text = task?.type === 'ai' && task.loop ? `${COMPLETION_REMINDER} ${LOOP_VERDICT_REMINDER}` : COMPLETION_REMINDER;
+      this.message(taskId, text, 'message', (live, message) => live.sendMessage(message, 'ordewell'));
       return;
     }
     // The task waits for the person either way; flagging the agent is what
