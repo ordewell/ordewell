@@ -1766,7 +1766,6 @@ const handlerOver = (read: PlannerToolsHost['read'], tasks: Task[] = [], readHan
   fetchUrl: async () => ({ success: true, output: '', truncated: false }),
   webSearch: async () => undefined,
   execute: async () => ({ ok: true, message: '' }),
-  editsRefused: () => undefined,
   ...logs,
 });
 
@@ -2140,7 +2139,6 @@ describe('a submission whose planner turn ends while its skill check runs', () =
       fetchUrl: async () => ({ success: true, output: '', truncated: false }),
       webSearch: async () => undefined,
       execute: vi.fn(),
-      editsRefused: () => undefined,
     };
     return { host, state, asked, handler: plannerToolHandler(host) };
   }
@@ -2187,7 +2185,6 @@ describe('task references in the read tools', () => {
     fetchUrl: async () => ({ success: true, output: '', truncated: false }),
     webSearch: async () => undefined,
     execute: async () => ({ ok: true, message: '' }),
-    editsRefused: () => undefined,
   });
 
   it('reads #2 as top-level task 2 once task 1 has subtasks, and a subtask by its dotted label', async () => {
@@ -2434,7 +2431,6 @@ describe('run_command, sealed (ADR-0036)', () => {
     fetchUrl: async () => ({ success: true, output: '', truncated: false }),
     webSearch: async () => undefined,
     execute: async () => ({ ok: true, message: '' }),
-    editsRefused: () => undefined,
   });
 
   it('hands a sealed run to the session only when the planner asks for one, and returns what it said', async () => {
