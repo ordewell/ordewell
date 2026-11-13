@@ -29,7 +29,7 @@ const SED_HINT = ` To read lines of a file, "head", "tail" and "sed -n '10,40p' 
 const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so after ";", "||", "&" or a newline every path is judged from the workspace root. Join the commands with "&&", or give paths from the root.';
 
 function refusal(output: string): ToolOutcome {
-  return { success: false, output, truncated: false };
+  return { success: false, output, truncated: false, refused: true };
 }
 
 /** Why a command naming a path the research shell reads by rules confinement cannot follow is refused (ADR-0010). */
@@ -193,6 +193,7 @@ export abstract class BaseFileSystem implements IFileSystem {
         success: false,
         output: `Access denied: "${abs}" is outside the workspace root (${root}) and was not approved. Keep research inside the workspace, or ask the user to approve this location.`,
         truncated: false,
+        refused: true,
       },
     };
   }
@@ -205,8 +206,10 @@ export abstract class BaseFileSystem implements IFileSystem {
   async readFiles(paths: string[]): Promise<ToolOutcome> {
     const results: string[] = [];
     let truncated = false;
+    let allRefused = paths.length > 0;
     for (const p of paths) {
       const r = await this.readFile(p);
+      if (!r.refused) allRefused = false;
       // Denials are reported inline: silently dropping them would let the model
       // believe a file was empty rather than out of bounds.
       if (r.success) {
@@ -216,7 +219,7 @@ export abstract class BaseFileSystem implements IFileSystem {
         results.push(`--- ${p} ---\n[not read] ${r.output}`);
       }
     }
-    if (results.length === 0) return { success: false, output: 'No files read.', truncated: false };
+    if (results.length === 0) return { success: false, output: 'No files read.', truncated: false, ...(allRefused ? { refused: true as const } : {}) };
     return { success: true, output: results.join('\n\n'), truncated };
   }
 

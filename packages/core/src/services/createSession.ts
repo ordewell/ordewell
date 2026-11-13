@@ -2536,7 +2536,9 @@ export class Session {
     const admission = this.readLimit.admit();
     if (!admission.allowed) return { success: false, output: admission.reason, truncated: false };
     const outcome = await this.fsAdapter.bash(command, signal, opts);
-    this.readLimit.charge(Buffer.byteLength(outcome.output));
+    // A refused command read nothing, so it costs no call (ADR-0068 R1).
+    if (outcome.refused) this.readLimit.refund();
+    else this.readLimit.charge(Buffer.byteLength(outcome.output));
     return outcome;
   }
 
