@@ -828,6 +828,12 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // `git branch`/`git tag` are read-only subcommands, but their delete/move
   // flag forms mutate refs. The readonly-subcommand allowlist only inspects
   // the subcommand, so these have to be caught here.
+  // bash's `printf -v NAME` assigns a shell variable, `PATH` and `CDPATH`
+  // included, which steers every later bare command and `cd` on the line to
+  // where no word names. It is the one option printf has, so it is leading.
+  if (seg.binary === 'printf' && seg.args[0]?.startsWith('-v')) {
+    return `"printf -v" assigns a shell variable, which can change what a later command or "cd" resolves to. You are a read-only planner: print the text instead.`;
+  }
   if (seg.binary === 'git') {
     const sub = subcommandOf(seg);
     const after = gitArgsAfterSubcommand(seg);
