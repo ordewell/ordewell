@@ -75,7 +75,7 @@ tree, Merge all, clean up or discard a run, a task message, force sending or
 withdrawing a queued one, interrupting a structured turn, a checkpoint answer,
 cancelling a scheduled resume)
 are saved before any surface hears of them too: a synchronous one holds its
-`status_update` until the save, and an asynchronous one (`withSave`) saves
+`status_update` until the save, and an asynchronous one (`SessionSaves.control`) saves
 before each `status_update` announced while it runs, and once more when it
 ends — a hold across its spawns and git work would stall every task's status
 and let an `execution_complete` it causes overtake the update held back. All
@@ -109,7 +109,10 @@ the plan's owner).
 Every save goes through one save seam, `SessionSaves`: a save an act depends on
 refuses the act when the disk refuses it, while a save made after the act has
 happened never throws and the user is told once per failing stretch that the
-disk is behind. Each save is made before the announcement it is owed for.
+disk is behind. Each save is made before the announcement it is owed for:
+`SessionSaves` alone holds the relay's status updates, and one table of its
+own says what each orchestrator event owes the disk before the relay or the
+Session announces it.
 A Session is one *tree node* (see there): its funds, its reading of the plans
 around it and its seat under a parent are chosen once, at construction.
 Session boundaries are hard: every way a plan stops being the Session's ends

@@ -16,7 +16,6 @@ import { planUsage, type UsageRecord } from '../models/Usage';
 import type { LegacyPlanState, ResearchProgress } from '../models/Task';
 import type { Escalation } from './escalations';
 import type { DelegatedRow } from '../models/Delegation';
-import type { SessionSaves } from './SessionSaves';
 
 type PlannerCompactionMessage = Extract<SessionMessage, { type: 'planner_compaction' }>;
 
@@ -59,26 +58,39 @@ export interface SessionEventRelayDeps {
 }
 
 /**
- * Every orchestrator event the relay announces. `onTaskSettled` is persistence
- * only, so it is the Session's alone. Run settings and automatic merge records
- * also need persistence before announcement, so Session owns those two
- * observers. A wait on a usage limit, and a task gone idle, reach surfaces as
- * the task's status; `onUsageLimitWait` and `onTaskIdle` themselves are for
- * the supervisor to wake on. The end-of-run handoff is marked by supervision
- * and remembered for a surface joining late, so Session announces it too. A
- * model switch is a plan edit, which Session's editor announces as one.
+ * Every orchestrator event the relay announces. `onTaskSettled` and
+ * `onScriptClaimed` are persistence only, so they are the Session's alone.
+ * Run settings and automatic merge records change the plan the Session
+ * announces, so Session owns those two observers. A wait on a usage limit, and
+ * a task gone idle, reach surfaces as the task's status; `onUsageLimitWait`
+ * and `onTaskIdle` themselves are for the supervisor to wake on. The end-of-run
+ * handoff is marked by supervision and remembered for a surface joining late,
+ * so Session announces it too, and the run's end after it
+ * ({@link SessionEventRelay.executionComplete}). A model switch is a plan edit,
+ * which Session's editor announces as one.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff' | 'onRunClosed' | 'onScriptClaimed'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff' | 'onRunClosed' | 'onScriptClaimed' | 'onExecutionComplete'>>;
+
+/**
+ * Status updates held back until what they announce is saved, and let go
+ * after. Only the Session's saves hold them (`SessionSaves`), so whatever
+ * holds them is what saves as it ends.
+ */
+export interface StatusGate {
+  holdStatus<T>(op: () => T): T;
+  releaseStatus(plan: LegacyPlanState | null): void;
+  flushStatus(plan: LegacyPlanState | null): void;
+}
 
 /**
  * Turns orchestrator and planner events into {@link SessionMessage}
  * broadcasts — the one place a surface's view of a Session is produced. It
  * writes nothing itself, and holds nothing of a planner turn: a turn keeps
- * what it writes until it lands (`PlannerConversation`). Where an event also
- * owes a save, its observer asks the Session's saves for it before announcing,
- * so no surface sees state the disk lacks.
+ * what it writes until it lands (`PlannerConversation`). What an event owes
+ * the disk is the Session's saves' to make before they hand it on here
+ * (`SessionSaves.observe`), so no surface sees state the disk lacks.
  */
-export class SessionEventRelay {
+export class SessionEventRelay implements StatusGate {
   private readonly broadcast: SessionBroadcaster;
   private readonly onNotice?: (notice: SessionNotice) => void;
   private readonly store: SessionEventRelayDeps['store'];
@@ -132,13 +144,10 @@ export class SessionEventRelay {
   }
 
   /** `plan` is read per event: a Session with no plan (or mid-reset) announces nothing about tasks. */
-  observer(plan: () => LegacyPlanState | null, saves?: Pick<SessionSaves, 'owed' | 'after'>): RelayObserver {
+  observer(plan: () => LegacyPlanState | null): RelayObserver {
     this.livePlan = plan;
     return {
-      onTaskChanged: () => {
-        saves?.owed('status');
-        this.statusChanged(plan());
-      },
+      onTaskChanged: () => this.statusChanged(plan()),
       onReviewNeeded: () => {
         this.flushStatus(plan());
         this.broadcast({ type: 'review_needed', tasks: this.store.allTasks.map(serializeTask) });
@@ -149,20 +158,9 @@ export class SessionEventRelay {
         if (!this.waitsSent) this.flushStatus(plan());
         this.broadcast({ type: 'checkpoint', taskId: data.taskId, taskTitle: data.taskTitle, summary: data.summary });
       },
-      onTick: () => {
-        saves?.owed('status');
-        this.statusChanged(plan());
-      },
-      onUsageChanged: () => {
-        saves?.owed('usage');
-        this.statusCanWait(plan());
-      },
-      onIsolationChanged: () => {
-        // The run record names branches and worktrees on disk, so it is saved
-        // as it changes rather than at the end: a crash must still find them.
-        saves?.after();
-        this.isolationChanged(plan());
-      },
+      onTick: () => this.statusChanged(plan()),
+      onUsageChanged: () => this.statusCanWait(plan()),
+      onIsolationChanged: () => this.isolationChanged(plan()),
       onIsolationBlocked: ({ reason, repos }) => {
         this.flushStatus(plan());
         const where = repos.length > 0 ? ` in ${repos.join(', ')}` : '';
@@ -175,10 +173,6 @@ export class SessionEventRelay {
       },
       onIsolationNotice: ({ level, message }) => {
         this.onNotice?.({ type: 'notice', level, message });
-      },
-      onExecutionComplete: () => {
-        saves?.after();
-        this.executionComplete(plan());
       },
     };
   }
@@ -331,11 +325,6 @@ export class SessionEventRelay {
       activity: this.orchestrator.activity,
       escalations: this.escalations(),
     };
-  }
-
-  /** A {@link holdStatus} is running: whoever runs it saves as it ends. */
-  get holdingStatus(): boolean {
-    return this.statusHeld;
   }
 
   /**
