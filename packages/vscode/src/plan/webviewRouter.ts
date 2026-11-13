@@ -7,7 +7,7 @@ import { isKnownSlashCommand } from '../commands/SlashParser';
 import { handleIsolationAction } from './isolation';
 import {
   handleAddTask, handleCheckpointAnswer, handleEscalationAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
-  handleSendMessage, handleSendMessageNow, handleStopPlanning, handleSystemCommand, handleTaskControl, handleTaskEdit, type PlanManagerDeps,
+  handleSendMessage, handleSendMessageNow, handleStopPlanning, handleTaskControl, handleTaskEdit, taskControlPort, type PlanManagerDeps,
 } from './PlanManager';
 
 /** What the extension itself answers: the catalog, the planner choice and the task skills — none of it a plan action. */
@@ -107,10 +107,12 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     // A Retry compaction is a planner turn the chat did not send, so nothing
     // else releases what was typed while it ran.
-    case 'sendSystemCommand':
-      await handleSystemCommand(msg.command, msg.taskId ?? '', deps, msg.requestId);
-      await chatSession(deps).release();
+    case 'sendSystemCommand': {
+      const chat = chatSession(deps);
+      await chat.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
+      await chat.release();
       return;
+    }
     case 'editTask':
       await handleTaskEdit(msg.taskId, msg.edit, deps);
       return;
@@ -204,11 +206,13 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
 }
 
 /**
- * The chat's prompt actions over the in-process Session (ADR-0017 Q2). The
- * hold lives in the chat's conversation, so one is built per message.
+ * The chat's prompt actions and system commands over the in-process Session
+ * (ADR-0017 Q2). The hold lives in the chat's conversation, so one is built per
+ * message.
  */
 function chatSession(deps: WebviewRouterDeps): ChatSessionHost {
   return new ChatSessionHost(deps.chatProvider.conversation, {
+    ...taskControlPort(deps),
     generating: () => deps.isGeneratingPlan(),
     // The Session's busy state is the turn itself, with no frame to trail it.
     answering: () => deps.isGeneratingPlan(),

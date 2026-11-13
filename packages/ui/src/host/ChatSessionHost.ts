@@ -2,6 +2,7 @@ import type { DaemonErrorCode, RunnerId } from '@ordewell/core';
 // The browser-safe entry: the desktop renderer runs this too.
 import { sendNowGivesBack } from '@ordewell/core/plan-utils';
 import type { ConversationViewHost } from './ConversationViewHost';
+import { TaskControls, type TaskControlPort } from './TaskControls';
 
 /** How one planner turn is asked for: a Send now stops the turn in flight and is answered in the one replacing it. */
 export interface ChatTurn {
@@ -15,9 +16,10 @@ export type TurnOutcome = { readonly ok: true } | { readonly ok: false; readonly
 
 /**
  * What a surface's session answers for the chat: the in-process Session in the
- * extension, the daemon's routes in the desktop app (ADR-0063 H7).
+ * extension, the daemon's routes in the desktop app (ADR-0063 H7). The prompt
+ * side is here; the plan's controls are {@link TaskControlPort}.
  */
-export interface SessionPort {
+export interface SessionPort extends TaskControlPort {
   /**
    * Whether a planner turn holds the session as the surface last saw it: a
    * prompt typed now is held, and Send now stops that turn.
@@ -44,13 +46,18 @@ export interface SessionPort {
  * turn is over, and Send now takes everything held with the draft last and
  * stops the turn in flight. It keeps nothing of its own: the hold lives in the
  * conversation it was written against, so a surface may build one per message.
- * A slash command is the surface's to run before it gets here.
+ * A slash command is the surface's to run before it gets here. The plan's
+ * system commands go through it too, so a surface keeps only its transport.
  */
 export class ChatSessionHost {
+  private readonly controls: TaskControls;
+
   constructor(
     private readonly conversation: ConversationViewHost,
     private readonly port: SessionPort,
-  ) {}
+  ) {
+    this.controls = new TaskControls(port);
+  }
 
   /**
    * A prompt sent from the chat. Typed during a turn it is held: starting
@@ -98,6 +105,16 @@ export class ChatSessionHost {
     const outcome = await this.port.converse(text, { now: true });
     if (!outcome.ok && sendNowGivesBack(outcome.code)) this.conversation.giveBack(text);
     await this.turnEnded();
+  }
+
+  /**
+   * A system command from the plan's cards and the run bars (Mark complete,
+   * Revert, Force start, Execute, Stop, Retry compaction…). It never releases
+   * what was held: a Retry compaction is the one that is a planner turn, and
+   * the surface calls {@link release} once its transport is done with the command.
+   */
+  systemCommand(command: string, taskId: string, requestId?: number): Promise<void> {
+    return this.controls.systemCommand(command, taskId, requestId);
   }
 
   /**

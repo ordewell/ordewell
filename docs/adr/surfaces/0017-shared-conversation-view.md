@@ -201,7 +201,11 @@ the same word.)
   not, since there is nothing left to answer it. Core's `sendNowGivesBack`
   is that one rule, read by the TUI's reducer and by ui's `ChatSessionHost`,
   which runs the hold, Send now and release for both chat views over their
-  own session (the in-process Session, or the daemon). The host,
+  own session (the in-process Session, or the daemon). The same host answers
+  the plan cards' system commands, Mark complete / Mark not done, Revert and
+  Force start included, asking their confirmations through the surface's own
+  dialog and sending each as one command at the seam, so VS Code and the
+  desktop app keep only the transport. The host,
   not the chat, decides what goes and what comes back, so a prompt already sent
   cannot also reappear in the input. A new or reloaded session drops the hold
   with the view.
@@ -308,3 +312,4 @@ the same word.)
 - 2026-11-10 — Q1-Q3: the TUI follows the same rule, in the planner chat and a subplanner's: a turn's end and ctrl-s send everything held as one message (ctrl-s with or without a draft), Esc takes back only the newest, and the held rows and the task chat's queue draw one "Send all now" control with the same wording. Before it the docs kept a carve-out: one prompt per turn, ctrl-s on the newest.
 - 2026-11-13 — the notice a run message earns (a task started, the plan awaiting sign-off or approved, a run finished or stopped) is worded once in core's `runNotice`, which the TUI and `SessionView` both call, and a task already shown at work is not announced a second time. Before it the TUI alone deduped a start and worded the other three, so VS Code and the desktop app said a start on every message and nothing for the rest.
 - 2026-11-13 — Q2: one give-back rule for Send now on every surface (core's `sendNowGivesBack`) and one `ChatSessionHost` in ui for both chat views; the TUI no longer gives back a forced send whose turn was discarded, as the desktop already did.
+- 2026-11-13 — Q2: the plan cards' system commands and Mark complete / Mark not done, Revert and Force start are `ChatSessionHost`'s too, one copy for VS Code and the desktop app; a refusal is said by the surface, and a failed command no longer skips the release on the desktop.
