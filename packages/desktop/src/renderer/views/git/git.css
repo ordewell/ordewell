@@ -151,7 +151,7 @@
  * first line to itself; refs, short sha, author and age share the second, the
  * ref chip giving way first. Lanes past a third of the sidebar are cut off, never
  * the text, and fade out to say the graph goes on; each line ends in an ellipsis,
- * its full text in the row's tooltip.
+ * its full text in the commit card (CommitCard.tsx).
  */
 .git-history { display: flex; flex-direction: column; min-width: 0; }
 .git-history-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--ow-space-2); padding: 0 var(--ow-space-3) var(--ow-space-2); }
@@ -184,6 +184,25 @@
 .git-scope-select { flex: 1 1 auto; min-width: 0; width: auto; text-overflow: ellipsis; }
 .git-scope-row .ow-icon-button { flex: none; }
 .git-list .srow.git-viewing { background: var(--ow-bg-selected); --srow-fill: var(--ow-bg-selected); }
+
+/*
+ * The commit card: one hover for a whole row, drawn over the main area beside
+ * the sidebar. A stripe in the commit's lane hue on its leading edge ties it to
+ * the line it was hovered on; its chips carry the same stripe (below).
+ */
+.git-card { position: fixed; z-index: 25; display: flex; flex-direction: column; gap: var(--ow-space-2); width: max-content; min-width: 260px; max-width: min(380px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; padding: var(--ow-space-2) var(--ow-space-3); border: 1px solid var(--ow-surface-card-border); border-inline-start: 3px solid var(--git-card-lane, var(--ow-surface-card-border)); border-radius: var(--ow-radius-md); background: var(--ow-surface-card); box-shadow: var(--ow-elevation-overlay); color: var(--ow-fg); font: var(--ow-type-small); }
+.git-card p { margin: 0; }
+.git-card-subject { font: var(--ow-type-body-strong); overflow-wrap: anywhere; }
+.git-card-body { margin: 0; max-height: 12lh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--ow-type-body); }
+.git-card-facts { display: flex; flex-direction: column; gap: var(--ow-space-1); }
+.git-card-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0 var(--ow-space-1); min-width: 0; overflow-wrap: anywhere; }
+.git-card-dim { color: var(--ow-fg-secondary); }
+.git-card-sha { font: var(--ow-type-code-small); }
+.git-card-copy.ow-icon-button { width: 20px; height: 20px; }
+.git-card-author { margin-inline-start: var(--ow-space-1); }
+.git-card-refs { display: flex; flex-direction: column; gap: var(--ow-space-1); margin: 0; padding: 0; list-style: none; }
+.git-card-refs li { display: flex; align-items: baseline; gap: var(--ow-space-2); min-width: 0; }
+.git-card-refs .git-chip { flex: none; max-width: 60%; }
 
 /*
  * A ref chip takes its commit's lane hue as a stripe on its leading edge, so it

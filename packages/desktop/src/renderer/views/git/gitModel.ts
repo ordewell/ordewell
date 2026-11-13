@@ -145,6 +145,8 @@ export function refChips(refs: readonly string[], branches: Branches | undefined
 /** What a narrow history row says of a commit's refs: one chip, a count of the rest, every name. */
 export interface RefSummary {
   lead: (RefChip & { tracked?: string }) | undefined;
+  /** Every chip HEAD aside, the lead first, a remote-tracking ref folded into its branch: what the commit card lists. */
+  chips: Array<RefChip & { tracked?: string }>;
   /** The names beyond the lead chip; a remote-tracking ref folded into its branch is not one. */
   more: number;
   /** Every name, HEAD left out, for a tooltip or a screen reader. */
@@ -171,11 +173,13 @@ export function summarizeRefs(chips: readonly RefChip[]): RefSummary {
     }
   }
   const rank = (chip: RefChip): number => (chip.current ? -1 : 0);
-  const kept = shown.filter((chip) => !folded.has(chip)).sort((a, b) => rank(a) - rank(b));
-  const first = kept[0];
-  const tracked = first && first.kind === 'branch' ? trackedBy.get(first.text) : undefined;
+  const kept = shown.filter((chip) => !folded.has(chip)).sort((a, b) => rank(a) - rank(b)).map((chip) => {
+    const tracked = chip.kind === 'branch' ? trackedBy.get(chip.text) : undefined;
+    return tracked ? { ...chip, tracked } : chip;
+  });
   return {
-    lead: first && (tracked ? { ...first, tracked } : first),
+    lead: kept[0],
+    chips: kept,
     more: Math.max(0, kept.length - 1),
     names: shown.map((chip) => chip.text),
   };
