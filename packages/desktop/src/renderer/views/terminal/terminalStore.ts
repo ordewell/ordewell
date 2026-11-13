@@ -47,11 +47,15 @@ interface Entry {
   ptyId: number | undefined;
   /** Closed before it finished starting: whatever arrives is discarded. */
   closed: boolean;
+  /**
+   * The grid this tab's shell was last told. Each tab's own: only the shown
+   * tab is refitted, so a tab shown again after the panel changed size must be
+   * compared with what its shell has, not with what another tab's was told.
+   */
+  pty: { cols: number; rows: number } | undefined;
   /** A login's waiters: the agent's status command is the verdict, not this exit. */
   ended(): void;
 }
-
-const DEFAULT_SIZE = { cols: 80, rows: 24 } as const;
 
 /**
  * The banner a task-worktree terminal shows once its task is running: the
@@ -78,7 +82,6 @@ export class TerminalStore {
   private readonly entries = new Map<string, Entry>();
   private host: HTMLElement | null = null;
   private counter = 0;
-  private size: { cols: number; rows: number } = DEFAULT_SIZE;
 
   constructor(private readonly api: FrameApi) {}
 
@@ -134,7 +137,7 @@ export class TerminalStore {
     const key = `terminal-${++this.counter}`;
     let ended: () => void = () => undefined;
     const done = new Promise<void>((resolve) => { ended = resolve; });
-    const entry: Entry = { term: undefined, ptyId: undefined, closed: false, ended };
+    const entry: Entry = { term: undefined, ptyId: undefined, closed: false, pty: undefined, ended };
     this.entries.set(key, entry);
     this.set({
       tabs: [...this.state.tabs, {
@@ -155,7 +158,10 @@ export class TerminalStore {
       }, isMac(this.api.platform));
       if (entry.closed) { term.dispose(); return { ended: done }; }
       entry.term = term;
-      const result = await window.ordewell.terminal.open({ repo, scope, ...this.size, ...(options.login ? { login: options.login } : {}) }, (event) => this.onEvent(key, entry, event));
+      // Fitted first when it is the one shown, so the shell starts at the grid it is drawn in.
+      if (this.state.active === key) this.showActive();
+      entry.pty = { ...term.size() };
+      const result = await window.ordewell.terminal.open({ repo, scope, ...entry.pty, ...(options.login ? { login: options.login } : {}) }, (event) => this.onEvent(key, entry, event));
       if (entry.closed) {
         if (result.ok) void window.ordewell.terminal.close(result.id);
         return { ended: done };
@@ -246,9 +252,11 @@ export class TerminalStore {
     const entry = this.state.active ? this.entries.get(this.state.active) : undefined;
     if (!entry?.term || !this.host?.clientWidth) return;
     const next = entry.term.fit();
-    if (next.cols === this.size.cols && next.rows === this.size.rows) return;
-    this.size = next;
-    if (entry.ptyId !== undefined) void window.ordewell.terminal.resize(entry.ptyId, next.cols, next.rows);
+    // A shell still starting was opened at entry.pty; once it runs, started() refits and tells it.
+    if (entry.ptyId === undefined) return;
+    if (next.cols === entry.pty?.cols && next.rows === entry.pty.rows) return;
+    entry.pty = { cols: next.cols, rows: next.rows };
+    void window.ordewell.terminal.resize(entry.ptyId, next.cols, next.rows);
   }
 
   focus(): void {
