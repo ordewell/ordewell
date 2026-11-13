@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as vscode from 'vscode';
-import { handleIsolationAction, handleIsolationBlocked } from '../isolation';
-import { isolationBlockedConfirmation } from '@ordewell/ui/host';
+import { handleIsolationAction as handle, handleIsolationBlocked, mergePort, type IsolationActionKind } from '../isolation';
+import { isolationBlockedConfirmation, MergeAll } from '@ordewell/ui/host';
 import type { PlanManagerDeps } from '../PlanManager';
 
 const showWarningMessage = vscode.window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
@@ -36,6 +36,14 @@ function deps() {
     log: vi.fn(),
   } as unknown as PlanManagerDeps;
   return { d, session, chatProvider };
+}
+
+/**
+ * The chat's Merge all as the router builds it: the shared loop over this host's
+ * port, so what the user sees in a modal is decided where the desktop's is.
+ */
+function handleIsolationAction(action: IsolationActionKind, taskId: string | undefined, d: PlanManagerDeps): Promise<void> {
+  return handle(action, taskId, d, { mergeAll: () => new MergeAll(mergePort(d)).run() });
 }
 
 describe('isolation_blocked host modal (ADR-0013)', () => {
@@ -190,6 +198,53 @@ describe('handoff actions (ADR-0013)', () => {
 
       expect(session.execute).toHaveBeenCalledTimes(1);
       expect(chatProvider.showError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('what the seam answers that is not a merge', () => {
+    it('shows a refusal in the seam\'s words, as an isolation action that failed', async () => {
+      showWarningMessage.mockResolvedValue('Merge');
+      const { d, session, chatProvider } = deps();
+      session.execute.mockResolvedValue({ ok: false, outcome: 'refused', message: 'Merge all needs main checked out.' });
+      await handleIsolationAction('merge', undefined, d);
+
+      expect(chatProvider.showError).toHaveBeenCalledWith('Isolation action failed: Merge all needs main checked out.');
+      expect(chatProvider.showPlan).not.toHaveBeenCalled();
+    });
+
+    it('does not ask a question twice: a hold it already has a yes for is the seam\'s refusal', async () => {
+      showWarningMessage.mockResolvedValueOnce('Merge').mockResolvedValue('Merge anyway');
+      const { d, session, chatProvider } = deps();
+      const held = { ok: false, outcome: 'refused', message: 'Still held.', payload: { kind: 'merge_hold', checks: ['#2'] } };
+      session.execute.mockResolvedValue(held);
+      await handleIsolationAction('merge', undefined, d);
+
+      expect(showWarningMessage).toHaveBeenCalledTimes(2);
+      expect(session.execute).toHaveBeenCalledTimes(2);
+      expect(chatProvider.showError).toHaveBeenCalledWith('Isolation action failed: Still held.');
+    });
+
+    it('says so when an ok answer carries no result', async () => {
+      showWarningMessage.mockResolvedValue('Merge');
+      const { d, session, chatProvider } = deps();
+      session.execute.mockResolvedValue({ ok: true, message: 'Done.' });
+      await handleIsolationAction('merge', undefined, d);
+
+      expect(chatProvider.showError).toHaveBeenCalledWith('Isolation action failed: Merge all answered without its result.');
+    });
+
+    it('re-shows and saves the plan after a merge, and leaves it alone after a no', async () => {
+      showWarningMessage.mockResolvedValue('Merge');
+      const merged = deps();
+      await handleIsolationAction('merge', undefined, merged.d);
+      expect(merged.chatProvider.showPlan).toHaveBeenCalledTimes(1);
+      expect(merged.d.persistState).toHaveBeenCalledTimes(1);
+
+      showWarningMessage.mockResolvedValue(undefined);
+      const declined = deps();
+      await handleIsolationAction('merge', undefined, declined.d);
+      expect(declined.chatProvider.showPlan).not.toHaveBeenCalled();
+      expect(declined.d.persistState).not.toHaveBeenCalled();
     });
   });
 

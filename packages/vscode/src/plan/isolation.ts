@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
-import { checkoutRule, mergeTarget } from '@ordewell/core';
 import {
-  discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
-  type ConfirmationRequest, type IsolationBlockedChoice,
+  discardRunConfirmation, type ChatSessionHost, type ConfirmationRequest, type IsolationBlockedChoice, type MergePort,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
 import type { PlanManagerDeps } from './PlanManager';
@@ -29,50 +27,52 @@ export async function handleIsolationBlocked(
 }
 
 /**
+ * The extension's side of Merge all (ADR-0020, ADR-0029): the in-process Session
+ * as the command seam, and real modals to ask in. What to ask, and in which
+ * order, lives in `@ordewell/ui/host`, shared with the desktop.
+ */
+export function mergePort(deps: Pick<PlanManagerDeps, 'session'>): MergePort {
+  return {
+    handoff: () => deps.session.isolationView()?.handoff,
+    isExecuting: () => deps.session.isExecuting,
+    // The user's Merge all, through the command seam as the other controls are.
+    mergeCall: () => async (yes) => {
+      const merged = await deps.session.execute({ command: 'merge_all', ...yes }, { kind: 'user' });
+      switch (merged.payload?.kind) {
+        // A merge git stopped is an outcome the handoff card shows, not an error.
+        case 'merge': return { kind: 'done' };
+        case 'merge_hold': return { kind: 'held', hold: 'pastChecks', message: merged.message };
+        case 'merge_beside_ops': return { kind: 'held', hold: 'besideOps', message: merged.message };
+      }
+      if (!merged.ok) throw new Error(merged.message);
+      throw new Error('Merge all answered without its result.');
+    },
+    ask: confirm,
+  };
+}
+
+/**
  * The handoff and conflict actions the webview cannot perform itself: opening a
  * diff, and the irreversible merge or discard. Merge and discard are confirmed
  * here rather than in the webview for the same reason removal is — a sandboxed
- * webview's `confirm()` is inert, and only the host can name what changes.
+ * webview's `confirm()` is inert, and only the host can name what changes. The
+ * chat is the one Merge all goes through, so what it asks is not this file's.
  */
 export async function handleIsolationAction(
   action: IsolationActionKind,
   taskId: string | undefined,
   deps: PlanManagerDeps,
+  chat: Pick<ChatSessionHost, 'mergeAll'>,
 ): Promise<void> {
   try {
     switch (action) {
       case 'reviewDiff':
         await openDiff(await deps.session.reviewRunDiff());
         return;
-      case 'merge': {
+      case 'merge':
         // Mid-run, Merge all opens the merge gates and the run goes on (ADR-0020).
-        const handoff = deps.session.isolationView()?.handoff;
-        const target = handoff ? mergeTarget(handoff) : 'the branch you have checked out';
-        const rule = handoff ? checkoutRule(handoff) : '';
-        if (!(await confirm(mergeAllConfirmation(target, rule, deps.session.isExecuting)))) return;
-        // The user's Merge all, through the command seam (ADR-0029) as the
-        // other controls are. A merge git stopped is an outcome the handoff
-        // card shows, not an error here; a refusal without one is thrown for
-        // the catch below.
-        // Work whose check has not passed (ADR-0055 D9), and ops tasks running
-        // in the checkout (ADR-0020), are the seam's to name, one question at a
-        // time: each yes goes with the next call, beside the ones before it.
-        const yes: { pastChecks?: true; besideOps?: true } = {};
-        let merged = await deps.session.execute({ command: 'merge_all' }, { kind: 'user' });
-        for (;;) {
-          if (merged.payload?.kind === 'merge_hold' && !yes.pastChecks) {
-            if (!(await confirm(mergePastChecksQuestion(merged.message, target)))) return;
-            yes.pastChecks = true;
-          } else if (merged.payload?.kind === 'merge_beside_ops' && !yes.besideOps) {
-            if (!(await confirm(mergeBesideOpsQuestion(merged.message, target)))) return;
-            yes.besideOps = true;
-          } else break;
-          merged = await deps.session.execute({ command: 'merge_all', ...yes }, { kind: 'user' });
-        }
-        if (merged.payload?.kind === 'merge') break;
-        if (!merged.ok) throw new Error(merged.message);
-        throw new Error('Merge all answered without its result.');
-      }
+        if (!(await chat.mergeAll())) return;
+        break;
       case 'discard': {
         if (!(await confirm(discardRunConfirmation()))) return;
         await deps.session.discardRun();

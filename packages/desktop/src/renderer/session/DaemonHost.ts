@@ -4,13 +4,12 @@ import type {
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  checkoutRule, DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, mergeTarget, ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, VENDORS, walkPlan,
+  DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
-  ChatSessionHost, DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
-  removeTaskConfirmation, runSettingRiskConfirmations,
-  type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue, type TurnOutcome,
+  ChatSessionHost, DaemonSessionStream, SessionView, discardRunConfirmation, removeTaskConfirmation, runSettingRiskConfirmations,
+  type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type MergeCall, type SessionCue, type TurnOutcome,
 } from '@ordewell/ui/host';
 import {
   isBuiltinSlashCommand, resolveSlashAlias, slashHelp,
@@ -308,6 +307,9 @@ export class DaemonHost {
       cancelPlannerResend: async () => { await callDaemon('plans.cancelResend', { sessionId: this.sessionId }); },
       retryPlannerCompaction: async () => { await callDaemon('plans.retryCompact', { sessionId: this.sessionId }); },
       settled: () => this.refreshPlan(),
+      handoff: () => this.view.run.current.handoff ?? this.view.run.current.runMerge,
+      isExecuting: () => this.snapshot.state.isExecuting,
+      mergeCall: () => this.mergeCall(this.sessionId),
     });
     this.agents = new AgentDetection(workspace, (msg) => this.emit(msg), options.detectionTimeoutMs, () => this.sessionId);
     const sessionId = mintSessionId();
@@ -1433,16 +1435,11 @@ export class DaemonHost {
           if (this.reviewer) { this.reviewer.open(); return; }
           await callDaemon('plans.isolationDiff', { sessionId });
           return;
-        case 'merge': {
+        case 'merge':
           // Every Merge all, the plan card's too, goes through the preflight where the Changes view is there to ask it (ADR-0062 G8).
           if (this.reviewer) { await this.reviewer.mergeAll(); return; }
-          const target = this.mergeTarget();
-          const handoff = this.view.run.current.handoff ?? this.view.run.current.runMerge;
-          const rule = handoff ? checkoutRule(handoff) : '';
-          if (await this.ask(mergeAllConfirmation(target, rule, this.snapshot.state.isExecuting)) !== 'merge') return;
-          await this.mergeAsked(target);
+          if (!(await this.chat.mergeAll())) return;
           break;
-        }
         case 'discard':
           if (await this.ask(discardRunConfirmation()) !== 'discard') return;
           await callDaemon('plans.isolationDiscard', { sessionId });
@@ -1464,12 +1461,6 @@ export class DaemonHost {
     }
   }
 
-  /** Where Merge all lands, as its confirmation names it. */
-  mergeTarget(): string {
-    const handoff = this.view.run.current.handoff ?? this.view.run.current.runMerge;
-    return handoff ? mergeTarget(handoff) : 'the branch you have checked out';
-  }
-
   /**
    * Merge all once the person has said yes elsewhere: the Changes view's
    * preflight asks its own question (ADR-0062 G8). False when it did not merge,
@@ -1477,7 +1468,7 @@ export class DaemonHost {
    */
   async mergeConfirmed(): Promise<boolean> {
     try {
-      return await this.mergeAsked(this.mergeTarget());
+      return await this.chat.mergeConfirmed();
     } catch (error) {
       this.showError(new Error(`Isolation action failed: ${messageOf(error)}`));
       return false;
@@ -1486,27 +1477,22 @@ export class DaemonHost {
     }
   }
 
-  private async mergeAsked(target: string): Promise<boolean> {
-    const sessionId = this.sessionId;
-    /*
-     * What the seam holds the merge for is its to name, one question at a time:
-     * work no check has passed (ADR-0055 D9), then an ops task running in the
-     * checkout (ADR-0020). Each yes goes with every later call.
-     */
-    const questions = { merge_past_check: ['pastChecks', mergePastChecksQuestion], merge_beside_ops: ['besideOps', mergeBesideOpsQuestion] } as const;
-    const yes: { pastChecks?: true; besideOps?: true } = {};
-    for (;;) {
+  /**
+   * The daemon's merge for the session on screen when Merge all began: a session
+   * switched to while a question is open is not sent its yes. What it holds the
+   * merge for is its refusal's code; any other refusal is thrown.
+   */
+  private mergeCall(sessionId: string): MergeCall {
+    return async (yes) => {
       try {
-        await callDaemon('plans.isolationMerge', { sessionId }, { ...yes });
-        return true;
+        await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        return { kind: 'done' };
       } catch (error) {
-        if (!(error instanceof DaemonRefusal) || (error.code !== 'merge_past_check' && error.code !== 'merge_beside_ops')) throw error;
-        const [flag, question] = questions[error.code];
-        if (yes[flag]) throw error;
-        if (await this.ask(question(error.message, target)) !== 'merge') return false;
-        yes[flag] = true;
+        if (error instanceof DaemonRefusal && error.code === 'merge_past_check') return { kind: 'held', hold: 'pastChecks', message: error.message };
+        if (error instanceof DaemonRefusal && error.code === 'merge_beside_ops') return { kind: 'held', hold: 'besideOps', message: error.message };
+        throw error;
       }
-    }
+    };
   }
 
   private async execute(command: ExecutionCommand): Promise<void> {

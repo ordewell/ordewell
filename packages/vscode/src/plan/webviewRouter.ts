@@ -4,7 +4,7 @@ import type { RunnerId } from '@ordewell/core';
 import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '@ordewell/ui/protocol';
 import { ChatSessionHost } from '@ordewell/ui/host';
 import { isKnownSlashCommand } from '../commands/SlashParser';
-import { handleIsolationAction } from './isolation';
+import { handleIsolationAction, mergePort } from './isolation';
 import {
   handleAddTask, handleCheckpointAnswer, handleEscalationAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
   handleSendMessage, handleSendMessageNow, handleStopPlanning, handleTaskControl, handleTaskEdit, taskControlPort, type PlanManagerDeps,
@@ -150,7 +150,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       await handleTaskControl({ kind: 'interrupt' }, msg.taskId, deps);
       return;
     case 'isolationAction':
-      await handleIsolationAction(msg.action, msg.taskId, deps);
+      await handleIsolationAction(msg.action, msg.taskId, deps, chatSession(deps));
       return;
     case 'addNote':
       deps.chatProvider.conversation.note('system', msg.text);
@@ -206,13 +206,14 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
 }
 
 /**
- * The chat's prompt actions and system commands over the in-process Session
- * (ADR-0017 Q2). The hold lives in the chat's conversation, so one is built per
- * message.
+ * The chat's prompt actions, system commands and Merge all over the in-process
+ * Session (ADR-0017 Q2). The hold lives in the chat's conversation, so one is
+ * built per message.
  */
 function chatSession(deps: WebviewRouterDeps): ChatSessionHost {
   return new ChatSessionHost(deps.chatProvider.conversation, {
     ...taskControlPort(deps),
+    ...mergePort(deps),
     generating: () => deps.isGeneratingPlan(),
     // The Session's busy state is the turn itself, with no frame to trail it.
     answering: () => deps.isGeneratingPlan(),

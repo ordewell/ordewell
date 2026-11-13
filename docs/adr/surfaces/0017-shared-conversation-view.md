@@ -205,7 +205,12 @@ the same word.)
   the plan cards' system commands, Mark complete / Mark not done, Revert and
   Force start included, asking their confirmations through the surface's own
   dialog and sending each as one command at the seam, so VS Code and the
-  desktop app keep only the transport. The host,
+  desktop app keep only the transport. Merge all is the host's as well: its
+  opening question, then whichever question the seam holds the merge for (past
+  unpassed checks, beside a running ops task), asked once each in the order the
+  seam raises them, and a no at any of them leaves the run untouched. Each
+  surface answers only the call itself, and a hold that comes back after its
+  yes is the seam's refusal, thrown for the surface to say. The host,
   not the chat, decides what goes and what comes back, so a prompt already sent
   cannot also reappear in the input. A new or reloaded session drops the hold
   with the view.
@@ -313,3 +318,4 @@ the same word.)
 - 2026-11-13 — the notice a run message earns (a task started, the plan awaiting sign-off or approved, a run finished or stopped) is worded once in core's `runNotice`, which the TUI and `SessionView` both call, and a task already shown at work is not announced a second time. Before it the TUI alone deduped a start and worded the other three, so VS Code and the desktop app said a start on every message and nothing for the rest.
 - 2026-11-13 — Q2: one give-back rule for Send now on every surface (core's `sendNowGivesBack`) and one `ChatSessionHost` in ui for both chat views; the TUI no longer gives back a forced send whose turn was discarded, as the desktop already did.
 - 2026-11-13 — Q2: the plan cards' system commands and Mark complete / Mark not done, Revert and Force start are `ChatSessionHost`'s too, one copy for VS Code and the desktop app; a refusal is said by the surface, and a failed command no longer skips the release on the desktop.
+- 2026-11-13 — Q2: Merge all, its opening question and the questions it is held for (unpassed checks, beside a running ops task) are `ChatSessionHost`'s too, through ui's `MergeAll`; VS Code and the desktop app answer only the merge call. A hold repeated after its yes now throws the seam's words on both, where the desktop rethrew the daemon's refusal and VS Code fell through to its failed-outcome error.
