@@ -1,5 +1,6 @@
 import { ProcessLifecycle } from './ProcessLifecycle';
 import { LineBuffer, type AgentAdapter, type AgentEvent, type AgentProcessDeps, type AgentStartOptions } from './AgentAdapter';
+import type { UsageRecord } from '../../models/Usage';
 
 /** An idle agent that chatters must not grow the between-turn buffer without bound. */
 const BETWEEN_TURN_EVENT_CAP = 50;
@@ -61,8 +62,10 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
   private betweenTurns: AgentEvent[] = [];
   /** Set once a turn has ended: after that, out-of-turn events are stale, not startup. */
   private hadTurn = false;
-  /** A task's session, which wants what the agent says on its own after a turn closed; a planner registers none and drops it. */
+  /** A task's session, which wants what the agent says on its own after a turn closed; a planner registers none and drops it, usage aside. */
   private outOfTurnListener: ((event: AgentEvent) => void) | null = null;
+  /** The session's ledger, which a closed turn's straggling work still spends against: dropping it with the rest under-counted for good. */
+  private usageListener: ((record: UsageRecord) => void) | null = null;
 
   constructor(deps: AgentProcessDeps) {
     super(deps);
@@ -136,10 +139,12 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
 
   /**
    * Deliver an event that no protocol line carries, the way a line's would be:
-   * to the open turn, or held for the first one.
+   * to the open turn, or held for the first one. Between turns, usage goes to
+   * the session's ledger whoever hears the rest.
    */
   protected announce(event: AgentEvent): void {
     if (this.turnEmit) this.turnEmit(event);
+    else if (this.hadTurn && event.type === 'usage' && this.usageListener) this.usageListener(event.record);
     else if (this.hadTurn && this.outOfTurnListener) this.outOfTurnListener(event);
     else if (!this.hadTurn && !TURN_SCOPED_EVENTS.has(event.type) && this.betweenTurns.length < BETWEEN_TURN_EVENT_CAP) {
       this.betweenTurns.push(event);
@@ -222,12 +227,17 @@ export abstract class StdioAgentAdapter extends ProcessLifecycle implements Agen
     this.outOfTurnListener = listener;
   }
 
+  onUsage(listener: (record: UsageRecord) => void): void {
+    this.usageListener = listener;
+  }
+
   nativeSessionId(): string | null { return this.sessionId; }
 
   override dispose(): void {
     if (this.isDisposed) return;
     this.turnEmit = null;
     this.outOfTurnListener = null;
+    this.usageListener = null;
     super.dispose();
   }
 

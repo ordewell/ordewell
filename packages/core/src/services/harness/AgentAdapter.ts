@@ -334,6 +334,17 @@ export interface AgentAdapter {
   /** What has been counted of the session's running cost, for a runner that reports one; null while unknown. */
   sessionCost?(): RunnerSessionCost | null;
 
+  /**
+   * Registers the listener for the usage the process reports once a turn has
+   * ended and before the next: a turn it opens itself to relay a backgrounded
+   * subagent's report spends, and a runner that reports a running cost has
+   * already counted it, so a ledger that misses it under-counts for good.
+   * Usage inside a turn stays on the turn's stream, and usage before the first
+   * turn is held for it, so nothing reaches both. Absent on an adapter that
+   * reads its process only within a turn.
+   */
+  onUsage?(listener: (record: UsageRecord) => void): void;
+
   /** Kill the process and release its resources. Idempotent. */
   dispose(): void;
 
@@ -413,6 +424,7 @@ export interface TaskModeAgentAdapter extends AgentAdapter {
    * before the next message — a turn it opens itself when background work
    * finishes, most often. Without one that output is dropped, which is right
    * for a planner and wrong for a task, which may report completion there.
+   * Its usage goes to {@link AgentAdapter.onUsage} instead.
    */
   onOutOfTurn?(listener: (event: AgentEvent) => void): void;
   /**

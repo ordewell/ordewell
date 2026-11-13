@@ -19,6 +19,7 @@ import type { TaskRunnerConfig, UsageLimitSignal } from './harness/AgentAdapter'
 import type { PlannerContextDeps } from './plannerContextBudget';
 import type { ConversationCompactionHost } from './budgetedChat';
 import type { PlannerReadLimit } from './plannerReadLimit';
+import type { UsageRecord } from '../models/Usage';
 
 /**
  * The planner tools a session offers its conversation (ADR-0022). A backend
@@ -97,6 +98,13 @@ export interface ConversationRequest {
    * not offered it). Absent: nowhere to show one, so none is raised.
    */
   notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /**
+   * The session's usage ledger, for what a harness planner's agent spends with
+   * no turn open: a turn Claude Code opens itself to relay a backgrounded
+   * subagent's report. A turn's own usage stays on its `onProgress`, which
+   * ends with it. Absent: that spend goes unbooked.
+   */
+  onUsage?: (record: UsageRecord) => void;
   /**
    * The session's approval policy, which a harness planner's own tool
    * requests are decided against as the API planner's are (ADR-0026). Absent:

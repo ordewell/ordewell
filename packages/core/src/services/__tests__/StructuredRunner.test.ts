@@ -801,6 +801,32 @@ describe('StructuredSession interrupt', () => {
 });
 
 /**
+ * A turn the CLI opens itself after a background task (recorded from `claude`
+ * 2.1.286) spends against the attempt as any turn does, though no turn of the
+ * adapter's is open: its usage reaches the session through the usage channel.
+ */
+describe('StructuredSession usage between turns', () => {
+  const background = fixture('claude-code', 'task-background');
+  const wakeTurn = background.split('\n').slice(background.split('\n').findIndex((line) => line.includes('"task_notification"')) + 1).join('\n');
+
+  it("books a turn the runner starts on its own, so the session's spend adds up to the CLI's total", async () => {
+    const { runner, spawned } = harness([fixture('claude-code', 'task-marker')]);
+    const turn = observe(await runner.spawn(options()));
+    await turn.nextTurnEnd();
+    const ended = turn.nextTurnEnd();
+    spawned.processes[0].emitStdout(wakeTurn);
+    await ended;
+
+    const records = turn.events.flatMap((e) => (e.type === 'usage' ? [e.record] : []));
+    // Each turn's `result` reports the session's cost so far: the wake turn's is its total.
+    const cost = records.reduce((sum, r) => sum + (r.reportedCost?.amount ?? 0), 0);
+    expect(cost).toBeCloseTo(0.044617, 10);
+    expect(turn.session.sessionCost?.()?.usd).toBeCloseTo(0.044617, 10);
+    turn.session.kill();
+  });
+});
+
+/**
  * An attempt that is over stops its runner (ADR-0018, L1). Claude Code reports
  * its cost and its model's window only on a turn's `result` line, so a stop
  * ends the turn the way the runner reports its end and takes that line before

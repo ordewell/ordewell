@@ -2537,6 +2537,8 @@ export class Session {
       readLimit: this.readLimit,
       approval: this.approvalPolicy,
       notice: (level, message) => this.notice(level, message),
+      // No turn's stream: the agent spent it after the turn ended, so it is the session's.
+      onUsage: (record) => this.events.progress({ type: 'usage', record }),
       plannerTools: {
         sessionId: this.sessionId,
         handler: this.offeredTools(),
