@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createTask, rejoinPlanTree, type LegacyPlanState, type Task } from '../../models/Task';
 import type { SkillInfo } from '../SkillsService';
 import { makeSession, FakeRunnerSession, fakeConfig, fakeFs, taskOf, saves, memoryTaskLogs } from './sessionTestKit';
-import { contextMeterText, plannerContextFill, taskUsageSummary, usageText } from '../../models/Usage';
+import { contextMeterText, plannerContextFill, taskUsageSummary, usageText, type UsageRecord } from '../../models/Usage';
 import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
@@ -1900,6 +1900,28 @@ describe("the planner shell's notice and scratch directory (ADR-0011)", () => {
     expect(endSession).toHaveBeenCalledTimes(1);
     session.destroy();
     expect(endSession).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('the planner\'s usage between turns', () => {
+  it('books what the agent spends after its turn ended in the session\'s usage, under no turn', async () => {
+    const broadcast = vi.fn();
+    let onUsage: ((record: UsageRecord) => void) | undefined;
+    const startConversation = vi.fn(async (req: { onUsage?: (record: UsageRecord) => void }) => {
+      onUsage = req.onUsage;
+      return { kind: 'message' as const, text: 'Launched an agent in the background.', researchLog: [] };
+    });
+    const session = makeSession({ broadcast, aiService: { startConversation, hasActiveConversation: () => false, reset: vi.fn() } });
+    await session.startPlanning('test goal', ['claude-code']);
+    broadcast.mockClear();
+
+    onUsage?.({ source: 'claude-code', model: 'claude-sonnet-5', inputTokens: 400, subagentId: 'sa1' });
+    onUsage?.({ source: 'claude-code', reportedCost: { amount: 0.04, currency: 'USD' } });
+
+    const sent = broadcast.mock.calls.map((c: unknown[]) => c[0] as { type: string }).filter((m) => m.type === 'planner_usage');
+    expect(sent).toHaveLength(2);
+    expect(sent.at(-1)).toMatchObject({ totals: { inputTokens: 400, reportedCost: { USD: 0.04 } }, bySubagent: { sa1: { inputTokens: 400 } } });
+    expect(sent.at(-1)).not.toHaveProperty('turnId');
   });
 });
 
