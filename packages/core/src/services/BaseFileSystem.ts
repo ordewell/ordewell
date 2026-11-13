@@ -10,33 +10,21 @@ import {
   type TaskShell,
   type TaskShellSite,
 } from '../interfaces/IFileSystem';
-import { IApproval, DENY_ALL, type ApprovalRequest, type StandingDecision } from '../interfaces/IApproval';
-import { cdUnfollowed, classifyCommand, excludedBy, innerCommandScopes, pathRefs } from './commandPolicy';
+import { IApproval, DENY_ALL } from '../interfaces/IApproval';
+import { decide, type GateSite, type GateWho } from './commandGate';
 import { ParsedLine } from './parsedLine';
 import { resolveResearchShell, researchShellWarning, researchLineShell, type ResearchShell, type ShellLaunch } from './researchShell';
 import { PlannerShellSandbox, SEALED_FAILURE_NOTE, TASK_SEALED_FAILURE_NOTE, TASK_SEALED_LIMITS, sandboxedFailureNote, sealedMemoryLimitNote, sealedRunHeader, sealedTimeLimitNote, type SealedRunOptions, type SealedRunReason } from './sandbox/plannerSandbox';
-import { parseAllowlist } from './plannerAllowlist';
-import { resolveWithin, resolveRef, grantScopeFor } from './pathScope';
+import { resolveWithin, grantScopeFor } from './pathScope';
 import { definitionPattern, referencePattern, languageForId, includeGlobFor } from './symbolPatterns';
 import { resolveAll, vetEgress, type ResolveAll } from './egressGuard';
-import { carriesSecret, sensitiveEnvValues } from './outboundSecrets';
-import { READ_REFUSAL_HINT, disableWebCommandStartup, pinWebCommandAddresses, wgetVersionCommands } from './webCommands';
-import { NOT_APPROVED_HINT } from './effectRoute';
+import { sensitiveEnvValues } from './outboundSecrets';
 import { changedGitEntries, removeOutwardLinks, removePlantedGit, snapshotGitEntries, type GitBefore } from './outwardLinks';
 
 export { AUTO_COMMANDS, GIT_READONLY_SUBCOMMANDS, REFUSED_COMMANDS, classifyCommand, pathLikeArgs } from './commandPolicy';
 
-const SED_HINT = ` To read lines of a file, "head", "tail" and "sed -n '10,40p' FILE" run without approval.`;
-const CD_HINT = ' A "cd" is followed only on a line joined by "&&" alone, so after ";", "||", "&" or a newline every path is judged from the workspace root. Join the commands with "&&", or give paths from the root.';
-
 function refusal(output: string): ToolOutcome {
   return { success: false, output, truncated: false, refused: true };
-}
-
-/** Why a command naming a path the research shell reads by rules confinement cannot follow is refused (ADR-0010). */
-function unfollowableReason(spelled: string): string {
-  return `Git Bash reads "${spelled}" by rules this check cannot follow, so it cannot tell which folder the command would reach: a ".." past one of its mounts, or its own /proc or /dev. `
-    + 'Name the path from its drive (/c/Users/...) or as a Windows path (C:\\Users\\...), with no "..".';
 }
 
 /**
@@ -44,9 +32,12 @@ function unfollowableReason(spelled: string): string {
  * a read-only task's working directory, where nobody is asked (ADR-0046).
  */
 interface ShellSite {
+  /** Which of the session's answers count, and whether anyone is asked (`commandGate`). */
+  who: GateWho;
   /** Paths are confined to it, and commands start in it. */
   root: string;
-  approval: IApproval;
+  /** The session's approvals as they stand at each command, which the gate reads as {@link who} may. */
+  approval(): IApproval;
   sandbox: PlannerShellSandbox;
   /** What a sealed run reads, and the one directory beyond scratch it may write. */
   sealed: SealedRunOptions;
@@ -64,45 +55,12 @@ interface ShellSite {
   };
 }
 
-/** Why a read-only task's command did not run where the planner's would have asked or run sealed (ADR-0046). */
-const TASK_UNSEALED = 'A read-only task asks nobody, so this command could only run sealed, and this machine has no sandbox to seal it in.';
 /** Why Ordewell's own script did not run in a read-only task's worktree (ADR-0050). */
 const OWN_UNSEALED = "this machine has no sandbox to seal it in, and Ordewell runs nothing in a read-only task's worktree outside one.";
-const TASK_CONTINUE = 'Continue without it, and say in your report if what it would have shown matters.';
 const OUTWARD_LINKS_REMOVED = 'Removed, since a read-only task may leave no link leading out of its worktree and the workspace:';
 const PLANTED_GIT_REMOVED = 'Removed, since a read-only task may leave no .git for git outside the sandbox to load:';
 const PLANTED_GIT_STUCK = "Could not remove a .git this command planted, so this task's shell is stopped, and every later command is refused:";
 const GIT_CHANGED = "A .git entry this task's checkout brought changed during a sealed run, though the sandbox forbids it, so this task's shell is stopped, and every later command is refused:";
-
-/** Why a read-only task's command was not run, from the decision that stood. */
-function taskRefusal(standing: StandingDecision | undefined): string {
-  if (standing?.decision === 'deny' && standing.source === 'excluded') return 'The allowlist excludes it.';
-  if (standing?.decision === 'deny' && standing.source === 'remembered') return 'The user denied it this session.';
-  return TASK_UNSEALED;
-}
-
-/**
- * The session's approvals as a read-only task's shell sees them (ADR-0046):
- * nobody is asked. The allowlist's standing approvals stand, and so do an
- * `!` exclusion and a denial the user gave on the card (ADR-0036 S3).
- * Anything else is the approval mode refusing without asking, which a
- * sandbox turns into a sealed run. A grant the user gave on the card was
- * given to the planner's command, and stays the planner's.
- */
-function allowlistOnly(session: () => IApproval): IApproval {
-  const peek = (req: ApprovalRequest): StandingDecision => {
-    const standing = session().peek?.(req);
-    if (standing?.decision === 'deny' && standing.source !== 'mode') return standing;
-    if (standing?.decision === 'allow' && standing.source === 'pre-approved') return standing;
-    return { decision: 'deny', source: 'mode' };
-  };
-  return {
-    request: async (req) => peek(req).decision === 'allow',
-    allowlist: () => session().allowlist?.() ?? parseAllowlist([]),
-    commandPolicy: () => ({ ...session().commandPolicy?.(), approvalMode: 'deny' }),
-    peek,
-  };
-}
 
 /**
  * The policy half of the planner's filesystem: path confinement, the tiered
@@ -294,25 +252,6 @@ export abstract class BaseFileSystem implements IFileSystem {
     };
   }
 
-  /**
-   * Path confinement for `bash`: an `auto`-tier binary (`cat`, `find`, `rg`, …)
-   * is only auto because *reading* is read-only — its arguments can still
-   * name a path outside the workspace, which is the exact escape confinement
-   * closes for `readFile`/`glob`/`grep`. Each escaping path is scoped to its
-   * containing directory, one entry per distinct scope.
-   */
-  private outsidePaths(line: ParsedLine, root: string): { outside: Array<{ abs: string; scope: string }>; unfollowable?: string } {
-    const found = new Map<string, string>();
-    for (const ref of pathRefs(line)) {
-      const { abs, inside, device, unfollowable } = resolveRef(root, ref, this.researchShell.hostPath);
-      if (unfollowable) return { outside: [], unfollowable: ref.path };
-      if (inside || device) continue;
-      const scope = grantScopeFor(abs, 'file');
-      if (!found.has(scope)) found.set(scope, abs);
-    }
-    return { outside: [...found].map(([scope, abs]) => ({ abs, scope })) };
-  }
-
   /** A command line read under the research shell: every check of one command reads this one value. */
   private parse(command: string): ParsedLine {
     return ParsedLine.parse(command, researchLineShell(this.researchShell));
@@ -320,7 +259,8 @@ export abstract class BaseFileSystem implements IFileSystem {
 
   private plannerSite(): ShellSite {
     const root = this.getWorkspaceRoot();
-    return { root, approval: this.approval, sandbox: this.sandbox, sealed: { workspace: root } };
+    const { approval } = this;
+    return { who: 'planner', root, approval: () => approval, sandbox: this.sandbox, sealed: { workspace: root } };
   }
 
   /**
@@ -353,8 +293,9 @@ export abstract class BaseFileSystem implements IFileSystem {
     const sandbox = this.sandbox.withOwnScratch();
     const task: NonNullable<ShellSite['task']> = { worktree: writable !== undefined, sealed: false };
     const site: ShellSite = {
+      who: 'task',
       root: cwd,
-      approval: allowlistOnly(() => this.approval),
+      approval: () => this.approval,
       sandbox,
       sealed: { workspace: this.getWorkspaceRoot(), ...(writable ? { writable } : {}), ...(worktrees?.length ? { worktrees } : {}), limits: TASK_SEALED_LIMITS },
       task,
@@ -397,151 +338,39 @@ export abstract class BaseFileSystem implements IFileSystem {
     return sealed.outcome;
   }
 
+  /** Carries out what the command gate decided for `command` at `site`: the gate decides, this only runs it. */
   private async runIn(site: ShellSite, command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
-    if (site.task?.stopped) return refusal(`Command not run: ${site.task.stopped}.\n${TASK_CONTINUE}`);
-    command = disableWebCommandStartup(this.parse(command));
-    const line = this.parse(command);
-    const { approval, root } = site;
-    const allow = approval.allowlist?.();
-    const { tier, scope, reason, allowedBy, perInvocation, scopes: commandScopes, webUrls, outboundTexts } = classifyCommand(line, {
-      ...approval.commandPolicy?.(), ...(allow ? { allow } : {}),
-    });
+    let verdict = await decide(this.parse(command), this.gateSite(site, signal, opts));
+    if (verdict.kind === 'ask') {
+      const approval = site.approval();
+      verdict = await verdict.answer(await (signal ? approval.request(verdict.request, { signal }) : approval.request(verdict.request)));
+    }
+    switch (verdict.kind) {
+      case 'refuse': return refusal(verdict.reason);
+      case 'sealed': return this.runSealed(site, verdict.command, verdict.why, signal);
+      case 'native': return this.runShell(site, verdict.command, verdict.network, signal);
+    }
+  }
 
-    const { outside, unfollowable } = this.outsidePaths(line, root);
-    const asks = tier === 'ask';
-    const scopes = [...(asks ? commandScopes ?? [scope] : []), ...outside.map((o) => o.scope)];
-    const touched = outside.map((o) => o.abs).join(', ');
-    const request: ApprovalRequest | undefined = scopes.length === 0 ? undefined : {
-      kind: asks ? 'shell_command' : 'external_path',
-      ...(perInvocation ? { perInvocation } : {}),
-      subject: asks ? command : outside[0].abs,
-      scope: scopes[0],
-      ...(scopes.length > 1 ? { scopes } : {}),
-      ...(asks && allowedBy ? { allowedBy } : {}),
-      detail: outside.length > 0
-        ? `Planner research wants to run "${command}", which touches ${touched}, outside the workspace (${root}).`
-        : `Planner research wants to run: ${command}`,
+  /** What the gate reads at `site` that only this filesystem knows. */
+  private gateSite(site: ShellSite, signal: AbortSignal | undefined, opts: BashOptions): GateSite {
+    return {
+      who: site.who,
+      root: site.root,
+      ...(this.researchShell.hostPath ? { hostPath: this.researchShell.hostPath } : {}),
+      approval: site.approval(),
+      canSeal: () => site.sandbox.canSeal(),
+      ...(opts.sealed ? { sealed: true } : {}),
+      ...(site.task?.sealed ? { after: true } : {}),
+      ...(site.task?.stopped ? { stopped: site.task.stopped } : {}),
+      outboundSecrets: () => [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)],
+      vetEgress: (host, port) => vetEgress(host, port, this.resolveWebHost),
+      probe: (probe) => this.runShell(site, probe, false, signal),
     };
-
-    if (opts.sealed) {
-      if (!(await site.sandbox.canSeal())) return refusal(`Command refused: this machine has no sandbox to run a command sealed in. Run it without "sealed", and Ordewell's command rules judge it as they do every command.`);
-      return this.runSealed(site, line, request, 'asked', signal);
-    }
-
-    // A sealed run may have written what a later command reads: a script the
-    // allowlisted `npm test` runs, a tool's config, a file in scratch. Run
-    // outside the sealed profile, that command would read the whole host, and
-    // an allowlisted one would have the network, so once a sealed run has
-    // started every later command of the attempt runs sealed (ADR-0046).
-    if (site.task?.sealed) return this.runSealed(site, line, request, 'after', signal);
-
-    if (tier === 'refuse') return this.sealedInstead(site, line, request, refusal(`Command refused: ${reason}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
-    if (unfollowable !== undefined) return this.sealedInstead(site, line, request, refusal(`Command refused: ${unfollowableReason(unfollowable)}${site.task ? `\n${TASK_UNSEALED} ${TASK_CONTINUE}` : ''}`), signal);
-
-    const outbound = [...(outboundTexts ?? []), ...(webUrls ?? []).map((url) => url.href)];
-    if (outbound.length && carriesSecret(outbound, [...this.outboundSecrets(), ...sensitiveEnvValues(process.env)])) {
-      return refusal(webUrls?.length
-        ? 'Command refused: a web command contains what looks like a secret. Fetch the page with your web fetch tool, without credentials.'
-        : 'Command refused: what this command sends over the network contains what looks like a secret. Run it without the value.');
-    }
-
-    const vettedAddresses = new Map<string, string>();
-    for (const url of webUrls ?? []) {
-      const check = await vetEgress(url.hostname, url.port, this.resolveWebHost);
-      if (!check.ok) return refusal(`Command refused: Blocked host: ${check.reason}. ${READ_REFUSAL_HINT}`);
-      vettedAddresses.set(url.origin, check.addresses[0]);
-    }
-
-    if (request) {
-      // The approval mode refuses without asking anyone, so where a sealed run
-      // can start that is what runs (S2). Elsewhere the request goes in, and
-      // the mode's refusal is recorded as it always was. A read-only task's
-      // mode refuses whatever would ask (ADR-0046).
-      const standing = approval.peek?.(request);
-      if (standing?.decision === 'deny' && standing.source === 'mode' && await site.sandbox.canSeal()) return this.runSealed(site, line, request, 'refused', signal);
-      if (!(await (signal ? approval.request(request, { signal }) : approval.request(request)))) {
-        if (site.task) return refusal(`Command not run: ${command}\n${taskRefusal(standing)} ${TASK_CONTINUE}`);
-        return refusal(outside.length > 0
-          ? `Access denied: "${command}" touches ${touched}, outside the workspace root (${root}), and was not approved. Keep research inside the workspace, or ask the user to approve this location.${cdUnfollowed(line) ? CD_HINT : ''}`
-          : `Command not approved: ${command}\nIt is outside the auto-allowed read-only set and the planner allowlist (${scope}). ${NOT_APPROVED_HINT}${/(^| )g?sed( |$)/.test(scope) ? SED_HINT : ''}`);
-      }
-    }
-
-    if (webUrls?.length) {
-      const latest = classifyCommand(line, { ...approval.commandPolicy?.(), allow: approval.allowlist?.() });
-      if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
-    }
-
-    for (const probe of wgetVersionCommands(line)) {
-      if (!probe) return refusal(`Command refused: the wget executable cannot be checked in an uncertain working directory. ${READ_REFUSAL_HINT}`);
-      const version = await this.runShell(site, probe, false, signal);
-      if (!version.success || !/^GNU Wget 1\./.test(version.output)) {
-        return refusal(`Command refused: only GNU Wget 1.x is supported; wget2 can write persistent databases. ${READ_REFUSAL_HINT}`);
-      }
-    }
-
-    const pinned = pinWebCommandAddresses(line, vettedAddresses);
-    command = pinned.command;
-    if (webUrls?.length) {
-      const latest = classifyCommand(this.parse(command), { ...approval.commandPolicy?.(), allow: approval.allowlist?.(), trustedWebResolves: pinned.resolves });
-      if (latest.tier === 'refuse') return refusal(`Command refused: ${latest.reason}`);
-    }
-    // The network follows the tier (ADR-0011 B3): an `ask` command got here
-    // approved, by the user, a standing grant, the allowlist or the mode, and
-    // keeps it. An `auto` one, including one approved only for the paths it
-    // names, has none.
-    return this.runShell(site, command, tier === 'ask', signal);
   }
 
-  /**
-   * A scope inside `command` the user denied on the card this session, or
-   * undefined (ADR-0036 S3). The whole command's request is peeked by the
-   * caller; this reaches the commands a refused wrapper hides, each remembered
-   * under its own scope, so wrapping a denied command never routes around the
-   * denial.
-   */
-  private deniedInnerScope(approval: IApproval, line: ParsedLine): string | undefined {
-    const peek = approval.peek;
-    if (!peek) return undefined;
-    for (const scope of innerCommandScopes(line)) {
-      const standing = peek.call(approval, { kind: 'shell_command', subject: line.raw, scope });
-      if (standing.decision === 'deny' && standing.source === 'remembered') return scope;
-    }
-    return undefined;
-  }
-
-  /** A refusal the envelope reached without asking anyone, run sealed where this host can (ADR-0036 S2), or `refused` as it was (S6). */
-  private async sealedInstead(site: ShellSite, line: ParsedLine, request: ApprovalRequest | undefined, refused: ToolOutcome, signal?: AbortSignal): Promise<ToolOutcome> {
-    return (await site.sandbox.canSeal()) ? this.runSealed(site, line, request, 'refused', signal) : refused;
-  }
-
-  /**
-   * One sealed run (S1): no network, no home, nothing it writes reaching the
-   * workspace, and nobody asked. What the user said no to stays refused (S3):
-   * a `!` exclusion naming the command or a path it touches, and a denial
-   * given on the card this session.
-   */
-  private async runSealed(site: ShellSite, line: ParsedLine, request: ApprovalRequest | undefined, why: SealedRunReason, signal?: AbortSignal): Promise<ToolOutcome> {
-    const { approval } = site;
-    const command = line.raw;
-    const allow = approval.allowlist?.();
-    const rule = allow ? excludedBy(line, allow) : undefined;
-    if (rule) return refusal(`Command refused: the planner allowlist excludes it ("${rule}"), and an exclusion holds for a sealed run too.`);
-    const standing = request ? approval.peek?.(request) : undefined;
-    if (request && standing?.decision === 'deny' && standing.source === 'excluded') {
-      return refusal(`Command refused: the planner allowlist excludes ${request.subject === command ? 'it' : `"${request.subject}"`}, and an exclusion holds for a sealed run too.`);
-    }
-    if (standing?.decision === 'deny' && standing.source === 'remembered') {
-      return refusal(`Command not approved: ${command}\nThe user denied it this session, and a denial holds for a sealed run too. Continue without it.`);
-    }
-    // A denial is keyed on each command's own scope, so a refused wrapper — a
-    // loop, a pipe — whose own request peek() never matched still refuses when
-    // it carries a command the user said no to (S3). Only the person's denial
-    // ('remembered'); a scope the approval mode alone would refuse is what a
-    // sealed run is for (S2).
-    const denied = this.deniedInnerScope(approval, line);
-    if (denied) return refusal(`Command not approved: ${command}\nThe user denied "${denied}" this session, and a denial holds for a sealed run too. Continue without it.`);
-
+  /** One sealed run (ADR-0036 S1): no network, no home, nothing it writes reaching the workspace, and nobody asked. */
+  private async runSealed(site: ShellSite, command: string, why: SealedRunReason, signal?: AbortSignal): Promise<ToolOutcome> {
     const sealed = await this.sealedRun(site, command, site.root, signal);
     if ('refused' in sealed) return sealed.refused;
     const { outcome, shell, first, swept } = sealed;

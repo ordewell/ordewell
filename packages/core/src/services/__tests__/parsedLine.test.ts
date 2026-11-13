@@ -46,6 +46,17 @@ describe("the wget probe follows the site's cdpath setting", () => {
     expect(classifyCommand(line).reason ?? '').not.toContain(UNCHECKABLE);
   });
 
+  // The gate re-reads its rewrites of a line (startup files off, pinned addresses); they keep the site's shell.
+  it("reads a rewrite of the line under the line's own shell", () => {
+    delete process.env.CDPATH;
+    const rewrite = ParsedLine.parse('git status', { dialect: 'posix', cdpathSet: true }).reparse(WGET_AFTER_CD);
+    expect(rewrite).toMatchObject({ cdpathSet: true, raw: WGET_AFTER_CD });
+    expect(wgetVersionCommands(rewrite)).toEqual([undefined]);
+    const cmd = ParsedLine.parse('dir', { dialect: 'cmd' });
+    expect(cmd.reparse('dir /b').dialect).toBe(cmd.dialect);
+    expect(cmd.reparse('dir /b').dialect).not.toBe(rewrite.dialect);
+  });
+
   it('still has no probe where a line break was trimmed off an end of the line', () => {
     for (const command of [`\n${WGET_AFTER_CD}`, `${WGET_AFTER_CD}\n`]) {
       const line = ParsedLine.parse(command, { dialect: 'posix' });
