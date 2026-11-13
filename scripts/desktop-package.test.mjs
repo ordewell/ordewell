@@ -509,3 +509,26 @@ describe('the publisher names electron-builder derives from the flags', () => {
     assert.equal(await derived(t, WIN_CERT), null);
   });
 });
+
+// The deb's New Window Action names its executable outright, since
+// electron-builder fills in only the main entry's Exec: the path it names has
+// to be the one electron-builder installs the deb's executable at.
+describe('the deb launcher entry', () => {
+  const require = createRequire(new URL('../packages/desktop/package.json', import.meta.url));
+  const desktop = fileURLToPath(new URL('../packages/desktop/', import.meta.url));
+
+  it('opens New Window with the executable the deb installs', async (t) => {
+    const { log } = createRequire(require.resolve('app-builder-lib/package.json'))('builder-util');
+    t.mock.property(log, 'stream', { write: () => true });
+    const { getConfig, validateConfiguration } = require('app-builder-lib/out/util/config/config.js');
+    const { installPrefix } = require('app-builder-lib/out/targets/LinuxTargetHelper.js');
+    const config = await getConfig(desktop, null, null);
+    await validateConfiguration(config, { isEnabled: false, add() {} });
+    const { entry, desktopActions } = config.linux.desktop;
+    assert.equal(entry.Actions, 'new-window;');
+    assert.deepEqual(desktopActions['new-window'], {
+      Name: 'New Window',
+      Exec: `${installPrefix}/${config.productName}/${config.linux.executableName} --new-window`,
+    });
+  });
+});

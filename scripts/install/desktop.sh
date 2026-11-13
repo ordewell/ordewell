@@ -269,6 +269,11 @@ install_linux_appimage() {
     printf 'Terminal=false\n'
     printf 'Categories=Development;\n'
     printf 'StartupWMClass=Ordewell\n'
+    # The same New Window Action electron-builder.yml (linux.desktop) gives the deb.
+    printf 'Actions=new-window;\n'
+    printf '\n[Desktop Action new-window]\n'
+    printf 'Name=New Window\n'
+    printf 'Exec=%s --new-window\n' "$exec_path"
   } > "$linux_entry"
   refresh_desktop_database
 

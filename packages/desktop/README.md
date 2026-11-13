@@ -39,6 +39,10 @@ launch*), or the welcome window.
   where it was installed, by default
   `& "$env:LOCALAPPDATA\Programs\Ordewell\Ordewell.exe" C:\code\acme`.
 
+The app icon's menu offers *New Window* too: the Dock menu on macOS, the jump
+list on Windows (installed app only), and the launcher entry's right-click on
+Linux, which runs the app with `--new-window`.
+
 ## Build and run
 
 ```bash
