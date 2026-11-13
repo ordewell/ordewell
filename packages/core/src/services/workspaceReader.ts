@@ -20,6 +20,7 @@ import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn
 import { repoRootOf, SELF_REPO } from './isolationRecord';
 import { landingsIn } from './LandingLedger';
 import { hasGitEntry, workspaceRepoGroup } from './repoGroup';
+import { NEVER_SCANNED } from './worktreeBootstrap';
 import { stateRootOf } from './stateRoot';
 import {
   allowedPath, readOnlyGitArgs, readSavedPatch, readTaskDiff, TASK_DIFF_NO_RECORD, TASK_DIFF_NO_RUN, TASK_DIFF_READ_ONLY, taskDiffUnavailable,
@@ -63,6 +64,8 @@ const CONFLICTED = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const SKILLS = '.ordewell/skills';
 // Git's own test for a binary file: a NUL among the first 8000 bytes.
 const BINARY_SNIFF = 8000;
+// What a search of the workspace folder's own files walks before it says it stopped short: git lists a repository's, nothing lists these.
+const MAX_FOLDER_FILES = 20000;
 
 /** One resolved view scope: where its files are, read from disk or from one commit. */
 interface Scope {
@@ -79,6 +82,8 @@ interface Scope {
   changedBy: { task: string } | { landings: Array<{ taskId: string; merge: string }> } | null;
   /** Paths Ordewell linked into a task's worktree from the workspace: not the task's work. */
   linked: string[];
+  /** The workspace folder that is no repository (ADR-0064 R2): read from disk, and no git runs in it. */
+  folder?: true;
 }
 
 export interface FindOptions { query: string; text?: boolean; limit?: number }
@@ -221,6 +226,30 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     throw new WorkspaceReadError('refused', group.length === 0 ? 'This workspace holds no repository.' : `Name a repository: this workspace has ${group.length}.`);
   }
 
+  /**
+   * Whether a target names the workspace folder itself where that folder is no
+   * repository: an explicit `.` beside the repositories it holds, or in a
+   * folder that holds none (ADR-0064 R2). Naming no repository stays refused.
+   */
+  function namesFolder(target: Pick<ReadTarget, 'workspace' | 'repo'>): boolean {
+    return target.repo === SELF_REPO && !workspaceRepoGroup(target.workspace, deps.config.workspaceRepos).includes(SELF_REPO);
+  }
+
+  function folderScope(target: ReadTarget): Scope {
+    if ((target.scope ?? 'checkout') !== 'checkout') {
+      throw new WorkspaceReadError('refused', 'The workspace folder is not a repository, so it has no integration branch or task worktree: pick one of its repositories.');
+    }
+    const root = fs.realpathSync(target.workspace);
+    return {
+      at: { repo: SELF_REPO, scope: 'checkout', source: 'disk', commit: null, branch: null },
+      root, cwd: root, prefix: '', base: null, changedBy: null, linked: [], folder: true,
+    };
+  }
+
+  function notRepository(): never {
+    throw new WorkspaceReadError('refused', 'The workspace folder is not a repository: pick one of its repositories for its git.');
+  }
+
   async function checkoutScope(target: ReadTarget, repo: string): Promise<Scope> {
     const root = fs.realpathSync(repoRootOf(target.workspace, repo));
     const prefix = repo === SELF_REPO ? (await gitOut(root, ['rev-parse', '--show-prefix'])).trim() : '';
@@ -304,7 +333,9 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     };
   }
 
-  async function scopeOf(target: ReadTarget): Promise<Scope> {
+  /** A target's scope: the workspace folder only where `folder` allows it, since every git read needs a repository. */
+  async function scopeOf(target: ReadTarget, folder = false): Promise<Scope> {
+    if (namesFolder(target)) return folder ? folderScope(target) : notRepository();
     const kind: ViewScopeKind = target.scope ?? 'checkout';
     const repo = repoOf(target);
     if (kind === 'checkout') return checkoutScope(target, repo);
@@ -356,10 +387,10 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   }
 
   /** Which of `paths` git ignores, a directory named with its trailing slash. */
-  async function ignoredOf(scope: Scope, paths: string[]): Promise<Set<string>> {
+  async function ignoredOf(cwd: string, paths: string[]): Promise<Set<string>> {
     if (paths.length === 0) return new Set();
-    const common = await readOnlyGitArgs(invoker, scope.cwd);
-    const result = await tryGit(invoker, scope.cwd, [...common, 'check-ignore', '-z', '--stdin'], paths.join('\0') + '\0');
+    const common = await readOnlyGitArgs(invoker, cwd);
+    const result = await tryGit(invoker, cwd, [...common, 'check-ignore', '-z', '--stdin'], paths.join('\0') + '\0');
     // Exit 1 is git's "none of them".
     if (!result.ok && result.code !== 1) throw new Error(`git check-ignore failed: ${result.stderr.trim()}`);
     return new Set(nulList(result.stdout));
@@ -368,9 +399,10 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
   async function tree(target: ReadTarget, dir: string): Promise<FileTreeResponse> {
     const rel = dir.split('\\').join('/').replace(/\/+$/, '');
     if (!listable(rel)) refusePath(dir);
-    const scope = await scopeOf(target);
+    const scope = await scopeOf(target, true);
     const join = (name: string) => (rel === '' ? name : `${rel}/${name}`);
     const entries = scope.root === null ? await entriesAt(scope, rel, dir) : entriesOnDisk({ ...scope, root: scope.root }, rel, dir);
+    if (scope.folder) return { at: scope.at, dir: rel, entries: (await markIgnoredInRepo(target, rel, entries)).sort(byKindThenName) };
     const { changed, untracked } = await changesBelow(scope, rel);
     const childOf = (file: string): string | null => {
       const below = rel === '' ? file : file.startsWith(`${rel}/`) ? file.slice(rel.length + 1) : null;
@@ -398,7 +430,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
       if (child !== null && !statuses.has(child)) statuses.set(child, '?');
     }
     // A commit holds no ignored file but one forced in, and the rules on disk are not the commit's.
-    const ignored = scope.root === null ? new Set<string>() : await ignoredOf(scope, entries.filter((e) => e.kind !== 'symlink').map((e) => (e.kind === 'file' ? e.path : `${e.path}/`)));
+    const ignored = scope.root === null ? new Set<string>() : await ignoredOf(scope.cwd, checkable(entries));
     for (const entry of entries) {
       const status = statuses.get(entry.name);
       if (status) entry.status = status;
@@ -407,6 +439,25 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
       entry.ignored = ignored.has(entry.path) || ignored.has(`${entry.path}/`);
     }
     return { at: scope.at, dir: rel, entries: entries.sort(byKindThenName) };
+  }
+
+  /** The entries git is asked about, a directory named with its trailing slash. */
+  function checkable(entries: FileTreeEntry[]): string[] {
+    return entries.filter((e) => e.kind !== 'symlink').map((e) => (e.kind === 'file' ? e.path : `${e.path}/`));
+  }
+
+  /**
+   * The workspace folder's entries below one of its repositories, marked as
+   * that repository's rules ignore them; the folder itself has no rules, and
+   * its changes are each repository's to show.
+   */
+  async function markIgnoredInRepo(target: ReadTarget, rel: string, entries: FileTreeEntry[]): Promise<FileTreeEntry[]> {
+    const repo = workspaceRepoGroup(target.workspace, deps.config.workspaceRepos).find((r) => rel.startsWith(`${r}/`) || rel === r);
+    if (repo === undefined) return entries;
+    const inRepo = (file: string) => file.slice(repo.length + 1);
+    const ignored = await ignoredOf(fs.realpathSync(repoRootOf(target.workspace, repo)), checkable(entries).map(inRepo));
+    for (const entry of entries) entry.ignored = ignored.has(inRepo(entry.path)) || ignored.has(`${inRepo(entry.path)}/`);
+    return entries;
   }
 
   function entriesOnDisk(scope: Scope & { root: string }, rel: string, dir: string): FileTreeEntry[] {
@@ -456,10 +507,11 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
 
   /** Quick open matches names; a text search reads what git would, ignored files left out (ADR-0064 R5). */
   async function find(target: ReadTarget, options: FindOptions): Promise<FileFindResponse> {
-    const scope = await scopeOf(target);
+    const scope = await scopeOf(target, true);
     const limit = limitOf(options.limit);
     const query = options.query;
     if (query.trim() === '') throw new WorkspaceReadError('refused', 'Name something to find.');
+    if (scope.folder) return findInFolder(target, scope, options, limit);
     const matches: FileFindMatch[] = [];
     let truncated = false;
     if (options.text) {
@@ -488,6 +540,84 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
       matches.push({ path: file });
     }
     return { at: scope.at, query, mode: 'name', matches, truncated };
+  }
+
+  /**
+   * A search of the workspace folder: its own files walked from disk, then each
+   * repository's as that repository's search finds them, so what git ignores
+   * there stays left out.
+   */
+  async function findInFolder(target: ReadTarget, scope: Scope & { folder?: true }, options: FindOptions, limit: number): Promise<FileFindResponse> {
+    const root = scope.root as string;
+    const repos = workspaceRepoGroup(target.workspace, deps.config.workspaceRepos);
+    const mode = options.text ? 'text' : 'name';
+    const needle = options.query.toLowerCase();
+    const matches: FileFindMatch[] = [];
+    const walked = looseFiles(root, new Set(repos));
+    let truncated = walked.truncated;
+    const add = (match: FileFindMatch): boolean => {
+      if (matches.length === limit) { truncated = true; return false; }
+      matches.push(match);
+      return true;
+    };
+    outer: for (const file of walked.files) {
+      if (!options.text) {
+        if (file.toLowerCase().includes(needle) && !add({ path: file })) break;
+        continue;
+      }
+      for (const match of textMatches(path.join(root, file), file, needle)) if (!add(match)) break outer;
+    }
+    for (const repo of repos) {
+      if (truncated) break;
+      const found = await find({ workspace: target.workspace, repo }, { ...options, limit: Math.max(1, limit - matches.length) });
+      for (const match of found.matches) if (!add({ ...match, path: `${repo}/${match.path}` })) break;
+      if (found.truncated) truncated = true;
+    }
+    return { at: scope.at, query: options.query, mode, matches, truncated };
+  }
+
+  /** The workspace folder's files outside its repositories, never following a link, nor into what is never scanned. */
+  function looseFiles(root: string, repos: ReadonlySet<string>): { files: string[]; truncated: boolean } {
+    const files: string[] = [];
+    const visit = (rel: string): boolean => {
+      let dirents: fs.Dirent[];
+      try {
+        dirents = fs.readdirSync(rel === '' ? root : path.join(root, rel), { withFileTypes: true });
+      } catch {
+        return true;
+      }
+      dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const dirent of dirents) {
+        const file = rel === '' ? dirent.name : `${rel}/${dirent.name}`;
+        if (dirent.isDirectory()) {
+          if (NEVER_SCANNED.has(dirent.name) || repos.has(file) || !listable(file)) continue;
+          if (!visit(file)) return false;
+        } else if (dirent.isFile() && userPath(file)) {
+          if (files.length === MAX_FOLDER_FILES) return false;
+          files.push(file);
+        }
+      }
+      return true;
+    };
+    const whole = visit('');
+    return { files, truncated: !whole };
+  }
+
+  /** The lines of a text file holding `needle`, case folded as git grep -i folds it; a binary or too large file holds none. */
+  function textMatches(full: string, file: string, needle: string): FileFindMatch[] {
+    let bytes: Buffer;
+    try {
+      if (fs.statSync(full).size > maxFileBytes) return [];
+      bytes = fs.readFileSync(full);
+    } catch {
+      return [];
+    }
+    if (bytes.subarray(0, BINARY_SNIFF).includes(0)) return [];
+    const matches: FileFindMatch[] = [];
+    bytes.toString('utf8').split(/\r?\n/).forEach((line, index) => {
+      if (line.toLowerCase().includes(needle)) matches.push({ path: file, line: index + 1, preview: line.trim().slice(0, PREVIEW_CHARS) });
+    });
+    return matches;
   }
 
   /** Every file of the scope, relative to its root: what git tracks or would, on disk; what the commit holds, otherwise. */
@@ -719,7 +849,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
 
   async function content(target: ReadTarget, file: string): Promise<FileContentResponse> {
     const rel = checked(file);
-    const scope = await scopeOf(target);
+    const scope = await scopeOf(target, true);
     if (scope.root !== null) {
       const real = onDisk({ ...scope, root: scope.root }, rel);
       const stat = fs.statSync(real);
@@ -772,12 +902,18 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
 
   /**
    * The user's checkout of a target's repository, resolved as a read resolves
-   * it: what a write to it starts from (ADR-0062 G1).
+   * it: what a write to it starts from (ADR-0062 G1). The workspace folder
+   * that is no repository only where `folder` allows it: a save, which runs no git.
    */
-  async function checkout(target: Pick<ReadTarget, 'workspace' | 'repo'>): Promise<CheckoutScope> {
+  async function checkout(target: Pick<ReadTarget, 'workspace' | 'repo'>, { folder = false }: { folder?: boolean } = {}): Promise<CheckoutScope> {
+    if (namesFolder(target)) {
+      if (!folder) notRepository();
+      const scope = folderScope(target);
+      return { repo: SELF_REPO, root: scope.root as string, prefix: '', at: scope.at, git: false };
+    }
     const repo = repoOf(target);
     const scope = await checkoutScope(target, repo);
-    return { repo, root: scope.root as string, prefix: scope.prefix, at: scope.at };
+    return { repo, root: scope.root as string, prefix: scope.prefix, at: scope.at, git: true };
   }
 
   /**
@@ -837,6 +973,8 @@ export interface CheckoutScope {
   root: string;
   prefix: string;
   at: ReadAt;
+  /** False for the workspace folder that is no repository: nothing may run git there. */
+  git: boolean;
 }
 
 export type WorkspaceReader = ReturnType<typeof createWorkspaceReader>;

@@ -262,6 +262,79 @@ describe('scope switching', () => {
   });
 });
 
+describe('a workspace folder of several repositories (plan task 14\'s reproduction)', () => {
+  const FOLDER = [
+    { name: 'api', path: 'api', kind: 'repository', ignored: false },
+    { name: 'docs', path: 'docs', kind: 'directory', ignored: false },
+    { name: 'web', path: 'web', kind: 'repository', ignored: false },
+    { name: 'notes.md', path: 'notes.md', kind: 'file', ignored: false },
+  ];
+  const API = [{ name: 'x.txt', path: 'x.txt', kind: 'file', ignored: false, status: 'M' }];
+  const GROUP_RUN = {
+    meta: { id: 's1' },
+    run: {
+      tasks: [{ id: 't3', order: 3, title: 'Add the parser', status: 'done', isolation: { state: 'integrated', branch: 'b', worktree: 'w', repos: ['api'] } }],
+      handoff: { repos: [{ path: 'api', integrationBranch: 'ordewell/s1', landed: [] }], landed: [] },
+    },
+  };
+  const group = () => workspace(undefined, {
+    'git.repos': () => ({ repos: [{ repo: 'api', branch: 'main', detached: false }, { repo: 'web', branch: 'dev', detached: false }] }),
+    'sessions.get': () => GROUP_RUN,
+    'files.tree': ({ params }) => ({ at: {}, dir: params.dir, entries: params.repo === '.' ? FOLDER : API }),
+  });
+  const picker = () => screen.getByRole('combobox', { name: 'Repository' }) as HTMLSelectElement;
+
+  it('opens on the selected folder, plain folders and loose files included, not on the first repository', async () => {
+    const { harness } = group();
+    await mount();
+    await waitFor(() => expect(scopeStoreFor(store.api).getSnapshot().repos).toHaveLength(2));
+    expect(scopeStoreFor(store.api).getSnapshot().repo).toBe('.');
+    await screen.findByRole('treeitem', { name: 'notes.md' });
+    expect(within(tree()).getAllByRole('treeitem').map((r) => r.getAttribute('aria-label'))).toEqual(['api', 'docs', 'web', 'notes.md']);
+    expect(harness.callsTo('files.tree').every((c) => c.params.repo === '.')).toBe(true);
+    expect(picker().value).toBe('.');
+    expect([...picker().options].map((o) => o.textContent)).toEqual(['Workspace folder', 'api (main)', 'web (dev)']);
+  });
+
+  it('browses a repository from its row or the picker, and comes back to the folder', async () => {
+    const { harness } = group();
+    await mount();
+    fireEvent.click(await screen.findByRole('treeitem', { name: 'api' }));
+    await screen.findByRole('treeitem', { name: 'x.txt' });
+    expect(scopeStoreFor(store.api).getSnapshot().repo).toBe('api');
+    expect(harness.callsTo('files.tree').at(-1)?.params).toMatchObject({ repo: 'api', scope: 'checkout', dir: '' });
+
+    fireEvent.change(picker(), { target: { value: '.' } });
+    await screen.findByRole('treeitem', { name: 'notes.md' });
+    fireEvent.change(picker(), { target: { value: 'web' } });
+    await waitFor(() => expect(harness.callsTo('files.tree').at(-1)?.params.repo).toBe('web'));
+  });
+
+  it('offers the folder only its own files, and each repository its branch and worktrees', async () => {
+    group();
+    await mount();
+    await waitFor(() => expect(scopeStoreFor(store.api).getSnapshot().session?.tasks).toHaveLength(1));
+    const menu = await openScopeMenu();
+    const folder = within(menu).getByRole('group', { name: 'Workspace folder' });
+    expect(within(folder).getAllByRole('menuitemradio').map((i) => i.textContent)).toEqual(['Workspace folder']);
+    const api = within(menu).getByRole('group', { name: 'api' });
+    expect(within(api).getAllByRole('menuitemradio').map((i) => i.textContent)).toEqual([
+      expect.stringContaining('Your checkout'), expect.stringContaining('Integration branch'), expect.stringContaining('Task #3 worktree'),
+    ]);
+    fireEvent.click(within(api).getByRole('menuitemradio', { name: /Task #3 worktree/ }));
+    await screen.findByRole('tree', { name: 'Files in Task #3' });
+    expect(scopeStoreFor(store.api).getSnapshot().repo).toBe('api');
+  });
+
+  it('opens a loose file of the folder for editing in the folder\'s own scope', async () => {
+    const { harness } = group();
+    await mount();
+    fireEvent.doubleClick(await screen.findByRole('treeitem', { name: 'notes.md' }));
+    await waitFor(() => expect(tabs().map((t) => t.title)).toEqual(['notes.md']));
+    await waitFor(() => expect(harness.callsTo('files.content').at(-1)?.params).toMatchObject({ repo: '.', scope: 'checkout', path: 'notes.md' }));
+  });
+});
+
 describe('a file in your checkout', () => {
   async function openReadme(): Promise<FakeEditor> {
     fireEvent.doubleClick(await screen.findByRole('treeitem', { name: 'README.md' }));

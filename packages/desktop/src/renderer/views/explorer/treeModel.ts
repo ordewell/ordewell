@@ -15,10 +15,15 @@ export function isExpandable(entry: TreeEntry): boolean {
   return entry.kind === 'directory';
 }
 
+/** A repository is a folder to the eye, as the workspace folder's view lists it beside the plain ones. */
+function isFolder(entry: TreeEntry): boolean {
+  return entry.kind === 'directory' || entry.kind === 'repository';
+}
+
 /** Folders first, then names, so a tree reads the same whatever order the daemon listed. */
 export function sortEntries(entries: TreeEntry[]): TreeEntry[] {
   return entries.slice().sort((a, b) => {
-    const folders = Number(isExpandable(b)) - Number(isExpandable(a));
+    const folders = Number(isFolder(b)) - Number(isFolder(a));
     return folders || a.name.localeCompare(b.name, undefined, { numeric: true });
   });
 }
