@@ -22,7 +22,19 @@ export interface PlannerSelectionDeps {
  * the webview pills and the `/planner` command, so neither can half-apply it.
  */
 export class PlannerSelection {
+  /**
+   * Changes run one after another: each reads the configuration the last one
+   * wrote, so two quick picks land as the later one, never interleaved.
+   */
+  private changes: Promise<unknown> = Promise.resolve();
+
   constructor(private readonly deps: PlannerSelectionDeps) {}
+
+  private inOrder<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.changes.then(work);
+    this.changes = next.catch(() => undefined);
+    return next;
+  }
 
   /**
    * Every planner the user could pick, ready or not (ADR-0009). Harness
@@ -44,14 +56,16 @@ export class PlannerSelection {
   /** Switch who plans, landing on what that backend remembers (ADR-0009). */
   async apply(provider: PlannerBackendId): Promise<void> {
     if (!getProviderMeta(provider)) return;
-    try {
-      await this.change({ provider });
-    } catch (err) {
-      // The pill the webview lit for this pick has to settle on what is true.
-      await this.sendState().catch(() => undefined);
-      throw err;
-    }
-    await this.publish(`Planner set to ${provider}`);
+    await this.inOrder(async () => {
+      try {
+        await this.change({ provider });
+      } catch (err) {
+        // The pill the webview lit for this pick has to settle on what is true.
+        await this.sendState().catch(() => undefined);
+        throw err;
+      }
+      await this.publish(`Planner set to ${provider}`);
+    });
   }
 
   /**
@@ -61,20 +75,26 @@ export class PlannerSelection {
    */
   async applyChoice(provider: PlannerBackendId, modelId: string, effort: string): Promise<void> {
     if (!getProviderMeta(provider)) return;
-    await this.change({ provider, model: modelId, effort });
-    await this.publish(`Planner set to ${provider}, model ${modelId}`);
+    await this.inOrder(async () => {
+      await this.change({ provider, model: modelId, effort });
+      await this.publish(`Planner set to ${provider}, model ${modelId}`);
+    });
   }
 
   /** A model picked with no effort is a pick of the runner's default. */
   async setModel(modelId: string, effort?: string): Promise<void> {
-    await this.change({ model: modelId, effort: effort ?? '' });
-    await this.publish(`Planner model set to ${modelId}`);
+    await this.inOrder(async () => {
+      await this.change({ model: modelId, effort: effort ?? '' });
+      await this.publish(`Planner model set to ${modelId}`);
+    });
   }
 
   /** Any change of who plans, from a slash command or a picker. */
   async pick(change: PlannerSelectionChange): Promise<void> {
-    const { next } = await this.change(change);
-    await this.publish(`Planner set to ${next.provider}, model ${next.model || '(none)'}, effort ${next.effort || 'default'}`);
+    await this.inOrder(async () => {
+      const { next } = await this.change(change);
+      await this.publish(`Planner set to ${next.provider}, model ${next.model || '(none)'}, effort ${next.effort || 'default'}`);
+    });
   }
 
   /**

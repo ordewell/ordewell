@@ -186,8 +186,11 @@ export type WebviewToHost =
    * `requestId` is what the host's `runnerChoiceSaved` answers.
    */
   | { type: 'setRunnerEnabled'; runnerId: RunnerId; enabled: boolean; requestId: string }
-  /** Who plans (ADR-0009) — a vendor provider id or one of the harness planners. */
-  | { type: 'setPlanner'; provider: string }
+  /**
+   * Who plans (ADR-0009) — a vendor provider id or one of the harness planners.
+   * `requestId` is what the host's `plannerChoiceSaved` answers.
+   */
+  | { type: 'setPlanner'; provider: string; requestId: string }
   /** The planner's own model and thinking effort, a pair so neither can outlive the other. */
   | { type: 'setPlannerModel'; modelId: string; effort?: string }
   /**
@@ -282,6 +285,13 @@ export type HostToWebview =
    * before the save can neither settle the click nor undo it.
    */
   | { type: 'runnerChoiceSaved'; requestId: string; runnerId: RunnerId; enabled: boolean }
+  /**
+   * The answer to one `setPlanner`, saved, refused or failed, sent once the
+   * planner state and model catalog it led to have been sent. Only this
+   * settles a planner pill click: a planner state names no request, so one
+   * from a detection that began before the save cannot settle it.
+   */
+  | { type: 'plannerChoiceSaved'; requestId: string }
   /** The remembered plan dock height in px; absent until the user first drags it. */
   | { type: 'planDockHeight'; height?: number }
   /** The user's autonomy level, run settings (ADR-0030) and parallel limit, sent on ready and after each change. */

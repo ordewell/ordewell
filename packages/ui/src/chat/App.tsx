@@ -135,7 +135,7 @@ export default function App({ layout = 'chat', selection, goal }: {
   const delegationOffered = useDelegationOffered() || told;
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
-    runnerList, enabledRunnerIds, pendingRunners, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
+    runnerList, enabledRunnerIds, pendingRunners, pendingPlanner, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, detectionError, isReady, modelDiscoveryErrors,
     runnerDiscoveryErrors,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
@@ -207,8 +207,8 @@ export default function App({ layout = 'chat', selection, goal }: {
   const nextStartRequest = useRef(0);
   // Prefixed per page: a reload starts the count again, and an answer still
   // on its way to the old page must not match a click on the new one.
-  const runnerRequestPrefix = useRef(Math.random().toString(36).slice(2));
-  const nextRunnerRequest = useRef(0);
+  const choiceRequestPrefix = useRef(Math.random().toString(36).slice(2));
+  const nextChoiceRequest = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const planRef = useRef(plan);
   planRef.current = plan;
@@ -399,8 +399,8 @@ export default function App({ layout = 'chat', selection, goal }: {
   // state wanted, which keeps a quick second click or a repeat from flipping
   // it back; the pill shows the click until the host answers this request.
   const handleRunnerPill = useCallback((runnerId: RunnerId, enabled: boolean) => {
-    nextRunnerRequest.current += 1;
-    const requestId = `${runnerRequestPrefix.current}-${nextRunnerRequest.current}`;
+    nextChoiceRequest.current += 1;
+    const requestId = `${choiceRequestPrefix.current}-${nextChoiceRequest.current}`;
     dispatch({ type: 'runnerChoiceRequested', runnerId, enabled, requestId });
     bridge.post({ type: 'setRunnerEnabled', runnerId, enabled, requestId });
   }, []);
@@ -803,22 +803,31 @@ export default function App({ layout = 'chat', selection, goal }: {
     bridge.post({ type: 'changeSettings', change });
   }, []);
 
-  // The host resolves the target backend's model catalog before it pushes the
-  // new provider, and that discovery can spawn a cold CLI (ADR-0009), so the
-  // pill would sit unchanged for the whole wait. Light the pick at once and drop
-  // the hint on the host's next planner state, whatever it says: the host, not
-  // this, decides, so a switch it declined or failed must not stay lit.
-  const [pendingPlanner, setPendingPlanner] = useState<string | null>(null);
-  useEffect(() => { setPendingPlanner(null); }, [planner]);
-  const activePlanner = pendingPlanner ?? planner.provider;
+  // The host resolves the target backend's model catalog before it answers,
+  // and that discovery can spawn a cold CLI (ADR-0009), so the pill would sit
+  // unchanged for the whole wait. Light the pick at once and hold it until the
+  // host answers this request: the host, not this, decides, so a switch it
+  // declined or failed settles on the planner it reports, and a planner state
+  // sent for an earlier pick or an unrelated detection leaves a later pick lit.
+  const activePlanner = pendingPlanner?.provider ?? planner.provider;
   /** The backend behind that choice, whose own auth verdict the Settings row carries. */
   const activeBackend = planner.backends.find((b) => b.id === activePlanner);
+  /**
+   * While a switch is with the host, the model, effort and catalog on hand are
+   * the previous planner's: offering them would save a model for a runner that
+   * is no longer the planner, so the picker waits for the answer.
+   */
+  const switchingTo = pendingPlanner
+    ? planner.backends.find((b) => b.id === pendingPlanner.provider)?.label ?? pendingPlanner.provider
+    : undefined;
 
   const handlePlannerChange = useCallback((provider: string) => {
     // Already the planner, or already asked for: a repeat would run the switch twice.
-    if (provider === planner.provider || provider === pendingPlanner) return;
-    setPendingPlanner(provider);
-    bridge.post({ type: 'setPlanner', provider });
+    if (provider === (pendingPlanner?.provider ?? planner.provider)) return;
+    nextChoiceRequest.current += 1;
+    const requestId = `${choiceRequestPrefix.current}-${nextChoiceRequest.current}`;
+    dispatch({ type: 'plannerChoiceRequested', provider, requestId });
+    bridge.post({ type: 'setPlanner', provider, requestId });
   }, [planner.provider, pendingPlanner]);
 
   // Before the host sends the runner list every task would read as on a runner that is off.
@@ -1215,7 +1224,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                       <span className={`planner-pill-group${signedOut ? ' signed-out' : ''}${b.id === activePlanner ? ' active' : ''}`}>
                         <button
                           type="button"
-                          className={`planner-pill${b.id === activePlanner ? ' active' : ''}${signedOut ? ' signed-out' : ''}${pendingPlanner === b.id ? ' pending' : ''}`}
+                          className={`planner-pill${b.id === activePlanner ? ' active' : ''}${signedOut ? ' signed-out' : ''}${pendingPlanner?.provider === b.id ? ' pending' : ''}`}
                           title={way ? way.hint : b.reason}
                           onClick={() => handlePlannerChange(b.id)}
                         >
@@ -1253,15 +1262,16 @@ export default function App({ layout = 'chat', selection, goal }: {
                 modelApiMapping={planner.runner ? {} : orchestratorModelApiMapping}
                 onChange={handleOrchestratorModelChange}
                 label={planner.runner ? 'Model & thinking effort' : 'Model'}
+                unavailable={switchingTo && `Switching to ${switchingTo}…`}
               />
-              {orchestratorModels.length === 0 && (
+              {!switchingTo && orchestratorModels.length === 0 && (
                 <div className="model-discovery-error" role="alert">
                   {planner.runner
                     ? (runnerDiscoveryErrors[planner.runner] ?? <>No models discovered for this agent yet: run <code>/refresh</code>.</>)
                     : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
                 </div>
               )}
-              {Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
+              {!switchingTo && Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
                 <div className="model-discovery-error" role="alert">
                   ⚠ Couldn't load models for{' '}
                   {Object.entries(modelDiscoveryErrors)

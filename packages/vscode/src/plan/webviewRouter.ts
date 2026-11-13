@@ -15,7 +15,8 @@ export interface ExtensionHandlers {
   ready(): void;
   refreshModels(): void;
   runSlashCommand(text: string): Promise<void>;
-  setPlanner(provider: string): Promise<void>;
+  /** Switch who plans; the host answers `requestId` once the planner it holds has been sent, whether or not the switch lands. */
+  setPlanner(provider: string, requestId: string): Promise<void>;
   setPlannerModel(modelId: string, effort?: string): Promise<void>;
   /** Open (or focus) the on-demand task-log tab for a structured task (ADR-0018, V1). */
   openTaskLog(taskId: string): void;
@@ -175,7 +176,7 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       deps.extension.setPlanDockHeight(msg.height);
       return;
     case 'setPlanner':
-      await deps.extension.setPlanner(msg.provider);
+      await deps.extension.setPlanner(msg.provider, msg.requestId);
       return;
     case 'setPlannerModel':
       await deps.extension.setPlannerModel(msg.modelId, msg.effort);

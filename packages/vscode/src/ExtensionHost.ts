@@ -331,7 +331,15 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       ready: onWebviewReady,
       refreshModels: () => refreshAgentsAndModels(),
       runSlashCommand: (text) => handleSlashCommand(text, slashDeps()),
-      setPlanner: (provider) => planner.apply(provider),
+      setPlanner: async (provider, requestId) => {
+        try {
+          await planner.apply(provider);
+        } finally {
+          // The chat keeps the model picker closed until this request is
+          // answered; a refused switch has already re-sent the planner held.
+          services.chatProvider.acknowledgePlannerChoice(requestId);
+        }
+      },
       setPlannerModel: (modelId, effort) => planner.setModel(modelId, effort),
       openTaskLog: (taskId) => taskLogs.open(taskId),
       openChild: (childId) => childViews.open(childId),

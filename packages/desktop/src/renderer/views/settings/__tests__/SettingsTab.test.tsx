@@ -301,7 +301,7 @@ describe('the Settings view', () => {
     await screen.findByRole('heading', { name: 'Planner' });
     const reads = w.daemon.calls('runners.list').length;
 
-    await act(async () => { await daemonHost(WORKSPACE).handle({ type: 'setPlanner', provider: 'codex' }); });
+    await act(async () => { await daemonHost(WORKSPACE).handle({ type: 'setPlanner', provider: 'codex', requestId: 'r1' }); });
 
     await waitFor(() => expect(w.daemon.calls('runners.list').length).toBeGreaterThan(reads));
     // The row still stands: the refresh is in place, not a blank "Loading settings…".

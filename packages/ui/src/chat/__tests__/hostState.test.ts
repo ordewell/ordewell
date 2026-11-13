@@ -451,3 +451,26 @@ describe('model discovery errors', () => {
     expect(shown.runnerDiscoveryErrors).toEqual({});
   });
 });
+
+describe('a planner pill clicked', () => {
+  const pick = (state: HostState, provider: string, requestId: string): HostState =>
+    reduceHost(state, { type: 'plannerChoiceRequested', provider, requestId });
+  const answered = (state: HostState, requestId: string): HostState =>
+    reduceHost(state, msg({ type: 'plannerChoiceSaved', requestId }));
+  const planner = (state: HostState, provider: string): HostState =>
+    reduceHost(state, msg({ type: 'setPlannerBackends', backends: [], provider, runner: provider }));
+
+  it('stays pending through the planner states the host sends, until it answers that pick', () => {
+    let state = pick(INITIAL_HOST_STATE, 'codex', 'p-1');
+    state = planner(state, 'codex');
+    expect(state.pendingPlanner).toEqual({ provider: 'codex', requestId: 'p-1' });
+    expect(answered(state, 'p-1').pendingPlanner).toBeNull();
+  });
+
+  it('keeps the later of two picks pending when the earlier one is answered', () => {
+    const state = pick(pick(INITIAL_HOST_STATE, 'codex', 'p-1'), 'opencode', 'p-2');
+    const first = answered(state, 'p-1');
+    expect(first.pendingPlanner).toEqual({ provider: 'opencode', requestId: 'p-2' });
+    expect(answered(first, 'p-2').pendingPlanner).toBeNull();
+  });
+});
