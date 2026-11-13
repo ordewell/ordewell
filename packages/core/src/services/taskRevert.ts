@@ -2,7 +2,7 @@ import type { IsolationRevertResult, IsolationRevertTask, IsolationRun, Isolatio
 import { checkOf, loopEnded } from '../models/Loop';
 import type { Task } from '../models/Task';
 import { quotedList } from '../utils/quotedList';
-import { changedReposOf } from './isolationRecord';
+import { dependentsOf, landedTaskOf, landedWork, mayHaveLanded, startedOlder, unreadLanding } from './LandingLedger';
 
 /*
  * What a revert of one task takes and whether it may go ahead (ADR-0054): the
@@ -49,79 +49,11 @@ export interface RevertScopeInput {
 
 const ref = ({ id, order, title }: Readonly<Task>): IsolationTaskRef => ({ taskId: id, order, title });
 
-/** Every run started now holds {@link IsolationRun.carried}, empty or not, so one without it was saved by a build that kept no such record. */
-export const startedOlder = (run: IsolationRun): boolean => run.carried === undefined;
-
 export const OLDER_RUN_REFUSAL = 'This run started on an older version of Ordewell, so Ordewell cannot tell what its merges carried, and a revert could take work that another task still counts as landed. Nothing was reverted.';
-
-/**
- * Whether a task has work of its own on the integration branch, this attempt's
- * or an earlier one's. A retry, a failed spawn or a continue that conflicted
- * leaves a record that is not `merged`, or none, over merges still on the branch.
- */
-function landedWork(run: IsolationRun | null, taskId: string): boolean {
-  const record = run?.tasks[taskId];
-  return run?.landings?.[taskId] !== undefined || run?.carried?.[taskId] !== undefined || (record?.status === 'merged' && changedReposOf(record).length > 0);
-}
-
-/** Whether a task of a run that did not keep its merges from the start can have landed in an attempt no record speaks for: nothing says it did not. */
-function mayHaveLanded(run: IsolationRun | null, task: Readonly<Task>): boolean {
-  const record = run?.tasks[task.id];
-  return !run?.keepsEveryLanding && !landedWork(run, task.id) && task.type === 'ai' && !task.ops && !record?.readOnly && (task.attempted === true || record !== undefined);
-}
 
 /** What stops a revert being all of what it says: a task that goes with it whose merges no record can name, or a dependent that may have some. */
 function unnamedLanding(run: IsolationRun | null, taken: readonly Readonly<Task>[], dependents: readonly Readonly<Task>[]): Readonly<Task> | undefined {
-  return taken.find((t) => !run?.tasks[t.id] && !run?.landedTasks?.[t.id]) ?? dependents.find((t) => mayHaveLanded(run, t));
-}
-
-/** What a task depends on in the plan, a check counting on its body as it does at a merge gate (ADR-0045 L9). */
-const dependenciesOf = (task: Readonly<Task>): string[] => [...task.dependencies, ...task.loop?.body ?? []];
-
-/** What a task depends on, directly or not, for {@link IsolationRun.landedOn} to keep as it lands. */
-export function landedOnOf(taskId: string, tasks: readonly Readonly<Task>[]): string[] {
-  const found = new Set<string>();
-  const queue = [taskId];
-  for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-    const task = tasks.find((t) => t.id === id);
-    for (const dependency of task ? dependenciesOf(task) : []) {
-      if (found.has(dependency)) continue;
-      found.add(dependency);
-      queue.push(dependency);
-    }
-  }
-  return [...found];
-}
-
-/** Everything that depends on the task, directly or not, by the plan or by what a landing kept: the plan lets go of a task that leaves it, and of what stood on it through that task. */
-function dependentIds(tasks: readonly Readonly<Task>[], run: IsolationRun | null, taskId: string): Set<string> {
-  const edges = new Map(tasks.map((t) => [t.id, dependenciesOf(t)]));
-  for (const [id, landedOn] of Object.entries(run?.landedOn ?? {})) edges.set(id, [...edges.get(id) ?? [], ...landedOn]);
-  const found = new Set<string>([taskId]);
-  const queue = [taskId];
-  for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-    for (const [other, dependencies] of edges) {
-      if (found.has(other) || !dependencies.includes(id)) continue;
-      found.add(other);
-      queue.push(other);
-    }
-  }
-  found.delete(taskId);
-  return found;
-}
-
-/** The tasks a revert of this one stands to change the ground of, landed or not: no start of one may be claimed while it runs. */
-export function revertReach(taskId: string, tasks: readonly Readonly<Task>[], run: IsolationRun | null): ReadonlySet<string> {
-  return new Set([taskId, ...dependentIds(tasks, run, taskId)]);
-}
-
-/** A task that landed and left the plan with no record of what it depended on, or of what to call it: whether it stands on the work nothing can say. */
-function unreadLanding(run: IsolationRun | null, tasks: readonly Readonly<Task>[]): string | undefined {
-  if (!run) return undefined;
-  const planned = new Set(tasks.map((t) => t.id));
-  const landed = [...Object.keys(run.landings ?? {}), ...Object.keys(run.carried ?? {}), ...Object.keys(run.tasks)].filter((id) => !planned.has(id) && landedWork(run, id));
-  const unread = landed.find((id) => !run.landedOn?.[id] || !(run.tasks[id] ?? run.landedTasks?.[id]));
-  return unread === undefined ? undefined : (run.tasks[unread] ?? run.landedTasks?.[unread])?.title ?? unread;
+  return taken.find((t) => !landedTaskOf(run, t.id)) ?? dependents.find((t) => mayHaveLanded(run, t));
 }
 
 /** The check of a loop the task is in, while that loop has not ended. */
@@ -138,7 +70,7 @@ export function revertScope(taskId: string, { tasks, run, live, resolvers }: Rev
   if (!landedWork(run, taskId)) {
     return { taskIds: [], refusal: { reason: 'no-landing', message: `Task "${task.title}" landed nothing on the integration branch, so there is nothing to revert.` } };
   }
-  const reached = dependentIds(tasks, run, taskId);
+  const reached = dependentsOf(tasks, run, taskId);
   const dependents = tasks.filter((t) => reached.has(t.id));
   const taken = [task, ...dependents.filter((t) => landedWork(run, t.id))];
   const leftThePlan = [...reached].filter((id) => !tasks.some((t) => t.id === id) && landedWork(run, id));
@@ -155,7 +87,7 @@ export function revertScope(taskId: string, { tasks, run, live, resolvers }: Rev
     return { taskIds, refusal: { reason: 'no-own-merge', message: `Ordewell has no record of which merges landed task "${unnamed.title}", so it cannot tell what a revert would have to take. Nothing was reverted.` } };
   }
 
-  const unread = unreadLanding(run, tasks);
+  const unread = unreadLanding(run, new Set(tasks.map((t) => t.id)));
   if (unread !== undefined) {
     return { taskIds, refusal: { reason: 'no-own-merge', message: `Task "${unread}" landed and left the plan, and Ordewell has no record of what it depended on, so it cannot tell whether that work stands on this. Nothing was reverted.` } };
   }

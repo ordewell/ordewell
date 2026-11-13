@@ -7,12 +7,14 @@ import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
+import { legacySkipOrigin, type SkipOrigin } from './SkipOrigin';
 import type { HandoffDigest } from './Handoff';
 import type { DelegatedBudget, TaskScope } from './Delegation';
 import { executionStateOf } from './TaskExecution';
 import type { Grant } from '../services/Mandate';
 import { SKILL_NAME_PATTERN } from '../conversation/skillTokens';
-import { subtreeIds, walkPlan } from '../services/PlanTree';
+import { walkPlan } from '../services/PlanTree';
+import { remove } from '../services/PlanGraph';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import { interruptedVerdict } from '../services/VerdictEngine';
 
@@ -79,14 +81,15 @@ export type TaskMode = string;
 /**
  * Why an `awaiting_user` task waits (ADR-0018, W1): a structured turn that
  * ended without a `task_complete` call, a checkpoint question, work that did not
- * land, an ops task that changed tracked files (ADR-0020), or its runner's
- * usage limit. Saved, so no surface has to guess it from whether an attempt
- * is live.
+ * land because it conflicts (`conflict`) or because git refused to commit or
+ * merge it for some other reason, such as no author identity (`landing-failed`),
+ * an ops task that changed tracked files (ADR-0020), or its runner's usage
+ * limit. Saved, so no surface has to guess it from whether an attempt is live.
  */
-export type AwaitingReason = 'input' | 'checkpoint' | 'question-lost' | 'conflict' | 'files-changed' | 'usage-limit';
+export type AwaitingReason = 'input' | 'checkpoint' | 'question-lost' | 'conflict' | 'landing-failed' | 'files-changed' | 'usage-limit';
 
 export function isAwaitingReason(value: unknown): value is AwaitingReason {
-  return value === 'input' || value === 'checkpoint' || value === 'question-lost' || value === 'conflict' || value === 'files-changed' || value === 'usage-limit';
+  return value === 'input' || value === 'checkpoint' || value === 'question-lost' || value === 'conflict' || value === 'landing-failed' || value === 'files-changed' || value === 'usage-limit';
 }
 
 export interface TaskModelAssignment {
@@ -126,6 +129,9 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
     const effort = (task as { thinkingEffort?: unknown }).thinkingEffort;
     if (typeof effort === 'string' && task.assignedModel && !task.assignedModel.thinkingEffort) task.assignedModel.thinkingEffort = effort;
     delete (task as { thinkingEffort?: unknown }).thinkingEffort;
+    // A loop's own skip was told from a person's by its text; it now says so itself (ADR-0045 L7).
+    const origin = legacySkipOrigin(task);
+    if (origin) task.skipOrigin = origin;
     migrateLoadedTasks(task.subtasks ?? []);
   }
 }
@@ -331,6 +337,13 @@ export interface Task {
   carriedFrom?: RunnerId;
   /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
   skipReason?: string;
+  /**
+   * Who skipped it, set with `skipReason` and only while `status` is `skipped`.
+   * A plan saved before this field has it only on a loop's own skips, which
+   * loading gives it from their text ({@link migrateLoadedTasks}); any other
+   * skip of such a plan has none, and reads as not the loop's.
+   */
+  skipOrigin?: SkipOrigin;
   /**
    * The user reverted its landed work (ADR-0054): saved with the plan, so the
    * hold that keeps it from running again outlives this process. Set only
@@ -873,6 +886,13 @@ export interface PlannerContextPause {
   done?: string[];
   /** More such calls ran than `done` keeps: the refusal could not list all of them, and a retry without the live context stays refused. */
   doneTruncated?: true;
+  /**
+   * A planner tool's change in the paused turn landed its inputs with it:
+   * the transcript holds them already, and they wait only for a retry to
+   * answer. A retry writes none of them again, and a Stop drops every one,
+   * wake-ups included, since the planner has been told them.
+   */
+  landed?: true;
 }
 
 /**
@@ -1265,30 +1285,9 @@ export function addTaskToPlan(tasks: readonly Task[], partial: Partial<Task>): T
   return renumberTasks([...tasks, newTask]);
 }
 
-/**
- * A removed task leaves every dependency on it, and every loop's body it was
- * in (ADR-0045 L8): a loop it leaves with no body is no loop. Whether its
- * removal may go ahead at all — a loop's check may not be removed — is the
- * caller's to say.
- */
+/** A task out of the plan, with every edge into it: `PlanGraph.remove` owns the rewrite, as it does for merge and split. */
 export function removeTaskFromPlan(tasks: readonly Task[], taskId: string): Task[] {
-  const removed = subtreeIds(tasks, taskId);
-  const prune = (level: readonly Task[]): Task[] => level
-    .filter((t) => !removed.has(t.id))
-    .map((t) => {
-      const pruned: Task = {
-        ...t,
-        dependencies: t.dependencies.filter((depId) => !removed.has(depId)),
-        subtasks: prune(t.subtasks),
-      };
-      if (!t.loop?.body.some((id) => removed.has(id))) return pruned;
-      const body = t.loop.body.filter((id) => !removed.has(id));
-      if (body.length > 0) return { ...pruned, loop: { ...t.loop, body } };
-      delete pruned.loop;
-      delete pruned.loopRound;
-      return pruned;
-    });
-  return renumberTasks(prune(tasks));
+  return remove(tasks, taskId);
 }
 
 export function updateTaskInPlan(tasks: readonly Task[], taskId: string, changes: Partial<Task>): Task[] {
@@ -1372,6 +1371,11 @@ export function stampOrigin(before: readonly Task[], after: readonly Task[], byS
 
 /** Done, running, or held for the user: execution state only a runner or the user can change. */
 const SETTLED_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(['completed', 'in_progress', 'awaiting_user']);
+
+/** Whether {@link keepExecutionState} keeps this task exactly as it stands, whatever a rewrite says of it. */
+export function isSettledTask(task: Pick<Task, 'status'>): boolean {
+  return SETTLED_STATUSES.has(task.status);
+}
 
 function holdsSettledWork(task: Task): boolean {
   return SETTLED_STATUSES.has(task.status) || (task.subtasks ?? []).some(holdsSettledWork);

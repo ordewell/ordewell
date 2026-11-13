@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import {
   flattenTasks,
+  isCardEdit,
   NoPlanError,
   parseExecutionCommand,
   resolveUserTaskRef,
@@ -300,6 +301,20 @@ export function plansRoute(pool: OrchestratorPool) {
       // dependency list against the whole plan, and lands it as one save. An
       // empty patch still asks whether the task exists at all.
       const result = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).updateTask(c.req.param('taskId'), changes);
+      if (!result) return refuse(c, 404, 'Task not found', 'task_not_found');
+      return c.json({ ok: true } satisfies OkResponse);
+    } catch (err) {
+      return failure(c, err, 'task edit');
+    }
+  });
+
+  // The card's edit, whose not-started precondition the session derives from
+  // its own run facts: a PUT of the same fields is the wider direct edit.
+  router.post('/:sessionId/tasks/:taskId/card-edit', async (c) => {
+    try {
+      const edit = await jsonObject(c);
+      if (!isCardEdit(edit)) return refuse(c, 400, 'Unknown card edit');
+      const result = await pool.session(c.req.param('sessionId'), callerWorkspace(c)).cardEdit(c.req.param('taskId'), edit);
       if (!result) return refuse(c, 404, 'Task not found', 'task_not_found');
       return c.json({ ok: true } satisfies OkResponse);
     } catch (err) {

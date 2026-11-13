@@ -731,4 +731,35 @@ describe('Session planner read limit', () => {
       session.destroy();
     }
   });
+
+  it('gives back a run_command the envelope refused, so refused commands do not use up the limit (ADR-0068 R1)', async () => {
+    const mcp = fakeMcpServer();
+    const fsAdapter = new ProbeFileSystem();
+    const answers: McpToolReply[] = [];
+    const spawned = fakeSpawn([(_written, proc) => {
+      void (async () => {
+        const handler = mcp.plannerHandlers.at(-1)!;
+        const context = { signal: new AbortController().signal };
+        for (const command of ['rm a.ts', 'rm b.ts', 'ls']) answers.push(await handler.runCommand!({ command }, context));
+        proc.emitStdout(fixture('claude-code', 'prose'));
+      })();
+    }]);
+    const config = fakeConfig({ aiProvider: 'claude-code', autonomousMode: false });
+    const svc = new CliAgentAiService(config, {
+      spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux',
+      isDirectory: () => true, exists: () => true, workspaceRoot: () => '/repo', mcpServer: mcp,
+    });
+    const session = makeSession({
+      config, aiService: svc, mcpServer: mcp, fsAdapter,
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerReadLimit: { calls: 2 } }),
+    });
+    try {
+      await session.startPlanning('upgrade the library', ['claude-code']);
+      expect(fsAdapter.bashCalls).toEqual(['ls']);
+      expect(JSON.stringify(answers[0])).toContain('Command refused');
+      expect(answers[2]).not.toEqual(expect.objectContaining({ isError: true }));
+    } finally {
+      session.destroy();
+    }
+  });
 });

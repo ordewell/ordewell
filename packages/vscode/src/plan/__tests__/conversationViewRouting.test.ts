@@ -72,3 +72,25 @@ describe('planner events reach the webview through the conversation view', () =>
     expect(screen.posted).toEqual([{ type: 'plannerLiveness' }]);
   });
 });
+
+describe('a regenerated plan reaches the host before the turn returns', () => {
+  it('adopts the Session\'s plan when it announces one, so a reload saves it, not the old plan', () => {
+    const oldPlan = { tasks: [{ id: 'a' }] };
+    const newPlan = { tasks: [{ id: 'b' }] };
+    let current = oldPlan;
+    const showPlan = vi.fn();
+    const persistState = vi.fn();
+    const deps = {
+      session: { planState: newPlan, activity: [], isExecuting: false, status: 'planned' },
+      chatProvider: { view: { receive: () => ({ type: 'plan', dock: 'draft' }) }, showPlan },
+      getCurrentPlan: () => current,
+      setCurrentPlan: (p: typeof oldPlan) => { current = p; },
+      persistState,
+    } as unknown as PlanManagerDeps;
+
+    handleSessionMessage({ type: 'plan_generated' } as unknown as SessionMessage, deps);
+
+    expect(current).toBe(newPlan);
+    expect(showPlan).toHaveBeenCalledWith(newPlan, 'draft');
+  });
+});

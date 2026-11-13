@@ -236,7 +236,7 @@ describe('the revert\'s place on the queue', () => {
     await adopted;
     expect(git(root, 'rev-parse', integration)).toBe(tip);
     expect(settled).toEqual([]);
-    expect(controller.current?.tasks[t.id].status).toBe('merged');
+    expect(controller.planIsolation?.run.tasks[t.id].status).toBe('merged');
   });
 
   it('records the tips and has the run saved before its first commit, and takes the task back in one step', async () => {

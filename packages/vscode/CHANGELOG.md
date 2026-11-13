@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **A run's notices now read as they do in the terminal.** The timeline says
+  "Plan needs your sign-off." when a plan awaits review, "Plan approved." once
+  it is, and "Execution finished: 2/3 tasks complete · 1 failed." (or
+  "stopped") when a run ends. A task that starts twice without a retry between
+  is announced once.
+
 ### Fixed
 
 - **Stopping a run no longer leaves a half-opened workspace behind.** A task

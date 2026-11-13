@@ -118,9 +118,9 @@ describe('the Needs you list', () => {
   });
 
   it('maps every kind to a tone, so a failure never borrows the amber that means a question', () => {
-    const kinds: Array<Escalation['kind']> = ['approval', 'checkpoint', 'input', 'conflict', 'files-changed', 'usage-limit', 'failed', 'out-of-rounds', 'merge-gate', 'unapproved', 'on-hold', 'no-prompt', 'by-hand', 'merge-all', 'blocked-run'];
+    const kinds: Array<Escalation['kind']> = ['approval', 'checkpoint', 'input', 'conflict', 'landing-failed', 'files-changed', 'usage-limit', 'failed', 'out-of-rounds', 'merge-gate', 'unapproved', 'on-hold', 'no-prompt', 'by-hand', 'merge-all', 'blocked-run'];
     const tones = Object.fromEntries(kinds.map((kind) => [kind, kindTone(kind)]));
-    expect(tones).toMatchObject({ failed: 'failed', 'out-of-rounds': 'failed', conflict: 'failed', 'blocked-run': 'blocked', 'merge-gate': 'merge', 'merge-all': 'merge', approval: 'attention', input: 'attention' });
+    expect(tones).toMatchObject({ failed: 'failed', 'out-of-rounds': 'failed', conflict: 'failed', 'landing-failed': 'failed', 'blocked-run': 'blocked', 'merge-gate': 'merge', 'merge-all': 'merge', approval: 'attention', input: 'attention' });
   });
 
   it('answers inline, asking first for an option that carries a note', async () => {

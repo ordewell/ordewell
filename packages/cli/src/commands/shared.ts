@@ -1,6 +1,7 @@
 import { createInterface } from 'readline';
 import { ensureDaemon, resolvePort } from '../daemon';
-import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
+import { ApiClient, deliveryOf } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog, type Catalog } from '../catalog';
 import { findEnvFile, writeEnvVar } from '../utils/env';
 import { workspaceOf } from '../utils';
@@ -39,7 +40,7 @@ export function headlessSignedOut(message: string): string {
  * does not have, and sends the reason as data so a client can re-word it.
  */
 export function headlessPlannerRefusal(err: unknown): string | null {
-  return err instanceof DaemonError && err.plannerNotReady ? describePlannerNotReady(err.plannerNotReady, HEADLESS_CLI_COMMANDS) : null;
+  return err instanceof DaemonRefusal && err.plannerNotReady ? describePlannerNotReady(err.plannerNotReady, HEADLESS_CLI_COMMANDS) : null;
 }
 
 /**

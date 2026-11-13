@@ -271,13 +271,13 @@ async function end(env: Env, how: End): Promise<IsolationTaskRecord | undefined>
       const spawned = env.spawnsOfT1();
       void orchestrator.forceStartTask('t1');
       await vi.waitFor(() => expect(env.spawnsOfT1()).toBe(spawned + 1));
-      const newer = orchestrator.runs.current?.tasks.t1;
+      const newer = orchestrator.runs.planIsolation?.run.tasks.t1;
       expect(newer).not.toBe(env.facts.made?.record);
       env.cleanUp();
       await cancelled;
       await flushMicrotasks(30);
       // The cancel's release was decided for the record it ended, not the one running now.
-      expect(orchestrator.runs.current?.tasks.t1).toBe(newer);
+      expect(orchestrator.runs.planIsolation?.run.tasks.t1).toBe(newer);
       expect(newer?.status).toBe('active');
       orchestrator.stop();
       await vi.waitFor(() => expect(newer?.status).toBe('kept'));
@@ -290,7 +290,7 @@ async function end(env: Env, how: End): Promise<IsolationTaskRecord | undefined>
       // Its prepare waits for the held one, as git's would.
       if (env.window === 'prepare') env.release();
       await vi.waitFor(() => expect(env.spawnsOfT1()).toBe(spawned + 1));
-      const newer = orchestrator.runs.current?.tasks.t1;
+      const newer = orchestrator.runs.planIsolation?.run.tasks.t1;
       expect(newer?.status).toBe('active');
       orchestrator.stop();
       await vi.waitFor(() => expect(newer?.status).toBe('kept'));
@@ -328,7 +328,7 @@ describe('every exit of an attempt\'s spawn, against every end in its window', (
 
     const { made } = env.facts;
     if (outcome === 'newer kept') {
-      expect(orchestrator.runs.current?.tasks.t1).toBe(newer);
+      expect(orchestrator.runs.planIsolation?.run.tasks.t1).toBe(newer);
       expect(newer?.status).toBe('kept');
       return;
     }

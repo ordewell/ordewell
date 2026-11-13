@@ -31,7 +31,7 @@ describe('plan pane: a runner starting while Ordewell\'s tools attach (ADR-0025)
   it('drops it once a status update no longer carries it', () => {
     const state = joined(runTask({ attaching: 1 }));
 
-    const next = reduce(state, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
+    const next = reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
 
     expect(plain(next)).not.toContain('connecting');
   });
@@ -39,7 +39,7 @@ describe('plan pane: a runner starting while Ordewell\'s tools attach (ADR-0025)
   it('shows the hold a second miss leaves, with no progress', () => {
     const state = joined(runTask({ attaching: 2 }));
 
-    const next = reduce(state, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'pending', verdict: null, holdReason: 'could not connect to Ordewell\'s tools; start it again' }], sessionId: 's1' }).state;
+    const next = reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'pending', verdict: null, holdReason: 'could not connect to Ordewell\'s tools; start it again' }] }, sessionId: 's1' }).state;
 
     expect(plain(next)).not.toContain('connecting');
     expect(plain(next)).toContain('could not connect to Ordewell\'s tools');

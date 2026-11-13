@@ -42,11 +42,11 @@
  * classifying something else. See {@link Dialect}.
  */
 
-import type { ShellDialect } from './researchShell';
-import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment } from './shellLexer';
+import { ParsedLine, type LineShell } from './parsedLine';
+import { SHELL_STATE_COMMANDS, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
-import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
-import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
+import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
+import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqProgramEnd, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 import { EFFECT_ROUTE } from './effectRoute';
@@ -103,7 +103,7 @@ const onlyAction = (...reads: string[]) => (after: string[]): boolean =>
  * it, and `symbolic-ref` with a second name writes, so a flag value counted as
  * a name refuses rather than asks.
  */
-const GIT_PROMPTABLE: Record<string, (after: string[]) => boolean> = {
+const GIT_PROMPTABLE: Record<string, (after: string[], seg: Segment) => boolean> = {
   'ls-remote': () => true,
   'for-each-ref': () => true,
   'show-ref': () => true,
@@ -128,7 +128,9 @@ const GIT_PROMPTABLE: Record<string, (after: string[]) => boolean> = {
   'bisect': onlyAction('log'),
   'sparse-checkout': onlyAction('list'),
   'reflog': onlyAction('show', 'exists'),
-  'symbolic-ref': (after) => after.filter((a) => !a.startsWith('-')).length <= 1,
+  // A second operand writes the ref, and a word the shell may split may be one.
+  'symbolic-ref': (after, seg) => after.filter((a) => !a.startsWith('-')).length <= 1
+    && !after.some((a) => shellRewrites(seg, a)),
   // `-w` writes the object; git's shared flag set keeps it for `git diff -w`.
   'hash-object': (after) => !after.some((a) => /^-[^-]*w/.test(a)),
 };
@@ -316,29 +318,23 @@ const MULTIPLEXERS = ['git', 'npm', 'yarn', 'pnpm', 'npx', 'cargo', 'go', 'dotne
 
 
 /**
- * Options threaded through classification.
- *
- * `dialect` is keyed to the interpreter rather than the OS on purpose: a Windows
- * host that has Git Bash runs the planner's commands in a POSIX shell (see
- * {@link resolveResearchShell}), and classifying those under cmd.exe rules
- * would be the same mismatch in the other direction. Callers pass the dialect of
- * the shell they are actually going to use; omitting it falls back to the host
- * default.
+ * What classification weighs beyond the line itself. The shell the line runs
+ * in is not here: it is read once into the {@link ParsedLine}.
  */
-export interface CommandPolicyOptions {
-  dialect?: ShellDialect;
+export interface PolicyInputs {
   /** Only flags generated from vetted DNS answers by BaseFileSystem, never caller input. */
   trustedWebResolves?: ReadonlySet<string>;
   autonomous?: boolean;
   approvalMode?: 'ask' | 'allow' | 'deny';
-  /**
-   * `CDPATH` is set in the environment the command will run in. A relative
-   * `cd` may then land in a directory the command line never names, so `cd`
-   * stops being navigation the classifier can follow.
-   */
-  cdpathSet?: boolean;
   /** The planner's standing approvals (ADR-0026); an `ask` command they cover carries {@link CommandClassification.allowedBy}. */
   allow?: PlannerAllowlist;
+}
+
+/** A string line's shell with the policy inputs, for a caller that classifies one line once. */
+export type CommandPolicyOptions = PolicyInputs & LineShell;
+
+function lineOf(line: string | ParsedLine, shell: LineShell): ParsedLine {
+  return typeof line === 'string' ? ParsedLine.parse(line, shell) : line;
 }
 
 export type CommandTier = 'auto' | 'ask' | 'refuse';
@@ -416,11 +412,11 @@ function looksLikePath(arg: string): boolean {
  * read-only, but their arguments can still point anywhere on disk, which is
  * exactly the escape path confinement closes for `readFile`/`glob`/`grep`.
  */
-export function pathRefs(command: string, opts: CommandPolicyOptions = {}): PathRef[] {
-  const dialect = dialectFor(opts.dialect);
-  // Lexed exactly as `classifyCommand` lexes it, so a leading newline cannot change what is followed.
-  return lexAll(command.trim(), dialect, opts.cdpathSet).segments.flatMap((seg) => {
-    const patterns = patternArgs(seg);
+export function pathRefs(line: ParsedLine): PathRef[];
+export function pathRefs(command: string, shell?: LineShell): PathRef[];
+export function pathRefs(line: string | ParsedLine, shell: LineShell = {}): PathRef[] {
+  return lineOf(line, shell).segments.flatMap((seg) => {
+    const { patterns } = patternArgs(seg);
     const cwd = seg.cwd ?? [];
     return [...seg.args.filter((_, i) => !patterns.has(i)), ...seg.inputs]
       .flatMap(pathIn)
@@ -434,9 +430,10 @@ export function pathRefs(command: string, opts: CommandPolicyOptions = {}): Path
  * classification: a line the classifier refuses unread can still run sealed,
  * and the user's exclusion holds for it all the same.
  */
-export function excludedBy(command: string, allow: PlannerAllowlist, opts: CommandPolicyOptions = {}): string | undefined {
-  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
-  for (const seg of segments) {
+export function excludedBy(line: ParsedLine, allow: PlannerAllowlist): string | undefined;
+export function excludedBy(command: string, allow: PlannerAllowlist, shell?: LineShell): string | undefined;
+export function excludedBy(line: string | ParsedLine, allow: PlannerAllowlist, shell: LineShell = {}): string | undefined {
+  for (const seg of lineOf(line, shell).segments) {
     const rule = commandExcludedBy(allow, [seg.binary, ...seg.args]);
     if (rule) return rule;
   }
@@ -452,11 +449,12 @@ export function excludedBy(command: string, allow: PlannerAllowlist, opts: Comma
  * run sealed under a request that names the whole loop. Read-only segments
  * carry no scope and are left out, as they are never asked about.
  */
-export function innerCommandScopes(command: string, opts: CommandPolicyOptions = {}): string[] {
-  const dialect = dialectFor(opts.dialect);
-  const { segments } = lexAll(command.trim(), dialect, opts.cdpathSet);
+export function innerCommandScopes(line: ParsedLine): string[];
+export function innerCommandScopes(command: string, shell?: LineShell): string[];
+export function innerCommandScopes(input: string | ParsedLine, shell: LineShell = {}): string[] {
+  const line = lineOf(input, shell);
   const scopes = new Set<string>();
-  for (const seg of segments) {
+  for (const seg of line.segments) {
     // The lexer keeps a compound-command opener as the segment's first word and
     // the command it heads among the words after it (`do npm test` is one
     // segment). Step past the openers, then unwrap any runner, so the command a
@@ -466,8 +464,8 @@ export function innerCommandScopes(command: string, opts: CommandPolicyOptions =
     let args = seg.args;
     while (SHELL_KEYWORDS.includes(binary) && args.length > 0) [binary, ...args] = args;
     if (SHELL_KEYWORDS.includes(binary)) continue;
-    const { seg: inner, runner } = unwrap({ ...seg, binary, args, binaryPath: undefined }, dialect);
-    if (runner !== undefined || !isAuto(inner, opts)) scopes.add(scopeFor(inner));
+    const { seg: inner, runner } = unwrap({ ...seg, binary, args, binaryPath: undefined }, line.dialect);
+    if (runner !== undefined || !isAuto(inner, line)) scopes.add(scopeFor(inner));
   }
   return [...scopes];
 }
@@ -477,14 +475,14 @@ export function innerCommandScopes(command: string, opts: CommandPolicyOptions =
  * judged from the workspace root: worth saying in a refusal, since the model
  * otherwise sees a path it never meant.
  */
-export function cdUnfollowed(command: string, opts: CommandPolicyOptions = {}): boolean {
-  const { segments } = lexAll(command.trim(), dialectFor(opts.dialect), opts.cdpathSet);
+export function cdUnfollowed(line: ParsedLine): boolean {
+  const { segments } = line;
   return segments.some((seg, i) => !seg.nested && literalCdTarget(seg) !== undefined
     && segments.slice(i + 1).some((later) => !later.nested && !later.cwd?.length));
 }
 
-export function pathLikeArgs(command: string, opts: CommandPolicyOptions = {}): string[] {
-  return pathRefs(command, opts).map((r) => r.path);
+export function pathLikeArgs(command: string, shell: LineShell = {}): string[] {
+  return pathRefs(command, shell).map((r) => r.path);
 }
 
 function pathIn(a: string): string[] {
@@ -538,42 +536,70 @@ const PATTERN_ARGS: Record<string, PatternSpec> = {
   },
 };
 
+/** Which of `seg.args` stand where a pattern or filter program does. */
+interface PatternWords {
+  /** Never opened as files: kept out of confinement and the climb check. */
+  patterns: Set<number>;
+  /**
+   * In a pattern's place, but the shell may make the word several: the first
+   * is the pattern and the rest are opened, so `grep -e /etc/p* src` searches
+   * /etc/profile. Such a word is confined like a path.
+   */
+  split: Set<number>;
+}
+
 /**
- * Indices of `seg.args` that are patterns or filter programs, not paths.
+ * Where `seg.args` holds patterns or filter programs, not paths.
  *
  * Fails closed: a flag outside the binary's declared set might take the next
  * token or not, so past one nothing is called a pattern. Mistaking a path for a
  * pattern would skip confinement; the reverse costs one prompt.
  */
-function patternArgs(seg: Segment): Set<number> {
-  if (SED_FAMILY.includes(seg.binary)) return new Set(sedProgramArgs(seg.binary, seg.args));
-  if (AWK_FAMILY.includes(seg.binary)) return new Set(awkProgramArgs(seg.binary, seg.args));
+function patternArgs(seg: Segment): PatternWords {
+  const none: PatternWords = { patterns: new Set(), split: new Set() };
+  if (SED_FAMILY.includes(seg.binary)) return { ...none, patterns: new Set(sedProgramArgs(seg.binary, seg.args)) };
+  if (AWK_FAMILY.includes(seg.binary)) return { ...none, patterns: new Set(awkProgramArgs(seg.binary, seg.args)) };
   const rule = PATTERN_ARGS[seg.binary];
   const spec = FLAG_POLICY[seg.binary];
-  if (!rule || !spec) return new Set();
+  if (!rule || !spec) return none;
 
   const booleans = new Set([...(spec.booleans ?? []), ...UNIVERSAL_FLAGS]);
   const values = new Set(spec.values ?? []);
-  const found = new Set<number>();
+  const { patterns, split } = { patterns: new Set<number>(), split: new Set<number>() };
+  // An expression binary is left out: there a shifted or split pattern lands
+  // as a stray word after the expression, which find rejects.
+  const splits = (at: number) => !spec.expressionArgs && shellRewrites(seg, seg.args[at]);
   const operands: number[] = [];
   let patternGiven = false;
+  // From the first operand or flag value the shell may split, which operand is
+  // the leading pattern is the shell's to decide: `grep -v --exclude src/*
+  // /etc/passwd` makes `src/b.ts` the pattern and reads /etc/passwd. A flag's
+  // own value is not moved by it, since a split word that may become a flag or
+  // `--` is refused (scanFlags).
+  let spreadAt = Infinity;
+  const counts = (at: number) => { if (at < spreadAt && splits(at)) spreadAt = at; };
 
   for (let i = 0; i < seg.args.length; i++) {
     const token = seg.args[i];
     if (token === '--' && !spec.expressionArgs) {
-      for (let j = i + 1; j < seg.args.length; j++) operands.push(j);
+      for (let j = i + 1; j < seg.args.length; j++) { counts(j); operands.push(j); }
       break;
     }
-    if (!/^-./.test(token)) { operands.push(i); continue; }
+    if (!/^-./.test(token)) { counts(i); operands.push(i); continue; }
 
     const inSubcommand = rule.subcommand !== undefined && seg.args[operands[0]] === rule.subcommand;
     if (inSubcommand && rule.subcommandBooleans?.includes(token)) continue;
     const shape = matchFlag(spec, booleans, values, token);
-    if (shape === undefined) return new Set();
+    if (shape === undefined) return none;
     const flag = valueFlagIn(token, booleans, values) ?? flagLabel(token);
     if (rule.leadingUnless?.includes(flag)) patternGiven = true;
     const consumes = shape === 'value' && takesNextToken(seg.args[i + 1]);
-    if (rule.flags.includes(flag) && values.has(flag)) found.add(consumes ? i + 1 : i);
+    if (consumes) counts(i + 1);
+    if (rule.flags.includes(flag) && values.has(flag)) {
+      // A glob after `--name=` stays that one flag's value, however many words it becomes.
+      if (consumes) (splits(i + 1) ? split : patterns).add(i + 1);
+      else patterns.add(i);
+    }
     if (consumes) i++;
   }
 
@@ -581,9 +607,9 @@ function patternArgs(seg: Segment): Set<number> {
     const leading = rule.subcommand
       ? seg.args[operands[0]] === rule.subcommand ? operands[1] : undefined
       : operands[0];
-    if (leading !== undefined) found.add(leading);
+    if (leading !== undefined && leading <= spreadAt) (leading === spreadAt ? split : patterns).add(leading);
   }
-  return found;
+  return { patterns, split };
 }
 
 
@@ -678,18 +704,21 @@ function scopeWord(word: string): string {
  */
 function climbsByGlob(seg: Segment): boolean {
   if (!seg.globbed) return false;
-  const patterns = patternArgs(seg);
-  return [...seg.args.filter((_, i) => !patterns.has(i)), ...seg.inputs]
+  const { patterns, split } = patternArgs(seg);
+  // A split pattern is checked by what it may become: read with the rough test
+  // below, a quoted regex beside a glob (`grep -E ".*TODO" src/*.ts`) would ask.
+  if ([...split].some((i) => seg.args[i].split(/[\\/]/).some((part) => part.startsWith('.') && mayExpandTo(seg, part, '..')))) return true;
+  return [...seg.args.filter((_, i) => !patterns.has(i) && !split.has(i)), ...seg.inputs]
     .some((a) => /(^|[\\/])\.[*?[]/.test(a));
 }
 
-function isAuto(seg: Segment, opts: CommandPolicyOptions): boolean {
+function isAuto(seg: Segment, line: ParsedLine): boolean {
   // Navigation is read-only, but only a target the command line spells out, on
   // a line where nothing else can steer it. Its effect on later commands is
   // followed by `followCd`, or ignored in the fallback, where a path judged
   // from the workspace root is never more permissive than from a deeper
   // directory the root contains.
-  if (seg.binary === 'cd') return !opts.cdpathSet && !seg.cdSteered && literalCdTarget(seg) !== undefined;
+  if (seg.binary === 'cd') return !line.cdpathSet && !seg.cdSteered && literalCdTarget(seg) !== undefined;
   const printsLines = SED_FAMILY.includes(seg.binary) && sedOnlyPrints(seg.args);
   if (!AUTO_COMMANDS.includes(seg.binary) && !printsLines) return false;
   // `./cat` is whatever file the repository ships under that name, not `cat`.
@@ -767,6 +796,25 @@ function remoteListingTexts(seg: Segment): string[] {
   return scanFlags({ ...git, args: gitArgsAfterSubcommand(git) })?.operands ?? [];
 }
 
+/** find's actions that run a command, delete, or write a file: each a single word the shell may assemble. */
+const FIND_ACTIONS = ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'];
+
+/** The arguments up to and including the first one the shell passes as written. */
+function leadingWords(seg: Segment): string[] {
+  const end = seg.args.findIndex((a) => !shellRewrites(seg, a));
+  return end < 0 ? seg.args : seg.args.slice(0, end + 1);
+}
+
+/**
+ * Every flag check here compares the words as written, and the shell expands a
+ * glob, a brace list or a variable before the program sees it: `sort -k *`
+ * becomes `sort -k -oout …` once the repository holds a file named `-oout`
+ * (ADR-0008). Such a word is read as possibly any flag, so it is refused.
+ */
+function expandedFlagReason(binary: string, word: string): string {
+  return `The shell may expand "${word}" into a flag for "${binary}" (a file named "-…" matches a glob, and a variable or substitution can hold one), and flags are only read-only as written. Start a file glob with "./" or put it after "--", write variables out literally, and re-run.`;
+}
+
 function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string | undefined {
   const web = webCommand(seg, trustedResolves);
   if (web?.reason) return web.reason;
@@ -805,7 +853,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // `enable -f lib.so name` loads a shared object into the shell, which runs
   // its code on load — a program from the repository, as `source` would run a
   // script. Plain `enable` only lists or toggles builtins.
-  if (seg.binary === 'enable' && seg.args.some((a) => /^-[a-zA-Z]*f/.test(a))) {
+  if (seg.binary === 'enable' && seg.args.some((a) => /^-[a-zA-Z]*f/.test(a) || mayBecomeFlag(seg, a))) {
     return `"enable -f" loads a shared library into the shell, which runs its code. Use the read-only research tools, or describe it as a task.`;
   }
   // A shell keyword or compound-command opener (`{`, `if`, `time`, `for`, ...)
@@ -820,14 +868,29 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   }
   const subs = REFUSED_SUBCOMMANDS[seg.binary];
   if (subs) {
+    const shifter = subcommandShifter(seg);
+    if (shifter !== undefined) {
+      const written = [seg.binary, scanFlags(seg)?.operands[0]].filter((w) => w !== undefined).join(' ');
+      return `The shell may expand "${shifter}" into several words or none, so "${written}" may run another subcommand than the one written. Spell the words before the subcommand literally, in single quotes where they hold a "*", and re-run.`;
+    }
     const sub = subcommandOf(seg);
-    if (sub && subs.includes(sub)) {
-      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
+    // `npm p*` runs `npm publish` once a file of that name exists.
+    const refused = sub === undefined ? undefined : subs.find((s) => mayExpandTo(seg, sub, s));
+    if (refused) {
+      return `"${seg.binary} ${refused}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
     }
   }
   // `git branch`/`git tag` are read-only subcommands, but their delete/move
   // flag forms mutate refs. The readonly-subcommand allowlist only inspects
   // the subcommand, so these have to be caught here.
+  // bash's `printf -v NAME` assigns a shell variable, `PATH` and `CDPATH`
+  // included, which steers every later bare command and `cd` on the line to
+  // where no word names. It is the one option printf has, so it is leading:
+  // the first word, or a later one should the shell expand those before it to
+  // nothing.
+  if (seg.binary === 'printf' && leadingWords(seg).some((a) => mayBeginWith(seg, a, '-v'))) {
+    return `"printf -v" assigns a shell variable, which can change what a later command or "cd" resolves to. You are a read-only planner: print the text instead.`;
+  }
   if (seg.binary === 'git') {
     const sub = subcommandOf(seg);
     const after = gitArgsAfterSubcommand(seg);
@@ -836,7 +899,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       if (!reads) {
         return `"git ${sub}" is not a git subcommand known only to read, so it may write the repository. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
-      if (!reads(after)) {
+      if (!reads(after, seg)) {
         return `"git ${[sub, ...after].join(' ')}" is not a read-only form of "git ${sub}". You are a read-only planner: ${EFFECT_ROUTE}`;
       }
     }
@@ -851,7 +914,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     }
     if (sub === 'branch' || sub === 'tag') {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))
-        ?? after.find(swallowsRefName);
+        ?? after.find(swallowsRefName)
+        ?? after.find((a) => mayBecomeFlag(seg, a));
       if (flag) {
         return `"git ${sub} ${flag}" mutates refs. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
@@ -862,7 +926,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       // rather than a ref name, so it stays read-only.
       const listing = seg.args.includes('-l') || seg.args.includes('--list');
       const scan = scanFlags(seg);
-      const target = scan?.operands[1];
+      // A word the shell may split may put a ref name where none is written.
+      const target = scan?.operands[1] ?? (scan?.spreadAt !== undefined ? seg.args[scan.spreadAt] : undefined);
       if (!listing && target) {
         return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
@@ -872,7 +937,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // run an arbitrary inner command — the exact bypass this classifier exists
   // to close. Refuse rather than prompt: the inner command is unauditable.
   if (seg.binary === 'find') {
-    const flag = seg.args.find((a) => ['-exec', '-execdir', '-ok', '-okdir', '-delete'].includes(a));
+    const flag = seg.args.find((a) => FIND_ACTIONS.some((action) => mayExpandTo(seg, a, action)));
     if (flag) {
       return `find with "${flag}" runs an inner command this classifier cannot inspect. Use the read-only research tools on find's output, or describe the change as a task.`;
     }
@@ -883,13 +948,29 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // read. One the shell rewrites first cannot be: a `$` that survives lexing
   // may be an expansion, and which token holds it is not tracked.
   if (SED_FAMILY.includes(seg.binary) || AWK_FAMILY.includes(seg.binary) || JQ_FAMILY.includes(seg.binary)) {
-    if (AWK_FAMILY.includes(seg.binary) && seg.args.some((a) => a === 'inplace')) {
+    if (AWK_FAMILY.includes(seg.binary) && seg.args.some((a) => mayExpandTo(seg, a, 'inplace'))) {
       return `"${seg.binary} -i inplace" edits files in place. You are a read-only planner — describe the change as a task instead.`;
     }
+    // Their flags are read as written by the program checks below (`sed -i`
+    // edits in place), so a word the shell may turn into one is refused first.
+    // Not stopped at `--`: `sed -e -- …` hands `-e` the `--`.
+    const flag = seg.args.find((a) => mayBecomeFlag(seg, a));
+    if (flag !== undefined) return expandedFlagReason(seg.binary, flag);
     const program = SED_FAMILY.includes(seg.binary) ? sedRefusal(seg.binary, seg.args)
       : AWK_FAMILY.includes(seg.binary) ? awkRefusal(seg.binary, seg.args)
         : jqRefusal(seg.binary, seg.args);
     if (program) return program;
+    // `seg.expandable` below misses a glob, brace list or bracket, and the
+    // program was read as written: with a file named `env`, `jq -n e*` runs
+    // `jq -n env`. A rewritten word before it moves it (`-L e*` beside a
+    // directory `e` becomes `-L e env`), so every word up to it counts; files
+    // after it stay confinement's to judge (ADR-0008).
+    if (JQ_FAMILY.includes(seg.binary)) {
+      const rewritten = seg.args.slice(0, jqProgramEnd(seg.binary, seg.args) + 1).find((a) => shellRewrites(seg, a));
+      if (rewritten !== undefined) {
+        return `The shell may rewrite "${rewritten}" before "${seg.binary}" sees it, which can change its program. Put the program in single quotes, name every word before it literally, and re-run.`;
+      }
+    }
     if (seg.expandable) {
       return `The shell rewrites part of this "${seg.binary}" command before "${seg.binary}" sees it, so its program cannot be inspected. Put the program in single quotes, name files literally, and re-run.`;
     }
@@ -902,7 +983,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     if (seg.stdinRedirected) {
       return `Feeding "${seg.binary}" from a redirect, here-document or here-string would run code this classifier cannot inspect. Read the file instead, or describe it as a task.`;
     }
-    const inline = seg.args.find((a) => isInlineCodeFlag(family, a))
+    const inline = seg.args.find((a) => isInlineCodeFlag(family, a) || mayBecomeFlag(seg, a)
+      || (shellRewrites(seg, a) && mayBeginWith(seg, a, '/') && ['pwsh', 'powershell', 'cmd'].includes(family)))
       ?? (family === 'deno' ? seg.args.find((a) => a === 'eval') : undefined);
     if (inline !== undefined) {
       return `Inline code via "${seg.binary} ${inline}" is not available to the planner. Use the read-only research tools, or describe it as a task.`;
@@ -940,15 +1022,18 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // flags that run helper programs or write files are closed as a class instead
   // of one at a time.
   const scan = scanFlags(seg);
+  if (scan?.rewritten !== undefined) return expandedFlagReason(seg.binary, scan.rewritten);
   if (scan?.unknown) {
     return `"${scan.unknown}" is not a flag this classifier knows to be read-only on "${seg.binary}", and flags on otherwise read-only binaries can run a helper program or write a file. Re-run with read-only flags only, or describe the work as a task.`;
   }
   // `uniq INPUT OUTPUT` writes its second operand. The allowlist cannot see this
   // one, because no flag is involved at all — the write is spelled as a
   // positional argument. Read from the scan rather than filtering the raw
-  // arguments, so `uniq -f 1 names.txt` is one operand and not two.
-  if (seg.binary === 'uniq' && scan && scan.operands.length > 1) {
-    return `"uniq" writes to its second file argument ("${scan.operands[1]}"). You are a read-only planner — pipe the output instead of naming an output file, or describe the write as a task.`;
+  // arguments, so `uniq -f 1 names.txt` is one operand and not two, and a word
+  // the shell may split counts as possibly two: `uniq notes*.txt`.
+  if (seg.binary === 'uniq' && scan && (scan.operands.length > 1 || scan.spreadAt !== undefined)) {
+    const output = scan.operands.length > 1 ? `its second file argument ("${scan.operands[1]}")` : `a second file the shell may expand "${seg.args[scan.spreadAt ?? 0]}" into`;
+    return `"uniq" writes to ${output}. You are a read-only planner — pipe the output instead of naming an output file, or describe the write as a task.`;
   }
   return undefined;
 }
@@ -973,12 +1058,14 @@ function withWrapperNote(reason: string, wrappers: string[]): string {
  * target provably writes nothing — `/dev/null`, or an fd duplication like
  * `2>&1` — since a planner that writes files has stopped being a planner.
  */
-export function classifyCommand(command: string, opts: CommandPolicyOptions = {}): CommandClassification {
-  const trimmed = command.trim();
+export function classifyCommand(line: ParsedLine, opts?: PolicyInputs): CommandClassification;
+export function classifyCommand(command: string, opts?: CommandPolicyOptions): CommandClassification;
+export function classifyCommand(input: string | ParsedLine, opts: CommandPolicyOptions = {}): CommandClassification {
+  const line = lineOf(input, opts);
+  const { text: trimmed, dialect } = line;
   if (!trimmed) return { tier: 'refuse', scope: '', reason: 'Empty command.' };
 
-  const dialect = dialectFor(opts.dialect);
-  const { segments, unsafeRedirect, processSubstitution, unbalanced, unreadable, arithmetic, switchName, truncated } = lexAll(trimmed, dialect, opts.cdpathSet);
+  const { segments, unsafeRedirect, processSubstitution, unbalanced, unreadable, arithmetic, switchName, truncated } = line.lexed;
 
   if (arithmetic) {
     return {
@@ -1079,7 +1166,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   }
 
   if (unwrapped.some(({ seg }) => programName(seg.binary) === 'wget')
-    && wgetVersionCommands(command, opts.dialect).includes(undefined)) {
+    && wgetVersionCommands(line).includes(undefined)) {
     return { tier: 'refuse', scope: '', reason: `The wget executable cannot be checked safely in this working directory. ${READ_REFUSAL_HINT}` };
   }
 
@@ -1090,7 +1177,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // that it can only grow, and the silent tier must not grow with it.
   const nonAuto = unwrapped.filter((u) => u.runner !== undefined
     || u.wrappers.some((w) => w !== w.toLowerCase())
-    || !isAuto(u.seg, opts));
+    || !isAuto(u.seg, line));
   if (nonAuto.length === 0) return { tier: 'auto', scope: '' };
 
   // A `cd` that asks, or a builtin that can move the shell, is one confinement
@@ -1104,7 +1191,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // A `cd` that runs silently still picks the repository a remote listing
   // reaches, as `-C` does, so that listing is held to the line too: under its
   // own words, approving `origin` in one repository covered `origin` in every
-  // other (ADR-0027). So does a wrapper (`env -C`, `env -u HOME`), whose own
+  // other (ADR-0027). So does a wrapper (`env -C`, `nice`), whose own
   // words never reach a scope, and anything else on the line that asks: it may
   // be a name that moves the shell no list here holds (a cmd.exe drive switch,
   // `cd..`), and its scope keeps only its name.

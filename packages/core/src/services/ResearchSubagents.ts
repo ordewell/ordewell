@@ -1,8 +1,7 @@
 import { executeTool } from './executeTool';
 import { subagentToolSpecs } from './researchTools';
-import { classifyCommand, pathRefs } from './commandPolicy';
-import { resolveResearchShell, researchPolicyOptions } from './researchShell';
-import { resolveWithin, resolveRef } from './pathScope';
+import { subagentOutside } from './commandGate';
+import { resolveWithin } from './pathScope';
 import { classifyOutcome } from './researchStepSummary';
 import type { IFileSystem, ToolOutcome } from '../interfaces/IFileSystem';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
@@ -95,24 +94,23 @@ function refused(output: string): ToolOutcome {
 }
 
 /**
- * A subagent runs in the background with nobody watching it, so it must never
- * reach a code path that pauses for approval — a prompt attributed to no
- * visible action, or three prompts at once from three concurrent agents, is
- * worse than a refusal. This wrapper enforces that at the capability boundary
- * rather than trusting the agent's prompt: the auto-tier read-only commands
- * still work, and anything that would ask is refused with an actionable
- * message telling the agent to report the gap in its digest instead.
+ * What a subagent may call on its filesystem. It runs in the background with
+ * nobody watching it, so it must never reach a code path that pauses for
+ * approval — a prompt attributed to no visible action, or three prompts at
+ * once from three concurrent agents, is worse than a refusal. The read tools
+ * are held to the workspace here, at the capability boundary, rather than
+ * trusting the agent's prompt; its shell is the command gate's `subagent`
+ * site (ADR-0008 T6), reached through the filesystem that owns the sandbox and
+ * the shell it runs in.
  *
  * Delegation is explicit rather than a spread — `fs` is a class instance, so
  * its methods live on the prototype and would not survive being copied.
  */
-function nonPromptingFs(fs: IFileSystem): IFileSystem {
+function confinedFs(fs: IFileSystem): IFileSystem {
   const withinWorkspace = (p: string | undefined): boolean =>
     resolveWithin(fs.getWorkspaceRoot(), p ?? '.').inside;
 
-  const outsideRefusal = (p: string) => refused(
-    `Path "${p}" is outside the workspace. Research agents are confined to the workspace root — note the gap in your digest and let the planner request it directly.`,
-  );
+  const outsideRefusal = (p: string) => refused(subagentOutside(p));
 
   return {
     getWorkspaceRoot: () => fs.getWorkspaceRoot(),
@@ -125,27 +123,11 @@ function nonPromptingFs(fs: IFileSystem): IFileSystem {
     grep: (pattern, opts) => (withinWorkspace(opts?.path) ? fs.grep(pattern, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     findSymbol: (symbol, opts) => (withinWorkspace(opts?.path) ? fs.findSymbol(symbol, opts) : Promise.resolve(outsideRefusal(opts!.path!))),
     listDir: (p, depth) => (withinWorkspace(p) ? fs.listDir(p, depth) : Promise.resolve(outsideRefusal(p))),
-    bash: async (command, signal, opts) => {
-      const shell = resolveResearchShell();
-      const policy = researchPolicyOptions(shell);
-      const { tier, reason } = classifyCommand(command, policy);
-      // An `auto` binary (cat, find, rg, …) is only auto because reading is
-      // read-only — its arguments can still name a path outside the
-      // workspace, and a subagent can never prompt to approve one.
-      // Named as resolved: after a `cd`, the path as written says nothing about where it points.
-      const escaping = pathRefs(command, policy).map((ref) => resolveRef(fs.getWorkspaceRoot(), ref, shell.hostPath)).find((r) => !r.inside);
-      // Only `auto` reaches the shell unsealed, so every command a subagent
-      // runs runs without the network (ADR-0011 B3): nothing it could ask for
-      // was approved.
-      if (tier === 'auto' && !escaping && !opts?.sealed) return fs.bash(command, signal);
-      // A sealed run asks nobody, so what would have asked or been refused
-      // runs sealed where the host can seal it (ADR-0036 S5); an exclusion or
-      // a denial still refuses it there.
-      if (opts?.sealed || await fs.canSeal?.()) return fs.bash(command, signal, { sealed: true });
-      if (tier === 'refuse') return refused(`Command refused: ${reason}`);
-      if (tier === 'auto' && escaping) return outsideRefusal(escaping.abs);
-      return refused(`"${command}" needs user approval, and research agents run in the background where nothing can be approved. Use the read-only research tools, and note in your digest that this command would answer the question.`);
-    },
+    // A filesystem that cannot judge a command is not one a subagent may run
+    // an unjudged command on.
+    bash: (command, signal, opts) => fs.subagentBash
+      ? fs.subagentBash(command, signal, opts)
+      : Promise.resolve(refused('Command refused: this filesystem cannot judge a command for a research agent. Use the read-only research tools, and note in your digest that this command would answer the question.')),
   };
 }
 
@@ -182,7 +164,7 @@ export function partialDigest(found: string, unread: string[], maxSteps = SUBAGE
 
 async function runLoop(prompt: string, deps: SubagentDeps): Promise<string> {
   if (deps.signal?.aborted) return '[research agent aborted before starting]';
-  const fs = nonPromptingFs(deps.fs);
+  const fs = confinedFs(deps.fs);
   const allowed = deps.tools ? new Set([...deps.tools].filter((name) => ALLOWED_TOOL_NAMES.has(name))) : ALLOWED_TOOL_NAMES;
   const chat = deps.createChat(
     (delta) => deps.onProgress?.({ type: 'thinking', text: delta, subagentId: deps.subagentId }),
@@ -306,7 +288,7 @@ export async function confinedRead(name: string, args: Record<string, unknown>, 
   if (!CONFINED_RESEARCH_TOOLS.has(name)) return refused(`${name} is not available. You are a read-only research subagent: only ${[...CONFINED_RESEARCH_TOOLS].join(', ')}.`);
   const call = { ...args };
   if (name === 'read_file' && !('maxBytes' in call) && !('limit' in call)) call.limit = 2000;
-  const res = await executeTool(name, call, nonPromptingFs(fs), undefined, signal);
+  const res = await executeTool(name, call, confinedFs(fs), undefined, signal);
   const max = SUBAGENT_LIMITS.toolOutputMaxChars;
   return res.output.length > max
     ? { ...res, output: res.output.slice(0, max) + `\n[... truncated to ${max} chars, total ${res.output.length}]`, truncated: true }

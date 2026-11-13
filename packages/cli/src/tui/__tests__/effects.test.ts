@@ -3,7 +3,8 @@ import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action } from '../reducer';
 import type { Effect } from '../reducer';
 import { fromTranscript, RUN_SETTINGS_DEFAULTS, type IsolationPreview, type SessionMessage } from '@ordewell/core';
-import { DaemonError, type SessionSocket, type SocketEnd } from '../../apiClient';
+import { type SessionSocket, type SocketEnd } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import type { TuiState } from '../state';
 import { chatOf, messagesOf } from './chat';
 import { emptyEditor } from '../editor';
@@ -152,6 +153,9 @@ function reviveMock(deps: EffectDeps): Mock<() => Promise<boolean>> {
 }
 
 const types = (actions: Action[]) => actions.map((a) => a.type);
+/** What the run said, by the message it carried: every run message reaches the reducer as the one `runMessage` action. */
+const runTypes = (actions: Action[]) => actions.flatMap((a) => (a.type === 'runMessage' ? [a.message.type] : []));
+const runMessages = (actions: Action[], type: string) => actions.filter((a) => a.type === 'runMessage' && a.message.type === type);
 
 describe('planning', () => {
   it('allocates a session, tells the reducer, and opens the conversation', async () => {
@@ -487,7 +491,7 @@ describe('planning', () => {
   it('dispatches a burst still held when the turn fails, ahead of the failure', async () => {
     const h = streaming(async (emit) => {
       emit({ type: 'planner_text_delta', turnId: 't1', segmentId: 's1', text: 'Half a' });
-      throw new DaemonError('no key', 400);
+      throw new DaemonRefusal('no key', 400);
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -549,7 +553,7 @@ describe('planning', () => {
   it('clears the optimistic session id when the very first planning call fails', async () => {
     // A refusal the daemon answered leaves no conversation a reply could
     // continue, so keeping the id would route every following message to nothing.
-    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)) });
+    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key', 400)) });
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
 
     expect(types(h.actions)).toContain('sessionCleared');
@@ -558,7 +562,7 @@ describe('planning', () => {
 
   it('stops following a session that failed to start, even when planning fails', async () => {
     const h = harness({
-      startConversation: vi.fn().mockRejectedValue(new DaemonError('no key', 400)),
+      startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key', 400)),
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -575,7 +579,7 @@ describe('planning', () => {
   // The user can load another session while this turn runs; the reducer drops
   // a failure that names a session no longer on screen.
   it('names the session a failed turn was for', async () => {
-    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) });
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonRefusal('planner down', 500)) });
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'use bcrypt' }, h.deps);
     expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', turn: true, sessionId: 's1' }));
   });
@@ -599,8 +603,8 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'statusUpdate',
-      tasks: [{ id: 'a', status: 'in_progress' }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 'a', status: 'in_progress' }] },
       sessionId: 's1',
     });
   });
@@ -632,11 +636,14 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'statusUpdate',
-      tasks: [
-        { id: 'a', status: 'completed', verdict: null },
-        { id: 'b', status: 'running', verdict: null },
-      ],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [
+          { id: 'a', status: 'completed', verdict: null },
+          { id: 'b', status: 'running', verdict: null },
+        ],
+      },
       sessionId: 's1',
     });
   });
@@ -645,8 +652,7 @@ describe('execution', () => {
     const h = withEvents({ type: 'task_started', taskId: 'a', order: 1, title: 'Add route', runner: 'opencode' });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const started = h.actions.find((a) => a.type === 'taskStarted') as Extract<Action, { type: 'taskStarted' }>;
-    expect(started).toMatchObject({ taskId: 'a', title: 'Add route', runner: 'opencode' });
+    expect(runMessages(h.actions, 'task_started')).toMatchObject([{ message: { taskId: 'a', title: 'Add route', runner: 'opencode' } }]);
   });
 
   it('hands a checkpoint to the reducer, which says where it can be answered', async () => {
@@ -672,8 +678,10 @@ describe('execution', () => {
     const h = withEvents({ type: 'review_needed', tasks: [] });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const notice = h.actions.find((a) => a.type === 'notice') as Extract<Action, { type: 'notice' }>;
-    expect(notice.message).toMatch(/approve/i);
+    expect(runMessages(h.actions, 'review_needed')).toHaveLength(1);
+    let state: TuiState = { ...initialState(), sessionId: 's1' };
+    for (const action of h.actions) ({ state } = reduce(state, action));
+    expect(state.conversation.blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Plan needs your sign-off: /approve to continue.' }));
   });
 
   it('takes a plan pushed over the stream, and hands its transcript to the conversation', async () => {
@@ -685,7 +693,7 @@ describe('execution', () => {
     expect(h.actions).toEqual([
       { type: 'sessionMessage', message: event, sessionId: 's1' },
       { type: 'planBroadcast', plan, sessionId: 's1' },
-      { type: 'executionComplete', summary: RUN_DONE.summary, sessionId: 's1' },
+      { type: 'runMessage', message: RUN_DONE, sessionId: 's1' },
     ]);
   });
 
@@ -694,8 +702,8 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'executionComplete',
-      summary: { total: 1, completed: 1, failed: 0 },
+      type: 'runMessage',
+      message: { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } },
       sessionId: 's1',
     });
   });
@@ -729,9 +737,9 @@ describe('execution', () => {
     const h = withEvents({ type: 'execution_stopped' });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const complete = h.actions.find((a) => a.type === 'executionComplete');
-    expect(complete).toBeDefined();
-    expect(complete).not.toHaveProperty('summary');
+    const [stopped] = runMessages(h.actions, 'execution_stopped');
+    expect(stopped).toBeDefined();
+    expect(stopped).not.toHaveProperty('message.summary');
   });
 
   it('a silent approval decision reached mid-execution lands in the conversation', async () => {
@@ -754,7 +762,7 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
     expect(h.actions).toEqual([
       { type: 'sessionMessage', message: token, sessionId: 's1' },
-      { type: 'executionComplete', summary: RUN_DONE.summary, sessionId: 's1' },
+      { type: 'runMessage', message: RUN_DONE, sessionId: 's1' },
     ]);
   });
 
@@ -887,7 +895,7 @@ describe('two runs asked for on one session', () => {
     await Promise.all(running);
 
     expect(h.api.followSession).toHaveBeenCalledTimes(1);
-    expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
+    expect(runMessages(h.actions, 'task_started')).toHaveLength(1);
     expect(types(h.actions)).not.toContain('executionLost');
   });
 });
@@ -934,8 +942,8 @@ describe('task control', () => {
 
     expect(order).toEqual(['followSession', 'execute']);
     expect(h.actions).toContainEqual({
-      type: 'statusUpdate',
-      tasks: [{ id: 't1', status: 'in_progress' }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] },
       sessionId: 's1',
     });
   });
@@ -1484,7 +1492,7 @@ describe('catalogs and sessions', () => {
   });
 
   it('reports a session the server cannot adopt', async () => {
-    const h = harness({ adoptSession: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
+    const h = harness({ adoptSession: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })) });
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
 
     expect(types(h.actions)).toContain('failed');
@@ -1495,7 +1503,7 @@ describe('catalogs and sessions', () => {
   // reload with /sessions would be refused the same way.
   it('reports a session another host runs in the daemon\'s words, naming that host', async () => {
     const held = 'This session is open in another Ordewell host: a TUI (pid 76271), through its daemon on port 49558 (pid 76279) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
-    const h = harness({ adoptSession: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    const h = harness({ adoptSession: vi.fn().mockRejectedValue(new DaemonRefusal(held, 409, { code: 'session_held' })) });
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
 
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
@@ -1576,7 +1584,7 @@ describe('revert (ADR-0054)', () => {
 
   it('shows a conflict in the seam\'s words and no notice of success', async () => {
     const words = 'Reverting task "One" conflicts with what landed after it: a.txt. Nothing was reverted, and the integration branch is as it was.';
-    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError(words, 400, 'refused')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonRefusal(words, 400, { code: 'refused' })) });
     await runEffect({ type: 'revertTask', sessionId: 's1', taskId: 't1', seen: ['t1'] }, h.deps);
 
     expect(h.actions).toContainEqual({ type: 'failed', message: words, code: 'refused' });
@@ -1588,7 +1596,7 @@ describe('failures', () => {
   // Now that loading adopts the session, this only happens when the daemon has
   // restarted underneath us — so the advice is to reload, not to re-plan.
   it('tells the user to reload a session the daemon no longer holds', async () => {
-    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
 
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
@@ -1600,7 +1608,7 @@ describe('failures', () => {
 
   it('names the host that runs the session when a call\'s re-adoption was refused, not a reload', async () => {
     const held = 'This session is open in another Ordewell host: the Ordewell daemon on port 3742 (pid 37797) has held it since 10/24/2026, 1:40:00 AM. Close it there, or stop that process, then open it here.';
-    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonError(held, 409, 'session_held')) });
+    const h = harness({ execute: vi.fn().mockRejectedValue(new DaemonRefusal(held, 409, { code: 'session_held' })) });
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
 
     const failure = h.actions.find((a) => a.type === 'failed') as Extract<Action, { type: 'failed' }>;
@@ -1610,7 +1618,7 @@ describe('failures', () => {
 
   it('shows why a model edit was refused, without the success notice (#106)', async () => {
     const reason = '"Build" has a live runner, so its model and effort cannot change now: stop the task first, or use the runner\'s own /model';
-    const h = harness({ updateTask: vi.fn().mockRejectedValue(new DaemonError(reason, 400, 'refused')) });
+    const h = harness({ updateTask: vi.fn().mockRejectedValue(new DaemonRefusal(reason, 400, { code: 'refused' })) });
     await runEffect({ type: 'updateTask', sessionId: 's1', taskId: 't1', changes: { assignedModel: { modelId: 'haiku', modelLabel: 'Haiku' } }, message: 'Model updated.' }, h.deps);
 
     expect(h.actions).toContainEqual({ type: 'failed', message: reason, code: 'refused' });
@@ -1704,7 +1712,7 @@ describe('a daemon that went away mid-session', () => {
     const h = harness({
       execute: vi.fn()
         .mockRejectedValueOnce(refused())
-        .mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')),
+        .mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })),
     });
 
     await runEffect({ type: 'taskAction', sessionId: 's1', taskId: 't1', action: 'complete' }, h.deps);
@@ -1826,7 +1834,7 @@ describe('loading an in-flight conversation', () => {
     state = { ...state, editor: { ...state.editor, text: 'check tests', cursor: 11 } };
     const sent = reduce(state, { type: 'key', key: { name: 'enter' } });
     state = sent.state;
-    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) }, {
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(new DaemonRefusal('planner down', 500)) }, {
       dispatch: (action) => { state = reduce(state, action).state; },
     });
     await runEffect(sent.effects[0], h.deps);
@@ -2159,7 +2167,7 @@ describe('conversation compact effect', () => {
   });
 
   it('reports a refusal, and the planner goes back to idle with nothing drawn', async () => {
-    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new DaemonError('The conversation is too short to condense.', 400)) });
+    const h = harness({ compactConversation: vi.fn().mockRejectedValue(new DaemonRefusal('The conversation is too short to condense.', 400)) });
     const start = session();
 
     await runEffect({ type: 'compactConversation', sessionId: 'session-1' }, h.deps);
@@ -2175,7 +2183,7 @@ describe('conversation compact effect', () => {
   it('ends the running block as failed when the call fails and the daemon\'s end frame never came', async () => {
     const { h } = sockets(async (emit) => {
       emit(started());
-      throw new DaemonError('rate limited', 500);
+      throw new DaemonRefusal('rate limited', 500);
     });
     const start = session();
 
@@ -2189,7 +2197,7 @@ describe('conversation compact effect', () => {
   it('ends the running block as stopped when the user stopped it', async () => {
     const { h } = sockets(async (emit) => {
       emit(started());
-      throw new DaemonError('The planner turn was stopped.', 409, 'planner_turn_stopped');
+      throw new DaemonRefusal('The planner turn was stopped.', 409, { code: 'planner_turn_stopped' });
     });
     const start = session({ stopRequested: true });
 
@@ -2234,7 +2242,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'b', status: 'awaiting_user', verdict: null, isolation }] });
+    expect(h.actions).toContainEqual({ type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'b', status: 'awaiting_user', verdict: null, isolation }] }, sessionId: 's1' });
   });
 
   it('carries mid-run landings without a gate from status updates and clears them after merging', async () => {
@@ -2247,9 +2255,9 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions.filter((a) => a.type === 'statusUpdate')).toEqual([
-      { type: 'statusUpdate', sessionId: 's1', tasks: [], runMerge: { waitingAtGate: false, paused: false, repos, landed } },
-      { type: 'statusUpdate', sessionId: 's1', tasks: [] },
+    expect(runMessages(h.actions, 'status_update')).toEqual([
+      { type: 'runMessage', message: { type: 'status_update', tasks: [], runMerge: { waitingAtGate: false, paused: false, repos, landed } }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'status_update', tasks: [] }, sessionId: 's1' },
     ]);
   });
 
@@ -2270,7 +2278,8 @@ describe('worktree isolation', () => {
     h.daemon.emit({ type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' });
     h.daemon.emit({ type: 'status_update', tasks: [{ id: 'ops1', status: 'in_progress', verdict: null }] });
 
-    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'statusUpdate']));
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'runMessage']));
+    expect(runTypes(h.actions)).toContain('status_update');
     h.daemon.emit(RUN_DONE);
     await run;
   });
@@ -2285,8 +2294,8 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(types(h.actions).filter((t) => t === 'isolationHandoff' || t === 'executionComplete')).toEqual(['isolationHandoff', 'executionComplete']);
-    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed }, sessionId: 's1' });
+    expect(runTypes(h.actions).filter((t) => t === 'isolation_handoff' || t === 'execution_complete')).toEqual(['isolation_handoff', 'execution_complete']);
+    expect(h.actions).toContainEqual({ type: 'runMessage', message: { type: 'isolation_handoff', repos, landed }, sessionId: 's1' });
   });
 
   it('carries the supervisor deferral of an isolation_handoff through', async () => {
@@ -2296,7 +2305,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed, deferredTo: 'supervisor' }, sessionId: 's1' });
+    expect(h.actions).toContainEqual({ type: 'runMessage', message: { type: 'isolation_handoff', repos, landed, deferredTo: 'supervisor' }, sessionId: 's1' });
   });
 
   it('hands the dirty repos of a group to the stash question', async () => {
@@ -2339,7 +2348,7 @@ describe('worktree isolation', () => {
     const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
 
     it('turns the daemon\'s question into one for the user, not a failure', async () => {
-      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonError(ASKED, 409, 'merge_past_check')) } as Partial<OrdewellApi>);
+      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonRefusal(ASKED, 409, { code: 'merge_past_check' })) } as Partial<OrdewellApi>);
 
       await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
@@ -2358,12 +2367,20 @@ describe('worktree isolation', () => {
     });
 
     it('still reports any other refusal as a failure', async () => {
-      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonError('The run is still running', 400, 'refused')) } as Partial<OrdewellApi>);
+      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonRefusal('The run is still running', 400, { code: 'refused' })) } as Partial<OrdewellApi>);
 
       await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
       expect(messageOf(h.actions, 'failed')).toContain('The run is still running');
       expect(h.actions.some((a) => a.type === 'mergeHeld')).toBe(false);
+    });
+
+    it('tells the pane its request will get no merge result, so the next one heard is not taken for its answer', async () => {
+      const h = harness({ mergeRun: vi.fn().mockRejectedValue(new DaemonRefusal('The run is still running', 400, { code: 'refused' })) } as Partial<OrdewellApi>);
+
+      await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+      expect(h.actions).toContainEqual({ type: 'mergeAbandoned', sessionId: 's1' });
     });
   });
 
@@ -2371,7 +2388,7 @@ describe('worktree isolation', () => {
     const ASKED = 'Ops task #3 "Deploy" is running in your checkout. Merge all rewrites files there that it may be reading, building or committing: merge beside it only if it works outside your checkout.';
 
     it('turns the daemon\'s question into one for the user, keeping the yes already given', async () => {
-      const mergeRun = vi.fn().mockRejectedValue(new DaemonError(ASKED, 409, 'merge_beside_ops'));
+      const mergeRun = vi.fn().mockRejectedValue(new DaemonRefusal(ASKED, 409, { code: 'merge_beside_ops' }));
       const h = harness({ mergeRun } as Partial<OrdewellApi>);
 
       await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true }, h.deps);
@@ -2437,7 +2454,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
 
-    expect(types(h.actions)).not.toContain('runClosed');
+    expect(runTypes(h.actions)).not.toContain('run_closed');
   });
 
   it('folds what any surface\'s Merge all did, and closes the run only when the Session says it closed', async () => {
@@ -2450,10 +2467,10 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions.filter((a) => a.type === 'isolationMerged' || a.type === 'runClosed')).toEqual([
-      { type: 'isolationMerged', result: blocked, sessionId: 's1' },
-      { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' },
-      { type: 'runClosed', sessionId: 's1' },
+    expect(h.actions.filter((a) => a.type === 'runMessage' && a.message.type !== 'execution_complete')).toEqual([
+      { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' } }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'run_closed' }, sessionId: 's1' },
     ]);
   });
 
@@ -2599,7 +2616,7 @@ describe('a structured task\'s log, messages and interrupt', () => {
   });
 
   it('shows the daemon\'s words when a message to take back had already gone out', async () => {
-    const refusal = new DaemonError('That message to task #1 "Build" was already delivered or taken back.', 400, 'refused');
+    const refusal = new DaemonRefusal('That message to task #1 "Build" was already delivered or taken back.', 400, { code: 'refused' });
     const h = harness({ execute: vi.fn().mockRejectedValue(refusal) });
 
     await runEffect({ type: 'removeTaskMessage', sessionId: 's1', taskId: 't1', messageId: 'm1', filled: 'use Postgres' }, h.deps);
@@ -2692,7 +2709,7 @@ describe('following the session', () => {
 
     expect(vi.mocked(h.api.followSession).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(h.api.startConversation).mock.invocationCallOrder[0]);
     expect(follow.sessionId).toBe('session-new');
-    expect(types(h.actions)).toEqual(expect.arrayContaining(['taskStarted', 'executionComplete']));
+    expect(runTypes(h.actions)).toEqual(expect.arrayContaining(['task_started', 'execution_complete']));
     expect(h.actions).toContainEqual(expect.objectContaining({ type: 'sessionMessage', message: expect.objectContaining({ type: 'execution_action' }) }));
   });
 
@@ -2719,7 +2736,7 @@ describe('following the session', () => {
     await running;
 
     expect(h.api.followSession).toHaveBeenCalledTimes(1);
-    expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
+    expect(runMessages(h.actions, 'task_started')).toHaveLength(1);
   });
 
   it('follows a loaded session, and leaves the one it was on', async () => {
@@ -2735,8 +2752,11 @@ describe('following the session', () => {
   it('lands the connect snapshot of a loaded session even though it arrives before the session is adopted', async () => {
     const view = { tasks: [{ id: 'a', order: 1, title: 'A', type: 'ai', status: 'in_progress', dependencies: [], subtasks: [] }], runMerge: null, handoff: null, mergeResult: null };
     const h: ReturnType<typeof following> = following({
+      // Stamped, as a daemon's connect snapshot is: an unstamped one is a jump
+      // the read out cannot be said to cover, so every read it rode on would
+      // be asked again, and this read emits it again.
       adoptSession: vi.fn().mockImplementation(async () => {
-        h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view });
+        h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view, stream: 'd1', seq: 1 });
         return { plan: { tasks: [{ id: 'a' }] }, goal: 'g' };
       }),
     });
@@ -2765,7 +2785,7 @@ describe('following the session', () => {
     const h: ReturnType<typeof following> = following({
       adoptSession: vi.fn().mockImplementation(async () => {
         h.follows.at(-1)!.emit({ type: 'run_snapshot', sessionId: 's9', view });
-        throw new DaemonError('Session not found', 404, 'session_not_found');
+        throw new DaemonRefusal('Session not found', 404, { code: 'session_not_found' });
       }),
     });
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
@@ -2774,7 +2794,7 @@ describe('following the session', () => {
   });
 
   it('goes on following the session on screen when loading another fails', async () => {
-    const h = following({ adoptSession: vi.fn().mockRejectedValue(new DaemonError('Session not found', 404, 'session_not_found')) });
+    const h = following({ adoptSession: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })) });
     await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'one' }, h.deps);
     await runEffect({ type: 'loadSession', sessionId: 's9' }, h.deps);
 
@@ -2799,7 +2819,7 @@ describe('following the session', () => {
   });
 
   it('keeps the session when a force send stopped its opening turn, so the forced turn\'s reply lands', async () => {
-    const stopped = new DaemonError('The planner turn was stopped', 409, 'planner_turn_stopped');
+    const stopped = new DaemonRefusal('The planner turn was stopped', 409, { code: 'planner_turn_stopped' });
     const h = following({ startConversation: vi.fn().mockRejectedValue(stopped) });
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
@@ -2809,7 +2829,7 @@ describe('following the session', () => {
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {
-    const h = following({ startConversation: vi.fn().mockRejectedValue(new DaemonError('planner down', 500)) });
+    const h = following({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('planner down', 500)) });
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
     expect(h.follows[0].close).toHaveBeenCalled();

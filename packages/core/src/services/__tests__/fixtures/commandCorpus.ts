@@ -587,15 +587,24 @@ const REFUSED_KEYWORDS: CorpusEntry[] = [
 // rather than running silently — the developer is the one who can tell what
 // the variable holds.
 const EXPANDED_READS: CorpusEntry[] = [
-  { command: 'x=/etc/passwd; cat $x', tier: 'ask', scope: 'cat' },
-  { command: 'cat ${x}', tier: 'ask', scope: 'cat' },
-  { command: 'cat $HOME/.ssh/id_rsa', tier: 'ask', scope: 'cat' },
-  { command: 'cat $(printf /etc/passwd)', tier: 'ask', scope: 'cat' },
-  { command: 'head -n 5 `printf /etc/passwd`', tier: 'ask', scope: 'head' },
-  { command: "cat $'/etc/passwd'", tier: 'ask', scope: 'cat' },
-  { command: 'cat $0', tier: 'ask', scope: 'cat' },
+  { command: 'x=/etc/passwd; cat -- $x', tier: 'ask', scope: 'cat' },
+  { command: 'cat -- ${x}', tier: 'ask', scope: 'cat' },
+  { command: 'cat -- $HOME/.ssh/id_rsa', tier: 'ask', scope: 'cat' },
+  { command: 'cat -- $(printf /etc/passwd)', tier: 'ask', scope: 'cat' },
+  { command: 'head -n 5 -- `printf /etc/passwd`', tier: 'ask', scope: 'head' },
+  { command: "cat -- $'/etc/passwd'", tier: 'ask', scope: 'cat' },
+  { command: 'cat -- $0', tier: 'ask', scope: 'cat' },
   // Brace expansion, where `/bin/sh` is bash.
-  { command: 'cat {,/etc/passwd}', tier: 'ask', scope: 'cat' },
+  { command: 'cat -- {,/etc/passwd}', tier: 'ask', scope: 'cat' },
+  // Before a `--` the same words may hold a flag, which no grant may cover.
+  { command: 'x=/etc/passwd; cat $x', tier: 'refuse' },
+  { command: 'cat ${x}', tier: 'refuse' },
+  { command: 'cat $HOME/.ssh/id_rsa', tier: 'refuse' },
+  { command: 'cat $(printf /etc/passwd)', tier: 'refuse' },
+  { command: 'head -n 5 `printf /etc/passwd`', tier: 'refuse' },
+  { command: "cat $'/etc/passwd'", tier: 'refuse' },
+  { command: 'cat $0', tier: 'refuse' },
+  { command: 'cat {,/etc/passwd}', tier: 'refuse' },
   { command: "rg '{a,b}' src", tier: 'auto' },
   // Inside double quotes `$"` is a literal dollar before the closing quote.
   { command: 'rg "total$" src', tier: 'auto' },
@@ -684,7 +693,7 @@ const WRAPPERS: CorpusEntry[] = [
   { command: 'timeout 30 npm test', tier: 'ask', scope: 'npm test' },
   { command: 'busybox ls -la', tier: 'auto' },
   { command: 'command cat package.json', tier: 'auto' },
-  { command: 'env -i git log --oneline -5', tier: 'auto' },
+  { command: 'env -i git log --oneline -5', tier: 'refuse' },
   { command: 'nohup git status', tier: 'auto' },
   { command: 'timeout 5 rg --files', tier: 'auto' },
   { command: 'timeout 60 pytest -q', tier: 'ask', scope: 'pytest' },
@@ -875,7 +884,8 @@ const CMD_DIALECT: CorpusEntry[] = [
   { command: 'echo "a b" ^& echo c', tier: 'auto', dialect: 'cmd' },
   { command: 'git log --oneline -20', tier: 'auto', dialect: 'cmd' },
   { command: 'rg --files', tier: 'auto', dialect: 'cmd' },
-  { command: 'cat %USERPROFILE%\\.ssh\\id_rsa', tier: 'ask', scope: 'cat', dialect: 'cmd' },
+  { command: 'cat %USERPROFILE%\\.ssh\\id_rsa', tier: 'refuse', dialect: 'cmd' },
+  { command: 'cat -- %USERPROFILE%\\.ssh\\id_rsa', tier: 'ask', scope: 'cat', dialect: 'cmd' },
 ];
 
 // ---------------------------------------------------------------------------

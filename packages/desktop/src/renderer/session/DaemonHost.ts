@@ -1,27 +1,25 @@
 import type {
-  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, MergeGateResponse, PlanResponse, RunnerId, RunTask,
+  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
   SessionHeld, SessionMessage, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  checkoutRule, confirmedOverride, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
-  rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
+  DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
-  DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
-  overrideConfirmation, removeTaskConfirmation, revertConfirmation, runSettingRiskConfirmations, startPastGateConfirmation,
-  type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue,
+  ChatSessionHost, DaemonSessionStream, SessionView, discardRunConfirmation, removeTaskConfirmation, runSettingRiskConfirmations,
+  type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type MergeCall, type SessionCue, type TurnOutcome,
 } from '@ordewell/ui/host';
 import {
   isBuiltinSlashCommand, resolveSlashAlias, slashHelp,
-  type HostToWebview, type IsolationActionKind, type SettingsChange, type TaskEdit, type WebviewToHost,
+  type HostToWebview, type IsolationActionKind, type SettingsChange, type WebviewToHost,
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
 import { askForKey, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
-import { callDaemon, DaemonError, messageOf } from './daemon';
+import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
 import { openLoginTerminal, type OpenLoginTerminal } from './loginTerminal';
 import { revealTask as revealInPlan } from './selection';
@@ -140,17 +138,6 @@ export interface DaemonHostOptions {
   now?: () => number;
 }
 
-const REJOIN_MIN_MS = 1000;
-const REJOIN_MAX_MS = 30_000;
-
-const SYSTEM_TASK_ACTIONS = {
-  cancel: 'cancel',
-  cancelResume: 'cancel-resume',
-  resumeNow: 'resume-now',
-  retry: 'retry',
-  skip: 'skip',
-} as const;
-
 /** What a read-only view may still ask: local navigation, the catalog, and leaving for a new session. */
 const READ_ONLY_ALLOWED: ReadonlySet<WebviewToHost['type']> = new Set<WebviewToHost['type']>([
   'ready', 'refreshModels', 'openTaskLog', 'openFile', 'getTaskCommands', 'newSession',
@@ -179,8 +166,7 @@ function planOfSaved(state: SurfacePlanState): SurfacePlan {
 
 /** The holder a load was refused for, when the refusal is the lease's (ADR-0049). */
 function heldOf(error: unknown): SessionHeld | null {
-  if (!(error instanceof DaemonError) || error.code !== 'session_held' || !isRecord(error.body) || !isRecord(error.body.sessionHeld)) return null;
-  return error.body.sessionHeld as unknown as SessionHeld;
+  return error instanceof DaemonRefusal && error.code === 'session_held' ? error.sessionHeld ?? null : null;
 }
 
 /** Whether anything has happened in this plan: a run, or a task that left `pending`. */
@@ -202,19 +188,6 @@ function holderViewOf(record: SessionHeld['holder']): HolderView {
     ...(host?.kind === 'daemon' && host.ownerPid !== undefined ? { ownerPid: host.ownerPid } : {}),
     since: record.since,
   };
-}
-
-/** A field edit from a card, as the daemon's task PUT takes it: the extension's own mapping (PlanManager). */
-function taskChanges(edit: TaskEdit): Partial<Task> {
-  switch (edit.kind) {
-    case 'runner': return { assignedRunner: edit.runner };
-    case 'model': return { assignedModel: edit.assignment };
-    case 'mode': return { taskMode: edit.mode };
-    case 'prompt': return { prompt: edit.prompt, description: edit.prompt || undefined };
-    case 'dependencies': return { dependencies: edit.dependencies };
-    case 'skills': return { skills: edit.skills };
-    case 'ops': return { ops: edit.ops };
-  }
 }
 
 /**
@@ -247,7 +220,7 @@ class SessionStream extends DaemonSessionStream {
     super(sessionView, post, hooks);
   }
 
-  protected override loaded(state: DaemonSessionState): undefined {
+  protected override loaded(state: DaemonSessionState): StreamStamp | undefined {
     if (!this.fresh()) return super.loaded(state);
     if (state.run) this.sessionView.adopt({ run: state.run });
     return undefined;
@@ -264,6 +237,7 @@ class SessionStream extends DaemonSessionStream {
  */
 export class DaemonHost {
   private readonly view: SessionView;
+  private readonly chat: ChatSessionHost;
   private readonly ports = new Set<(msg: HostToWebview) => void>();
   private readonly sticky = new Map<HostToWebview['type'], HostToWebview>();
   private readonly taskLogs = new Map<string, TaskLogHost>();
@@ -285,7 +259,7 @@ export class DaemonHost {
   /** What each chat instance keeps across a remount, by the place it is drawn in. */
   private readonly savedStates = new Map<string, unknown>();
   private rejoin: (() => void) | null = null;
-  private rejoinDelay = REJOIN_MIN_MS;
+  private readonly rejoinBackoff = new ReconnectBackoff();
   /** Continue here is adopting the session: a second click is the same takeover, not another. */
   private continuing = false;
   private navigator: SessionNavigator | null = null;
@@ -298,6 +272,12 @@ export class DaemonHost {
   private dock: 'draft' | null = null;
   /** The session main has joined a holder's daemon for on this window's behalf, until the window leaves it. */
   private holderSession: string | null = null;
+  /**
+   * The newest request to show a session, numbered. The plan list opens a
+   * session on every click without waiting for the last, so two loads race and
+   * the one that answers last would win; only the newest request may draw.
+   */
+  private shown = 0;
   private stopWatching: (() => void) | null = null;
   /** A refused join's holder is watched for its exit, so Continue here can be offered (W16). */
   private stopHolderWatch: (() => void) | null = null;
@@ -310,6 +290,27 @@ export class DaemonHost {
     this.options = options;
     this.watchMs = options.watchMs ?? WATCH_MS;
     this.view = new SessionView((msg) => this.emit(msg));
+    this.chat = new ChatSessionHost(this.view.conversation, {
+      generating: () => this.generating,
+      answering: () => this.turnsIn(this.sessionId) > 0,
+      converse: (text, turn) => this.turn(text, turn.now, turn.runners),
+      tasks: () => this.planTasks(),
+      advancesOnItsOwn: () => this.view.run.current.activity?.advancesOnItsOwn === true,
+      mergeGate: async (taskId) => (await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId })).mergeGate.map((t) => t.id),
+      revertPreview: (taskId) => callDaemon('plans.revertPreview', { sessionId: this.sessionId, taskId }),
+      execute: (command) => this.execute(command),
+      ask: (request) => this.ask(request),
+      starting: (start) => this.startingRun(start),
+      refuse: (error) => this.showError(error),
+      executePlan: (requestId) => this.executePlan(requestId),
+      stopped: () => this.emit({ type: 'setState', state: 'planDraft' }),
+      cancelPlannerResend: async () => { await callDaemon('plans.cancelResend', { sessionId: this.sessionId }); },
+      retryPlannerCompaction: async () => { await callDaemon('plans.retryCompact', { sessionId: this.sessionId }); },
+      settled: () => this.refreshPlan(),
+      handoff: () => this.view.run.current.handoff ?? this.view.run.current.runMerge,
+      isExecuting: () => this.snapshot.state.isExecuting,
+      mergeCall: () => this.mergeCall(this.sessionId),
+    });
     this.agents = new AgentDetection(workspace, (msg) => this.emit(msg), options.detectionTimeoutMs, () => this.sessionId);
     const sessionId = mintSessionId();
     this.snapshot = { sessionId, goal: '', state: INITIAL_HOST_STATE, held: null, restored: false, readOnly: false, link: null };
@@ -503,24 +504,32 @@ export class DaemonHost {
    * and the frame offers what to do about it (W16).
    */
   async open(sessionId: string): Promise<void> {
+    const request = ++this.shown;
+    // A newer open (or New session) supersedes this one. What it loaded stays
+    // with the daemon, which keeps every session it has loaded live; it is
+    // just never drawn here, nor its error shown over the newer session.
+    const superseded = (): boolean => request !== this.shown;
     // Read before the load: a session this daemon already holds is live, and a
     // load of a saved one always answers with a run. This is what tells a
     // restored session (W17) from one that was already at work.
     const wasLive = await this.savedIsLive(sessionId);
+    if (superseded()) return;
     let adopted: AdoptSessionResponse;
     try {
       adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
     } catch (error) {
+      if (superseded()) return;
       const held = heldOf(error);
       if (held) {
-        if (held.holder.host?.kind === 'daemon') { await this.join(sessionId, held); return; }
+        if (held.holder.host?.kind === 'daemon') { await this.join(sessionId, held, superseded); return; }
         this.update({ held, link: null });
-        await this.viewHeld(sessionId);
+        await this.viewHeld(sessionId, superseded);
         return;
       }
       this.showError(error);
       return;
     }
+    if (superseded()) return;
     this.adopt(sessionId, adopted, wasLive);
   }
 
@@ -536,11 +545,16 @@ export class DaemonHost {
    * session's calls and socket there, so it stays the session's one live host
    * (ADR-0049). A join main refuses shows why, over the saved state.
    */
-  private async join(sessionId: string, held: SessionHeld): Promise<void> {
+  private async join(sessionId: string, held: SessionHeld, superseded: () => boolean): Promise<void> {
     this.cancelHolderWatch();
     const host = held.holder.host;
     if (host?.kind === 'daemon') this.update({ held, link: { kind: 'joining', port: host.port } });
     const joined = await window.ordewell.daemon.join(sessionId);
+    // A join main made for a window that has moved on is let go, so main closes the holder's connection once nothing else uses it.
+    if (superseded()) {
+      if (joined.ok && this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
+      return;
+    }
     if (!joined.ok) {
       this.update({ held, link: { kind: 'refused', reason: joined.reason, message: joined.message } });
       await this.viewHeld(sessionId);
@@ -552,8 +566,13 @@ export class DaemonHost {
       saved = await this.readJoined(sessionId);
     } catch (error) {
       if (this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
+      if (superseded()) return;
       this.update({ link: null });
       this.showError(error);
+      return;
+    }
+    if (superseded()) {
+      if (this.holderSession !== sessionId) void window.ordewell.daemon.leave(sessionId);
       return;
     }
     this.switchTo(sessionId, false, saved?.meta.goal ?? '', { held, link: { kind: 'joined', holder: joined.holder } });
@@ -566,7 +585,7 @@ export class DaemonHost {
     try {
       return await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
     } catch (error) {
-      if (error instanceof DaemonError && error.code === 'session_not_found') return null;
+      if (error instanceof DaemonRefusal && error.code === 'session_not_found') return null;
       throw error;
     }
   }
@@ -593,13 +612,14 @@ export class DaemonHost {
    * (W16). Every write is refused while it is drawn; taking the session over
    * is the way out (ADR-0049).
    */
-  async viewHeld(sessionId: string): Promise<void> {
+  async viewHeld(sessionId: string, superseded: () => boolean = () => false): Promise<void> {
     try {
       const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
+      if (superseded()) return;
       this.showReadOnly(sessionId, saved);
       this.watch(sessionId, JSON.stringify(saved));
     } catch (error) {
-      this.showError(error);
+      if (!superseded()) this.showError(error);
     }
   }
 
@@ -740,6 +760,7 @@ export class DaemonHost {
 
   /** A blank session: nothing is created on the daemon until the first message starts the planner. */
   newSession(): void {
+    this.shown++;
     this.switchTo(mintSessionId(), true, '');
     this.emit({ type: 'setState', state: 'empty' });
   }
@@ -823,9 +844,7 @@ export class DaemonHost {
             return;
           }
         }
-        // A prompt typed while a turn is still the planner's waits for it, as in the extension's sendChat.
-        if (msg.typed && this.generating) { this.view.conversation.holdPrompt(msg.text); return; }
-        await (msg.typed ? this.say(msg.text, false, msg.runners) : this.turn(msg.text, false, msg.runners));
+        await this.chat.send(msg.text, msg.typed ?? false, msg.runners);
         return;
       }
       case 'loginPlanner':
@@ -843,24 +862,16 @@ export class DaemonHost {
       case 'changeSettings':
         await this.changeSettings(msg.change);
         return;
-      // Send now (ADR-0017 Q2): everything held goes with the composer's text,
-      // as one message. Only a turn in flight is stopped for it; with none, it
-      // is a plain send, as in the extension's sendChatNow.
-      case 'sendMessageNow': {
-        const text = this.view.conversation.takeAll(msg.text);
-        if (!text.trim()) return;
-        if (!this.generating) { await this.say(text, false); return; }
-        // A forced turn that is refused gives back what it took, as in the extension's sendChatNow.
-        await this.say(text, true, undefined, () => this.view.conversation.giveBack(text));
+      case 'sendMessageNow':
+        await this.chat.sendNow(msg.text);
         return;
-      }
-      // Typed while the chat saw a turn in flight: one that has ended since leaves nothing to wait for, as in the extension.
+      // Typed while the chat saw a turn in flight: one that has ended since
+      // leaves nothing to wait for, and it goes as typed, a slash command included.
       case 'holdPrompt':
-        if (this.generating) this.view.conversation.holdPrompt(msg.text);
-        else await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
+        if (!this.chat.hold(msg.text)) await this.handle({ type: 'sendMessage', text: msg.text, typed: true });
         return;
       case 'unsendPrompt':
-        this.view.conversation.unsendPrompt(msg.toComposer);
+        this.chat.unsend(msg.toComposer);
         return;
       case 'stopResearch':
         this.view.conversation.stop();
@@ -898,7 +909,7 @@ export class DaemonHost {
         return;
       }
       case 'editTask':
-        await this.planEdit(callDaemon('plans.updateTask', { sessionId: this.sessionId, taskId: msg.taskId }, taskChanges(msg.edit)));
+        await this.planEdit(callDaemon('plans.cardEdit', { sessionId: this.sessionId, taskId: msg.taskId }, msg.edit));
         return;
       case 'removeTask':
         await this.removeTask(msg.taskId);
@@ -907,10 +918,10 @@ export class DaemonHost {
         await this.planEdit(callDaemon('plans.addTask', { sessionId: this.sessionId }, msg.draft));
         return;
       case 'sendSystemCommand': {
-        await this.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
+        await this.chat.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
         // A Retry compaction is a planner turn the chat did not send, so no
         // turn() of ours ends to release what was typed while it ran.
-        if (!this.generating) await this.sendHeldPrompt();
+        await this.chat.release();
         return;
       }
       case 'sendTaskMessage':
@@ -953,8 +964,13 @@ export class DaemonHost {
     return this.turns.get(sessionId) ?? 0;
   }
 
-  /** One planner turn: the first of a fresh session starts it, every later one is a message. */
-  private async turn(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
+  /**
+   * One planner turn: the first of a fresh session starts it, every later one
+   * is a message. A turn whose session was left meanwhile ended well enough:
+   * nothing is given back into another session's composer.
+   */
+  private async turn(text: string, now: boolean, runners?: readonly RunnerId[]): Promise<TurnOutcome> {
+    let outcome: TurnOutcome = { ok: true };
     await this.plannerTurn(async (sessionId) => {
       let response: PlanResponse;
       if (this.fresh) {
@@ -972,14 +988,15 @@ export class DaemonHost {
       this.showPlan(response.plan);
     }, (error) => {
       this.showError(error);
-      // A stop or a left session ended the turn on purpose; anything else refused it, and what it carried is not lost.
-      if (!(error instanceof DaemonError && (error.code === 'planner_turn_stopped' || error.code === 'planner_turn_discarded'))) refused?.();
+      outcome = { ok: false, ...(error instanceof DaemonRefusal ? { code: error.code } : {}) };
     });
+    return outcome;
   }
 
   /**
-   * A call that is a planner turn: what is typed meanwhile is held, and the
-   * held prompts go once it ends, as one message, whoever asked for the turn.
+   * A call that is a planner turn, counted while it runs so what is typed
+   * meanwhile is held. Its caller releases the hold once it returns: the chat's
+   * own turns through `chat`, after a Send now's give-back.
    */
   private async plannerTurn(run: (sessionId: string) => Promise<void>, failed: (error: unknown) => void): Promise<void> {
     const sessionId = this.sessionId;
@@ -993,20 +1010,6 @@ export class DaemonHost {
       if (left > 0) this.turns.set(sessionId, left);
       else this.turns.delete(sessionId);
     }
-    if (sessionId !== this.sessionId) return;
-    if (this.turnsIn(sessionId) === 0) await this.sendHeldPrompt();
-  }
-
-  /** Every prompt typed while the planner was busy, glued and sent now that it is not. */
-  private async sendHeldPrompt(): Promise<void> {
-    const next = this.view.conversation.nextPrompt();
-    if (next !== undefined) await this.say(next, false);
-  }
-
-  /** A prompt the user sent, shown as theirs and answered in a turn, as the extension's sendChat does (webviewRouter). */
-  private async say(text: string, now: boolean, runners?: readonly RunnerId[], refused?: () => void): Promise<void> {
-    if (text.trim()) this.view.conversation.note('user', text);
-    await this.turn(text, now, runners, refused);
   }
 
   /**
@@ -1106,10 +1109,13 @@ export class DaemonHost {
   /** The session's own events draw the compaction where it happens (ADR-0017); the answer only carries the plan. */
   private async compact(): Promise<void> {
     if (this.plannerIsAnswering()) return;
+    const condensed = this.sessionId;
     await this.plannerTurn(async (sessionId) => {
       const response = await callDaemon('plans.compact', { sessionId });
       if (sessionId === this.sessionId) this.showPlan(response.plan);
     }, (error) => this.showError(new Error(`Could not condense the conversation: ${messageOf(error)}: nothing was changed.`)));
+    // What was typed while it condensed waits for it like any turn's.
+    if (condensed === this.sessionId) await this.chat.turnEnded();
   }
 
   /**
@@ -1362,54 +1368,6 @@ export class DaemonHost {
     });
   }
 
-  private async systemCommand(command: string, taskId: string, requestId: number | undefined): Promise<void> {
-    try {
-      switch (command) {
-        case 'cancel':
-        case 'cancelResume':
-        case 'resumeNow':
-        case 'retry':
-        case 'skip':
-          await this.execute(taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
-          break;
-        case 'markComplete':
-          await this.markByHand('complete', taskId);
-          break;
-        case 'markIncomplete':
-          await this.markByHand('uncomplete', taskId);
-          break;
-        case 'revertTask':
-          await this.revert(taskId);
-          break;
-        case 'forceStart':
-          await this.forceStart(taskId);
-          break;
-        case 'runTask': {
-          const gate = await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId });
-          // The seam's run_task refuses a gated task: a start past the gate is a force start, confirmed first.
-          if (gate.mergeGate.length > 0) await this.forceStart(taskId, gate);
-          else await this.start(taskActionCommand('run', taskId));
-          break;
-        }
-        case 'executePlan':
-          await this.executePlan(requestId);
-          break;
-        case 'stopExecution':
-          await this.execute({ command: 'stop_run' });
-          this.emit({ type: 'setState', state: 'planDraft' });
-          break;
-        case 'cancelPlannerResend':
-          await callDaemon('plans.cancelResend', { sessionId: this.sessionId });
-          break;
-        case 'retryPlannerCompaction':
-          await callDaemon('plans.retryCompact', { sessionId: this.sessionId });
-          break;
-      }
-    } finally {
-      this.refreshPlan();
-    }
-  }
-
   /** Approve and run the plan, or, with a run under way, approve what waits for approval (#95). */
   private async executePlan(requestId: number | undefined): Promise<void> {
     try {
@@ -1424,44 +1382,6 @@ export class DaemonHost {
       const activity = this.view.run.current.activity;
       if (activity) this.emit({ type: 'runActivity', activity, ...(requestId !== undefined ? { requestId } : {}) });
     }
-  }
-
-  /**
-   * Mark complete and Mark not done vouch for work no verdict passed, so an AI
-   * or script task's override is asked in a real modal first and the yes goes
-   * with the status it was asked about (ADR-0029). A manual task's is the
-   * user's own sign-off and asks nothing.
-   */
-  private async markByHand(direction: OverrideDirection, taskId: string): Promise<void> {
-    const command = taskActionCommand(direction, taskId);
-    const { tasks, task } = this.planTask(taskId);
-    if (!task || !overrideNeedsConfirmation(task)) { await this.execute(command); return; }
-    const label = `task ${titledTaskRefOf(tasks, taskId) ?? taskId}`;
-    if (this.view.run.current.activity?.advancesOnItsOwn) throw new Error(manualOverrideStopFirst(direction, label));
-    if (await this.ask(overrideConfirmation(direction, label)) !== 'override') return;
-    await this.execute(confirmedOverride(command, task.status));
-  }
-
-  /** ADR-0054: the preview names what goes with it, and the yes carries the ids the user was shown. */
-  private async revert(taskId: string): Promise<void> {
-    const preview = await callDaemon('plans.revertPreview', { sessionId: this.sessionId, taskId });
-    if (!preview.revertible) throw new Error(preview.message);
-    if (await this.ask(revertConfirmation(preview, taskId)) !== 'revert') return;
-    await this.execute({ command: 'revert_task', task: taskId, confirmed: true, seen: preview.tasks.map((t) => t.taskId) });
-  }
-
-  private async forceStart(taskId: string, known?: MergeGateResponse): Promise<void> {
-    const gate = known ?? await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId });
-    if (gate.mergeGate.length > 0) {
-      const named = titledRefs(gate.mergeGate.map((t) => t.id), this.view.run.current.tasks);
-      if (await this.ask(startPastGateConfirmation(named)) !== 'start') return;
-    }
-    await this.start(taskActionCommand('force-start', taskId));
-  }
-
-  /** A start reopens the run whose cards its last end left up. */
-  private async start(command: ExecutionCommand): Promise<void> {
-    await this.startingRun(() => this.execute(command));
   }
 
   /**
@@ -1481,10 +1401,14 @@ export class DaemonHost {
     }
   }
 
-  /** The plan's own task, as the chat's cards were drawn from it: the run view's copy carries less. */
-  private planTask(taskId: string): { tasks: Task[]; task: Task | undefined } {
+  /** The plan's own tasks, as the chat's cards were drawn from them: the run view's copy carries less. */
+  private planTasks(): Task[] {
     // A surface plan's tasks are the plan's tasks as sent: the cast names them so (ui's App does the same).
-    const tasks = (this.snapshot.state.plan?.tasks ?? []) as Task[];
+    return (this.snapshot.state.plan?.tasks ?? []) as Task[];
+  }
+
+  private planTask(taskId: string): { tasks: Task[]; task: Task | undefined } {
+    const tasks = this.planTasks();
     return { tasks, task: [...walkPlan(tasks)].find((placed) => placed.task.id === taskId)?.task };
   }
 
@@ -1511,16 +1435,11 @@ export class DaemonHost {
           if (this.reviewer) { this.reviewer.open(); return; }
           await callDaemon('plans.isolationDiff', { sessionId });
           return;
-        case 'merge': {
+        case 'merge':
           // Every Merge all, the plan card's too, goes through the preflight where the Changes view is there to ask it (ADR-0062 G8).
           if (this.reviewer) { await this.reviewer.mergeAll(); return; }
-          const target = this.mergeTarget();
-          const handoff = this.view.run.current.handoff ?? this.view.run.current.runMerge;
-          const rule = handoff ? checkoutRule(handoff) : '';
-          if (await this.ask(mergeAllConfirmation(target, rule, this.snapshot.state.isExecuting)) !== 'merge') return;
-          await this.mergeAsked(target);
+          if (!(await this.chat.mergeAll())) return;
           break;
-        }
         case 'discard':
           if (await this.ask(discardRunConfirmation()) !== 'discard') return;
           await callDaemon('plans.isolationDiscard', { sessionId });
@@ -1542,12 +1461,6 @@ export class DaemonHost {
     }
   }
 
-  /** Where Merge all lands, as its confirmation names it. */
-  mergeTarget(): string {
-    const handoff = this.view.run.current.handoff ?? this.view.run.current.runMerge;
-    return handoff ? mergeTarget(handoff) : 'the branch you have checked out';
-  }
-
   /**
    * Merge all once the person has said yes elsewhere: the Changes view's
    * preflight asks its own question (ADR-0062 G8). False when it did not merge,
@@ -1555,7 +1468,7 @@ export class DaemonHost {
    */
   async mergeConfirmed(): Promise<boolean> {
     try {
-      return await this.mergeAsked(this.mergeTarget());
+      return await this.chat.mergeConfirmed();
     } catch (error) {
       this.showError(new Error(`Isolation action failed: ${messageOf(error)}`));
       return false;
@@ -1564,27 +1477,22 @@ export class DaemonHost {
     }
   }
 
-  private async mergeAsked(target: string): Promise<boolean> {
-    const sessionId = this.sessionId;
-    /*
-     * What the seam holds the merge for is its to name, one question at a time:
-     * work no check has passed (ADR-0055 D9), then an ops task running in the
-     * checkout (ADR-0020). Each yes goes with every later call.
-     */
-    const questions = { merge_past_check: ['pastChecks', mergePastChecksQuestion], merge_beside_ops: ['besideOps', mergeBesideOpsQuestion] } as const;
-    const yes: { pastChecks?: true; besideOps?: true } = {};
-    for (;;) {
+  /**
+   * The daemon's merge for the session on screen when Merge all began: a session
+   * switched to while a question is open is not sent its yes. What it holds the
+   * merge for is its refusal's code; any other refusal is thrown.
+   */
+  private mergeCall(sessionId: string): MergeCall {
+    return async (yes) => {
       try {
-        await callDaemon('plans.isolationMerge', { sessionId }, { ...yes });
-        return true;
+        await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        return { kind: 'done' };
       } catch (error) {
-        if (!(error instanceof DaemonError) || (error.code !== 'merge_past_check' && error.code !== 'merge_beside_ops')) throw error;
-        const [flag, question] = questions[error.code];
-        if (yes[flag]) throw error;
-        if (await this.ask(question(error.message, target)) !== 'merge') return false;
-        yes[flag] = true;
+        if (error instanceof DaemonRefusal && error.code === 'merge_past_check') return { kind: 'held', hold: 'pastChecks', message: error.message };
+        if (error instanceof DaemonRefusal && error.code === 'merge_beside_ops') return { kind: 'held', hold: 'besideOps', message: error.message };
+        throw error;
       }
-    }
+    };
   }
 
   private async execute(command: ExecutionCommand): Promise<void> {
@@ -1745,13 +1653,13 @@ export class DaemonHost {
         return;
       }
       if (!isFrame(event.frame)) return;
-      this.rejoinDelay = REJOIN_MIN_MS;
+      this.rejoinBackoff.reset();
       const wasGenerating = this.generating;
       stream.receive(event.frame);
       this.toTaskLogs(event.frame);
       // A turn's ended frame can trail the answer of the route that ran it, so
       // the frame releases what that answer could not (a Retry compaction's).
-      if (wasGenerating && !this.generating) void this.sendHeldPrompt();
+      if (wasGenerating && !this.generating) void this.chat.release();
     });
   }
 
@@ -1771,8 +1679,7 @@ export class DaemonHost {
     const offStatus = window.ordewell.daemon.onStatus((status) => { if (status.state === 'connected') again(); });
     const timer = setTimeout(() => {
       void window.ordewell.daemon.status().then((status) => { if (status.state === 'connected') again(); });
-    }, this.rejoinDelay);
-    this.rejoinDelay = Math.min(this.rejoinDelay * 2, REJOIN_MAX_MS);
+    }, this.rejoinBackoff.next());
     this.rejoin = () => { offStatus(); clearTimeout(timer); };
   }
 
@@ -1789,7 +1696,7 @@ export class DaemonHost {
     const joined = await window.ordewell.daemon.join(sessionId);
     if (sessionId !== this.sessionId || this.snapshot.link !== link) return;
     if (joined.ok) {
-      this.rejoinDelay = REJOIN_MIN_MS;
+      this.rejoinBackoff.reset();
       this.update({ link: { kind: 'joined', holder: joined.holder } });
       this.dispose();
       this.follow(sessionId);
@@ -1805,8 +1712,7 @@ export class DaemonHost {
     if (joined.reason === 'unreachable') {
       // Its pid still holds the lease: the holder is away, not gone, and nothing may continue it here yet.
       if (!link.away) this.update({ link: { ...link, away: true } });
-      const timer = setTimeout(() => { void this.rejoinHolder(sessionId); }, this.rejoinDelay);
-      this.rejoinDelay = Math.min(this.rejoinDelay * 2, REJOIN_MAX_MS);
+      const timer = setTimeout(() => { void this.rejoinHolder(sessionId); }, this.rejoinBackoff.next());
       this.rejoin = () => clearTimeout(timer);
       return;
     }
@@ -1834,6 +1740,7 @@ export class DaemonHost {
         conversation: saved.conversation ?? {},
         ...(saved.run ? { run: saved.run } : {}),
         ...(saved.plannerTurnId ? { plannerTurnId: saved.plannerTurnId } : {}),
+        ...(saved.position ? { position: saved.position } : {}),
       };
     }
     const adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
@@ -1842,6 +1749,7 @@ export class DaemonHost {
       conversation: adopted.plan,
       ...(adopted.run ? { run: adopted.run } : {}),
       ...(adopted.plannerTurnId ? { plannerTurnId: adopted.plannerTurnId } : {}),
+      ...(adopted.position ? { position: adopted.position } : {}),
     };
   }
 

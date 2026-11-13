@@ -40,7 +40,7 @@ describe('task row accounting', () => {
     const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }] };
     receive(wire as WsEvent);
-    const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');
+    const update = actions.find((a): a is Extract<Action, { type: 'runMessage' }> => a.type === 'runMessage' && a.message.type === 'status_update');
     const state = initialState({ sessionId: 's1', tasks: [task()] });
     const updated = reduce(state, update!).state;
     expect(updated.tasks[0].attemptUsage).toEqual([usage]);
@@ -49,7 +49,7 @@ describe('task row accounting', () => {
 
   it('applies nested usage updates without needing a status change', () => {
     const state = initialState({ tasks: [task({ id: 'parent', subtasks: [task()] })] });
-    const updated = reduce(state, { type: 'statusUpdate', tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }] }).state;
+    const updated = reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't', status: 'completed', verdict: null, attemptUsage: [usage] }] } }).state;
     expect(updated.tasks[0].subtasks?.[0].attemptUsage).toEqual([usage]);
     expect(lines(updated.tasks)).toContain(TOTAL);
   });
@@ -65,7 +65,7 @@ describe('task row accounting', () => {
         landed: [{ taskId: 't', order: 1, title: 'Work' }],
       },
     });
-    const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');
+    const update = actions.find((a): a is Extract<Action, { type: 'runMessage' }> => a.type === 'runMessage' && a.message.type === 'status_update');
     const state = initialState({ sessionId: 's1', tasks: [task({ id: 'parent', subtasks: [task()] })] });
     const updated = reduce(state, update!).state;
     const layout = planLayout(updated, 4, 140);
@@ -80,7 +80,7 @@ describe('task row accounting', () => {
     expect(layout.rowSpans[0].start).toBeGreaterThan(at);
     expect(layout.rowSpans[0].end).toBeLessThanOrEqual(at + layout.rows - 1);
 
-    const cleared = reduce(updated, { type: 'statusUpdate', tasks: [] }).state;
+    const cleared = reduce(updated, { type: 'runMessage', message: { type: 'status_update', tasks: [] } }).state;
     const clearedText = planLayout(cleared, 40, 140).lines.map(stripAnsi).join('\n');
     expect(clearedText).not.toContain('landed task');
     expect(clearedText.split('\n')).toContain(TOTAL);

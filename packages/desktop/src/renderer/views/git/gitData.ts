@@ -265,7 +265,7 @@ function actionBody(action: GitAction): Record<string, unknown> {
   }
 }
 
-/** One action on the user's checkout of `repo`; a refusal throws a `DaemonError` carrying the daemon's code and body. */
+/** One action on the user's checkout of `repo`; a refusal throws a `DaemonRefusal` carrying the daemon's code and body. */
 export async function runGitAction(workspace: string, repo: string, action: GitAction): Promise<ActionResult> {
   const data = await callDaemon(action.route, {}, { workspace, repo, ...actionBody(action) });
   return parseAction(data) ?? unreadable('an action result');

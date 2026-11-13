@@ -36,7 +36,7 @@ describe('ReplySplitter', () => {
   // Streamed one character at a time: the worst split a provider can deliver,
   // and the one that lands a delta boundary inside every fence and tag.
   it.each([
-    ['a json-fenced taskOps envelope', '```json\n{"taskOps":[{"op":"remove","task":"#2"}]}\n```', 'plan', 'task_ops'],
+    ['a json-fenced taskOps envelope', '```json\n{"taskOps":[{"op":"remove","taskId":"#2"}]}\n```', 'plan', 'task_ops'],
     ['a bare-fenced taskQuery envelope', '```\n{"taskQuery":{"tasks":["#1"]}}\n```', 'plan', 'task_query'],
     ['a plan cut off inside an upper-case fence', '```JSON {"tasks": [{"id": "t1", "title": "Ad', 'plan', 'broken_plan'],
     ['an envelope after an inline think block', '<think>they want task 1</think>\n{"taskQuery":{"tasks":["#1"]}}', 'plan', 'task_query'],

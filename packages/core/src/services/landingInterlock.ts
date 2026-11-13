@@ -4,6 +4,7 @@ import type { LandingBranchHeld } from '../daemonContract';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import type { LegacyPlanState } from '../models/Task';
 import { listSessions, loadSession } from '../utils/sessionStore';
+import { hasLandingIn } from './LandingLedger';
 
 /**
  * What a live run holds of the user's checkout (ADR-0062 G7): its landing
@@ -83,7 +84,7 @@ export function landingRuns(
       if (entries.length === 0) continue;
       const live = isLive(workspace, meta.id, plan);
       for (const entry of entries) {
-        runs.push({ workspace, sessionId: meta.id, runId: run.id, repo: checkout.repo, branch: entry.baseBranch as string, live, unmerged: landedIn(run, entry.path) });
+        runs.push({ workspace, sessionId: meta.id, runId: run.id, repo: checkout.repo, branch: entry.baseBranch as string, live, unmerged: hasLandingIn(run, entry.path) });
       }
     }
     if (path.dirname(dir) === dir) return runs;
@@ -112,11 +113,6 @@ function checkoutOf(file: string): string | null {
     if (fs.existsSync(path.join(dir, '.git'))) return dir;
     if (path.dirname(dir) === dir) return null;
   }
-}
-
-function landedIn(run: IsolationRun, repo: string): boolean {
-  if (Object.values(run.landings ?? {}).some((byRepo) => (byRepo[repo]?.length ?? 0) > 0)) return true;
-  return Object.values(run.tasks).some((record) => record.repos[repo]?.landedTip !== undefined);
 }
 
 /**

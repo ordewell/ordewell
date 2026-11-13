@@ -9,6 +9,7 @@ import type { TurnFailure } from '../runnerExit';
 import { fakePlanChanges, passed, refused } from './planChangesTestKit';
 import { PLAN_BLOCK_MAX_TASKS } from '../planWindow';
 import { turnPrompt } from '../PlanTurns';
+import { NODE_REPORTED } from '../plannerTools';
 
 function dialoguePlan(): LegacyPlanState {
   return {
@@ -1187,6 +1188,69 @@ describe('a whole plan at landing', () => {
     expect(vi.mocked(ai.continueConversation).mock.calls[1][0]).toContain('invalid assignedRunner "codex". Expected one of: claude-code');
     expect(host.adoptTasks).toHaveBeenCalledTimes(1);
     expect(vi.mocked(host.adoptTasks).mock.calls[0][0].map((t) => t.assignedRunner)).toEqual(['claude-code']);
+  });
+});
+
+// ADR-0055 D7: a child's report is what its verdict and landing go by, so its
+// plan stays as the report describes it, whichever way a change is made.
+describe('a change to a plan whose node has reported', () => {
+  const planReply: ConversationTurn = { kind: 'plan', text: '', researchLog: [], tasks: [createTask({ id: 'n1', order: 1, title: 'New', prompt: 'p', assignedRunner: 'claude-code' })] };
+  const opsReply: ConversationTurn = { kind: 'task_ops', text: '', researchLog: [], ops: [{ op: 'remove', taskId: '#1' }] };
+
+  it.each([['a plan', planReply], ['task ops', opsReply]])('is refused in a text envelope (%s), changing nothing', async (_, reply) => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(reply) });
+    const { conversation, host, state, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
+    host.changeRefusal = () => NODE_REPORTED;
+
+    await conversation.reply('Change the plan');
+
+    expect(host.adoptTasks).not.toHaveBeenCalled();
+    expect(vi.mocked(ai.continueConversation).mock.calls[1][0]).toContain(NODE_REPORTED);
+    expect(state.plan!.conversationHistory!.at(-1)!.content).toContain(NODE_REPORTED);
+  });
+
+  it.each([['a plan', planReply], ['task ops', opsReply]])('is refused in a text envelope (%s) when the report lands while its check runs', async (_, reply) => {
+    const ai = fakeAi({ continueConversation: vi.fn().mockResolvedValue(reply) });
+    const { conversation, host, checks } = fakeHost(ai, threeTurnPlan());
+    let reported = false;
+    host.changeRefusal = () => (reported ? NODE_REPORTED : null);
+    checks.rules.mockImplementation(() => {
+      reported = true;
+      return passed({ summary: ['removed #1'] });
+    });
+
+    await conversation.reply('Change the plan');
+
+    expect(host.adoptTasks).not.toHaveBeenCalled();
+    expect(vi.mocked(ai.continueConversation).mock.calls[1][0]).toContain(NODE_REPORTED);
+  });
+
+  it.each([
+    ['a plan', { kind: 'plan' as const, tasks: [createTask({ id: 'n1', order: 1, title: 'New', prompt: 'p', assignedRunner: 'claude-code' })] }],
+    ['task ops', { kind: 'task_ops' as const, ops: [{ op: 'remove', taskId: '#1' }] as TaskOp[] }],
+  ])('is refused through a tool (%s), as the call is made and as it lands', async (_, change) => {
+    let finish: (turn: ConversationTurn) => void = () => undefined;
+    const ai = fakeAi({ continueConversation: vi.fn(() => new Promise<ConversationTurn>((resolve) => { finish = resolve; })) });
+    const { conversation, host, checks } = fakeHost(ai, threeTurnPlan());
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
+    let reported = true;
+    host.changeRefusal = () => (reported ? NODE_REPORTED : null);
+
+    const turn = conversation.reply('Change the plan');
+    await vi.waitFor(() => expect(conversation.currentTurnId).toBeDefined());
+    expect(await conversation.commitFromTool(change, conversation.currentTurnId)).toEqual({ ok: false, errors: [{ field: 'tasks', message: NODE_REPORTED }] });
+
+    reported = false;
+    checks.rules.mockImplementation(() => {
+      reported = true;
+      return passed({ summary: ['removed #1'] });
+    });
+    expect(await conversation.commitFromTool(change, conversation.currentTurnId)).toEqual({ ok: false, errors: [{ field: 'tasks', message: NODE_REPORTED }] });
+    finish({ kind: 'message', text: 'Nothing changed.', researchLog: [] });
+    await turn;
+
+    expect(host.adoptTasks).not.toHaveBeenCalled();
   });
 });
 

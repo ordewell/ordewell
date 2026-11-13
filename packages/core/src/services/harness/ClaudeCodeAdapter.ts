@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { realpathSync } from 'fs';
 import * as path from 'path';
 import type { SubagentOutcome } from '../../models/Task';
-import { partedPromptUsage, type RunnerSessionCost, type SessionBilling, type UsageRecord } from '../../models/Usage';
+import { partedPromptUsage, type RunnerSessionCost } from '../../models/Usage';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerMcpServer, type RunnerModelRef } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
@@ -21,6 +21,9 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
+import { SubagentTracker, subagentBrief } from './subagentTracker';
+import { TurnOutcome } from './turnOutcome';
+import { UsageRecordBuilder, type CallUsage } from './usageBuilder';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 
 /**
@@ -445,16 +448,15 @@ function sameModel(a: string | undefined, b: string | undefined): boolean {
  * + cache_creation_input_tokens + cache_read_input_tokens + output_tokens`, read
  * in the 2.1.303 CLI) for its own context warning and auto-compaction.
  */
-function usageRecord(usage: ClaudeUsage, model: string | undefined, subagentId?: string): UsageRecord {
-  const record: UsageRecord = {
-    source: 'claude-code',
-    ...partedPromptUsage({ uncached: usage.input_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens }),
+function callUsage(usage: ClaudeUsage, model: string | undefined, subagentId?: string): CallUsage {
+  const prompt = partedPromptUsage({ uncached: usage.input_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens });
+  return {
+    ...prompt,
+    ...(usage.output_tokens !== undefined ? { outputTokens: usage.output_tokens } : {}),
+    ...(prompt.inputTokens !== undefined ? { contextTokens: prompt.inputTokens + (usage.output_tokens ?? 0) } : {}),
+    ...(model ? { model } : {}),
+    ...(subagentId ? { subagentId } : {}),
   };
-  if (model) record.model = model;
-  if (usage.output_tokens !== undefined) record.outputTokens = usage.output_tokens;
-  if (subagentId) record.subagentId = subagentId;
-  else if (record.inputTokens !== undefined) record.contextTokens = record.inputTokens + (record.outputTokens ?? 0);
-  return record;
 }
 
 /** The last call's usage an `Agent` result carries, and the model that made it. */
@@ -527,8 +529,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private controlCount = 0;
   /** Control requests sent and not yet answered, by request id. */
   private readonly pendingControl = new Map<string, (response: ControlResponse | null) => void>();
-  /** An interrupt was sent during the current turn, so an aborted result is that interrupt, not a failure. */
-  private interruptRequested = false;
+  /** Whether an interrupt was asked for in this turn, and so how its `result` ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
   private readonly permissions = new PermissionLedger<ClaudeAskHandle>(
     (handle, decision) => this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: handle.id, response: canUseToolAnswer(handle, decision) } }),
     () => ({ role: this.role, autoApprove: false, decide: readOnlyTaskPolicy(this.readOnlySite) }),
@@ -548,7 +550,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * selected id, while a message names the API's canonical id without it.
    */
   private sessionModel: string | undefined;
-  private billing: SessionBilling | undefined;
   private streamingMessage: string | undefined;
   /** The message the last `assistant` line was part of, and how many of its blocks the lines have carried. */
   private lineMessage: { id: string; blocks: number } | null = null;
@@ -562,15 +563,16 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private reportedCostUsd: number | undefined = 0;
   private reportedModelCostUsd = new Map<string, number>();
-  /** What this turn's streamed calls already reported, so its result only adds what did not stream. */
-  private turnCallUsage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
   /**
-   * Subagents started and not yet finished, keyed by the `Agent` call's id.
-   * Kept across turns: a backgrounded one reports after its turn has ended.
+   * Builds every usage record: a subagent message arrives as one line per
+   * content block, each repeating its usage, and a turn's result re-sums the
+   * calls that streamed, so what is counted once is decided there.
    */
-  private readonly openSubagents = new Map<string, { background: boolean }>();
-  /** Subagent messages already counted. A message arrives as one line per content block, each repeating its usage. */
-  private readonly countedSubagentMessages = new Set<string>();
+  private readonly usage = new UsageRecordBuilder(this.agentId);
+  /** Kept across turns: a backgrounded subagent reports after its turn has ended. */
+  private readonly subagents = new SubagentTracker(this.outcome);
+  /** The open subagents whose `Agent` call returned at launch: only a completion notice ends them. */
+  private readonly backgroundSubagents = new Set<string>();
   /** Background tasks (shells, agents) the CLI reports as still running, as of its last `background_tasks_changed`. */
   private backgroundTaskCount = 0;
   /**
@@ -821,11 +823,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (this.resultHeld) {
       this.resultHeld = false;
       this.clearFollowOnTimer();
-      this.closeTurn({ type: 'turn_end', interrupted: true }, (event) => this.announce(event));
+      this.closeTurn(this.outcome.settle('interrupted'), (event) => this.announce(event));
       return true;
     }
-    this.interruptRequested = true;
-    return (await this.control({ subtype: 'interrupt' }, timeoutMs))?.subtype === 'success';
+    this.outcome.request();
+    const answer = await this.control({ subtype: 'interrupt' }, timeoutMs);
+    if (answer && answer.subtype !== 'success') this.outcome.refused();
+    return answer?.subtype === 'success';
   }
 
   /**
@@ -847,7 +851,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * with the message unread.
    */
   async steer(id: string, text: string): Promise<boolean> {
-    if (this.role !== 'task' || !this.process || this.interruptRequested || this.pendingResume) return false;
+    if (this.role !== 'task' || !this.process || this.outcome.requested || this.pendingResume) return false;
     const uuid = randomUUID();
     this.steers.set(uuid, id);
     // It runs once the turn it was sent into ends, if the CLI runs it as a command at all.
@@ -950,7 +954,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   private openTurnState(): void {
     this.replyRuns = new ReplyRuns();
-    this.interruptRequested = false;
+    this.outcome.open();
     this.resultHeld = false;
     this.turnClosed = false;
     this.runnerTurn = false;
@@ -1052,7 +1056,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           else if (block.type === 'tool_use' && block.name) {
             const id = block.id ?? block.name;
             emit({ type: 'tool_call', id, name: block.name, args: block.input ?? {} });
-            if (SUBAGENT_TOOLS.has(block.name) && block.id) this.startSubagent(block.id, block.input ?? {}, emit);
+            if (SUBAGENT_TOOLS.has(block.name) && block.id) {
+              const input = block.input ?? {};
+              this.subagents.start({ id: block.id, brief: subagentBrief(input), model: typeof input.model === 'string' ? input.model : undefined }, emit);
+            }
           }
         }
         return;
@@ -1070,10 +1077,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           const id = block.tool_use_id ?? '';
           const output = flattenContent(block.content);
           const diff = block.is_error === true ? '' : editDiff(msg.tool_use_result);
-          const subagent = subagentId ? undefined : this.openSubagents.get(id);
+          const subagent = !subagentId && this.subagents.isOpen(id);
           if (!subagentId && output.includes(ASYNC_LAUNCH_MARKER)) {
             emit({ type: 'background_agent', id });
-            if (subagent) subagent.background = true;
+            if (subagent) this.backgroundSubagents.add(id);
           } else if (subagent) {
             this.finishForegroundSubagent(id, msg.tool_use_result, output, block.is_error === true, emit);
           }
@@ -1090,7 +1097,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         if (subagentId) return;
         this.restartCount();
         const resetModel = this.sessionModel ?? (this.plannerModel !== '<synthetic>' ? this.plannerModel : undefined);
-        emit({ type: 'usage', record: { source: 'claude-code', ...(resetModel ? { model: resetModel } : {}), compacted: true } });
+        emit({ type: 'usage', record: this.usage.compacted({ model: resetModel }) });
         return;
       }
 
@@ -1118,7 +1125,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
             ...(typeof meta?.post_tokens === 'number' ? { postTokens: meta.post_tokens } : {}),
           });
           const model = this.sessionModel ?? (this.plannerModel !== '<synthetic>' ? this.plannerModel : undefined);
-          emit({ type: 'usage', record: { source: 'claude-code', ...(model ? { model } : {}), compacted: true, ...(typeof meta?.post_tokens === 'number' ? { contextTokens: meta.post_tokens } : {}) } });
+          emit({ type: 'usage', record: this.usage.compacted({ model, ...(typeof meta?.post_tokens === 'number' ? { contextTokens: meta.post_tokens } : {}) }) });
         }
         if (msg.subtype === 'background_tasks_changed' && Array.isArray(msg.tasks)) {
           this.backgroundTaskCount = msg.tasks.length;
@@ -1126,9 +1133,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         }
         // A backgrounded subagent's only completion signal: its `Agent` call
         // returned at launch, long before the work ended.
-        if (msg.subtype === 'task_notification' && msg.tool_use_id && this.openSubagents.get(msg.tool_use_id)?.background) {
-          this.openSubagents.delete(msg.tool_use_id);
-          emit({ type: 'subagent_finished', subagentId: msg.tool_use_id, outcome: notificationOutcome(msg.status), digest: msg.summary ?? '' });
+        if (msg.subtype === 'task_notification' && msg.tool_use_id && this.backgroundSubagents.delete(msg.tool_use_id)) {
+          this.subagents.finish(msg.tool_use_id, { status: notificationOutcome(msg.status) }, msg.summary ?? '', emit);
         }
         return;
 
@@ -1141,20 +1147,19 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
         for (const command of this.modelCommands) command.turnsLeft = Math.max(0, command.turnsLeft - 1);
-        // The request belongs to the turn this result closes, so a result that
-        // finished anyway clears it too: left set, it would call the next turn interrupted.
-        if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
-          this.interruptRequested = false;
-          this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
-        } else if (msg.is_error || (msg.subtype && msg.subtype !== 'success')) {
-          this.closeTurn({ type: 'error', message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` }, emit);
-        } else if (this.role === 'task' && this.backgroundTaskCount > 0) {
-          this.interruptRequested = false;
-          this.resultHeld = true;
-        } else {
-          this.interruptRequested = false;
-          this.resultHeld = false;
-          this.closeTurn({ type: 'turn_end' }, emit);
+        {
+          // The CLI reports the interrupt it was asked for as a failed result,
+          // with nothing that tells it from a failure of the turn's own.
+          const failed = msg.is_error || (msg.subtype !== undefined && msg.subtype !== 'success');
+          const ending = failed && !this.outcome.requested
+            ? this.outcome.settle('completed', { message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` })
+            : this.outcome.settle(failed ? 'interrupted' : 'completed');
+          if (ending.type === 'turn_end' && !ending.interrupted && this.role === 'task' && this.backgroundTaskCount > 0) {
+            this.resultHeld = true;
+          } else {
+            this.resultHeld = false;
+            this.closeTurn(ending, emit);
+          }
         }
         return;
 
@@ -1261,7 +1266,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.followOnTimer = setTimeout(() => {
       this.followOnTimer = null;
       this.resultHeld = false;
-      this.closeTurn({ type: 'turn_end' }, emit);
+      this.closeTurn(this.outcome.settle('completed'), emit);
     }, FOLLOW_ON_TURN_GRACE_MS);
     this.followOnTimer.unref?.();
   }
@@ -1274,12 +1279,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     emit(end);
   }
 
-  private startSubagent(id: string, input: Record<string, unknown>, emit: (event: AgentEvent) => void): void {
-    this.openSubagents.set(id, { background: false });
-    const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
-    emit({ type: 'subagent_started', subagentId: id, brief, model: typeof input.model === 'string' ? input.model : undefined });
-  }
-
   /**
    * A subagent's messages do not stream, so each line's usage is the snapshot
    * taken before generation: the prompt is real, the output a placeholder.
@@ -1288,10 +1287,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    */
   private handleSubagentMessage(msg: ClaudeLine, subagentId: string, emit: (event: AgentEvent) => void): void {
     const messageId = msg.message?.id;
-    if (msg.message?.usage && messageId && !this.countedSubagentMessages.has(messageId)) {
-      this.countedSubagentMessages.add(messageId);
-      emit({ type: 'usage', record: usageRecord({ ...msg.message.usage, output_tokens: undefined }, msg.message.model, subagentId) });
-    }
+    const usage = msg.message?.usage;
+    const record = messageId ? this.usage.call(usage && callUsage({ ...usage, output_tokens: undefined }, msg.message?.model, subagentId), messageId) : null;
+    if (record) emit({ type: 'usage', record });
     for (const block of blocksOf(msg)) {
       if (block.type === 'thinking' && block.thinking) emit({ type: 'thinking', text: block.thinking, subagentId });
       else if (block.type === 'tool_use' && block.name) {
@@ -1306,10 +1304,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * complete usage instead.
    */
   private finishForegroundSubagent(id: string, result: unknown, output: string, failed: boolean, emit: (event: AgentEvent) => void): void {
-    this.openSubagents.delete(id);
     const finalCall = subagentFinalCall(result);
-    if (finalCall) emit({ type: 'usage', record: usageRecord(finalCall.usage, finalCall.model, id) });
-    emit({ type: 'subagent_finished', subagentId: id, outcome: failed ? 'failed' : 'done', digest: output });
+    const record = this.usage.call(finalCall ? callUsage(finalCall.usage, finalCall.model, id) : undefined, `result:${id}`);
+    if (record) emit({ type: 'usage', record });
+    this.subagents.finish(id, { success: !failed }, output, emit);
   }
 
   /**
@@ -1338,11 +1336,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.streamingMessage = event.message?.id;
       this.followModel(this.plannerModel, emit);
     } else if (event.type === 'message_delta' && event.usage) {
-      const record = usageRecord(event.usage, this.plannerModel);
-      this.turnCallUsage.inputTokens += record.inputTokens ?? 0;
-      this.turnCallUsage.cachedInputTokens += record.cachedInputTokens ?? 0;
-      this.turnCallUsage.outputTokens += record.outputTokens ?? 0;
-      emit({ type: 'usage', record });
+      const record = this.usage.call(callUsage(event.usage, this.plannerModel), this.streamingMessage);
+      if (record) emit({ type: 'usage', record });
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
       this.replyRuns.delta(`${this.streamingMessage ?? ''}:${event.index ?? 0}`, event.delta.text, emit);
     } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta.thinking) {
@@ -1367,9 +1362,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private reportBilling(apiKeySource: string | undefined, plan: string | undefined, emit: (event: AgentEvent) => void): void {
     const type = apiKeySource ? (apiKeySource === 'none' ? 'subscription' : 'api-key') : plan ? 'subscription' : undefined;
     if (!type) return;
-    const knownPlan = plan ?? (this.billing?.type === type ? this.billing.plan : undefined);
-    this.billing = { type, ...(knownPlan ? { plan: knownPlan } : {}) };
-    emit({ type: 'usage', record: { source: this.agentId, aggregate: true, sessionBilling: this.billing } });
+    emit({ type: 'usage', record: this.usage.billing({ type, ...(plan ? { plan } : {}) }) });
   }
 
   /**
@@ -1380,27 +1373,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * never moves the meter — only a call says what the context was left at.
    */
   private reportUnstreamedUsage(msg: ClaudeLine, emit: (event: AgentEvent) => void): void {
-    const { inputTokens: streamedInput, cachedInputTokens: streamedCached, outputTokens: streamedOutput } = this.turnCallUsage;
-    this.turnCallUsage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
-    if (!msg.usage) return;
     const models = Object.keys(msg.modelUsage ?? {});
     const model = this.plannerModel ?? this.mainModel ?? (models.length === 1 ? models[0] : undefined);
-    const total = usageRecord(msg.usage, model);
-    const inputTokens = (total.inputTokens ?? 0) - streamedInput;
-    const cachedInputTokens = (total.cachedInputTokens ?? 0) - streamedCached;
-    const outputTokens = (total.outputTokens ?? 0) - streamedOutput;
-    if (inputTokens <= 0 && outputTokens <= 0) return;
-    emit({
-      type: 'usage',
-      record: {
-        source: 'claude-code',
-        ...(model ? { model } : {}),
-        aggregate: true,
-        ...(inputTokens > 0 ? { inputTokens } : {}),
-        ...(inputTokens > 0 && cachedInputTokens > 0 ? { cachedInputTokens } : {}),
-        ...(outputTokens > 0 ? { outputTokens } : {}),
-      },
-    });
+    const record = this.usage.turnTotal(msg.usage && callUsage(msg.usage, model));
+    if (record) emit({ type: 'usage', record });
   }
 
   /**
@@ -1432,10 +1408,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     const modelCosts = Object.entries(msg.modelUsage ?? {}).filter((entry): entry is [string, { contextWindow?: number; costUSD: number; costBasis?: 'list' | 'managed' }] => typeof entry[1].costUSD === 'number' && entry[1].costUSD > 0 && entry[1].costBasis !== 'unknown');
     const growth = canReport && typeof total === 'number' && total > 0 ? total - this.reportedCostUsd! : undefined;
     let emitted = 0;
-    const emitCost = (record: { model?: string; amount: number; basis?: 'list' | 'managed' }): void => {
-      if (!(record.amount > 0)) return;
-      emitted += record.amount;
-      emit({ type: 'usage', record: { source: 'claude-code', ...(record.model ? { model: record.model } : {}), aggregate: true, ...(this.billing ? { sessionBilling: this.billing } : {}), reportedCost: { amount: record.amount, currency: 'USD', kind: 'estimate', ...(record.basis ? { basis: record.basis } : {}) } } });
+    const emitCost = (spend: { model?: string; amount: number; basis?: 'list' | 'managed' }): void => {
+      const record = this.usage.cost({ ...spend, kind: 'estimate' });
+      if (!record) return;
+      emitted += spend.amount;
+      emit({ type: 'usage', record });
     };
     if (modelCosts.length > 0) {
       // What the breakdown says grew, per model. A model the runner marked
@@ -1471,6 +1448,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     // A synthetic message names no model at all.
     const model = this.plannerModel && this.plannerModel !== '<synthetic>' ? this.plannerModel : this.sessionModel;
     const contextWindow = model ? msg.modelUsage?.[model]?.contextWindow : undefined;
-    if (typeof contextWindow === 'number' && contextWindow > 0) emit({ type: 'usage', record: { source: 'claude-code', model, contextWindow } });
+    const record = model && typeof contextWindow === 'number' ? this.usage.meter({ model, contextWindow }) : null;
+    if (record) emit({ type: 'usage', record });
   }
 }

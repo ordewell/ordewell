@@ -50,7 +50,7 @@ describe('the plan a revert saves halfway', () => {
     const halfway: string[] = [];
     const off = orchestrator.subscribe({
       onIsolationChanged: () => {
-        const run = orchestrator.runs.current;
+        const run = orchestrator.runs.planIsolation?.run;
         const recorded = run?.tasks.t1 !== undefined || run?.tasks.t2 !== undefined || run?.landings?.t1 !== undefined || run?.landings?.t2 !== undefined;
         const statuses = [orchestrator.storeInstance.get('t2')?.status, orchestrator.storeInstance.get('t1')?.status];
         if (!recorded && statuses.some((s) => s !== 'pending')) halfway.push(statuses.join('/'));
@@ -263,7 +263,7 @@ describe('a dependent that lands after its dependency left the plan', () => {
     if (preview.revertible) {
       expect(preview.tasks.map((t) => t.taskId)).toContain('C');
       await orchestrator.revertTask('A');
-      expect(orchestrator.runs.current?.landings?.C).toBeUndefined();
+      expect(orchestrator.runs.planIsolation?.run.landings?.C).toBeUndefined();
     } else {
       // Refusing what it cannot place is the other correct answer.
       expect(preview.reason).toBeDefined();

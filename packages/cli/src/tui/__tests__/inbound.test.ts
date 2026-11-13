@@ -78,3 +78,79 @@ describe('a socket held on a plan', () => {
     expect(lastMessage(state)).toMatchObject({ role: 'error', text: said });
   });
 });
+
+describe('a merge the socket carries', () => {
+  it('hands on who made it: an automatic merge says why it ran', () => {
+    const actions: Action[] = [];
+    const onEvent = createInbound((action) => { actions.push(action); }, 's1').receive;
+    const result = { outcome: 'merged' as const };
+
+    onEvent({ type: 'isolation_merge', result, trigger: { kind: 'gate', taskId: 't1' } } as WsEvent);
+    onEvent({ type: 'isolation_merge', result } as WsEvent);
+
+    expect(actions).toEqual([
+      { type: 'runMessage', message: { type: 'isolation_merge', result, trigger: { kind: 'gate', taskId: 't1' } }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'isolation_merge', result }, sessionId: 's1' },
+    ]);
+  });
+});
+
+describe('a session opened from a read', () => {
+  const view = { tasks: [], runMerge: null, handoff: null, mergeResult: null };
+  const status = (seq: number) => ({ type: 'status_update', tasks: [], stream: 'd', seq }) as WsEvent;
+  const approvals = [{ id: 'a1' }] as never;
+
+  function opened() {
+    const actions: Action[] = [];
+    const inbound = createInbound((action) => { actions.push(action); }, 's1');
+    return { actions, inbound, types: () => actions.map((a) => a.type) };
+  }
+
+  it('draws the read first and what came after it on top, dropping what the read already holds', async () => {
+    const { inbound, types } = opened();
+    const drawn: string[] = [];
+
+    const loading = inbound.openFrom(async () => ({
+      position: { stream: 'd', seq: 5 },
+      apply: () => { drawn.push(`read after ${types().length} dispatched`); },
+    }));
+    inbound.receive(status(4));
+    inbound.receive(status(6));
+    await loading;
+
+    expect(drawn).toEqual(['read after 0 dispatched']);
+    expect(types()).toEqual(['runMessage']);
+  });
+
+  it('keeps the approvals of a greeting the read covers, which no read returns', async () => {
+    const { actions, inbound } = opened();
+
+    const loading = inbound.openFrom(async () => ({ position: { stream: 'd', seq: 9 }, run: view as never, apply: () => {} }));
+    inbound.receive({ type: 'run_snapshot', sessionId: 's1', view, approvals, stream: 'd', seq: 8 } as WsEvent);
+    await loading;
+
+    expect(actions).toEqual([{ type: 'runSnapshot', view, approvals, sessionId: 's1' }]);
+  });
+
+  it('says the tree and the quota once the session is on screen, not before the read draws it', async () => {
+    const { inbound, types } = opened();
+    const order: string[] = [];
+
+    const loading = inbound.openFrom(async () => ({ apply: () => { order.push(`read (${types().join(',')})`); } }));
+    inbound.receive({ type: 'child_tree', sessionId: 's1', children: [] } as WsEvent);
+    await loading;
+
+    expect(order).toEqual(['read ()']);
+    expect(types()).toEqual(['childTree']);
+  });
+
+  it('rejects with the read\'s failure and draws nothing from it', async () => {
+    const { inbound, types } = opened();
+
+    const loading = inbound.openFrom(async () => { throw new Error('session gone'); });
+    inbound.receive(status(1));
+
+    await expect(loading).rejects.toThrow('session gone');
+    expect(types()).toEqual([]);
+  });
+});

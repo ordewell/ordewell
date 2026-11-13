@@ -4,7 +4,8 @@ import { initialState, reduce, type Action } from '../reducer';
 import { render } from '../render';
 import { width } from '../ansi';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
-import { DaemonError, type WsEvent } from '../../apiClient';
+import { type WsEvent } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { createInbound } from '../inbound';
 import type { TaskView, TuiState } from '../state';
 import { lastMessage } from './chat';
@@ -169,7 +170,7 @@ describe('/inbox: a stale entry', () => {
 
   it('shows the daemon\'s own refusal as it was said', async () => {
     const dispatched: Action[] = [];
-    const answerEscalation = vi.fn().mockRejectedValue(new DaemonError('That is no longer waiting on you.', 400, 'refused'));
+    const answerEscalation = vi.fn().mockRejectedValue(new DaemonRefusal('That is no longer waiting on you.', 400, { code: 'refused' }));
     const deps = {
       api: { answerEscalation } as unknown as OrdewellApi, workspace: '/ws', port: 1, dispatch: (a: Action) => dispatched.push(a),
     } as unknown as EffectDeps;

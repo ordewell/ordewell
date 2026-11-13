@@ -18,21 +18,21 @@ function running(): TuiState {
 
 describe('what the plan pane says the run waits on', () => {
   it('logs a started task as a settled line, never a pending research step', () => {
-    const { state } = reduce(running(), { type: 'taskStarted', taskId: 't1', title: 'Add multiply', runner: 'claude-code', sessionId: 's1' });
+    const { state } = reduce(running(), { type: 'runMessage', message: { type: 'task_started', taskId: 't1', order: 1, title: 'Add multiply', runner: 'claude-code' }, sessionId: 's1' });
 
     expect(state.conversation.blocks.some((b) => b.type === 'tool')).toBe(false);
     expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'Started "Add multiply" · Claude Code' });
   });
 
   it('names nothing while tasks are only running', () => {
-    let { state } = reduce(running(), { type: 'taskStarted', taskId: 't1', title: 'Add multiply', runner: 'claude-code', sessionId: 's1' });
-    ({ state } = reduce(state, { type: 'taskStarted', taskId: 't2', title: 'Add reverse', runner: 'opencode', sessionId: 's1' }));
+    let { state } = reduce(running(), { type: 'runMessage', message: { type: 'task_started', taskId: 't1', order: 1, title: 'Add multiply', runner: 'claude-code' }, sessionId: 's1' });
+    ({ state } = reduce(state, { type: 'runMessage', message: { type: 'task_started', taskId: 't2', order: 1, title: 'Add reverse', runner: 'opencode' }, sessionId: 's1' }));
 
     expect(runHint(state)).toBe('');
   });
 
   it('says the run is waiting on the user when a conflicted task is left', () => {
-    const { state } = reduce(running(), { type: 'statusUpdate', tasks: [{ id: 't1', status: 'completed', verdict: null }, { id: 't2', status: 'awaiting_user', verdict: null }], sessionId: 's1' });
+    const { state } = reduce(running(), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'completed', verdict: null }, { id: 't2', status: 'awaiting_user', verdict: null }] }, sessionId: 's1' });
 
     expect(runHint(state)).toBe('1 task waits for you');
   });
@@ -46,7 +46,7 @@ describe('what the plan pane says the run waits on', () => {
 
 describe('the run across a plan refresh mid-run', () => {
   it('stays executing when the plan arrives after the run snapshot, as a /load has it', () => {
-    let { state } = reduce(running(), { type: 'taskStarted', taskId: 't1', title: 'Add multiply', runner: 'claude-code', sessionId: 's1' });
+    let { state } = reduce(running(), { type: 'runMessage', message: { type: 'task_started', taskId: 't1', order: 1, title: 'Add multiply', runner: 'claude-code' }, sessionId: 's1' });
     const plan = { tasks: [task({ status: 'in_progress' }), task({ id: 't2', title: 'Add reverse', assignedRunner: 'opencode' })] };
     ({ state } = reduce(state, { type: 'planUpdated', plan, sessionId: 's1' }));
 

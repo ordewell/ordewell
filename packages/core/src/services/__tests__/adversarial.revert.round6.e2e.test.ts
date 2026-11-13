@@ -294,7 +294,7 @@ describe('the user\'s own steps after Merge all', () => {
     await vi.waitFor(() => expect(orchestrator.getAttempt('t2')?.phase).toBe('running'), { timeout: 20000 });
 
     expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
-    const run = orchestrator.runs.current!;
+    const run = orchestrator.runs.planIsolation!.run;
     const base = run.repos[0].baseRef;
     expect(git(root, 'ls-tree', '--name-only', 'main').split('\n')).toContain('one.txt');
 

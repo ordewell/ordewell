@@ -1,6 +1,7 @@
 import type { LegacyPlanState } from '../models/Task';
 import type { PlanStore } from './PlanStore';
-import type { SessionEventRelay } from './SessionEventRelay';
+import type { StatusGate } from './SessionEventRelay';
+import type { OrchestratorObserver, TaskOrchestrator } from './TaskOrchestrator';
 import { describeHeld, type SessionHeld } from './sessionLease';
 
 /**
@@ -21,12 +22,84 @@ export interface SessionSavesDeps {
   /** Null while this Session may save; otherwise the host that holds its session (ADR-0049). */
   heldElsewhere(): SessionHeld | null;
   store: Pick<PlanStore, 'revision' | 'statusMark'>;
-  status: Pick<SessionEventRelay, 'holdingStatus' | 'holdStatus' | 'releaseStatus' | 'flushStatus'>;
+  /** The relay's status updates, held and let go only from here: what holds them saves as it ends. */
+  status: StatusGate;
   notice(message: string): void;
 }
 
 /** When a change made before an announcement is owed its save. */
 export type SaveOwed = 'status' | 'usage';
+
+/**
+ * What an orchestrator event owes the disk before it is announced: a changed
+ * status or usage, paced as {@link SessionSaves.owed} says; a save `after`
+ * the event's effect, made before its announcement; or one save `once` for
+ * all the effect asks of it.
+ */
+export type SavePolicy = SaveOwed | 'after' | 'once';
+
+/**
+ * The one table of what each orchestrator event owes the disk (ADR-0029). An
+ * event not here owes none, or, as an automatic merge's record does, saves as
+ * a plan mutation ({@link SessionSaves.mutation}).
+ */
+const SAVE_OWED = {
+  onTaskChanged: 'status',
+  onTick: 'status',
+  onUsageChanged: 'usage',
+  // The run record names branches and worktrees on disk, so it is saved as it
+  // changes rather than at the end: a crash must still find them.
+  onIsolationChanged: 'after',
+  // A script's effects do not wait for a save, and a reload that finds it
+  // unstarted would offer to run them again as if they never ran (ADR-0035).
+  onScriptClaimed: 'after',
+  // The run's settings, taken as it starts, are on the plan it announces.
+  onRunStarted: 'after',
+  onExecutionComplete: 'after',
+  // Saved the moment it settles: a shared run has no run record to save it
+  // mid-run, so a crash would otherwise lose every verdict since the last
+  // Session operation.
+  onTaskSettled: 'once',
+} as const satisfies { readonly [E in keyof OrchestratorObserver]?: SavePolicy };
+
+/** How a run control is saved: an async one as it settles ({@link SessionSaves.control}), a sync one under a status hold ({@link SessionSaves.sync}). */
+type ControlSave<F> = F extends (...args: never[]) => Promise<unknown> ? 'control' : F extends (...args: never[]) => unknown ? 'sync' : never;
+
+/**
+ * The orchestrator's controls a user's act reaches, each saved before any
+ * surface hears of it (ADR-0029). The type holds each to the save its return
+ * owes: a control that awaits spawns and git must not hold every status back.
+ */
+const CONTROL_SAVES = {
+  forceStartTask: 'control',
+  markTaskComplete: 'control',
+  markTaskIncomplete: 'control',
+  revertTask: 'control',
+  interruptTask: 'control',
+  cancelTask: 'control',
+  skipTask: 'control',
+  landKeptWork: 'control',
+  resumeNow: 'control',
+  retryTask: 'control',
+  continueTask: 'control',
+  cancelScheduledResume: 'control',
+  approveReview: 'control',
+  approveCheckpoint: 'sync',
+  rejectCheckpoint: 'sync',
+  sendTaskMessage: 'sync',
+  forceSendTaskMessage: 'sync',
+  forceSendQueuedTaskMessage: 'sync',
+  removeQueuedTaskMessage: 'sync',
+} as const satisfies { readonly [K in keyof TaskOrchestrator]?: ControlSave<TaskOrchestrator[K]> };
+
+/** The orchestrator's run controls, as {@link SessionSaves.controls} hands them out: each saved as {@link CONTROL_SAVES} says. */
+export type RunControls = Pick<TaskOrchestrator, keyof typeof CONTROL_SAVES>;
+
+/** An event {@link SAVE_OWED} gives a save. */
+export type SavedEvent = keyof typeof SAVE_OWED;
+
+/** What a saved event changes before its save, where its announcement alone would announce it unsaved. */
+export type SavedEffects = Pick<OrchestratorObserver, SavedEvent>;
 
 /**
  * The Session's one save seam (ADR-0029): when a save is owed, how often one
@@ -51,6 +124,8 @@ export class SessionSaves {
   private held = false;
   /** The user was told the disk is refusing this session's saves, and none has landed since. */
   private failureSaid = false;
+  /** Status updates held by {@link hold}: whoever holds them saves as it ends. */
+  private holds = 0;
 
   constructor(private readonly deps: SessionSavesDeps) {}
 
@@ -110,7 +185,7 @@ export class SessionSaves {
     if (change === 'usage') return this.soon();
     if (this.controlsInFlight > 0) return this.after();
     // Saved as it ends, or not at all if it aborts.
-    if (this.deps.status.holdingStatus) return;
+    if (this.holds > 0) return;
     if (this.deps.store.revision === this.savedRevision) return;
     if (this.deps.store.statusMark() === this.savedStatuses) return this.soon();
     const sinceSaved = Date.now() - this.savedAt;
@@ -157,7 +232,7 @@ export class SessionSaves {
    * and a surface would keep showing what it answered.
    */
   sync<T>(op: () => T): T {
-    const result = this.deps.status.holdStatus(op);
+    const result = this.hold(op);
     this.after();
     this.deps.status.releaseStatus(this.deps.plan());
     return result;
@@ -169,7 +244,7 @@ export class SessionSaves {
    * status goes, so no surface hears of a change the disk refused.
    */
   mutation(op: () => boolean, save: 'first' | 'after' = 'first'): boolean {
-    const changed = this.deps.status.holdStatus(op);
+    const changed = this.hold(op);
     if (changed) this[save]();
     this.deps.status.releaseStatus(this.deps.plan());
     return changed;
@@ -180,10 +255,61 @@ export class SessionSaves {
     if (this.timer) this.after();
   }
 
-  /** The store holds what the disk does, as a plan is loaded: nothing of it is owed yet. */
-  loaded(): void {
-    this.savedRevision = this.deps.store.revision;
-    this.savedStatuses = this.deps.store.statusMark();
+  /**
+   * A plan adopted from outside, its status held until it is saved: `put`
+   * loads it into the store, which then holds what the disk does, and `adopt`
+   * adds what taking it over owes. Whether a load saves is its caller's to say
+   * (`persist`), so a task `put` puts back is not saved by its status.
+   */
+  load(put: () => void, adopt: () => void, persist: boolean): void {
+    this.hold(put);
+    this.loaded();
+    adopt();
+    // The file has the plan as it came, and this carries what adopting it added.
+    if (persist) this.after();
+    this.deps.status.releaseStatus(this.deps.plan());
+  }
+
+  /**
+   * `announce` with each event {@link SAVE_OWED} names given its save: the
+   * event's effect (from `effects`) first, then its save, then `announce`'s
+   * own handler, so no surface hears of what the disk lacks.
+   */
+  observe(announce: OrchestratorObserver, effects: SavedEffects = {}): OrchestratorObserver {
+    const saved = <A extends unknown[]>(event: SavedEvent, effect: ((...data: A) => void) | undefined, told: ((...data: A) => void) | undefined) => (...data: A): void => {
+      const owed: SavePolicy = SAVE_OWED[event];
+      if (owed === 'once') {
+        this.once(() => effect?.(...data));
+      } else {
+        effect?.(...data);
+        if (owed === 'after') this.after();
+        else this.owed(owed);
+      }
+      told?.(...data);
+    };
+    const wired: Required<SavedEffects> = {
+      onTaskChanged: saved('onTaskChanged', effects.onTaskChanged, announce.onTaskChanged),
+      onTick: saved('onTick', effects.onTick, announce.onTick),
+      onUsageChanged: saved('onUsageChanged', effects.onUsageChanged, announce.onUsageChanged),
+      onIsolationChanged: saved('onIsolationChanged', effects.onIsolationChanged, announce.onIsolationChanged),
+      onScriptClaimed: saved('onScriptClaimed', effects.onScriptClaimed, announce.onScriptClaimed),
+      onRunStarted: saved('onRunStarted', effects.onRunStarted, announce.onRunStarted),
+      onExecutionComplete: saved('onExecutionComplete', effects.onExecutionComplete, announce.onExecutionComplete),
+      onTaskSettled: saved('onTaskSettled', effects.onTaskSettled, announce.onTaskSettled),
+    };
+    return { ...announce, ...wired };
+  }
+
+  /** `orchestrator`'s run controls, each saved before what it changed is announced, as {@link CONTROL_SAVES} says. */
+  controls(orchestrator: RunControls): RunControls {
+    const saved: Partial<Record<keyof RunControls, unknown>> = {};
+    for (const name of Object.keys(CONTROL_SAVES) as (keyof RunControls)[]) {
+      const act = orchestrator[name] as (...args: unknown[]) => unknown;
+      saved[name] = CONTROL_SAVES[name] === 'control'
+        ? (...args: unknown[]) => this.control(async () => act.apply(orchestrator, args))
+        : (...args: unknown[]) => this.sync(() => act.apply(orchestrator, args));
+    }
+    return saved as RunControls;
   }
 
   /** The next failed save is said, whatever the ones before it already said: a Stop is answered on its own. */
@@ -200,6 +326,22 @@ export class SessionSaves {
     if (this.refusedFor === held.holder.hostId) return;
     this.refusedFor = held.holder.hostId;
     this.deps.notice(`${describeHeld(held)} Nothing of this session is saved from here meanwhile.`);
+  }
+
+  /** The store holds what the disk does, as a plan is loaded or saved: nothing of it is owed yet. */
+  private loaded(): void {
+    this.savedRevision = this.deps.store.revision;
+    this.savedStatuses = this.deps.store.statusMark();
+  }
+
+  /** `op` with status updates held back: a store op signals as it goes, which would announce what the save owed after it has not yet written. */
+  private hold<T>(op: () => T): T {
+    this.holds++;
+    try {
+      return this.deps.status.holdStatus(op);
+    } finally {
+      this.holds--;
+    }
   }
 
   private marked(): void {

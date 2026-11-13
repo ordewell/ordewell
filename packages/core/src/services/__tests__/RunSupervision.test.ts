@@ -346,3 +346,24 @@ describe('whose run an actor opens', () => {
     for (const kind of ['user', 'planner-turn', 'autorun'] as const) expect(runOrigin({ kind })).toBe('user');
   });
 });
+
+describe('a passed task whose landing git refused', () => {
+  it('wakes the planner with what git said and how the kept work lands, never as a conflict', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    const refused = 'git could not commit its work (git commit failed: Author identity unknown)';
+    const withError: RunSupervisionHost = Object.assign(host, { landingError: (taskId: string) => (taskId === 't1' ? refused : undefined) });
+    tasks[0] = { ...tasks[0], status: 'awaiting_user', awaitingReason: 'landing-failed' };
+
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(withError.deliver).toHaveBeenCalledTimes(1);
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain(refused);
+    expect(text).toContain('user.name');
+    expect(text).toContain('retry_task from "session"');
+    expect(text).not.toMatch(/conflict/i);
+  });
+});

@@ -14,6 +14,12 @@ export interface ToolOutcome {
    * the run (ADR-0036 S1).
    */
   signal?: NodeJS.Signals;
+  /**
+   * The envelope decided this call and nothing ran: refused by its rules or
+   * denied by the user. A caller that counts reads (ADR-0068) gives the call
+   * back, which a command that ran and failed must not get.
+   */
+  refused?: true;
 }
 
 export interface ReadFileOpts {
@@ -144,6 +150,13 @@ export interface IFileSystem {
    * indistinguishable from cancelling them mid-flight; a `bash` call is not.
    */
   bash(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
+  /**
+   * `bash` for a research subagent (ADR-0008 T6): the command gate's `subagent`
+   * site, which asks nobody and keeps the network from what it runs. Absent
+   * where the filesystem cannot judge a command itself, and then a subagent
+   * runs none.
+   */
+  subagentBash?(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
   /** Definition-first lookup for one symbol. See `symbolPatterns.ts`. */
   findSymbol(symbol: string, opts?: FindSymbolOptions): Promise<ToolOutcome>;
   getWorkspaceRoot(): string;

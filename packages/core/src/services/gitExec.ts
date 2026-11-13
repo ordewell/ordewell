@@ -66,6 +66,13 @@ export const NO_HOOKS = ['-c', 'core.hooksPath=/dev/null'];
 /** `exec` for work a repository's hooks must not run over, whichever hook git would fire and however it gets there. */
 export const withoutHooks = (exec: GitExecFn): GitExecFn => (file, args, opts) => exec(file, [...NO_HOOKS, ...args], opts);
 
+/**
+ * `exec` for git whose own words Ordewell reads (a commit refused for want of
+ * an identity): a translated git would answer in the user's language, which no
+ * pattern here matches. The user's own git actions do not go through this.
+ */
+export const inEnglish = (exec: GitExecFn): GitExecFn => (file, args, opts) => exec(file, args, { ...opts, env: { ...opts.env, LC_ALL: 'C' } });
+
 function describeDuration(ms: number): string {
   return ms >= 60_000 ? `${ms / 60_000} minutes` : `${ms / 1000} seconds`;
 }

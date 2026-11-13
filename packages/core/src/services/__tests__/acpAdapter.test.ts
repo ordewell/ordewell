@@ -13,6 +13,7 @@ import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import type { RunnerManifest } from '../../plugins/types';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import type { StructuredEvent } from '../../interfaces/IRunner';
+import type { UsageRecord } from '../../models/Usage';
 import { StructuredRunner } from '../StructuredRunner';
 import { OrdewellMcpServer, mcpClientConfig, type McpClientConfig } from '../mcp';
 import type { TaskCompleteArgs } from '../mcp';
@@ -904,7 +905,7 @@ describe('AcpAdapter interrupt', () => {
     expect(agent.requests('session/cancel').map((m) => m.params)).toEqual([{ sessionId: 'sess-1' }]);
   });
 
-  it('counts a turn the agent ends normally after the cancel as interrupted', async () => {
+  it('counts a turn the agent ends normally after the cancel as interrupted (ADR-0018 W1)', async () => {
     const { adapter } = setup([
       ...handshake(),
       { expect: 'session/prompt' },
@@ -1821,6 +1822,25 @@ describe('AcpAdapter resume (K1)', () => {
     const events = await turn(adapter, 'go on');
     expect(events.filter((e) => e.type === 'assistant_text').map((e) => e.type === 'assistant_text' && e.text)).toEqual(['new answer']);
     expect(agent.invalid).toEqual([]);
+    expect(agent.unexpected).toEqual([]);
+  });
+
+  it('books none of the usage the agent replays on session/load, on the turn or between turns', async () => {
+    const { agent, adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ loadSession: true }) },
+      { expect: 'session/load' },
+      { notify: 'session/update', params: update('usage_update', { used: 99000, size: 200000, cost: { amount: 0.5, currency: 'USD' } }) },
+      { answer: {} },
+      { expect: 'session/prompt' },
+      { notify: 'session/update', params: update('usage_update', { used: 1000, size: 200000, cost: { amount: 0.51, currency: 'USD' } }) },
+      { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    ]);
+    const between: UsageRecord[] = [];
+    await adapter.start(taskStart('ask', { resumeSessionId: 'sess-1' }));
+    adapter.onUsage((record) => between.push(record));
+    const events = await turn(adapter, 'go on');
+    expect(events.flatMap((e) => (e.type === 'usage' ? [e.record.contextTokens] : []))).toEqual([1000]);
+    expect(between).toEqual([]);
     expect(agent.unexpected).toEqual([]);
   });
 

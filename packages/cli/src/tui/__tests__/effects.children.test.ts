@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import type { Action } from '../reducer';
-import { DaemonError, type SessionSocket, type SocketEnd } from '../../apiClient';
+import { type SessionSocket, type SocketEnd } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 
 const ROOT = 'root-session';
 const CHILD = 'child-session';
@@ -45,11 +46,11 @@ function harness(over: Record<string, unknown> = {}) {
 
 const of = (actions: Action[], type: Action['type']) => actions.filter((a) => a.type === type);
 const open = (deps: EffectDeps) => runEffect({ type: 'followChild', rootId: ROOT, childId: CHILD }, deps);
-const REFUSED = new DaemonError('This plan has ended.', 409, 'child_view_only');
-const UNLISTED = new DaemonError('No such child.', 404, 'child_not_found');
+const REFUSED = new DaemonRefusal('This plan has ended.', 409, { code: 'child_view_only' });
+const UNLISTED = new DaemonRefusal('No such child.', 404, { code: 'child_not_found' });
 
 describe('a checkpoint answered from a plan below the one that holds it', () => {
-  const NOT_WAITING = new DaemonError('No longer waiting.', 409, 'checkpoint_not_waiting');
+  const NOT_WAITING = new DaemonRefusal('No longer waiting.', 409, { code: 'checkpoint_not_waiting' });
 
   it('comes back as that plan\'s refusal, with the words it carried', async () => {
     const h = harness({ rejectTaskCheckpoint: vi.fn().mockRejectedValue(NOT_WAITING) });
@@ -134,7 +135,7 @@ describe('following a child plan', () => {
   it('keeps trying through a 4404 whose read fails for any other reason', async () => {
     const h = harness();
     await open(h.deps);
-    h.api.getChild.mockRejectedValueOnce(new DaemonError('Busy.', 503));
+    h.api.getChild.mockRejectedValueOnce(new DaemonRefusal('Busy.', 503));
 
     h.sockets[0].end(4404);
     await vi.advanceTimersByTimeAsync(500);
@@ -186,7 +187,7 @@ describe('following a child plan', () => {
   });
 
   describe('a read that fails on an open socket', () => {
-    const BUSY = new DaemonError('Busy.', 503);
+    const BUSY = new DaemonRefusal('Busy.', 503);
 
     it('reads again on a socket of its own after a reconnect, and says nothing more', async () => {
       const h = harness();

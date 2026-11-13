@@ -206,11 +206,12 @@ describe('parsePlanJson', () => {
     expect(tasks[0].id).toBe('t1');
   });
 
-  it('defaults unknown task type to "ai"', () => {
+  // Read as "ai" once, while submit_plan's schema refused it: the routes now agree, as an edit's type already did.
+  it('refuses a task type no kind owns, never reading it as "ai"', () => {
     const raw = JSON.stringify({
       tasks: [{ id: 'x', order: 1, title: 't', description: 'd', type: 'something-weird', dependencies: [], subtasks: [], sliceType: 'AFK', autonomy: 'AFK' }],
     });
-    expect(parsePlanJson(raw, RUNNERS)[0].type).toBe('ai');
+    expect(() => parsePlanJson(raw, RUNNERS)).toThrow(/"something-weird", which is no kind of task/);
   });
 
   it('parses type "user" as user task', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DaemonError } from '../../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
 import { chatActivity } from '../layout';
@@ -20,7 +20,7 @@ const midTurn = (): TuiState => enter(enter(initialState({ sessionId: 's1', rows
 
 const rejects = (): Promise<never> => Promise.reject(new Error('socket hang up'));
 /** What the daemon answers when the turn itself fails. */
-const refusesTurn = (): Promise<never> => Promise.reject(new DaemonError('planner down', 500));
+const refusesTurn = (): Promise<never> => Promise.reject(new DaemonRefusal('planner down', 500));
 /** What Node rejects with when nothing is listening on the daemon's port. */
 const refused = (): Promise<never> => Promise.reject(Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3742'), { code: 'ECONNREFUSED' }));
 /** The sockets a turn opens around its call, open at once and never dropping. */

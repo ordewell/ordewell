@@ -761,6 +761,72 @@ describe('applyTaskOps — merge', () => {
     expect(merged.dependencies.sort()).toEqual(['x', 'y']);
   });
 
+  it('rewires a subtask that depended on a merged task, at any depth', () => {
+    const plan = [
+      createTask({ id: 'a', order: 1, title: 'A', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'B', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({
+        id: 'c', order: 3, title: 'C', prompt: 'p', assignedRunner: 'claude-code',
+        subtasks: [createTask({
+          id: 'c1', order: 1, title: 'C1', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code',
+          subtasks: [createTask({ id: 'c11', order: 1, title: 'C11', prompt: 'p', dependencies: ['b'], assignedRunner: 'claude-code' })],
+        })],
+      }),
+    ];
+    const res = applyTaskOps(plan, [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB' } }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    const merged = res.tasks.find((t) => t.title === 'AB')!;
+    const c = res.tasks.find((t) => t.id === 'c')!;
+    expect(c.subtasks[0].dependencies).toEqual([merged.id]);
+    expect(c.subtasks[0].subtasks[0].dependencies).toEqual([merged.id]);
+  });
+
+  it('keeps the dependencies the merged spec states beside those the merged tasks had', () => {
+    const plan = [
+      createTask({ id: 'x', order: 1, title: 'X', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'y', order: 2, title: 'Y', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'a', order: 3, title: 'A', prompt: 'p', dependencies: ['x'], assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 4, title: 'B', prompt: 'p', assignedRunner: 'claude-code' }),
+    ];
+    const res = applyTaskOps(plan, [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB', dependencies: ['#2'] } }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks.find((t) => t.title === 'AB')!.dependencies).toEqual(['x', 'y']);
+  });
+
+  it('reads a merged spec dependency by handle, and refuses an unknown one rather than dropping it', () => {
+    const plan = samplePlan();
+    const byHandle = applyTaskOps(plan, [
+      { op: 'add', task: { title: 'Lint', prompt: 'p' }, handle: 'lint' },
+      { op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB', dependencies: ['lint'] } },
+    ], ['claude-code']);
+    expect(byHandle.errors).toEqual([]);
+    const lint = byHandle.tasks.find((t) => t.title === 'Lint')!;
+    expect(byHandle.tasks.find((t) => t.title === 'AB')!.dependencies).toEqual([lint.id]);
+    expect(byHandle.tasks.findIndex((t) => t.id === lint.id)).toBeLessThan(byHandle.tasks.findIndex((t) => t.title === 'AB'));
+
+    const unknown = applyTaskOps(plan, [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB', dependencies: ['#9'] } }], ['claude-code']);
+    expect(unknown.ok).toBe(false);
+    expect(unknown.errors[0]).toMatch(/op 1 \(merge\): unknown dependencies/);
+  });
+
+  it('leaves a task that depended on both merged tasks with one dependency on the survivor', () => {
+    const plan = [
+      createTask({ id: 'a', order: 1, title: 'A', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 2, title: 'B', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'c', order: 3, title: 'C', prompt: 'p', dependencies: ['a', 'b'], assignedRunner: 'claude-code' }),
+    ];
+    const res = applyTaskOps(plan, [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB' } }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    const merged = res.tasks.find((t) => t.title === 'AB')!;
+    expect(res.tasks.find((t) => t.id === 'c')!.dependencies).toEqual([merged.id]);
+  });
+
+  it('drops a merged spec dependency on a task it merges away, which would be a dependency on itself', () => {
+    const res = applyTaskOps(samplePlan(), [{ op: 'merge', taskIds: ['a', 'b'], merged: { title: 'AB', dependencies: ['a'] } }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks.find((t) => t.title === 'AB')!.dependencies).toEqual([]);
+  });
+
   it('falls back to combined description/prompt when the spec omits them', () => {
     const plan = [
       createTask({ id: 'a', order: 1, title: 'A', description: 'desc-a', prompt: 'p-a', assignedRunner: 'claude-code' }),
@@ -807,6 +873,56 @@ describe('applyTaskOps — split', () => {
     const res = applyTaskOps(samplePlan(), [{ op: 'split', taskId: 'b', parts: [{ title: 'x' }, {}] }], ['claude-code']);
     expect(res.ok).toBe(false);
     expect(res.errors[0]).toMatch(/part 2.*title/i);
+  });
+
+  it('rewires a subtask that depended on the split task to the last part', () => {
+    const plan = [
+      createTask({ id: 'a', order: 1, title: 'A', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({
+        id: 'c', order: 2, title: 'C', prompt: 'p', assignedRunner: 'claude-code',
+        subtasks: [createTask({ id: 'c1', order: 1, title: 'C1', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' })],
+      }),
+    ];
+    const res = applyTaskOps(plan, [{ op: 'split', taskId: 'a', parts: [{ title: 'A1' }, { title: 'A2' }] }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    const last = res.tasks.find((t) => t.title === 'A2')!;
+    expect(res.tasks.find((t) => t.id === 'c')!.subtasks[0].dependencies).toEqual([last.id]);
+  });
+
+  it('keeps the dependencies each part states, beside the chain and what the task had', () => {
+    const plan = [
+      createTask({ id: 'x', order: 1, title: 'X', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'y', order: 2, title: 'Y', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 3, title: 'B', prompt: 'p', dependencies: ['x'], assignedRunner: 'claude-code' }),
+    ];
+    const res = applyTaskOps(plan, [{
+      op: 'split', taskId: 'b',
+      parts: [{ title: 'B1' }, { title: 'B2', dependencies: ['#2'] }],
+    }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    const [b1, b2] = ['B1', 'B2'].map((title) => res.tasks.find((t) => t.title === title)!);
+    expect(b1.dependencies).toEqual(['x']);
+    expect(b2.dependencies).toEqual([b1.id, 'y']);
+  });
+
+  it('adds the first part\'s stated dependencies to the ones the split task had', () => {
+    const plan = [
+      createTask({ id: 'x', order: 1, title: 'X', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'y', order: 2, title: 'Y', prompt: 'p', assignedRunner: 'claude-code' }),
+      createTask({ id: 'b', order: 3, title: 'B', prompt: 'p', dependencies: ['x'], assignedRunner: 'claude-code' }),
+    ];
+    const res = applyTaskOps(plan, [{ op: 'split', taskId: 'b', parts: [{ title: 'B1', dependencies: ['y', 'x'] }, { title: 'B2' }] }], ['claude-code']);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks.find((t) => t.title === 'B1')!.dependencies).toEqual(['x', 'y']);
+  });
+
+  it('refuses a part that names the task being split, and an unknown dependency, rather than dropping them', () => {
+    const named = applyTaskOps(samplePlan(), [{ op: 'split', taskId: 'b', parts: [{ title: 'B1' }, { title: 'B2', dependencies: ['b'] }] }], ['claude-code']);
+    expect(named.ok).toBe(false);
+    expect(named.errors[0]).toMatch(/split part 2.*"Build".*being split/);
+    const unknown = applyTaskOps(samplePlan(), [{ op: 'split', taskId: 'b', parts: [{ title: 'B1', dependencies: ['#9'] }, { title: 'B2' }] }], ['claude-code']);
+    expect(unknown.ok).toBe(false);
+    expect(unknown.errors[0]).toMatch(/split part 1.*unknown dependencies/);
   });
 
   it('refuses to split a completed task', () => {
@@ -1212,5 +1328,58 @@ describe('research task type flips', () => {
     expect(result.ok).toBe(true);
     expect(result.tasks[0].type).toBe(type);
     expect(result.tasks[0].research).toBeFalsy();
+  });
+});
+
+// A wrong-typed field was read as empty, so an edit "succeeded" by clearing what it meant to set;
+// and a malformed op threw out of the text route instead of being refused for the planner to fix.
+describe('a malformed task op is refused, never coerced or thrown', () => {
+  it('refuses an update whose dependencies are a string, leaving the task as it was', () => {
+    const plan = samplePlan();
+    const result = applyTaskOps(plan, [{ op: 'update', taskId: '#3', changes: { dependencies: '#2' as unknown as string[] } }], ['claude-code']);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/dependencies" is "#[23]", which must be a list of task refs/);
+    expect(result.tasks.find((t) => t.id === 'c')?.dependencies).toEqual(['b']);
+  });
+
+  it('refuses an added task whose dependencies are a string', () => {
+    const result = applyTaskOps(samplePlan(), [{ op: 'add', task: { title: 'Ship', prompt: 'ship', dependencies: '#3' as unknown as string[] } }], ['claude-code']);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/dependencies" is "#[23]", which must be a list of task refs/);
+  });
+
+  it('reads numeric dependency refs as the orders they name', () => {
+    const result = applyTaskOps(samplePlan(), [{ op: 'update', taskId: '#3', changes: { dependencies: [1] as unknown as string[] } }], ['claude-code']);
+    expect(result.ok).toBe(true);
+    expect(result.tasks.find((t) => t.id === 'c')?.dependencies).toEqual(['a']);
+  });
+
+  it('refuses ops whose changes, taskIds or parts are not what they hold', () => {
+    const malformed = [
+      { op: 'update', taskId: '#2', changes: 'title: x' },
+      { op: 'reorder', taskIds: '#1,#2,#3' },
+      { op: 'merge', taskIds: '#1', merged: { title: 'Both' } },
+      { op: 'split', taskId: '#2', parts: 'two halves' },
+    ] as unknown as TaskOp[];
+    for (const op of malformed) {
+      const result = applyTaskOps(samplePlan(), [op], ['claude-code']);
+      expect(result.ok, JSON.stringify(op)).toBe(false);
+    }
+  });
+
+  it('turns a malformed op in a text reply into a parse error the planner is asked to fix', () => {
+    for (const reply of [
+      '{"taskOps":[{"op":"update","taskId":"#2","changes":"title: x"}]}',
+      '{"taskOps":[{"op":"reorder","taskIds":"#1,#2,#3"}]}',
+      '{"taskOps":[{"op":"update","taskId":"#3","changes":{"dependencies":"#2"}}]}',
+    ]) {
+      expect(() => parseTaskOpsJson(reply), reply).toThrow(PlanParseError);
+    }
+    expect(() => parseTaskOpsJson('{"taskOps":[{"op":"update","taskId":"#3","changes":{"dependencies":"#2"}}]}')).toThrow(/dependencies/);
+  });
+
+  it('accepts numeric dependency refs in a text reply, as edit_plan does', () => {
+    expect(parseTaskOpsJson('{"taskOps":[{"op":"update","taskId":3,"changes":{"dependencies":[1]}}]}'))
+      .toEqual([{ op: 'update', taskId: 3, changes: { dependencies: [1] } }]);
   });
 });

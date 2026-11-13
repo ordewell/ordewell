@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ExecutionActor } from '../../models/Execution';
-import { ExecutionCommands, type ExecutionHost } from '../ExecutionCommands';
+import { ExecutionCommands, type ApprovalReads, type ExecutionHost, type RunReads } from '../ExecutionCommands';
+import type { RunControls } from '../SessionSaves';
 import { rootAuthority } from '../Mandate';
 import { SURFACE_CONTROLS, type Surface } from '../surfaceControls';
 
@@ -19,7 +20,7 @@ function seam(surface: Surface, mergesByThemselves = false): ExecutionCommands {
     userControls: () => SURFACE_CONTROLS[surface],
     mergesByThemselves: () => mergesByThemselves,
   } as unknown as ExecutionHost;
-  return new ExecutionCommands({ host, consent: { request: vi.fn() }, authority: rootAuthority(() => ({ autorun: false, autonomous: false, delegationTokens: 0, runners: [], models: {} })) });
+  return new ExecutionCommands({ orchestrator: {} as RunReads, controls: {} as RunControls, approvals: {} as ApprovalReads, host, consent: { request: vi.fn() }, authority: rootAuthority(() => ({ autorun: false, autonomous: false, delegationTokens: 0, runners: [], models: {} })) });
 }
 
 function refusal(commands: ExecutionCommands, actor: ExecutionActor, command: Parameters<ExecutionCommands['consent']>[1]): string {

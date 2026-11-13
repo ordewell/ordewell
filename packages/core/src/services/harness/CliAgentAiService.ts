@@ -11,7 +11,7 @@ import {
   DEFAULT_RUNNERS,
   type PlannerNativeSession,
 } from '../../models/Task';
-import { addUsage, type RunnerSessionCost, type UsageTotals } from '../../models/Usage';
+import { addUsage, type RunnerSessionCost, type UsageRecord, type UsageTotals } from '../../models/Usage';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
@@ -191,6 +191,8 @@ class PlannerSession {
   notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
   /** The setting's reason was already said this session; see {@link CliAgentAiService.noticeNativeShell}. */
   nativeShellNoticed = false;
+  /** Where spend the agent reports between turns is booked; see {@link ConversationRequest.onUsage}. */
+  onUsage?: (record: UsageRecord) => void;
   /**
    * The agent's own session id, kept across a process death so the next turn
    * can resume warm context instead of re-reading the repository. Never
@@ -216,12 +218,6 @@ class PlannerSession {
    * exclusions or its budget can change between turns. Absent, it is off.
    */
   searchesUnasked: ((provider: string) => boolean) | undefined;
-  /**
-   * Every subagent this session has reported starting, and finishing.
-   * Agents restate a subagent's state as it changes, and one can finish a turn
-   * or a process restart after it started; surfaces get each once, in order.
-   */
-  readonly subagents = { started: new Set<string>(), finished: new Set<string>() };
   /** Ordewell's research agent, where this session serves one (ADR-0066); its token lists `spawn_research_agent`. */
   research?: NonNullable<PlannerToolHandler['spawnResearchAgent']>;
   /** Where the research agent's progress goes: the open turn's, or nowhere between turns. */
@@ -429,6 +425,7 @@ export class CliAgentAiService implements IAiService {
     const session = new PlannerSession(this.mcpServer);
     this.session = session;
     session.notice = req.notice;
+    session.onUsage = req.onUsage;
 
     // Only a runner whose own agents are withheld gets Ordewell's (ADR-0066); a session refused agents gets none.
     if (this.runner === 'opencode' && !req.plannerTools.noSubagents) await this.offerResearchAgent(session, req, req.plannerTools.sessionId);
@@ -791,15 +788,12 @@ export class CliAgentAiService implements IAiService {
           return;
         }
 
+        // Each adapter reports a subagent's start and finish once, in order (SubagentTracker).
         case 'subagent_started':
-          if (session.subagents.started.has(event.subagentId)) return;
-          session.subagents.started.add(event.subagentId);
           onProgress({ type: 'subagent_started', subagentId: event.subagentId, brief: event.brief, model: event.model });
           return;
 
         case 'subagent_finished':
-          if (!session.subagents.started.has(event.subagentId) || session.subagents.finished.has(event.subagentId)) return;
-          session.subagents.finished.add(event.subagentId);
           onProgress({
             type: 'subagent_finished', subagentId: event.subagentId, outcome: event.outcome, digest: event.digest,
             usage: subagentUsage.get(event.subagentId),
@@ -1075,6 +1069,7 @@ export class CliAgentAiService implements IAiService {
         starting = adapter;
         startupExit = null;
         await adapter.start({ ...start, mcp: mcpClientConfig(credential) });
+        this.bookUsageBetweenTurns(adapter, session);
         adapter.onProcessExit?.((code, lastWords) => {
           if (adapter === starting) startupExit ??= lastWords ?? `${this.runner} exited with code ${code}`;
         });
@@ -1093,6 +1088,19 @@ export class CliAgentAiService implements IAiService {
     // before the first turn; Claude Code names it on `init`, inside one.
     session.nativeShellVersion = spawned.adapter.version?.() ?? session.nativeShellVersion;
     return spawned.adapter;
+  }
+
+  /**
+   * Once per process: what it spends with no turn of ours open, a turn it
+   * opened itself to relay a backgrounded subagent's report most often. The
+   * kept count follows, since the runner has counted that spend too, and a
+   * resume from the count before it would book it a second time.
+   */
+  private bookUsageBetweenTurns(adapter: AgentAdapter, session: PlannerSession): void {
+    adapter.onUsage?.((record) => {
+      if (session.adapter === adapter) session.sessionCost = adapter.sessionCost?.() ?? session.sessionCost;
+      session.onUsage?.(record);
+    });
   }
 
   /** Whether the runner uses its token only once a prompt runs, so its first turn spawns it as the attach check (ADR-0060, R5). */

@@ -1,7 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
-import { cleanEnv, execFileWithTimeout, git, isAncestor, subcommandOf } from '../gitExec';
+import { cleanEnv, execFileWithTimeout, git, isAncestor, subcommandOf, type GitExecFn } from '../gitExec';
+import { createWorktreeIsolation } from '../GitWorktreeIsolation';
+import { fakeConfig } from '../../testing';
+import { SELF_REPO } from '../repoPath';
 
 const REPO_ROOT = join(__dirname, '../../../../..');
 
@@ -32,6 +35,21 @@ describe('gitExec', () => {
       resolvePath: async () => '',
     };
     await expect(git(invoker, '/repo', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'x'])).rejects.toThrow('git commit failed: hook refused');
+  });
+
+  describe('the language git speaks', () => {
+    // A translated git, as Debian ships it: it answers in German unless the locale is pinned.
+    const translated: GitExecFn = async (_file, _args, opts) => {
+      throw Object.assign(new Error('git'), {
+        stderr: opts.env.LC_ALL === 'C' ? "fatal: unable to auto-detect email address (got 'me@host.(none)')\n" : 'fatal: E-Mail-Adresse konnte nicht automatisch erkannt werden\n',
+        code: 128,
+      });
+    };
+
+    it('still refuses a run for want of an identity when the user\'s git is translated', async () => {
+      const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), execFileImpl: translated, resolvePath: async () => '' });
+      expect(await isolation.commitRefusal?.('/ws', [SELF_REPO])).toMatch(/unable to auto-detect email address/);
+    });
   });
 
   describe('isAncestor', () => {

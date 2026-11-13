@@ -7,6 +7,7 @@ import { DELEGATED_FIELDS, notOnADelegatedMessage } from '../models/Delegation';
 import { notOnAScriptMessage, MODE_NOT_THE_PLANNERS, MANUAL_NOT_READ_ONLY, OPS_NOT_READ_ONLY } from './PlannedTask';
 import { clearedBodyFields } from '../models/ScriptTask';
 import { taggedReadOnlyMode } from './ModeResolver';
+import { readSpec } from './TaskSpec';
 
 /**
  * A task as the planner writes it: its fields, less the mode, plus whether it
@@ -110,6 +111,10 @@ export function prepareTaskEdit(
   const target = taskPlacement(tasks, taskId)?.task;
   if (!target) return { ok: false, error: 'Task not found' };
   const planner = actor === 'planner';
+  // Only the planner's route reads JSON it wrote; the user's arrives typed.
+  if (planner && raw !== undefined && (typeof raw !== 'object' || raw === null || Array.isArray(raw))) {
+    return { ok: false, error: `"${target.title}" ${readSpec(raw, 'patch')[0].message}` };
+  }
   if (planner && raw) {
     // What only a runner would read, and that never lands on a task, is refused here for a script (ADR-0035).
     // A type no kind owns is refused with the rest of the type checks, in validateTaskEdit.
@@ -118,6 +123,9 @@ export function prepareTaskEdit(
     if (kind === 'script' && planners.length > 0) return { ok: false, error: `"${target.title}" ${notOnAScriptMessage(planners)}` };
     if (target.type === 'delegated' && planners.length > 0) return { ok: false, error: `"${target.title}" ${notOnADelegatedMessage(planners)}` };
     if ('taskMode' in raw) return { ok: false, error: MODE_NOT_THE_PLANNERS };
+    // After the refusals that say why a field is not this task's, so a script's nulled prompt is named as that.
+    const misshapen = readSpec(raw, 'patch');
+    if (misshapen.length > 0) return { ok: false, error: `"${target.title}" ${misshapen[0].message}` };
   }
   const asked = editableChanges(actor, raw);
   if (planner && raw && 'thinkingEffort' in raw) {

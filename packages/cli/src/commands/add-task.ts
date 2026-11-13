@@ -1,13 +1,16 @@
 import { resolveUserTaskRef } from '@ordewell/core/plan-utils';
-import { flag, flags, readLastSession, workspaceOf } from '../utils';
+import { flag, flagGiven, flags, readLastSession, workspaceOf } from '../utils';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { taskViews } from './shared';
 
+const USAGE =
+  'Usage: ordewell add-task --title "..." [--description "..."] [--prompt "..."] [--type ai|user] [--depends-on <task-id> ...] [--session-id <id>] [--workspace /path]';
+
 export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient): Promise<void> {
   const title = flag(subArgs, '--title');
   if (!title) {
-    console.error('Usage: ordewell add-task --title "..." [--description "..."] [--prompt "..."] [--type ai|user] [--depends-on <task-id> ...] [--session-id <id>] [--workspace /path]');
+    console.error(USAGE);
     process.exit(1);
   }
 
@@ -22,7 +25,20 @@ export async function handleAddTask(subArgs: string[], injectedApi?: ApiClient):
     sessionId = last.sessionId;
   }
 
-  const type = flag(subArgs, '--type') === 'user' ? 'user' : 'ai';
+  // An unrecognised value must not fall back to 'ai': that task is one an
+  // agent will go on to run.
+  const typeFlag = flag(subArgs, '--type');
+  if (typeFlag === undefined && flagGiven(subArgs, '--type')) {
+    console.error(`--type needs a value. Use ai or user.\n${USAGE}`);
+    process.exit(1);
+    return;
+  }
+  if (typeFlag !== undefined && typeFlag !== 'ai' && typeFlag !== 'user') {
+    console.error(`Invalid --type "${typeFlag}". Use ai or user.`);
+    process.exit(1);
+    return;
+  }
+  const type = typeFlag === 'user' ? 'user' : 'ai';
   const description = flag(subArgs, '--description') || title;
   const dependencyRefs = flags(subArgs, '--depends-on').filter(Boolean) as string[];
 

@@ -156,6 +156,26 @@ describe('Welcome: the hero and the footer', () => {
     expect(bridge.app.openWorkspace).toHaveBeenCalledWith(undefined);
   });
 
+  it('arms ⌘O in the same commit that names it, not one effect later', async () => {
+    const bridge = installBridge();
+    render(<Welcome status={CONNECTED} />);
+    const open = screen.getByRole('button', { name: /Open folder…/ });
+    // A MutationObserver runs right after React's commit and before its passive
+    // effects: the earliest moment a user could press the key the button names.
+    const calls = await new Promise<number[]>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (open.getAttribute('aria-keyshortcuts') !== 'Meta+O') return;
+        observer.disconnect();
+        fireEvent.keyDown(window, { key: 'o', ctrlKey: true });
+        const afterCtrl = bridge.app.openWorkspace.mock.calls.length;
+        fireEvent.keyDown(window, { key: 'o', metaKey: true });
+        resolve([afterCtrl, bridge.app.openWorkspace.mock.calls.length]);
+      });
+      observer.observe(open, { attributes: true });
+    });
+    expect(calls).toEqual([0, 1]);
+  });
+
   it('uses Ctrl+O on Linux and shows Ctrl+Q to quit', async () => {
     const bridge = installBridge({ platform: 'linux' });
     render(<Welcome status={CONNECTED} />);

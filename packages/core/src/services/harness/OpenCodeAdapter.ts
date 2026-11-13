@@ -13,10 +13,13 @@ import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
-  REQUEST_TIMEOUT_MS, SESSION_TITLE, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
+  REQUEST_TIMEOUT_MS, SESSION_TITLE, openCodeCall, streamTurn, turnLatch, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
+import { SubagentTracker, subagentBrief } from './subagentTracker';
+import { TurnOutcome } from './turnOutcome';
+import { UsageRecordBuilder } from './usageBuilder';
 
 const SERVER_READY_TIMEOUT_MS = 30000;
 /** The banner is one short line; a longer unterminated one is not it, and is not kept growing. */
@@ -287,8 +290,11 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   /** The last assistant message already settled — the baseline {@link recoverReply} measures a new reply against. */
   private lastAssistantId: string | null = null;
   private taskTurn: TaskTurn | null = null;
-  /** An abort was posted during the current task turn, so the idle that follows ends it as interrupted. */
-  private interruptRequested = false;
+  /** Whether an abort was posted in the current task turn, and so how the idle that follows ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
+  private readonly subagents = new SubagentTracker(this.outcome);
+  /** For the session, not the turn: a replayed frame can restate a call a later turn sees again. */
+  private readonly usage = new UsageRecordBuilder('opencode');
   /** The user's MCP servers, as `/mcp` last listed them: what tells a planner's MCP tool request from a built-in's (ADR-0026). */
   private mcpServers: string[] = [];
   private readonly permissions = openCodePermissions(
@@ -578,7 +584,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     command?: { name: string; args: string },
   ): Promise<void> {
     const state = newTurnState();
-    this.interruptRequested = false;
+    this.outcome.open();
     const turn: TaskTurn = Object.assign(turnLatch(), { userMessages: new Set<string>(), failure: null, messageError: null, messageAborted: false });
     this.taskTurn = turn;
     const stream = await this.openStream(state, onEvent, onActivity);
@@ -593,7 +599,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
           const held = await this.heldPost(post, turn);
           if (signal?.aborted) { this.dispose(); return; }
           // An interrupted command's reply is the abort, not the turn's end: the idle after it is.
-          if (held.kind === 'answered' && !this.interruptRequested) {
+          if (held.kind === 'answered' && !this.outcome.requested) {
             this.permissions.endTurn(onEvent);
             if (command.name !== 'compact') this.settle(held.value as OpenCodeMessageResponse | null, state, onEvent);
             else if (held.value === true) onEvent({ type: 'turn_end' });
@@ -624,9 +630,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
         permissions: this.permissions,
         outcome: () => {
           // 1.x names no end status. The abort the interrupt asked for is no failure of the turn, but an error of its own is.
-          const failure = turn.failure ?? (turn.messageAborted && this.interruptRequested ? null : turn.messageError);
-          if (this.interruptRequested && !failure) return { type: 'turn_end', interrupted: true };
-          return failure ? { type: 'error', message: failure } : { type: 'turn_end' };
+          const failure = turn.failure ?? (turn.messageAborted && this.outcome.requested ? null : turn.messageError);
+          return this.outcome.settle('completed', failure ? { message: failure } : undefined);
         },
       }, onEvent);
       // A turn that ends with a message the model never read leaves it stored
@@ -676,7 +681,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
       (value) => ({ kind: 'answered' as const, value }),
       async (reason: unknown) => {
         if (reason instanceof OpenCodeHttpError) return { kind: 'refused' as const, reason };
-        if (this.interruptRequested || turn.live) return { kind: 'lost' as const };
+        if (this.outcome.requested || turn.live) return { kind: 'lost' as const };
         if (await this.sessionBusy() === true) { turn.live = true; return { kind: 'lost' as const }; }
         return { kind: 'refused' as const, reason };
       },
@@ -711,7 +716,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     const turn = this.taskTurn;
     // 1.x's mid-turn path is the validated one (ADR-0023). 2.x has none yet, so
     // its adapter keeps the turn-end queue by refusing every steer.
-    if (this.v2 || !task || !this.process || !this.sessionId || this.exited || !turn || turn.done || this.interruptRequested) return false;
+    if (this.v2 || !task || !this.process || !this.sessionId || this.exited || !turn || turn.done || this.outcome.requested) return false;
     const messageID = newUserMessageId();
     this.steers.hand(messageID, id);
     const posted = await this.json('POST', `/session/${this.sessionId}/prompt_async`, this.taskPromptBody(task, text, messageID))
@@ -820,7 +825,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     } else if (frame.type === 'session.error' && props.error) {
       // An overflowing context is compacted and the turn carries on; when it
       // cannot be, the message itself carries the error.
-      if (props.error.name !== 'ContextOverflowError' && !(props.error.name === ABORTED && this.interruptRequested)) turn.failure = errorText(props.error);
+      if (props.error.name !== 'ContextOverflowError' && !(props.error.name === ABORTED && this.outcome.requested)) turn.failure = errorText(props.error);
       void this.confirmIdle(turn);
     }
   }
@@ -839,11 +844,10 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     if (!this.process || !this.sessionId || this.exited) return false;
     if (this.v2) return this.v2.interrupt(timeoutMs);
     const turn = this.taskTurn;
-    this.interruptRequested = true;
+    this.outcome.request();
     const posted = await this.json('POST', `/session/${this.sessionId}/abort`, undefined, undefined, timeoutMs).then(() => true, () => false);
     if (!posted) {
-      // An abort the server did not take stops nothing, so it must not colour the turn's end.
-      this.interruptRequested = false;
+      this.outcome.refused();
       return false;
     }
     if (!turn || turn.done) return true;
@@ -994,20 +998,13 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     const child = state?.metadata?.sessionId;
     const held = child ? turn.children.adopt(child, callId) : null;
     if (held) {
-      const input = state?.input ?? {};
-      const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
       const model = flatModelId(state?.metadata?.model?.providerID, state?.metadata?.model?.modelID);
-      onEvent({ type: 'subagent_started', subagentId: callId, brief, ...(model ? { model } : {}) });
+      this.subagents.start({ id: callId, brief: subagentBrief(state?.input), model }, onEvent);
       for (const frame of held) this.onFrame(frame, turn, onEvent);
     }
     const status = state?.status;
     if (status === 'completed' || status === 'error') {
-      onEvent({
-        type: 'subagent_finished',
-        subagentId: callId,
-        outcome: status === 'completed' ? 'done' : 'failed',
-        digest: taskDigest(state?.output ?? state?.error ?? ''),
-      });
+      this.subagents.finish(callId, { success: status === 'completed' }, taskDigest(state?.output ?? state?.error ?? ''), onEvent);
     }
   }
 
@@ -1016,9 +1013,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
    * is one model call; until it completes its counts are zeros.
    */
   private countUsage(info: OpenCodeMessageInfo, turn: TurnState, onEvent: (e: AgentEvent) => void, subagentId?: string): void {
-    if (info.role !== 'assistant' || !info.id || !info.time?.completed || turn.seen.has(`usage:${info.id}`)) return;
-    turn.seen.add(`usage:${info.id}`);
-    const record = usageRecord(info.tokens, { model: flatModelId(info.providerID, info.modelID), cost: info.cost, subagentId });
+    if (info.role !== 'assistant' || !info.id || !info.time?.completed) return;
+    const record = this.usage.call(openCodeCall(info.tokens, { model: flatModelId(info.providerID, info.modelID), cost: info.cost, subagentId }), info.id);
     if (record) onEvent({ type: 'usage', record });
   }
 
@@ -1039,7 +1035,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     if (frame.type === 'session.compacted' && session === this.sessionId) {
       onEvent({ type: 'compaction', trigger: this.manualCompaction ? 'manual' : 'auto' });
       // OpenCode states no size after it: the next call's usage is the first.
-      onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
+      onEvent({ type: 'usage', record: this.usage.compacted() });
       return;
     }
     if (session === this.sessionId && this.taskTurn) this.followTaskTurn(frame, this.taskTurn, onEvent);

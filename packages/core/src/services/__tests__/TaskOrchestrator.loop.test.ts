@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TaskOrchestrator } from '../TaskOrchestrator';
 import { applyTaskOps } from '../TaskOps';
-import { createTask, type RunnerId, type Task } from '../../models/Task';
+import { createTask, migrateLoadedTasks, type RunnerId, type Task } from '../../models/Task';
 import type { TaskLoop } from '../../models/Loop';
 import type { IRunner, ScriptExit } from '../../interfaces/IRunner';
 import type { TaskCompleteArgs } from '../mcp/tools';
@@ -473,6 +473,47 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
     expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('Task "Task review" failed verification'));
   });
 
+  it.each(['user', 'supervisor'] as const)('keeps a body skip by the %s whose reason reads like the loop\'s own: the loop is stopped, and the fix does not run', async (by) => {
+    const h = setup(reviewed());
+    await h.orchestrator.approveReview();
+    await h.pass('build');
+    await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(1));
+    await h.orchestrator.skipTask('fix', 'not needed: its check passed', by);
+    expect(h.get('fix')).toMatchObject({ status: 'skipped', skipOrigin: by });
+
+    await h.fail('review', 1);
+
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalled());
+    expect(h.spawns('fix')).toHaveLength(0);
+    expect(h.get('fix')).toMatchObject({ status: 'skipped', skipOrigin: by });
+    expect(h.orchestrator.getBlockedBy('ship')).toEqual(['review']);
+
+    // The user retries the check: it fails its round again, and the skip still stands.
+    await h.orchestrator.retryTask('review');
+    await h.orchestrator.start();
+    await h.fail('review', 2);
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalledTimes(2));
+    expect(h.spawns('fix')).toHaveLength(0);
+  });
+
+  it('runs the body a plan saved before skip origins held as skipped by the loop, when a retried check fails', async () => {
+    const saved = reviewed();
+    saved[0].status = 'completed';
+    saved[1].status = 'completed';
+    saved[2] = { ...saved[2], status: 'skipped', skipReason: 'not needed: its check passed' };
+    saved[3].status = 'completed';
+    migrateLoadedTasks(saved);
+    expect(saved[2]).toMatchObject({ skipOrigin: 'loop' });
+    const h = setup(saved);
+    await h.orchestrator.approveReview();
+
+    await h.orchestrator.retryTask('review');
+    await h.orchestrator.start();
+    await h.fail('review', 1);
+
+    await vi.waitFor(() => expect(h.spawns('fix')).toHaveLength(1));
+  });
+
   it('runs the body skipped by a loop that closed again when a retried check fails', async () => {
     const h = setup(reviewed());
     await h.orchestrator.approveReview();
@@ -529,7 +570,7 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
 
     release();
     await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(2));
-    expect(h.orchestrator.runs.openRecord('fix')?.status).toBe('merged');
+    expect(h.orchestrator.runs.openTaskState('fix')).toBe('merged');
   });
 });
 

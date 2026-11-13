@@ -82,12 +82,24 @@ describe('editorInvocation', () => {
 });
 
 describe('Shell', () => {
-  it('opens with the OS default when no editor is configured', async () => {
+  it('opens with the OS default on Linux when no editor is configured', async () => {
     const a = actions();
-    const result = await new Shell(a, () => '').openInEditor(root, { repo: '.', path: 'README.md' });
+    const result = await new Shell(a, () => '', 'linux').openInEditor(root, { repo: '.', path: 'README.md' });
     expect(result).toEqual({ ok: true });
     expect(a.openPath).toHaveBeenCalledOnce();
     expect(a.launch).not.toHaveBeenCalled();
+  });
+
+  it('never hands a file to the OS default action on Windows or macOS, which would run a script', async () => {
+    writeFileSync(join(root, 'setup.bat'), 'calc');
+    const win = actions();
+    expect(await new Shell(win, () => '', 'win32').openInEditor(root, { repo: '.', path: 'setup.bat' })).toEqual({ ok: true });
+    expect(win.openPath).not.toHaveBeenCalled();
+    expect(win.launch).toHaveBeenCalledWith('notepad.exe', [expect.stringMatching(/setup\.bat$/)]);
+    const mac = actions();
+    await new Shell(mac, () => '', 'darwin').openInEditor(root, { repo: '.', path: 'setup.bat' });
+    expect(mac.openPath).not.toHaveBeenCalled();
+    expect(mac.launch).toHaveBeenCalledWith('open', ['-t', expect.stringMatching(/setup\.bat$/)]);
   });
 
   it('runs the configured editor without a shell', async () => {
@@ -104,7 +116,7 @@ describe('Shell', () => {
     expect(failed.message).toContain('nosuch');
     const b = actions();
     b.openPath.mockResolvedValue('No application is associated');
-    expect(await new Shell(b, () => '').openInEditor(root, { repo: '.', path: 'README.md' })).toEqual({ ok: false, message: 'No application is associated' });
+    expect(await new Shell(b, () => '', 'linux').openInEditor(root, { repo: '.', path: 'README.md' })).toEqual({ ok: false, message: 'No application is associated' });
   });
 
   it('reveals only what it resolves', () => {

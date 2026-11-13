@@ -120,7 +120,7 @@ describe('a resolver start a dirty tree parked, replayed after the revert retire
     orchestrator.runs.linkResolver(resolver.id, 't1');
 
     // A dirty tree parks a start only where no run goes on: its records gone, as a retry's are, over merges a revert can still take.
-    const run = orchestrator.runs.current!;
+    const run = orchestrator.runs.planIsolation!.run;
     (run.landedTasks ??= {}).t1 = run.tasks.t1;
     delete run.tasks.t1;
 
@@ -194,12 +194,12 @@ describe('a merge the user takes back out', () => {
     await orchestrator.tick();
     await vi.waitFor(() => expect(started('opened')).toBe(1));
     await pass('opened');
-    expect(orchestrator.runs.current?.tasks.A.inHead).toBe(true);
+    expect(orchestrator.runs.planIsolation?.run.tasks.A.inHead).toBe(true);
 
     isolation.mergedByHand.delete('A');
     isolation.mergedByHand.add('D');
     await pass('D');
-    await vi.waitFor(() => expect(orchestrator.runs.current?.tasks.A.inHead).toBeUndefined());
+    await vi.waitFor(() => expect(orchestrator.runs.planIsolation?.run.tasks.A.inHead).toBeUndefined());
 
     expect(started('later')).toBe(0);
     expect(orchestrator.getMergeGate('later')).toEqual(['A']);

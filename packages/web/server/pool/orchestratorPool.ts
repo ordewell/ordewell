@@ -88,6 +88,7 @@ import {
   type IsolationPreview,
 } from '@ordewell/core';
 import { ChildStreams } from './childStreams';
+import { StreamSequence } from './streamSequence';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
@@ -164,14 +165,15 @@ export class OrchestratorPool {
   /** The workspace each socket named when it subscribed, judged again whenever a session takes its id. */
   private readonly socketWorkspaces = new WeakMap<WebSocket, string>();
   /**
-   * This process's broadcast numbering (see `StreamStamp`), per session id
-   * rather than per Session object: a session replaced under the same id
-   * keeps counting up, so a client never mistakes its first broadcast for one
-   * of the old session's it already showed.
+   * This process's broadcast numbering, per session id rather than per
+   * Session object: a session replaced under the same id keeps counting up,
+   * so a client never mistakes its first broadcast for one of the old
+   * session's it already showed. Child plans count on the same sequence,
+   * each under its own key.
    */
   private readonly stream = randomUUID();
-  private sequence = new Map<string, number>();
-  private readonly childStreams = new ChildStreams(this.stream, (ws, workspace) => this.hears(ws, workspace));
+  private readonly sequence = new StreamSequence(this.stream);
+  private readonly childStreams = new ChildStreams(this.sequence, (ws, workspace) => this.hears(ws, workspace));
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
   /** A host that supplied its own resolver answers for every workspace, as a supplied probe does. */
@@ -416,9 +418,7 @@ export class OrchestratorPool {
       const runner = task && assignedRunnerOf(task);
       if (runner) monitor?.invalidate(runner);
     }
-    const seq = (this.sequence.get(sessionId) ?? 0) + 1;
-    this.sequence.set(sessionId, seq);
-    this.send(sessionId, workspace, JSON.stringify({ ...msg, stream: this.stream, seq } satisfies SessionFrame));
+    this.send(sessionId, workspace, JSON.stringify({ ...msg, ...this.sequence.next(sessionId) } satisfies SessionFrame));
   }
 
   hasSession(sessionId: string): boolean { return this.sessions.has(sessionId); }
@@ -525,7 +525,7 @@ export class OrchestratorPool {
   /** The planner's approval requests still waiting, as they were announced. */
   announcedApprovals(sessionId: string): ApprovalRequestMessage[] { return this.sessions.get(sessionId)?.announcedApprovals() ?? []; }
   /** The last broadcast of the session so far: a snapshot taken now accounts for it and everything before. */
-  streamPosition(sessionId: string): StreamStamp { return { stream: this.stream, seq: this.sequence.get(sessionId) ?? 0 }; }
+  streamPosition(sessionId: string): StreamStamp { return this.sequence.position(sessionId); }
 
   private runtimeSettings(): SessionRuntimeSettings {
     return sessionRuntimeSettings(this.settingsService.getAll());

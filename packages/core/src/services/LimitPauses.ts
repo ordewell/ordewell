@@ -64,8 +64,8 @@ export interface LimitPausesHost {
   waitChanged(wait: LimitWait): void;
   changed(): void;
   unawaited(work: Promise<unknown>, failure: string): void;
-  /** Keep a paused attempt's worktree: the resume continues the work in it. */
-  keepWorktree(taskId: string): Promise<void>;
+  /** Let go of a paused attempt's worktree as a pause leaves it (`attemptLeaves`): kept, since the resume continues the work in it. */
+  leaveWorktree(taskId: string, attempt: LimitedAttempt): Promise<void>;
   /** What follows an attempt that ended, here on a pause: the task has settled, and the run goes on or holds. */
   settled(taskId: string): Promise<void>;
   /** Start the next attempt of a task its reset, or `now`, resumes, as a continue of its saved session. */
@@ -111,7 +111,8 @@ export class LimitPauses {
     // Words are the turn's whole output, too long to stand as the reason.
     const reason = typeof said === 'string' ? `${attempt.runner} hit its usage limit` : said.message;
     store.setTaskOutputSummary(taskId, summarizeOutput(reason, output), handoffKept(task, attempt.kind));
-    if (attempt.worktree) await this.host.keepWorktree(taskId);
+    // Only with one: an await with nothing to let go would let an edit reach the task before what follows the pause settles it.
+    if (attempt.worktree) await this.host.leaveWorktree(taskId, attempt);
     await this.host.settled(taskId);
   }
 

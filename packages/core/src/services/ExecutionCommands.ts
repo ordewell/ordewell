@@ -7,11 +7,15 @@ import type { ApprovalDecision, ApprovalRequest, IApproval } from '../interfaces
 import type { IsolationMergeResult, IsolationRevertResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
-import { STOPPED_BEFORE_START, type StartAdmission } from './TaskOrchestrator';
+import { STOPPED_BEFORE_START, type StartAdmission, type TaskOrchestrator } from './TaskOrchestrator';
+import type { ApprovalRecord } from './ApprovalRecord';
+import type { RunControls } from './SessionSaves';
+import { runOrigin } from './RunSupervision';
 import { waitOf, type StartWait } from './readiness';
 import { escalationAct, type Escalation } from './escalations';
+import { checkStart, type CheckStart } from './LoopRounds';
 import { mergeBesideOpsConfirmation, mergePastChecksConfirmation } from './mergeWording';
-import { revertStopped, type RevertScope } from './taskRevert';
+import { revertStopped } from './taskRevert';
 import { manualOverrideConfirmation, manualOverrideStopFirst, type OverrideDirection } from '../taskRow/texts';
 import { actionPhrase, type SurfaceControls, type UserAction } from './surfaceControls';
 import { COMMAND_GRANTS, SCRIPT_PAST_THE_RULES, allowsCommand, missingGrant, rootAuthority, type Grant, type Mandate, type NodeAuthority } from './Mandate';
@@ -125,6 +129,9 @@ export type EffectAllowlist = (body: ScriptBody) => string | null;
 /** No effect is pre-approved until the user's rules are read: the allowlist has no built-in entries. */
 const NO_EFFECTS: EffectAllowlist = () => null;
 
+/** A start that leaves its loop's rounds as they are: the user's retry, which starts them over (ADR-0045 L7). */
+const OWN_START: CheckStart = { kind: 'own' };
+
 /** How long `run_script` waits for its task to end before it answers that it is still running (ADR-0035). */
 export const SCRIPT_ANSWER_WAIT_MS = 60_000;
 
@@ -156,23 +163,26 @@ export interface WaitingRequest {
 }
 
 /**
- * What the seam reads and calls. The Session supplies it from the operations
- * behind the surfaces' buttons, so a command lands exactly as the matching
- * button press does, whoever asked.
+ * The orchestrator's reads the seam judges a call by, and the calls of its
+ * that owe no save of their own, passed in as they are.
+ */
+export type RunReads = Pick<TaskOrchestrator,
+  | 'isScheduling' | 'startsHeld' | 'hasLiveWork' | 'runHeld' | 'scheduledRun' | 'startsPending' | 'loopCarried' | 'awaitsResume' | 'advancesOnItsOwn'
+  | 'getAttempt' | 'holdsSlot' | 'repairWait' | 'loopRunsOn' | 'startWaits' | 'revertScope' | 'awaitsCheckpoint'
+  | 'admitStart' | 'readyFailed' | 'startAtGate'>;
+
+/** Who approved what to run (ADR-0029, ADR-0035); a start the seam consented to approves before it acts. */
+export type ApprovalReads = Pick<ApprovalRecord, 'planApproved' | 'isApproved' | 'waitsForApproval' | 'approve' | 'approvePlan'>;
+
+/**
+ * What only the Session can answer or do: its settings, its surfaces, the
+ * operations that do more than one control, and the planner's script tasks.
+ * Supplied from the operations behind the surfaces' buttons, so a command
+ * lands exactly as the matching button press does, whoever asked.
  */
 export interface ExecutionHost {
   /** The plan's task tree; null when there is no plan. */
   tasks(): readonly Task[] | null;
-  /** The user approved the whole plan by executing it. */
-  planApproved(): boolean;
-  /** The user approved this task: it was in the plan they executed, or they started it themselves. */
-  taskApproved(taskId: string): boolean;
-  /** A task the scheduler leaves for the user to approve: added to the plan since they approved it (ADR-0035). */
-  waitsForApproval(taskId: string): boolean;
-  /** A start the user consented to approves these tasks, before it acts. */
-  approve(taskIds: readonly string[]): void;
-  /** A start under Full with autorun makes the plan approved, as autorun's own start does, so nothing later in the session is refused for it (ADR-0030). */
-  approvePlan(): void;
   /** Full autonomy: starts follow plan approval without a question. */
   autonomous(): boolean;
   /** How the user takes their own actions on the surface the session's live host serves (ADR-0030). */
@@ -181,46 +191,13 @@ export interface ExecutionHost {
   mergesByThemselves(): boolean;
   /** The user's autorun setting, as it is now (ADR-0030). */
   autorun(): boolean;
-  /** The scheduler is driving the plan: ready tasks start as slots free. */
-  scheduling(): boolean;
-  /** An open planner turn holds the scheduler's new starts until its reply ends. */
-  startsHeld(): boolean;
-  /** Work is running right now. */
-  hasLiveWork(): boolean;
-  /** A usage limit holds the run: what it paused resumes at the reset. */
-  runHeld(): boolean;
-  /** A scheduled run is open, driving the plan or held by a usage limit that gives it back, whether or not anything is live. */
-  scheduledRun(): boolean;
-  /** Something will start without being asked again: a start admitted and not yet claimed, or a scheduled resume. */
-  startsPending(): boolean;
   /** A plan the turn in flight submitted, whose start autorun makes as the turn ends (ADR-0030): a start on its way that no run holds yet. */
   submittedStartWaits(): boolean;
-  /** A loop is carried on, one a body task stopped included; see {@link TaskOrchestrator.loopCarried}. */
-  loopCarried(): boolean;
-  /** A run with nothing starting that something still resumes: a usage limit's reset, or a retry of a failure; see {@link TaskOrchestrator.awaitsResume}. */
-  awaitsResume(): boolean;
-  /** Something will run this loop's check between rounds without being asked; see {@link TaskOrchestrator.loopRunsOn}. */
-  loopRunsOn(taskId: string): boolean;
-  /** Something could move a task on without being asked: a start, an attempt in any phase, the scheduler or a usage-limit hold. */
-  advancesOnItsOwn(): boolean;
-  /** Admit a start that waits before it claims; see {@link StartAdmission}. */
-  admitStart(): StartAdmission;
-  /** The task's attempt is live: starting, running or landing. */
-  running(taskId: string): boolean;
-  /** Its live attempt holds a slot, as a delegated task's does not (ADR-0055 D18). */
-  holdsSlot(taskId: string): boolean;
-  /** A conflict repair of the task will start by itself: there is a start to withdraw (ADR-0015). */
-  repairOwed(taskId: string): boolean;
   maxParallel(): number;
   /** The run waits on the user to stash or skip isolation before anything starts. */
   runBlocked(): boolean;
   /** Why nothing may start here, as every surface says it: another host holds the session (ADR-0049). */
   heldRefusal(): string | null;
-  /**
-   * Every reason the task cannot start now, from the scheduler's one start
-   * rule (ADR-0034). Takes the task, not its id: the one the seam located.
-   */
-  startWaits(task: Readonly<Task>): readonly StartWait[];
   /** The runner requests waiting on a task for an answer. */
   waitingRequests(taskId: string): readonly WaitingRequest[];
   /** A start is told who asked: whether a run it opens continues the last one depends on it (ADR-0029). */
@@ -232,18 +209,7 @@ export interface ExecutionHost {
    * `left` still wait. Answers the line that says so.
    */
   joinRun(approved: number, left: number): Promise<string>;
-  /** The fresh chance the user's Execute gives what failed, for work it takes in (ADR-0053); none while the scheduler drives the run. */
-  readyFailed(): void;
   startTask(taskId: string, actor: ExecutionActor): Promise<void>;
-  /** Force start the task; answers the line saying it waits for its dependencies, when it was queued behind them rather than started. */
-  forceStart(taskId: string): Promise<string | undefined>;
-  markComplete(taskId: string): Promise<void>;
-  markNotDone(taskId: string): Promise<void>;
-  /** What reverting the task would take, as far as the plan can say; see {@link TaskOrchestrator.revertScope}. */
-  revertScope(taskId: string): RevertScope;
-  /** Revert the task's landed work, through the queue it shares with landings. */
-  revertTask(taskId: string): Promise<IsolationRevertResult>;
-  interrupt(taskId: string): Promise<void>;
   /** `actor` is who stopped it: the user's stop holds the supervisor back from it (ADR-0029). */
   stopTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** `actor` is who stopped it: the user's Stop stands the supervisor down (ADR-0029). */
@@ -252,34 +218,14 @@ export interface ExecutionHost {
   stopAsked(): void;
   /** A start cleared its last check and is about to act; the user's ends their Stop (ADR-0029). */
   startAsked(actor: ExecutionActor): void;
-  retryTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** Whether the task is a delegated task's check (ADR-0055 D8). */
   checksDelegatedTask(taskId: string): boolean;
-  /** End the task as skipped, landing nothing of it; see {@link TaskOrchestrator.skipTask}. */
-  skipTask(taskId: string, reason: string | undefined, actor: ExecutionActor): Promise<void>;
-  continueTask(taskId: string, message: string, actor: ExecutionActor): Promise<void>;
-  /** Resume a task paused on a usage limit now; see {@link TaskOrchestrator.resumeNow}. */
-  resumeNow(taskId: string, message: string | undefined, actor: ExecutionActor): Promise<void>;
-  messageTask(taskId: string, text: string): string;
-  /** Force send (ADR-0023, F1): interrupt the running turn and deliver this next. */
-  forceMessage(taskId: string, text: string): string;
-  /** False once the message was delivered. */
-  forceSendQueued(taskId: string, id: string): boolean;
-  /** False once the message was delivered or taken back. */
-  removeQueued(taskId: string, id: string): boolean;
-  /** False when no resume was scheduled. */
-  cancelResume(taskId: string): Promise<boolean>;
-  /** The task waits at a checkpoint, and a runner is left to hear the answer. */
-  awaitsCheckpoint(taskId: string): boolean;
-  answerCheckpoint(taskId: string, approve: boolean, reason?: string, note?: string): void;
   /** The checks that hold every merge but the user's (ADR-0055 D9), each as its row names it. */
   mergeHold(): readonly string[];
   /** The ops tasks running in the user's checkout, which hold every merge but the one the user confirms (ADR-0020), each as its row names it. */
   opsInCheckout(): readonly string[];
   /** A raise for a delegated task's child, from what this node has left (ADR-0056 M5). Null when it took; otherwise why not. */
   raiseChild(taskId: string, tokens: number): Promise<string | null>;
-  /** Sign off the review: the plan is the user's, and runs. */
-  approveReview(): Promise<void>;
   /** Answer a runner's request, as its card does; false once it was answered or withdrawn. */
   answerRequest(requestId: string, decision: ApprovalDecision): boolean;
   /** Merge all, through the queue it shares with landings; `besideOps` past the ops tasks running in the checkout. */
@@ -301,8 +247,6 @@ export interface ExecutionHost {
   draftScript(call: RunScript, actor: ExecutionActor): { ok: true; task: Task } | { ok: false; errors: string[] };
   /** Put a drafted script task in the plan now, unapproved. */
   addScript(task: Task, actor: ExecutionActor): void;
-  /** Start an approved task once its merge gate opens, never past it; see {@link TaskOrchestrator.startAtGate}. */
-  startAtGate(taskId: string): void;
   /** Settles once the task's attempt is over, `ms` have passed, or `signal` aborted, whichever is first. */
   awaitEnd(taskId: string, ms: number, signal?: AbortSignal): Promise<void>;
   /** The task's result is owed to the planner, in a turn acting for whoever started it (ADR-0037, R2, R3). */
@@ -318,6 +262,10 @@ export interface ExecutionHost {
 }
 
 export interface ExecutionCommandsDeps {
+  orchestrator: RunReads;
+  /** The run controls a call reaches, each saved before any surface hears of it (`SessionSaves.controls`). */
+  controls: RunControls;
+  approvals: ApprovalReads;
   host: ExecutionHost;
   /** The approval card channel a Guarded start asks through. */
   consent: Pick<IApproval, 'request'>;
@@ -415,6 +363,8 @@ interface Located {
   ref: string;
   /** Paused on its runner's usage limit as the call arrived: a continue of it is a resume, worded as one once it has run. */
   paused: boolean;
+  /** Passed, with work git refused to land, as the call arrived: a retry of it from its session lands that work, and runs nothing. */
+  landsKept: boolean;
 }
 
 interface Acted {
@@ -446,6 +396,9 @@ type Prepared =
  * worded for whoever asked to act on ({@link voiceOf}).
  */
 export class ExecutionCommands {
+  private readonly orchestrator: RunReads;
+  private readonly controls: RunControls;
+  private readonly approvals: ApprovalReads;
   private readonly host: ExecutionHost;
   private readonly authority: NodeAuthority;
   private readonly guards: readonly LoopGuard[];
@@ -466,6 +419,9 @@ export class ExecutionCommands {
   private readonly overriding = new Set<string>();
 
   constructor(private readonly deps: ExecutionCommandsDeps) {
+    this.orchestrator = deps.orchestrator;
+    this.controls = deps.controls;
+    this.approvals = deps.approvals;
     this.host = deps.host;
     this.authority = deps.authority ?? rootAuthority(() => ({ autorun: deps.host.autorun(), autonomous: deps.host.autonomous(), delegationTokens: 0, runners: [], models: {} }));
     this.guards = deps.guards ?? [];
@@ -505,7 +461,7 @@ export class ExecutionCommands {
     if (tripped) return tripped;
 
     // A start counts as live work for Stop until it has acted — on the card, and while it starts (ADR-0029).
-    const admission = STARTS.has(command.command) ? this.host.admitStart() : null;
+    const admission = STARTS.has(command.command) ? this.orchestrator.admitStart() : null;
     try {
       return await this.carryOut(command, actor, located, consent, first, admission);
     } finally {
@@ -572,8 +528,8 @@ export class ExecutionCommands {
     // under way changes the plan, and the user consented to the plan as it was checked, not as it becomes.
     // Recorded before it acts too because the scheduler starts only approved tasks (ADR-0035), and a retry
     // or run it hands over is started by the scheduler.
-    this.host.approve(this.consented(command, actor, located, prepared.approves));
-    if (STARTS.has(command.command) && this.startsUnattended(actor)) this.host.approvePlan();
+    this.approvals.approve(this.consented(command, actor, located, prepared.approves));
+    if (STARTS.has(command.command) && this.startsUnattended(actor)) this.approvals.approvePlan();
     if (STARTS.has(command.command)) this.host.startAsked(actor);
     let acted: Acted;
     try {
@@ -616,14 +572,14 @@ export class ExecutionCommands {
     if (tripped) return tripped;
 
     // Live work for Stop while the user is asked; the start takes its own admission as it claims.
-    const admission = this.host.admitStart();
+    const admission = this.orchestrator.admitStart();
     let how: ScriptConsent | CommandOutcome;
     try {
       this.host.addScript(draft.task, actor);
       how = consent.kind === 'ask' ? await this.askForScript(command, actor, draft.task, admission) : consent.how;
       if ('by' in how) {
-        this.host.approve([draft.task.id]);
-        if (this.startsUnattended(actor)) this.host.approvePlan();
+        this.approvals.approve([draft.task.id]);
+        if (this.startsUnattended(actor)) this.approvals.approvePlan();
       }
     } finally {
       admission.release();
@@ -670,10 +626,10 @@ export class ExecutionCommands {
       return { ok: true, message };
     };
     // Answering took time: what holds it now is read afresh.
-    const waits = this.host.startWaits(started.task);
+    const waits = this.orchestrator.startWaits(started.task);
     const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id) ?? []);
     if (gate.length > 0) {
-      this.host.startAtGate(taskId);
+      this.orchestrator.startAtGate(taskId);
       this.host.owe(taskId, to);
       return answered('gated', `Added ${label}, approved to run, but it waits at its merge gate: the work of ${named(gate)} is not merged into the user's branch yet. ${this.host.mergesByThemselves() ? 'It starts once automatic merging merges that work, by itself' : `It starts once the user merges it (${this.host.userControls().merge})`}, and its result reaches you in a run update when it ends. Tell the user.`);
     }
@@ -692,7 +648,7 @@ export class ExecutionCommands {
     // Read as the wait ends, not as it was told: an end that came since is answered here, never owed as well.
     const now = this.located(taskId);
     if (!now) return answered('stopped', `${capitalize(label)} was removed from the plan before it ended, so it has no result.`);
-    if (reportEnded(now.task) || (!this.host.running(taskId) && now.task.status !== 'in_progress')) {
+    if (reportEnded(now.task) || (!this.running(taskId) && now.task.status !== 'in_progress')) {
       return answered(scriptResultOf(now.task), `Ran ${label}. ${taskReport(now.task, this.host.reportTail(taskId))}`, now);
     }
     this.host.owe(taskId, to);
@@ -708,7 +664,7 @@ export class ExecutionCommands {
   private scriptUnready(task: Readonly<Task>): string | null {
     const held = this.host.heldRefusal();
     if (held) return held;
-    const waits = this.host.startWaits(task);
+    const waits = this.orchestrator.startWaits(task);
     const one = (n: number, a: string, b: string) => (n === 1 ? a : b);
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id) ?? []);
     if (failed.length > 0) return `Script task "${task.title}" would depend on ${named(failed)}, which failed. Retry ${one(failed.length, 'it', 'them')} first, or leave the dependency out.`;
@@ -718,7 +674,7 @@ export class ExecutionCommands {
     }
     if (waitOf(waits, 'merging')) return 'A Merge all is under way, and a script task never runs alongside one. Call run_script again once it has finished.';
     if (waitOf(waits, 'merge-gate')) return null;
-    const live = this.all().filter(({ task: t }) => this.host.holdsSlot(t.id)).length;
+    const live = this.all().filter(({ task: t }) => this.orchestrator.holdsSlot(t.id)).length;
     if (live >= this.host.maxParallel()) return `${live} tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.`;
     return null;
   }
@@ -809,7 +765,7 @@ export class ExecutionCommands {
     if (this.asksToApprove(actor)) return named.flatMap(({ task }) => withSubtasks(task));
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) return [];
     if (located) return withSubtasks(located.task);
-    const leaves = (task: Readonly<Task>) => actor.kind === 'autorun' && !this.host.autonomous() && task.type === 'script' && !this.host.taskApproved(task.id);
+    const leaves = (task: Readonly<Task>) => actor.kind === 'autorun' && !this.host.autonomous() && task.type === 'script' && !this.approvals.isApproved(task.id);
     return this.all().filter(({ task }) => !leaves(task)).map(({ task }) => task.id).filter((id) => !this.carded.has(id));
   }
 
@@ -948,7 +904,9 @@ export class ExecutionCommands {
       case 'run_task': return this.prepareStart(located!, actor, 'run', tasks);
       case 'retry_task': return command.from === 'fresh'
         ? this.prepareStart(located!, actor, 'retry', tasks)
-        : located!.paused ? this.prepareResume(located!, actor, command.message) : this.prepareContinue(located!, actor, command.message);
+        : located!.paused ? this.prepareResume(located!, actor, command.message)
+          : located!.landsKept ? this.prepareLandKept(located!, actor)
+          : this.prepareContinue(located!, actor, command.message);
       case 'stop_task': return this.prepareStop(located!, actor);
       case 'stop_run': return this.prepareStopRun(actor);
       case 'message_task': return this.prepareMessage(located!, command, actor);
@@ -972,14 +930,14 @@ export class ExecutionCommands {
 
   private prepareRunPlan(actor: ExecutionActor, tasks: readonly Task[]): Prepared {
     const all = this.all(tasks);
-    const live = all.filter(({ task }) => this.host.running(task.id));
-    const working = this.host.hasLiveWork();
+    const live = all.filter(({ task }) => this.running(task.id));
+    const working = this.orchestrator.hasLiveWork;
     // No plan submitted asks to take a hold's run on (ADR-0030): that is the user's Execute.
-    if (actor.kind === 'autorun' && !working && this.host.runHeld()) return { refusal: AUTORUN_RESTARTS_NOTHING };
+    if (actor.kind === 'autorun' && !working && this.orchestrator.runHeld) return { refusal: AUTORUN_RESTARTS_NOTHING };
     // A run that is open with nothing live is joined too, one a dirty checkout parked included: a new run would take back its pause and what failed in it (ADR-0018 U1, ADR-0053).
     // A planner joins one that ended on a failure as well: a retry continues that run, and the fresh chance a new one gives is not the planner's to ask for.
-    if (working || this.host.runHeld() || this.host.scheduledRun() || (actor.kind === 'planner-turn' && this.host.awaitsResume())) {
-      const waiting = all.filter(({ task }) => this.host.waitsForApproval(task.id) && !this.carded.has(task.id));
+    if (working || this.orchestrator.runHeld || this.orchestrator.scheduledRun || (actor.kind === 'planner-turn' && this.orchestrator.awaitsResume)) {
+      const waiting = all.filter(({ task }) => this.approvals.waitsForApproval(task.id) && !this.carded.has(task.id));
       // Autorun under Guarded stays out of it: its join would approve a script task the user was never shown (ADR-0035).
       if (actor.kind === 'autorun' && !this.host.autonomous()) return { refusal: AUTORUN_JOINS_NOTHING };
       // The user's Execute, and autorun for them, approves what waits rather than restarting the run under way; counted before the approval it records.
@@ -987,7 +945,7 @@ export class ExecutionCommands {
         return {
           act: async () => {
             // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
-            if (actor.kind === 'user') this.host.readyFailed();
+            if (actor.kind === 'user') this.orchestrator.readyFailed();
             const joined = await this.host.joinRun(waiting.length, 0);
             return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined };
           },
@@ -997,7 +955,7 @@ export class ExecutionCommands {
       // It approves nothing, and the scheduler starts only approved tasks, so it grants what run_task already does (ADR-0035);
       // under Full with autorun it approves what waits, since nobody is asked there.
       const unattended = this.startsUnattended(actor);
-      if (!unattended && !this.host.planApproved()) {
+      if (!unattended && !this.approvals.planApproved) {
         return { refusal: `${this.refusals().notApprovedYet} Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` };
       }
       return {
@@ -1006,7 +964,7 @@ export class ExecutionCommands {
           if (this.host.runBlocked()) return { message: this.voiceOf(actor).blockedRun };
           const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user approved the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or execute the plan.`;
           const under = live.length === 0 ? '' : `${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and `;
-          const limit = this.host.runHeld() ? ' A usage limit holds the run, so nothing starts before its reset.' : '';
+          const limit = this.orchestrator.runHeld ? ' A usage limit holds the run, so nothing starts before its reset.' : '';
           return { message: this.runningLine(actor, `The plan is running: ${under}each approved task starts as its dependencies finish.${limit}${held}`) };
         },
       };
@@ -1018,11 +976,11 @@ export class ExecutionCommands {
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is, and so is a start it lets a planner make in Full.
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) {
       // Executing the plan is how the user first takes it as theirs, so no card stands in for it.
-      if (!this.host.planApproved()) {
+      if (!this.approvals.planApproved) {
         return { refusal: this.refusals().notApprovedYet };
       }
       // A planner's run leaves what failed as it is, so no card asks to run it.
-      approves = toRun.filter(({ task }) => !this.host.taskApproved(task.id) && !(actor.kind === 'planner-turn' && task.status === 'failed'));
+      approves = toRun.filter(({ task }) => !this.approvals.isApproved(task.id) && !(actor.kind === 'planner-turn' && task.status === 'failed'));
       if (approves.length > 0 && !this.asksToApprove(actor)) {
         const one = approves.length === 1;
         return { refusal: `${capitalize(named(approves))} ${one ? 'was' : 'were'} added after the user approved the plan, so ${one ? 'it is' : 'they are'} not approved to run. Ask the user to execute the plan themselves, which approves ${one ? 'it' : 'them'}.` };
@@ -1033,10 +991,10 @@ export class ExecutionCommands {
       act: async () => {
         await this.host.runPlan(actor);
         if (this.host.runBlocked()) return { message: this.voiceOf(actor).blockedRun };
-        const started = this.all().filter(({ task }) => this.host.running(task.id));
+        const started = this.all().filter(({ task }) => this.running(task.id));
         if (started.length > 0) return { message: this.runningLine(actor, `The plan is running: ${named(started)} started, and the rest start as their dependencies finish.`) };
         return {
-          message: this.runningLine(actor, this.host.startsHeld()
+          message: this.runningLine(actor, this.orchestrator.startsHeld
             ? 'The plan is running: what is ready starts once this reply ends, and the rest as their dependencies finish.'
             : 'The plan is running; nothing could start yet. Read the plan to see what each task waits on.'),
         };
@@ -1053,7 +1011,7 @@ export class ExecutionCommands {
     const failed = actor.kind === 'planner-turn' ? this.all().filter(({ task }) => task.status === 'failed') : [];
     if (failed.length === 0) return running;
     const left = `${capitalize(named(failed))} failed and ${failed.length === 1 ? 'stays' : 'stay'} failed, and run_plan gives no fresh chance. ${this.voiceOf({ kind: 'planner-turn' }).retry}`;
-    return this.host.scheduling() || this.host.hasLiveWork() || this.host.runHeld() ? `${running} ${left}` : `Nothing could start. ${left}`;
+    return this.orchestrator.isScheduling || this.orchestrator.hasLiveWork || this.orchestrator.runHeld ? `${running} ${left}` : `Nothing could start. ${left}`;
   }
 
   /** A start of one task: `run_task`, or a fresh `retry_task`, which also takes a task that failed or waits on the user. */
@@ -1064,7 +1022,7 @@ export class ExecutionCommands {
     if (task.type === 'user') return { refusal: `${capitalize(label)} is a user task: ${voice.byHand}` };
     const completing = this.completingRefusal(located);
     if (completing) return { refusal: completing };
-    if (this.host.running(task.id) || task.status === 'in_progress') {
+    if (this.running(task.id) || task.status === 'in_progress') {
       return { refusal: how === 'run' ? `${capitalize(label)} is already running.` : `${capitalize(label)} is running: ${voice.stopOrSteer}` };
     }
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${voice.completed}` };
@@ -1072,18 +1030,19 @@ export class ExecutionCommands {
     if (skipped) return { refusal: skipped };
     // Only the user's retry starts a check's rounds over (ADR-0045 L7).
     const keepsRounds = how === 'run' || actor.kind !== 'user';
-    const repeating = keepsRounds ? this.betweenRounds(located, tasks) : null;
+    const start = keepsRounds ? this.checkStart(task) : OWN_START;
+    const repeating = this.betweenRounds(located, start, tasks);
     if (repeating) return { refusal: repeating };
     // Past that refusal, nothing else will run a check between rounds: this start is its next round.
-    const nextRound = keepsRounds ? waitOf(this.host.startWaits(task), 'repeating') : undefined;
+    const nextRound = start.kind === 'own' ? undefined : start.wait;
     const settled = !nextRound && (task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped');
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
         ? voice.answerOrRetry
-        : located.paused ? voice.resume : voice.retry;
+        : located.paused ? voice.resume : located.landsKept ? voice.landKept : voice.retry;
       return { refusal: `${capitalize(label)} ${statusWords(task)}. ${next}` };
     }
-    const waits = this.host.startWaits(task);
+    const waits = this.orchestrator.startWaits(task);
     // The start rule's `no-prompt`: a task with nothing to run is never started.
     if (waitOf(waits, 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     const failed = (waitOf(waits, 'blocked')?.failed ?? []).flatMap((id) => this.located(id, tasks) ?? []);
@@ -1096,8 +1055,8 @@ export class ExecutionCommands {
     const behind = this.heldBehind(located, waits, voice, tasks);
     if (behind) return { refusal: behind };
     // A retry under a running scheduler is left to it, as the Retry button leaves it, so only a start of our own takes a slot.
-    const live = this.all(tasks).filter(({ task: t }) => this.host.holdsSlot(t.id)).length;
-    if (!(settled && this.host.scheduling()) && live >= this.host.maxParallel()) {
+    const live = this.all(tasks).filter(({ task: t }) => this.orchestrator.holdsSlot(t.id)).length;
+    if (!(settled && this.orchestrator.isScheduling) && live >= this.host.maxParallel()) {
       return { refusal: `${live} tasks are already running, the most this session runs at once. Wait for one to finish, or stop one first.` };
     }
 
@@ -1105,14 +1064,14 @@ export class ExecutionCommands {
       ...approval,
       act: async (stopped) => {
         // The Retry button's own path: it continues a run that ended on a failure, and hands the task to a scheduler that runs.
-        if (settled) await this.host.retryTask(task.id, actor);
+        if (settled) await this.controls.retryTask(task.id, runOrigin(actor));
         // A Stop while the retry let go of the old worktree withdrew the start that would follow it.
         if (stopped()) throw new Error(STOPPED_BEFORE_START);
-        if (!this.host.running(task.id) && !(settled && this.host.scheduling())) await this.host.startTask(task.id, actor);
+        if (!this.running(task.id) && !(settled && this.orchestrator.isScheduling)) await this.host.startTask(task.id, actor);
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         const verb = how === 'run' || nextRound ? 'Started' : 'Retrying';
         return {
-          message: this.host.running(task.id)
+          message: this.running(task.id)
             ? `${verb} ${label}${nextRound ? `, as round ${nextRound.round} of ${nextRound.maxRounds}` : ''}.`
             : `${capitalize(label)} is back in the run and starts when a slot is free.`,
         };
@@ -1148,17 +1107,17 @@ export class ExecutionCommands {
     const { task } = located;
     const label = describe(located);
     if (task.type === 'user') return { refusal: `${capitalize(label)} is a user task: ${USER_VOICE.byHand}` };
-    if (this.host.running(task.id) || task.status === 'in_progress') return { refusal: `${capitalize(label)} is already running.` };
+    if (this.running(task.id) || task.status === 'in_progress') return { refusal: `${capitalize(label)} is already running.` };
     if (task.status === 'completed') return { refusal: `${capitalize(label)} has already completed. ${USER_VOICE.completed}` };
     // A force start goes past a hold, a failure and a gate, but not the fact
     // that there is nothing to run (ADR-0034).
-    if (waitOf(this.host.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
+    if (waitOf(this.orchestrator.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     return {
       act: async () => {
-        const queued = await this.host.forceStart(task.id);
+        const queued = await this.controls.forceStartTask(task.id, 'user');
         if (queued) return { message: queued, payload: { kind: 'queued', line: queued } };
         if (this.host.runBlocked()) return { message: USER_VOICE.blockedRun };
-        return { message: this.host.running(task.id) ? `Started ${label}.` : `${capitalize(label)} is back in the run and starts when a slot is free.` };
+        return { message: this.running(task.id) ? `Started ${label}.` : `${capitalize(label)} is back in the run and starts when a slot is free.` };
       },
     };
   }
@@ -1167,7 +1126,9 @@ export class ExecutionCommands {
   private prepareApproveReview(): Prepared {
     return {
       act: async () => {
-        await this.host.approveReview();
+        // The plan's own mark beside the record the seam keeps: planner starts read it (ADR-0029).
+        this.approvals.approvePlan();
+        await this.controls.approveReview('user');
         return { message: this.host.runBlocked() ? USER_VOICE.blockedRun : 'Approved the plan: it runs, each task starting once its dependencies finish.' };
       },
     };
@@ -1179,7 +1140,7 @@ export class ExecutionCommands {
    * landing would complete the task anyway.
    */
   private completingRefusal(located: Located): string | null {
-    if (!waitOf(this.host.startWaits(located.task), 'completing')) return null;
+    if (!waitOf(this.orchestrator.startWaits(located.task), 'completing')) return null;
     return `${capitalize(describe(located))} is being marked complete: its work is landing.`;
   }
 
@@ -1192,7 +1153,7 @@ export class ExecutionCommands {
    */
   private overrideBusy(located: Located, direction: OverrideDirection): string | null {
     if (located.task.type === 'user') return null;
-    if (this.host.advancesOnItsOwn()) return manualOverrideStopFirst(direction, describe(located));
+    if (this.orchestrator.advancesOnItsOwn) return manualOverrideStopFirst(direction, describe(located));
     return this.overriding.size > 0 ? OVERRIDE_LANDING : null;
   }
 
@@ -1233,7 +1194,7 @@ export class ExecutionCommands {
     if (unconfirmed) return { refusal: unconfirmed };
     return {
       act: async () => {
-        await this.overriddenBy(located, () => this.host.markComplete(task.id));
+        await this.overriddenBy(located, () => this.controls.markTaskComplete(task.id));
         // A landing that conflicts leaves the task for the user to resolve, and its row says so.
         return { message: this.located(task.id)?.task.status === 'completed' ? `Marked ${label} complete.` : `Marked ${label} complete, but its work could not land yet: its row says why.` };
       },
@@ -1249,7 +1210,7 @@ export class ExecutionCommands {
     if (unconfirmed) return { refusal: unconfirmed };
     return {
       act: async () => {
-        await this.overriddenBy(located, () => this.host.markNotDone(located.task.id));
+        await this.overriddenBy(located, () => this.controls.markTaskIncomplete(located.task.id));
         return { message: `Marked ${label} not done: it waits until you retry or start it.` };
       },
     };
@@ -1262,7 +1223,7 @@ export class ExecutionCommands {
    * in its turn on the queue.
    */
   private prepareRevert(located: Located, command: Extract<ExecutionCommand, { command: 'revert_task' }>): Prepared {
-    const scope = this.host.revertScope(located.task.id);
+    const scope = this.orchestrator.revertScope(located.task.id);
     if (scope.refusal) return { refusal: scope.refusal.message };
     const takes = named(scope.taskIds.flatMap((id) => this.located(id) ?? []));
     if (command.seen && !sameIds(command.seen, scope.taskIds)) {
@@ -1274,7 +1235,7 @@ export class ExecutionCommands {
     return {
       act: async () => {
         let result: IsolationRevertResult | undefined;
-        await this.overriddenBy(located, async () => { result = await this.host.revertTask(located.task.id); });
+        await this.overriddenBy(located, async () => { result = await this.controls.revertTask(located.task.id); });
         // Set by the act just awaited.
         const ended = result!;
         if (ended.outcome !== 'reverted') throw new Stopped(revertStopped(ended), { kind: 'revert', result: ended });
@@ -1291,10 +1252,10 @@ export class ExecutionCommands {
     const { task } = located;
     const label = describe(located);
     if (task.type === 'script') return { refusal: scriptHasNoTurn(label, 'interrupt') };
-    if (!this.host.running(task.id)) return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is no turn to interrupt.` };
+    if (!this.running(task.id)) return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is no turn to interrupt.` };
     return {
       act: async () => {
-        await this.host.interrupt(task.id);
+        await this.controls.interruptTask(task.id);
         return { message: `Interrupted ${label}: it waits for your message.` };
       },
     };
@@ -1305,7 +1266,7 @@ export class ExecutionCommands {
     if (!waitsForReset(located.task)) return { refusal: `${capitalize(label)} has no resume scheduled.` };
     return {
       act: async () => {
-        if (!(await this.host.cancelResume(located.task.id))) throw new Error(`${capitalize(label)} has no resume scheduled.`);
+        if (!(await this.controls.cancelScheduledResume(located.task.id))) throw new Error(`${capitalize(label)} has no resume scheduled.`);
         return { message: `${capitalize(label)} no longer resumes on its own at its usage limit's reset: resume it when you choose.` };
       },
     };
@@ -1313,7 +1274,7 @@ export class ExecutionCommands {
 
   private prepareCheckpoint(located: Located, command: Extract<ExecutionCommand, { command: 'answer_checkpoint' }>, actor: ExecutionActor): Prepared {
     const label = describe(located);
-    if (!this.host.awaitsCheckpoint(located.task.id)) {
+    if (!this.orchestrator.awaitsCheckpoint(located.task.id)) {
       return { refusal: `${capitalize(label)} is not waiting at a checkpoint: it was answered already, withdrawn, or has no runner left to hear it.` };
     }
     const approve = command.answer === 'approve';
@@ -1330,7 +1291,8 @@ export class ExecutionCommands {
         // A child's question wants an answer, not a yes: only a rejection carries words to a runner.
         const said = located.task.type === 'delegated' ? reason : undefined;
         const note = [said, raise === undefined ? undefined : `Your budget was raised by ${raise} tokens.`].filter(Boolean).join(' ') || undefined;
-        this.host.answerCheckpoint(located.task.id, approve, reason, note);
+        if (approve) this.controls.approveCheckpoint(located.task.id, note);
+        else this.controls.rejectCheckpoint(located.task.id, reason);
         const told = actor.kind === 'user' ? 'your reason' : 'the reason';
         return { message: approve ? `Approved the checkpoint of ${label}: it goes on${raise === undefined ? '' : `, with ${raise} more tokens`}.` : `Rejected the checkpoint of ${label}: the runner is told${reason ? ` ${told}` : ''}.` };
       },
@@ -1341,16 +1303,16 @@ export class ExecutionCommands {
     const { task } = located;
     const label = describe(located);
     const voice = this.voiceOf(actor);
-    if (this.host.running(task.id) || task.status === 'in_progress') {
+    if (this.running(task.id) || task.status === 'in_progress') {
       return { refusal: `${capitalize(label)} is running: ${voice.stopOrSteer}` };
     }
     const skipped = this.skippedRefusal(located, actor);
     if (skipped) return { refusal: skipped };
     if (actor.kind !== 'user') {
-      const repeating = this.betweenRounds(located);
+      const start = this.checkStart(task);
+      const repeating = this.betweenRounds(located, start);
       if (repeating) return { refusal: repeating };
-      const nextRound = waitOf(this.host.startWaits(task), 'repeating');
-      if (nextRound) return { refusal: `${capitalize(label)} is between rounds of its loop, and nothing runs it on its own now, so a continue would start its rounds over: start it with run_task, which runs round ${nextRound.round} of ${nextRound.maxRounds}.` };
+      if (start.kind !== 'own') return { refusal: `${capitalize(label)} is between rounds of its loop, and nothing runs it on its own now, so a continue would start its rounds over: start it with run_task, which runs round ${start.wait.round} of ${start.wait.maxRounds}.` };
     }
     const eligible = continuability(task);
     if (!eligible.ok) return { refusal: `${eligible.reason} ${voice.startOver}` };
@@ -1358,14 +1320,35 @@ export class ExecutionCommands {
     const approval = this.unapproved(located, actor);
     if (approval && 'refusal' in approval) return approval;
     // A continue is a retry whose first turn is the message (ADR-0018 K1), so what holds a retry holds it.
-    const behind = this.heldBehind(located, this.host.startWaits(task), voice);
+    const behind = this.heldBehind(located, this.orchestrator.startWaits(task), voice);
     if (behind) return { refusal: behind };
     return {
       ...approval,
       act: async () => {
-        await this.host.continueTask(task.id, message, actor);
+        await this.controls.continueTask(task.id, message, runOrigin(actor));
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         return { message: `Continuing ${label} in its saved session with your message.` };
+      },
+    };
+  }
+
+  /**
+   * Its verdict passed and only its landing did not: what it kept lands, as
+   * the pass already owed, and nothing runs again. A message has nothing to
+   * go to, so none is needed (ADR-0013).
+   */
+  private prepareLandKept(located: Located, actor: ExecutionActor): Prepared {
+    const { task } = located;
+    const label = describe(located);
+    const voice = this.voiceOf(actor);
+    const completing = this.completingRefusal(located);
+    if (completing) return { refusal: completing };
+    return {
+      act: async () => {
+        await this.controls.landKeptWork(task.id);
+        const now = this.located(task.id)?.task;
+        if (now?.status !== 'completed') return { message: `${capitalize(label)}'s kept work still did not land: git refused it again. ${voice.landKept}` };
+        return { message: `Landed the kept work of ${label}, without running it again.` };
       },
     };
   }
@@ -1387,7 +1370,7 @@ export class ExecutionCommands {
     return {
       ...approval,
       act: async () => {
-        await this.host.resumeNow(task.id, text || undefined, actor);
+        await this.controls.resumeNow(task.id, runOrigin(actor), text || undefined);
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         return { message: `Resumed ${label} in its saved session${text ? ' with your message' : ''}.` };
       },
@@ -1399,7 +1382,7 @@ export class ExecutionCommands {
     const label = describe(located);
     const completing = this.completingRefusal(located);
     if (completing) return { refusal: completing };
-    if (!this.host.repairOwed(task.id) && !this.host.running(task.id) && task.status !== 'in_progress') {
+    if (this.orchestrator.repairWait(task.id) === null && !this.running(task.id) && task.status !== 'in_progress') {
       return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is nothing to stop.${this.conflictNext(task)}` };
     }
     return {
@@ -1415,20 +1398,20 @@ export class ExecutionCommands {
 
   /** What a refused Stop of a conflicted task can do instead: nothing runs it, so there is something else to press. */
   private conflictNext(task: Readonly<Task>): string {
-    const resolver = this.located(waitOf(this.host.startWaits(task), 'resolver')?.resolver ?? '');
+    const resolver = this.located(waitOf(this.orchestrator.startWaits(task), 'resolver')?.resolver ?? '');
     if (resolver) return ` Its conflict is with ${describe(resolver)}: stop that task, or let it finish.`;
     return task.status === 'awaiting_user' && task.awaitingReason === 'conflict' ? ` ${CONFLICT_ANSWERS}` : '';
   }
 
   private prepareStopRun(actor: ExecutionActor): Prepared {
-    const live = this.all().filter(({ task }) => this.host.running(task.id));
+    const live = this.all().filter(({ task }) => this.running(task.id));
     // Execute is a fresh attempt, which discards a child (ADR-0055 D15), so the usual advice would lose what it landed.
     const children = live.filter(({ task }) => task.type === 'delegated');
     // A start admitted but not yet claimed would begin after a refused Stop, so it is a run to stop too, as is the one a submitted plan waits on (ADR-0030).
-    const pending = this.host.startsPending() || this.host.submittedStartWaits();
+    const pending = this.orchestrator.startsPending || this.host.submittedStartWaits();
     // A loop a body task stopped starts nothing, but the retry that passes would resume it unless a Stop ends it first (ADR-0045 L7).
-    const carried = this.host.loopCarried();
-    if (!this.host.hasLiveWork() && !this.host.scheduling() && !pending && !carried) {
+    const carried = this.orchestrator.loopCarried;
+    if (!this.orchestrator.hasLiveWork && !this.orchestrator.isScheduling && !pending && !carried) {
       if (actor.kind !== 'user') return { refusal: 'Nothing is running: there is no run to stop.' };
       // The user's Stop pressed after the run ended is no request to refuse: the surface already shows it stopped. It still stands against what was admitted before it.
       this.host.stopAsked();
@@ -1454,16 +1437,16 @@ export class ExecutionCommands {
     const label = describe(located);
     if (located.task.type === 'script') return { refusal: scriptHasNoTurn(label, 'message') };
     if (command.force && actor.kind !== 'user') return { refusal: this.usersOnly('forceSend') };
-    if (this.host.awaitsCheckpoint(located.task.id)) {
+    if (this.orchestrator.awaitsCheckpoint(located.task.id)) {
       return { refusal: `${capitalize(label)} is at a checkpoint${actor.kind === 'user' ? ':' : ', which a message does not answer:'} ${this.voiceOf(actor).atCheckpoint}` };
     }
     return {
       act: async () => {
         if (command.force) {
-          const id = this.host.forceMessage(located.task.id, command.text);
+          const id = this.controls.forceSendTaskMessage(located.task.id, command.text);
           return { message: `Sent to ${label} now: its turn is interrupted, and the runner reads it next.`, payload: { kind: 'message', id } };
         }
-        const id = this.host.messageTask(located.task.id, command.text);
+        const id = this.controls.sendTaskMessage(located.task.id, command.text);
         return { message: `Sent to ${label}. The runner reads it at its next step, or when its turn ends.`, payload: { kind: 'message', id } };
       },
     };
@@ -1474,7 +1457,7 @@ export class ExecutionCommands {
     const label = describe(located);
     return {
       act: async () => {
-        const done = how === 'force' ? this.host.forceSendQueued(located.task.id, id) : this.host.removeQueued(located.task.id, id);
+        const done = how === 'force' ? this.controls.forceSendQueuedTaskMessage(located.task.id, id) : this.controls.removeQueuedTaskMessage(located.task.id, id);
         if (!done) throw new Error(`That message to ${label} was already delivered${how === 'remove' ? ' or taken back' : ''}.`);
         return {
           message: how === 'force'
@@ -1573,18 +1556,23 @@ export class ExecutionCommands {
    * Why a loop's check between rounds is not started from the seam: something
    * will run it, once its body has landed, or nothing will and its body has
    * yet to land (ADR-0045 L5). Each says only what is true of it. Null for any
-   * other task, and for a check whose fix has landed that nothing else will
+   * other start, and for a check whose fix has landed that nothing else will
    * run, which a start runs as its next round rather than leave it stranded.
    */
-  private betweenRounds(located: Located, tasks?: readonly Task[]): string | null {
-    const repeating = waitOf(this.host.startWaits(located.task), 'repeating');
-    if (!repeating) return null;
-    const fix = repeating.waiting.flatMap((id) => this.located(id, tasks) ?? []);
-    const round = `round ${repeating.round} of ${repeating.maxRounds}`;
+  private betweenRounds(located: Located, start: CheckStart, tasks?: readonly Task[]): string | null {
+    if (start.kind !== 'loop-runs-it' && start.kind !== 'fix-unlanded') return null;
+    const fix = start.wait.waiting.flatMap((id) => this.located(id, tasks) ?? []);
+    const round = `round ${start.wait.round} of ${start.wait.maxRounds}`;
     const landed = `once ${named(fix)} ${fix.length === 1 ? 'has' : 'have'} passed and landed`;
     const between = `${capitalize(describe(located))} is between rounds of its loop`;
-    if (this.host.loopRunsOn(located.task.id)) return `${between}: it runs again on its own, as ${round}, ${fix.length > 0 ? landed : 'next'}. Leave it to the loop.`;
+    if (start.kind === 'loop-runs-it') return `${between}: it runs again on its own, as ${round}, ${fix.length > 0 ? landed : 'next'}. Leave it to the loop.`;
     return fix.length > 0 ? `${between}, and nothing runs it on its own now: it can start as ${round} ${landed}.` : null;
+  }
+
+  /** What a start of the task does to its loop's rounds; see {@link checkStart}. */
+  private checkStart(task: Readonly<Task>): CheckStart {
+    const wait = waitOf(this.orchestrator.startWaits(task), 'repeating');
+    return checkStart(wait, !!wait && this.orchestrator.loopRunsOn(task.id));
   }
 
   /**
@@ -1606,15 +1594,15 @@ export class ExecutionCommands {
       // That would let the work past its only check (ADR-0055 D8); the user's Skip stands.
       if (this.host.checksDelegatedTask(task.id)) return { refusal: `${capitalize(label)} is a delegated task's check, so a model does not skip it: that would let the work past its only check. Fix what it found, or leave it for the user.` };
       if (!why) return { refusal: `Skipping ${label} needs a reason: it is shown to the user and told to the tasks that depend on it.` };
-      const waits = this.host.startWaits(task);
+      const waits = this.orchestrator.startWaits(task);
       // A check between rounds needs no one while something runs it on (ADR-0045 L3); stranded, it is failed like any task.
-      if (waitOf(waits, 'repeating') && this.host.loopRunsOn(task.id)) return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
+      if (this.checkStart(task).kind === 'loop-runs-it') return { refusal: `${capitalize(label)} is between rounds of its loop, which goes on by itself: it needs no one, so the supervisor does not skip it.` };
       const needsSomeone = task.status === 'failed' || task.status === 'awaiting_user' || waitOf(waits, 'blocked') !== undefined;
       if (!needsSomeone) return { refusal: `${capitalize(label)} has not started and nothing blocks it: the supervisor skips only a task that failed, is blocked or is waiting for input.` };
     }
     return {
       act: async () => {
-        await this.host.skipTask(task.id, why, actor);
+        await this.controls.skipTask(task.id, why, runOrigin(actor));
         return { message: `Skipped ${label}: none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told why.` };
       },
     };
@@ -1625,9 +1613,9 @@ export class ExecutionCommands {
    * approve, or null: the user's own call is its own approval.
    */
   private unapproved(located: Located, actor: ExecutionActor): { refusal: string } | { approves: Located[] } | null {
-    if (actor.kind === 'user' || actor.kind === 'autorun' || this.startsUnattended(actor) || this.host.taskApproved(located.task.id)) return null;
+    if (actor.kind === 'user' || actor.kind === 'autorun' || this.startsUnattended(actor) || this.approvals.isApproved(located.task.id)) return null;
     const label = describe(located);
-    if (!this.host.planApproved()) {
+    if (!this.approvals.planApproved) {
       return { refusal: `The user has not approved ${label}: they approve the plan themselves (${this.host.userControls().approvePlan}), or a task by starting it (${this.host.userControls().forceStart}). Ask them to.` };
     }
     if (this.asksToApprove(actor)) return { approves: [located] };
@@ -1673,7 +1661,9 @@ export class ExecutionCommands {
     switch (command.command) {
       case 'run_plan': return 'run the plan';
       case 'run_task': return `start ${label}`;
-      case 'retry_task': return command.from === 'fresh' ? `retry ${label}` : `${located?.paused ? 'resume' : 'continue'} ${label} in its saved session`;
+      case 'retry_task': return command.from === 'fresh' ? `retry ${label}`
+        : located?.landsKept ? `land the kept work of ${label}`
+        : `${located?.paused ? 'resume' : 'continue'} ${label} in its saved session`;
       case 'stop_task': return `stop ${label}`;
       case 'stop_run': return 'stop the run';
       case 'message_task': return `message ${label}`;
@@ -1711,11 +1701,16 @@ export class ExecutionCommands {
       ...script,
       at: this.now(),
     };
-    this.host.record(record, describeExecution(record, command, located?.paused));
+    this.host.record(record, describeExecution(record, command, located?.paused ? 'resume' : located?.landsKept ? 'land' : 'continue'));
+  }
+
+  /** The task's attempt is live: starting, running or landing. */
+  private running(taskId: string): boolean {
+    return this.orchestrator.getAttempt(taskId) !== undefined;
   }
 
   private all(tasks: readonly Task[] = this.host.tasks() ?? []): Located[] {
-    return flattenTasksWithParents(tasks).map(({ task, ref }) => ({ task, ref, paused: pausedOnLimit(task) }));
+    return flattenTasksWithParents(tasks).map(({ task, ref }) => ({ task, ref, paused: pausedOnLimit(task), landsKept: landingRefused(task) }));
   }
 
   private located(id: string, tasks?: readonly Task[]): Located | undefined {
@@ -1778,6 +1773,8 @@ interface Voice {
   resume: string;
   /** What to do with a failed or skipped task instead of running it. */
   retry: string;
+  /** What lands a passed task's work git refused, once git can. */
+  landKept: string;
   /** What gets a task past its merge gate. */
   passGate: string;
   /** What starts a task over that cannot go on in its saved session. */
@@ -1802,6 +1799,7 @@ function modelVoice(controls: SurfaceControls, mergesByThemselves: boolean): Voi
     answerOrRetry: 'Answer it with message_task, or start a new attempt with retry_task.',
     resume: 'Resume it in its saved session with retry_task from "session".',
     retry: 'Start a new attempt with retry_task.',
+    landKept: 'Once git can commit, land its kept work with retry_task from "session"; it runs nothing again.',
     // Asking the user for a merge automatic merging makes would ask for what needs no one.
     passGate: mergesByThemselves
       ? `Automatic merging merges that work at the gate by itself; let it, or ask the user to force start it (${controls.forceStart}).`
@@ -1830,6 +1828,7 @@ const USER_VOICE: Voice = {
   answerOrRetry: 'Answer it with a message, or Retry it.',
   resume: 'Resume it now in its saved session, or wait for its reset.',
   retry: 'Retry it to start a new attempt.',
+  landKept: 'Once git can commit, land its work: it runs nothing again.',
   passGate: 'Merge all first, or force start it.',
   startOver: 'Retry starts it over from its prompt.',
   startAgain: 'Run the plan or a task to start again.',
@@ -1894,6 +1893,7 @@ function statusWords(task: Readonly<Task>): string {
   if (task.status === 'awaiting_user' && task.awaitingReason === 'input') return 'is waiting for input';
   if (task.status === 'awaiting_user' && task.awaitingReason === 'checkpoint') return 'is waiting at a checkpoint for the user';
   if (task.status === 'awaiting_user' && task.awaitingReason === 'conflict') return 'is waiting on a merge conflict';
+  if (landingRefused(task)) return 'passed, and waits to land the work git refused';
   if (pausedOnLimit(task)) return 'is paused on its runner\'s usage limit';
   return STATUS_WORDS[task.status];
 }
@@ -1901,6 +1901,13 @@ function statusWords(task: Readonly<Task>): string {
 /** Why a dependency does not count as finished yet; a completed one is done but its work has not landed. */
 function depState(task: Readonly<Task>): string {
   return task.status === 'completed' ? 'done, not landed yet' : statusWords(task).replace(/^(is|has) /, '');
+}
+
+/** What a retry from its session did, by the task as the call arrived. */
+type FromSession = 'continue' | 'resume' | 'land';
+
+function landingRefused(task: Readonly<Task>): boolean {
+  return task.status === 'awaiting_user' && task.awaitingReason === 'landing-failed';
 }
 
 /** The extra a record keeps for a call that went through: the message it sent, or the note a denial carried. */
@@ -1921,17 +1928,17 @@ const WHO: Record<ExecutionActor['kind'], string> = {
 };
 
 /** The timeline's line for one call: who asked, what, and how it ended. */
-function describeExecution(record: ExecutionRecord, command: ExecutionCommand, paused = false): string {
+function describeExecution(record: ExecutionRecord, command: ExecutionCommand, fromSession: FromSession = 'continue'): string {
   const who = record.person ? 'A person' : WHO[record.actor];
   // A refusal for a task the plan does not have names it as the caller did.
   const label = record.task ? `task ${record.task.ref} "${record.task.title}"` : 'task' in command ? `"${command.task}"` : '';
-  const continued = command.command === 'retry_task' && command.from === 'session' ? (paused ? 'resume' : 'continue') : null;
+  const continued = command.command === 'retry_task' && command.from === 'session' ? fromSession : null;
   if (record.ended) return `Script ${label}, which ${WHO[record.actor].toLowerCase()} ran, ${SCRIPT_ENDED[record.result ?? 'stopped']}`;
   if (record.outcome !== 'done') {
     const asked = {
       run_plan: 'run the plan',
       run_task: `start ${label}`,
-      retry_task: continued ? `${continued} ${label}` : `retry ${label}`,
+      retry_task: continued === 'land' ? `land the kept work of ${label}` : continued ? `${continued} ${label}` : `retry ${label}`,
       stop_task: `stop ${label}`,
       stop_run: 'stop the run',
       message_task: `message ${label}`,
@@ -1962,12 +1969,14 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, p
 }
 
 /** What a call that went through did, and what follows it in the line: a full stop, the quoted message, or the note. */
-function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: string, continued: 'resume' | 'continue' | null): { action: string; tail: string } {
+function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: string, continued: FromSession | null): { action: string; tail: string } {
   const quoted = record.detail ? `: "${record.detail}"` : '.';
   switch (command.command) {
     case 'run_plan': return { action: 'started the plan', tail: '.' };
     case 'run_task': return { action: `started ${label}`, tail: '.' };
-    case 'retry_task': return continued ? { action: `${continued}d ${label} in its saved session`, tail: quoted } : { action: `retried ${label}`, tail: '.' };
+    case 'retry_task':
+      if (continued === 'land') return { action: `landed the kept work of ${label}`, tail: '.' };
+      return continued ? { action: `${continued}d ${label} in its saved session`, tail: quoted } : { action: `retried ${label}`, tail: '.' };
     case 'stop_task': return { action: `stopped ${label}`, tail: '.' };
     case 'stop_run': return { action: 'stopped the run', tail: '.' };
     case 'message_task': return { action: `${command.force ? 'force sent' : 'sent'} ${label} a message`, tail: quoted };

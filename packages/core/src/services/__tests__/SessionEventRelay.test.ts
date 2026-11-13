@@ -197,7 +197,7 @@ describe('SessionEventRelay', () => {
     relay.status(null);
     observer.onTaskChanged();
     observer.onTick();
-    observer.onExecutionComplete();
+    relay.executionComplete(null);
 
     expect(sent).toEqual([]);
   });
@@ -264,11 +264,11 @@ describe('SessionEventRelay', () => {
 
     it('sends what waited ahead of a checkpoint and of the end of the run, which surfaces read it before', () => {
       for (const announce of ['checkpoint', 'execution_complete'] as const) {
-        const { observer, types } = windowOpen();
+        const { relay, observer, p, types } = windowOpen();
 
         observer.onUsageChanged();
         if (announce === 'checkpoint') observer.onCheckpoint({ taskId: 't3', taskTitle: 'Third', summary: '' });
-        else observer.onExecutionComplete();
+        else relay.executionComplete(p);
 
         expect(types()).toEqual(['status_update', announce]);
         vi.advanceTimersByTime(1000);
@@ -310,7 +310,7 @@ describe('SessionEventRelay', () => {
     const { relay, sent, store } = setup();
     store.update('t3', { dependencies: ['t2'] });
 
-    relay.observer(() => plan()).onExecutionComplete();
+    relay.executionComplete(plan());
 
     expect(sent.at(-1)).toEqual({ type: 'execution_complete', summary: { total: 3, completed: 1, failed: 1, blocked: 1, skipped: 0 } });
   });
@@ -323,7 +323,7 @@ describe('SessionEventRelay', () => {
     observer.onCheckpoint({ taskId: 't3', taskTitle: 'Third', summary: 'look' });
     observer.onIsolationBlocked({ reason: 'dirty', repos: ['api', 'web'] });
     observer.onIsolationNotice({ level: 'warn', message: 'shared paths' });
-    observer.onExecutionComplete();
+    relay.executionComplete(plan());
 
     expect(types()).toEqual(['review_approved', 'checkpoint', 'isolation_blocked', 'execution_complete']);
     expect(sent[2]).toMatchObject({ repos: ['api', 'web'], message: expect.stringContaining('in api, web') });

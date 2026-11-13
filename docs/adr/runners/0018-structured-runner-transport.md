@@ -70,7 +70,15 @@ and completion evidence.
   Ordewell's, and the task stays `in_progress`. It is sent once per attempt
   (a retry or continue gets its own), for every task kind, and never after a
   failed or interrupted turn, a usage limit, or while a user message is queued
-  or owed. Only a `task_complete` call settles the task; if the reminder's
+  or owed. A turn is interrupted when its runner says so or when Ordewell
+  asked for an interrupt in that turn and the runner did not refuse it, even
+  if the model finished as the request landed, so every runner ends the same
+  race the same way and no reminder follows a user's interrupt; only an error
+  of the turn's own, such as a usage limit, outranks it. One module,
+  `TurnOutcome`, holds that rule for every adapter. A subagent an interrupt cut
+  short finishes `stopped`, not `failed`, by the same latch, and
+  `SubagentTracker` reports each subagent's start and finish once for every
+  adapter. Only a `task_complete` call settles the task; if the reminder's
   turn ends without one, the task waits for input and the user (or the
   supervisor) responds or marks it complete. The reminder asks for no new
   work, so the summary handed to dependents keeps the report written before
@@ -554,3 +562,5 @@ transport is retained for take-over.
 - 2026-11-10 — K1: the native session id is saved as soon as the runner reports it, so a task interrupted by Ordewell stopping can be continued; an agent that cannot resume fails the continue in plain words and points to Retry.
 - 2026-11-10 — V1: in the TUI task view Esc takes back the newest queued message before it clears the draft or returns, and send now sends the whole queue, as the planner chat's keys do.
 - 2026-11-12 — L1: a wind-down after `task_complete` lets an OpenCode 2.x step in flight end within the interrupt grace before interrupting, a second stop killing at once; an aborted OpenCode 2.x turn is interrupted, with a one-second grace, before its server is disposed of.
+- 2026-11-13 — W1: an interrupt asked for and not refused ends its turn interrupted on every runner, even when the turn finished as it landed; an error of the turn's own still outranks it.
+- 2026-11-13 — W1: a subagent an interrupt cut short finishes `stopped` on every runner, not `failed`, and one tracker per adapter reports each subagent's start and finish once, where the planner service did.

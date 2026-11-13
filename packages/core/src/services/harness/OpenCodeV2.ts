@@ -10,9 +10,12 @@ import type { ProjectMcpServer } from './repoConfig';
 import type { RaisedRequest } from './permissionLedger';
 import {
   autoApproves, delay, EventStreamLostError, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
-  SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
+  SESSION_TITLE, openCodeCall, turnLatch, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import { settleWithin } from './settleWithin';
+import { SubagentTracker, subagentBrief } from './subagentTracker';
+import { TurnOutcome } from './turnOutcome';
+import { UsageRecordBuilder } from './usageBuilder';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
 /**
@@ -260,7 +263,11 @@ export class OpenCodeV2 {
   private model: V2Model | null = null;
   private agent: string;
   private turn: Turn | null = null;
-  private interruptRequested = false;
+  /** Whether an interrupt was asked for in this turn, and so how its end ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
+  private readonly subagents = new SubagentTracker(this.outcome);
+  /** For the session, not the turn: a replayed frame can restate a call a later turn sees again. */
+  private readonly usage = new UsageRecordBuilder('opencode');
   /** Whether the session's own step is streaming: begun, and neither ended nor failed. */
   private stepOpen = false;
   private stepWaiters: (() => void)[] = [];
@@ -462,7 +469,7 @@ export class OpenCodeV2 {
       return;
     }
     const state = newTurnState();
-    this.interruptRequested = false;
+    this.outcome.open();
     const turn: Turn = Object.assign(turnLatch(), { outcome: null, failure: null });
     this.turn = turn;
     const stream = await this.openStream(state, turn, onEvent, onActivity);
@@ -488,10 +495,11 @@ export class OpenCodeV2 {
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
-          // OpenCode's own end decides; the request only stands in where it named none.
-          if (turn.outcome === 'interrupted' || (turn.outcome === null && this.interruptRequested)) return { type: 'turn_end', interrupted: true };
-          if (turn.outcome === 'failed' || turn.failure) return { type: 'error', message: turn.failure ?? 'OpenCode reported that the turn failed.' };
-          return { type: 'turn_end' };
+          const failed = turn.outcome === 'failed' || turn.failure;
+          return this.outcome.settle(
+            turn.outcome === 'interrupted' ? 'interrupted' : 'completed',
+            failed ? { message: turn.failure ?? 'OpenCode reported that the turn failed.' } : undefined,
+          );
         },
       }, onEvent);
       if (!settled) await this.interruptAborted(turn);
@@ -569,7 +577,7 @@ export class OpenCodeV2 {
         const messages = await this.messages();
         const idle = [...(messages ?? [])].reverse().find((m) => m.type === 'idle');
         if (idle?.outcome === 'failed' || idle?.outcome === 'interrupted' || idle?.outcome === 'succeeded') turn.outcome ??= idle.outcome;
-        turn.outcome ??= this.interruptRequested ? 'interrupted' : 'succeeded';
+        turn.outcome ??= 'succeeded';
         if (!turn.done) turn.finish();
       }
     }
@@ -609,11 +617,10 @@ export class OpenCodeV2 {
   async interrupt(timeoutMs: number): Promise<boolean> {
     if (!this.sessionId || this.host.isExited()) return false;
     const turn = this.turn;
-    this.interruptRequested = true;
+    this.outcome.request();
     const response = await this.host.json<{ interrupted?: boolean }>('POST', `/api/session/${this.sessionId}/interrupt`, undefined, undefined, timeoutMs).catch(() => null);
     if (!response) {
-      // An interrupt the server did not take stops nothing, so it must not colour the turn's end.
-      this.interruptRequested = false;
+      this.outcome.refused();
       return false;
     }
     if (!turn || turn.done) return true;
@@ -672,7 +679,7 @@ export class OpenCodeV2 {
       if (frame.type === 'session.compaction.ended') {
         onEvent({ type: 'compaction', trigger: data.reason === 'manual' ? 'manual' : 'auto' });
         // OpenCode states no size after it: the next call's usage is the first.
-        onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
+        onEvent({ type: 'usage', record: this.usage.compacted() });
         return;
       }
       if (frame.type === 'session.step.started') this.stepOpen = true;
@@ -768,8 +775,7 @@ export class OpenCodeV2 {
         if ((name === 'bash' || name === 'shell') && typeof input.command === 'string') {
           state.shellCalls.set(id, { command: input.command, session: data.sessionID ?? '' });
         }
-        const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
-        state.briefs.set(id, brief);
+        state.briefs.set(id, subagentBrief(input));
         onEvent({ type: 'tool_call', id, name, args: input, subagentId });
         return;
       }
@@ -787,7 +793,7 @@ export class OpenCodeV2 {
         if (success && this.role === 'planner') this.rememberSaved(data.metadata);
         const output = wrongShell ?? (success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message ?? data.error?.type ?? '');
         onEvent({ type: 'tool_result', id, name: state.toolNames.get(id) ?? 'tool', output, success, subagentId });
-        if (!subagentId) this.finishChild(id, success, output, state, onEvent);
+        if (!subagentId) this.finishChild(id, success, output, onEvent);
         return;
       }
       case 'session.step.ended':
@@ -813,15 +819,13 @@ export class OpenCodeV2 {
     const held = child && callId ? state.children.adopt(child, callId) : null;
     if (!held || !callId) return;
     const model = state.stepModels.get(data.assistantMessageID ?? '');
-    onEvent({ type: 'subagent_started', subagentId: callId, brief: state.briefs.get(callId) ?? '', ...(model ? { model } : {}) });
+    this.subagents.start({ id: callId, brief: state.briefs.get(callId) ?? '', model }, onEvent);
     for (const frame of held) this.onFrame(frame, state, turn, onEvent);
   }
 
-  private finishChild(callId: string, success: boolean, output: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
-    if (!state.children.owns(callId)) return;
-    // 2.2.7 fails the delegating call of an interrupt Ordewell asked for; that is a stop, not the subagent's failure.
-    const outcome = success ? 'done' : this.interruptRequested ? 'stopped' : 'failed';
-    onEvent({ type: 'subagent_finished', subagentId: callId, outcome, digest: subagentDigest(output) });
+  /** 2.2.7 fails the delegating call of an interrupt Ordewell asked for; the tracker reads that as a stop, not the subagent's failure. */
+  private finishChild(callId: string, success: boolean, output: string, onEvent: (e: AgentEvent) => void): void {
+    this.subagents.finish(callId, { success }, subagentDigest(output), onEvent);
   }
 
   /** A billed call outside any step. A frame that names a step is that step's usage, which `step.ended` or `step.failed` reports. */
@@ -832,20 +836,18 @@ export class OpenCodeV2 {
     const message = data.assistantMessageID;
     if (message) {
       // A start that named no model fills no `stepModels`; the open step is what marks the call as that step's.
-      if (state.openSteps.has(message) || state.stepModels.has(message) || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
-      state.seen.add(`recorded:${message}`);
+      if (state.openSteps.has(message) || state.stepModels.has(message)) return;
     }
-    const record = usageRecord(data.tokens, { cost: data.cost, purpose });
+    const record = this.usage.call(openCodeCall(data.tokens, { cost: data.cost, purpose }), message);
     if (record) onEvent({ type: 'usage', record });
   }
 
   /** One model call's usage, once, when its step ends. Zeros mean the call failed before the provider answered. */
   private countUsage(data: NonNullable<V2Frame['data']>, state: TurnState, onEvent: (e: AgentEvent) => void, subagentId?: string): void {
     const message = data.assistantMessageID;
-    // `recorded:` too: a call OpenCode recorded before its step was seen to start is already counted.
-    if (!message || !data.tokens || state.seen.has(`usage:${message}`) || state.seen.has(`recorded:${message}`)) return;
-    state.seen.add(`usage:${message}`);
-    const record = usageRecord(data.tokens, { model: state.stepModels.get(message), cost: data.cost, subagentId });
+    if (!message) return;
+    // One id for both: a call OpenCode recorded before its step was seen to start is already counted.
+    const record = this.usage.call(openCodeCall(data.tokens, { model: state.stepModels.get(message), cost: data.cost, subagentId }), message);
     if (record) onEvent({ type: 'usage', record });
   }
 

@@ -56,7 +56,7 @@ describe('a Stop while an attempt is preparing its workspace', () => {
     // Stop keeps one (ADR-0013): off active, so no prune takes it for an
     // orphan. The decision check must not skip it now that the lease throws.
     expect(env.isolation.calls.filter((c) => c.op === 'release')).toEqual([{ op: 'release', taskId: 't1', keep: true }]);
-    expect(env.orchestrator.runs.current?.tasks.t1?.status).toBe('kept');
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1?.status).toBe('kept');
     expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('pending');
   });
 
@@ -84,7 +84,7 @@ describe('a Stop while an attempt is preparing its workspace', () => {
     // The late prepare's record is in the run the Stop ended; a release reaches only the current one.
     expect(env.spawn).toHaveBeenCalledTimes(1);
     expect(env.isolation.taskIdsFor('release')).toEqual([]);
-    expect(env.orchestrator.runs.current?.tasks.t1).toBeDefined();
+    expect(env.orchestrator.runs.planIsolation?.run.tasks.t1).toBeDefined();
     expect(env.orchestrator.storeInstance.get('t1')?.status).toBe('in_progress');
   });
 });

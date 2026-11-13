@@ -123,8 +123,19 @@ describe('the decision record', () => {
     const full = Array.from({ length: RECORD_LIMIT }, (_, i): DecisionRecordEntry => ({ id: `Q${i + 1}`, kind: 'question', text: `q${i}`, at: 0, timestamp: 't' }));
     expect(addToRecord(full, [{ kind: 'question', text: 'one more' }], context())).toEqual({
       ok: false,
-      errors: [`The record holds its limit of ${RECORD_LIMIT} entries: supersede what no longer stands rather than add to it.`],
+      errors: [`The record holds its limit of ${RECORD_LIMIT} live entries: supersede what no longer stands rather than add to it.`],
     });
+  });
+
+  it('still accepts a superseding entry at the limit, and counts only live entries', () => {
+    const full = Array.from({ length: RECORD_LIMIT }, (_, i): DecisionRecordEntry => ({ id: `Q${i + 1}`, kind: 'question', text: `q${i}`, at: 0, timestamp: 't' }));
+    const result = addToRecord(full, [{ kind: 'decision', text: 'eu-west-1', why: 'users', supersedes: 'Q1' }], context());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Superseded entries stay in the array but no longer hold a place.
+    expect(result.record).toHaveLength(RECORD_LIMIT + 1);
+    expect(addToRecord(result.record, [{ kind: 'decision', text: 'again', why: 'users', supersedes: 'D1' }], context()).ok).toBe(true);
+    expect(addToRecord(result.record, [{ kind: 'question', text: 'one more' }], context()).ok).toBe(false);
   });
 
   it('keeps, before a rewind point, only what was recorded before it', () => {

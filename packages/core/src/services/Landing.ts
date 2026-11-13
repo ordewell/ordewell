@@ -1,16 +1,16 @@
 import type { Task, Verdict } from '../models/Task';
 import type { IConfig } from '../interfaces/IConfig';
-import type { IsolationOutcome, IsolationRun, RepairEvidence } from '../interfaces/IWorktreeIsolation';
+import type { IsolationOutcome, RepairEvidence } from '../interfaces/IWorktreeIsolation';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
-import { changedReposOf, SELF_REPO } from './isolationRecord';
-import { handoffBranchName } from './mergeWording';
+import { SELF_REPO } from './isolationRecord';
 import { capConflictFiles } from './conflictFiles';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './PlanPrompts';
 import { landsNothing, type AttemptKind } from './attemptKind';
 import type { HandoffCommit } from '../models/Handoff';
 import { landingMessage } from './landingMessage';
 import { underProtectedPath } from '../models/Delegation';
+import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -68,6 +68,12 @@ export interface LandingDeps {
 
 const NOTHING_TO_LAND: LandingOutcome = { kind: 'nothing-to-land', messages: [] };
 
+/** What lands work git refused, once the user has fixed what it said: the work is kept, so it is landed, never redone. */
+export function landingFix(landingError: string | undefined): string {
+  const cause = lacksIdentity(landingError) ? ` ${IDENTITY_FIX}.` : '';
+  return `${cause} Once git can, land its work (retry it from its session) to land what it kept without running it again.`;
+}
+
 /**
  * Landing and Conflict repair (ADR-0013, ADR-0014, ADR-0015): a passed
  * attempt's work onto the run's integration branches through the
@@ -110,9 +116,20 @@ export class Landing {
 
   /** Mark complete is a passed verdict the user vouches for: what the task holds unlanded lands the same way. */
   async landVouched(task: Task): Promise<LandingOutcome> {
-    if (this.runs.current?.tasks[task.id]?.readOnly) return this.discard(task, true);
+    if (this.runs.isReadOnly(task.id)) return this.discard(task, true);
     if (!this.hasUnlandedWork(task.id)) return NOTHING_TO_LAND;
     const landing = await this.runs.integrate(task);
+    return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
+  }
+
+  /**
+   * Land what a passed task kept when git refused its landing, once git can:
+   * the verdict it earned stands and the commit its handoff stated is the one
+   * written, so nothing runs again (ADR-0013).
+   */
+  async landKept(task: Task): Promise<LandingOutcome> {
+    if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
+    const landing = await this.runs.integrate(task, task.handoff?.commit);
     return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
   }
 
@@ -136,7 +153,7 @@ export class Landing {
     if (touched.length > 0) return this.unrepaired(task, `changed protected paths (${capConflictFiles(touched)})`);
     const landing = await this.runs.integrate(task);
     if (landing !== 'merged') return this.unmerged(task, landing);
-    const files = this.runs.current?.tasks[task.id]?.repairedFiles ?? [];
+    const files = this.runs.repairedFilesOf(task.id);
     return {
       kind: 'landed',
       messages: [{ level: 'info', text: `Task "${task.title}" landed after repairing a conflict${files.length > 0 ? ` in ${capConflictFiles(files)}` : ''}.`, repairLog: true }],
@@ -183,7 +200,7 @@ export class Landing {
     const task = this.tasks.get(conflictedId);
     // Only the conflict it was added for: a task retried since has a new
     // attempt of its own, whose worktree it would merge half-done.
-    if (!task || this.runs.current?.tasks[conflictedId]?.status !== 'conflict') return null;
+    if (!task || this.runs.taskState(conflictedId) !== 'conflict') return null;
     return { task, outcome: this.landConflicted(task) };
   }
 
@@ -199,10 +216,9 @@ export class Landing {
    * conflict instead: a conflict has one worker (ADR-0015).
    */
   nextRepair(taskId: string): RepairAttempt | null {
-    const record = this.runs.openRecord(taskId);
     const limit = this.config.conflictRepairAttempts;
-    const spent = record?.repairs ?? 0;
-    return record?.status === 'conflict' && spent < limit && this.liveResolvers(taskId).length === 0 ? { n: spent + 1, limit } : null;
+    const spent = this.runs.repairsOf(taskId);
+    return this.runs.openTaskState(taskId) === 'conflict' && spent < limit && this.liveResolvers(taskId).length === 0 ? { n: spent + 1, limit } : null;
   }
 
   /**
@@ -219,23 +235,23 @@ export class Landing {
 
   /** What a repair is asked to do; read once `reopen` has recorded the tips it must bring in. */
   repairPrompt(task: Task): string {
-    const run = this.runs.requireRun();
-    const record = run.tasks[task.id];
+    this.runs.requireRun();
+    const found = this.runs.conflictOf(task.id);
     const conflict = {
-      branch: record?.branch ?? '',
-      message: landingMessage('repair-merge', record ?? task, this.plannedWith()),
-      repos: Object.keys(record?.repairBase ?? {}),
-      ...(record?.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
-      ...(record?.conflictFiles ? { conflictFiles: record.conflictFiles } : {}),
+      branch: found?.branch ?? '',
+      message: landingMessage('repair-merge', found?.subject ?? task, this.plannedWith()),
+      repos: found?.repairRepos ?? [],
+      ...(found?.conflictRepo ? { conflictRepo: found.conflictRepo } : {}),
+      ...(found?.conflictFiles ? { conflictFiles: found.conflictFiles } : {}),
     };
-    const prompt = buildConflictRepairPrompt(task, conflict, handoffBranchName(run), this.tasks.planTasks);
+    const prompt = buildConflictRepairPrompt(task, conflict, this.runs.handoffBranch ?? '', this.tasks.planTasks);
     const paths = this.protectedPaths(task);
     return paths.length > 0 ? `${prompt}\n\nThese paths may not change: ${paths.join(', ')}. A repair that changes one does not land.` : prompt;
   }
 
   private hasUnlandedWork(taskId: string): boolean {
-    const record = this.runs.current?.tasks[taskId];
-    return !!record && record.status !== 'merged' && !record.readOnly;
+    const state = this.runs.taskState(taskId);
+    return state !== undefined && state !== 'merged' && !this.runs.isReadOnly(taskId);
   }
 
   /** A read-only task's worktree goes with whatever is in it, and nothing lands (ADR-0046). */
@@ -245,13 +261,12 @@ export class Landing {
   }
 
   private unmerged(task: Readonly<Task>, landing: Exclude<IsolationOutcome, 'merged'>): UnlandedOutcome {
-    const run = this.runs.current;
-    const branch = run ? handoffBranchName(run) : 'the integration branch';
-    const record = run?.tasks[task.id];
+    const branch = this.runs.handoffBranch ?? 'the integration branch';
+    const conflict = this.runs.conflictOf(task.id);
     // Named only where there is a repo to name: a group of one reads as it always has.
-    const inRepo = record?.conflictRepo && record.conflictRepo !== SELF_REPO ? record.conflictRepo : null;
+    const inRepo = conflict?.conflictRepo && conflict.conflictRepo !== SELF_REPO ? conflict.conflictRepo : null;
     if (landing === 'conflict') {
-      const files = record?.conflictFiles?.length ? ` (${capConflictFiles(record.conflictFiles)})` : '';
+      const files = conflict?.conflictFiles?.length ? ` (${capConflictFiles(conflict.conflictFiles)})` : '';
       const conflicted = inRepo
         ? `Task "${task.title}" passed, but landing it on ${branch} conflicted in ${inRepo}${files}, so none of it landed.`
         : `Task "${task.title}" passed, but merging it into ${branch} conflicted${files}.`;
@@ -274,15 +289,17 @@ export class Landing {
     // the runner's own report, and failing would block its dependents over work
     // that is finished and kept, so it waits on the user as a conflict does
     // (ADR-0013).
-    const why = record?.landingError ? ` (${record.landingError})` : '';
+    const landingError = this.runs.landingErrorOf(task.id);
+    const why = landingError ? ` (${landingError})` : '';
     return {
       kind: 'awaiting_user',
       reason: 'landing-failed',
       messages: [{
         level: 'error',
-        text: inRepo
+        text: (inRepo
           ? `Task "${task.title}" passed, but git could not integrate its work in ${inRepo}${why}, so none of it landed. Its worktrees are kept for inspection.`
-          : `Task "${task.title}" passed, but git could not integrate its work${why}. Its worktree is kept for inspection.`,
+          : `Task "${task.title}" passed, but git could not integrate its work${why}. Its worktree is kept for inspection.`)
+          + landingFix(landingError),
       }],
     };
   }
@@ -290,14 +307,13 @@ export class Landing {
   private noRepairReason(task: Readonly<Task>): string | null {
     const limit = this.config.conflictRepairAttempts;
     if (limit === 0) return `Conflict repair is off (conflictRepairAttempts is 0), so task "${task.title}" waits for you.`;
-    const spent = this.runs.current?.tasks[task.id]?.repairs ?? 0;
+    const spent = this.runs.repairsOf(task.id);
     return spent >= limit ? `Task "${task.title}" has had ${spent} of its ${limit} conflict repairs, so its conflict waits for you.` : null;
   }
 
   private describeEvidence(evidence: Exclude<RepairEvidence, { ok: true }>): string {
-    const run = this.runs.current;
     const inRepo = evidence.repo !== SELF_REPO ? ` in ${evidence.repo}` : '';
-    const branch = run ? handoffBranchName(run) : 'the integration branch';
+    const branch = this.runs.handoffBranch ?? 'the integration branch';
     switch (evidence.reason) {
       case 'not-merged': return `finished, but its branch${inRepo} does not contain ${branch}`;
       case 'conflict-markers': {
@@ -309,7 +325,7 @@ export class Landing {
   }
 
   private isGroup(): boolean {
-    return this.runs.current?.repos.some((r) => r.path !== SELF_REPO) ?? false;
+    return this.runs.inRepoGroup;
   }
 }
 
@@ -320,19 +336,24 @@ export class Landing {
  * task's landing is in conflict. Linking the two, so the conflicted task lands
  * once the resolver has, stays with the caller.
  */
-export function conflictResolverTask(task: Readonly<Task>, run: IsolationRun | null, plan?: readonly Task[], plannedWith = false): Partial<Task> | null {
-  const record = run?.tasks[task.id];
-  if (!run || record?.status !== 'conflict') return null;
-  const integrationBranch = handoffBranchName(run);
+export function conflictResolverTask(
+  task: Readonly<Task>,
+  runs: Pick<IsolationRunController, 'taskState' | 'conflictOf' | 'handoffBranch'>,
+  plan?: readonly Task[],
+  plannedWith = false,
+): Partial<Task> | null {
+  const found = runs.taskState(task.id) === 'conflict' ? runs.conflictOf(task.id) : null;
+  const integrationBranch = runs.handoffBranch;
+  if (!found || integrationBranch === null) return null;
   const conflict = {
-    branch: record.branch,
-    message: landingMessage('repair-merge', record, plannedWith),
-    repos: changedReposOf(record),
-    ...(record.conflictRepo ? { conflictRepo: record.conflictRepo } : {}),
+    branch: found.branch,
+    message: landingMessage('repair-merge', found.subject, plannedWith),
+    repos: found.changedRepos,
+    ...(found.conflictRepo ? { conflictRepo: found.conflictRepo } : {}),
   };
   return {
     title: `Resolve merge conflict: ${task.title}`,
-    description: `Merge ${record.branch} into ${integrationBranch} by hand.`,
+    description: `Merge ${found.branch} into ${integrationBranch} by hand.`,
     type: 'ai',
     prompt: buildConflictResolutionPrompt(task, conflict, integrationBranch, plan),
     assignedRunner: task.assignedRunner,

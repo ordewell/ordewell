@@ -57,7 +57,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
 
     it('refuses in the preview and the revert, says why in those words, and offers nothing', async () => {
       const { orchestrator, isolation, status } = await landed([task('t1', 1), task('t2', 2)], ['t1']);
-      delete orchestrator.runs.current!.carried;
+      delete orchestrator.runs.planIsolation!.run.carried;
 
       expect(await orchestrator.revertPreview('t1')).toEqual({ revertible: false, reason: 'no-own-merge', message: older });
       expect(await orchestrator.revertTask('t1')).toEqual({ outcome: 'refused', reason: older });
@@ -68,7 +68,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
 
     it('refuses for a task that shows no landing too: what it carried is what no record says', async () => {
       const { orchestrator } = await landed([task('t1', 1), task('t2', 2)], ['t1']);
-      delete orchestrator.runs.current!.carried;
+      delete orchestrator.runs.planIsolation!.run.carried;
 
       expect(orchestrator.revertScope('t2')).toEqual({ taskIds: [], refusal: { reason: 'no-own-merge', message: older } });
     });
@@ -76,7 +76,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
     it('leaves a run started on this build alone, holding the record while it is empty', async () => {
       const { orchestrator } = await landed([task('t1', 1)], ['t1']);
 
-      expect(orchestrator.runs.current?.carried).toEqual({});
+      expect(orchestrator.runs.planIsolation?.run.carried).toEqual({});
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ revertible: true });
       expect(await orchestrator.revertPreview('t1')).toMatchObject({ revertible: true });
       expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
@@ -208,7 +208,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
         const { orchestrator, status } = await retried();
         await orchestrator.cancelTask('t2');
         await orchestrator.runs.release('t2', { keep: false });
-        expect(orchestrator.runs.current?.tasks.t2).toBeUndefined();
+        expect(orchestrator.runs.planIsolation?.run.tasks.t2).toBeUndefined();
 
         expect(orchestrator.revertScope('t1').taskIds).toEqual(['t1', 't2']);
         expect(orchestrator.runs.taskIsolation('t2')).toEqual({ state: 'none', revertible: true });
@@ -222,12 +222,12 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       it('go with it from a stopped attempt, whose worktree stays', async () => {
         const { orchestrator, isolation, status } = await retried();
         await orchestrator.cancelTask('t2');
-        expect(orchestrator.runs.current?.tasks.t2.status).toBe('kept');
+        expect(orchestrator.runs.planIsolation?.run.tasks.t2.status).toBe('kept');
 
         expect(await orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
 
         expect(status('t2')).toBe('pending');
-        expect(orchestrator.runs.current?.tasks.t2.status).toBe('kept');
+        expect(orchestrator.runs.planIsolation?.run.tasks.t2.status).toBe('kept');
         expect(isolation.calls).toContainEqual({ op: 'revert', taskIds: ['t1', 't2'] });
       });
 
@@ -411,8 +411,8 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
 
     it('refuses a read-only task, whose record lands nothing', async () => {
       const { orchestrator } = await landed([task('t1', 1), task('other', 2)], ['t1']);
-      await vi.waitFor(() => expect(orchestrator.runs.current?.tasks.other).toBeDefined());
-      orchestrator.runs.current!.tasks.other.readOnly = true;
+      await vi.waitFor(() => expect(orchestrator.runs.planIsolation?.run.tasks.other).toBeDefined());
+      orchestrator.runs.planIsolation!.run.tasks.other.readOnly = true;
 
       expect(orchestrator.revertScope('other').refusal).toMatchObject({ reason: 'no-landing' });
     });
@@ -447,7 +447,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
       latest('check').reportComplete({ status: 'failed', summary: 'wanting' });
       await vi.waitFor(() => expect(orchestrator.getAttempt('fix')?.phase).toBe('running'));
       await latest('fix').reportComplete({ status: 'done', summary: '' });
-      await vi.waitFor(() => expect(orchestrator.runs.current?.tasks.fix?.status).toBe('merged'));
+      await vi.waitFor(() => expect(orchestrator.runs.planIsolation?.run.tasks.fix?.status).toBe('merged'));
 
       const { refusal } = orchestrator.revertScope('fix');
 
@@ -538,7 +538,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
   describe('the preview', () => {
     it('does not offer a revert it cannot name when a recordless landing has no landedTasks', async () => {
       const { orchestrator } = await landed([task('t1', 1)], ['t1']);
-      const run = orchestrator.runs.current!;
+      const run = orchestrator.runs.planIsolation!.run;
       // A run saved by the first #86 build: it has landings but no landedTasks.
       delete run.landedTasks;
       delete run.tasks.t1;
@@ -548,7 +548,7 @@ describe('TaskOrchestrator: reverting a landed task (ADR-0054)', () => {
 
     it('refuses the whole revert rather than leave out a dependent it cannot name', async () => {
       const { orchestrator, isolation } = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
-      const run = orchestrator.runs.current!;
+      const run = orchestrator.runs.planIsolation!.run;
       delete run.landedTasks;
       delete run.tasks.t2;
 
@@ -654,8 +654,8 @@ describe('TaskOrchestrator: a landed task that left the plan (ADR-0054)', () => 
     expect(await env.orchestrator.revertPreview('t1')).toMatchObject({ revertible: true, tasks: expect.arrayContaining([expect.objectContaining({ taskId: 't2', dependent: true })]) });
     expect(await env.orchestrator.revertTask('t1')).toMatchObject({ outcome: 'reverted' });
 
-    expect(env.orchestrator.runs.current?.landings?.t2).toBeUndefined();
-    expect(env.orchestrator.runs.current?.landedTasks?.t2).toBeUndefined();
+    expect(env.orchestrator.runs.planIsolation?.run.landings?.t2).toBeUndefined();
+    expect(env.orchestrator.runs.planIsolation?.run.landedTasks?.t2).toBeUndefined();
     expect(env.status('t1')).toBe('pending');
   });
 
@@ -701,13 +701,13 @@ describe('TaskOrchestrator: a landed task that left the plan (ADR-0054)', () => 
     expect(env.orchestrator.revertScope('t1')).toEqual({ taskIds: ['t1'] });
     await env.orchestrator.revertTask('t1');
 
-    expect(env.orchestrator.runs.current?.landings?.free).toBeDefined();
+    expect(env.orchestrator.runs.planIsolation?.run.landings?.free).toBeDefined();
   });
 
   it('refuses every revert of the run when nothing says what it depended on', async () => {
     const env = await landed([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], ['t1', 't2']);
     await leave(env, 't2');
-    delete env.orchestrator.runs.current!.landedOn!.t2;
+    delete env.orchestrator.runs.planIsolation!.run.landedOn!.t2;
 
     expect(env.orchestrator.revertScope('t1').refusal).toMatchObject({ reason: 'no-own-merge', message: expect.stringContaining('Task "Task t2" landed and left the plan') });
     expect(await env.orchestrator.revertTask('t1')).toMatchObject({ outcome: 'refused' });

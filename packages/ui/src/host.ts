@@ -6,10 +6,11 @@
  */
 export { ConversationViewHost, type SavedConversation } from './host/ConversationViewHost';
 export { RunViewHost } from './host/RunViewHost';
+export { ChatSessionHost, type ChatTurn, type SessionPort, type TurnOutcome } from './host/ChatSessionHost';
+export { MergeAll, type MergeAnswer, type MergeCall, type MergePort, type MergeYes } from './host/MergeAll';
+export { TaskActions, TaskControls, type TaskActionPort, type TaskControlPort } from './host/TaskControls';
 export { SessionView, type SessionCue, type SessionSnapshot } from './host/SessionView';
 export { ChildView } from './host/ChildView';
-export {
-  DaemonChildStream, DaemonSessionStream,
-  type ConnectedFrame, type DaemonChildHooks, type DaemonFrame, type DaemonSessionHooks, type DaemonSessionState,
-} from './host/DaemonStream';
+export { DaemonSessionStream, type DaemonSessionHooks, type DaemonSessionState } from './host/DaemonStream';
+export type { ConnectedFrame, DaemonFrame } from '@ordewell/core/plan-utils';
 export * from './host/confirmations';

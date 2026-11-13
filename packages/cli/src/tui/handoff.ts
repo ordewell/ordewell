@@ -2,7 +2,8 @@ import type { Effect, MergeYes, Step } from './reducers/shared';
 import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
-import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeTarget, repairedLanded, repairedNotice } from '@ordewell/core';
+import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeOutcome, mergeTarget, repairedLanded, repairedNotice } from '@ordewell/core';
+import type { IsolationMergeResult } from '@ordewell/core';
 import type { HandoffView, Overlay, PickerItem, TuiState } from './state';
 
 /**
@@ -201,7 +202,25 @@ export function confirmedHandoff(state: TuiState, kind: 'merge-run' | 'discard-r
       ...(yes.besideOps ? { besideOps: true as const } : {}),
     }
     : { type: 'isolationDiscard', sessionId, branch: handoffBranchName(handoff) };
-  return { state: closed, effects: [effect] };
+  return { state: kind === 'merge-run' ? { ...closed, mergeAsked: true } : closed, effects: [effect] };
+}
+
+/**
+ * The words for a merge result this pane did not ask for: an automatic Merge
+ * all that was turned away (the only trace of why a conflict held the run is
+ * here), the supervisor's, or another window's. The pane's own request is
+ * answered in the words its HTTP reply brings, so its result, the first heard
+ * after it was sent, says nothing; core's `mergeOutcome` words the rest as
+ * /merge does. An automatic merge that landed is already a line of the
+ * transcript, which the session writes and every surface draws, so a second
+ * one here would say it twice.
+ */
+export function announceMerge(state: TuiState, result: IsolationMergeResult, automatic = false): TuiState {
+  if (state.mergeAsked) return { ...state, mergeAsked: false };
+  if (automatic && result.outcome === 'merged') return state;
+  const handoff = state.runMerge?.handoff ?? state.handoff;
+  const { ok, message } = mergeOutcome(result, handoff ? handoffBranchName(handoff) : 'the run\'s branch', handoff ? isRepoGroup(handoff) : false, handoff ? repairedLanded(handoff) : []);
+  return say(state, ok ? 'system' : 'error', message);
 }
 
 /** The diff arrived: show it in the overlay, opening it if the request came from `/merge review`. */

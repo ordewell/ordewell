@@ -11,9 +11,10 @@ import type { ResearchProgress, ResearchStep } from '../../models/Task';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { McpCredential, McpToolContext, McpToolReply, OrdewellMcpServer, SpawnResearchAgentArgs } from '../mcp';
 import { onHostTeardown } from '../../utils/processTree';
-import { openEventStream, usageRecord, withDeadline, REQUEST_TIMEOUT_MS, type EventStream, type OpenCodeTokens } from './openCodeTransport';
+import { openCodeCall, openEventStream, withDeadline, REQUEST_TIMEOUT_MS, type EventStream, type OpenCodeTokens } from './openCodeTransport';
 import { NO_TURN_OPEN, semaphore } from './harnessResearchAgent';
 import { RunnerProcess } from './runnerProcess';
+import { UsageRecordBuilder } from './usageBuilder';
 import type { AgentProcessDeps } from './AgentAdapter';
 import { SERVER_USERNAME } from './OpenCodeAdapter';
 
@@ -397,13 +398,9 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
   };
 
   // A step reaches us as its end or its failure, never both, but a replayed stream repeats a frame.
-  const counted = new Set<string>();
+  const records = new UsageRecordBuilder('opencode');
   const count = (data: NonNullable<Frame['data']>, call: { model?: string; purpose?: string }) => {
-    if (data.assistantMessageID) {
-      if (counted.has(data.assistantMessageID)) return;
-      counted.add(data.assistantMessageID);
-    }
-    const record = usageRecord(data.tokens, { ...call, cost: data.cost, subagentId });
+    const record = records.call(openCodeCall(data.tokens, { ...call, cost: data.cost, subagentId }), data.assistantMessageID);
     if (!record) return;
     // A purpose takes the place of the subagent on a record, but the research call is whose spend it is.
     const attributed = { ...record, subagentId };
