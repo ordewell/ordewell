@@ -752,6 +752,10 @@ function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
       // A `]` first in the set is a member, not the close.
       if (word[from] === ']') from++;
       const close = word.indexOf(']', from);
+      // A `[` in the set may open `[:class:]`, `[.c.]` or `[=c=]`, whose own
+      // `]` does not close the bracket (`[[:punct:]]exec` is `-exec`), and
+      // shells disagree on such sets. Nothing past it is trusted.
+      if (close > 0 && word.slice(from, close).includes('[')) { parts.push('any'); return parts; }
       if (close > 0) { parts.push('one'); i = close; continue; }
     }
     parts.push(c);
