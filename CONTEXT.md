@@ -149,7 +149,12 @@ budget ledger is `NodeFunding` (a root opens the tree's log and is charged
 nothing; a child holds what its parent carved), what it reads of its own plan,
 the plans below it and its board is `NodeReading` (each read made afresh), and
 where it sits under its parent is `NodeSeat`. Each has a root and a child variant
-chosen at construction, so the Session never asks its depth.
+chosen at construction, so the Session never asks its depth. The choice is made
+once, by `createSession`, as the node's `NodePosition` (`RootPosition` or
+`ChildPosition`): it builds those three, and owns the state root, the save
+target, the lease, the refusals a start meets at the node, and how a child is
+seated, opened and discarded. Building the child Session itself stays
+`createSession`'s, which the position is handed.
 
 **StreamOrder** (`utils/streamOrder.ts`) — the pure, per-session record of which
 stamped broadcasts a client has delivered (a 256-number window), which run frames
