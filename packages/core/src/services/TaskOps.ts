@@ -14,6 +14,7 @@ import { plannedTask, newBreaches, taskWhere, type IntakeCatalog, type PlannedTa
 import { loopRemovalRefusal, loopReshapeRefusal, loopSpec } from '../models/Loop';
 import { freshAttempt } from '../models/TaskExecution';
 import { askedReadOnly, isReadOnly, prepareTaskEdit, UPDATABLE_FIELDS, type PlannerTaskSpec } from './TaskEdit';
+import { opShapeRefusal } from './TaskSpec';
 
 export { UPDATABLE_FIELDS, type PlannerTaskSpec } from './TaskEdit';
 
@@ -104,10 +105,10 @@ function parseTaskOpsObject(json: string, text: string): TaskOp[] {
   if (!Array.isArray(ops) || ops.length === 0) {
     throw new PlanParseError('"taskOps" must be a non-empty array', text);
   }
-  for (const op of ops) {
-    if (typeof op !== 'object' || op === null || typeof (op as { op?: unknown }).op !== 'string') {
-      throw new PlanParseError('Every task op needs an "op" field (update | add | remove | reorder | merge | split)', text);
-    }
+  // The shape edit_plan's schema takes: a malformed op is the planner's to fix, so it is asked again, never thrown at.
+  for (const [i, op] of ops.entries()) {
+    const refusal = opShapeRefusal(op, i);
+    if (refusal) throw new PlanParseError(refusal, text);
   }
   return ops as TaskOp[];
 }
@@ -329,6 +330,12 @@ export function applyTaskOps(
   // batch before anything mutates.
   const handleOwner = new Map<string, number>();
   const handleId = new Map<string, string>();
+  // Ops reach here from every route already shaped, but for a caller that skipped it: refused, never read as empty.
+  for (const [i, op] of ops.entries()) {
+    const shape = opShapeRefusal(op, i);
+    if (shape) errors.push({ message: shape });
+  }
+  if (errors.length) return refused(currentTasks, errors);
   for (const [i, op] of ops.entries()) {
     const handle = (op as { handle?: unknown }).handle;
     if (handle === undefined) continue;

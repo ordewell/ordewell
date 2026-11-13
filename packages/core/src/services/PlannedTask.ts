@@ -5,6 +5,7 @@ import { Task, RunnerId, TaskModelAssignment, DEFAULT_RUNNERS, createTask, flatt
 import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { scriptBodyErrors } from '../models/ScriptTask';
+import { readSpec } from './TaskSpec';
 import { loopErrors, loopSpec } from '../models/Loop';
 import { DELEGATION_UNAVAILABLE, delegationErrors, notOnADelegatedMessage, type DelegatedBudget, type DelegationRules, type TaskScope } from '../models/Delegation';
 
@@ -221,6 +222,8 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   const plannerId = text(raw.id);
   const id = freshIds || !plannerId ? newId() : plannerId;
   if (freshIds && plannerId) renamed.set(plannerId, id);
+  // A field in a shape it cannot hold is refused before anything reads it: read loosely, a string of dependencies was no list, and planned none.
+  for (const e of readSpec(spec, 'new')) errors.push({ taskId: id, field: e.field, message: `${where} ${e.message}` });
 
   const delegating = catalog.delegationRefusal === null;
   const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' || raw.type === 'script' || raw.type === 'delegated' ? raw.type : base.type ?? 'ai';
@@ -258,7 +261,6 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   // otherwise get write access the planner said the work must not have.
   const asked = typeof raw.readOnly === 'boolean' ? raw.readOnly : undefined;
   const readOnly = ai && !ops && (asked ?? from?.readOnly ?? parent?.readOnly ?? false);
-  if (raw.research !== undefined && typeof raw.research !== 'boolean') errors.push({ taskId: id, field: 'research', message: `${where}: "research" must be a boolean` });
 
   const assignedModel = ai || delegated ? modelOf(raw, base.assignedModel) : undefined;
   const slice = (value: unknown): 'AFK' | 'HITL' | undefined => (value === 'AFK' || value === 'HITL' ? value : undefined);
