@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, runHoldsEditors, cardEditNeedsUnstarted, confirmedOverride, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction, type TaskEditOptions,
+  taskActionCommand, confirmedOverride, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
@@ -351,24 +351,6 @@ function settleDirectEdit(deps: PlanManagerDeps): void {
   deps.saveCurrentSession();
 }
 
-function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit, options?: TaskEditOptions): Promise<unknown> {
-  // An idle plan keeps the call it always made, without the card's condition.
-  const update = (changes: Partial<Task>) => options
-    ? session.updateTask(taskId, changes, options)
-    : session.updateTask(taskId, changes);
-  switch (edit.kind) {
-    // A runner change re-derives the task's model, effort and mode from the
-    // new runner's catalog, which only the session can read.
-    case 'runner': return options ? session.setTaskRunner(taskId, edit.runner, options) : session.setTaskRunner(taskId, edit.runner);
-    case 'model': return update({ assignedModel: edit.assignment });
-    case 'mode': return update({ taskMode: edit.mode });
-    case 'prompt': return update({ prompt: edit.prompt, description: edit.prompt || undefined });
-    case 'dependencies': return options ? session.setTaskDependencies(taskId, edit.dependencies, options) : session.setTaskDependencies(taskId, edit.dependencies);
-    case 'skills': return update({ skills: edit.skills });
-    case 'ops': return update({ ops: edit.ops });
-  }
-}
-
 /**
  * A field edit from a task card, through the Session like every other edit
  * so it is validated, broadcast and scheduled for. The plan is re-shown
@@ -376,18 +358,9 @@ function applyTaskEdit(session: Session, taskId: string, edit: TaskEdit, options
  * attempted.
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
-  // The card's own rule, from the same run fact: a run that could still move
-  // a task on holds its editors to a task that has not started, and the
-  // Session checks that again after its own waits. A task that has not started
-  // is held to it in an idle plan too, as a start can claim it while the edit
-  // waits on discovery. A settled task of an idle plan, a failed one a run
-  // ended on included, keeps the wider direct-edit contract.
-  const { session } = deps;
-  const target = flattenTasks(session.planTasks).find((t) => t.id === taskId);
-  const held = runHoldsEditors(session.isExecuting, session.activity);
-  const options: TaskEditOptions | undefined = (target ? cardEditNeedsUnstarted(held, target) : held) ? { requireUnstarted: true } : undefined;
   try {
-    await applyTaskEdit(deps.session, taskId, edit, options);
+    // The Session derives the card's not-started precondition itself.
+    await deps.session.cardEdit(taskId, edit);
   } catch (err) {
     void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
   }

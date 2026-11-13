@@ -15,7 +15,7 @@ import {
 } from '@ordewell/ui/host';
 import {
   isBuiltinSlashCommand, resolveSlashAlias, slashHelp,
-  type HostToWebview, type IsolationActionKind, type SettingsChange, type TaskEdit, type WebviewToHost,
+  type HostToWebview, type IsolationActionKind, type SettingsChange, type WebviewToHost,
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
@@ -202,19 +202,6 @@ function holderViewOf(record: SessionHeld['holder']): HolderView {
     ...(host?.kind === 'daemon' && host.ownerPid !== undefined ? { ownerPid: host.ownerPid } : {}),
     since: record.since,
   };
-}
-
-/** A field edit from a card, as the daemon's task PUT takes it: the extension's own mapping (PlanManager). */
-function taskChanges(edit: TaskEdit): Partial<Task> {
-  switch (edit.kind) {
-    case 'runner': return { assignedRunner: edit.runner };
-    case 'model': return { assignedModel: edit.assignment };
-    case 'mode': return { taskMode: edit.mode };
-    case 'prompt': return { prompt: edit.prompt, description: edit.prompt || undefined };
-    case 'dependencies': return { dependencies: edit.dependencies };
-    case 'skills': return { skills: edit.skills };
-    case 'ops': return { ops: edit.ops };
-  }
 }
 
 /**
@@ -898,7 +885,7 @@ export class DaemonHost {
         return;
       }
       case 'editTask':
-        await this.planEdit(callDaemon('plans.updateTask', { sessionId: this.sessionId, taskId: msg.taskId }, taskChanges(msg.edit)));
+        await this.planEdit(callDaemon('plans.cardEdit', { sessionId: this.sessionId, taskId: msg.taskId }, msg.edit));
         return;
       case 'removeTask':
         await this.removeTask(msg.taskId);

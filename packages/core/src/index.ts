@@ -200,6 +200,7 @@ export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction,
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';
 export type { ChildPlacement, SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export type { TaskEditOptions } from './services/PlanEditor';
+export { cardEditPatch, isCardEdit, type CardEdit } from './services/CardEdit';
 export type { RevertPreviewTask, RevertRefusal, RevertRefusalReason, RevertScope, TaskRevertPreview } from './services/taskRevert';
 export { ExecutionCommands } from './services/ExecutionCommands';
 export type { ExecutionCommand, CommandOutcome, CommandPayload, Consent, LoopGuard, ExecutionHost } from './services/ExecutionCommands';

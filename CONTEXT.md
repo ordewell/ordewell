@@ -2643,6 +2643,12 @@ completed set, which is safe because `removeTaskFromPlan` detaches the
 dependents in the same op. A direct edit sets only the fields the planner may
 change (`UPDATABLE_FIELDS`): a task's status, verdict and subtasks are
 execution's and the plan tree's, never a patch's.
+A task card's field edit (`CardEdit`) reaches the plan through one
+`Session.cardEdit`, which derives the card's not-started precondition itself
+from the run's facts (`runHoldsEditors`, `cardEditNeedsUnstarted`): a surface
+sends the edit, never decides the precondition, and the daemon's `card-edit`
+route is what the desktop app calls where `PUT /tasks/:taskId` is the wider
+direct edit.
 Both routes prepare an edit through one `prepareTaskEdit`, whose only differing
 input is the actor. The planner's vocabulary (no `taskMode`, `readOnly`,
 `thinkingEffort`, delegated fields), the lock (lifted by a rearm), the

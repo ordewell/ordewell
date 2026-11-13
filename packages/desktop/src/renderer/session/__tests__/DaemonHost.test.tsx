@@ -241,6 +241,18 @@ describe('DaemonHost', () => {
     expect(daemon.calls('plans.deleteTask')).toEqual([[{ sessionId: 's1', taskId: 't1' }, undefined]]);
   });
 
+  it('sends a card edit whole to the daemon, whose session holds it to the unstarted precondition', async () => {
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: PLAN, goal: 'g' }), 'plans.cardEdit': ok({ ok: true }) });
+    const host = hostWith();
+    await opened(daemon, host);
+    await waitFor(() => expect(host.getSnapshot().state.plan?.tasks).toHaveLength(2));
+
+    await act(() => host.handle({ type: 'editTask', taskId: 't1', edit: { kind: 'prompt', prompt: 'Do it differently' } }));
+
+    expect(daemon.calls('plans.cardEdit')).toEqual([[{ sessionId: 's1', taskId: 't1' }, { kind: 'prompt', prompt: 'Do it differently' }]]);
+    expect(daemon.calls('plans.updateTask')).toEqual([]);
+  });
+
   it('keeps its session when another host holds the one asked for, and says who', async () => {
     const sessionHeld = { holder: { host: { kind: 'vscode', pid: 4242 }, acquiredAt: '2026-11-03T09:00:00.000Z' } };
     const daemon = fakeDaemon({
