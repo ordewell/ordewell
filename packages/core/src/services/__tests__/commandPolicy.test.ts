@@ -1622,6 +1622,35 @@ describe('jq and yq programs are read for the environment and files they reach',
   ])('keeps an ordinary filter unprompted: %s', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('auto');
   });
+
+  // The program was read as written, and the shell rewrites it first: with a
+  // repository file named `env`, `jq -n e*` runs `jq -n env` and prints the
+  // environment. A word before the program moves it: `-L e*` beside a
+  // directory `e` and a file `env` becomes `-L e env`, and `env` is the program.
+  it.each([
+    'jq -n e*',
+    'jq -n en?',
+    'jq -n [e]nv',
+    'jq -n {e,f}nv',
+    'jq -n -L e* .',
+    'jq -n --arg x e* .',
+    'jq --indent 2* .',
+    'yq -n e*',
+    'yq -n --indent 2* .',
+  ])('refuses a program the shell may rewrite: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'jq . data.json',
+    "jq -n '{a:1}'",
+    "jq --arg x y '.a' f.json",
+    "yq '.a' f.yaml",
+    "jq '.a' f*.json",
+    "jq -r '.name' packages/*/package.json",
+  ])('leaves a glob after the program to path confinement: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
 });
 
 describe('an input redirect names a file the shell opens, not an argument', () => {

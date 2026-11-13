@@ -46,7 +46,7 @@ import type { ShellDialect } from './researchShell';
 import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
-import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
+import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqProgramEnd, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
 import { EFFECT_ROUTE } from './effectRoute';
@@ -964,6 +964,17 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       : AWK_FAMILY.includes(seg.binary) ? awkRefusal(seg.binary, seg.args)
         : jqRefusal(seg.binary, seg.args);
     if (program) return program;
+    // `seg.expandable` below misses a glob, brace list or bracket, and the
+    // program was read as written: with a file named `env`, `jq -n e*` runs
+    // `jq -n env`. A rewritten word before it moves it (`-L e*` beside a
+    // directory `e` becomes `-L e env`), so every word up to it counts; files
+    // after it stay confinement's to judge (ADR-0008).
+    if (JQ_FAMILY.includes(seg.binary)) {
+      const rewritten = seg.args.slice(0, jqProgramEnd(seg.binary, seg.args) + 1).find((a) => shellRewrites(seg, a));
+      if (rewritten !== undefined) {
+        return `The shell may rewrite "${rewritten}" before "${seg.binary}" sees it, which can change its program. Put the program in single quotes, name every word before it literally, and re-run.`;
+      }
+    }
     if (seg.expandable) {
       return `The shell rewrites part of this "${seg.binary}" command before "${seg.binary}" sees it, so its program cannot be inspected. Put the program in single quotes, name files literally, and re-run.`;
     }
