@@ -1,8 +1,9 @@
-import { flattenTasks, type RunnerId, type Task } from '../models/Task';
-import type { RunnerModeInfo } from './ModeResolver';
+import { flattenTasks, isSettledTask, keepExecutionState, renumberTasks, type RunnerId, type Task } from '../models/Task';
+import { carryPlannedModes, type RunnerModeInfo } from './ModeResolver';
 import { validatePlanTasks, type PlanTasksResult } from './PlanValidator';
-import { checkPlanInvariants, type IntakeCatalog } from './PlannedTask';
-import { applyTaskOps, opRefusalText, type OpRef, type TaskOp } from './TaskOps';
+import { checkPlanInvariants, newBreaches, type IntakeCatalog, type PlanTaskError } from './PlannedTask';
+import { applyTaskOps, opRefusalText, type ApplyTaskOpsResult, type OpRef, type TaskOp } from './TaskOps';
+import * as PlanGraph from './PlanGraph';
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
 import { SCRIPT_PAST_THE_RULES, delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
@@ -113,6 +114,18 @@ export interface PlanIntake {
 
 const NO_SKILLS: SkillCheck = { errors: [], warnings: [] };
 
+type ChangeCatalog = ReturnType<PlanChangeScope['catalog']>;
+
+/**
+ * A change as it would land, read in one tick: an edit's ops applied, or a
+ * plan's tasks resolved and, as it commits, laid over the plan's execution
+ * state. Every rule judges this, never what the planner wrote.
+ */
+type Normalized = { before: readonly Task[]; runners: RunnerId[]; catalog: ChangeCatalog } & (
+  | { kind: 'ops'; applied: ApplyTaskOpsResult }
+  | { kind: 'plan'; tasks: Task[]; adjustments: AssignmentAdjustment[] }
+);
+
 /**
  * The one check a planner's change to the plan meets (ADR-0022, P2), on every
  * route: `submit_plan` and a plan envelope, an edit made through `edit_plan`
@@ -133,27 +146,38 @@ export class PlanChangeCheck {
   }
 
   /**
-   * Hold `change` to every rule at `phase`. Its one wait, the skill lookup,
-   * comes before every rule that reads the plan, and `then` gets what passed
-   * in the tick those rules ran in, so nothing can move the plan between the
-   * check and what is done with it.
+   * Hold `change` to every rule at `phase`. Its waits, the skill lookup and
+   * the sandbox probe a result that brings a sealed script needs, come before
+   * every rule that reads the plan, and the change is read as it would land
+   * again after them, so the rules and `then` run in one tick: nothing can
+   * move the plan between the check and what is done with it.
    */
   async check<P extends CheckPhase>(change: PlannerChange<P>, phase: P, then?: (passed: PassedChange) => void): Promise<CheckedChange> {
     const read = this.read(change, phase);
     if (read && !read.ok) return this.refused(change, read.errors);
     const lookup = this.scope.skills?.();
     const skills = !lookup ? NO_SKILLS : change.kind === 'ops' ? await checkOpSkills(change.ops, lookup) : await checkPlanSkills(read?.tasks ?? landing(change), lookup);
-    const sealable = this.bringsSealedScript(change, read) ? await this.scope.canSeal?.() : undefined;
-    const checked = this.rules(change, phase, skills, read, sealable);
-    if (checked.ok) then?.(checked);
-    return checked;
+    let sealable: boolean | undefined;
+    let probed = false;
+    for (;;) {
+      const normal = this.normalize(change, phase, read);
+      // Probed once: a plan moved during the probe into bringing one is judged on that answer, which nothing since can have changed.
+      if (!probed && bringsSealedScript(normal)) {
+        sealable = await this.scope.canSeal?.();
+        probed = true;
+        continue;
+      }
+      const checked = this.rules(change, phase, skills, read, normal, sealable);
+      if (checked.ok) then?.(checked);
+      return checked;
+    }
   }
 
   /** {@link check} without the skill lookup, for a change that attaches none or is only being shown. */
   checkNow<P extends CheckPhase>(change: PlannerChange<P>, phase: P): CheckedChange {
     const read = this.read(change, phase);
     if (read && !read.ok) return this.refused(change, read.errors);
-    return this.rules(change, phase, NO_SKILLS, read);
+    return this.rules(change, phase, NO_SKILLS, read, this.normalize(change, phase, read));
   }
 
   /** A plan's JSON read into tasks as it is submitted; nothing in it reads the plan. */
@@ -173,33 +197,51 @@ export class PlanChangeCheck {
     };
   }
 
-  /** Only such a change waits on the probe, so a flat plan's check takes the turns it always took. */
-  private bringsSealedScript<P extends CheckPhase>(change: PlannerChange<P>, read: PlanTasksResult | undefined): boolean {
-    if (change.kind === 'ops') return change.ops.some((op) => op.op === 'add' && op.task?.readOnly === true && op.task.type === 'script');
-    return (read?.ok ? read.tasks : read ? [] : landing(change)).some((task) => task.type === 'script' && task.readOnly === true);
-  }
-
-  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined, canSeal?: boolean): CheckedChange {
+  /**
+   * What `change` would leave, read from the scope as it stands. A whole plan
+   * that commits is the planner restating every task, which never witnessed
+   * one run, so it is laid over the plan's execution state here, ahead of
+   * every rule: the rules then judge the order and dependencies that land, a
+   * settled task's included (ADR-0022 P2). At submit the plan is still the
+   * planner's own, accepted as it wrote it.
+   */
+  private normalize<P extends CheckPhase>(change: PlannerChange<P>, phase: P, read: PlanTasksResult | undefined): Normalized {
     const runners = this.scope.runners(change.kind);
     const catalog = this.scope.catalog(runners);
     const before = this.scope.tasks();
+    const base = { before, runners, catalog };
+    if (change.kind === 'ops') {
+      return { ...base, kind: 'ops', applied: applyTaskOps(before, change.ops, runners, catalog, this.scope.handles?.(), this.delegation()) };
+    }
+    const written = read?.ok ? read.tasks : [...landing(change)];
+    const resolved = resolveAssignments(written, before, catalog);
+    if (phase !== 'land') return { ...base, kind: 'plan', tasks: written, adjustments: resolved.adjustments };
+    const modes = { runnerModes: catalog.runnerModes ?? {}, ...(catalog.autonomousDefault !== undefined ? { autonomousDefault: catalog.autonomousDefault } : {}) };
+    return { ...base, kind: 'plan', tasks: keepExecutionState(before, carryPlannedModes(before, resolved.tasks, modes)), adjustments: resolved.adjustments };
+  }
+
+  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined, normal: Normalized, canSeal?: boolean): CheckedChange {
+    const { before, runners, catalog } = normal;
     const skillErrors: PlanChangeError[] = skills.errors.map((e) => ({ ...e, field: 'skills' }));
 
-    if (change.kind === 'plan') {
-      const tasks = read?.ok ? read.tasks : [...landing(change)];
+    if (normal.kind === 'plan') {
+      const { tasks } = normal;
       const ungranted = [...this.ungranted(before, tasks), ...this.pastMandate(before, tasks)];
       if (ungranted.length > 0) return this.refused(change, ungranted);
       // A landing plan waited out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
       const sealing = canSeal === false ? { canSeal } : {};
-      const broken = phase === 'land' || canSeal === false ? checkPlanInvariants(tasks, runners, catalog.runnerModes, sealing) : [];
+      const broken = phase === 'land' || canSeal === false ? rewriteBreaches(before, tasks, runners, catalog.runnerModes, sealing) : [];
       if (broken.length > 0 || skillErrors.length > 0) return this.refused(change, [...broken, ...skillErrors]);
-      const resolved = resolveAssignments(tasks, before, catalog);
       const warnings = [...(read?.ok ? read.warnings ?? [] : []), ...skills.warnings];
-      return { ok: true, tasks: phase === 'land' ? resolved.tasks : tasks, adjustments: resolved.adjustments, warnings, summary: [], handles: new Map() };
+      if (phase !== 'land') return { ok: true, tasks, adjustments: normal.adjustments, warnings, summary: [], handles: new Map() };
+      // Dependencies first, as an edit leaves them: a settled task keeps its slot, so a rewrite that lists it ahead of what it waits on is refused.
+      const repaired = PlanGraph.repairOrder(tasks);
+      if ('error' in repaired) return this.refused(change, [{ field: 'tasks', message: repaired.error }]);
+      return { ok: true, tasks: renumberTasks(repaired.tasks), adjustments: normal.adjustments, warnings, summary: [], handles: new Map() };
     }
 
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
-    const applied = applyTaskOps(before, change.ops, runners, catalog, this.scope.handles?.(), this.delegation());
+    const { applied } = normal;
     if (!applied.ok) return this.refused(change, applied.refusals);
     const ungranted = [...this.ungranted(before, applied.tasks), ...this.pastMandate(before, applied.tasks)];
     if (ungranted.length > 0) return this.refused(change, ungranted);
@@ -283,6 +325,41 @@ export class PlanChangeCheck {
 
 function statedBudget({ budget }: Pick<Task, 'budget'>): number {
   return budget?.tokens ?? 0;
+}
+
+/**
+ * Only a change whose result brings a read-only script waits on the probe, so
+ * a flat plan's check takes the turns it always took. An edit's is judged on
+ * what it leaves, as a script it adds may be sealed by the mandate rather than
+ * by its own `readOnly` (ADR-0056 M9).
+ */
+function bringsSealedScript(normal: Normalized): boolean {
+  const sealed = (task: Task) => task.type === 'script' && task.readOnly === true;
+  if (normal.kind === 'plan') return normal.tasks.some(sealed);
+  if (!normal.applied.ok) return false;
+  const was = new Set(flattenTasks(normal.before).filter(sealed).map((task) => task.id));
+  return normal.applied.tasks.some((task) => sealed(task) && !was.has(task.id));
+}
+
+/**
+ * The rules a landing plan breaks, less those a settled task already broke:
+ * it lands as it stood whatever the rewrite says of it, so the planner could
+ * write nothing that cures it, as an edit is not held to what the plan already
+ * broke.
+ */
+function rewriteBreaches(
+  before: readonly Task[],
+  tasks: readonly Task[],
+  runners: readonly RunnerId[],
+  runnerModes: ChangeCatalog['runnerModes'],
+  sealing: { canSeal?: boolean },
+): PlanTaskError[] {
+  const errors = checkPlanInvariants(tasks, runners, runnerModes, sealing);
+  const settled = new Set(flattenTasks(before).filter(isSettledTask).map((task) => task.id));
+  if (settled.size === 0) return errors;
+  const told = (error: PlanTaskError) => `${error.taskId ?? ''}\u0000${error.field}\u0000${error.message}`;
+  const fresh = new Set(newBreaches(before, tasks, runners, runnerModes).map(({ error }) => told(error)));
+  return errors.filter((error) => !error.taskId || !settled.has(error.taskId) || fresh.has(told(error)));
 }
 
 /** The overlaps an edit brought (ADR-0057 R6): what stood before it was answered then. */

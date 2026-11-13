@@ -2709,7 +2709,14 @@ every other task keeps its status and skip reason, and one the rewrite adds
 starts `pending`. A planner restates tasks, it never witnessed one run, so no
 status is ever read
 from a rewrite. Without this, a planner that answered "add a task" with the
-full plan echoed finished tasks as `pending` and they ran again.
+full plan echoed finished tasks as `pending` and they ran again. The overlay is
+the first step of the **Plan change check** as the rewrite commits, so its rules
+judge what will land, not what the planner wrote: the dependency graph with
+each settled task's own dependencies (a cycle they close is refused), and the
+order, which is repaired dependencies-first as an edit's is, with settled tasks
+kept in their slots. A rewrite that lists a finished task ahead of an
+unfinished one it depends on is refused. A rule a settled task already broke is
+not held against the rewrite, since nothing the planner writes changes that task.
 *Avoid:* "regenerating" the plan for an edit — only `generatePlan` and the
 first plan commit start from zero, and only `rearm` or Mark not done re-runs a
 finished task.

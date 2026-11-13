@@ -5,6 +5,7 @@ import { parsePlanJson } from '../PlanValidator';
 import type { TaskOp } from '../TaskOps';
 import type { SkillInfo } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
+import { rootMandate } from '../Mandate';
 
 const model = (modelId: string): DiscoveredModel => ({ modelId, modelLabel: modelId, variants: [] });
 
@@ -93,6 +94,69 @@ describe('a whole plan, as submitted and as it lands', () => {
 
     expect(refused).toMatchObject({ ok: false, errors: [{ taskId: 'a', field: 'skills', message: expect.stringContaining('"grilling" is a planner skill') }] });
     expect(warned.warnings).toEqual([expect.stringContaining('skill "later" not found')]);
+  });
+});
+
+describe('a whole plan over a plan that has run, judged as it will land (ADR-0022 P2)', () => {
+  const ran = (over: Partial<Task> = {}) => createTask({ id: 'x', order: 2, title: 'Task x', prompt: 'p', assignedRunner: 'claude-code', status: 'completed', dependencies: ['y'], ...over });
+  const waiting = () => createTask({ id: 'y', order: 1, title: 'Task y', prompt: 'p', assignedRunner: 'claude-code' });
+
+  it('lands with the execution state the plan holds, not the status the planner wrote', async () => {
+    const { check } = fakeSession([waiting(), ran()]);
+
+    const landed = passed(await check.check({ kind: 'plan', tasks: [waiting(), ran({ status: 'pending', title: 'Restated' })] }, 'land'));
+
+    expect(landed.tasks.map((t) => [t.id, t.status, t.title])).toEqual([['y', 'pending', 'Task y'], ['x', 'completed', 'Task x']]);
+  });
+
+  it('refuses a rewrite that lists a finished task ahead of the unfinished one it depends on', async () => {
+    const { check } = fakeSession([waiting(), ran()]);
+
+    const refused = await check.check({ kind: 'plan', tasks: [ran({ dependencies: [] }), waiting()] }, 'land');
+
+    expect(refused).toMatchObject({ ok: false, errors: [{ field: 'tasks', message: '"Task y" would have to run before "Task x", which is completed and cannot be moved' }] });
+  });
+
+  it('refuses a cycle only the finished task\'s kept dependencies make', async () => {
+    const { check } = fakeSession([waiting(), ran()]);
+
+    const refused = await check.check({ kind: 'plan', tasks: [ran({ dependencies: [] }), createTask({ ...waiting(), order: 2, dependencies: ['x'] })] }, 'land');
+
+    expect(refused.ok ? [] : refused.errors.map((e) => e.message)).toEqual([expect.stringMatching(/^Dependency cycle detected: /)]);
+  });
+
+  it('puts an unfinished dependency ahead of what waits on it, as an edit does', async () => {
+    const { check } = fakeSession();
+    const later = createTask({ id: 'b', order: 1, title: 'Task b', prompt: 'p', assignedRunner: 'claude-code', dependencies: ['a'] });
+    const first = createTask({ id: 'a', order: 2, title: 'Task a', prompt: 'p', assignedRunner: 'claude-code' });
+
+    const landed = passed(await check.check({ kind: 'plan', tasks: [later, first] }, 'land'));
+
+    expect(landed.tasks.map((t) => [t.id, t.order])).toEqual([['a', 1], ['b', 2]]);
+  });
+});
+
+describe('a script added below the root, where nothing can seal (ADR-0056 M9)', () => {
+  // No `effect` grant: every script a child writes runs sealed, though the planner never said read-only.
+  const child = rootMandate({ level: 'act', autorun: false, autonomous: true, delegationTokens: 0, runners: ['claude-code'], models: {} });
+  const unsealable = (): PlanChangeScope => ({
+    tasks: () => [],
+    runners: () => ['claude-code'],
+    catalog: () => ({ modelsByRunner: {} }),
+    node: () => ({ mandate: child, level: 1 }),
+    canSeal: () => Promise.resolve(false),
+  });
+  const script = { id: 's', title: 'Lint', description: 'lint', type: 'script' as const, commands: [['npm', 'run', 'lint']], sliceType: 'AFK' as const, dependencies: [] };
+  const sealRefusal = 'Task "Lint" is a read-only script task, and this machine has no sandbox to seal one in: make the check a read-only AI task';
+
+  it('is refused by edit_plan, as submit_plan refuses it', async () => {
+    const check = new PlanChangeCheck(unsealable());
+
+    const submitted = await check.check({ kind: 'plan', tasks: [script] }, 'submit');
+    const edited = await check.check({ kind: 'ops', ops: [{ op: 'add', task: script }] }, 'land');
+
+    expect(submitted.ok ? [] : submitted.errors.map((e) => e.message)).toEqual([sealRefusal]);
+    expect(edited.ok ? [] : edited.errors.map((e) => e.message)).toEqual([sealRefusal]);
   });
 });
 
