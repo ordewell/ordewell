@@ -945,6 +945,7 @@ export class Session {
       plannerAnswered: installedPlannerAnswered,
       plannerDetected: installedPlannerDetected,
       detecting: (waiting) => this.broadcast({ type: 'planner_detection', waiting }),
+      refuseHeld: () => this.refuseHeld(),
       assertReady: () => this.assertPlannerReady(),
       queuedTurnRunning: () => this.turns.turnRunning,
       conversationBusy: () => this.conversation.isTurnInFlight,
@@ -2180,6 +2181,17 @@ export class Session {
     return chosen;
   }
 
+  /**
+   * What a new goal passes once its gate admitted it: a runner to plan for,
+   * and under a host's fixed id that session's hold, which the gate leaves
+   * to the goal (ADR-0049 L5).
+   */
+  private goalRunners(requested: RunnerId[] | undefined): RunnerId[] {
+    const chosen = this.chosenRunners(requested);
+    this.claimHostSession();
+    return chosen;
+  }
+
   /** Whether a first turn for `requested` would be refused for want of an enabled runner: a host calls it before it replaces a live session. */
   assertRunnersEnabled(requested: RunnerId[] | undefined): void {
     this.chosenRunners(requested);
@@ -2188,23 +2200,22 @@ export class Session {
   async generatePlan(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.gate.endAll(() => new PlannerTurnDiscardedError());
-    // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
-    let chosenRunners: RunnerId[];
-    try {
-      const opening = this.gate.admit(options?.signal);
-      if (opening) await opening;
-      chosenRunners = this.chosenRunners(runners);
-      this.claimHostSession();
-    } catch (err) {
-      this.gate.dropped();
-      throw err;
-    }
-    this.plan = null;
-    this.goal = goal;
-    this.remintSessionId();
-    this.beginFreshPlanForTurn();
+    const generated = await this.gate.admit('goal', options?.signal, () => {
+      // Before the plan scope is dropped, so a refusal leaves the plan held now as it was.
+      const chosenRunners = this.goalRunners(runners);
+      this.plan = null;
+      this.goal = goal;
+      this.remintSessionId();
+      this.beginFreshPlanForTurn();
+      return this.generateFor(goal, chosenRunners, options?.signal);
+    });
+    if (this.orchestrator.startsPending) await this.saves.control(() => this.orchestrator.tick());
+    return generated;
+  }
 
-    const generated = await this.conversation.hold(options?.signal, async (turn) => {
+  /** The planner's one-shot generation of a plan for `goal`, adopted as the session's plan. */
+  private generateFor(goal: string, chosenRunners: RunnerId[], signal: AbortSignal | undefined): Promise<LegacyPlanState> {
+    return this.conversation.hold(signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
       const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
       const subagents = new SubagentRuns();
@@ -2240,8 +2251,6 @@ export class Session {
       for (const warning of skillWarnings) this.notice('warn', warning);
       return plan;
     });
-    if (this.orchestrator.startsPending) await this.saves.control(() => this.orchestrator.tick());
-    return generated;
   }
 
   /**
@@ -2256,20 +2265,19 @@ export class Session {
     this.opening = pending;
     let opened: Promise<{ landed: LegacyPlanState; effects: TurnEffects }>;
     try {
-      const gate = this.gate.admit(options?.signal);
-      if (gate) await gate;
-      const chosenRunners = this.chosenRunners(runners);
-      this.claimHostSession();
-      this.plan = null;
-      this.goal = goal;
-      this.remintSessionId();
-      this.beginFreshPlanForTurn();
+      // Wrapped: what this waits on is the opening's admission, not the opening.
+      ({ opened } = await this.gate.admit('goal', options?.signal, () => {
+        const chosenRunners = this.goalRunners(runners);
+        this.plan = null;
+        this.goal = goal;
+        this.remintSessionId();
+        this.beginFreshPlanForTurn();
 
-      const now = new Date().toISOString();
-      this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
-      opened = this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal));
+        const now = new Date().toISOString();
+        this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
+        return { opened: this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal)) };
+      }));
     } catch (err) {
-      this.gate.dropped();
       // What was sent behind an opening that never opened shares its end: a
       // stop, a newer goal, a refusal its sender must hear as the goal's.
       if (this.opening === pending) this.opening = null;
@@ -2387,17 +2395,7 @@ export class Session {
    */
   async compactConversation(signal?: AbortSignal): Promise<ConversationCompaction> {
     if (!this.plan) throw new ConversationEditError('No planning conversation to condense');
-    let compaction: ConversationCompaction;
-    try {
-      const opening = this.gate.admit(signal);
-      if (opening) await opening;
-      // After the wait, which a takeover can land in.
-      this.refuseHeld();
-      compaction = await this.conversation.compact(signal);
-    } catch (err) {
-      this.gate.dropped();
-      throw err;
-    }
+    const compaction = await this.gate.admit('session', signal, () => this.conversation.compact(signal));
     // The backend's live context is gone: the next prompt replays the
     // condensed context, so the size of the last call before it says
     // nothing of how full that prompt is. It is a reset with no size stated,

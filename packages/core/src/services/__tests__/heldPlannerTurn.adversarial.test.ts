@@ -25,13 +25,13 @@ const PRD = '<!-- ORDEWELL_PRD_START slug="sub" --># A PRD<!-- ORDEWELL_PRD_END 
  * next isolated run.
  */
 describe('a held session does not run a planner turn', () => {
-  function heldSession(saved: Partial<LegacyPlanState> = {}, sessionId?: string) {
+  function heldSession(saved: Partial<LegacyPlanState> = {}, sessionId?: string, config = fakeConfig({ worktreeIsolation: true })) {
     const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-held-turn-')));
     const host = new LeaseHost();
     const taker = new LeaseHost({ now: () => Date.now() + 2 * LEASE_STALE_MS });
     const turns: string[] = [];
     const session = makeSession({
-      config: fakeConfig({ worktreeIsolation: true }),
+      config,
       saveSession, leaseHost: host,
       aiService: {
         hasActiveConversation: () => true,
@@ -82,6 +82,18 @@ describe('a held session does not run a planner turn', () => {
   it('refuses a compaction', async () => {
     const { session, turns, cleanup } = heldSession({}, 'root');
     try {
+      await expect(session.compactConversation()).rejects.toBeInstanceOf(SessionHeldError);
+      expect(turns).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The hold is the first thing a turn on the session is judged on, a reply's and a compaction's alike: the host to send the user to is the one holding it, not the planner's login.
+  it('refuses a compaction for the hold, as a reply is, before judging a planner that cannot plan', async () => {
+    const { session, turns, cleanup } = heldSession({}, 'root', fakeConfig({ worktreeIsolation: true, getProviderApiKey: () => '', orchestratorModel: '', planningModel: '' }));
+    try {
+      await expect(session.continueConversation('next step')).rejects.toBeInstanceOf(SessionHeldError);
       await expect(session.compactConversation()).rejects.toBeInstanceOf(SessionHeldError);
       expect(turns).toEqual([]);
     } finally {
