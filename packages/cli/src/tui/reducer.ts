@@ -1,4 +1,4 @@
-import { blockingFailures, DEFAULT_RUNNERS, NO_TURN, closeTurn, fromTranscript, holdPrompt, taskLogCommands, taskStartedNotice, type ChildPlanView, type DecisionRecordEntry, type RunnerId, type SerializedPlan } from '@ordewell/core';
+import { NO_TURN, closeTurn, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -21,12 +21,12 @@ import { refreshStepper } from './reducers/stepper';
 import {
   handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
-import { clamp, clampSelection, clearNotice, reportError, stale, staleFailure, step, type Action, type Effect, type Step } from './reducers/shared';
+import { clamp, clampSelection, clearNotice, reportError, stale, staleFailure, step, type Action, type Effect, type RunMessage, type Step } from './reducers/shared';
 import { belongsAbove, childFailed, childGone, childKey, childLost, childMessaged, childTreeArrived, childrenListed, commandInChild, leaveChild, onParent, readLanded, routeChild, sendAllToChild, speakToChild, takeBackHeld } from './reducers/children';
 
 export { initialState } from './state';
 export { resolveTaskId } from './reducers/taskEdits';
-export type { Action, Effect, Step, TaskAction } from './reducers/shared';
+export type { Action, Effect, RunMessage, Step, TaskAction } from './reducers/shared';
 
 /** The cause a lost-reply line carries, when the effect knew one. */
 function because(reason: string | undefined): string {
@@ -269,53 +269,15 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       return step(taskLogLoaded(state, action));
 
-    // A settled transcript line, not a research step: nothing ever settles a
-    // task's start, so as a step it stayed "⋯" forever and was counted into
-    // the planner's next "(+N more)".
-    case 'taskStarted': {
+    // Core folds the message into the run and words its notice; the pane keeps
+    // only what is its own (below).
+    case 'runMessage':
       if (stale(state, action.sessionId)) return step(state);
-      // One task, one start. A second notice for a task already running is a
-      // duplicate that slipped through (a retry arrives with it back to
-      // pending, so a genuine second start still speaks).
-      const existing = findTask(state.tasks, action.taskId);
-      if (existing && isTaskRunning(existing)) return step(state);
-      const folded = foldRun(state, {
-        type: 'task_started',
-        taskId: action.taskId,
-        order: action.order ?? 0,
-        title: action.title,
-        runner: (action.runner ?? DEFAULT_RUNNERS[0]) as RunnerId,
-      });
-      const spoken = say(folded, 'system', taskStartedNotice(action.title, action.runner));
-      return step({ ...spoken, status: 'executing' });
-    }
+      return step(runMessage(state, action.message));
 
     case 'taskCheckpoint':
       if (stale(state, action.sessionId)) return step(state);
       return step(announceCheckpoint(state, action));
-
-    // An edit from another surface or the supervisor; the plan itself is not
-    // re-read, so the patch is all there is to show it by.
-    case 'taskUpdated':
-      if (stale(state, action.sessionId)) return step(state);
-      return step(foldRun(state, { type: 'task_updated', taskId: action.taskId, changes: action.changes }));
-
-    case 'statusUpdate': {
-      if (stale(state, action.sessionId)) return step(state);
-      const next = foldRun(state, {
-        type: 'status_update',
-        tasks: action.tasks,
-        ...(action.runMerge !== undefined ? { runMerge: action.runMerge } : {}),
-        ...(action.usage !== undefined ? { usage: action.usage } : {}),
-        ...(action.activity !== undefined ? { activity: action.activity } : {}),
-        ...(action.escalations !== undefined ? { escalations: action.escalations } : {}),
-      });
-      // The indicator follows the run's own activity first, then the tasks:
-      // beginning a run is "starting" until it claims, and once none is
-      // running the run is over, whatever the scheduler still holds armed.
-      const status = runStatus(next, next.tasks);
-      return step({ ...next, status });
-    }
 
     case 'isolationBlocked': {
       if (stale(state, action.sessionId)) return step(state);
@@ -323,28 +285,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(blockedPicker(state, action.message, action.repos));
     }
 
-    case 'isolationHandoff': {
-      if (stale(state, action.sessionId)) return step(state);
-      // Announce against the handoff the pane already held — a deferred one for
-      // the same run words the follow-up as the supervisor leaving it — then
-      // fold the fresh handoff into the run view. A child's branch is not the
-      // person's to land: it comes in through its task in the plan above, and
-      // `/merge` here would act on the root.
-      const announced = state.child ? state : handoffArrived(state, action.handoff);
-      return step(foldRun(announced, { type: 'isolation_handoff', ...action.handoff }));
-    }
-
     case 'handoffDiff': {
       if (stale(state, action.sessionId)) return step(state);
       return step(showDiff(state, action.diff));
-    }
-
-    // What Merge all did, folded the way the Session says it: a merge that
-    // leaves the run going keeps the marks (ADR-0020), and only `run_closed`
-    // takes them (below).
-    case 'isolationMerged': {
-      if (stale(state, action.sessionId)) return step(state);
-      return step(withoutHandoffOverlay(foldRun(announceMerge(state, action.result, action.trigger !== undefined), { type: 'isolation_merge', result: action.result })));
     }
 
     case 'mergeAbandoned': {
@@ -356,31 +299,6 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'mergeHeld': {
       if (stale(state, action.sessionId)) return step(state);
       return step(askMergeHeld({ ...state, mergeAsked: false }, action.message, action.asked, action.given));
-    }
-
-    case 'runClosed': {
-      if (stale(state, action.sessionId)) return step(state);
-      return step(withoutHandoffOverlay(foldRun(state, { type: 'run_closed' })));
-    }
-
-    case 'executionComplete': {
-      if (stale(state, action.sessionId)) return step(state);
-      // A stop sends no tally, and defaulting it to zero reported a run halted
-      // after four of five tasks as "0/5 complete". The pane already holds the
-      // per-task statuses the daemon streamed, so count them.
-      const { completed, total, failed, blocked, skipped } = action.summary ?? {
-        completed: state.tasks.filter((t) => t.status === 'completed').length,
-        total: state.tasks.length,
-        failed: state.tasks.filter((t) => t.status === 'failed').length,
-        blocked: blockingFailures(state.tasks).size,
-        skipped: state.tasks.filter((t) => t.status === 'skipped').length,
-      };
-      const failures = `${failed > 0 ? ` · ${failed} failed` : ''}${blocked ? ` · ${blocked} blocked` : ''}${skipped ? ` · ${skipped} skipped` : ''}`;
-      const verb = action.stopped ? 'stopped' : 'finished';
-      return step({
-        ...say(state, 'system', `Execution ${verb}: ${completed}/${total} tasks complete${failures}.`),
-        status: 'idle',
-      });
     }
 
     // Its own turn's plan comes back on the call `converse` awaits; the copy
@@ -676,6 +594,55 @@ function reduceAction(state: TuiState, action: Action): Step {
  */
 function withoutHandoffOverlay(state: TuiState): TuiState {
   return state.handoff || state.overlay?.kind !== 'handoff' ? state : { ...state, overlay: null };
+}
+
+/**
+ * A run message into the pane: core folds it into the run and words its
+ * notice (`runNotice`, shared with VS Code and the desktop app, ADR-0017); what
+ * follows is only what the terminal has of its own: the status indicator, the
+ * handoff announcement and the overlay a merge closes.
+ */
+function runMessage(state: TuiState, message: RunMessage): TuiState {
+  const notice = runNotice(message, state.run, { approveWith: '/approve' });
+  const heard = notice === null ? state : say(state, 'system', notice);
+  switch (message.type) {
+    // A start the run already shows is a duplicate: it changes nothing here.
+    case 'task_started':
+      return notice === null ? state : { ...foldRun(heard, message), status: 'executing' };
+    case 'status_update': {
+      const next = foldRun(state, message);
+      // The indicator follows the run's own activity first, then the tasks:
+      // beginning a run is "starting" until it claims, and once none is
+      // running the run is over, whatever the scheduler still holds armed.
+      return { ...next, status: runStatus(next, next.tasks) };
+    }
+    case 'isolation_handoff': {
+      // Announce against the handoff the pane already held (a deferred one for
+      // the same run words the follow-up as the supervisor leaving it), then
+      // fold the fresh handoff into the run view. A child's branch is not the
+      // person's to land: it comes in through its task in the plan above, and
+      // `/merge` here would act on the root.
+      const { repos, landed, deferredTo } = message;
+      const announced = state.child ? state : handoffArrived(state, { repos, landed, ...(deferredTo ? { deferredTo } : {}) });
+      return foldRun(announced, message);
+    }
+    // What Merge all did, folded the way the Session says it: a merge that
+    // leaves the run going keeps the marks (ADR-0020), and only `run_closed`
+    // takes them.
+    case 'isolation_merge':
+      return withoutHandoffOverlay(foldRun(announceMerge(state, message.result, message.trigger !== undefined), message));
+    case 'run_closed':
+      return withoutHandoffOverlay(foldRun(state, message));
+    case 'execution_complete':
+    case 'execution_stopped':
+      return { ...foldRun(heard, message), status: 'idle' };
+    // An edit from another surface or the supervisor: the plan itself is not
+    // re-read, so the patch is all there is to show it by.
+    case 'task_updated':
+    case 'review_needed':
+    case 'review_approved':
+      return foldRun(heard, message);
+  }
 }
 
 /** A plan onto the pane, whether or not it ends a planner turn. */

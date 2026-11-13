@@ -60,7 +60,7 @@ it('follows the latest main model serving a task while old attempts are viewed, 
     { type: 'usage', record: { source: 'opencode', model: 'third-party/old', inputTokens: 500 } },
   ] }).state;
   expect(footer(state).join(' ')).toContain('OpenCode Go 5h 24% used');
-  state = reduce(state, { type: 'taskUpdated', sessionId: 's', taskId: 't', changes: { assignedModel: { modelId: 'third-party/new', modelLabel: 'New' } } }).state;
+  state = reduce(state, { type: 'runMessage', message: { type: 'task_updated', taskId: 't', changes: { assignedModel: { modelId: 'third-party/new', modelLabel: 'New' } } }, sessionId: 's' }).state;
   expect(footer(state).join(' ')).not.toContain('OpenCode Go');
 });
 

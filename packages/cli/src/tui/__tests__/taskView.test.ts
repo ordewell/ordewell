@@ -115,8 +115,9 @@ describe('opening and closing the task view', () => {
   it('takes a live status update\'s attempted mark before any output or usage arrives', () => {
     const base = planned({ tasks: [task({ status: 'pending', attempted: undefined })] });
     const live = reduce(base, {
-      type: 'statusUpdate', sessionId: 's1',
-      tasks: [{ id: 't1', status: 'in_progress', verdict: null, attempted: true }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, attempted: true }] },
+      sessionId: 's1',
     }).state;
     expect(live.tasks[0].attempted).toBe(true);
     expect(reduce(live, { type: 'key', key: key('enter') }).effects).toEqual([
@@ -716,9 +717,9 @@ describe('continuing a finished task (ADR-0018, K1)', () => {
 
   it('keeps the continuable flag in step with the daemon\'s status', () => {
     const base = initialState({ sessionId: 's1', tasks: [task({ status: 'completed' })] });
-    const on = reduce(base, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't1', status: 'completed', verdict: null, continuable: true }] }).state;
+    const on = reduce(base, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'completed', verdict: null, continuable: true }] }, sessionId: 's1' }).state;
     expect(on.tasks[0].continuable).toBe(true);
-    const off = reduce(on, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }).state;
+    const off = reduce(on, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
     expect(off.tasks[0].continuable).toBe(false);
   });
 });

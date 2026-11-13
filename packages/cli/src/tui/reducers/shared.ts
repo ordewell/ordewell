@@ -1,11 +1,21 @@
-import type { AccountLimitSnapshot, AutoMergeTrigger } from '@ordewell/core';
-import type { AiProvider, ChildPlanEntry, ChildPlanView, Escalation, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlanUsage, PlannerUsage, ResearchLogEntry, RunActivity, RunMergeView, RunView, SerializedConversationMessage, SerializedPendingTurn, SerializedTaskStatus, SessionMessage, SettingsResponse, GlobalRunSettings, IsolationMergeResult, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AccountLimitSnapshot } from '@ordewell/core';
+import type { AiProvider, ChildPlanEntry, ChildPlanView, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlannerUsage, ResearchLogEntry, RunView, SerializedConversationMessage, SerializedPendingTurn, SessionMessage, SettingsResponse, GlobalRunSettings, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
-  HandoffView, LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
+  LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
   TuiState,
 } from '../state';
 import { say } from '../transcript';
+
+/**
+ * The session messages that change the run or earn it a line, which the
+ * `runMessage` action carries whole. The rest of the lifecycle stays its own
+ * action: a checkpoint or a log is the task view's, not the run's.
+ */
+export type RunMessage = Extract<SessionMessage, {
+  type: 'status_update' | 'task_started' | 'task_updated' | 'isolation_handoff' | 'isolation_merge' | 'run_closed'
+    | 'review_needed' | 'review_approved' | 'execution_complete' | 'execution_stopped';
+}>;
 
 /** Side effects the runtime performs; the reducer itself stays pure. */
 /** The yes a Merge all carries past what holds it for the user's say (ADR-0055 D9, ADR-0020), each asked on its own. */
@@ -189,20 +199,18 @@ export type Action =
   | { type: 'taskLogLoaded'; position?: StreamStamp; taskId: string; attempts?: number[]; attempt: number; events: TaskLogEvent[]; sessionId?: string }
   /** Open a task's saved log in the chat pane. */
   | { type: 'taskViewRequested'; taskId: string; sessionId: string }
-  | { type: 'taskStarted'; taskId: string; order?: number; title: string; runner?: string; sessionId?: string }
+  /**
+   * A message of the run itself, as the Session sent it: core folds it into the
+   * run and words its notice, the same calls every surface makes (ADR-0017).
+   */
+  | { type: 'runMessage'; message: RunMessage; sessionId?: string }
   /** A task asked a checkpoint question; the chat pane says so, and where to answer. */
-  | { type: 'taskUpdated'; taskId: string; changes: Record<string, unknown>; sessionId?: string }
   | { type: 'taskCheckpoint'; taskId: string; title: string; summary: string; sessionId?: string }
-  /** The run's status stream: folded through core's `reduceRun`, status-only fields and all. */
-  | { type: 'statusUpdate'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[]; sessionId?: string }
   /** The run as the daemon sends it when a socket connects, before the next update. */
   | { type: 'runSnapshot'; view: RunView; approvals?: ApprovalRequestMessage[]; sessionId?: string }
   /** The edit the open planner turn holds, as it would leave the plan; null once it landed or was dropped. */
   | { type: 'isolationBlocked'; message: string; repos?: string[]; sessionId?: string }
-  | { type: 'isolationHandoff'; handoff: HandoffView; sessionId?: string }
   | { type: 'handoffDiff'; diff: string; sessionId?: string }
-  /** The run and its record are gone; nothing is left to hand off or to mark. */
-  | { type: 'isolationMerged'; result: IsolationMergeResult; trigger?: AutoMergeTrigger; sessionId?: string }
   /** A merge request this pane made ended without a merge to answer it (a transport failure), so the next merge result is not its own. */
   | { type: 'mergeAbandoned'; sessionId?: string }
   /**
@@ -211,10 +219,8 @@ export type Action =
    * `message` names them; `given` is the yes the refused request already carried.
    */
   | { type: 'mergeHeld'; message: string; asked: keyof MergeYes; given?: MergeYes; sessionId?: string }
-  | { type: 'runClosed'; sessionId?: string }
   /** The scheduled expiry of an armed stop; the arm simply lapses. */
   | { type: 'stopDisarmed'; arm: number }
-  | { type: 'executionComplete'; summary?: { total: number; completed: number; failed: number; blocked?: number; skipped?: number }; stopped?: boolean; sessionId?: string }
   /** The execution socket dropped before the run reported an end; whatever the pane shows as running no longer has a feed. */
   | { type: 'executionLost'; sessionId?: string }
   /** The session's standing subscription went with the daemon (see `follow` in effects). */

@@ -1,5 +1,5 @@
 import type { ApprovalRequestMessage, RunView, SessionMessage } from '@ordewell/core';
-import { taskStartedNotice } from '@ordewell/core/plan-utils';
+import { runNotice } from '@ordewell/core/plan-utils';
 import type { HostToWebview } from '../shared/protocol';
 import { ConversationViewHost, type SavedConversation } from './ConversationViewHost';
 import { RunViewHost } from './RunViewHost';
@@ -51,6 +51,12 @@ export class SessionView {
 
   receive(msg: SessionMessage): SessionCue | null {
     this.conversation.receive(msg);
+    // Worded before the run folds the message in: a start the run already
+    // shows is a duplicate, and only the run as it stood can tell. The wording
+    // is core's, so the terminal says the same (ADR-0017). There is a button to
+    // approve a plan here, so the sign-off line has nothing to point at.
+    const notice = runNotice(msg, this.run.current);
+    if (notice !== null) this.conversation.note('system', notice);
     // Every message feeds the run view too: the card badges, isolation marks
     // and merge and handoff cards are drawn from it, not from the plan.
     this.run.receive(msg);
@@ -64,7 +70,6 @@ export class SessionView {
         return null;
       case 'task_started':
         this.post({ type: 'taskCommands', taskId: msg.taskId, commands: [] });
-        this.conversation.note('system', taskStartedNotice(msg.title, msg.runner));
         return null;
       // The run view holds each task's status already; the dock reads a
       // plan-level one, which is the host's to keep.

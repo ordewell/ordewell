@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createInbound } from '../inbound';
 import type { WsEvent } from '../../apiClient';
-import { initialState, reduce, type Action } from '../reducer';
+import { initialState, reduce, type Action, type RunMessage } from '../reducer';
 import { findTask, type TaskView, type TuiState } from '../state';
 
 /**
@@ -20,7 +20,7 @@ const loaded = (tasks: unknown[]): TuiState =>
   reduce(initialState({ sessionId: 's1', rows: 30, cols: 100 }), { type: 'planUpdated', plan: plan(tasks), sessionId: 's1' }).state;
 
 const status = (state: TuiState, tasks: unknown[]): TuiState =>
-  reduce(state, { type: 'statusUpdate', tasks: tasks as Extract<Action, { type: 'statusUpdate' }>['tasks'], sessionId: 's1' }).state;
+  reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: tasks as Extract<RunMessage, { type: 'status_update' }>['tasks'] }, sessionId: 's1' }).state;
 
 describe('a plan refresh keeps what the status stream reported', () => {
   it('keeps the checkpoint card and continuable across a refresh', () => {
@@ -104,7 +104,7 @@ describe('a subtask start', () => {
     const parent = task({
       id: 'p', subtasks: [task({ id: 'p1', title: 'Child' })],
     });
-    const started = reduce(loaded([parent]), { type: 'taskStarted', taskId: 'p1', title: 'Child', sessionId: 's1' }).state;
+    const started = reduce(loaded([parent]), { type: 'runMessage', message: { type: 'task_started', taskId: 'p1', order: 1, title: 'Child', runner: 'claude-code' }, sessionId: 's1' }).state;
 
     expect(findTask(started.tasks, 'p1')?.status).toBe('in_progress');
   });

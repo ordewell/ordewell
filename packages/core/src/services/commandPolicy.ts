@@ -45,7 +45,7 @@
 import type { ShellDialect } from './researchShell';
 import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
-import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
+import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, subcommandShifter, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
 import { commandAllowedBy, commandExcludedBy, scopeExcluded, type PlannerAllowlist } from './plannerAllowlist';
 import { EFFECT_REFUSAL_HINT, READ_REFUSAL_HINT, webCommand, wgetVersionCommands } from './webCommands';
@@ -103,7 +103,7 @@ const onlyAction = (...reads: string[]) => (after: string[]): boolean =>
  * it, and `symbolic-ref` with a second name writes, so a flag value counted as
  * a name refuses rather than asks.
  */
-const GIT_PROMPTABLE: Record<string, (after: string[]) => boolean> = {
+const GIT_PROMPTABLE: Record<string, (after: string[], seg: Segment) => boolean> = {
   'ls-remote': () => true,
   'for-each-ref': () => true,
   'show-ref': () => true,
@@ -128,7 +128,9 @@ const GIT_PROMPTABLE: Record<string, (after: string[]) => boolean> = {
   'bisect': onlyAction('log'),
   'sparse-checkout': onlyAction('list'),
   'reflog': onlyAction('show', 'exists'),
-  'symbolic-ref': (after) => after.filter((a) => !a.startsWith('-')).length <= 1,
+  // A second operand writes the ref, and a word the shell may split may be one.
+  'symbolic-ref': (after, seg) => after.filter((a) => !a.startsWith('-')).length <= 1
+    && !after.some((a) => shellRewrites(seg, a)),
   // `-w` writes the object; git's shared flag set keeps it for `git diff -w`.
   'hash-object': (after) => !after.some((a) => /^-[^-]*w/.test(a)),
 };
@@ -839,9 +841,16 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   }
   const subs = REFUSED_SUBCOMMANDS[seg.binary];
   if (subs) {
+    const shifter = subcommandShifter(seg);
+    if (shifter !== undefined) {
+      const written = [seg.binary, scanFlags(seg)?.operands[0]].filter((w) => w !== undefined).join(' ');
+      return `The shell may expand "${shifter}" into several words or none, so "${written}" may run another subcommand than the one written. Spell the words before the subcommand literally, in single quotes where they hold a "*", and re-run.`;
+    }
     const sub = subcommandOf(seg);
-    if (sub && subs.includes(sub)) {
-      return `"${seg.binary} ${sub}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
+    // `npm p*` runs `npm publish` once a file of that name exists.
+    const refused = sub === undefined ? undefined : subs.find((s) => mayExpandTo(seg, sub, s));
+    if (refused) {
+      return `"${seg.binary} ${refused}" changes state or reaches outward. You are a read-only planner: ${EFFECT_ROUTE}`;
     }
   }
   // `git branch`/`git tag` are read-only subcommands, but their delete/move
@@ -863,7 +872,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       if (!reads) {
         return `"git ${sub}" is not a git subcommand known only to read, so it may write the repository. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
-      if (!reads(after)) {
+      if (!reads(after, seg)) {
         return `"git ${[sub, ...after].join(' ')}" is not a read-only form of "git ${sub}". You are a read-only planner: ${EFFECT_ROUTE}`;
       }
     }
@@ -890,7 +899,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
       // rather than a ref name, so it stays read-only.
       const listing = seg.args.includes('-l') || seg.args.includes('--list');
       const scan = scanFlags(seg);
-      const target = scan?.operands[1];
+      // A word the shell may split may put a ref name where none is written.
+      const target = scan?.operands[1] ?? (scan?.spreadAt !== undefined ? seg.args[scan.spreadAt] : undefined);
       if (!listing && target) {
         return `"git ${sub} ${target}" creates or moves a ref. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
@@ -981,9 +991,11 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // `uniq INPUT OUTPUT` writes its second operand. The allowlist cannot see this
   // one, because no flag is involved at all — the write is spelled as a
   // positional argument. Read from the scan rather than filtering the raw
-  // arguments, so `uniq -f 1 names.txt` is one operand and not two.
-  if (seg.binary === 'uniq' && scan && scan.operands.length > 1) {
-    return `"uniq" writes to its second file argument ("${scan.operands[1]}"). You are a read-only planner — pipe the output instead of naming an output file, or describe the write as a task.`;
+  // arguments, so `uniq -f 1 names.txt` is one operand and not two, and a word
+  // the shell may split counts as possibly two: `uniq notes*.txt`.
+  if (seg.binary === 'uniq' && scan && (scan.operands.length > 1 || scan.spreadAt !== undefined)) {
+    const output = scan.operands.length > 1 ? `its second file argument ("${scan.operands[1]}")` : `a second file the shell may expand "${seg.args[scan.spreadAt ?? 0]}" into`;
+    return `"uniq" writes to ${output}. You are a read-only planner — pipe the output instead of naming an output file, or describe the write as a task.`;
   }
   return undefined;
 }

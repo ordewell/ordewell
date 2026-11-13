@@ -211,7 +211,7 @@ describe('answering from the task view', () => {
   });
 
   it('says so, and sends nothing, once the checkpoint settled or was withdrawn', () => {
-    const settled = reduce(opened(), { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
+    const settled = reduce(opened(), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
     expect(plain(settled)).not.toContain('asks');
     for (const name of ['ctrl-y', 'ctrl-g']) {
       const { state, effects } = reduce(settled, key(name));
@@ -219,7 +219,7 @@ describe('answering from the task view', () => {
       expect(lastMessage(state)).toMatchObject({ text: 'Nothing is waiting for approval.' });
     }
 
-    const withdrawn = reduce(opened(), { type: 'statusUpdate', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'input' }], sessionId: 's1' }).state;
+    const withdrawn = reduce(opened(), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'input' }] }, sessionId: 's1' }).state;
     expect(plain(withdrawn)).not.toContain('Task 2 asks');
     expect(reduce(withdrawn, key('ctrl-y')).effects).toEqual([]);
   });
@@ -231,13 +231,13 @@ describe('the question, from the daemon', () => {
     const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'checkpoint', checkpoint: `Drop it?\x1b[2J\n${'x'.repeat(10)}` }] };
     receive(wire as WsEvent);
-    const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');
+    const update = actions.find((a): a is Extract<Action, { type: 'runMessage' }> => a.type === 'runMessage' && a.message.type === 'status_update');
 
     const base = initialState({ sessionId: 's1', focus: 'plan', rows: 20, cols: 180, tasks: [task({ status: 'in_progress', awaitingReason: undefined, checkpoint: undefined })] });
     const waiting = reduce(base, update!).state;
     expect(waiting.tasks[0]).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint', checkpoint: `Drop it?\n${'x'.repeat(10)}` });
 
-    const settled = reduce(waiting, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
+    const settled = reduce(waiting, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
     expect(settled.tasks[0].checkpoint).toBeUndefined();
   });
 

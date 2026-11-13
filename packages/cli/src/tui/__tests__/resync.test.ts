@@ -86,7 +86,7 @@ describe('two sockets on one session during a handover', () => {
     old(status(6));
     await afterGapRead();
 
-    expect(actions.filter((a) => a.type === 'statusUpdate').length).toBe(1);
+    expect(actions.filter((a) => a.type === 'runMessage').length).toBe(1);
     expect(actions.at(-1)).toMatchObject({ type: 'runSnapshot' });
   });
 
@@ -97,7 +97,7 @@ describe('two sockets on one session during a handover', () => {
 
     receive({ type: 'run_snapshot', sessionId: 's1', view, stream: 'd1', seq: 8 } as WsEvent);
 
-    expect(actions.map((a) => a.type)).toEqual(['statusUpdate']);
+    expect(actions.map((a) => a.type)).toEqual(['runMessage']);
   });
 
   it('shows each broadcast once whichever socket delivers it, and two that read the same twice', () => {
@@ -107,7 +107,7 @@ describe('two sockets on one session during a handover', () => {
 
     a(status(1)); b(status(1)); b(status(2)); a(status(2));
 
-    expect(actions.filter((x) => x.type === 'statusUpdate')).toHaveLength(2);
+    expect(actions.filter((x) => x.type === 'runMessage')).toHaveLength(2);
   });
 
   it('starts counting again for a restarted daemon', async () => {
@@ -119,7 +119,7 @@ describe('two sockets on one session during a handover', () => {
     await afterGapRead();
 
     // Shown, though numbered below 7, and the conversation read back: a new daemon's numbers say nothing of what this surface missed.
-    expect(actions.map((a) => a.type)).toEqual(['statusUpdate', 'streamGap', 'statusUpdate']);
+    expect(actions.map((a) => a.type)).toEqual(['runMessage', 'streamGap', 'runMessage']);
   });
 });
 

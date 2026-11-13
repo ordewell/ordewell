@@ -30,7 +30,8 @@ export interface LoopSubject {
   loop?: TaskLoop;
   /** The round of the check's latest run; absent is round 1. */
   loopRound?: number;
-  verdict?: { outcome: string; reported?: string };
+  /** `null` for a task that has none yet: a surface's task shape holds it that way. */
+  verdict?: { outcome: string; reported?: string } | null;
   /** Who skipped it, when it is skipped; a body task skipped by anyone but the loop has stopped the loop (ADR-0045 L7). */
   skipOrigin?: SkipOrigin;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialState, reduce, type Action } from '../reducer';
+import { initialState, reduce, type Action, type RunMessage } from '../reducer';
 import { createInbound } from '../inbound';
 import { chatActivity } from '../layout';
 import { findTask, type TuiState } from '../state';
@@ -15,7 +15,7 @@ const task = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: 'a', order: 1, title: 'A', type: 'ai', status: 'pending', dependencies: [], ...over,
 });
 
-type StatusTasks = Extract<Action, { type: 'statusUpdate' }>['tasks'];
+type StatusTasks = Extract<RunMessage, { type: 'status_update' }>['tasks'];
 
 const apply = (state: TuiState, ...actions: Action[]): TuiState =>
   actions.reduce((s, action) => reduce(s, action).state, state);
@@ -25,7 +25,7 @@ const typed = (state: TuiState, text: string): TuiState => ({ ...state, editor: 
 const running = (): TuiState => apply(
   initialState({ sessionId: 's1', rows: 30, cols: 100 }),
   { type: 'planUpdated', plan: { tasks: [task(), task({ id: 'b', order: 2, title: 'B' })] }, sessionId: 's1' },
-  { type: 'taskStarted', taskId: 'a', title: 'A', sessionId: 's1' },
+  { type: 'runMessage', message: { type: 'task_started', taskId: 'a', order: 1, title: 'A', runner: 'claude-code' }, sessionId: 's1' },
 );
 
 const sentMidRun = (): TuiState => reduce(typed(running(), 'also add a README'), { type: 'key', key: { name: 'enter' } }).state;
@@ -35,7 +35,7 @@ describe('a planner turn sent while a run is going', () => {
     const turn = sentMidRun();
     expect(chatActivity(turn)?.label).toBe('Planning…');
 
-    const updated = apply(turn, { type: 'statusUpdate', tasks: [{ id: 'a', status: 'in_progress', verdict: null }] as StatusTasks, sessionId: 's1' });
+    const updated = apply(turn, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'a', status: 'in_progress', verdict: null }] as StatusTasks }, sessionId: 's1' });
     expect(chatActivity(updated)?.label).toBe('Planning…');
 
     const snapshotted = apply(updated, { type: 'runSnapshot', view: updated.run, sessionId: 's1' });
@@ -43,7 +43,7 @@ describe('a planner turn sent while a run is going', () => {
   });
 
   it('stops on a second Esc, leaving the run alone', () => {
-    const updated = apply(sentMidRun(), { type: 'statusUpdate', tasks: [{ id: 'a', status: 'in_progress', verdict: null }] as StatusTasks, sessionId: 's1' });
+    const updated = apply(sentMidRun(), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'a', status: 'in_progress', verdict: null }] as StatusTasks }, sessionId: 's1' });
     const armed = reduce(updated, { type: 'key', key: { name: 'escape' } }).state;
     const { effects } = reduce(armed, { type: 'key', key: { name: 'escape' } });
 
@@ -51,7 +51,7 @@ describe('a planner turn sent while a run is going', () => {
   });
 
   it('sends now on ctrl-s, interrupting the turn rather than queueing behind it', () => {
-    const updated = apply(sentMidRun(), { type: 'statusUpdate', tasks: [{ id: 'a', status: 'in_progress', verdict: null }] as StatusTasks, sessionId: 's1' });
+    const updated = apply(sentMidRun(), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'a', status: 'in_progress', verdict: null }] as StatusTasks }, sessionId: 's1' });
     const { effects } = reduce(typed(updated, 'use Markdown'), { type: 'key', key: { name: 'ctrl-s' } });
 
     expect(effects).toEqual([{ type: 'forceSendPlannerMessage', sessionId: 's1', message: 'use Markdown' }]);
@@ -61,7 +61,7 @@ describe('a planner turn sent while a run is going', () => {
 describe('the run and the turn end on their own', () => {
   it('the run ending does not end a planner turn still out', () => {
     const queued = reduce(typed(sentMidRun(), 'and a CHANGELOG'), { type: 'key', key: { name: 'enter' } }).state;
-    const { state, effects } = reduce(queued, { type: 'executionComplete', summary: { total: 2, completed: 2, failed: 0 }, sessionId: 's1' });
+    const { state, effects } = reduce(queued, { type: 'runMessage', message: { type: 'execution_complete', summary: { total: 2, completed: 2, failed: 0, blocked: 0, skipped: 0 } }, sessionId: 's1' });
 
     expect(state.status).toBe('idle');
     expect(chatActivity(state)?.label).toBe('Planning…');

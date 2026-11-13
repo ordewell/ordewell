@@ -30,7 +30,7 @@ const lines = (state: TuiState): string => planLayout(state, 40, 100).lines.join
 
 const delegation = { tasks: { completed: 2, running: 1, waiting: 0, pending: 1, failed: 0, skipped: 0 }, tokens: { budget: 2_000_000, left: 1_300_000 } };
 const update = (state: TuiState, over: Record<string, unknown>): TuiState =>
-  reduce(state, { type: 'statusUpdate', tasks: [{ id: 'd', status: 'in_progress', verdict: null, ...over }], sessionId: 's1' }).state;
+  reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'd', status: 'in_progress', verdict: null, ...over }] }, sessionId: 's1' }).state;
 
 describe('a delegated task in the plan pane', () => {
   it('stays a delegated task, with its goal', () => {
