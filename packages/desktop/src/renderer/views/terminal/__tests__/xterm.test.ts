@@ -32,7 +32,15 @@ afterEach(() => {
 
 async function terminal(mac: boolean): Promise<{ press(chord: Chord): { sent: string[]; prevented: boolean } }> {
   const sent: string[] = [];
-  handle = await createTerm({ onData: (data) => sent.push(data), onLink: () => undefined, screenReaderMode: false }, mac);
+  handle = await createTerm({
+    onData: (data) => sent.push(data),
+    onLink: () => undefined,
+    screenReaderMode: false,
+    // Nothing here reads or writes the clipboard; a rejection is what a failed bridge call looks like.
+    readClipboard: () => Promise.reject(new Error('no clipboard in this test')),
+    writeClipboard: () => Promise.reject(new Error('no clipboard in this test')),
+    onClipboardError: () => undefined,
+  }, mac);
   const parent = document.createElement('div');
   document.body.append(parent);
   handle.mount(parent);
