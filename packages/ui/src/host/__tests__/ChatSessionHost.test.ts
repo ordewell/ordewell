@@ -1,19 +1,38 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { DaemonErrorCode } from '@ordewell/core';
+import { createTask, type DaemonErrorCode, type ExecutionCommand, type Task, type TaskRevertPreview } from '@ordewell/core';
 import { ChatSessionHost, type ChatTurn, type SessionPort, type TurnOutcome } from '../ChatSessionHost';
+import type { ConfirmationRequest } from '../confirmations';
 import { ConversationViewHost } from '../ConversationViewHost';
+import { TaskActions } from '../TaskControls';
 import type { HostToWebview } from '../../protocol';
 
 /**
  * A session the test drives: `busy` is the turn the surface saw open, and
- * each turn it is asked for is answered with what `answer` returns.
+ * each turn it is asked for is answered with what `answer` returns. The task
+ * controls record what reached the seam, what the user was asked and what was
+ * refused, and answer from `state`.
  */
 function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise<TurnOutcome> = () => ({ ok: true })) {
   const posts: HostToWebview[] = [];
   const conversation = new ConversationViewHost((msg) => posts.push(msg));
   const notes = vi.spyOn(conversation, 'note');
   const turns: { text: string; turn: ChatTurn }[] = [];
-  const state = { busy: false, answering: 0 };
+  const state = {
+    busy: false,
+    answering: 0,
+    tasks: [] as Task[],
+    advances: false,
+    gate: [] as string[],
+    preview: { revertible: true, tasks: [] } as TaskRevertPreview,
+    /** What the user does with a question: the one choice offered, or a dismissal as the surface says it. */
+    reply: 'accept' as 'accept' | null | undefined,
+    /** What the seam says to a command, thrown in its own words. */
+    seamRefuses: undefined as string | undefined,
+  };
+  const executed: ExecutionCommand[] = [];
+  const asked: ConfirmationRequest[] = [];
+  const refused: string[] = [];
+  const events: string[] = [];
   const port: SessionPort = {
     generating: () => state.busy || state.answering > 0,
     answering: () => state.answering > 0,
@@ -26,10 +45,33 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
         state.answering -= 1;
       }
     },
+    tasks: () => state.tasks,
+    advancesOnItsOwn: () => state.advances,
+    mergeGate: vi.fn(async () => state.gate),
+    revertPreview: vi.fn(async () => state.preview),
+    execute: async (command) => {
+      events.push(`execute ${command.command}`);
+      if (state.seamRefuses) throw new Error(state.seamRefuses);
+      executed.push(command);
+    },
+    ask: async (request) => {
+      asked.push(request);
+      return state.reply === 'accept' ? request.choices[0]?.id : state.reply;
+    },
+    starting: async (start) => {
+      events.push('starting');
+      await start();
+    },
+    refuse: (error) => { refused.push(error instanceof Error ? error.message : String(error)); },
+    executePlan: vi.fn(async () => undefined),
+    stopped: () => { events.push('stopped'); },
+    cancelPlannerResend: vi.fn(async () => undefined),
+    retryPlannerCompaction: vi.fn(async () => undefined),
+    settled: vi.fn(),
   };
   const chat = new ChatSessionHost(conversation, port);
   return {
-    chat, conversation, state, turns,
+    chat, conversation, state, turns, port, executed, asked, refused, events,
     sent: () => turns.map((t) => [t.text, t.turn.now]),
     held: () => posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts').at(-1)?.prompts ?? [],
     unsent: () => posts.flatMap((m) => (m.type === 'promptUnsent' ? [m.text] : [])),
@@ -180,5 +222,350 @@ describe('ChatSessionHost', () => {
     await forced;
 
     expect(order).toEqual(['forced', 'sent typed meanwhile with use Postgres given back']);
+  });
+});
+
+const ai = (id: string, order: number, title: string, overrides: Partial<Task> = {}): Task => createTask({ id, order, title, ...overrides });
+
+describe('ChatSessionHost system commands', () => {
+  describe('the one-command actions', () => {
+    it.each([
+      ['cancel', { command: 'stop_task', task: 't1' }],
+      ['cancelResume', { command: 'cancel_resume', task: 't1' }],
+      ['resumeNow', { command: 'retry_task', task: 't1', from: 'session' }],
+      ['retry', { command: 'retry_task', task: 't1', from: 'fresh' }],
+      // Skip lands nothing, so it is never a mark: it carries no override and asks nothing.
+      ['skip', { command: 'skip_task', task: 't1' }],
+    ] as const)('%s is that one command at the seam, asked of no one', async (command, sent) => {
+      const h = harness();
+
+      await h.chat.systemCommand(command, 't1');
+
+      expect(h.executed).toEqual([sent]);
+      expect(h.asked).toEqual([]);
+      expect(h.refused).toEqual([]);
+    });
+  });
+
+  describe('Mark complete and Mark not done (ADR-0029)', () => {
+    it('signs off a manual task for the user, asking nothing', async () => {
+      const h = harness();
+      h.state.tasks = [ai('t1', 1, 'Review by hand', { type: 'user' })];
+
+      await h.chat.systemCommand('markComplete', 't1');
+
+      expect(h.executed).toEqual([{ command: 'mark_complete', task: 't1' }]);
+      expect(h.asked).toEqual([]);
+    });
+
+    it('asks first about an AI task, naming it, and sends the yes with the status the user was asked about', async () => {
+      const h = harness();
+      h.state.tasks = [ai('t1', 1, 'Build')];
+
+      await h.chat.systemCommand('markComplete', 't1');
+
+      expect(h.asked).toHaveLength(1);
+      expect(h.asked[0]).toMatchObject({ kind: 'manual_override', choices: [{ id: 'override', label: 'Mark complete' }] });
+      expect(h.asked[0]?.message).toContain('#1 Build');
+      expect(h.executed).toEqual([{ command: 'mark_complete', task: 't1', confirmed: true, seen: 'pending' }]);
+    });
+
+    it('finds a subtask by walking the plan, and names it by its dotted ref', async () => {
+      const h = harness();
+      h.state.tasks = [ai('parent', 1, 'Parent', { subtasks: [ai('child', 1, 'Child', { status: 'completed' })] })];
+
+      await h.chat.systemCommand('markIncomplete', 'child');
+
+      expect(h.asked[0]?.message).toContain('#1.1 Child');
+      expect(h.executed).toEqual([{ command: 'mark_not_done', task: 'child', confirmed: true, seen: 'completed' }]);
+      expect(h.asked[0]?.choices).toEqual([{ id: 'override', label: 'Mark not done' }]);
+    });
+
+    it.each([['null', null], ['undefined', undefined]])('overrides nothing when the dialog is dismissed (%s)', async (_surface, reply) => {
+      const h = harness();
+      h.state.tasks = [ai('t1', 1, 'Build')];
+      h.state.reply = reply;
+
+      await h.chat.systemCommand('markComplete', 't1');
+
+      expect(h.asked).toHaveLength(1);
+      expect(h.executed).toEqual([]);
+      expect(h.refused).toEqual([]);
+    });
+
+    it('says to stop the run first while one could move the task on, and asks nothing', async () => {
+      const h = harness();
+      h.state.tasks = [ai('t1', 1, 'Build')];
+      h.state.advances = true;
+
+      await h.chat.systemCommand('markIncomplete', 't1');
+
+      expect(h.asked).toEqual([]);
+      expect(h.executed).toEqual([]);
+      expect(h.refused).toHaveLength(1);
+      expect(h.refused[0]).toContain('Task #1 Build cannot be marked not done');
+      expect(h.refused[0]).toContain('Stop the run first');
+    });
+
+    it('leaves a task the plan does not hold to the seam, which names what it refuses', async () => {
+      const h = harness();
+      h.state.seamRefuses = 'No task ghost.';
+
+      await h.chat.systemCommand('markComplete', 'ghost');
+
+      expect(h.asked).toEqual([]);
+      expect(h.refused).toEqual(['No task ghost.']);
+    });
+
+    it('tells the user in the seam\'s words when the task moved on while the dialog was open', async () => {
+      const h = harness();
+      h.state.tasks = [ai('t1', 1, 'Build')];
+      h.state.seamRefuses = 'Task t1 has changed since you were asked.';
+
+      await h.chat.systemCommand('markComplete', 't1');
+
+      expect(h.refused).toEqual(['Task t1 has changed since you were asked.']);
+      expect(h.port.settled).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('Revert (ADR-0054)', () => {
+    const preview: TaskRevertPreview = {
+      revertible: true,
+      tasks: [
+        { taskId: 't2', order: 2, title: 'Fix', repos: ['.'], dependent: false },
+        { taskId: 't3', order: 3, title: 'Docs', repos: ['.'], dependent: true },
+      ],
+    };
+
+    it('shows what goes with the task, and the yes carries the ids the user was shown', async () => {
+      const h = harness();
+      h.state.preview = preview;
+
+      await h.chat.systemCommand('revertTask', 't2');
+
+      expect(h.port.revertPreview).toHaveBeenCalledWith('t2');
+      expect(h.asked).toHaveLength(1);
+      expect(h.asked[0]).toMatchObject({ kind: 'revert_task', choices: [{ id: 'revert', label: 'Revert' }] });
+      expect(h.asked[0]?.detail).toContain('#3 Docs (goes with it)');
+      expect(h.executed).toEqual([{ command: 'revert_task', task: 't2', confirmed: true, seen: ['t2', 't3'] }]);
+    });
+
+    it.each([['null', null], ['undefined', undefined]])('reverts nothing when the dialog is dismissed (%s)', async (_surface, reply) => {
+      const h = harness();
+      h.state.preview = preview;
+      h.state.reply = reply;
+
+      await h.chat.systemCommand('revertTask', 't2');
+
+      expect(h.executed).toEqual([]);
+      expect(h.refused).toEqual([]);
+    });
+
+    it('says core\'s reason a task cannot be reverted, and asks nothing', async () => {
+      const h = harness();
+      h.state.preview = { revertible: false, reason: 'no-landing', message: 'Nothing of this task has landed.' };
+
+      await h.chat.systemCommand('revertTask', 't2');
+
+      expect(h.asked).toEqual([]);
+      expect(h.executed).toEqual([]);
+      expect(h.refused).toEqual(['Nothing of this task has landed.']);
+    });
+
+    it('says a revert the seam refuses after the yes, such as a plan that changed meanwhile', async () => {
+      const h = harness();
+      h.state.preview = preview;
+      h.state.seamRefuses = 'The plan changed since you were shown the revert.';
+
+      await h.chat.systemCommand('revertTask', 't2');
+
+      expect(h.refused).toEqual(['The plan changed since you were shown the revert.']);
+    });
+  });
+
+  describe('Force start and Run past a merge gate (ADR-0020)', () => {
+    it('asks naming the unmerged work as the plan titles it, and force starts on a yes, as a start', async () => {
+      const h = harness();
+      h.state.tasks = [ai('fix', 1, 'Fix'), ai('ops', 2, 'Deploy', { dependencies: ['fix'] })];
+      h.state.gate = ['fix', 'ghost'];
+
+      await h.chat.systemCommand('forceStart', 'ops');
+
+      expect(h.asked).toHaveLength(1);
+      expect(h.asked[0]).toMatchObject({ kind: 'start_past_gate', choices: [{ id: 'start', label: 'Start anyway' }] });
+      // An id the plan does not hold stays bare, as it is.
+      expect(h.asked[0]?.message).toContain('the work of #1 Fix, ghost is not merged into your branch yet');
+      expect(h.events).toEqual(['starting', 'execute force_start']);
+      expect(h.executed).toEqual([{ command: 'force_start', task: 'ops' }]);
+    });
+
+    it.each([['null', null], ['undefined', undefined]])('starts nothing, and clears nothing, when the dialog is dismissed (%s)', async (_surface, reply) => {
+      const h = harness();
+      h.state.gate = ['fix'];
+      h.state.reply = reply;
+
+      await h.chat.systemCommand('forceStart', 'ops');
+
+      expect(h.events).toEqual([]);
+      expect(h.executed).toEqual([]);
+    });
+
+    it('asks nothing of a task no gate holds', async () => {
+      const h = harness();
+
+      await h.chat.systemCommand('forceStart', 'ops');
+
+      expect(h.asked).toEqual([]);
+      expect(h.executed).toEqual([{ command: 'force_start', task: 'ops' }]);
+      expect(h.events).toEqual(['starting', 'execute force_start']);
+    });
+
+    it('says a start the seam refused, from inside the start the surface wrapped', async () => {
+      const h = harness();
+      h.state.seamRefuses = 'Another task is starting.';
+
+      await h.chat.systemCommand('forceStart', 'ops');
+
+      expect(h.events).toEqual(['starting', 'execute force_start']);
+      expect(h.refused).toEqual(['Another task is starting.']);
+    });
+
+    it('Run on a gated task is a force start, asked first, off the one read of the gate', async () => {
+      const h = harness();
+      h.state.tasks = [ai('fix', 1, 'Fix')];
+      h.state.gate = ['fix'];
+
+      await h.chat.systemCommand('runTask', 'ops');
+
+      expect(h.port.mergeGate).toHaveBeenCalledTimes(1);
+      expect(h.asked).toHaveLength(1);
+      expect(h.executed).toEqual([{ command: 'force_start', task: 'ops' }]);
+    });
+
+    it('Run on a gated task starts nothing when the user says no', async () => {
+      const h = harness();
+      h.state.gate = ['fix'];
+      h.state.reply = null;
+
+      await h.chat.systemCommand('runTask', 'ops');
+
+      expect(h.executed).toEqual([]);
+    });
+
+    it('Run on an ungated task is run_task as a start, asking nothing', async () => {
+      const h = harness();
+
+      await h.chat.systemCommand('runTask', 'ops');
+
+      expect(h.asked).toEqual([]);
+      expect(h.events).toEqual(['starting', 'execute run_task']);
+      expect(h.executed).toEqual([{ command: 'run_task', task: 'ops' }]);
+    });
+
+    it('a force start given a gate its caller already read does not read it again', async () => {
+      const h = harness();
+      h.state.tasks = [ai('fix', 1, 'Fix')];
+
+      await new TaskActions(h.port).forceStart('ops', ['fix']);
+
+      expect(h.port.mergeGate).not.toHaveBeenCalled();
+      expect(h.asked).toHaveLength(1);
+    });
+  });
+
+  describe('the run-wide controls', () => {
+    it('stops the run at the seam, then lets the surface stop what it holds of it', async () => {
+      const h = harness();
+
+      await h.chat.systemCommand('stopExecution', '');
+
+      expect(h.events).toEqual(['execute stop_run', 'stopped']);
+      expect(h.executed).toEqual([{ command: 'stop_run' }]);
+    });
+
+    it('keeps the surface\'s run when the seam refuses the stop', async () => {
+      const h = harness();
+      h.state.seamRefuses = 'The run could not be stopped.';
+
+      await h.chat.systemCommand('stopExecution', '');
+
+      expect(h.events).toEqual(['execute stop_run']);
+      expect(h.refused).toEqual(['The run could not be stopped.']);
+    });
+
+    it('hands Execute the request it answers, for the surface to settle', async () => {
+      const h = harness();
+
+      await h.chat.systemCommand('executePlan', '', 7);
+
+      expect(h.port.executePlan).toHaveBeenCalledWith(7);
+      expect(h.executed).toEqual([]);
+    });
+
+    it('cancels a planner resend and retries a compaction through the surface', async () => {
+      const h = harness();
+
+      await h.chat.systemCommand('cancelPlannerResend', '');
+      await h.chat.systemCommand('retryPlannerCompaction', '');
+
+      expect(h.port.cancelPlannerResend).toHaveBeenCalledOnce();
+      expect(h.port.retryPlannerCompaction).toHaveBeenCalledOnce();
+      expect(h.executed).toEqual([]);
+    });
+
+    it('says a refused retry as any control\'s refusal', async () => {
+      const h = harness();
+      vi.mocked(h.port.retryPlannerCompaction).mockRejectedValueOnce(new Error('The planner is not paused on its context.'));
+
+      await h.chat.systemCommand('retryPlannerCompaction', '');
+
+      expect(h.refused).toEqual(['The planner is not paused on its context.']);
+    });
+  });
+
+  describe('however a command ends', () => {
+    it.each(['skip', 'markComplete', 'revertTask', 'forceStart', 'runTask', 'stopExecution', 'executePlan', 'retryPlannerCompaction', 'nothing-we-know'])(
+      'draws the plan from what the session holds after %s, whether it landed, was refused or threw',
+      async (command) => {
+        const landed = harness();
+        await landed.chat.systemCommand(command, 't1');
+        expect(landed.port.settled).toHaveBeenCalledOnce();
+
+        const threw = harness();
+        threw.state.seamRefuses = 'refused';
+        vi.mocked(threw.port.mergeGate).mockRejectedValue(new Error('refused'));
+        vi.mocked(threw.port.revertPreview).mockRejectedValue(new Error('refused'));
+        vi.mocked(threw.port.executePlan).mockRejectedValue(new Error('refused'));
+        vi.mocked(threw.port.retryPlannerCompaction).mockRejectedValue(new Error('refused'));
+        await expect(threw.chat.systemCommand(command, 't1')).resolves.toBeUndefined();
+        expect(threw.refused).toEqual(command === 'nothing-we-know' ? [] : ['refused']);
+        expect(threw.port.settled).toHaveBeenCalledOnce();
+      },
+    );
+
+    it('ignores a command it does not know, which a newer webview may send', async () => {
+      const h = harness();
+
+      await h.chat.systemCommand('nothing-we-know', 't1');
+
+      expect(h.executed).toEqual([]);
+      expect(h.asked).toEqual([]);
+      expect(h.refused).toEqual([]);
+    });
+
+    it('is not a turn: what was typed meanwhile waits for the surface to release it', async () => {
+      const h = harness();
+      h.state.busy = true;
+      h.chat.hold('and add tests');
+      h.state.busy = false;
+
+      await h.chat.systemCommand('skip', 't1');
+      expect(h.turns).toEqual([]);
+      expect(h.held()).toEqual(['and add tests']);
+
+      await h.chat.release();
+      expect(h.sent()).toEqual([['and add tests', false]]);
+    });
   });
 });

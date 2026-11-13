@@ -1,16 +1,15 @@
 import type {
-  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, MergeGateResponse, PlanResponse, RunnerId, RunTask,
+  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
   SessionHeld, SessionMessage, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  checkoutRule, confirmedOverride, DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
-  ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
+  checkoutRule, DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, mergeTarget, ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
   ChatSessionHost, DaemonSessionStream, SessionView, discardRunConfirmation, mergeAllConfirmation, mergeBesideOpsQuestion, mergePastChecksQuestion,
-  overrideConfirmation, removeTaskConfirmation, revertConfirmation, runSettingRiskConfirmations, startPastGateConfirmation,
+  removeTaskConfirmation, runSettingRiskConfirmations,
   type ConfirmationRequest, type DaemonFrame, type DaemonSessionState, type SessionCue, type TurnOutcome,
 } from '@ordewell/ui/host';
 import {
@@ -139,14 +138,6 @@ export interface DaemonHostOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
-
-const SYSTEM_TASK_ACTIONS = {
-  cancel: 'cancel',
-  cancelResume: 'cancel-resume',
-  resumeNow: 'resume-now',
-  retry: 'retry',
-  skip: 'skip',
-} as const;
 
 /** What a read-only view may still ask: local navigation, the catalog, and leaving for a new session. */
 const READ_ONLY_ALLOWED: ReadonlySet<WebviewToHost['type']> = new Set<WebviewToHost['type']>([
@@ -304,6 +295,19 @@ export class DaemonHost {
       generating: () => this.generating,
       answering: () => this.turnsIn(this.sessionId) > 0,
       converse: (text, turn) => this.turn(text, turn.now, turn.runners),
+      tasks: () => this.planTasks(),
+      advancesOnItsOwn: () => this.view.run.current.activity?.advancesOnItsOwn === true,
+      mergeGate: async (taskId) => (await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId })).mergeGate.map((t) => t.id),
+      revertPreview: (taskId) => callDaemon('plans.revertPreview', { sessionId: this.sessionId, taskId }),
+      execute: (command) => this.execute(command),
+      ask: (request) => this.ask(request),
+      starting: (start) => this.startingRun(start),
+      refuse: (error) => this.showError(error),
+      executePlan: (requestId) => this.executePlan(requestId),
+      stopped: () => this.emit({ type: 'setState', state: 'planDraft' }),
+      cancelPlannerResend: async () => { await callDaemon('plans.cancelResend', { sessionId: this.sessionId }); },
+      retryPlannerCompaction: async () => { await callDaemon('plans.retryCompact', { sessionId: this.sessionId }); },
+      settled: () => this.refreshPlan(),
     });
     this.agents = new AgentDetection(workspace, (msg) => this.emit(msg), options.detectionTimeoutMs, () => this.sessionId);
     const sessionId = mintSessionId();
@@ -912,7 +916,7 @@ export class DaemonHost {
         await this.planEdit(callDaemon('plans.addTask', { sessionId: this.sessionId }, msg.draft));
         return;
       case 'sendSystemCommand': {
-        await this.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
+        await this.chat.systemCommand(msg.command, msg.taskId ?? '', msg.requestId);
         // A Retry compaction is a planner turn the chat did not send, so no
         // turn() of ours ends to release what was typed while it ran.
         await this.chat.release();
@@ -1362,54 +1366,6 @@ export class DaemonHost {
     });
   }
 
-  private async systemCommand(command: string, taskId: string, requestId: number | undefined): Promise<void> {
-    try {
-      switch (command) {
-        case 'cancel':
-        case 'cancelResume':
-        case 'resumeNow':
-        case 'retry':
-        case 'skip':
-          await this.execute(taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
-          break;
-        case 'markComplete':
-          await this.markByHand('complete', taskId);
-          break;
-        case 'markIncomplete':
-          await this.markByHand('uncomplete', taskId);
-          break;
-        case 'revertTask':
-          await this.revert(taskId);
-          break;
-        case 'forceStart':
-          await this.forceStart(taskId);
-          break;
-        case 'runTask': {
-          const gate = await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId });
-          // The seam's run_task refuses a gated task: a start past the gate is a force start, confirmed first.
-          if (gate.mergeGate.length > 0) await this.forceStart(taskId, gate);
-          else await this.start(taskActionCommand('run', taskId));
-          break;
-        }
-        case 'executePlan':
-          await this.executePlan(requestId);
-          break;
-        case 'stopExecution':
-          await this.execute({ command: 'stop_run' });
-          this.emit({ type: 'setState', state: 'planDraft' });
-          break;
-        case 'cancelPlannerResend':
-          await callDaemon('plans.cancelResend', { sessionId: this.sessionId });
-          break;
-        case 'retryPlannerCompaction':
-          await callDaemon('plans.retryCompact', { sessionId: this.sessionId });
-          break;
-      }
-    } finally {
-      this.refreshPlan();
-    }
-  }
-
   /** Approve and run the plan, or, with a run under way, approve what waits for approval (#95). */
   private async executePlan(requestId: number | undefined): Promise<void> {
     try {
@@ -1424,44 +1380,6 @@ export class DaemonHost {
       const activity = this.view.run.current.activity;
       if (activity) this.emit({ type: 'runActivity', activity, ...(requestId !== undefined ? { requestId } : {}) });
     }
-  }
-
-  /**
-   * Mark complete and Mark not done vouch for work no verdict passed, so an AI
-   * or script task's override is asked in a real modal first and the yes goes
-   * with the status it was asked about (ADR-0029). A manual task's is the
-   * user's own sign-off and asks nothing.
-   */
-  private async markByHand(direction: OverrideDirection, taskId: string): Promise<void> {
-    const command = taskActionCommand(direction, taskId);
-    const { tasks, task } = this.planTask(taskId);
-    if (!task || !overrideNeedsConfirmation(task)) { await this.execute(command); return; }
-    const label = `task ${titledTaskRefOf(tasks, taskId) ?? taskId}`;
-    if (this.view.run.current.activity?.advancesOnItsOwn) throw new Error(manualOverrideStopFirst(direction, label));
-    if (await this.ask(overrideConfirmation(direction, label)) !== 'override') return;
-    await this.execute(confirmedOverride(command, task.status));
-  }
-
-  /** ADR-0054: the preview names what goes with it, and the yes carries the ids the user was shown. */
-  private async revert(taskId: string): Promise<void> {
-    const preview = await callDaemon('plans.revertPreview', { sessionId: this.sessionId, taskId });
-    if (!preview.revertible) throw new Error(preview.message);
-    if (await this.ask(revertConfirmation(preview, taskId)) !== 'revert') return;
-    await this.execute({ command: 'revert_task', task: taskId, confirmed: true, seen: preview.tasks.map((t) => t.taskId) });
-  }
-
-  private async forceStart(taskId: string, known?: MergeGateResponse): Promise<void> {
-    const gate = known ?? await callDaemon('plans.mergeGate', { sessionId: this.sessionId, taskId });
-    if (gate.mergeGate.length > 0) {
-      const named = titledRefs(gate.mergeGate.map((t) => t.id), this.view.run.current.tasks);
-      if (await this.ask(startPastGateConfirmation(named)) !== 'start') return;
-    }
-    await this.start(taskActionCommand('force-start', taskId));
-  }
-
-  /** A start reopens the run whose cards its last end left up. */
-  private async start(command: ExecutionCommand): Promise<void> {
-    await this.startingRun(() => this.execute(command));
   }
 
   /**
@@ -1481,10 +1399,14 @@ export class DaemonHost {
     }
   }
 
-  /** The plan's own task, as the chat's cards were drawn from it: the run view's copy carries less. */
-  private planTask(taskId: string): { tasks: Task[]; task: Task | undefined } {
+  /** The plan's own tasks, as the chat's cards were drawn from them: the run view's copy carries less. */
+  private planTasks(): Task[] {
     // A surface plan's tasks are the plan's tasks as sent: the cast names them so (ui's App does the same).
-    const tasks = (this.snapshot.state.plan?.tasks ?? []) as Task[];
+    return (this.snapshot.state.plan?.tasks ?? []) as Task[];
+  }
+
+  private planTask(taskId: string): { tasks: Task[]; task: Task | undefined } {
+    const tasks = this.planTasks();
     return { tasks, task: [...walkPlan(tasks)].find((placed) => placed.task.id === taskId)?.task };
   }
 

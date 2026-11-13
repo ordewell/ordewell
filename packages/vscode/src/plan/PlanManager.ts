@@ -3,8 +3,8 @@ import { latestTaskCommands } from '../shared/taskCommands';
 import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
-  createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, titledRefs, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  taskActionCommand, confirmedOverride, manualOverrideStopFirst, overrideNeedsConfirmation, titledTaskRefOf, type ExecutionCommand, type OverrideDirection, type TaskAction,
+  createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
+  type ExecutionCommand, type OverrideDirection,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
@@ -12,7 +12,7 @@ import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
 import {
-  overrideConfirmation, removeTaskConfirmation, revertConfirmation, startPastGateConfirmation, type SessionCue, type TurnOutcome,
+  removeTaskConfirmation, TaskActions, TaskControls, type SessionCue, type TaskActionPort, type TaskControlPort, type TurnOutcome,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
 import { handleIsolationBlocked } from './isolation';
@@ -530,14 +530,71 @@ export function handleNewSession(deps: Pick<PlanManagerDeps,
 }
 
 /**
- * A force start or a single-task run passes a merge gate (ADR-0020) once the
- * user has seen, in a real modal, which work the task would act without. True
- * when nothing gates the task or the user went ahead.
+ * The extension's side of a task's by-hand actions (ADR-0029, ADR-0020,
+ * ADR-0054): the in-process Session as the command seam, and real modals to ask
+ * in. What to ask and when lives in `@ordewell/ui/host`, shared with the desktop.
  */
-export async function confirmPastGate(taskId: string, session: Pick<Session, 'mergeGate' | 'planState'>): Promise<boolean> {
-  const unmerged = session.mergeGate(taskId);
-  if (unmerged.length === 0) return true;
-  return (await confirm(startPastGateConfirmation(titledRefs(unmerged, session.planState?.tasks ?? [])))) === 'start';
+export function taskActionPort(deps: Pick<PlanManagerDeps, 'session'> & Partial<Pick<PlanManagerDeps, 'chatProvider'>>): TaskActionPort {
+  return {
+    tasks: () => deps.session.planState?.tasks ?? [],
+    // The seam's own guard, not a narrower reading of it.
+    advancesOnItsOwn: () => deps.session.activity.advancesOnItsOwn,
+    mergeGate: async (taskId) => deps.session.mergeGate(taskId),
+    revertPreview: (taskId) => deps.session.revertPreview(taskId),
+    execute: (command) => executeUserCommand(deps.session, command),
+    ask: confirm,
+    // A start reopens the run whose cards its last end left up. Cleared only once
+    // the seam accepts it: a refused start replaced no run, and the Session still
+    // holds every mark and the handoff.
+    // The chat is only a start's: a mark or a revert never reads it.
+    starting: async (start) => {
+      await start();
+      deps.chatProvider?.clearIsolationHandoff();
+    },
+    refuse: showRefusal,
+  };
+}
+
+export function taskControlPort(deps: PlanManagerDeps): TaskControlPort {
+  return {
+    ...taskActionPort(deps),
+    executePlan: (requestId) => handleApprovePlan(deps, requestId),
+    stopped: () => {
+      deps.runner.stopAll();
+      deps.chatProvider.setState('planDraft');
+    },
+    cancelPlannerResend: async () => { deps.session.cancelPlannerResend(); },
+    // A planner turn: it streams to the chat as any does, and fails as one.
+    retryPlannerCompaction: async () => {
+      try {
+        // The retry is a planner turn too, and the signed-out refusal's
+        // login runs outside this host: ask the account again before the
+        // session's gate judges.
+        const recheck = recheckSignedOutPlanner(deps);
+        if (recheck) await recheck;
+        await deps.session.retryPlannerCompaction();
+      } catch (err) {
+        reportPlannerError(err, deps);
+      }
+    },
+    settled: () => {
+      deps.chatProvider.showPlan(deps.getCurrentPlan());
+      deps.persistState();
+    },
+  };
+}
+
+/**
+ * Mark complete and Mark not done, from the card and from the command palette
+ * alike (ADR-0029).
+ */
+export function markTaskByHand(direction: OverrideDirection, taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
+  return new TaskActions(taskActionPort(deps)).markByHand(direction, taskId);
+}
+
+/** Revert a task's landed work from its card (ADR-0054). */
+export function revertTaskByHand(taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
+  return new TaskActions(taskActionPort(deps)).revert(taskId);
 }
 
 /**
@@ -545,148 +602,12 @@ export async function confirmPastGate(taskId: string, session: Pick<Session, 'me
  * seen named. One path for the plan pane and the command palette, so the
  * start clears a handoff the same way from either.
  */
-export async function forceStartPastGate(taskId: string, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>): Promise<void> {
-  if (!(await confirmPastGate(taskId, deps.session))) return;
-  await startTask(deps, taskActionCommand('force-start', taskId));
+export function forceStartPastGate(taskId: string, deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>): Promise<void> {
+  return new TaskActions(taskActionPort(deps)).forceStart(taskId);
 }
 
-/**
- * Mark complete and Mark not done, from the card and from the command palette
- * alike (ADR-0029). An AI or script task's override vouches for work no verdict
- * passed, so a real modal explains it first and the seam gets the user's yes on
- * the command; the core refuses it anyway while a run could advance the task,
- * and the modal is not offered then. A manual task's is the user's own sign-off
- * and asks nothing. The task is named by id and the status the user was asked
- * about travels with the yes, so a task that moved on while the modal was open
- * is refused rather than overridden.
- */
-export async function markTaskByHand(direction: OverrideDirection, taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
-  const { session } = deps;
-  const tasks = session.planState?.tasks ?? [];
-  const task = flattenTasks(tasks).find((t) => t.id === taskId);
-  const command = taskActionCommand(direction, taskId);
-  if (!task || !overrideNeedsConfirmation(task)) {
-    await executeUserCommand(session, command);
-    return;
-  }
-  const label = `task ${titledTaskRefOf(tasks, taskId) ?? taskId}`;
-  // The seam's own guard, not a narrower reading of it: a queued force start or
-  // a usage-limit hold refuses an override too, though nothing is starting,
-  // running or scheduled (ADR-0029).
-  if (session.activity.advancesOnItsOwn) {
-    showRefusal(new Error(manualOverrideStopFirst(direction, label)));
-    return;
-  }
-  if (!(await confirm(overrideConfirmation(direction, label)))) return;
-  await executeUserCommand(session, confirmedOverride(command, task.status));
-}
-
-/**
- * Revert a task's landed work (ADR-0054), from its card. Core's preview says
- * what goes with it, or why nothing does, and a real modal shows that list
- * (a `confirm()` in the webview would never fire). The yes carries the ids the
- * user was shown, so a plan that changed meanwhile is refused, not reverted.
- * A refusal at any point is core's own words.
- */
-export async function revertTaskByHand(taskId: string, deps: Pick<PlanManagerDeps, 'session'>): Promise<void> {
-  const { session } = deps;
-  const preview = await session.revertPreview(taskId);
-  if (!preview.revertible) {
-    showRefusal(new Error(preview.message));
-    return;
-  }
-  if (!(await confirm(revertConfirmation(preview, taskId)))) return;
-  await executeUserCommand(session, { command: 'revert_task', task: taskId, confirmed: true, seen: preview.tasks.map((t) => t.taskId) });
-}
-
-/**
- * A start reopens the run whose cards its last end left up. Cleared only once
- * the seam accepts it: a refused start replaced no run, and the Session still
- * holds every mark and the handoff.
- */
-async function startTask(deps: Pick<PlanManagerDeps, 'session' | 'chatProvider'>, command: ExecutionCommand): Promise<void> {
-  await executeUserCommand(deps.session, command);
-  deps.chatProvider.clearIsolationHandoff();
-}
-
-/** The webview's names for the task controls that are one command each; Force start and Run go through the merge gate's confirmation instead. */
-const SYSTEM_TASK_ACTIONS = {
-  cancel: 'cancel',
-  cancelResume: 'cancel-resume',
-  resumeNow: 'resume-now',
-  retry: 'retry',
-  skip: 'skip',
-  markComplete: 'complete',
-  markIncomplete: 'uncomplete',
-} as const satisfies Record<string, TaskAction>;
-
-export async function handleSystemCommand(
-  command: string,
-  taskId: string,
-  deps: PlanManagerDeps,
-  requestId?: number,
-): Promise<void> {
-  try {
-    switch (command) {
-      case 'cancelPlannerResend':
-        deps.session.cancelPlannerResend();
-        break;
-      // A planner turn: it streams to the chat as any does, and fails as one.
-      case 'retryPlannerCompaction':
-        try {
-          // The retry is a planner turn too, and the signed-out refusal's
-          // login runs outside this host: ask the account again before the
-          // session's gate judges.
-          const recheck = recheckSignedOutPlanner(deps);
-          if (recheck) await recheck;
-          await deps.session.retryPlannerCompaction();
-        } catch (err) {
-          reportPlannerError(err, deps);
-        }
-        break;
-      // Skip lands nothing, so it is never a mark: only Mark complete vouches for work.
-      case 'cancel':
-      case 'cancelResume':
-      case 'resumeNow':
-      case 'retry':
-      case 'skip':
-        await executeUserCommand(deps.session, taskActionCommand(SYSTEM_TASK_ACTIONS[command], taskId));
-        break;
-      case 'markComplete':
-      case 'markIncomplete':
-        await markTaskByHand(SYSTEM_TASK_ACTIONS[command], taskId, deps);
-        break;
-      case 'revertTask':
-        await revertTaskByHand(taskId, deps);
-        break;
-      case 'forceStart':
-        await forceStartPastGate(taskId, deps);
-        break;
-      case 'runTask': {
-        // A start past a merge gate is a force start, confirmed first; the seam's
-        // run_task refuses a gated one.
-        if (deps.session.mergeGate(taskId).length > 0) {
-          await forceStartPastGate(taskId, deps);
-          break;
-        }
-        await startTask(deps, taskActionCommand('run', taskId));
-        break;
-      }
-      case 'executePlan':
-        await handleApprovePlan(deps, requestId);
-        break;
-      case 'stopExecution':
-        // The seam answers a stop with nothing running, and nothing about to start, as an ok no-op; a refusal is a stop that could not be kept.
-        await executeUserCommand(deps.session, { command: 'stop_run' });
-        deps.runner.stopAll();
-        deps.chatProvider.setState('planDraft');
-        break;
-    }
-  } catch (err) {
-    void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
-  }
-  deps.chatProvider.showPlan(deps.getCurrentPlan());
-  deps.persistState();
+export function handleSystemCommand(command: string, taskId: string, deps: PlanManagerDeps, requestId?: number): Promise<void> {
+  return new TaskControls(taskControlPort(deps)).systemCommand(command, taskId, requestId);
 }
 
 export function handleSessionMessage(
