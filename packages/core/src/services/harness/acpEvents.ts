@@ -1,6 +1,7 @@
 import type { AgentEvent } from './AgentAdapter';
 import type { UsageRecord } from '../../models/Usage';
 import type { AcpSessionUpdate, AcpToolCall, AcpTokenUsage } from './acpSchema';
+import type { TurnOutcome } from './turnOutcome';
 
 /**
  * The turn-by-turn translation of an ACP agent's `session/update`
@@ -219,21 +220,21 @@ const NOTE: Readonly<Record<string, string>> = {
 
 /**
  * The one place a turn ends, on the response to `session/prompt`.
- * `cancelSent` is whether Ordewell sent `session/cancel` for this turn: an
+ * `outcome` says whether Ordewell sent `session/cancel` for this turn: an
  * agent can answer `end_turn` to a cancel that crossed its own finish, and
- * the turn was still interrupted. A reason Ordewell does not know ends the
+ * the turn was still interrupted (ADR-0018 W1). A reason Ordewell does not know ends the
  * turn the way `end_turn` does, with the reason named, since the agent did stop.
  * An answer with no stop reason to read (`unreadable`, the parse error) says
  * nothing of why the agent stopped, so it ends the turn as an error rather
  * than passing for a normal end.
  */
-export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string }, usage: AcpTokenUsage | null | undefined, cancelSent: boolean): AgentEvent[] {
+export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string }, usage: AcpTokenUsage | null | undefined, outcome: TurnOutcome): AgentEvent[] {
   const events: AgentEvent[] = [];
 
-  // A call still open has no result coming: the turn it belonged to is over.
+  // A call still open has no result coming. It is announced, and the turn's
+  // end settles it as not executed, as for every runner.
   for (const [id, call] of Object.entries(turn.open)) {
     if (!call.announced) events.push(announce(id, call));
-    events.push(result(id, call, 'The turn ended before this call reported a result.', false));
   }
   for (const run of turn.thoughts) events.push({ type: 'thinking', text: run.text });
   for (const run of turn.messages) events.push({ type: 'assistant_text', runId: run.runId, text: run.text });
@@ -241,18 +242,20 @@ export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string
   const record = usageRecord(turn, usage);
   if (record) events.push({ type: 'usage', record });
 
-  if (cancelSent || stopReason === 'cancelled') {
-    events.push({ type: 'turn_end', interrupted: true });
+  // ACP has an agent answer a cancelled prompt `cancelled`; whatever else it
+  // answers after Ordewell's cancel is still that cancel, not a failure of the turn.
+  if (stopReason === 'cancelled' || outcome.requested) {
+    events.push(outcome.settle('interrupted'));
   } else if (typeof stopReason === 'object') {
-    events.push({ type: 'error', message: `The agent ended the turn with an answer Ordewell cannot read: ${stopReason.unreadable}` });
+    events.push(outcome.settle('completed', { message: `The agent ended the turn with an answer Ordewell cannot read: ${stopReason.unreadable}` }));
   } else if (stopReason === 'refusal') {
     // An error alone ends the turn, as for the other runners.
-    events.push({ type: 'error', message: 'The agent refused to continue this turn.' });
+    events.push(outcome.settle('completed', { message: 'The agent refused to continue this turn.' }));
   } else {
     if (stopReason !== 'end_turn') {
       events.push({ type: 'command_output', text: NOTE[stopReason] ?? `The agent stopped the turn with the reason "${stopReason}".` });
     }
-    events.push({ type: 'turn_end' });
+    events.push(outcome.settle('completed'));
   }
   return events;
 }

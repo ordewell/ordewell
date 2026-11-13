@@ -904,7 +904,7 @@ describe('AcpAdapter interrupt', () => {
     expect(agent.requests('session/cancel').map((m) => m.params)).toEqual([{ sessionId: 'sess-1' }]);
   });
 
-  it('counts a turn the agent ends normally after the cancel as interrupted', async () => {
+  it('counts a turn the agent ends normally after the cancel as interrupted (ADR-0018 W1)', async () => {
     const { adapter } = setup([
       ...handshake(),
       { expect: 'session/prompt' },

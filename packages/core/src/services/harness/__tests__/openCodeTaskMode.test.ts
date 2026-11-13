@@ -664,6 +664,28 @@ describe('OpenCodeAdapter task mode — interrupt', () => {
     adapter.dispose();
   });
 
+  it('ends a turn whose finish raced the abort as interrupted (ADR-0018 W1)', async () => {
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    await until(() => server.requests.some((r) => r.path === `/session/${SES}/prompt_async`));
+
+    server.status[SES] = { type: 'busy' };
+    const acknowledged = adapter.interrupt(2000);
+    await until(() => server.requests.some((r) => r.method === 'POST' && r.path === `/session/${SES}/abort`));
+    delete server.status[SES];
+    stream.push(assistant('msg_a', { time: { created: 1, completed: 2 } }));
+    stream.push(status('idle'));
+
+    expect(await acknowledged).toBe(true);
+    await turn;
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
+    adapter.dispose();
+  });
+
   it('reports a turn that failed for its own reason after an interrupt as failed, and only the abort itself as interrupted', async () => {
     const server = fakeServer();
     const { adapter } = await startTask(server);

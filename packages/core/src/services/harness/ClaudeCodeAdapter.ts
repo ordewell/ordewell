@@ -21,6 +21,7 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
+import { TurnOutcome } from './turnOutcome';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 
 /**
@@ -527,8 +528,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private controlCount = 0;
   /** Control requests sent and not yet answered, by request id. */
   private readonly pendingControl = new Map<string, (response: ControlResponse | null) => void>();
-  /** An interrupt was sent during the current turn, so an aborted result is that interrupt, not a failure. */
-  private interruptRequested = false;
+  /** Whether an interrupt was asked for in this turn, and so how its `result` ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
   private readonly permissions = new PermissionLedger<ClaudeAskHandle>(
     (handle, decision) => this.writeLine({ type: 'control_response', response: { subtype: 'success', request_id: handle.id, response: canUseToolAnswer(handle, decision) } }),
     () => ({ role: this.role, autoApprove: false, decide: readOnlyTaskPolicy(this.readOnlySite) }),
@@ -821,11 +822,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     if (this.resultHeld) {
       this.resultHeld = false;
       this.clearFollowOnTimer();
-      this.closeTurn({ type: 'turn_end', interrupted: true }, (event) => this.announce(event));
+      this.closeTurn(this.outcome.settle('interrupted'), (event) => this.announce(event));
       return true;
     }
-    this.interruptRequested = true;
-    return (await this.control({ subtype: 'interrupt' }, timeoutMs))?.subtype === 'success';
+    this.outcome.request();
+    const answer = await this.control({ subtype: 'interrupt' }, timeoutMs);
+    if (answer && answer.subtype !== 'success') this.outcome.refused();
+    return answer?.subtype === 'success';
   }
 
   /**
@@ -847,7 +850,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * with the message unread.
    */
   async steer(id: string, text: string): Promise<boolean> {
-    if (this.role !== 'task' || !this.process || this.interruptRequested || this.pendingResume) return false;
+    if (this.role !== 'task' || !this.process || this.outcome.requested || this.pendingResume) return false;
     const uuid = randomUUID();
     this.steers.set(uuid, id);
     // It runs once the turn it was sent into ends, if the CLI runs it as a command at all.
@@ -950,7 +953,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
 
   private openTurnState(): void {
     this.replyRuns = new ReplyRuns();
-    this.interruptRequested = false;
+    this.outcome.open();
     this.resultHeld = false;
     this.turnClosed = false;
     this.runnerTurn = false;
@@ -1141,20 +1144,19 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         // blocks, so this only settles the turn.
         this.reportSessionCost(msg, emit);
         for (const command of this.modelCommands) command.turnsLeft = Math.max(0, command.turnsLeft - 1);
-        // The request belongs to the turn this result closes, so a result that
-        // finished anyway clears it too: left set, it would call the next turn interrupted.
-        if (this.interruptRequested && (msg.is_error || msg.subtype !== 'success')) {
-          this.interruptRequested = false;
-          this.closeTurn({ type: 'turn_end', interrupted: true }, emit);
-        } else if (msg.is_error || (msg.subtype && msg.subtype !== 'success')) {
-          this.closeTurn({ type: 'error', message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` }, emit);
-        } else if (this.role === 'task' && this.backgroundTaskCount > 0) {
-          this.interruptRequested = false;
-          this.resultHeld = true;
-        } else {
-          this.interruptRequested = false;
-          this.resultHeld = false;
-          this.closeTurn({ type: 'turn_end' }, emit);
+        {
+          // The CLI reports the interrupt it was asked for as a failed result,
+          // with nothing that tells it from a failure of the turn's own.
+          const failed = msg.is_error || (msg.subtype !== undefined && msg.subtype !== 'success');
+          const ending = failed && !this.outcome.requested
+            ? this.outcome.settle('completed', { message: msg.result?.trim() || msg.errors?.join('\n').trim() || `Claude Code ended the turn: ${msg.subtype ?? 'error'}` })
+            : this.outcome.settle(failed ? 'interrupted' : 'completed');
+          if (ending.type === 'turn_end' && !ending.interrupted && this.role === 'task' && this.backgroundTaskCount > 0) {
+            this.resultHeld = true;
+          } else {
+            this.resultHeld = false;
+            this.closeTurn(ending, emit);
+          }
         }
         return;
 
@@ -1261,7 +1263,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     this.followOnTimer = setTimeout(() => {
       this.followOnTimer = null;
       this.resultHeld = false;
-      this.closeTurn({ type: 'turn_end' }, emit);
+      this.closeTurn(this.outcome.settle('completed'), emit);
     }, FOLLOW_ON_TURN_GRACE_MS);
     this.followOnTimer.unref?.();
   }
