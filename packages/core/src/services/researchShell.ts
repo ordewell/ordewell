@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import * as fsSync from 'fs';
 import * as path from 'path';
-import type { CommandPolicyOptions } from './commandPolicy';
+import type { LineShell } from './parsedLine';
 import { isInertDevice, type HostPath } from './pathScope';
 
 /**
@@ -349,11 +349,11 @@ export function researchShellWarning(shell: ResearchShell): string | null {
 }
 
 /**
- * What a research-shell command is classified under. One function, because a
- * subagent must never classify under different rules than its parent: the
- * shell's dialect, and whether a `CDPATH` in the environment can send a
- * relative `cd` somewhere the line never names.
+ * The shell a research-shell command line is parsed under. One function,
+ * because a subagent must never read a line under different rules than its
+ * parent: the shell's dialect, and whether a `CDPATH` in the environment can
+ * send a relative `cd` somewhere the line never names.
  */
-export function researchPolicyOptions(shell: ResearchShell): CommandPolicyOptions {
+export function researchLineShell(shell: ResearchShell): LineShell {
   return { dialect: shell.dialect, cdpathSet: !!process.env.CDPATH };
 }
