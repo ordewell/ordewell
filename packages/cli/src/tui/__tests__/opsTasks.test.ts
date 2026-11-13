@@ -41,14 +41,14 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
   it('takes the gate from a status update, and says the run is paused for Merge all', () => {
     const state = plan([change(), deploy()], { status: 'executing' });
 
-    const next = apply(state, { type: 'statusUpdate', sessionId: 's1', runMerge: wireMerge(runMerge), tasks: [{ id: 'o2', status: 'pending', verdict: null, idleSince: null, mergeGate: ['t1'] }] }).state;
+    const next = apply(state, { type: 'runMessage', message: { type: 'status_update', runMerge: wireMerge(runMerge), tasks: [{ id: 'o2', status: 'pending', verdict: null, idleSince: null, mergeGate: ['t1'] }] }, sessionId: 's1' }).state;
 
     expect(next.runMerge).toEqual(runMerge);
     expect(next.tasks[1].mergeGate).toEqual(['t1']);
     expect(next.status).toBe('executing');
     expect(runHint(next)).toBe('paused for Merge all: /merge');
 
-    const cleared = apply(next, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'o2', status: 'in_progress', verdict: null, idleSince: null }] }).state;
+    const cleared = apply(next, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'o2', status: 'in_progress', verdict: null, idleSince: null }] }, sessionId: 's1' }).state;
     expect(cleared.runMerge).toBeNull();
     expect(cleared.tasks[1].mergeGate).toBeUndefined();
   });
@@ -105,14 +105,14 @@ describe('ops tasks and merge gates in the TUI (ADR-0020)', () => {
 
   it('shows the unmerged landing count quietly and clears it without task status changes', () => {
     const state = plan([change(), change({ id: 't2', order: 2, status: 'in_progress' })], { status: 'executing' });
-    const next = apply(state, { type: 'statusUpdate', tasks: [], runMerge: wireMerge({ ...runMerge, waitingAtGate: false, paused: false }) }).state;
+    const next = apply(state, { type: 'runMessage', message: { type: 'status_update', tasks: [], runMerge: wireMerge({ ...runMerge, waitingAtGate: false, paused: false }) } }).state;
 
     expect(frame(next)).toContain('1 landed task not merged');
     expect(frame(next)).not.toContain('paused for Merge all');
     expect(frame(next)).not.toContain('waits for Merge all');
     expect(next.overlay).toBeNull();
 
-    const cleared = apply(next, { type: 'statusUpdate', tasks: [] }).state;
+    const cleared = apply(next, { type: 'runMessage', message: { type: 'status_update', tasks: [] } }).state;
     expect(frame(cleared)).not.toContain('landed task');
   });
 

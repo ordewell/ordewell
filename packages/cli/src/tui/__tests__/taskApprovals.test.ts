@@ -135,15 +135,15 @@ describe('waiting for approval, from the daemon', () => {
     const receive = createInbound((action) => actions.push(action), 's1').receive;
     const wire: unknown = { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, awaitingApproval: 2 }] };
     receive(wire as WsEvent);
-    const update = actions.find((a): a is Extract<Action, { type: 'statusUpdate' }> => a.type === 'statusUpdate');
-    expect(update?.tasks[0].awaitingApproval).toBe(2);
+    const update = actions.find((a): a is Extract<Action, { type: 'runMessage' }> => a.type === 'runMessage' && a.message.type === 'status_update');
+    expect(update?.message).toMatchObject({ tasks: [{ awaitingApproval: 2 }] });
 
     const base = initialState({ sessionId: 's1', focus: 'plan', rows: 20, cols: 180, tasks: [task()] });
     const waiting = reduce(base, update!).state;
     expect(waiting.tasks[0]).toMatchObject({ status: 'in_progress', awaitingApproval: 2 });
     expect(plain(waiting)).toContain('waiting for approval (2): enter opens it');
 
-    const answered = reduce(waiting, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
+    const answered = reduce(waiting, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
     expect(answered.tasks[0].awaitingApproval).toBeUndefined();
   });
 });

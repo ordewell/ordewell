@@ -176,14 +176,14 @@ describe('adversarial: the run closed is the Session\'s to say (ADR-0013, ADR-00
   };
 
   it('a Merge all while the run goes on keeps the marks and takes the handoff card it merged', () => {
-    const merged = reduce(runWithCards(), { type: 'isolationMerged', sessionId: 's1', result: { outcome: 'merged' } }).state;
+    const merged = reduce(runWithCards(), { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' } }, sessionId: 's1' }).state;
 
     expect(merged.tasks[0]?.isolation).toMatchObject({ state: 'conflict' });
     expect(merged.handoff).toBeNull();
   });
 
   it('the Session\'s run_closed is what clears the marks', () => {
-    const closed = reduce(runWithCards(), { type: 'runClosed', sessionId: 's1' }).state;
+    const closed = reduce(runWithCards(), { type: 'runMessage', message: { type: 'run_closed' }, sessionId: 's1' }).state;
 
     expect(closed.tasks[0]?.isolation).toBeUndefined();
     expect(closed.handoff).toBeNull();

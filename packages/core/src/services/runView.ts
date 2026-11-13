@@ -84,8 +84,10 @@ function withoutIsolation(tasks: readonly RunTask[]): RunTask[] {
   return tasks.map(({ isolation: _isolation, ...task }) => ({ ...task, subtasks: withoutIsolation(task.subtasks) }));
 }
 
-function handoffOf({ type: _type, ...handoff }: Extract<RunInput, { type: 'isolation_handoff' }>): IsolationHandoff {
-  return handoff;
+// Named field by field: a message off a daemon socket also carries its stream
+// stamp, which is no part of the handoff a surface holds.
+function handoffOf({ repos, landed, deferredTo }: Extract<RunInput, { type: 'isolation_handoff' }>): IsolationHandoff {
+  return { repos, landed, ...(deferredTo ? { deferredTo } : {}) };
 }
 
 /**

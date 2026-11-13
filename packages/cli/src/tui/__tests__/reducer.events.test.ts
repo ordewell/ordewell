@@ -164,20 +164,20 @@ describe('execution', () => {
   };
 
   it('updates one task in place', () => {
-    const s = send(initialState(withTasks), { type: 'statusUpdate', tasks: [{ id: 'b', status: 'in_progress', verdict: null }] });
+    const s = send(initialState(withTasks), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'b', status: 'in_progress', verdict: null }] } });
     expect(s.tasks.map((t) => t.status)).toEqual(['pending', 'in_progress']);
     expect(s.status).toBe('executing');
   });
 
   it('ignores a status for a task that is not in the plan', () => {
-    const s = send(initialState(withTasks), { type: 'statusUpdate', tasks: [{ id: 'zz', status: 'in_progress', verdict: null }] });
+    const s = send(initialState(withTasks), { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'zz', status: 'in_progress', verdict: null }] } });
     expect(s.tasks.map((t) => t.status)).toEqual(['pending', 'pending']);
   });
 
   it('returns to idle when the run finishes and reports the outcome', () => {
     const s = send(initialState({ ...withTasks, status: 'executing' }), {
-      type: 'executionComplete',
-      summary: { total: 2, completed: 2, failed: 0 },
+      type: 'runMessage',
+      message: { type: 'execution_complete', summary: { total: 2, completed: 2, failed: 0, blocked: 0, skipped: 0 } },
     });
     expect(s.status).toBe('idle');
     expect(lastMessage(s)?.text).toContain('2/2');
@@ -224,32 +224,41 @@ describe('execution', () => {
 
   it('returns to idle on a status snapshot with nothing running', () => {
     const s = send(initialState(running), {
-      type: 'statusUpdate',
-      tasks: [{ id: 'a', status: 'completed', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 'a', status: 'completed', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
+      },
     });
     expect(s.status).toBe('idle');
   });
 
   it('returns to idle when a single task update leaves none running', () => {
     const s = send(initialState({ ...running, tasks: [withTasks.tasks![0], withTasks.tasks![1]] }), {
-      type: 'statusUpdate',
-      tasks: [{ id: 'a', status: 'pending', verdict: null }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 'a', status: 'pending', verdict: null }] },
     });
     expect(s.status).toBe('idle');
   });
 
   it('still says executing while some task is running', () => {
     const s = send(initialState({ ...withTasks, status: 'idle' }), {
-      type: 'statusUpdate',
-      tasks: [{ id: 'a', status: 'completed', verdict: null }, { id: 'b', status: 'in_progress', verdict: null }],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 'a', status: 'completed', verdict: null }, { id: 'b', status: 'in_progress', verdict: null }],
+      },
     });
     expect(s.status).toBe('executing');
   });
 
   it('does not let a run status clobber a planner turn in flight', () => {
     const s = send(initialState({ ...withTasks, planner: 'planning' }), {
-      type: 'statusUpdate',
-      tasks: [{ id: 'a', status: 'pending', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 'a', status: 'pending', verdict: null }, { id: 'b', status: 'pending', verdict: null }],
+      },
     });
     expect(s.planner).toBe('planning');
   });
@@ -263,8 +272,8 @@ describe('execution', () => {
       { ...withTasks.tasks![1], status: 'failed' },
     ];
     const s = send(initialState({ ...withTasks, tasks, status: 'executing' }), {
-      type: 'executionComplete',
-      stopped: true,
+      type: 'runMessage',
+      message: { type: 'execution_stopped' },
     });
 
     expect(s.status).toBe('idle');
@@ -273,8 +282,8 @@ describe('execution', () => {
 
   it('says how many tasks a failure blocked when the run finishes (ADR-0034)', () => {
     const s = send(initialState({ ...withTasks, status: 'executing' }), {
-      type: 'executionComplete',
-      summary: { total: 5, completed: 2, failed: 1, blocked: 2 },
+      type: 'runMessage',
+      message: { type: 'execution_complete', summary: { total: 5, completed: 2, failed: 1, blocked: 2, skipped: 0 } },
     });
 
     expect(lastMessage(s)?.text).toBe('Execution finished: 2/5 tasks complete · 1 failed · 2 blocked.');

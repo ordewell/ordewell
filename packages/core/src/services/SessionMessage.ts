@@ -14,7 +14,7 @@ import type { IsolationHandoff, IsolationMergeResult, TaskIsolation } from '../i
 import type { QueuedTaskMessage } from '../interfaces/IRunner';
 import { canContinue } from './continuation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
-import { blockingFailures } from './blocking';
+import { blockingFailures, type BlockingSubject } from './blocking';
 import type { SkipOrigin } from '../models/SkipOrigin';
 
 export type SerializedTaskStatus = {
@@ -721,7 +721,8 @@ export interface ExecutionSummary {
   skipped: number;
 }
 
-export function executionSummary(tasks: readonly Task[]): ExecutionSummary {
+// Structural, so a run view's tasks are counted by the same rule as the store's.
+export function executionSummary(tasks: readonly BlockingSubject[]): ExecutionSummary {
   const blocked = blockingFailures(tasks);
   return {
     total: tasks.length,

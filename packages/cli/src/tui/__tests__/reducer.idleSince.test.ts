@@ -18,8 +18,11 @@ describe('statusUpdate — idleSince threading', () => {
   it('sets idleSince on the matching task', () => {
     const state = planPane();
     const { state: next } = reduce(state, {
-      type: 'statusUpdate',
-      tasks: [{ id: 't1', status: 'in_progress', verdict: null, idleSince: '2026-08-18T00:00:00.000Z' }],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 't1', status: 'in_progress', verdict: null, idleSince: '2026-08-18T00:00:00.000Z' }],
+      },
       sessionId: 's1',
     });
     expect(next.tasks[0].idleSince).toBe('2026-08-18T00:00:00.000Z');
@@ -28,8 +31,8 @@ describe('statusUpdate — idleSince threading', () => {
   it('clears idleSince once the task resumes', () => {
     const state = planPane({ tasks: [task({ idleSince: '2026-08-18T00:00:00.000Z' })] });
     const { state: next } = reduce(state, {
-      type: 'statusUpdate',
-      tasks: [{ id: 't1', status: 'in_progress', verdict: null, idleSince: null }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null, idleSince: null }] },
       sessionId: 's1',
     });
     expect(next.tasks[0].idleSince).toBeNull();

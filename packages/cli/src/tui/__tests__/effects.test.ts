@@ -152,6 +152,9 @@ function reviveMock(deps: EffectDeps): Mock<() => Promise<boolean>> {
 }
 
 const types = (actions: Action[]) => actions.map((a) => a.type);
+/** What the run said, by the message it carried: every run message reaches the reducer as the one `runMessage` action. */
+const runTypes = (actions: Action[]) => actions.flatMap((a) => (a.type === 'runMessage' ? [a.message.type] : []));
+const runMessages = (actions: Action[], type: string) => actions.filter((a) => a.type === 'runMessage' && a.message.type === type);
 
 describe('planning', () => {
   it('allocates a session, tells the reducer, and opens the conversation', async () => {
@@ -599,8 +602,8 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'statusUpdate',
-      tasks: [{ id: 'a', status: 'in_progress' }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 'a', status: 'in_progress' }] },
       sessionId: 's1',
     });
   });
@@ -632,11 +635,14 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'statusUpdate',
-      tasks: [
-        { id: 'a', status: 'completed', verdict: null },
-        { id: 'b', status: 'running', verdict: null },
-      ],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [
+          { id: 'a', status: 'completed', verdict: null },
+          { id: 'b', status: 'running', verdict: null },
+        ],
+      },
       sessionId: 's1',
     });
   });
@@ -645,8 +651,7 @@ describe('execution', () => {
     const h = withEvents({ type: 'task_started', taskId: 'a', order: 1, title: 'Add route', runner: 'opencode' });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const started = h.actions.find((a) => a.type === 'taskStarted') as Extract<Action, { type: 'taskStarted' }>;
-    expect(started).toMatchObject({ taskId: 'a', title: 'Add route', runner: 'opencode' });
+    expect(runMessages(h.actions, 'task_started')).toMatchObject([{ message: { taskId: 'a', title: 'Add route', runner: 'opencode' } }]);
   });
 
   it('hands a checkpoint to the reducer, which says where it can be answered', async () => {
@@ -672,8 +677,10 @@ describe('execution', () => {
     const h = withEvents({ type: 'review_needed', tasks: [] });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const notice = h.actions.find((a) => a.type === 'notice') as Extract<Action, { type: 'notice' }>;
-    expect(notice.message).toMatch(/approve/i);
+    expect(runMessages(h.actions, 'review_needed')).toHaveLength(1);
+    let state: TuiState = { ...initialState(), sessionId: 's1' };
+    for (const action of h.actions) ({ state } = reduce(state, action));
+    expect(state.conversation.blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Plan needs your sign-off: /approve to continue.' }));
   });
 
   it('takes a plan pushed over the stream, and hands its transcript to the conversation', async () => {
@@ -685,7 +692,7 @@ describe('execution', () => {
     expect(h.actions).toEqual([
       { type: 'sessionMessage', message: event, sessionId: 's1' },
       { type: 'planBroadcast', plan, sessionId: 's1' },
-      { type: 'executionComplete', summary: RUN_DONE.summary, sessionId: 's1' },
+      { type: 'runMessage', message: RUN_DONE, sessionId: 's1' },
     ]);
   });
 
@@ -694,8 +701,8 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toContainEqual({
-      type: 'executionComplete',
-      summary: { total: 1, completed: 1, failed: 0 },
+      type: 'runMessage',
+      message: { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0 } },
       sessionId: 's1',
     });
   });
@@ -729,9 +736,9 @@ describe('execution', () => {
     const h = withEvents({ type: 'execution_stopped' });
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    const complete = h.actions.find((a) => a.type === 'executionComplete');
-    expect(complete).toBeDefined();
-    expect(complete).not.toHaveProperty('summary');
+    const [stopped] = runMessages(h.actions, 'execution_stopped');
+    expect(stopped).toBeDefined();
+    expect(stopped).not.toHaveProperty('message.summary');
   });
 
   it('a silent approval decision reached mid-execution lands in the conversation', async () => {
@@ -754,7 +761,7 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
     expect(h.actions).toEqual([
       { type: 'sessionMessage', message: token, sessionId: 's1' },
-      { type: 'executionComplete', summary: RUN_DONE.summary, sessionId: 's1' },
+      { type: 'runMessage', message: RUN_DONE, sessionId: 's1' },
     ]);
   });
 
@@ -887,7 +894,7 @@ describe('two runs asked for on one session', () => {
     await Promise.all(running);
 
     expect(h.api.followSession).toHaveBeenCalledTimes(1);
-    expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
+    expect(runMessages(h.actions, 'task_started')).toHaveLength(1);
     expect(types(h.actions)).not.toContain('executionLost');
   });
 });
@@ -934,8 +941,8 @@ describe('task control', () => {
 
     expect(order).toEqual(['followSession', 'execute']);
     expect(h.actions).toContainEqual({
-      type: 'statusUpdate',
-      tasks: [{ id: 't1', status: 'in_progress' }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress' }] },
       sessionId: 's1',
     });
   });
@@ -2234,7 +2241,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 'b', status: 'awaiting_user', verdict: null, isolation }] });
+    expect(h.actions).toContainEqual({ type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 'b', status: 'awaiting_user', verdict: null, isolation }] }, sessionId: 's1' });
   });
 
   it('carries mid-run landings without a gate from status updates and clears them after merging', async () => {
@@ -2247,9 +2254,9 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions.filter((a) => a.type === 'statusUpdate')).toEqual([
-      { type: 'statusUpdate', sessionId: 's1', tasks: [], runMerge: { waitingAtGate: false, paused: false, repos, landed } },
-      { type: 'statusUpdate', sessionId: 's1', tasks: [] },
+    expect(runMessages(h.actions, 'status_update')).toEqual([
+      { type: 'runMessage', message: { type: 'status_update', tasks: [], runMerge: { waitingAtGate: false, paused: false, repos, landed } }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'status_update', tasks: [] }, sessionId: 's1' },
     ]);
   });
 
@@ -2270,7 +2277,8 @@ describe('worktree isolation', () => {
     h.daemon.emit({ type: 'isolation_blocked', reason: 'dirty', message: 'Tracked files have uncommitted changes' });
     h.daemon.emit({ type: 'status_update', tasks: [{ id: 'ops1', status: 'in_progress', verdict: null }] });
 
-    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'statusUpdate']));
+    expect(types(h.actions)).toEqual(expect.arrayContaining(['isolationBlocked', 'runMessage']));
+    expect(runTypes(h.actions)).toContain('status_update');
     h.daemon.emit(RUN_DONE);
     await run;
   });
@@ -2285,8 +2293,8 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(types(h.actions).filter((t) => t === 'isolationHandoff' || t === 'executionComplete')).toEqual(['isolationHandoff', 'executionComplete']);
-    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed }, sessionId: 's1' });
+    expect(runTypes(h.actions).filter((t) => t === 'isolation_handoff' || t === 'execution_complete')).toEqual(['isolation_handoff', 'execution_complete']);
+    expect(h.actions).toContainEqual({ type: 'runMessage', message: { type: 'isolation_handoff', repos, landed }, sessionId: 's1' });
   });
 
   it('carries the supervisor deferral of an isolation_handoff through', async () => {
@@ -2296,7 +2304,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions).toContainEqual({ type: 'isolationHandoff', handoff: { repos, landed, deferredTo: 'supervisor' }, sessionId: 's1' });
+    expect(h.actions).toContainEqual({ type: 'runMessage', message: { type: 'isolation_handoff', repos, landed, deferredTo: 'supervisor' }, sessionId: 's1' });
   });
 
   it('hands the dirty repos of a group to the stash question', async () => {
@@ -2445,7 +2453,7 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
 
-    expect(types(h.actions)).not.toContain('runClosed');
+    expect(runTypes(h.actions)).not.toContain('run_closed');
   });
 
   it('folds what any surface\'s Merge all did, and closes the run only when the Session says it closed', async () => {
@@ -2458,10 +2466,10 @@ describe('worktree isolation', () => {
 
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
-    expect(h.actions.filter((a) => a.type === 'isolationMerged' || a.type === 'runClosed')).toEqual([
-      { type: 'isolationMerged', result: blocked, sessionId: 's1' },
-      { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' },
-      { type: 'runClosed', sessionId: 's1' },
+    expect(h.actions.filter((a) => a.type === 'runMessage' && a.message.type !== 'execution_complete')).toEqual([
+      { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' } }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'run_closed' }, sessionId: 's1' },
     ]);
   });
 
@@ -2700,7 +2708,7 @@ describe('following the session', () => {
 
     expect(vi.mocked(h.api.followSession).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(h.api.startConversation).mock.invocationCallOrder[0]);
     expect(follow.sessionId).toBe('session-new');
-    expect(types(h.actions)).toEqual(expect.arrayContaining(['taskStarted', 'executionComplete']));
+    expect(runTypes(h.actions)).toEqual(expect.arrayContaining(['task_started', 'execution_complete']));
     expect(h.actions).toContainEqual(expect.objectContaining({ type: 'sessionMessage', message: expect.objectContaining({ type: 'execution_action' }) }));
   });
 
@@ -2727,7 +2735,7 @@ describe('following the session', () => {
     await running;
 
     expect(h.api.followSession).toHaveBeenCalledTimes(1);
-    expect(h.actions.filter((a) => a.type === 'taskStarted')).toHaveLength(1);
+    expect(runMessages(h.actions, 'task_started')).toHaveLength(1);
   });
 
   it('follows a loaded session, and leaves the one it was on', async () => {

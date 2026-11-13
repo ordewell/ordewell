@@ -89,9 +89,12 @@ describe('a task\'s handoff in its row (ADR-0047)', () => {
     expect(planText({ ...planned, expandedTaskId: 't1' })).toContain('2 findings · Blocker · Added the route.');
 
     const live = reduce(planned, {
-      type: 'statusUpdate',
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 't1', status: 'completed', verdict: null, handoff: { summary: 'Live done.', findings: [], findingCount: 0 } }],
+      },
       sessionId: 's1',
-      tasks: [{ id: 't1', status: 'completed', verdict: null, handoff: { summary: 'Live done.', findings: [], findingCount: 0 } }],
     }).state;
     expect(planText(live)).not.toContain('Live done.');
     expect(planText({ ...live, expandedTaskId: 't1' })).toContain('no findings · Live done.');

@@ -41,6 +41,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   steps every change owes — and ends by naming each owed check it left to CI,
   and why. `npm run test:changed -- --list` prints the selection without
   running it.
+- **VS Code and the desktop app now word a run's notices as the terminal
+  does,** from one place in core: a plan awaiting review says "Plan needs your
+  sign-off.", an approved one "Plan approved.", and a run's end "Execution
+  finished: 2/3 tasks complete · 1 failed." (or "stopped"). A task that starts
+  twice without a retry between no longer says so twice, in any of them. A
+  stopped run's tally counts subtasks too, as the daemon's own tally does.
 
 ### Fixed
 

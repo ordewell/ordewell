@@ -89,8 +89,8 @@ describe('a merge the socket carries', () => {
     onEvent({ type: 'isolation_merge', result } as WsEvent);
 
     expect(actions).toEqual([
-      { type: 'isolationMerged', result, trigger: { kind: 'gate', taskId: 't1' }, sessionId: 's1' },
-      { type: 'isolationMerged', result, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'isolation_merge', result, trigger: { kind: 'gate', taskId: 't1' } }, sessionId: 's1' },
+      { type: 'runMessage', message: { type: 'isolation_merge', result }, sessionId: 's1' },
     ]);
   });
 });
@@ -119,7 +119,7 @@ describe('a session opened from a read', () => {
     await loading;
 
     expect(drawn).toEqual(['read after 0 dispatched']);
-    expect(types()).toEqual(['statusUpdate']);
+    expect(types()).toEqual(['runMessage']);
   });
 
   it('keeps the approvals of a greeting the read covers, which no read returns', async () => {
