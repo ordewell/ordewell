@@ -725,9 +725,9 @@ type WordPart = string | 'one' | 'any';
  *
  * Read per segment, not per word: quotes are gone, so a quoted `*` sitting
  * beside an unquoted glob counts as one too. That only ever over-reads a word,
- * which is the safe side for a flag check. A brace list and a bracket
- * expression stand for any run and any one character; whose members they
- * hold is not worth modelling for a check that refuses.
+ * which is the safe side for a flag check. A brace list stands for any run,
+ * and a closed bracket expression for any text from it to the word's end;
+ * whose members they hold is not worth modelling for a check that refuses.
  */
 function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
   if (seg.expandable && (/[$`]/.test(word) || /%[A-Za-z_][^%]*%|![A-Za-z_][^!]*!/.test(word))) return 'anything';
@@ -751,12 +751,12 @@ function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
       if (word[from] === '!' || word[from] === '^') from++;
       // A `]` first in the set is a member, not the close.
       if (word[from] === ']') from++;
-      const close = word.indexOf(']', from);
-      // A `[` in the set may open `[:class:]`, `[.c.]` or `[=c=]`, whose own
-      // `]` does not close the bracket (`[[:punct:]]exec` is `-exec`), and
-      // shells disagree on such sets. Nothing past it is trusted.
-      if (close > 0 && word.slice(from, close).includes('[')) { parts.push('any'); return parts; }
-      if (close > 0) { parts.push('one'); i = close; continue; }
+      // Where the bracket truly closes is unknowable here, so nothing from it
+      // on is trusted. An escaped or quoted `]` is a member, not the close, and
+      // its backslash or quotes are gone (`[x\]-]exec` is `-exec`); a `[` in
+      // the set may open `[:class:]`, `[.c.]` or `[=c=]`, whose own `]` does
+      // not close it either (`[[:punct:]]exec`). An unclosed `[` is literal.
+      if (word.indexOf(']', from) > 0) { parts.push('any'); return parts; }
     }
     parts.push(c);
   }

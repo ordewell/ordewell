@@ -830,6 +830,21 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 
+  // An escaped or quoted `]` is a member of the set to bash and dash, not its
+  // close, and the lexer has dropped the backslash or quotes by the time the
+  // word is read: `[x\]-]exec` is `-exec` once the repository commits that file.
+  it.each([
+    'find . [x\\]-]exec bin/x {} +',
+    'find . [-\\]]exec bin/x {} +',
+    "find . [x']'-]exec bin/x {} +",
+    'find . [x"]"-]exec bin/x {} +',
+    'printf [x\\]-]v PATH . && cd bin && cat x',
+    "printf [x']'-]v PATH . && cd bin && cat x",
+    'printf [x"]"-]v PATH . && cd bin && cat x',
+  ])('reads a word from its first closed bracket as any text: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
   // getopt hands a value flag the next word even when it is `--`, so the words
   // after it are still options: `tree -I -- -o out` writes `out`.
   it.each([
@@ -848,6 +863,9 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     'ls src/?.ts',
     'grep -n foo -- *.ts',
     'printf "%s\\n" *.md',
+    'ls src/[ab]*.ts',
+    'cat src/[ab].ts',
+    'find . -name *.ts',
   ])('keeps a glob that cannot become a flag unprompted: %s', (cmd) => {
     expect(classifyCommand(cmd).tier).toBe('auto');
   });
