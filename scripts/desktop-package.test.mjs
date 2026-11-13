@@ -23,6 +23,7 @@ import {
   withoutSigning,
 } from '../packages/desktop/scripts/package.mjs';
 import { codeSignTool, failed, redact, sign, signArgs } from '../packages/desktop/scripts/esigner-sign.mjs';
+import { DESKTOP_WORKSPACES, buildArgs, buildWorkspaces } from '../packages/desktop/scripts/workspace-builds.mjs';
 
 const MAC_CERT = { CSC_LINK: 'base64p12', CSC_KEY_PASSWORD: 'p12pass' };
 const API_KEY = { APPLE_API_KEY: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n', APPLE_API_KEY_ID: 'KEYID123', APPLE_API_ISSUER: 'issuer-uuid' };
@@ -530,5 +531,59 @@ describe('the deb launcher entry', () => {
       Name: 'New Window',
       Exec: `${installPrefix}/${config.productName}/${config.linux.executableName} --new-window`,
     });
+  });
+});
+
+// A dist/ from an older checkout under a current app is what made the
+// Explorer refuse a workspace folder: the daemon was web's old dist.
+describe('the workspaces desktop:dev and desktop:package rebuild', () => {
+  const manifest = (dir) => JSON.parse(readFileSync(new URL(`../${dir}/package.json`, import.meta.url), 'utf8'));
+  const desktopScript = (name) => readFileSync(new URL(`../packages/desktop/scripts/${name}`, import.meta.url), 'utf8');
+
+  it('are every @ordewell package the desktop app depends on', () => {
+    const { dependencies, devDependencies } = manifest('packages/desktop');
+    const ordewell = Object.keys({ ...dependencies, ...devDependencies }).filter((name) => name.startsWith('@ordewell/'));
+    assert.deepEqual(DESKTOP_WORKSPACES.map((name) => `@ordewell/${name}`).sort(), ordewell.sort());
+    for (const name of DESKTOP_WORKSPACES) assert.equal(manifest(`packages/${name}`).name, `@ordewell/${name}`);
+  });
+
+  it('build in the order of the root build', () => {
+    const root = manifest('.').scripts.build.split(' && ');
+    const positions = DESKTOP_WORKSPACES.map((name) => root.indexOf(`npm run build -w packages/${name}`));
+    assert.ok(positions.every((at) => at >= 0), `${root.join('\n')} builds each of ${DESKTOP_WORKSPACES}`);
+    assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  });
+
+  // By path, npm would look for packages/desktop/packages/core when run as desktop's script.
+  it('name each workspace so npm finds it from any directory', () => {
+    for (const name of DESKTOP_WORKSPACES) assert.deepEqual(buildArgs(name), ['run', 'build', '-w', `@ordewell/${name}`]);
+  });
+
+  it('builds each in turn, with the environment given', () => {
+    const calls = [];
+    const env = { CSC_LINK: undefined };
+    assert.equal(buildWorkspaces((args, given) => { calls.push([args, given]); return 0; }, env), null);
+    assert.deepEqual(calls, DESKTOP_WORKSPACES.map((name) => [buildArgs(name), env]));
+  });
+
+  it('stops at the first build that fails and names it', () => {
+    const calls = [];
+    const failed = buildWorkspaces((args) => { calls.push(args.at(-1)); return args.at(-1) === '@ordewell/ui' ? 2 : 0; });
+    assert.deepEqual(calls, ['@ordewell/core', '@ordewell/ui']);
+    assert.match(failed, /^Building @ordewell\/ui failed \(`npm run build -w @ordewell\/ui` exited with 2\)/);
+  });
+
+  for (const script of ['dev.mjs', 'package.mjs']) {
+    it(`run in ${script} before main, the preload or the renderer is built`, () => {
+      const source = desktopScript(script);
+      const builds = source.indexOf('buildWorkspaces(');
+      assert.ok(builds > 0, `${script} calls buildWorkspaces`);
+      assert.ok(builds < source.indexOf('tsup/dist/cli-default.js'), `${script} builds the workspaces before tsup`);
+      assert.doesNotMatch(source, /existsSync\([^)]*dist/, `${script} does not settle for a dist/ that exists`);
+    });
+  }
+
+  it('see no signing secret when packaging', () => {
+    assert.match(desktopScript('package.mjs'), /buildWorkspaces\(undefined, Object\.fromEntries\(SIGNING_VARIABLES\.map\(\(name\) => \[name, undefined\]\)\)\)/);
   });
 });

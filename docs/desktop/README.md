@@ -210,11 +210,11 @@ From a checkout of this repository:
 
 ```bash
 npm install
-npm run build          # core first: every other package compiles against its dist/
 npm run desktop:dev
 ```
 
-`desktop:dev` builds main and the preload once, serves the renderer from Vite
+`desktop:dev` rebuilds `@ordewell/core`, `@ordewell/ui` and `@ordewell/web`,
+whose `dist/` the daemon and the app run on, then builds main and the preload once, serves the renderer from Vite
 with hot reload, and opens an unpackaged Electron app pointed at that server. A
 change to `src/main` or `src/preload` needs the command restarted; a change to
 the renderer reloads in place.
@@ -243,8 +243,9 @@ npm run desktop:package -- --dir
 
 Anything else after `--` goes to electron-builder, so
 `npm run desktop:package -- --arch x64` cross-builds the other macOS
-architecture. Building `@ordewell/core` and `@ordewell/web` first is not
-optional: the packaged daemon is web's `dist/`.
+architecture. It rebuilds `@ordewell/core`, `@ordewell/ui` and `@ordewell/web`
+before anything else, as `desktop:dev` does: the packaged daemon is web's
+`dist/`, and a `dist/` from an older checkout would otherwise ship.
 
 The terminal's PTY is `node-pty`, a native addon. electron-builder rebuilds it
 for the app's Electron, once per target architecture, which is why a packaged

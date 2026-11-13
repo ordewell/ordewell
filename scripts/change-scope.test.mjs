@@ -159,7 +159,7 @@ describe('a change inside workspaces', () => {
   });
 
   it('keeps the packaging scripts to desktop, with the bench step that holds their tests', () => {
-    for (const path of ['packages/desktop/scripts/package.mjs', 'packages/desktop/scripts/esigner-sign.mjs']) {
+    for (const path of ['packages/desktop/scripts/package.mjs', 'packages/desktop/scripts/esigner-sign.mjs', 'packages/desktop/scripts/workspace-builds.mjs']) {
       const scope = selected(path);
       assert.deepEqual(scope.workspaces, [DESKTOP], path);
       assert.equal(scope.checks.bench, true, path);
