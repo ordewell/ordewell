@@ -68,9 +68,10 @@ export function reduceUpdate(turn: AcpTurn, update: AcpSessionUpdate): AcpStep {
       return toolCall(closeRuns(turn), update);
     case 'usage_update': {
       // A context meter, and `cost` is the session's running total: neither
-      // adds up per turn, so only the meter is reported.
-      const record = new UsageRecordBuilder(turn.source).meter({ model: turn.model, contextTokens: update.used, contextWindow: update.size });
-      return { turn, events: record ? [{ type: 'usage', record }] : [] };
+      // adds up per turn, so only the meter is reported. `used` is required, so
+      // the meter always has a measure to report.
+      const record = new UsageRecordBuilder(turn.source).meter({ model: turn.model, contextTokens: update.used, contextWindow: update.size })!;
+      return { turn, events: [{ type: 'usage', record }] };
     }
     // user_message_chunk only replays history on session/load. The rest hold
     // state the connector reads from the update itself, and an unknown kind
