@@ -61,6 +61,7 @@ describe('the frame', () => {
     expect(within(title).getByRole('button', { name: 'Run plan' })).toBeInTheDocument();
     fireEvent.click(within(title).getByRole('button', { name: 'More actions' }));
     expect(screen.getByRole('menuitem', { name: 'Reset layout' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'New window' })).toBeInTheDocument();
   });
 
   it('puts focus on the ⋯ menu\'s first drawn item, past a scope chip the bar has room for, and closes on Escape', () => {
@@ -350,6 +351,19 @@ describe('the command palette', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(ran).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
+  });
+
+  it('lists New window with its menu chord, runs it from the palette, and binds no key of its own', () => {
+    const { store } = mount('darwin');
+    const open = vi.spyOn(store.projects, 'newWindow');
+    fireEvent.keyDown(window, { key: 'N', code: 'KeyN', metaKey: true, shiftKey: true });
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'k', code: 'KeyK', metaKey: true });
+    const input = screen.getByRole('combobox', { name: 'Search commands' });
+    fireEvent.change(input, { target: { value: 'new window' } });
+    expect(screen.getByRole('option', { name: /New window/ })).toHaveTextContent('⇧⌘N');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(open).toHaveBeenCalledOnce();
   });
 
   it('lists a command for each theme and saves the one chosen', async () => {

@@ -75,6 +75,7 @@ const bridge: OrdewellBridge = {
     onThemeChange: (cb) => listen<AppInfo['theme']>(EVENTS.theme, cb),
     onMenuCommand: (cb) => listen<MenuCommand>(EVENTS.menuCommand, cb),
     openWorkspace: (path, options) => ipcRenderer.invoke(CHANNELS.appOpenWorkspace, path, options),
+    newWindow: () => ipcRenderer.invoke(CHANNELS.appNewWindow),
     recentWorkspaces: () => ipcRenderer.invoke(CHANNELS.appRecentWorkspaces),
     onRecentsChange: (cb) => listen<undefined>(EVENTS.recentsChanged, () => cb()),
     reportLiveWork: (kinds) => ipcRenderer.invoke(CHANNELS.appReportLiveWork, kinds),

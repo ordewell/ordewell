@@ -20,6 +20,7 @@ function fakeProjects(initial: RecentWorkspace[]) {
     recents: vi.fn(async () => list),
     onRecentsChange: vi.fn((cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; }),
     open: vi.fn((_path: string | undefined, _options: { newWindow: boolean }) => {}),
+    newWindow: vi.fn(() => {}),
     openDropped: vi.fn(async (_file: File): Promise<ActionResult> => ({ ok: true })),
   } satisfies ProjectsPort;
   return {
@@ -80,6 +81,27 @@ describe('the project switcher', () => {
     expect(docs).toHaveTextContent('/srv/www/docs');
     expect(within(menu).getByRole('menuitem', { name: 'Open Folder…' })).toHaveTextContent('Ctrl+O');
     expect(within(menu).getByRole('menuitemcheckbox', { name: 'Open in new window' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('opens a recent in a new window on a Ctrl-click or Ctrl+Enter, and hints at it', async () => {
+    const { projects } = mount(RECENTS);
+    fireEvent.click(switcher());
+    const menu = await screen.findByRole('menu', { name: 'Switch project' });
+    expect(menu).toHaveTextContent('Ctrl-click to open in a new window');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'billing' }), { ctrlKey: true });
+    expect(projects.port.open).toHaveBeenLastCalledWith('/home/me/billing', { newWindow: true });
+    fireEvent.click(switcher());
+    fireEvent.keyDown(await screen.findByRole('menuitem', { name: 'docs' }), { key: 'Enter', ctrlKey: true });
+    expect(projects.port.open).toHaveBeenLastCalledWith('/srv/www/docs', { newWindow: true });
+  });
+
+  it('names the Command key on a Mac and ignores Ctrl there', async () => {
+    const { projects } = mount(RECENTS, 'darwin');
+    fireEvent.click(switcher());
+    const menu = await screen.findByRole('menu', { name: 'Switch project' });
+    expect(menu).toHaveTextContent('⌘-click to open in a new window');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'billing' }), { ctrlKey: true });
+    expect(projects.port.open).toHaveBeenLastCalledWith('/home/me/billing', { newWindow: false });
   });
 
   it('tells two folders of one name apart by their paths, in the row and for a screen reader, without printing the path twice', async () => {

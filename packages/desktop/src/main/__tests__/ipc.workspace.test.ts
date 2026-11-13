@@ -22,6 +22,7 @@ import { registerIpc, type IpcDeps } from '../ipc';
 describe('a window\'s daemon calls name its workspace', () => {
   const calls: Array<{ path: string }> = [];
   const streams: string[] = [];
+  const welcomed = vi.fn();
   let context: { kind: 'workspace'; path: string } | { kind: 'welcome' };
 
   beforeEach(() => {
@@ -38,7 +39,7 @@ describe('a window\'s daemon calls name its workspace', () => {
     registerIpc({
       appVersion: '0', contract: 1, devOrigin: undefined,
       daemon: inert(), recents: inert(), projects: inert(), prefs: inert(), updates: inert(), notifications: inert(), terminals: inert(),
-      windows: { contextOf: () => context, broadcast: () => undefined },
+      windows: { contextOf: () => context, openWelcome: welcomed, broadcast: () => undefined },
       proxy,
       holders: { route: () => undefined },
     } as unknown as IpcDeps);
@@ -59,6 +60,11 @@ describe('a window\'s daemon calls name its workspace', () => {
     invoke(CHANNELS.daemonSubscribe, { rootId: 's1', childId: 'c1' });
 
     expect(streams).toEqual(['/ws/session/s1?workspace=%2Fb', '/ws/session/s1/child/c1?workspace=%2Fb']);
+  });
+
+  it('opens the welcome window for the new-window request', async () => {
+    await invoke(CHANNELS.appNewWindow);
+    expect(welcomed).toHaveBeenCalledTimes(1);
   });
 
   it('names none from a window with no workspace', async () => {
