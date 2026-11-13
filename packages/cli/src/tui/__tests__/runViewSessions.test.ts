@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialState, reduce, type Action } from '../reducer';
+import { initialState, reduce, type RunMessage } from '../reducer';
 import { findTask, type TuiState } from '../state';
 
 /**
@@ -18,12 +18,15 @@ const oldRun = (): TuiState => {
     type: 'planUpdated', plan: { tasks: [task()] }, sessionId: 'old',
   }).state;
   return reduce(planned, {
-    type: 'statusUpdate',
+    type: 'runMessage',
+    message: {
+      type: 'status_update',
+      tasks: [{
+        id: 'task-1', status: 'awaiting_user', verdict: null, awaitingReason: 'checkpoint',
+        checkpoint: 'Keep the old API?', continuable: true, mergeGate: ['task-0'], awaitingApproval: 2,
+      }] as Extract<RunMessage, { type: 'status_update' }>['tasks'],
+    },
     sessionId: 'old',
-    tasks: [{
-      id: 'task-1', status: 'awaiting_user', verdict: null, awaitingReason: 'checkpoint',
-      checkpoint: 'Keep the old API?', continuable: true, mergeGate: ['task-0'], awaitingApproval: 2,
-    }] as Extract<Action, { type: 'statusUpdate' }>['tasks'],
   }).state;
 };
 

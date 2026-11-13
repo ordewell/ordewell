@@ -34,9 +34,9 @@ describe('what an awaiting task waits on, on its row', () => {
 describe('the reason, from the daemon', () => {
   it('is taken from each status update, and dropped once the task stops waiting', () => {
     const base = initialState({ sessionId: 's1', tasks: [task({ status: 'in_progress' })] });
-    const waiting = reduce(base, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'input' }], sessionId: 's1' }).state;
+    const waiting = reduce(base, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'awaiting_user', verdict: null, awaitingReason: 'input' }] }, sessionId: 's1' }).state;
     expect(waiting.tasks[0].awaitingReason).toBe('input');
-    const resumed = reduce(waiting, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
+    const resumed = reduce(waiting, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
     expect(resumed.tasks[0].awaitingReason).toBeUndefined();
   });
 

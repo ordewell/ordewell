@@ -81,7 +81,7 @@ describe('repaint measurement', () => {
       if (i % 4 === 0) {
         flood.push({ type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_text_delta', turnId: 'turn', segmentId: 'seg', text: `token ${i} ` } });
       } else if (i % 4 === 1) {
-        flood.push({ type: 'statusUpdate', sessionId: 's1', tasks: Array.from({ length: 6 }, (_, n) => ({ id: `t${n + 1}`, status: 'in_progress', verdict: null })) });
+        flood.push({ type: 'runMessage', message: { type: 'status_update', tasks: Array.from({ length: 6 }, (_, n) => ({ id: `t${n + 1}`, status: 'in_progress', verdict: null })) }, sessionId: 's1' });
       } else if (i % 4 === 2) {
         flood.push({ type: 'taskLog', sessionId: 's1', taskId: 't1', attempt: 1, events: [{ type: 'text_delta', text: `step ${i}\n` }] });
       } else {

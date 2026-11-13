@@ -31,7 +31,7 @@ function typed(state: TuiState, text: string): Step {
 
 describe('isolation_handoff', () => {
   it('records the handoff, says so, and opens the overlay on an otherwise quiet screen', () => {
-    const { state } = apply(session(), { type: 'isolationHandoff', handoff, sessionId: 's1' });
+    const { state } = apply(session(), { type: 'runMessage', message: { type: 'isolation_handoff', ...handoff }, sessionId: 's1' });
 
     expect(state.handoff).toEqual(handoff);
     expect(state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
@@ -39,7 +39,7 @@ describe('isolation_handoff', () => {
   });
 
   it('does not take over a screen that already has an overlay', () => {
-    const { state } = apply(session({ overlay: { kind: 'help' } }), { type: 'isolationHandoff', handoff, sessionId: 's1' });
+    const { state } = apply(session({ overlay: { kind: 'help' } }), { type: 'runMessage', message: { type: 'isolation_handoff', ...handoff }, sessionId: 's1' });
 
     expect(state.overlay).toEqual({ kind: 'help' });
     expect(state.handoff).toEqual(handoff);
@@ -49,7 +49,7 @@ describe('isolation_handoff', () => {
   it('stores a handoff deferred to the supervisor and says so, without opening the overlay', () => {
     const deferred: HandoffView = { ...handoff, deferredTo: 'supervisor' };
 
-    const { state } = apply(session(), { type: 'isolationHandoff', handoff: deferred, sessionId: 's1' });
+    const { state } = apply(session(), { type: 'runMessage', message: { type: 'isolation_handoff', ...deferred }, sessionId: 's1' });
 
     expect(state.handoff).toEqual(deferred);
     expect(state.overlay).toBeNull();
@@ -68,7 +68,7 @@ describe('isolation_handoff', () => {
   it('opens the overlay when the unmarked handoff for the same run follows, and says the supervisor left it', () => {
     const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' } });
 
-    const { state } = apply(deferred, { type: 'isolationHandoff', handoff, sessionId: 's1' });
+    const { state } = apply(deferred, { type: 'runMessage', message: { type: 'isolation_handoff', ...handoff }, sessionId: 's1' });
 
     expect(state.handoff).toEqual(handoff);
     expect(state.overlay).toEqual({ kind: 'handoff', index: 0, diff: null });
@@ -80,7 +80,7 @@ describe('isolation_handoff', () => {
   it('leaves an overlay that is already open alone when the unmarked handoff follows', () => {
     const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' }, overlay: { kind: 'help' } });
 
-    const { state } = apply(deferred, { type: 'isolationHandoff', handoff, sessionId: 's1' });
+    const { state } = apply(deferred, { type: 'runMessage', message: { type: 'isolation_handoff', ...handoff }, sessionId: 's1' });
 
     expect(state.overlay).toEqual({ kind: 'help' });
   });
@@ -92,13 +92,13 @@ describe('isolation_handoff', () => {
     };
     const deferred = session({ handoff: { ...handoff, deferredTo: 'supervisor' } });
 
-    const { state } = apply(deferred, { type: 'isolationHandoff', handoff: other, sessionId: 's1' });
+    const { state } = apply(deferred, { type: 'runMessage', message: { type: 'isolation_handoff', ...other }, sessionId: 's1' });
 
     expect(lastMessage(state)?.text).toMatch(/^Run finished on ordewell\/r2\/integration/);
   });
 
   it("ignores another session's handoff", () => {
-    const { state } = apply(session(), { type: 'isolationHandoff', handoff, sessionId: 'other' });
+    const { state } = apply(session(), { type: 'runMessage', message: { type: 'isolation_handoff', ...handoff }, sessionId: 'other' });
 
     expect(state.handoff).toBeNull();
     expect(state.overlay).toBeNull();
@@ -416,7 +416,7 @@ describe('the run closing', () => {
       overlay: { kind: 'handoff', index: 2, diff: null },
     });
 
-    const { state } = apply(before, { type: 'runClosed', sessionId: 's1' });
+    const { state } = apply(before, { type: 'runMessage', message: { type: 'run_closed' }, sessionId: 's1' });
 
     expect(state.handoff).toBeNull();
     expect(state.tasks[0].isolation).toBeUndefined();
@@ -424,7 +424,7 @@ describe('the run closing', () => {
   });
 
   it('leaves an overlay opened since alone', () => {
-    const { state } = apply(withHandoff({ overlay: { kind: 'help' } }), { type: 'runClosed', sessionId: 's1' });
+    const { state } = apply(withHandoff({ overlay: { kind: 'help' } }), { type: 'runMessage', message: { type: 'run_closed' }, sessionId: 's1' });
 
     expect(state.overlay).toEqual({ kind: 'help' });
   });
@@ -440,7 +440,7 @@ describe('a Merge all that leaves the run open', () => {
       overlay: { kind: 'handoff', index: 0, diff: null },
     });
 
-    const { state } = apply(before, { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' });
+    const { state } = apply(before, { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' } }, sessionId: 's1' });
 
     expect(state.tasks[0].isolation).toEqual(landing);
     expect(state.handoff).toBeNull();
@@ -456,7 +456,7 @@ describe('a merge while the handoff is deferred', () => {
       overlay: { kind: 'handoff', index: 0, diff: null },
     });
 
-    const { state } = apply(before, { type: 'runClosed', sessionId: 's1' });
+    const { state } = apply(before, { type: 'runMessage', message: { type: 'run_closed' }, sessionId: 's1' });
 
     expect(state.handoff).toBeNull();
     expect(state.overlay).toBeNull();
@@ -468,7 +468,9 @@ describe('per-task isolation on the plan', () => {
 
   it('takes each task\'s isolation from the status stream', () => {
     const { state } = apply(session({ tasks: [task({ id: 't2', status: 'awaiting_user' })] }), {
-      type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't2', status: 'awaiting_user', verdict: null, isolation: conflict }],
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 't2', status: 'awaiting_user', verdict: null, isolation: conflict }] },
+      sessionId: 's1',
     });
 
     expect(state.tasks[0].isolation).toEqual(conflict);
@@ -479,8 +481,12 @@ describe('per-task isolation on the plan', () => {
     const before = session({ tasks: [task({ id: 't2', status: 'in_progress', isolation: repairing })] });
 
     const { state } = apply(before, {
-      type: 'statusUpdate', sessionId: 's1',
-      tasks: [{ id: 't2', status: 'in_progress', verdict: null, isolation: { ...repairing, repair: { attempt: 2, limit: 2 } } }],
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 't2', status: 'in_progress', verdict: null, isolation: { ...repairing, repair: { attempt: 2, limit: 2 } } }],
+      },
+      sessionId: 's1',
     });
 
     expect(state.tasks[0].isolation).toEqual({ ...repairing, repair: { attempt: 2, limit: 2 } });
@@ -489,7 +495,7 @@ describe('per-task isolation on the plan', () => {
   it('notices an isolation change even when the status did not', () => {
     const before = session({ tasks: [task({ id: 't2', status: 'awaiting_user', isolation: { state: 'active', branch: 'b', worktree: 'w', repos: [] } })] });
 
-    const { state } = apply(before, { type: 'statusUpdate', sessionId: 's1', tasks: [{ id: 't2', status: 'awaiting_user', verdict: null, isolation: conflict }] });
+    const { state } = apply(before, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't2', status: 'awaiting_user', verdict: null, isolation: conflict }] }, sessionId: 's1' });
 
     expect(state.tasks[0].isolation?.state).toBe('conflict');
   });
@@ -597,7 +603,7 @@ describe('a run over a repo group', () => {
   const inGroup = (over: Partial<TuiState> = {}): TuiState => session({ handoff: group, ...over });
 
   it('says which repos the run finished in when it arrives', () => {
-    const { state } = apply(session(), { type: 'isolationHandoff', handoff: group, sessionId: 's1' });
+    const { state } = apply(session(), { type: 'runMessage', message: { type: 'isolation_handoff', ...group }, sessionId: 's1' });
 
     expect(lastMessage(state)?.text).toBe(`Run finished on ${branch} in api, web, infra: 2 tasks landed. /merge to review and land it.`);
   });
@@ -646,7 +652,7 @@ describe('a merge result the pane did not ask for', () => {
   const blocked = { outcome: 'blocked' as const, blocked: [{ repo: '.', reason: 'conflict' as const, files: ['a.ts'] }] };
 
   it('says why an automatic Merge all stopped, in the words of /merge', () => {
-    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: blocked, trigger: { kind: 'run_end' }, sessionId: 's1' });
+    const { state } = apply(withHandoff(), { type: 'runMessage', message: { type: 'isolation_merge', result: blocked, trigger: { kind: 'run_end' } }, sessionId: 's1' });
 
     expect(lastMessage(state)).toMatchObject({ role: 'error', text: expect.stringContaining('Merged nothing, so every tree is as it was: . would conflict in a.ts') });
   });
@@ -654,7 +660,7 @@ describe('a merge result the pane did not ask for', () => {
   it('adds no second line for an automatic Merge all that landed, which the transcript already says', () => {
     const before = withHandoff();
     for (const trigger of [{ kind: 'gate' as const, taskId: 't1' }, { kind: 'run_end' as const }]) {
-      const { state } = apply(before, { type: 'isolationMerged', result: { outcome: 'merged' }, trigger, sessionId: 's1' });
+      const { state } = apply(before, { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' }, trigger }, sessionId: 's1' });
 
       expect(messagesOf(state)).toHaveLength(messagesOf(before).length);
       expect(state.handoff).toBeNull();
@@ -662,13 +668,13 @@ describe('a merge result the pane did not ask for', () => {
   });
 
   it('says where a merge landed that Ordewell did not run by itself', () => {
-    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' });
+    const { state } = apply(withHandoff(), { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' } }, sessionId: 's1' });
 
     expect(lastMessage(state)).toMatchObject({ role: 'system', text: expect.stringContaining('Merged ordewell/r1/integration into your checked-out branch') });
   });
 
   it('says what a supervisor\'s or another window\'s Merge all did, which carries no trigger', () => {
-    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: blocked, sessionId: 's1' });
+    const { state } = apply(withHandoff(), { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' });
 
     expect(lastMessage(state)?.text).toContain('would conflict in a.ts');
   });
@@ -677,14 +683,14 @@ describe('a merge result the pane did not ask for', () => {
     const asked = apply(withHandoff({ overlay: { kind: 'confirm', title: 't', message: 'm', action: { kind: 'merge-run' } } }), key('enter')).state;
     const before = messagesOf(asked).length;
 
-    const { state } = apply(asked, { type: 'isolationMerged', result: blocked, sessionId: 's1' });
+    const { state } = apply(asked, { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' });
 
     expect(messagesOf(state)).toHaveLength(before);
   });
 
   it('speaks again once the request it asked for is answered', () => {
     const asked = apply(withHandoff({ overlay: { kind: 'confirm', title: 't', message: 'm', action: { kind: 'merge-run' } } }), key('enter')).state;
-    const answered = apply(apply(asked, { type: 'isolationMerged', result: blocked, sessionId: 's1' }).state, { type: 'isolationMerged', result: blocked, sessionId: 's1' }).state;
+    const answered = apply(apply(asked, { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' }).state, { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' }).state;
 
     expect(lastMessage(answered)?.text).toContain('would conflict in a.ts');
   });
@@ -693,7 +699,7 @@ describe('a merge result the pane did not ask for', () => {
     const asked = apply(withHandoff({ overlay: { kind: 'confirm', title: 't', message: 'm', action: { kind: 'merge-run' } } }), key('enter')).state;
     const abandoned = apply(asked, { type: 'mergeAbandoned', sessionId: 's1' }).state;
 
-    const { state } = apply(abandoned, { type: 'isolationMerged', result: blocked, sessionId: 's1' });
+    const { state } = apply(abandoned, { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' });
 
     expect(lastMessage(state)?.text).toContain('would conflict in a.ts');
   });

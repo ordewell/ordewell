@@ -34,7 +34,7 @@ describe('plan pane: a report received while its attempt winds down (ADR-0018, L
   it('drops the receipt once a status update no longer carries it', () => {
     const state = joined(runTask({ completionReceived: 'done' }));
 
-    const next = reduce(state, { type: 'statusUpdate', tasks: [{ id: 't1', status: 'in_progress', verdict: null }], sessionId: 's1' }).state;
+    const next = reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
 
     expect(plain(next)).not.toContain('received');
   });

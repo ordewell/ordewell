@@ -61,22 +61,26 @@ describe('a whole-plan start in the TUI', () => {
 
   it('follows the run\'s activity from starting to executing to idle', () => {
     const starting = reduce(planKey().state, {
-      type: 'statusUpdate', tasks: [], activity: activity({ starting: true, scheduled: true }), sessionId: 's1',
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [], activity: activity({ starting: true, scheduled: true }) },
+      sessionId: 's1',
     });
     expect(starting.state.status).toBe('starting');
 
     const running = reduce(starting.state, {
-      type: 'statusUpdate',
-      tasks: [{ id: 'task-1', status: 'in_progress', verdict: null }],
-      activity: activity({ running: true, scheduled: true }),
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 'task-1', status: 'in_progress', verdict: null }],
+        activity: activity({ running: true, scheduled: true }),
+      },
       sessionId: 's1',
     });
     expect(running.state.status).toBe('executing');
 
     const finished = reduce(running.state, {
-      type: 'statusUpdate',
-      tasks: [{ id: 'task-1', status: 'completed', verdict: null }],
-      activity: activity(),
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [{ id: 'task-1', status: 'completed', verdict: null }], activity: activity() },
       sessionId: 's1',
     });
     expect(finished.state.status).toBe('idle');
@@ -95,7 +99,9 @@ describe('a whole-plan start in the TUI', () => {
 
     // A status tick from the session it left cannot start a spinner here.
     const late = reduce(loaded.state, {
-      type: 'statusUpdate', tasks: [], activity: activity({ starting: true, scheduled: true }), sessionId: 's1',
+      type: 'runMessage',
+      message: { type: 'status_update', tasks: [], activity: activity({ starting: true, scheduled: true }) },
+      sessionId: 's1',
     });
     expect(late.state.status).toBe('idle');
   });

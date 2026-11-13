@@ -349,43 +349,27 @@ export function createInbound(dispatch: Dispatch, sessionId: string): SessionInb
  */
 function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionId: string): void {
   switch (event.type) {
+    // Whole, for core to fold into the run and word (`runNotice`): the reducer
+    // adds only what the terminal has of its own. A merge's result is worded
+    // there too, unless this pane asked for the merge itself, and whether it
+    // ended the run is the Session's to say, in `run_closed`.
     case 'status_update':
-      dispatch({
-        type: 'statusUpdate',
-        tasks: event.tasks,
-        ...(event.runMerge ? { runMerge: event.runMerge } : {}),
-        ...(event.usage ? { usage: event.usage } : {}),
-        ...(event.activity ? { activity: event.activity } : {}),
-        ...(event.escalations ? { escalations: event.escalations } : {}),
-        sessionId,
-      });
-      return;
-
     case 'task_started':
-      dispatch({ type: 'taskStarted', taskId: String(event.taskId), order: event.order, title: String(event.title ?? event.taskId), runner: event.runner, sessionId });
+    case 'task_updated':
+    case 'review_needed':
+    case 'review_approved':
+    case 'execution_complete':
+    case 'execution_stopped':
+    case 'isolation_handoff':
+    case 'isolation_merge':
+    case 'run_closed':
+      dispatch({ type: 'runMessage', message: event, sessionId });
       return;
 
     // The extension shows these in its checkpoint panel; here they are a
     // transcript line, and the task view carries the card that answers them.
     case 'checkpoint':
       dispatch({ type: 'taskCheckpoint', taskId: String(event.taskId), title: String(event.taskTitle), summary: event.summary, sessionId });
-      return;
-
-    case 'review_needed':
-      dispatch({ type: 'notice', message: 'Plan needs your sign-off: /approve to continue.', sessionId });
-      return;
-
-    case 'review_approved':
-      dispatch({ type: 'notice', message: 'Plan approved.', sessionId });
-      return;
-
-    case 'execution_complete':
-      dispatch({ type: 'executionComplete', summary: event.summary, sessionId });
-      return;
-
-    // A stop carries no tally — the reducer counts the pane instead.
-    case 'execution_stopped':
-      dispatch({ type: 'executionComplete', stopped: true, sessionId });
       return;
 
     // Nothing started; the user chooses how to go on.
@@ -398,10 +382,6 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'notice', message: event.message, level: event.level, sessionId });
       return;
 
-    case 'isolation_handoff':
-      dispatch({ type: 'isolationHandoff', handoff: { repos: event.repos, landed: event.landed, ...(event.deferredTo ? { deferredTo: event.deferredTo } : {}) }, sessionId });
-      return;
-
     // A structured task's log as it happens (ADR-0018, P1): the task view is
     // its only reader, and the reducer drops it unless that view is open on
     // this task. The run's watcher itself does nothing with it.
@@ -409,24 +389,10 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'taskLog', taskId: String(event.taskId), attempt: event.attempt, events: event.events, position: stampOf(event) ?? undefined, sessionId });
       return;
 
-    case 'task_updated':
-      dispatch({ type: 'taskUpdated', taskId: String(event.taskId), changes: event.changes, sessionId });
-      return;
-
     // Raw runner chatter. Listed rather than defaulted, so a new lifecycle
     // variant fails to compile here until someone decides what a run's watcher
     // does with it.
     case 'task_output':
-      return;
-
-    // Whether the merge ended the run is the Session's to say, in `run_closed`.
-    // The reducer words the result unless this pane asked for the merge itself.
-    case 'isolation_merge':
-      dispatch({ type: 'isolationMerged', result: event.result, ...(event.trigger ? { trigger: event.trigger } : {}), sessionId });
-      return;
-
-    case 'run_closed':
-      dispatch({ type: 'runClosed', sessionId });
       return;
 
     default: {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { initialState, reduce, type Action, type Step } from '../reducer';
+import { initialState, reduce, type RunMessage, type Step } from '../reducer';
 import { render } from '../render';
 import { style } from '../ansi';
 import { findTask, type TaskView, type TuiState } from '../state';
@@ -71,9 +71,12 @@ describe('a loop from the run view', () => {
 
   it('takes the loop off the plan and the round and verdict off the status stream', () => {
     const state = reduce(loaded(), {
-      type: 'statusUpdate',
+      type: 'runMessage',
+      message: {
+        type: 'status_update',
+        tasks: [{ id: 'c', status: 'failed', loopRound: 2, loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' } }] as Extract<RunMessage, { type: 'status_update' }>['tasks'],
+      },
       sessionId: 's1',
-      tasks: [{ id: 'c', status: 'failed', loopRound: 2, loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' } }] as Extract<Action, { type: 'statusUpdate' }>['tasks'],
     }).state;
 
     expect(findTask(state.tasks, 'c')).toMatchObject({ loop: { body: ['f'], maxRounds: 3 }, loopRound: 2, verdict: { outcome: 'fail', reported: 'failed' } });
@@ -82,12 +85,12 @@ describe('a loop from the run view', () => {
   });
 
   it('draws a check nothing will run as stopped, off the status stream, and no longer once a run takes it back', () => {
-    const tasks = (loopStranded: boolean) => [{ id: 'c', status: 'failed', loopRound: 1, loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' }, ...(loopStranded ? { loopStranded: true } : {}) }] as Extract<Action, { type: 'statusUpdate' }>['tasks'];
-    const stranded = reduce(loaded(), { type: 'statusUpdate', sessionId: 's1', tasks: tasks(true) }).state;
+    const tasks = (loopStranded: boolean) => [{ id: 'c', status: 'failed', loopRound: 1, loop: { body: ['f'], maxRounds: 3 }, verdict: { outcome: 'fail', reason: 'two problems', checks: [], reported: 'failed' }, ...(loopStranded ? { loopStranded: true } : {}) }] as Extract<RunMessage, { type: 'status_update' }>['tasks'];
+    const stranded = reduce(loaded(), { type: 'runMessage', message: { type: 'status_update', tasks: tasks(true) }, sessionId: 's1' }).state;
 
     expect(frame(stranded)).toContain('↻ stopped in round 1 of 3 · nothing runs it');
     expect(frame(stranded)).not.toContain('fixing');
-    expect(frame(reduce(stranded, { type: 'statusUpdate', sessionId: 's1', tasks: tasks(false) }).state)).toContain('↻ round 1 of 3: fixing');
+    expect(frame(reduce(stranded, { type: 'runMessage', message: { type: 'status_update', tasks: tasks(false) }, sessionId: 's1' }).state)).toContain('↻ round 1 of 3: fixing');
   });
 });
 
