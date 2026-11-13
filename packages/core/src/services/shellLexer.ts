@@ -58,6 +58,12 @@ export interface Dialect {
    */
   hereDocuments: boolean;
   /**
+   * What ends a word. A POSIX shell splits on blanks alone: U+00A0, U+2003, a
+   * lone CR and the like stay inside the word, so `cat<NBSP>x/y` names the file
+   * `./cat<NBSP>x/y`, which splitting it on JS's `\s` would run as `cat x/y`.
+   */
+  wordBlank: RegExp;
+  /**
    * Characters that end a command name with no space before them. cmd.exe
    * reads `cmd/c del x` as `cmd /c del x`, and skips `,` and `=` like spaces,
    * so `,del x` runs `del`. Read by `nameDelimiter` in {@link lex}.
@@ -75,6 +81,7 @@ const POSIX_DIALECT: Dialect = {
   expansion: /^\$[A-Za-z_{0-9@*#?$!-]/,
   dollarQuotes: true,
   hereDocuments: true,
+  wordBlank: /[ \t]/,
   nameDelimiters: '',
   strippedExtensions: [],
 };
@@ -87,6 +94,7 @@ const CMD_DIALECT: Dialect = {
   expansion: /^[%!][A-Za-z_]/,
   dollarQuotes: false,
   hereDocuments: false,
+  wordBlank: /\s/,
   nameDelimiters: '/,=',
   // Without this, `del.exe` and `C:\bin\del.exe` both missed the refusal list.
   strippedExtensions: ['.exe', '.cmd', '.bat', '.com', '.ps1', '.msc'],
@@ -655,7 +663,7 @@ export function lex(command: string, nested: string[], dialect: Dialect): Lexed 
       continue;
     }
 
-    if (/\s/.test(c)) { endToken(false); i++; continue; }
+    if (dialect.wordBlank.test(c)) { endToken(false); i++; continue; }
     if (quote === '' && nameDelimiter(c)) { i++; continue; }
 
     // A `#` at a word boundary opens a comment for the rest of this line; only

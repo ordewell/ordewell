@@ -774,6 +774,31 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     expect(classifyCommand('printf -- "%s\\n" one').tier).toBe('auto');
   });
 
+  // bash's `printf -v NAME` assigns a shell variable, so `printf -v PATH bin`
+  // makes the next bare command run the repository's own file, and
+  // `printf -v CDPATH` sends a bare-name `cd` outside the workspace.
+  it.each([
+    'printf -v PATH . && cd bin && cat x',
+    'printf -v PATH bin && cat README.md',
+    "printf -v CDPATH ':\\057' && cd etc && cat passwd",
+    'printf -vPATH bin && cat README.md',
+    "printf '-v' PATH bin && cat README.md",
+    'command printf -v PATH bin && cat README.md',
+  ])('does not run printf -v unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).not.toBe('auto');
+  });
+
+  // A shell keeps U+00A0 and the other Unicode spaces inside a word, so
+  // `cat<NBSP>x/y` is one word with a slash: the file `./cat<NBSP>x/y`.
+  it.each([
+    ['no-break space', '\u00a0'], ['em space', '\u2003'], ['ideographic space', '\u3000'],
+    ['byte order mark', '\ufeff'], ['carriage return', '\r'], ['form feed', '\f'], ['vertical tab', '\v'],
+  ])('does not split a word on a %s', (_name, space) => {
+    const cmd = `cat${space}x/y`;
+    expect(classifyCommand(cmd).tier).not.toBe('auto');
+    expect(classifyCommand(`ls${space}x/y`).tier).not.toBe('auto');
+  });
+
   // Membership in the permitted set is not enough on its own: a binary with no
   // declared flag set would refuse every flag it was ever given, which is the
   // over-tightening failure arriving by omission rather than by decision.

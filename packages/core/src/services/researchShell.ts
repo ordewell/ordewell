@@ -78,6 +78,20 @@ export interface ShellLaunch {
   memoryBytes?: number;
 }
 
+/**
+ * Git's discovery is told to take a bare repository only when named. A
+ * repository can commit a bare one of its own (`vendor/evil.git`), and
+ * `git -C vendor/evil.git diff` or a `cd` into it would otherwise run the
+ * `diff.external` or textconv program its config names, with the planner's
+ * silent, flag-checked `git` as the only gate. Every planner shell carries
+ * this, sandboxed or not.
+ */
+export const PLANNER_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'safe.bareRepository',
+  GIT_CONFIG_VALUE_0: 'explicit',
+};
+
 const POSIX_SHELL: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
 const CMD_SHELL: ResearchShell = { file: null, args: [], dialect: 'cmd', utilsDir: null };
 

@@ -19,7 +19,7 @@ import {
 } from '../plannerSandbox';
 import type { ProbeExec, SandboxBackend, SandboxProfile } from '../SandboxBackend';
 import { classifyOutcome } from '../../researchStepSummary';
-import type { ResearchShell } from '../../researchShell';
+import { PLANNER_GIT_ENV, type ResearchShell } from '../../researchShell';
 
 const POSIX: ResearchShell = { file: null, args: [], dialect: 'posix', utilsDir: null };
 
@@ -261,6 +261,11 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
     expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/ws', writable: '/ws', worktrees: ['/ws/alpha'] }).gitless).toBeUndefined();
   });
 
+  it('keeps git from discovering a bare repository nobody named', () => {
+    expect(sealedShellProfile(host, { scratch: '/tmp/s', workspace: '/w' }).env).toMatchObject(PLANNER_GIT_ENV);
+    expect(sealedShellProfile(host, { workspace: '/w' }).env).toMatchObject(PLANNER_GIT_ENV);
+  });
+
   it('keeps its network off unless a native shell asks for the harness\'s own (N3)', () => {
     expect(sealedShellProfile(host, { workspace: '/w' }).network).toBe(false);
     expect(sealedShellProfile(host, { workspace: '/w', network: true }).network).toBe(true);
@@ -273,6 +278,14 @@ describe('sealedShellProfile (ADR-0036 S1)', () => {
 
 describe('plannerShellProfile', () => {
   const host = { platform: 'linux' as NodeJS.Platform, services: ['/run/user/1000'] };
+
+  // A bare repository the workspace commits carries its own config, which can
+  // name a program for `git diff` to run; `git -C` or a `cd` reaches it silently.
+  it('keeps git from discovering a bare repository nobody named', () => {
+    expect(PLANNER_GIT_ENV).toEqual({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.bareRepository', GIT_CONFIG_VALUE_0: 'explicit' });
+    expect(plannerShellProfile(host, { network: false }).env).toMatchObject(PLANNER_GIT_ENV);
+    expect(plannerShellProfile(host, { scratch: '/tmp/s', network: true }).env).toMatchObject(PLANNER_GIT_ENV);
+  });
 
   it('reads the host, writes only scratch, and points the read commands that write caches at it (B2)', () => {
     const profile = plannerShellProfile(host, { scratch: '/tmp/s', network: false });
@@ -287,6 +300,7 @@ describe('plannerShellProfile', () => {
       GOCACHE: join('/tmp/s', 'go-build'),
       XDG_CACHE_HOME: join('/tmp/s', 'cache'),
       PYTHONPYCACHEPREFIX: join('/tmp/s', 'pycache'),
+      ...PLANNER_GIT_ENV,
     });
     expect(plannerShellProfile({ ...host, platform: 'darwin' }, { scratch: '/tmp/s', network: false }).env.xcrun_db).toBe(join('/tmp/s', 'xcrun_db'));
   });
@@ -328,7 +342,9 @@ describe('PlannerShellSandbox', () => {
 
     const launches = await Promise.all([1, 2, 3].map(() => sandbox.launch(POSIX, { network: false })));
     await sandbox.launch(POSIX, { network: true });
-    expect(launches.every((l) => l.launch === POSIX && !l.sandboxed)).toBe(true);
+    expect(launches.every((l) => l.launch.file === POSIX.file && l.launch.args === POSIX.args && !l.sandboxed)).toBe(true);
+    // No sandbox does not mean git may take a bare repository the workspace committed.
+    expect(launches.every((l) => l.launch.env?.GIT_CONFIG_VALUE_0 === 'explicit')).toBe(true);
     expect(notices).toEqual(['no sandbox']);
 
     sandbox.end();
