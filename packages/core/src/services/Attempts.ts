@@ -41,6 +41,7 @@ import { augmentedPath } from '../utils/shellPath';
 import type { ApplyPatchArgs, McpToolReply, PostArgs } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
+import { attemptLeaves, endKeeps, keptLate } from './attemptLeaves';
 import type { IWebFetcher } from '../interfaces/IWebFetcher';
 import type { OrchestratorObserver, StartAdmission } from './TaskOrchestrator';
 import { KeptWorkError, type ExecutionBackend, type OpenLease, type ReservedLease } from './executionLease';
@@ -1338,7 +1339,7 @@ export class Attempts {
    */
   private async leaveEnded(task: Task, attempt: TaskAttempt, session?: IRunnerSession): Promise<false> {
     session?.kill();
-    const keep = () => attempt.kind.kind === 'repair' || attempt.endKeeps;
+    const keep = () => keptLate(attempt.kind, attempt.endKeeps);
     const made = (await this.deps.runs.stillToLetGo(task.id, attempt.isolationDecision, keep)) ?? attempt.worktree;
     if (made && !this.live.has(task.id) && !this.host.completing(task.id)) {
       await this.deps.leases.letGo(task.id, { keep: keep(), reason: 'ended while opening' });
@@ -1360,7 +1361,7 @@ export class Attempts {
     attempt.shell?.end();
     attempt.web?.end();
     if (this.live.has(task.id) || this.host.completing(task.id) || store.get(task.id)?.status !== 'in_progress') return;
-    if (attempt.kind.kind === 'repair') store.markAwaitingUser(task.id, 'conflict');
+    if (attemptLeaves('abandoned', attempt.kind).status === 'conflict') store.markAwaitingUser(task.id, 'conflict');
     else store.markPending(task.id);
     this.host.emit('onTaskChanged');
   }
@@ -1614,8 +1615,8 @@ export class Attempts {
 
   private endAll(reason: 'stop' | 'load'): TaskAttempt[] {
     const ended = [...this.live.values()];
-    // A Stop keeps worktrees as a cancel does (ADR-0013); a loaded plan replaced the one that would land them.
-    for (const { taskId } of ended) this.end(taskId, reason, { keep: reason === 'stop' });
+    const keep = endKeeps(reason === 'stop' ? 'stopped' : 'loaded');
+    for (const { taskId } of ended) this.end(taskId, reason, { keep });
     this.verifier.reset();
     if (reason === 'load') this.deps.output.reset();
     return ended;
