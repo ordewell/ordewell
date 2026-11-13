@@ -126,9 +126,16 @@ describe('summarizeRefs', () => {
     expect(sum(['origin/main']).lead?.tracked).toBeUndefined();
   });
 
+  it('lists every chip but HEAD for the card, the lead first and a folded remote marked on its branch', () => {
+    const s = sum(['HEAD', 'feature', 'main', 'origin/main', 'v1.0']);
+    expect(s.chips.map((c) => c.text)).toEqual(['main', 'feature', 'v1.0']);
+    expect(s.chips[0]).toMatchObject({ tracked: 'origin/main' });
+    expect(s.lead).toBe(s.chips[0]);
+  });
+
   it('leads with Ordewell’s branch before a remote or a tag, and with nothing when there is no ref', () => {
     expect(sum(['v1.0', 'origin/main', 'ordewell/r7/integration']).lead?.kind).toBe('ordewell');
-    expect(sum([])).toEqual({ lead: undefined, more: 0, names: [] });
+    expect(sum([])).toEqual({ lead: undefined, chips: [], more: 0, names: [] });
   });
 });
 

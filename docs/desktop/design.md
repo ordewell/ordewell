@@ -1122,8 +1122,14 @@ left as it was:
     local branch and its remote-tracking ref at the commit are that one chip,
     marked with a small cloud, and the other refs are a `+N` beside it. The
     chip shows at least 64 px of its name or all of it (O7). The HEAD chip is
-    left out, since the checkout's own chip says it. The full sha and every
-    ref name are in the row's tooltip, and the row's name to a screen reader
+    left out, since the checkout's own chip says it. Hovering any part of a
+    row for about half a second, or focusing it from the keyboard, opens one
+    commit card beside the sidebar, level with the row, over the main area:
+    subject and message, short sha with a copy button, author and email, the
+    age and the local date, every ref as a lane-striped chip with its kind,
+    the parents and the files changed. It replaces every native tooltip on
+    the row, stays open while the pointer is on it, and Escape closes it; the
+    graph tab's rows open the same card. The row's name to a screen reader
     is the short sha, subject, author, age and ref names. Lanes and the chip's
     stripe take the lane colours (Visual language, rule 7), never a status or
     area colour; the lane step narrows from 10 to 8 px beyond six lanes, and lanes
