@@ -1123,25 +1123,6 @@ describe('CliAgentAiService — streamed events (#47)', () => {
       { type: 'usage', record: { source: 'claude-code', inputTokens: 5000, outputTokens: 80, reportedCost: { amount: 0.04, currency: 'USD' } } },
     ]);
   });
-
-  // Agents restate a subagent's state as it changes — a tool part updated,
-  // a later call listing every child's status — and one may finish in a later
-  // turn than it started in. Surfaces get one start and one finish, in order.
-  it('reports each subagent starting once and finishing once, across turns, and never a finish without a start', async () => {
-    const started = { type: 'subagent_started', subagentId: 'sa1', brief: 'find the cache' } as const;
-    const finished = { type: 'subagent_finished', subagentId: 'sa1', outcome: 'done', digest: 'src/cache.ts' } as const;
-    const svc = scripted(
-      [started, started, { type: 'assistant_text', runId: 'r1', text: 'Looking.' }, { type: 'turn_end' }],
-      [finished, started, finished, { type: 'subagent_finished', subagentId: 'ghost', outcome: 'failed', digest: '' }, { type: 'assistant_text', runId: 'r1', text: 'Found it.' }, { type: 'turn_end' }],
-    );
-    const { events, onProgress } = collector();
-
-    await svc.startConversation(request({ onProgress }));
-    await svc.continueConversation('go on', onProgress);
-
-    expect(events.filter((e) => e.type === 'subagent_started' || e.type === 'subagent_finished').map((e) => `${e.type}:${e.subagentId}`))
-      .toEqual(['subagent_started:sa1', 'subagent_finished:sa1']);
-  });
 });
 
 describe('CliAgentAiService — a usage limit the agent says twice (#79)', () => {

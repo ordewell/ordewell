@@ -13,6 +13,7 @@ import {
   SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import { settleWithin } from './settleWithin';
+import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
@@ -263,6 +264,7 @@ export class OpenCodeV2 {
   private turn: Turn | null = null;
   /** Whether an interrupt was asked for in this turn, and so how its end ends it (ADR-0018 W1). */
   private readonly outcome = new TurnOutcome();
+  private readonly subagents = new SubagentTracker(this.outcome);
   /** Whether the session's own step is streaming: begun, and neither ended nor failed. */
   private stepOpen = false;
   private stepWaiters: (() => void)[] = [];
@@ -770,8 +772,7 @@ export class OpenCodeV2 {
         if ((name === 'bash' || name === 'shell') && typeof input.command === 'string') {
           state.shellCalls.set(id, { command: input.command, session: data.sessionID ?? '' });
         }
-        const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
-        state.briefs.set(id, brief);
+        state.briefs.set(id, subagentBrief(input));
         onEvent({ type: 'tool_call', id, name, args: input, subagentId });
         return;
       }
@@ -789,7 +790,7 @@ export class OpenCodeV2 {
         if (success && this.role === 'planner') this.rememberSaved(data.metadata);
         const output = wrongShell ?? (success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message ?? data.error?.type ?? '');
         onEvent({ type: 'tool_result', id, name: state.toolNames.get(id) ?? 'tool', output, success, subagentId });
-        if (!subagentId) this.finishChild(id, success, output, state, onEvent);
+        if (!subagentId) this.finishChild(id, success, output, onEvent);
         return;
       }
       case 'session.step.ended':
@@ -815,15 +816,13 @@ export class OpenCodeV2 {
     const held = child && callId ? state.children.adopt(child, callId) : null;
     if (!held || !callId) return;
     const model = state.stepModels.get(data.assistantMessageID ?? '');
-    onEvent({ type: 'subagent_started', subagentId: callId, brief: state.briefs.get(callId) ?? '', ...(model ? { model } : {}) });
+    this.subagents.start({ id: callId, brief: state.briefs.get(callId) ?? '', model }, onEvent);
     for (const frame of held) this.onFrame(frame, state, turn, onEvent);
   }
 
-  private finishChild(callId: string, success: boolean, output: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
-    if (!state.children.owns(callId)) return;
-    // 2.2.7 fails the delegating call of an interrupt Ordewell asked for; that is a stop, not the subagent's failure.
-    const outcome = success ? 'done' : this.outcome.requested ? 'stopped' : 'failed';
-    onEvent({ type: 'subagent_finished', subagentId: callId, outcome, digest: subagentDigest(output) });
+  /** 2.2.7 fails the delegating call of an interrupt Ordewell asked for; the tracker reads that as a stop, not the subagent's failure. */
+  private finishChild(callId: string, success: boolean, output: string, onEvent: (e: AgentEvent) => void): void {
+    this.subagents.finish(callId, { success }, subagentDigest(output), onEvent);
   }
 
   /** A billed call outside any step. A frame that names a step is that step's usage, which `step.ended` or `step.failed` reports. */

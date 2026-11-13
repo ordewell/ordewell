@@ -21,6 +21,7 @@ import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
+import { SubagentTracker } from './subagentTracker';
 import { TurnOutcome, type TurnError } from './turnOutcome';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
@@ -390,6 +391,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private rateLimits: CodexRateLimits = new Map();
   /** Whether an interrupt was asked for in this turn, and so how its end signal ends it (ADR-0018 W1). */
   private readonly outcome = new TurnOutcome();
+  /** Codex restates a collab call's agent states at every later call, so what it reports of a subagent is decided here. */
+  private readonly subagentLifecycle = new SubagentTracker(this.outcome);
   /**
    * Turns an interrupt cut short. Codex leaves their command running and
    * reports it when it ends, inside whatever turn is live by then — a report
@@ -1380,7 +1383,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       for (const child of item.receiverThreadIds ?? []) {
         const model = item.model || undefined;
         this.subagents.set(child, { model });
-        emit({ type: 'subagent_started', subagentId: child, brief: item.prompt ?? '', ...(model ? { model } : {}) });
+        this.subagentLifecycle.start({ id: child, brief: item.prompt ?? '', model }, emit);
       }
     }
     // The subagent's outcome arrives on the call that observed it — a `wait`, or
@@ -1389,7 +1392,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
       const outcome = subagentOutcome(state?.status);
       if (!outcome) continue;
       this.subagents.set(child, this.subagents.get(child) ?? {});
-      emit({ type: 'subagent_finished', subagentId: child, outcome, digest: state?.message ?? '' });
+      this.subagentLifecycle.finish(child, { status: outcome }, state?.message ?? '', emit);
     }
     emit({
       type: 'tool_result', id, name: item.tool ?? 'collab',

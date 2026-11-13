@@ -210,11 +210,9 @@ describe('ChildSessions', () => {
 
     expect(children.claim('ses_c', 'f1')).toBeNull();
     expect(children.claim('ses_c', 'f2')).toBeNull();
-    expect(children.owns('call_1')).toBe(false);
     expect(children.adopt('ses_c', 'call_1')).toEqual(['f1', 'f2']);
     expect(children.adopt('ses_c', 'call_1')).toBeNull();
     expect(children.claim('ses_c', 'f3')).toBe('call_1');
-    expect(children.owns('call_1')).toBe(true);
   });
 
   it('adopts a child whose creation it never saw, and keeps a second creation from untying it', () => {

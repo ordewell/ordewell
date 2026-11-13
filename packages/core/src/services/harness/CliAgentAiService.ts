@@ -216,12 +216,6 @@ class PlannerSession {
    * exclusions or its budget can change between turns. Absent, it is off.
    */
   searchesUnasked: ((provider: string) => boolean) | undefined;
-  /**
-   * Every subagent this session has reported starting, and finishing.
-   * Agents restate a subagent's state as it changes, and one can finish a turn
-   * or a process restart after it started; surfaces get each once, in order.
-   */
-  readonly subagents = { started: new Set<string>(), finished: new Set<string>() };
   /** Ordewell's research agent, where this session serves one (ADR-0066); its token lists `spawn_research_agent`. */
   research?: NonNullable<PlannerToolHandler['spawnResearchAgent']>;
   /** Where the research agent's progress goes: the open turn's, or nowhere between turns. */
@@ -791,15 +785,12 @@ export class CliAgentAiService implements IAiService {
           return;
         }
 
+        // Each adapter reports a subagent's start and finish once, in order (SubagentTracker).
         case 'subagent_started':
-          if (session.subagents.started.has(event.subagentId)) return;
-          session.subagents.started.add(event.subagentId);
           onProgress({ type: 'subagent_started', subagentId: event.subagentId, brief: event.brief, model: event.model });
           return;
 
         case 'subagent_finished':
-          if (!session.subagents.started.has(event.subagentId) || session.subagents.finished.has(event.subagentId)) return;
-          session.subagents.finished.add(event.subagentId);
           onProgress({
             type: 'subagent_finished', subagentId: event.subagentId, outcome: event.outcome, digest: event.digest,
             usage: subagentUsage.get(event.subagentId),

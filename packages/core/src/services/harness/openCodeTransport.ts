@@ -334,10 +334,6 @@ export class ChildSessions<F> {
     this.held.delete(child);
     return held;
   }
-
-  owns(callId: string): boolean {
-    return [...this.owners.values()].includes(callId);
-  }
 }
 
 /** What one turn has learned from the stream, as far as both versions share it. */
