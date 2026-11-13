@@ -81,10 +81,18 @@ describe('TurnGate: admission', () => {
     expect(gate.waiting).toBe(false);
   });
 
-  it('takes no slot for a turn of a Session outside a tree', () => {
-    const { gate, host } = harness({ placed: false });
+  it('holds a lease for a turn of a Session outside a tree, which never waits for a slot', async () => {
+    const { gate, host, takeSlot } = harness({ placed: false });
     expect(admitting(gate).entered).toBe(true);
-    expect(host.reserve).not.toHaveBeenCalled();
+    expect(host.reserve).toHaveBeenCalledTimes(1);
+    expect(gate.holding).toBe(true);
+
+    gate.settled();
+    takeSlot();
+    const refused = admitting(gate);
+    expect(refused.entered).toBe(false);
+    expect(await refused.admitted).toEqual(new Error('the tree is full'));
+    expect(gate.waiting).toBe(false);
     expect(gate.holding).toBe(false);
   });
 
@@ -131,13 +139,69 @@ describe('TurnGate: admission', () => {
     expect(gate.holding).toBe(false);
   });
 
-  it('the queue waits on the probe while it is unanswered, and on nothing once it has', async () => {
-    const { gate, answerProbe } = harness({ answered: false });
-    const probe = gate.probe();
-    expect(probe).not.toBeNull();
+});
+
+describe('TurnGate: tryAdmit, the queue\'s turn', () => {
+  it('admits at once when the probe has answered and a slot is free, holding the lease', () => {
+    const { gate } = harness();
+    expect(gate.tryAdmit()).toEqual({ kind: 'admitted' });
+    expect(gate.holding).toBe(true);
+    expect(gate.waiting).toBe(false);
+  });
+
+  it('answers with the probe while it is unanswered, telling the surfaces once, and takes nothing', async () => {
+    const { gate, host, answerProbe } = harness({ answered: false });
+    const first = gate.tryAdmit();
+    const second = gate.tryAdmit();
+    expect(first).toMatchObject({ kind: 'probing' });
+    expect(host.detecting).toHaveBeenCalledTimes(1);
+    expect(host.detecting).toHaveBeenCalledWith(true);
+    expect(host.assertReady).not.toHaveBeenCalled();
+    expect(host.reserve).not.toHaveBeenCalled();
+    expect(gate.waiting).toBe(false);
+    expect(gate.detecting).toBe(true);
+
     answerProbe();
-    await probe;
-    expect(gate.probe()).toBeNull();
+    if (first.kind !== 'probing' || second.kind !== 'probing') throw new Error('expected the probe');
+    await Promise.all([first.answered, second.answered]);
+    expect(gate.detecting).toBe(false);
+    expect(gate.tryAdmit()).toEqual({ kind: 'admitted' });
+  });
+
+  it('throws what a session turn is refused for, a held session before the planner, taking no slot', () => {
+    const { gate, host, state } = harness();
+    state.held = new Error('held elsewhere');
+    state.ready = new Error('no planner');
+    expect(() => gate.tryAdmit()).toThrow('held elsewhere');
+    state.held = null;
+    expect(() => gate.tryAdmit()).toThrow('no planner');
+    expect(host.reserve).not.toHaveBeenCalled();
+    expect(gate.holding).toBe(false);
+  });
+
+  it('says why the tree is full, without waiting, and is offered the slot when one frees', () => {
+    const { gate, host, takeSlot, freeOne } = harness();
+    takeSlot();
+    expect(gate.tryAdmit()).toEqual({ kind: 'full', why: 'the tree is full' });
+    expect(gate.waiting).toBe(false);
+    expect(gate.holding).toBe(false);
+    // Nobody waits at the gate for it: the queue's next turn may take it.
+    freeOne();
+    expect(host.pump).toHaveBeenCalledTimes(1);
+    expect(gate.tryAdmit()).toEqual({ kind: 'admitted' });
+  });
+
+  it('asks the pool once however many turns of the queue follow', () => {
+    const { gate, host } = harness();
+    gate.tryAdmit();
+    gate.tryAdmit();
+    expect(host.reserve).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Session outside a tree takes a lease too, and its refusal is reported, not waited on', () => {
+    const { gate, takeSlot } = harness({ placed: false });
+    takeSlot();
+    expect(gate.tryAdmit()).toEqual({ kind: 'full', why: 'the tree is full' });
   });
 });
 
@@ -323,30 +387,17 @@ describe('TurnGate: a wait for a slot of the tree (ADR-0055 D18)', () => {
 });
 
 describe('TurnGate: the lease (ADR-0059 L1)', () => {
-  it('a claim takes one lease, and asks no more while it is held', () => {
-    const { gate, host } = harness();
-    expect(gate.claim()).toBeNull();
-    expect(gate.claim()).toBeNull();
-    expect(host.reserve).toHaveBeenCalledTimes(1);
-  });
-
-  it('says why the pool refused a claim', () => {
-    const { gate, takeSlot } = harness();
-    takeSlot();
-    expect(gate.claim()).toBe('the tree is full');
-  });
-
   it('opens the planner process on the lease, and on nothing without one', async () => {
     const { gate } = harness();
     const signal = new AbortController().signal;
     expect(gate.open(signal)).toBeUndefined();
-    gate.claim();
+    gate.tryAdmit();
     await expect(gate.open(signal)).resolves.toEqual({});
   });
 
   it('a settled turn parks the Session and gives its slot back, once', () => {
     const { gate, host, released } = harness();
-    gate.claim();
+    gate.tryAdmit();
     gate.settled();
     gate.settled();
     expect(released).toEqual(['turn ended']);
@@ -356,7 +407,7 @@ describe('TurnGate: the lease (ADR-0059 L1)', () => {
 
   it('the conversation letting go keeps the lease of a queued turn still under way', () => {
     const { gate, state, released } = harness();
-    gate.claim();
+    gate.tryAdmit();
     state.queuedTurnRunning = true;
     gate.released();
     expect(released).toEqual([]);
@@ -367,7 +418,7 @@ describe('TurnGate: the lease (ADR-0059 L1)', () => {
 
   it('a refusal after admission gives the slot back, unless a turn holds the conversation', () => {
     const { gate, state, released } = harness();
-    gate.claim();
+    gate.tryAdmit();
     state.conversationBusy = true;
     gate.dropped();
     expect(released).toEqual([]);
@@ -395,7 +446,7 @@ describe('TurnGate: the lease (ADR-0059 L1)', () => {
 
   it('a lease is kept if the old scope\'s end throws, and a later end still frees it', () => {
     const { gate, released } = harness();
-    gate.claim();
+    gate.tryAdmit();
     expect(() => gate.carry(() => { throw new Error('boom'); })).toThrow('boom');
     expect(gate.holding).toBe(true);
     gate.settled();

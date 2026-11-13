@@ -911,13 +911,8 @@ export class Session {
       turnAborted: () => this.approvals.clear(isPlannerApproval),
       // A planner switch or settings change made while no turn ran is made
       // before the next one takes the backend, and one made during a turn as
-      // soon as it is over. A Retry compaction alone arrives here with no
-      // slot: run past the refusal, it would be one more than the tree's limit.
-      turnClaiming: () => {
-        this.backend.settle();
-        const refused = this.gate.claim();
-        if (refused) throw new Error(refused);
-      },
+      // soon as it is over. The turn holds its lease by now: the gate admitted it.
+      turnClaiming: () => { this.backend.settle(); },
       // After the turn has announced its end, so the next one never starts
       // ahead of it on a surface.
       turnReleased: () => {
@@ -972,7 +967,7 @@ export class Session {
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
-      turnRoom: () => this.gate.claim() === null,
+      tryAdmit: () => this.gate.tryAdmit(),
       turnSettled: () => this.gate.settled(),
       // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
@@ -991,8 +986,6 @@ export class Session {
         return landed;
       },
       notice: (message) => this.notice('error', message),
-      plannerDetecting: () => this.gate.probe(),
-      assertPlannerReady: () => this.assertTurnMayRun(),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
     });
 
@@ -2124,17 +2117,6 @@ export class Session {
       this.funds.stop(refused);
       throw new Error(refused);
     }
-  }
-
-  /**
-   * What a turn on the session this Session has open passes. Not part of
-   * {@link assertPlannerReady}, which a new goal passes too: under a minted id
-   * that goal leaves a held session behind, and {@link claimHostSession} judges
-   * a fixed one.
-   */
-  private assertTurnMayRun(): void {
-    this.refuseHeld();
-    this.assertPlannerReady();
   }
 
   /**
