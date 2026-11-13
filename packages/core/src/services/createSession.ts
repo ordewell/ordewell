@@ -1934,13 +1934,16 @@ export class Session {
     this.store.setTaskRunnerSessionId(task.id, placement.sessionId, this.store.resolveTaskRunner(task));
     this.saves.after();
     const saved = reopening ? loadChildSession({ baseDir: this.stateRoot, rootSessionId: this.rootSessionId, sessionId: reopening }) : null;
+    let child: Session | undefined;
     try {
       // Its run is tied to this path: moved, it would mint a new one and leave what it had landed behind, with its tasks still reading as done.
       if (saved?.plan.isolation && saved.plan.isolation.run.workspaceRoot !== cwd) throw new Error(`Task "${task.title}" cannot reopen its child: its worktree has moved. Retry it fresh, which starts a new child.`);
-      const child = this.childSession({ task, cwd, placement, authority, brief, link });
+      child = this.childSession({ task, cwd, placement, authority, brief, link });
       if (saved) child.loadPlan(pickedUp(saved.plan), saved.meta.goal, cwd, { sessionId: placement.sessionId });
       return child.seat.asNode(task, mandate, (await this.reading.board())?.pins() ?? []);
     } catch (err) {
+      // A built child joined the tree's slot pool as it was made, and only its destroy leaves it: left, it counts as a sibling and is ticked for good.
+      try { child?.destroy(); } catch { /* the refusal that sent us here is the one to report */ }
       budget.tree.close(budget.path);
       throw err;
     }
