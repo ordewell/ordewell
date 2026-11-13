@@ -1,5 +1,6 @@
 import type { TerminalEvent, TerminalOpenResult } from '../../../shared/bridge';
 import { terminalLabel, terminalScopeDecision, type TerminalScope } from '../../../shared/terminalScope';
+import { readClipboardText, writeClipboardText } from '../../clipboard';
 import type { FrameApi } from '../../frame/api';
 import { isMac } from '../../frame/keys';
 import { scopeStoreFor, type ScopeState } from '../scope/scopeStore';
@@ -148,6 +149,9 @@ export class TerminalStore {
         onData: (data) => { if (entry.ptyId !== undefined) void window.ordewell.terminal.write(entry.ptyId, data); },
         onLink: (url) => { void window.ordewell.terminal.openLink(url); },
         screenReaderMode: false,
+        readClipboard: readClipboardText,
+        writeClipboard: writeClipboardText,
+        onClipboardError: (title, reason) => this.clipboardFailed(title, reason),
       }, isMac(this.api.platform));
       if (entry.closed) { term.dispose(); return { ended: done }; }
       entry.term = term;
@@ -170,6 +174,11 @@ export class TerminalStore {
     entry.ptyId = result.id;
     this.patchTab(key, { phase: 'running', shell: result.shell });
     this.showActive();
+  }
+
+  private clipboardFailed(title: string, reason: string): void {
+    const dismiss = this.api.showBanner({ id: 'terminal-clipboard', tone: 'warning', title, body: reason, actions: [{ label: 'Dismiss', run: () => dismiss() }] });
+    this.api.announce(`${title}: ${reason}`);
   }
 
   private fail(key: string, entry: Entry, message: string): void {

@@ -68,6 +68,16 @@ ipcRenderer.on(EVENTS.terminal, (_event, delivery: TerminalDelivery) => {
 });
 let nextTerminal = 1;
 
+/**
+ * The clipboard is the user's, so the page reaches it only while they press a
+ * key or click: without that, script on the page could read whatever was
+ * copied in another app, or replace it unseen. Main checks focus on top.
+ */
+const NOT_FROM_THE_USER = 'Copy and paste work from a key press or a click in the window.';
+// The preload compiles without the DOM lib, so Node's Navigator type lacks it.
+type ActivatedNavigator = { userActivation: { isActive: boolean } };
+const fromTheUser = (): boolean => (navigator as unknown as ActivatedNavigator).userActivation.isActive;
+
 const bridge: OrdewellBridge = {
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo),
@@ -145,6 +155,14 @@ const bridge: OrdewellBridge = {
       await ipcRenderer.invoke(CHANNELS.terminalClose, id);
     },
     openLink: (url) => ipcRenderer.invoke(CHANNELS.terminalOpenLink, url),
+  },
+  clipboard: {
+    readText: async () => (fromTheUser()
+      ? ipcRenderer.invoke(CHANNELS.clipboardReadText)
+      : { ok: false, message: NOT_FROM_THE_USER }),
+    writeText: async (text) => (fromTheUser()
+      ? ipcRenderer.invoke(CHANNELS.clipboardWriteText, text)
+      : { ok: false, message: NOT_FROM_THE_USER }),
   },
 };
 
