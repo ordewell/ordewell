@@ -76,3 +76,6 @@ packages/desktop/playwright-report/
 
 # The pinned shellcheck (scripts/shellcheck.mjs) and any other tool fetched for the tests
 .tools
+
+# Scratch output (test logs) an agent writes inside its worktree; Ordewell commits everything else there
+.scratch/
