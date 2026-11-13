@@ -96,7 +96,7 @@ const CHECK_NAMES: Record<CheckId, string> = {
   h: 'no element of a graph card overflows the card or overlaps a sibling',
   i: `every card's fill stands off its backdrop by at least ${LIFT_MIN}:1, and its text reads at ${TEXT_MIN}:1 (e2e/surfaces.ts)`,
   j: 'allowlist rows fit, scroll, title truncated ids and distinguish shared labels with visible providers',
-  k: `important names and titles (branches, commits, paths, projects, tasks, models) show at least ${SHOWN_MIN}px of their text, carry a tooltip where cut, and read at ${TEXT_MIN}:1 (e2e/surfaces.ts)`,
+  k: `important names and titles (branches, commits, paths, projects, tasks, models) show at least ${SHOWN_MIN}px of their text, carry a tooltip where cut (a title, or a description their keyboard focus opens), and read at ${TEXT_MIN}:1 (e2e/surfaces.ts)`,
 };
 const CHAT_FILL = 0.9;
 
@@ -867,9 +867,12 @@ async function sashProbe(page: Page): Promise<Record<string, unknown>> {
  * label a snapping scroller leaves cut at its edge, though the scroller can
  * show it whole, passes; a label its own ellipsis cuts, with no tooltip, fails;
  * a folder shortened in the middle, in a box narrower than its kept tail, still
- * shows a few characters of its head, with the app's own MiddleText styles; and
- * the scroller ends where it was, snapping as before. What it finds fails the
- * tour under TOUR_STRICT.
+ * shows a few characters of its head, with the app's own MiddleText styles; a
+ * cut label whose focus opens a description holding it whole passes, and one
+ * whose focus opens nothing, or a description without it, fails; a cut line of
+ * facts passes when the description holds every fact, and fails when it leaves
+ * one out; and the scroller ends where it was, snapping as before. What it finds fails the tour
+ * under TOUR_STRICT.
  */
 async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
   await page.evaluate(() => {
@@ -914,6 +917,44 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
     }
     narrow.append(mid);
     document.body.append(narrow);
+    // A cut label in a button, as a commit row's subject is: focus opens a description with it whole, one with
+    // another text, or nothing. The description is drawn beside it, as the commit card is beside the sidebar.
+    // A row's line of facts the card tells apart, in its own words and order, is held only while every fact is.
+    const disclosing = document.createElement('div');
+    disclosing.dataset.tourControl = 'disclosures';
+    disclosing.style.cssText = 'position:fixed;left:0;top:96px;z-index:2147483647;width:300px;display:flex;flex-direction:column;background:#fff;color:#000;font:13px sans-serif';
+    const subject = 'a label its own ellipsis cuts, whose focus discloses it';
+    const facts = 'now · an author with a long name · 899b705';
+    for (const [control, label, says] of [
+      ['disclosed', subject, subject],
+      ['misdisclosed', subject, 'another text altogether'],
+      ['undisclosed', subject, undefined],
+      ['factsdisclosed', facts, '899b705 by an author with a long name, just now'],
+      ['factsmisdisclosed', facts, '899b705, just now'],
+    ] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.control = control;
+      button.style.cssText = 'display:block;width:120px;padding:0;border:0;background:#fff;color:#000;font:inherit;text-align:start';
+      const text = document.createElement('span');
+      text.style.cssText = 'display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      text.textContent = label;
+      button.append(text);
+      if (says !== undefined) {
+        const card = document.createElement('div');
+        card.id = `tour-control-${control}`;
+        card.dataset.tourControl = 'description';
+        card.setAttribute('role', 'tooltip');
+        card.style.cssText = 'position:fixed;left:320px;top:96px;z-index:2147483647;width:240px;background:#fff;color:#000;font:13px sans-serif';
+        card.hidden = true;
+        card.textContent = says;
+        document.body.append(card);
+        button.addEventListener('focus', () => { card.hidden = false; button.setAttribute('aria-describedby', card.id); });
+        button.addEventListener('blur', () => { card.hidden = true; button.removeAttribute('aria-describedby'); });
+      }
+      disclosing.append(button);
+    }
+    document.body.append(disclosing);
   });
   const host = page.locator('[data-tour-control="labels"]');
   const judge = (control: string): Promise<string[]> => host.locator(`[data-control="${control}"]`).evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
@@ -922,6 +963,13 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
   const cut = await judge('cut');
   const middle = await page.locator('[data-tour-control="middle"] .mid').evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
   await page.locator('[data-tour-control="middle"]').evaluate((el) => el.remove());
+  const disclosure = (control: string): Promise<string[]> => page.locator(`[data-tour-control="disclosures"] [data-control="${control}"]`).evaluateAll(labelChecks, { textMin: TEXT_MIN, shownMin: SHOWN_MIN });
+  const disclosed = await disclosure('disclosed');
+  const misdisclosed = await disclosure('misdisclosed');
+  const undisclosed = await disclosure('undisclosed');
+  const factsDisclosed = await disclosure('factsdisclosed');
+  const factsMisdisclosed = await disclosure('factsmisdisclosed');
+  await page.locator('[data-tour-control="disclosures"], [data-tour-control="description"]').evaluateAll((els) => { for (const el of els) el.remove(); });
   const after = await host.evaluate((el) => ({ left: Math.round(el.scrollLeft), snap: getComputedStyle(el).scrollSnapType }));
   // What the check works around, recorded: scrollIntoView under the snap, where it lands.
   result.snappedScrollIntoView = await host.evaluate((el) => {
@@ -929,11 +977,16 @@ async function labelCheckControl(page: Page): Promise<Record<string, unknown>> {
     return Math.round(el.scrollLeft);
   });
   await host.evaluate((el) => el.remove());
-  Object.assign(result, { reachable, cut, middle, after });
+  Object.assign(result, { reachable, cut, middle, disclosed, misdisclosed, undisclosed, factsDisclosed, factsMisdisclosed, after });
   const wrong: string[] = [];
   if (reachable.length > 0) wrong.push(`a label the scroller can show whole fails: ${reachable.join('; ')}`);
   if (!cut.some((p) => p.includes('cut short with no tooltip'))) wrong.push(`a label cut with no tooltip passes: ${cut.join('; ') || 'no problem found'}`);
   if (middle.length > 0) wrong.push(`a folder shortened in the middle loses a part: ${middle.join('; ')}`);
+  if (disclosed.length > 0) wrong.push(`a cut label whose focus discloses it whole fails: ${disclosed.join('; ')}`);
+  if (!misdisclosed.some((p) => p.includes('does not hold it'))) wrong.push(`a cut label whose focus discloses another text passes: ${misdisclosed.join('; ') || 'no problem found'}`);
+  if (!undisclosed.some((p) => p.includes('discloses nothing'))) wrong.push(`a cut label whose focus discloses nothing passes: ${undisclosed.join('; ') || 'no problem found'}`);
+  if (factsDisclosed.length > 0) wrong.push(`a cut line of facts whose focus discloses each fails: ${factsDisclosed.join('; ')}`);
+  if (!factsMisdisclosed.some((p) => p.includes('does not hold it'))) wrong.push(`a cut line of facts whose focus leaves one out passes: ${factsMisdisclosed.join('; ') || 'no problem found'}`);
   if (after.left !== 0 || !after.snap.includes('mandatory')) wrong.push(`the scroller was left at ${after.left}px, snapping ${after.snap}`);
   fitFailures.push(...wrong.map((w) => `check k control: ${w}`));
   result.wrong = wrong;
