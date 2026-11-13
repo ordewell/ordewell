@@ -163,8 +163,15 @@ export const SHOWN_MIN = 64;
  * liftChecks' colour arithmetic, since a function sent to the page takes
  * nothing from this module. A label scrolled away is scrolled to and back,
  * with any scroll snapping held off meanwhile.
+ *
+ * The tooltip is a native `title`, or a disclosure the keyboard opens: a cut
+ * text with no title inside a focusable part of the label is focused, and
+ * passes only when the focus describes it (`aria-describedby`) with a shown
+ * element that holds the text whole, uncut (a line of facts set apart by
+ * " · " fact by fact), which closes again once focus leaves or on Escape. Focus is then put back, unless it was on that part,
+ * whose focus is what opens it.
  */
-export function labelChecks(labels: Element[], input: { textMin: number; shownMin: number }): string[] {
+export async function labelChecks(labels: Element[], input: { textMin: number; shownMin: number }): Promise<string[]> {
   type Rgba = [number, number, number, number];
   const parse = (value: string): Rgba | undefined => {
     const rgb = /^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/.exec(value);
@@ -227,6 +234,9 @@ export function labelChecks(labels: Element[], input: { textMin: number; shownMi
   }
   for (const el of snaps.keys()) el.style.scrollSnapType = 'none';
 
+  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  /** Cut texts with no title, each inside a part of its label that takes focus: judged by what that focus discloses. */
+  const untitled: { opener: HTMLElement; full: string; name: string; problem: string }[] = [];
   const problems: string[] = [];
   for (const label of labels) {
     const name = (label.getAttribute('aria-label') ?? label.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
@@ -259,7 +269,11 @@ export function labelChecks(labels: Element[], input: { textMin: number; shownMi
       if (seen.width < Math.min(whole.width, input.shownMin / 2) - 1) problems.push(`"${name}": "${text}" is squeezed to ${Math.round(seen.width)}px`);
       const titled = leaf.closest('[title]');
       if (cut && !(titled && (titled === label || label.contains(titled)) && titled.getAttribute('title')?.trim())) {
-        problems.push(`"${name}": "${text}" is cut short with no tooltip`);
+        const opener = leaf.closest(FOCUSABLE);
+        const full = (leaf.textContent ?? '').trim().replace(/\s+/g, ' ');
+        const problem = `"${name}": "${text}" is cut short with no tooltip`;
+        if (opener instanceof HTMLElement && (opener === label || label.contains(opener))) untitled.push({ opener, full, name, problem });
+        else problems.push(problem);
       }
       if (leaf.closest('[disabled], [aria-disabled="true"]')) continue;
       const style = getComputedStyle(leaf);
@@ -276,5 +290,65 @@ export function labelChecks(labels: Element[], input: { textMin: number; shownMi
   for (const [el, top, left] of scrolled.reverse()) { el.scrollTop = top; el.scrollLeft = left; }
   // Back on the position it was snapped to, the scroller snaps again as it did.
   for (const [el, inline] of snaps) el.style.scrollSnapType = inline;
+  if (untitled.length > 0) problems.push(...await disclosures());
   return problems;
+
+  /** Each opener focused in turn, without scrolling: what its focus describes must hold the cut text whole. */
+  async function disclosures(): Promise<string[]> {
+    // A frame, or 50ms where a hidden window draws none: React's render and a scroll's event both land on one.
+    const tick = (): Promise<void> => new Promise((resolve) => {
+      const timer = setTimeout(resolve, 50);
+      requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
+    });
+    const until = async (done: () => boolean, ms: number): Promise<boolean> => {
+      for (const end = Date.now() + ms; !done();) {
+        if (Date.now() > end) return false;
+        await tick();
+      }
+      return true;
+    };
+    const described = (opener: HTMLElement): HTMLElement[] => (opener.getAttribute('aria-describedby') ?? '').split(/\s+/)
+      .map((id) => (id ? document.getElementById(id) : null))
+      .filter((el): el is HTMLElement => el !== null && el.isConnected && el.getClientRects().length > 0 && shown(el) && el.closest('.sr-only, .visually-hidden') === null);
+    const found: string[] = [];
+    const before = document.activeElement;
+    // The scrolls that brought labels to view and back fire their events first, which may close what a focus opens.
+    await tick();
+    await tick();
+    const byOpener = new Map<HTMLElement, { full: string; name: string; problem: string }[]>();
+    for (const cut of untitled) byOpener.set(cut.opener, [...(byOpener.get(cut.opener) ?? []), cut]);
+    for (const [opener, cuts] of byOpener) {
+      // Its own focus may be the pointer's, which opens nothing: it is taken from the keyboard afresh.
+      if (document.activeElement === opener) opener.blur();
+      await tick();
+      opener.focus({ preventScroll: true });
+      const open = await until(() => described(opener).length > 0, 2000);
+      const descriptions = described(opener);
+      for (const { full, problem } of cuts) {
+        if (!open) { found.push(`${problem}: focusing it discloses nothing`); continue; }
+        // A line of facts set apart by " · " (an age, an author, a sha) may be told fact by fact, each where it
+        // belongs. Each part needs the description's innermost element that holds it whole to show all of that.
+        const shortfalls = full.split(' · ').filter((part) => part.trim() !== '').map((part) => {
+          const holds = (el: Element): boolean => (el.textContent ?? '').replace(/\s+/g, ' ').includes(part);
+          const holder = descriptions.flatMap((d) => [d, ...d.querySelectorAll('*')]).find((el) => holds(el) && ![...el.children].some(holds));
+          if (!holder) return 'does not hold it';
+          const rect = holder.getBoundingClientRect();
+          const seen = clip(rect, holder);
+          const block = getComputedStyle(holder).display !== 'inline';
+          return seen.width < rect.width - 1 || seen.height < rect.height - 1 || (block && (holder.scrollWidth > holder.clientWidth + 1 || holder.scrollHeight > holder.clientHeight + 1))
+            ? 'cuts it too' : undefined;
+        });
+        const shortfall = shortfalls.find((s) => s === 'does not hold it') ?? shortfalls.find((s) => s !== undefined);
+        if (shortfall) found.push(`${problem}: what focusing it discloses ${shortfall}`);
+      }
+      opener.blur();
+      // Closing on blur waits out a grace period, and a pointer resting on the row keeps it open: Escape then dismisses it.
+      if (open && !await until(() => described(opener).length === 0, 1000)) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        if (!await until(() => described(opener).length === 0, 1000)) found.push(`"${cuts[0]!.name}": what focusing it discloses stays open after focus leaves and Escape`);
+      }
+    }
+    if (before instanceof HTMLElement && !byOpener.has(before) && before !== document.activeElement) before.focus({ preventScroll: true });
+    return found;
+  }
 }

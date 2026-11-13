@@ -201,8 +201,9 @@
 .git-card-copy.ow-icon-button { width: 20px; height: 20px; }
 .git-card-author { margin-inline-start: var(--ow-space-1); }
 .git-card-refs { display: flex; flex-direction: column; gap: var(--ow-space-1); margin: 0; padding: 0; list-style: none; }
-.git-card-refs li { display: flex; align-items: baseline; gap: var(--ow-space-2); min-width: 0; }
-.git-card-refs .git-chip { flex: none; max-width: 60%; }
+/* The card is where a name the row cuts is read whole: a long ref wraps, and its kind goes under it. */
+.git-card-refs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--ow-space-2); min-width: 0; }
+.git-card-refs .git-chip { flex: 0 1 auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 
 /*
  * A ref chip takes its commit's lane hue as a stripe on its leading edge, so it

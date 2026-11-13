@@ -1126,8 +1126,8 @@ left as it was:
     row for about half a second, or focusing it from the keyboard, opens one
     commit card beside the sidebar, level with the row, over the main area:
     subject and message, short sha with a copy button, author and email, the
-    age and the local date, every ref as a lane-striped chip with its kind,
-    the parents and the files changed. It replaces every native tooltip on
+    age and the local date, every ref named whole as a lane-striped chip with
+    its kind, the parents and the files changed. It replaces every native tooltip on
     the row, stays open while the pointer is on it, and Escape closes it; the
     graph tab's rows open the same card. The row's name to a screen reader
     is the short sha, subject, author, age and ref names. Lanes and the chip's
@@ -2428,8 +2428,10 @@ are permanent, so findings can cite them.
   it, and each part of it at least half that, so a long neighbour never
   squeezes it to nothing (the middle ellipsis's `3em` head floor is what keeps
   that half, 2em would not; only a name whose last word alone outgrows its
-  row gives the head less). Where it is cut, it has a tooltip, and it reads at
-  4.5:1. The tour's check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
+  row gives the head less). Where it is cut, it has a tooltip: a native one,
+  or a description its keyboard focus opens with the name whole, as the
+  commit card does for a History row's subject. It reads at 4.5:1. The tour's
+  check `k` (`labelChecks` in `e2e/surfaces.ts`) measures
   this on long branch, commit, path, project, task and model names, as the
   app paints them, in both themes and every size.
 
