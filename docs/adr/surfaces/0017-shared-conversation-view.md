@@ -195,7 +195,13 @@ the same word.)
   arrives while the turn is still unwinding — and on Send now, which glues the
   composer's text, possibly empty, last and stops the turn in flight to answer
   it (`sendMessageNow`; with no turn in flight it is a plain send). A stop
-  gives everything held back to the composer instead. The host,
+  gives everything held back to the composer instead. A Send now that is
+  refused or fails gives what it took back to the composer too; one whose turn
+  was stopped by another, or discarded because its session was left, does
+  not, since there is nothing left to answer it. Core's `sendNowGivesBack`
+  is that one rule, read by the TUI's reducer and by ui's `ChatSessionHost`,
+  which runs the hold, Send now and release for both chat views over their
+  own session (the in-process Session, or the daemon). The host,
   not the chat, decides what goes and what comes back, so a prompt already sent
   cannot also reappear in the input. A new or reloaded session drops the hold
   with the view.
@@ -301,3 +307,4 @@ the same word.)
 - 2026-11-10 — Q1-Q3: the chat views send everything held as one message, glued in the order typed, at a turn's end and on Send now, which needs no composer text; Esc and the newest row's × refill only an empty composer. Seen live: Cmd+Enter did nothing in VS Code's planner chat with prompts held and the composer empty.
 - 2026-11-10 — Q1-Q3: the TUI follows the same rule, in the planner chat and a subplanner's: a turn's end and ctrl-s send everything held as one message (ctrl-s with or without a draft), Esc takes back only the newest, and the held rows and the task chat's queue draw one "Send all now" control with the same wording. Before it the docs kept a carve-out: one prompt per turn, ctrl-s on the newest.
 - 2026-11-13 — the notice a run message earns (a task started, the plan awaiting sign-off or approved, a run finished or stopped) is worded once in core's `runNotice`, which the TUI and `SessionView` both call, and a task already shown at work is not announced a second time. Before it the TUI alone deduped a start and worded the other three, so VS Code and the desktop app said a start on every message and nothing for the rest.
+- 2026-11-13 — Q2: one give-back rule for Send now on every surface (core's `sendNowGivesBack`) and one `ChatSessionHost` in ui for both chat views; the TUI no longer gives back a forced send whose turn was discarded, as the desktop already did.

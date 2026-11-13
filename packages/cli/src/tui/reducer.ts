@@ -477,10 +477,11 @@ function reduceAction(state: TuiState, action: Action): Step {
       // its way, so the stop is not news and the prompts held behind it keep
       // their order rather than draining into the turn replacing it. Only the
       // stop is that: any other failure is the forced send's own, and its
-      // prompt is already out of the composer or the queue, so it goes back.
+      // prompt is already out of the composer or the queue, so it goes back
+      // as `restoreForced` rules.
       if (state.forceSendPending) {
         if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, planner: plannerInFlight(state) ? 'planning' : 'idle' });
-        state = restoreForced(state);
+        state = restoreForced(state, action.code);
       }
       const quiet = plannerInFlight(state) && state.stopRequested;
       // The daemon's own end for a compaction may have been lost with the call.

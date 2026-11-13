@@ -644,9 +644,11 @@ describe('webview messages reach the session through one entry point each', () =
       expect(calls).toHaveLength(1);
 
       calls[0].finish('Stopped.');
-      await first;
+      // The route returns once the turn it released has returned too.
       await vi.waitFor(() => expect(calls).toHaveLength(2));
       expect(calls[1].message).toContain('actually, do this instead');
+      calls[1].finish('Done.');
+      await first;
     });
 
     it('a stopped turn unwinding late leaves the turn after it busy and stoppable', async () => {
@@ -659,12 +661,13 @@ describe('webview messages reach the session through one entry point each', () =
       await h.route({ type: 'stopResearch' });
       await h.route({ type: 'sendMessage', text: 'next', typed: true });
       calls[0].finish('Stopped.');
-      await first;
       await vi.waitFor(() => expect(calls).toHaveLength(2));
 
       expect(h.deps.isGeneratingPlan()).toBe(true);
       await h.route({ type: 'stopResearch' });
       expect(calls[1].signal?.aborted).toBe(true);
+      calls[1].finish('Stopped.');
+      await first;
     });
   });
 

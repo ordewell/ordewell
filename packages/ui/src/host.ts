@@ -6,6 +6,7 @@
  */
 export { ConversationViewHost, type SavedConversation } from './host/ConversationViewHost';
 export { RunViewHost } from './host/RunViewHost';
+export { ChatSessionHost, type ChatTurn, type SessionPort, type TurnOutcome } from './host/ChatSessionHost';
 export { SessionView, type SessionCue, type SessionSnapshot } from './host/SessionView';
 export { ChildView } from './host/ChildView';
 export { DaemonSessionStream, type DaemonSessionHooks, type DaemonSessionState } from './host/DaemonStream';
