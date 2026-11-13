@@ -13,12 +13,13 @@ import type { ProjectMcpServer } from './repoConfig';
 import { hunksOf, markedLines } from './fileDiff';
 import {
   PendingSteers, autoApproves, delay, interruptAcknowledged, newUserMessageId, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId,
-  REQUEST_TIMEOUT_MS, SESSION_TITLE, streamTurn, turnLatch, usageRecord, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
+  REQUEST_TIMEOUT_MS, SESSION_TITLE, openCodeCall, streamTurn, turnLatch, withDeadline, type EventStream, type PermissionAnswer, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
+import { UsageRecordBuilder } from './usageBuilder';
 
 const SERVER_READY_TIMEOUT_MS = 30000;
 /** The banner is one short line; a longer unterminated one is not it, and is not kept growing. */
@@ -292,6 +293,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   /** Whether an abort was posted in the current task turn, and so how the idle that follows ends it (ADR-0018 W1). */
   private readonly outcome = new TurnOutcome();
   private readonly subagents = new SubagentTracker(this.outcome);
+  /** For the session, not the turn: a replayed frame can restate a call a later turn sees again. */
+  private readonly usage = new UsageRecordBuilder('opencode');
   /** The user's MCP servers, as `/mcp` last listed them: what tells a planner's MCP tool request from a built-in's (ADR-0026). */
   private mcpServers: string[] = [];
   private readonly permissions = openCodePermissions(
@@ -1010,9 +1013,8 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
    * is one model call; until it completes its counts are zeros.
    */
   private countUsage(info: OpenCodeMessageInfo, turn: TurnState, onEvent: (e: AgentEvent) => void, subagentId?: string): void {
-    if (info.role !== 'assistant' || !info.id || !info.time?.completed || turn.seen.has(`usage:${info.id}`)) return;
-    turn.seen.add(`usage:${info.id}`);
-    const record = usageRecord(info.tokens, { model: flatModelId(info.providerID, info.modelID), cost: info.cost, subagentId });
+    if (info.role !== 'assistant' || !info.id || !info.time?.completed) return;
+    const record = this.usage.call(openCodeCall(info.tokens, { model: flatModelId(info.providerID, info.modelID), cost: info.cost, subagentId }), info.id);
     if (record) onEvent({ type: 'usage', record });
   }
 
@@ -1033,7 +1035,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     if (frame.type === 'session.compacted' && session === this.sessionId) {
       onEvent({ type: 'compaction', trigger: this.manualCompaction ? 'manual' : 'auto' });
       // OpenCode states no size after it: the next call's usage is the first.
-      onEvent({ type: 'usage', record: { source: 'opencode', compacted: true } });
+      onEvent({ type: 'usage', record: this.usage.compacted() });
       return;
     }
     if (session === this.sessionId && this.taskTurn) this.followTaskTurn(frame, this.taskTurn, onEvent);

@@ -2,6 +2,7 @@ import type { AgentEvent } from './AgentAdapter';
 import type { UsageRecord } from '../../models/Usage';
 import type { AcpSessionUpdate, AcpToolCall, AcpTokenUsage } from './acpSchema';
 import type { TurnOutcome } from './turnOutcome';
+import { UsageRecordBuilder } from './usageBuilder';
 
 /**
  * The turn-by-turn translation of an ACP agent's `session/update`
@@ -68,9 +69,8 @@ export function reduceUpdate(turn: AcpTurn, update: AcpSessionUpdate): AcpStep {
     case 'usage_update': {
       // A context meter, and `cost` is the session's running total: neither
       // adds up per turn, so only the meter is reported.
-      const record: UsageRecord = { source: turn.source, contextTokens: update.used, contextWindow: update.size };
-      if (turn.model !== undefined) record.model = turn.model;
-      return { turn, events: [{ type: 'usage', record }] };
+      const record = new UsageRecordBuilder(turn.source).meter({ model: turn.model, contextTokens: update.used, contextWindow: update.size });
+      return { turn, events: record ? [{ type: 'usage', record }] : [] };
     }
     // user_message_chunk only replays history on session/load. The rest hold
     // state the connector reads from the update itself, and an unknown kind
@@ -262,18 +262,18 @@ export function endTurn(turn: AcpTurn, stopReason: string | { unreadable: string
 
 // A measure the agent leaves out stays out of the record: unknown, not zero.
 // `thoughtTokens` has no place in a record, and `totalTokens` is only a sum.
-function usageRecord(turn: AcpTurn, usage: AcpTokenUsage | null | undefined): UsageRecord | undefined {
-  if (!usage) return undefined;
-  const record: UsageRecord = { source: turn.source };
-  if (turn.model !== undefined) record.model = turn.model;
-  let reported = false;
-  const take = (value: number | null | undefined, set: (n: number) => void) => {
-    if (typeof value !== 'number') return;
-    set(value);
-    reported = true;
-  };
-  take(usage.inputTokens, (n) => (record.inputTokens = n));
-  take(usage.outputTokens, (n) => (record.outputTokens = n));
-  take(usage.cachedReadTokens, (n) => (record.cachedInputTokens = n));
-  return reported ? record : undefined;
+// The reducer keeps no state across turns and ACP names no call, so each
+// turn's builder has nothing to count twice.
+function usageRecord(turn: AcpTurn, usage: AcpTokenUsage | null | undefined): UsageRecord | null {
+  if (!usage) return null;
+  const measure = (value: number | null | undefined) => (typeof value === 'number' ? value : undefined);
+  const inputTokens = measure(usage.inputTokens);
+  const outputTokens = measure(usage.outputTokens);
+  const cachedInputTokens = measure(usage.cachedReadTokens);
+  return new UsageRecordBuilder(turn.source).call({
+    ...(turn.model !== undefined ? { model: turn.model } : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+  });
 }
