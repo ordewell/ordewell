@@ -17,6 +17,7 @@ import {
 } from './openCodeTransport';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import type { AgentEvent, AgentStartOptions, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
+import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
 
 const SERVER_READY_TIMEOUT_MS = 30000;
@@ -290,6 +291,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   private taskTurn: TaskTurn | null = null;
   /** Whether an abort was posted in the current task turn, and so how the idle that follows ends it (ADR-0018 W1). */
   private readonly outcome = new TurnOutcome();
+  private readonly subagents = new SubagentTracker(this.outcome);
   /** The user's MCP servers, as `/mcp` last listed them: what tells a planner's MCP tool request from a built-in's (ADR-0026). */
   private mcpServers: string[] = [];
   private readonly permissions = openCodePermissions(
@@ -993,20 +995,13 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     const child = state?.metadata?.sessionId;
     const held = child ? turn.children.adopt(child, callId) : null;
     if (held) {
-      const input = state?.input ?? {};
-      const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
       const model = flatModelId(state?.metadata?.model?.providerID, state?.metadata?.model?.modelID);
-      onEvent({ type: 'subagent_started', subagentId: callId, brief, ...(model ? { model } : {}) });
+      this.subagents.start({ id: callId, brief: subagentBrief(state?.input), model }, onEvent);
       for (const frame of held) this.onFrame(frame, turn, onEvent);
     }
     const status = state?.status;
     if (status === 'completed' || status === 'error') {
-      onEvent({
-        type: 'subagent_finished',
-        subagentId: callId,
-        outcome: status === 'completed' ? 'done' : 'failed',
-        digest: taskDigest(state?.output ?? state?.error ?? ''),
-      });
+      this.subagents.finish(callId, { success: status === 'completed' }, taskDigest(state?.output ?? state?.error ?? ''), onEvent);
     }
   }
 

@@ -21,6 +21,7 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
+import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 
@@ -565,11 +566,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private reportedModelCostUsd = new Map<string, number>();
   /** What this turn's streamed calls already reported, so its result only adds what did not stream. */
   private turnCallUsage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
-  /**
-   * Subagents started and not yet finished, keyed by the `Agent` call's id.
-   * Kept across turns: a backgrounded one reports after its turn has ended.
-   */
-  private readonly openSubagents = new Map<string, { background: boolean }>();
+  /** Kept across turns: a backgrounded subagent reports after its turn has ended. */
+  private readonly subagents = new SubagentTracker(this.outcome);
+  /** The open subagents whose `Agent` call returned at launch: only a completion notice ends them. */
+  private readonly backgroundSubagents = new Set<string>();
   /** Subagent messages already counted. A message arrives as one line per content block, each repeating its usage. */
   private readonly countedSubagentMessages = new Set<string>();
   /** Background tasks (shells, agents) the CLI reports as still running, as of its last `background_tasks_changed`. */
@@ -1055,7 +1055,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           else if (block.type === 'tool_use' && block.name) {
             const id = block.id ?? block.name;
             emit({ type: 'tool_call', id, name: block.name, args: block.input ?? {} });
-            if (SUBAGENT_TOOLS.has(block.name) && block.id) this.startSubagent(block.id, block.input ?? {}, emit);
+            if (SUBAGENT_TOOLS.has(block.name) && block.id) {
+              const input = block.input ?? {};
+              this.subagents.start({ id: block.id, brief: subagentBrief(input), model: typeof input.model === 'string' ? input.model : undefined }, emit);
+            }
           }
         }
         return;
@@ -1073,10 +1076,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           const id = block.tool_use_id ?? '';
           const output = flattenContent(block.content);
           const diff = block.is_error === true ? '' : editDiff(msg.tool_use_result);
-          const subagent = subagentId ? undefined : this.openSubagents.get(id);
+          const subagent = !subagentId && this.subagents.isOpen(id);
           if (!subagentId && output.includes(ASYNC_LAUNCH_MARKER)) {
             emit({ type: 'background_agent', id });
-            if (subagent) subagent.background = true;
+            if (subagent) this.backgroundSubagents.add(id);
           } else if (subagent) {
             this.finishForegroundSubagent(id, msg.tool_use_result, output, block.is_error === true, emit);
           }
@@ -1129,9 +1132,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         }
         // A backgrounded subagent's only completion signal: its `Agent` call
         // returned at launch, long before the work ended.
-        if (msg.subtype === 'task_notification' && msg.tool_use_id && this.openSubagents.get(msg.tool_use_id)?.background) {
-          this.openSubagents.delete(msg.tool_use_id);
-          emit({ type: 'subagent_finished', subagentId: msg.tool_use_id, outcome: notificationOutcome(msg.status), digest: msg.summary ?? '' });
+        if (msg.subtype === 'task_notification' && msg.tool_use_id && this.backgroundSubagents.delete(msg.tool_use_id)) {
+          this.subagents.finish(msg.tool_use_id, { status: notificationOutcome(msg.status) }, msg.summary ?? '', emit);
         }
         return;
 
@@ -1276,12 +1278,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
     emit(end);
   }
 
-  private startSubagent(id: string, input: Record<string, unknown>, emit: (event: AgentEvent) => void): void {
-    this.openSubagents.set(id, { background: false });
-    const brief = typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
-    emit({ type: 'subagent_started', subagentId: id, brief, model: typeof input.model === 'string' ? input.model : undefined });
-  }
-
   /**
    * A subagent's messages do not stream, so each line's usage is the snapshot
    * taken before generation: the prompt is real, the output a placeholder.
@@ -1308,10 +1304,9 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * complete usage instead.
    */
   private finishForegroundSubagent(id: string, result: unknown, output: string, failed: boolean, emit: (event: AgentEvent) => void): void {
-    this.openSubagents.delete(id);
     const finalCall = subagentFinalCall(result);
     if (finalCall) emit({ type: 'usage', record: usageRecord(finalCall.usage, finalCall.model, id) });
-    emit({ type: 'subagent_finished', subagentId: id, outcome: failed ? 'failed' : 'done', digest: output });
+    this.subagents.finish(id, { success: !failed }, output, emit);
   }
 
   /**
