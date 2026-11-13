@@ -32,6 +32,7 @@ import type {
   PreviewRepo,
   RepoHead,
   PreservedWork,
+  RefusedRemoval,
   RepairEvidence,
   RevertCommand,
   RevertWatch,
@@ -48,6 +49,7 @@ import { absorbRemoval, handoffOf, integrationBranchFor, landedInRepo, noRemoval
 import { isTaskWorkspaceOf, refuseUsersCheckout, stateRootOf, worktreesDirOf } from './stateRoot';
 import { defaultExecFile, git, isAncestor, tryGit, withoutHooks, type Ancestry, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { IsolationLocks } from './isolationLocks';
+import { IDENTITY_FIX, identityRefusal, lacksIdentity } from './gitIdentity';
 import { bootstrap, installDirs, isEnvFile, lexists, LINKED_ARTIFACTS, listDir, SetupCommandError } from './worktreeBootstrap';
 import { linkPath } from './worktreeLink';
 import { OLDER_RUN_REFUSAL, startedOlder } from './taskRevert';
@@ -144,6 +146,18 @@ function resolvesAsNamed(base: string, p: string): boolean {
 
 function firstLine(text: string): string {
   return text.split(/\r?\n/, 1)[0].trim();
+}
+
+/**
+ * Why a fresh attempt could not start over its last one's worktree. Keeping
+ * that work is a commit: one git refused for want of an identity it makes on
+ * the next start once the user sets one, so only another refusal is theirs to
+ * resolve by hand.
+ */
+function unkeptWork(refused: RefusedRemoval): string {
+  const held = `The worktree of its last attempt (${refused.worktree}) holds work Ordewell could not keep`;
+  if (lacksIdentity(refused.reason)) return `${held} yet: ${IDENTITY_FIX}. Then start the task again, and that work is kept first`;
+  return `${held} (${refused.reason}). Save or remove it by hand, then start the task again`;
 }
 
 /** What git said when it stopped, in a line; a hook that printed nothing leaves only how it ended. */
@@ -620,7 +634,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const replaced = previous ? await this.removeTask(run, previous, { dropRecord: true, intent }) : noRemoval();
       const [refused] = replaced.refused;
       if (refused) {
-        throw new Error(`The worktree of its last attempt (${refused.worktree}) holds work Ordewell could not keep (${refused.reason}). Save or remove it by hand, then start the task again`);
+        throw new Error(unkeptWork(refused));
       }
       const { branch, dir } = this.namesFor(run, task);
       // What the record did not name: a crash between `worktree add` and the save, or a record lost to another save, leaves a registration, a
@@ -633,7 +647,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const [stuck] = leftover.refused;
       if (stuck) {
         keepChild([...replaced.preserved, ...leftover.preserved, ...(previous?.continuationWork ?? [])]);
-        throw new Error(`The worktree of its last attempt (${stuck.worktree}) holds work Ordewell could not keep (${stuck.reason}). Save or remove it by hand, then start the task again`);
+        throw new Error(unkeptWork(stuck));
       }
       const preserved = intent === 'restore'
         ? [...replaced.preserved, ...leftover.preserved, ...(previous?.continuationWork ?? [])]
@@ -1260,6 +1274,14 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       });
     }
     return off;
+  }
+
+  async commitRefusal(workspaceRoot: string, repos: readonly string[]): Promise<string | null> {
+    for (const repo of repos) {
+      const said = await identityRefusal(this.gitInvoker, repoRootOf(workspaceRoot, repo));
+      if (said) return `${IDENTITY_FIX}${repo === SELF_REPO ? '' : ` in repository \`${repo}\``} (git said: ${said})`;
+    }
+    return null;
   }
 
   /** `git merge-tree --write-tree`, which merges without touching a tree, arrived in git 2.38. */

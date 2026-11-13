@@ -24,6 +24,7 @@ export type RunEventKind =
   | 'approval_denied'
   | 'task_idle'
   | 'landing_conflict'
+  | 'landing_failed'
   | 'usage_limit'
   | 'auto_merge_stopped'
   | 'start_refused'

@@ -131,7 +131,7 @@ describe('Landing', () => {
       expect(await landing.landPassed(t1, { worktree: true, kind: CHANGE })).toEqual({
         kind: 'awaiting_user',
         reason: 'landing-failed',
-        messages: [{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work (its worktree is missing). Its worktree is kept for inspection.' }],
+        messages: [{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work (its worktree is missing). Its worktree is kept for inspection. Once git can, land its work (retry it from its session) to land what it kept without running it again.' }],
       });
       expect(record('t1')?.status).toBe('failed');
       expect(isolation.taskIdsFor('release')).toEqual([]);
@@ -148,7 +148,7 @@ describe('Landing', () => {
 
       const outcome = await landing.landPassed(t1, { worktree: true, kind: CHANGE });
 
-      expect(outcome.messages).toEqual([{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work in web, so none of it landed. Its worktrees are kept for inspection.' }]);
+      expect(outcome.messages).toEqual([{ level: 'error', text: 'Task "Task t1" passed, but git could not integrate its work in web, so none of it landed. Its worktrees are kept for inspection. Once git can, land its work (retry it from its session) to land what it kept without running it again.' }]);
     });
 
     it('cannot land a worktree attempt whose record went with a discarded run', async () => {

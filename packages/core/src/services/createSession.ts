@@ -1005,6 +1005,7 @@ export class Session {
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       landedWork: () => (this.runMergeView() ? 'pending' : this.runs.mergedRun ? 'merged' : null),
       mergeTarget: () => this.position.mergeTarget(),
+      landingError: (taskId) => this.runs.current?.tasks[taskId]?.landingError,
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
       reportTail: (taskId) => this.reportTail(taskId),
       reported: (taskId, to) => {
@@ -1258,6 +1259,7 @@ export class Session {
       },
       skipTask: (taskId, reason, actor) => this.saves.control(() => this.orchestrator.skipTask(taskId, reason, runOrigin(actor))),
       continueTask: (taskId, message, actor) => this.resumeTask(taskId, message, runOrigin(actor)),
+      landKept: (taskId) => this.saves.control(() => this.orchestrator.landKeptWork(taskId)),
       resumeNow: (taskId, message, actor) => this.saves.control(() => this.orchestrator.resumeNow(taskId, runOrigin(actor), message)),
       messageTask: (taskId, text) => this.sendTaskMessage(taskId, text),
       forceMessage: (taskId, text) => this.forceSendTaskMessage(taskId, text),

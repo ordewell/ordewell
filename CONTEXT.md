@@ -2130,8 +2130,14 @@ rather than building on part of a task. `merged` always means the whole task
 landed, and a dependent starts only then. `conflictRepo` names the repo that
 stopped it. A landing that does not go through never fails the task, so it
 blocks nothing: a conflict gets a *conflict repair* or waits on the user, and
-one git refuses (`failed`) leaves the task `awaiting_user` with its verdict,
-worktree and branch kept (ADR-0013).
+one git refuses (`failed`), a *landing failure*, leaves the task `awaiting_user`
+(`landing-failed`) with its verdict, worktree and branch kept (ADR-0013). A
+landing failure is told as what git said and its fix, never as a conflict: a
+commit git cannot author for want of `user.name`/`user.email` is the common
+one, and an isolated run checks for it (`git var GIT_AUTHOR_IDENT`) before it
+claims its first task, refusing the start rather than inventing an identity.
+Once the cause is fixed, landing the kept work (`retry_task` from `session`)
+lands it without running the task again.
 The `Landing` module (`services/Landing.ts`) owns it, and conflict repair,
 between the scheduler and the *isolation run controller*: given a passed
 attempt it lands through the controller and answers `landed`,

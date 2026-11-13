@@ -61,7 +61,20 @@ export interface IsolationDecision {
  * what closed the run (a revert, a skip) may have changed the task, so its
  * start says how rather than only that it stopped.
  */
-export type IsolationStart = IsolationDecision | 'blocked' | 'interrupted' | 'closed';
+export type IsolationStart = IsolationDecision | IsolationRefused | 'blocked' | 'interrupted' | 'closed';
+
+/**
+ * An isolated run git could not commit in, refused before it claims anything:
+ * landing commits each task's work, so a run started anyway would do it all
+ * and keep none of it. Nothing is decided, so the next start asks again.
+ */
+export interface IsolationRefused {
+  readonly refused: string;
+}
+
+export function isRefused(start: IsolationStart | 'checkout'): start is IsolationRefused {
+  return typeof start === 'object' && 'refused' in start;
+}
 
 const DECISION_CLOSED = 'The isolation decision changed or closed before this attempt could start.';
 
@@ -1036,6 +1049,9 @@ export class IsolationRunController {
       this.begin('shared');
       return this.decision;
     }
+    const refusal = await this.isolation.commitRefusal?.(root, decision.layout.repos);
+    if (interrupted()) return ended();
+    if (refusal) return { refused: `No task was started, since Ordewell commits each task's work as it lands: ${refusal}. Start again once git can commit.` };
     if (!decision.continuing) {
       try {
         if (!(await this.mint(root, interrupted)) || interrupted()) return ended();

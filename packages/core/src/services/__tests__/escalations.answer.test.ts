@@ -36,6 +36,7 @@ const CASES: { [K in EscalationOptionId]?: [Partial<Escalation>, string | undefi
   reply: [{ kind: 'input' }, 'use port 8080', { command: 'message_task', task: 't1', text: 'use port 8080' }],
   resume: [{ kind: 'usage-limit' }, undefined, { command: 'retry_task', task: 't1', from: 'session' }],
   continue: [{ kind: 'failed' }, 'fix the lint too', { command: 'retry_task', task: 't1', from: 'session', message: 'fix the lint too' }],
+  land: [{ kind: 'landing-failed' }, undefined, { command: 'retry_task', task: 't1', from: 'session' }],
   retry: [{ kind: 'failed' }, undefined, { command: 'retry_task', task: 't1', from: 'fresh' }],
   run: [{ kind: 'unapproved' }, undefined, { command: 'run_task', task: 't1' }],
   'force-start': [{ kind: 'on-hold' }, undefined, { command: 'force_start', task: 't1' }],

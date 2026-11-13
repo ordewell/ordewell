@@ -636,6 +636,14 @@ export interface IWorktreeIsolation {
   gitShortfall(): Promise<string | null>;
 
   /**
+   * Why git could not commit in a repo of the group, asked before an isolated
+   * run claims its first task, since landing commits each task's work; null
+   * when it can in every one. Optional: an isolation that never commits has
+   * nothing to ask.
+   */
+  commitRefusal?(workspaceRoot: string, repos: readonly string[]): Promise<string | null>;
+
+  /**
    * Put the tracked changes of every dirty repo of the group on its git stash,
    * the user's way out of a `dirty` refusal. Untracked files stay: they never
    * block isolation.
