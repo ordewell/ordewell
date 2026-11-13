@@ -70,10 +70,10 @@ before.
 - **No secret's value is kept (R4).** Text and `why` go through the summary
   redaction (`redactSummaryText`, ADR-0061 P1) after R1's check has read the
   raw words.
-- **The record is bounded (R5).** It holds at most 150 entries, superseded ones
-  included. Past that, an addition is refused and the planner is told to
-  supersede what no longer stands, since every fresh context is told the whole
-  record.
+- **The record is bounded (R5).** It holds at most 150 live entries. Past that,
+  an addition is refused and the planner is told to supersede what no longer
+  stands: a superseding entry replaces a live one, so it is never refused, and
+  superseded entries, which no fresh context is told, do not count.
 - **The record writes nothing but the plan's own notes (R6).** It changes no
   task and needs no consent, so every planner is offered it: harness planners
   as an Ordewell MCP tool with the read-only hint the other planner tools
@@ -137,3 +137,4 @@ before.
 ## History
 
 - 2026-11-10 — accepted and implemented: the `record` tool, the record on the plan, and the seeded checkpoint for `/compact` and automatic compaction.
+- 2026-11-13 — R5 counts live entries only, so a superseding entry is accepted at the limit; counting superseded ones froze a full record for good.
