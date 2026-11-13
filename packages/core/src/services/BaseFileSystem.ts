@@ -258,9 +258,17 @@ export abstract class BaseFileSystem implements IFileSystem {
   }
 
   private plannerSite(): ShellSite {
+    return this.workspaceSite('planner');
+  }
+
+  private subagentSite(): ShellSite {
+    return this.workspaceSite('subagent');
+  }
+
+  private workspaceSite(who: 'planner' | 'subagent'): ShellSite {
     const root = this.getWorkspaceRoot();
     const { approval } = this;
-    return { who: 'planner', root, approval: () => approval, sandbox: this.sandbox, sealed: { workspace: root } };
+    return { who, root, approval: () => approval, sandbox: this.sandbox, sealed: { workspace: root } };
   }
 
   /**
@@ -278,6 +286,16 @@ export abstract class BaseFileSystem implements IFileSystem {
    */
   async bash(command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
     return this.runIn(this.plannerSite(), command, signal, opts);
+  }
+
+  /**
+   * A research subagent's `bash` (ADR-0008 T6): the planner's workspace and
+   * sandbox, but a site that asks nobody and keeps no grant. The gate decides
+   * which commands run, sealed or not; what would ask is refused with what to
+   * report in the digest instead.
+   */
+  async subagentBash(command: string, signal?: AbortSignal, opts: BashOptions = {}): Promise<ToolOutcome> {
+    return this.runIn(this.subagentSite(), command, signal, opts);
   }
 
   /**

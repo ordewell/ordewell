@@ -94,7 +94,8 @@ function taskRefusal(standing: StandingDecision | undefined): string {
   return TASK_UNSEALED;
 }
 
-function subagentOutside(abs: string): string {
+/** Why a research subagent's read or command naming `abs` was refused (ADR-0008 T6). */
+export function subagentOutside(abs: string): string {
   return `Path "${abs}" is outside the workspace. Research agents are confined to the workspace root — note the gap in your digest and let the planner request it directly.`;
 }
 

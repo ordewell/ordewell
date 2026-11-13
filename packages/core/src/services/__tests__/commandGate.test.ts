@@ -1,17 +1,11 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolve } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import { ApprovalPolicy } from '../ApprovalPolicy';
-import { BaseFileSystem } from '../BaseFileSystem';
 import { decide, type GateSite, type GateVerdict, type GateWho, type Settled } from '../commandGate';
 import type { EgressCheck } from '../egressGuard';
 import { grantScopeFor } from '../pathScope';
 import { ParsedLine } from '../parsedLine';
-import { nonPromptingFs } from '../ResearchSubagents';
-import { researchLineShell, resolveResearchShell, type ShellLaunch } from '../researchShell';
-import { PlannerShellSandbox, plannerShellProfile, sealedShellProfile, type PlannerSandboxAvailability } from '../sandbox/plannerSandbox';
-import type { SandboxBackend, SandboxLaunch, SandboxProfile } from '../sandbox/SandboxBackend';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
 
 /**
@@ -299,85 +293,67 @@ describe('commandGate: a research subagent (ADR-0008 T6, ADR-0036 S5)', () => {
   });
 });
 
-/** Hands back a launch that says whether it was sealed and with what network, so a run reads as a verdict. */
-class RecordingBackend implements SandboxBackend {
-  readonly name = 'recording';
-  readonly profiles: SandboxProfile[] = [];
-  async probe(): Promise<{ ok: true }> { return { ok: true }; }
-  wrap(_invocation: unknown, profile: SandboxProfile): SandboxLaunch {
-    this.profiles.push(profile);
-    return { file: profile.limits ? '/sealed' : '/sandboxed', args: [String(this.profiles.length - 1)], env: {} };
-  }
-}
+/**
+ * What the `subagent` site decides for each command, under a session whose
+ * card holds a standing grant (`gh issue list`), two exclusions (`!rm *`,
+ * `!npm run *`) and a "no" for `npm test`. These are the decisions a research
+ * subagent has always had, from before it shared the gate with the planner and
+ * tasks: a table pinned so that moving a site's rules cannot widen one. A sandbox that seals turns what would ask, or be
+ * refused, into a sealed run — except what the person said no to (S3); one
+ * that cannot, refuses it with what to report instead (S6). No grant is kept
+ * at this site, and no command keeps a network (ADR-0011 B3).
+ */
+describe('commandGate: a research subagent, command by command (ADR-0008 T6)', () => {
+  const native = (command: string) => ({ kind: 'native', network: false, command });
+  const sealed = (command: string) => ({ kind: 'sealed', why: 'asked', command });
+  const refuses = (text: string) => ({ kind: 'refuse', reason: expect.stringContaining(text) });
+  const OUTSIDE_TEXT = 'is outside the workspace. Research agents are confined to the workspace root';
+  const UNAPPROVED = 'needs user approval, and research agents run in the background where nothing can be approved';
+  const NO_SANDBOX = 'this machine has no sandbox to run a command sealed in';
+  const EXCLUDED = 'an exclusion holds for a sealed run too';
+  const DENIED = 'a denial holds for a sealed run too';
 
-function available(backend: SandboxBackend): PlannerSandboxAvailability {
-  return {
-    available: true,
-    backend,
-    profile: (opts) => plannerShellProfile({ platform: 'darwin', services: [] }, opts),
-    sealed: { available: true, profile: (opts) => sealedShellProfile({ platform: 'darwin', reads: ['/usr'], masked: [], overlay: false }, opts) },
-  };
-}
-
-type Outcome = { ran: string; sealed: boolean; network: boolean } | { refused: string };
-
-class WorkspaceFileSystem extends BaseFileSystem {
-  last?: Outcome;
-  constructor(private readonly root: string, private readonly backend: RecordingBackend | null) {
-    super(undefined, new PlannerShellSandbox(async () => (backend ? available(backend) : { available: false, notice: 'no sandbox in this test' })));
-  }
-  getWorkspaceRoot(): string { return this.root; }
-  protected async readFileImpl(): Promise<ToolOutcome> { throw new Error('not used'); }
-  protected async globImpl(): Promise<ToolOutcome> { throw new Error('not used'); }
-  protected async grepImpl(): Promise<ToolOutcome> { throw new Error('not used'); }
-  protected async listDirImpl(): Promise<ToolOutcome> { throw new Error('not used'); }
-  protected async execBashImpl(command: string, shell: ShellLaunch): Promise<ToolOutcome> {
-    const profile = shell.file === null ? undefined : this.backend?.profiles[Number(shell.args[0])];
-    this.last = { ran: command, sealed: shell.file === '/sealed', network: profile?.network ?? false };
-    return { success: true, output: 'ran', truncated: false };
-  }
-}
-
-describe("commandGate's subagent site decides as nonPromptingFs does (part 2 moves the wrapper onto it)", () => {
-  let workspace: string;
-  beforeEach(() => { workspace = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-gate-'))); });
-  afterEach(() => { rmSync(workspace, { recursive: true, force: true }); });
-
-  const COMMANDS = [
-    'git status', 'cat a.md', `cat ${OUTSIDE}`, 'ls ..', 'cd .. && cat a.md', 'cat /dev/null', 'npm test', 'npm run lint',
-    'rm -rf build', 'echo draft > notes.txt', 'for i in 1 2; do npm test; done', 'gh issue list', 'curl https://example.com/',
-    "sed -i 's/a/b/' a.md", 'git log --oneline | head -5',
+  /** What each command meets: on a host that seals, on one that cannot, and when the agent asked for a sealed run. */
+  const TABLE: Array<{ command: string; sealable: object; unsealable: object; asked: object }> = [
+    { command: 'git status', sealable: native('git status'), unsealable: native('git status'), asked: sealed('git status') },
+    { command: 'cat a.md', sealable: native('cat a.md'), unsealable: native('cat a.md'), asked: sealed('cat a.md') },
+    { command: 'git log --oneline | head -5', sealable: native('git log --oneline | head -5'), unsealable: native('git log --oneline | head -5'), asked: sealed('git log --oneline | head -5') },
+    { command: `cat ${OUTSIDE}`, sealable: sealed(`cat ${OUTSIDE}`), unsealable: refuses(OUTSIDE_TEXT), asked: sealed(`cat ${OUTSIDE}`) },
+    { command: 'ls ..', sealable: sealed('ls ..'), unsealable: refuses(OUTSIDE_TEXT), asked: sealed('ls ..') },
+    { command: 'cd .. && cat a.md', sealable: sealed('cd .. && cat a.md'), unsealable: refuses(OUTSIDE_TEXT), asked: sealed('cd .. && cat a.md') },
+    { command: 'cat /dev/null', sealable: sealed('cat /dev/null'), unsealable: refuses(OUTSIDE_TEXT), asked: sealed('cat /dev/null') },
+    // A "no" on the card and an exclusion refuse, sealed or not (S3).
+    { command: 'npm test', sealable: refuses(DENIED), unsealable: refuses(UNAPPROVED), asked: refuses(DENIED) },
+    { command: 'for i in 1 2; do npm test; done', sealable: refuses(DENIED), unsealable: refuses('Command refused: "for" is a shell keyword'), asked: refuses(DENIED) },
+    { command: 'npm run lint', sealable: refuses(EXCLUDED), unsealable: refuses(UNAPPROVED), asked: refuses(EXCLUDED) },
+    { command: 'rm -rf build', sealable: refuses(EXCLUDED), unsealable: refuses('Command refused: "rm" modifies state'), asked: refuses(EXCLUDED) },
+    // What the classifier refuses runs sealed where it can (S2), and is the refusal elsewhere (S6).
+    { command: 'echo draft > notes.txt', sealable: sealed('echo draft > notes.txt'), unsealable: refuses('Command refused: "> notes.txt" writes to a file'), asked: sealed('echo draft > notes.txt') },
+    { command: "sed -i 's/a/b/' a.md", sealable: sealed("sed -i 's/a/b/' a.md"), unsealable: refuses('Command refused: "sed -i" edits files in place'), asked: sealed("sed -i 's/a/b/' a.md") },
+    // A standing grant is the planner's: the subagent has none, so it is what would ask.
+    { command: 'gh issue list', sealable: sealed('gh issue list'), unsealable: refuses(UNAPPROVED), asked: sealed('gh issue list') },
+    { command: 'curl https://example.com/', sealable: sealed("curl -q --noproxy '*' https://example.com/"), unsealable: refuses(UNAPPROVED), asked: sealed("curl -q --noproxy '*' https://example.com/") },
   ];
 
-  it.each([
-    { name: 'with a sandbox', sandbox: true },
-    { name: 'without one', sandbox: false },
-  ])('$name, across standing grants, exclusions and denials', async ({ sandbox }) => {
-    const shell = resolveResearchShell();
-    for (const sealed of [false, true]) {
-      const fixture = approvals({ preApproved: ['gh issue list', '!rm *', '!npm run *'] });
-      await denyOnCard('npm test', fixture);
-      for (const command of COMMANDS) {
-        const fs = new WorkspaceFileSystem(workspace, sandbox ? new RecordingBackend() : null);
-        fs.setApproval(fixture.approval);
-        const wrapped = await nonPromptingFs(fs).bash(command, undefined, sealed ? { sealed: true } : undefined);
-        const before: Outcome = wrapped.output === 'ran' || wrapped.output.endsWith('\nran') ? fs.last! : { refused: wrapped.output };
+  async function fixture() {
+    const fixture = approvals({ preApproved: ['gh issue list', '!rm *', '!npm run *'] });
+    await denyOnCard('npm test', fixture);
+    return fixture;
+  }
 
-        const verdict = await decide(ParsedLine.parse(command, researchLineShell(shell)), {
-          ...site('subagent', fixture.approval),
-          root: workspace,
-          ...(shell.hostPath ? { hostPath: shell.hostPath } : {}),
-          canSeal: () => fs.canSeal(),
-          ...(sealed ? { sealed: true } : {}),
-        });
-        expect(verdict.kind).not.toBe('ask');
-        const after: Outcome = verdict.kind === 'refuse' ? { refused: verdict.reason }
-          : verdict.kind === 'sealed' ? { ran: verdict.command, sealed: true, network: false }
-            : verdict.kind === 'native' ? { ran: verdict.command, sealed: false, network: verdict.network }
-              : { refused: 'asked' };
-        expect({ command, sealed, outcome: after }).toEqual({ command, sealed, outcome: before });
-      }
-      expect(fixture.asked).toEqual(['npm test']);
-    }
+  it.each(TABLE)('$command', async ({ command, sealable: whereSealed, unsealable }) => {
+    const { approval, asked } = await fixture();
+    const before = asked.length;
+    expect(await decide(line(command), site('subagent', approval, { canSeal: async () => true }))).toMatchObject(whereSealed);
+    expect(await decide(line(command), site('subagent', approval))).toMatchObject(unsealable);
+    expect(asked.length).toBe(before);
+  });
+
+  it.each(TABLE)('$command, asked to run sealed', async ({ command, asked: whenAsked }) => {
+    const { approval, asked } = await fixture();
+    const before = asked.length;
+    expect(await decide(line(command), site('subagent', approval, { canSeal: async () => true, sealed: true }))).toMatchObject(whenAsked);
+    expect(await decide(line(command), site('subagent', approval, { sealed: true }))).toMatchObject(refuses(NO_SANDBOX));
+    expect(asked.length).toBe(before);
   });
 });
