@@ -13,6 +13,7 @@ import {
   SESSION_TITLE, turnLatch, usageRecord, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
 } from './openCodeTransport';
 import { settleWithin } from './settleWithin';
+import { TurnOutcome } from './turnOutcome';
 /** A turn's end is also read from `/api/session/active`, behind the stream, which can drop a frame. */
 const ACTIVE_POLL_INTERVAL_MS = 1000;
 /**
@@ -260,7 +261,8 @@ export class OpenCodeV2 {
   private model: V2Model | null = null;
   private agent: string;
   private turn: Turn | null = null;
-  private interruptRequested = false;
+  /** Whether an interrupt was asked for in this turn, and so how its end ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
   /** Whether the session's own step is streaming: begun, and neither ended nor failed. */
   private stepOpen = false;
   private stepWaiters: (() => void)[] = [];
@@ -462,7 +464,7 @@ export class OpenCodeV2 {
       return;
     }
     const state = newTurnState();
-    this.interruptRequested = false;
+    this.outcome.open();
     const turn: Turn = Object.assign(turnLatch(), { outcome: null, failure: null });
     this.turn = turn;
     const stream = await this.openStream(state, turn, onEvent, onActivity);
@@ -488,10 +490,11 @@ export class OpenCodeV2 {
         readBack: () => this.readBack(state, onEvent),
         permissions: this.permissions,
         outcome: () => {
-          // OpenCode's own end decides; the request only stands in where it named none.
-          if (turn.outcome === 'interrupted' || (turn.outcome === null && this.interruptRequested)) return { type: 'turn_end', interrupted: true };
-          if (turn.outcome === 'failed' || turn.failure) return { type: 'error', message: turn.failure ?? 'OpenCode reported that the turn failed.' };
-          return { type: 'turn_end' };
+          const failed = turn.outcome === 'failed' || turn.failure;
+          return this.outcome.settle(
+            turn.outcome === 'interrupted' ? 'interrupted' : 'completed',
+            failed ? { message: turn.failure ?? 'OpenCode reported that the turn failed.' } : undefined,
+          );
         },
       }, onEvent);
       if (!settled) await this.interruptAborted(turn);
@@ -569,7 +572,7 @@ export class OpenCodeV2 {
         const messages = await this.messages();
         const idle = [...(messages ?? [])].reverse().find((m) => m.type === 'idle');
         if (idle?.outcome === 'failed' || idle?.outcome === 'interrupted' || idle?.outcome === 'succeeded') turn.outcome ??= idle.outcome;
-        turn.outcome ??= this.interruptRequested ? 'interrupted' : 'succeeded';
+        turn.outcome ??= 'succeeded';
         if (!turn.done) turn.finish();
       }
     }
@@ -609,11 +612,10 @@ export class OpenCodeV2 {
   async interrupt(timeoutMs: number): Promise<boolean> {
     if (!this.sessionId || this.host.isExited()) return false;
     const turn = this.turn;
-    this.interruptRequested = true;
+    this.outcome.request();
     const response = await this.host.json<{ interrupted?: boolean }>('POST', `/api/session/${this.sessionId}/interrupt`, undefined, undefined, timeoutMs).catch(() => null);
     if (!response) {
-      // An interrupt the server did not take stops nothing, so it must not colour the turn's end.
-      this.interruptRequested = false;
+      this.outcome.refused();
       return false;
     }
     if (!turn || turn.done) return true;
@@ -820,7 +822,7 @@ export class OpenCodeV2 {
   private finishChild(callId: string, success: boolean, output: string, state: TurnState, onEvent: (e: AgentEvent) => void): void {
     if (!state.children.owns(callId)) return;
     // 2.2.7 fails the delegating call of an interrupt Ordewell asked for; that is a stop, not the subagent's failure.
-    const outcome = success ? 'done' : this.interruptRequested ? 'stopped' : 'failed';
+    const outcome = success ? 'done' : this.outcome.requested ? 'stopped' : 'failed';
     onEvent({ type: 'subagent_finished', subagentId: callId, outcome, digest: subagentDigest(output) });
   }
 

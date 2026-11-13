@@ -1501,7 +1501,7 @@ describe('ClaudeCodeAdapter — an interrupt and the turn it is for', () => {
     adapter.dispose();
   });
 
-  it('reports a failure of the turn the runner opens itself, however an earlier interrupt ended', async () => {
+  it('ends a turn whose finish raced an acknowledged interrupt as interrupted, and still reports a failure of a turn the runner opens itself', async () => {
     const { processDeps, spawned } = deps([(written, proc) => { void written; void proc; }, (written, proc) => proc.emitStdout(ack(written) + result('success'))]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start(taskStart());
@@ -1513,8 +1513,8 @@ describe('ClaudeCodeAdapter — an interrupt and the turn it is for', () => {
 
     await expect(adapter.interrupt(1000)).resolves.toBe(true);
     await turn;
-    // The interrupt lost the race: the turn finished on its own.
-    expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    // The model finished as the interrupt landed: the interrupt still ends it (ADR-0018 W1).
+    expect(events.at(-1)).toEqual({ type: 'turn_end', interrupted: true });
     expect(await adapter.steer('m1', 'next')).toBe(true);
 
     spawned.processes[0].emitStdout(speaking + result('error_during_execution'));

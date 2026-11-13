@@ -21,6 +21,7 @@ import { settleWithin } from './settleWithin';
 import { PermissionLedger } from './permissionLedger';
 import { ReplyRuns } from './replyRuns';
 import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type CodexRateLimits } from './codexUsageLimit';
+import { TurnOutcome, type TurnError } from './turnOutcome';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
 
@@ -387,8 +388,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
    * turn fails on the usage limit; an update on its own acts on nothing.
    */
   private rateLimits: CodexRateLimits = new Map();
-  /** An interrupt was asked for during this turn, so however it ends, it was cut short. */
-  private interruptRequested = false;
+  /** Whether an interrupt was asked for in this turn, and so how its end signal ends it (ADR-0018 W1). */
+  private readonly outcome = new TurnOutcome();
   /**
    * Turns an interrupt cut short. Codex leaves their command running and
    * reports it when it ends, inside whatever turn is live by then — a report
@@ -722,11 +723,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   interrupt(timeoutMs: number): Promise<boolean> {
     const turn = this.turn;
     if (!this.process || !turn) return Promise.resolve(false);
-    this.interruptRequested = true;
+    this.outcome.request();
     const acknowledged = new Promise<boolean>((resolve) => {
       this.whenNamed(turn, () => this.rpc.send('turn/interrupt', { threadId: this.threadId, turnId: turn.id }, (response) => {
-        // A refused interrupt stops nothing, so it must not colour the turn's end.
-        if (!response.ok) this.interruptRequested = false;
+        if (!response.ok) this.outcome.refused();
         resolve(response.ok);
       }));
     });
@@ -805,7 +805,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   protected turnPayload(message: string): string {
     const turn: CodexTurn = { id: null, steers: new Map(), onNamed: [] };
     this.turn = turn;
-    this.interruptRequested = false;
+    this.outcome.open();
     if (this.command === 'compact') {
       return this.rpc.frame('thread/compact/start', { threadId: this.threadId }, (response, emit) => this.turnAnswered(turn, response, emit));
     }
@@ -940,7 +940,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         const params = msg.params as { threadId?: string; status?: { type?: string } } | undefined;
         if (params?.threadId !== this.threadId || params?.status?.type !== 'idle' || !this.turn?.id) return;
         this.closeTurn(emit);
-        emit(this.interruptRequested ? { type: 'turn_end', interrupted: true } : { type: 'turn_end' });
+        emit(this.outcome.settle('completed'));
         return;
       }
       // Codex reports a setup problem once, at startup, and then plans anyway.
@@ -976,7 +976,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // Like a late `turn/completed`: the previous turn's failure, landing after the next turn was written, is not this one's.
         if (typeof failure?.turnId === 'string' && (failure.turnId === this.endedTurnId || (this.turn?.id && failure.turnId !== this.turn.id))) return;
         this.closeTurn(emit);
-        emit(this.turnFailed(failure?.error));
+        emit(this.outcome.settle('completed', this.turnFailed(failure?.error)));
         return;
       }
       case 'turn/completed': {
@@ -987,16 +987,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         const turn = msg.params?.turn as { id?: string; status?: string; error?: CodexTurnError } | undefined;
         if (!this.turn || (turn?.id && turn.id === this.endedTurnId)) return;
         this.closeTurn(emit);
-        // Codex's own status decides. The request only breaks the tie when it
-        // names none: a turn that finished or failed as the interrupt arrived
-        // is that, and its error and completion reminder are still owed.
-        if (turn?.status === 'interrupted' || (turn?.status === undefined && this.interruptRequested)) {
-          emit({ type: 'turn_end', interrupted: true });
-        } else if (turn?.status === 'failed') {
-          emit(this.turnFailed(turn.error));
-        } else {
-          emit({ type: 'turn_end' });
-        }
+        emit(turn?.status === 'failed'
+          ? this.outcome.settle('completed', this.turnFailed(turn.error))
+          : this.outcome.settle(turn?.status === 'interrupted' ? 'interrupted' : 'completed'));
         return;
       }
       // Deltas for command output and MCP progress are skipped: the completed
@@ -1006,10 +999,10 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     }
   }
 
-  private turnFailed(error: CodexTurnError | undefined): AgentEvent {
+  private turnFailed(error: CodexTurnError | undefined): TurnError {
     const message = error?.message || 'Codex ended the turn with an error.';
     const usageLimit = codexUsageLimitSignal(error, this.rateLimits, new Date());
-    return usageLimit === undefined ? { type: 'error', message } : { type: 'error', message, usageLimit };
+    return usageLimit === undefined ? { message } : { message, usageLimit };
   }
 
   private turnStarted(id: unknown): void {
@@ -1027,7 +1020,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private closeTurn(emit: (event: AgentEvent) => void): void {
     const turn = this.turn;
     this.endedTurnId = turn?.id ?? null;
-    if (turn?.id && this.interruptRequested) this.interruptedTurnIds.add(turn.id);
+    if (turn?.id && this.outcome.requested) this.interruptedTurnIds.add(turn.id);
     this.turn = null;
     this.mcpCallsInProgress.clear();
     this.permissions.endTurn(emit);

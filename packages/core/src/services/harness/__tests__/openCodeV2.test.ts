@@ -1161,8 +1161,8 @@ describe('OpenCode 2.x — an interrupt that raced the turn\'s own end', () => {
     return events;
   }
 
-  it('ends a turn OpenCode reports succeeded as completed, so its completion reminder is still owed', async () => {
-    expect(await interruptedThen(succeeded())).toEqual([{ type: 'turn_end' }]);
+  it('ends a turn OpenCode reports succeeded as interrupted, so no completion reminder follows the interrupt (ADR-0018 W1)', async () => {
+    expect(await interruptedThen(succeeded())).toEqual([{ type: 'turn_end', interrupted: true }]);
   });
 
   it('ends a turn OpenCode reports failed as failed, with its error', async () => {

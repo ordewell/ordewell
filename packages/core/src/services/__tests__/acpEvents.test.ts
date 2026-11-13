@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest';
 import type { AgentEvent } from '../harness/AgentAdapter';
 import { endTurn, newTurn, reduceUpdate, type AcpTurn } from '../harness/acpEvents';
 import { parseSessionUpdate } from '../harness/acpSchema';
+import { TurnOutcome } from '../harness/turnOutcome';
+
+/** A turn whose `session/cancel` went out. */
+function cancelSent(): TurnOutcome {
+  const outcome = new TurnOutcome();
+  outcome.request();
+  return outcome;
+}
 
 /** Feed raw `update` objects the way a connector would: parsed, then reduced. */
 function feed(raws: unknown[], turn: AcpTurn = newTurn({ source: 'acp-agent' })): { turn: AcpTurn; events: AgentEvent[] } {
@@ -220,7 +228,7 @@ describe('reduceUpdate', () => {
 
     it('attributes a call the turn closes to the call that started it', () => {
       const turn = feed([{ sessionUpdate: 'tool_call', toolCallId: 'c-1', title: 'Search', status: 'pending', ...child }]).turn;
-      expect(endTurn(turn, 'end_turn', undefined, false).slice(0, 2)).toEqual([
+      expect(endTurn(turn, 'end_turn', undefined, new TurnOutcome()).slice(0, 2)).toEqual([
         { type: 'tool_call', id: 'c-1', name: 'Search', args: {}, subagentId: 'p-1' },
         { type: 'turn_end' },
       ]);
@@ -229,7 +237,7 @@ describe('reduceUpdate', () => {
     it('keeps its words out of the planner\'s answer and shows its thoughts as its own', () => {
       const { turn, events } = feed([text('Looking. '), text('I found it.', child), { ...thought('hm'), ...child }, text('Done.')]);
       expect(events.filter((e) => e.type !== 'assistant_text_delta')).toEqual([{ type: 'thinking_delta', text: 'hm', subagentId: 'p-1' }]);
-      expect(endTurn(turn, 'end_turn', undefined, false).filter((e) => e.type === 'assistant_text' || e.type === 'thinking')).toEqual([
+      expect(endTurn(turn, 'end_turn', undefined, new TurnOutcome()).filter((e) => e.type === 'assistant_text' || e.type === 'thinking')).toEqual([
         { type: 'assistant_text', runId: expect.any(String), text: 'Looking. Done.' },
       ]);
     });
@@ -277,49 +285,49 @@ describe('endTurn', () => {
 
   describe('the stop reason', () => {
     it('ends an ordinary turn on end_turn', () => {
-      expect(endTurn(newTurn({ source: 's' }), 'end_turn', undefined, false)).toEqual([{ type: 'turn_end' }]);
+      expect(endTurn(newTurn({ source: 's' }), 'end_turn', undefined, new TurnOutcome())).toEqual([{ type: 'turn_end' }]);
     });
 
     it('marks a cancelled turn interrupted', () => {
-      expect(endTurn(newTurn({ source: 's' }), 'cancelled', undefined, true)).toEqual([{ type: 'turn_end', interrupted: true }]);
+      expect(endTurn(newTurn({ source: 's' }), 'cancelled', undefined, cancelSent())).toEqual([{ type: 'turn_end', interrupted: true }]);
     });
 
     it('marks cancelled interrupted even when Ordewell sent no cancel', () => {
-      expect(endTurn(newTurn({ source: 's' }), 'cancelled', undefined, false)).toEqual([{ type: 'turn_end', interrupted: true }]);
+      expect(endTurn(newTurn({ source: 's' }), 'cancelled', undefined, new TurnOutcome())).toEqual([{ type: 'turn_end', interrupted: true }]);
     });
 
     it('marks end_turn after a cancel interrupted, because the agent raced the cancel', () => {
-      expect(endTurn(newTurn({ source: 's' }), 'end_turn', undefined, true)).toEqual([{ type: 'turn_end', interrupted: true }]);
+      expect(endTurn(newTurn({ source: 's' }), 'end_turn', undefined, cancelSent())).toEqual([{ type: 'turn_end', interrupted: true }]);
     });
 
     it.each<string | { unreadable: string }>(['max_tokens', 'max_turn_requests', 'refusal', 'something_new', { unreadable: 'stopReason: Required' }])('marks %o after a cancel interrupted', (reason) => {
-      const events = endTurn(newTurn({ source: 's' }), reason, undefined, true);
+      const events = endTurn(newTurn({ source: 's' }), reason, undefined, cancelSent());
       expect(events[events.length - 1]).toEqual({ type: 'turn_end', interrupted: true });
       expect(events.some((e) => e.type === 'error')).toBe(false);
     });
 
     it('reports a refusal as an error in plain words, with no turn_end', () => {
-      const events = endTurn(newTurn({ source: 's' }), 'refusal', undefined, false);
+      const events = endTurn(newTurn({ source: 's' }), 'refusal', undefined, new TurnOutcome());
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ type: 'error' });
       expect((events[0] as { message: string }).message).toMatch(/refus/i);
     });
 
     it('ends a max_tokens turn with a note', () => {
-      const events = endTurn(newTurn({ source: 's' }), 'max_tokens', undefined, false);
+      const events = endTurn(newTurn({ source: 's' }), 'max_tokens', undefined, new TurnOutcome());
       expect(events.map((e) => e.type)).toEqual(['command_output', 'turn_end']);
       expect((events[0] as { text: string }).text).toMatch(/token limit/i);
       expect(events[1]).toEqual({ type: 'turn_end' });
     });
 
     it('ends a max_turn_requests turn with a note', () => {
-      const events = endTurn(newTurn({ source: 's' }), 'max_turn_requests', undefined, false);
+      const events = endTurn(newTurn({ source: 's' }), 'max_turn_requests', undefined, new TurnOutcome());
       expect(events.map((e) => e.type)).toEqual(['command_output', 'turn_end']);
       expect((events[0] as { text: string }).text).toMatch(/requests/i);
     });
 
     it('ends a turn with a reason it does not know, and names the reason', () => {
-      const events = endTurn(newTurn({ source: 's' }), 'exhausted', undefined, false);
+      const events = endTurn(newTurn({ source: 's' }), 'exhausted', undefined, new TurnOutcome());
       expect(events.map((e) => e.type)).toEqual(['command_output', 'turn_end']);
       expect((events[0] as { text: string }).text).toContain('exhausted');
     });
@@ -329,7 +337,7 @@ describe('endTurn', () => {
     it('gathers the chunks of a run into one assistant_text under the id the deltas used', () => {
       const { turn, events } = feed([text('Hel'), text('lo')]);
       const runId = (events[0] as { runId: string }).runId;
-      expect(endTurn(turn, 'end_turn', undefined, false)).toEqual([
+      expect(endTurn(turn, 'end_turn', undefined, new TurnOutcome())).toEqual([
         { type: 'assistant_text', runId, text: 'Hello' },
         { type: 'turn_end' },
       ]);
@@ -337,22 +345,22 @@ describe('endTurn', () => {
 
     it('gives each run its own complete text, in order', () => {
       const turn = turnWith([text('one', { messageId: 'a' }), text('two', { messageId: 'b' })]);
-      const done = endTurn(turn, 'end_turn', undefined, false).filter((e) => e.type === 'assistant_text');
+      const done = endTurn(turn, 'end_turn', undefined, new TurnOutcome()).filter((e) => e.type === 'assistant_text');
       expect(done.map((e) => (e as { text: string }).text)).toEqual(['one', 'two']);
     });
 
     it('closes a thought as one thinking event before the reply', () => {
       const turn = turnWith([thought('think'), thought('ing'), text('answer')]);
-      const types = endTurn(turn, 'end_turn', undefined, false).map((e) => e.type);
+      const types = endTurn(turn, 'end_turn', undefined, new TurnOutcome()).map((e) => e.type);
       expect(types).toEqual(['thinking', 'assistant_text', 'turn_end']);
     });
 
     it('emits no text event for a turn that said nothing', () => {
-      expect(endTurn(turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't', title: 'x', status: 'completed' }]), 'end_turn', undefined, false)).toEqual([{ type: 'turn_end' }]);
+      expect(endTurn(turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't', title: 'x', status: 'completed' }]), 'end_turn', undefined, new TurnOutcome())).toEqual([{ type: 'turn_end' }]);
     });
 
     it('keeps the text a refused turn already said', () => {
-      const types = endTurn(turnWith([text('I cannot')]), 'refusal', undefined, false).map((e) => e.type);
+      const types = endTurn(turnWith([text('I cannot')]), 'refusal', undefined, new TurnOutcome()).map((e) => e.type);
       expect(types).toEqual(['assistant_text', 'error']);
     });
   });
@@ -360,14 +368,14 @@ describe('endTurn', () => {
   describe('calls still open', () => {
     it('leaves announced calls for the consumer to settle at turn end', () => {
       const turn = turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run tests' }]);
-      const events = endTurn(turn, 'cancelled', undefined, true);
+      const events = endTurn(turn, 'cancelled', undefined, cancelSent());
       expect(events.some((event) => event.type === 'tool_result')).toBe(false);
       expect(events[events.length - 1]).toEqual({ type: 'turn_end', interrupted: true });
     });
 
     it('reports a call that never left pending before closing it', () => {
       const turn = turnWith([{ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run tests', status: 'pending', rawInput: { command: 'npm test' } }]);
-      const events = endTurn(turn, 'cancelled', undefined, true);
+      const events = endTurn(turn, 'cancelled', undefined, cancelSent());
       expect(events).toEqual([
         { type: 'tool_call', id: 't1', name: 'Run tests', args: { command: 'npm test' } },
         { type: 'turn_end', interrupted: true },
@@ -379,18 +387,18 @@ describe('endTurn', () => {
         { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'ls' },
         { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' },
       ]);
-      expect(endTurn(turn, 'end_turn', undefined, false)).toEqual([{ type: 'turn_end' }]);
+      expect(endTurn(turn, 'end_turn', undefined, new TurnOutcome())).toEqual([{ type: 'turn_end' }]);
     });
   });
 
   describe('usage', () => {
     it('reports the tokens the agent counted, with cache reads as cached input', () => {
-      const events = endTurn(newTurn({ source: 'acp-agent' }), 'end_turn', { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedReadTokens: 5 }, false);
+      const events = endTurn(newTurn({ source: 'acp-agent' }), 'end_turn', { totalTokens: 30, inputTokens: 20, outputTokens: 10, cachedReadTokens: 5 }, new TurnOutcome());
       expect(events[0]).toEqual({ type: 'usage', record: { source: 'acp-agent', inputTokens: 20, outputTokens: 10, cachedInputTokens: 5 } });
     });
 
     it('leaves a measure the agent did not report absent, never zero', () => {
-      const events = endTurn(newTurn({ source: 'acp-agent' }), 'end_turn', { inputTokens: 20 }, false);
+      const events = endTurn(newTurn({ source: 'acp-agent' }), 'end_turn', { inputTokens: 20 }, new TurnOutcome());
       const record: Record<string, unknown> = { ...(events[0] as Extract<AgentEvent, { type: 'usage' }>).record };
       expect(record).toEqual({ source: 'acp-agent', inputTokens: 20 });
       expect('outputTokens' in record).toBe(false);
@@ -398,22 +406,22 @@ describe('endTurn', () => {
     });
 
     it('keeps a reported zero', () => {
-      const events = endTurn(newTurn({ source: 's' }), 'end_turn', { inputTokens: 0, outputTokens: 0 }, false);
+      const events = endTurn(newTurn({ source: 's' }), 'end_turn', { inputTokens: 0, outputTokens: 0 }, new TurnOutcome());
       expect(events[0]).toEqual({ type: 'usage', record: { source: 's', inputTokens: 0, outputTokens: 0 } });
     });
 
     it.each([[undefined], [null], [{}], [{ totalTokens: 9 }], [{ inputTokens: null }]])('reports nothing for %j', (usage) => {
-      const events = endTurn(newTurn({ source: 's' }), 'end_turn', usage as never, false);
+      const events = endTurn(newTurn({ source: 's' }), 'end_turn', usage as never, new TurnOutcome());
       expect(events).toEqual([{ type: 'turn_end' }]);
     });
 
     it('is reported even for an interrupted turn, which still spent them', () => {
-      const events = endTurn(newTurn({ source: 's' }), 'cancelled', { inputTokens: 3 }, true);
+      const events = endTurn(newTurn({ source: 's' }), 'cancelled', { inputTokens: 3 }, cancelSent());
       expect(events.map((e) => e.type)).toEqual(['usage', 'turn_end']);
     });
 
     it('names the model when the turn knows it', () => {
-      const events = endTurn(newTurn({ source: 's', model: 'm-1' }), 'end_turn', { inputTokens: 1 }, false);
+      const events = endTurn(newTurn({ source: 's', model: 'm-1' }), 'end_turn', { inputTokens: 1 }, new TurnOutcome());
       expect(events[0]).toMatchObject({ record: { model: 'm-1' } });
     });
   });
