@@ -422,6 +422,9 @@ describe('desktop.sh', () => {
       const entry = readFileSync(join(home, '.local/share/applications/ordewell-desktop.desktop'), 'utf8');
       assert.match(entry, /^Exec=.*\/\.local\/bin\/ordewell-desktop %U$/m);
       assert.match(entry, /^Icon=ordewell-desktop$/m);
+      assert.match(entry, /^Actions=new-window;$/m);
+      assert.match(entry, /^\[Desktop Action new-window\]\nName=New Window\nExec=.*\/\.local\/bin\/ordewell-desktop --new-window$/m);
+      assert.ok(entry.indexOf('Actions=') < entry.indexOf('[Desktop Action'), 'the Action key belongs to [Desktop Entry]');
       assert.equal(readFileSync(join(home, '.local/share/icons/hicolor/512x512/apps/ordewell-desktop.png'), 'utf8'), 'png');
       assert.deepEqual(readdirSync(join(home, '.local/bin')), ['ordewell-desktop'], 'no temporary file is left beside it');
 

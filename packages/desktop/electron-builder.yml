@@ -113,6 +113,18 @@ linux:
   # CLI of that name lives.
   executableName: ordewell-desktop
   category: Development
+  # The launcher's right-click New Window, as the Dock menu and the Windows
+  # jump list offer it (src/main/osEntries.ts). The AppImage's entry is
+  # written by scripts/install/desktop.sh, which carries the same Action. Exec
+  # is electron-builder's own install path for the deb (/opt/<productName>),
+  # since it refuses an Exec in `entry` and fills in only the main one.
+  desktop:
+    entry:
+      Actions: new-window;
+    desktopActions:
+      new-window:
+        Name: New Window
+        Exec: /opt/Ordewell/ordewell-desktop --new-window
   synopsis: Turn one goal into an ordered plan of coding-agent tasks.
   maintainer: Alessandro Costanzo Ciano
   # ${arch} is not x64 here: electron-builder writes x86_64 for an AppImage and

@@ -28,6 +28,7 @@ import { closePrompt, onLastWindowClosed, quitPrompt, runsQuitStops } from './li
 import { droppedFolder } from './droppedFolder';
 import { launchAction, launchDataOf, OpenProjectsMemory, parseLaunchArgs, type LaunchData } from './launch';
 import { menuTemplate } from './menu';
+import { registerNewWindowEntries } from './osEntries';
 import { ProjectOpener } from './projectOpener';
 import { AttentionNotifier } from './notifications';
 import { PrefsStore } from './prefs';
@@ -229,6 +230,15 @@ async function main(): Promise<void> {
     })));
   };
   setMenu(recents.list());
+  registerNewWindowEntries({
+    app,
+    platform: process.platform,
+    packaged: app.isPackaged,
+    allowed: osSurfacesAllowed(),
+    execPath: process.execPath,
+    buildMenu: (template) => Menu.buildFromTemplate(template),
+    newWindow: () => { wm.openWelcome(); },
+  });
   recents.onChange((list) => {
     setMenu(list);
     wm.broadcast(EVENTS.recentsChanged, undefined);
