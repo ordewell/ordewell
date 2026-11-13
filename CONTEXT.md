@@ -2603,6 +2603,18 @@ dependencies on every id in its subtree and releases every descendant runner.
 `dependentsOf` names the surviving tasks whose edges that removal detaches.
 `TaskRefs` renders and resolves references using the same traversal.
 
+**Plan graph (`PlanGraph`)** — the one module that rewrites a plan's dependency
+edges and display order, where `PlanTree` says which edges may exist. `remove`
+(which `removeTaskFromPlan` and so `PlanEditor.removeTask` call) detaches every
+edge into a removed subtree and prunes loop bodies; `replace(ids, newTasks,
+tailId)` swaps tasks for others, which take the first one's slot, and points
+every dependent at the tail, at any depth, each id once; `repairOrder` is the
+planner batch's post-pass. A merge or split therefore rewires a subtask that
+depended on the task as it does a top-level one, and a task that depended on
+both of two merged tasks depends on the merged one once. An edge into a subtask
+that a merge or split drops is not rewired: it dangles and the plan invariants
+refuse the batch.
+
 **Dependency edit (`dependencyCandidates` + `canSetDependencies` +
 `Session.setTaskDependencies`)** — dependencies may name any task in the plan
 except the task itself, its ancestors and its descendants, provided no cycle
@@ -2610,10 +2622,13 @@ forms. The planner and user follow this same rule, across branches and at every
 depth. `PlanTree` owns the target restrictions and cycle check; direct edits,
 planner batches and whole-plan intake all read them. A planner batch is checked
 on its final graph, so a later op may finish an earlier rewire. Its post-pass
-`repairOrder` places top-level dependencies before their dependents, keeping
-unrelated tasks in relative order and running or completed tasks in their slots;
-a batch that requires moving a pinned task is refused, naming it. Display order
-is not a requirement on a user's dependency edit.
+`PlanGraph.repairOrder` places top-level dependencies before their dependents,
+keeping unrelated tasks in relative order and running or completed tasks in their
+slots; a batch that requires moving a pinned task is refused, naming it. Display
+order is not a requirement on a user's dependency edit. A `merged` or `parts[i]`
+spec's own `dependencies` are read like any task's and joined to what the merged
+tasks or the split task had, each id once; a part that names the task being split
+is refused, since the part before it already stands for what it did.
 
 `dependencyCandidates` takes the whole tree and offers earlier siblings of the
 target (all top-level tasks when the id is omitted for a new task). Pickers may
