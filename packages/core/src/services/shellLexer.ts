@@ -731,7 +731,9 @@ type WordPart = string | 'one' | 'any';
  */
 function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
   if (seg.expandable && (/[$`]/.test(word) || /%[A-Za-z_][^%]*%|![A-Za-z_][^!]*!/.test(word))) return 'anything';
-  const braces = seg.expandable && /\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(word);
+  // Read loosely: an escaped or quoted brace is not one to bash, and its
+  // backslash or quotes are gone, so `{x\},-exec}` reads `{x},-exec}`.
+  const braces = seg.expandable && /\{.*(?:,|\.\.).*\}/s.test(word);
   const parts: WordPart[] = [];
   for (let i = 0; i < word.length; i++) {
     const c = word[i];
@@ -742,7 +744,13 @@ function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
         if (word[j] === '{') depth++;
         else if (word[j] === '}' && --depth === 0) break;
       }
-      if (j < word.length) { parts.push('any'); i = j; continue; }
+      // A close the braces seen do not balance, or a `}` after the one they
+      // do, means some brace was a member: where the list opens and closes is
+      // unknowable, so nothing from here on is trusted (bash expands
+      // `{x\},-exec}` to `x}` and `-exec`, and `-exec{\},}` to `-exec}` and
+      // `-exec`).
+      if (j >= word.length || word.includes('}', j + 1)) { parts.push('any'); return parts; }
+      parts.push('any'); i = j; continue;
     }
     if (seg.globbed && c === '*') { parts.push('any'); continue; }
     if (seg.globbed && c === '?') { parts.push('one'); continue; }

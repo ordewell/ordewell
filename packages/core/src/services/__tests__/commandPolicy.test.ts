@@ -845,6 +845,47 @@ describe('flags on permitted binaries are an allowlist, not an afterthought', ()
     expect(classifyCommand(cmd).tier).toBe('refuse');
   });
 
+  // A glob or brace list is one word as written and any number once expanded,
+  // so a check that counts operands or takes one by position must not count it
+  // as one: with `notes1.txt` and `notes2.txt`, `uniq notes*.txt` writes the
+  // second, and with a directory `res` and a file `rm`, `git -C r* log` runs
+  // `git -C res rm log`.
+  it.each([
+    'uniq notes*.txt',
+    'uniq notes/*.txt',
+    'uniq -f 1* names.txt',
+    'uniq {a,b}.txt',
+    'git -C r* log',
+    'git -C r* status',
+    'git --git-dir r* log',
+    'git -C r*',
+    'git -C {res,rm} log',
+    'git -C $DIR log',
+    'git branch --contains r*',
+    'git symbolic-ref r*',
+  ])('reads a word the shell may split as possibly several operands: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  // An escaped or quoted brace is not one to bash and the lexer has dropped
+  // the backslash, so where the list opens and closes is not knowable: bash
+  // expands `{x\},-exec}` to `x}` and `-exec`.
+  it.each([
+    'find . -not -name {x\\},-exec} touch pwned \\;',
+    'find . -not -name {\\{,-exec} touch pwned \\;',
+    'find . -not -name -exec{\\},} touch pwned \\;',
+  ])('reads a brace list it cannot close as any text: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('refuse');
+  });
+
+  it.each([
+    'git log -- *.ts',
+    'git -C packages/core log --oneline -3',
+    'uniq -c names.txt',
+  ])('keeps a split that lands after every counted position unprompted: %s', (cmd) => {
+    expect(classifyCommand(cmd).tier).toBe('auto');
+  });
+
   // getopt hands a value flag the next word even when it is `--`, so the words
   // after it are still options: `tree -I -- -o out` writes `out`.
   it.each([
