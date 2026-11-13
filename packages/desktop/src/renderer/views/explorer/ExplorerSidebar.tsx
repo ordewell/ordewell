@@ -5,7 +5,7 @@ import { describeError, filesApi, FilesError, type FindMatch, type ReadTarget, t
 import type { FrameApi, Unregister, ViewScope } from '../../frame/api';
 import { all } from '../Stub';
 import { openRun } from '../git/gitActions';
-import { scopeName, type ScopeSession } from '../scope/scopeStore';
+import { folderIsView, scopeName, viewRepos, WORKSPACE, type ScopeSession } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
 import { openFile } from './fileTabs';
 import { revealLabel } from './shellLabels';
@@ -55,9 +55,11 @@ interface TreeProps {
   onGone(message: string): void;
   /** Bumped by the header's refresh button. */
   reloadKey: number;
+  /** In the workspace folder's view, a repository row opens that repository's own: its git and its scopes. */
+  onRepository?(repo: string): void;
 }
 
-function Tree({ api, target, session, onGone, reloadKey }: TreeProps): JSX.Element {
+function Tree({ api, target, session, onGone, reloadKey, onRepository }: TreeProps): JSX.Element {
   const scopeId = `${target.repo}|${JSON.stringify(target.scope)}`;
   const tree = useTree(target, scopeId, onGone);
   const rows = useMemo(() => flatten(tree.dirs, tree.expanded), [tree.dirs, tree.expanded]);
@@ -107,6 +109,7 @@ function Tree({ api, target, session, onGone, reloadKey }: TreeProps): JSX.Eleme
 
   const activate = (entry: TreeEntry, keep: boolean): void => {
     if (isExpandable(entry)) { tree.toggle(entry.path); return; }
+    if (entry.kind === 'repository' && onRepository) { onRepository(entry.path); return; }
     if (entry.kind === 'file') openFile(api, target.repo, entry.path, target.scope, { preview: !keep });
   };
 
@@ -174,6 +177,7 @@ function Tree({ api, target, session, onGone, reloadKey }: TreeProps): JSX.Eleme
               session={session}
               onFocus={() => setFocused(index)}
               onActivate={activate}
+              opensRepository={onRepository !== undefined}
               onTask={openTask}
               onReveal={(entry) => void shellAction(api, 'reveal', target.repo, entry.path)}
               onEditor={(entry) => void shellAction(api, 'openInEditor', target.repo, entry.path)}
@@ -200,6 +204,8 @@ interface RowProps {
   session: ScopeSession | undefined;
   onFocus(): void;
   onActivate(entry: TreeEntry, keep: boolean): void;
+  /** Whether a repository row opens that repository, rather than sitting inert. */
+  opensRepository: boolean;
   onTask(taskId: string): void;
   onReveal(entry: TreeEntry): void;
   onEditor(entry: TreeEntry): void;
@@ -210,7 +216,7 @@ interface RowProps {
  * thing that shrinks and nothing can be drawn under an icon (design.md, Layout
  * rules that prevent overlap).
  */
-function TreeRow({ row, index, total, focused, checkout, platform, session, onFocus, onActivate, onTask, onReveal, onEditor }: RowProps): JSX.Element {
+function TreeRow({ row, index, total, focused, checkout, platform, session, onFocus, onActivate, opensRepository, onTask, onReveal, onEditor }: RowProps): JSX.Element {
   const top = index * ROW_HEIGHT;
   const guides = Array.from({ length: row.depth }, (_, level) => <span key={level} className="ex-guide" aria-hidden="true" />);
   if (row.type === 'note') {
@@ -235,9 +241,9 @@ function TreeRow({ row, index, total, focused, checkout, platform, session, onFo
       aria-expanded={expandable ? row.expanded : undefined}
       aria-label={entry.name}
       tabIndex={focused ? 0 : -1}
-      className={`ex-row${entry.ignored ? ' ex-ignored' : ''}${entry.kind === 'repository' || entry.kind === 'symlink' ? ' ex-inert' : ''}`}
+      className={`ex-row${entry.ignored ? ' ex-ignored' : ''}${(entry.kind === 'repository' && !opensRepository) || entry.kind === 'symlink' ? ' ex-inert' : ''}`}
       style={{ top, height: ROW_HEIGHT }}
-      title={entry.ignored ? `${entry.path} (ignored by git)` : entry.path}
+      title={entry.ignored ? `${entry.path} (ignored by git)` : entry.kind === 'repository' && opensRepository ? `Open the repository ${entry.path}` : entry.path}
       onFocus={onFocus}
       onClick={() => onActivate(entry, false)}
       onDoubleClick={() => { if (!expandable) onActivate(entry, true); }}
@@ -386,7 +392,14 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
   const scope: ViewScope = store.scopeOf();
   const target: ReadTarget = { workspace: api.workspace, repo: state.repo, scope };
   const readOnly = scope.kind !== 'checkout';
-  const multi = state.repos.length > 1;
+  const views = viewRepos(state);
+  const multi = views.length > 1;
+  const inFolder = state.repo === WORKSPACE && folderIsView(state);
+  const openRepository = (repo: string): void => {
+    if (!state.repos.some((r) => r.repo === repo)) return;
+    store.setRepo(repo);
+    api.announce(`Viewing the repository ${repo}.`);
+  };
 
   useEffect(() => {
     const reload = (): void => { void store.refresh(); setReloadKey((n) => n + 1); };
@@ -418,7 +431,10 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
       </div>
       {multi && (
         <select className="ow-select ex-repo frame-input" aria-label="Repository" value={state.repo} onChange={(event) => store.setRepo(event.target.value)}>
-          {state.repos.map((r) => <option key={r.repo} value={r.repo}>{r.repo === '.' ? 'Workspace' : r.repo}{r.branch ? ` (${r.branch})` : ''}</option>)}
+          {views.map((repo) => {
+            const branch = state.repos.find((r) => r.repo === repo)?.branch;
+            return <option key={repo} value={repo}>{repo === WORKSPACE ? (folderIsView(state) ? 'Workspace folder' : 'Workspace') : repo}{branch ? ` (${branch})` : ''}</option>;
+          })}
         </select>
       )}
       {state.notice && (
@@ -449,7 +465,7 @@ function ExplorerTree({ api }: { api: FrameApi }): JSX.Element {
       </div>
       {query.trim()
         ? <Results api={api} target={target} query={query.trim()} mode={mode} onError={onSearchError} keys={resultKeys} />
-        : <Tree api={api} target={target} session={state.session} onGone={(message) => store.fallBack(state.repo, message)} reloadKey={reloadKey} />}
+        : <Tree api={api} target={target} session={state.session} onGone={(message) => store.fallBack(state.repo, message)} reloadKey={reloadKey} onRepository={inFolder ? openRepository : undefined} />}
     </div>
   );
 }

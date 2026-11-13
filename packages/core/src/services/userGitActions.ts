@@ -86,9 +86,13 @@ export function createUserGit(deps: UserGitDeps) {
     return result.ok ? result.stdout.trim() : null;
   }
 
-  /** The person's checkout of the repository, and never a run's worktree in it (G1). */
-  async function open(scope: UserGitScope): Promise<CheckoutScope> {
-    const checkout = await reader.checkout(scope);
+  /**
+   * The person's checkout of the repository, and never a run's worktree in it
+   * (G1). The workspace folder that is no repository only for a write that runs
+   * no git (ADR-0064 R2); every git action there is refused as the reader refuses it.
+   */
+  async function open(scope: UserGitScope, { folder = false }: { folder?: boolean } = {}): Promise<CheckoutScope> {
+    const checkout = await reader.checkout(scope, { folder });
     if (`${checkout.root}${path.sep}`.includes(WORKTREES)) {
       throw new UserGitError('not_checkout', 'This is a task worktree Ordewell made: act on your own checkout, and leave a run\'s worktrees to the run.');
     }
@@ -102,6 +106,7 @@ export function createUserGit(deps: UserGitDeps) {
   }
 
   async function answer(scope: CheckoutScope, workspace: string, extra: Omit<GitActionResponse, 'repo'> = {}): Promise<GitActionResponse> {
+    if (!scope.git) return { repo: { repo: scope.repo, branch: null, detached: false, head: null, upstream: null, ahead: 0, behind: 0 }, ...extra };
     const { repos } = await reader.repos(workspace);
     const repo = repos.find((r) => r.repo === scope.repo) as GitRepoInfo;
     return { repo, ...extra };
@@ -195,7 +200,7 @@ export function createUserGit(deps: UserGitDeps) {
   return {
     /** G10: a write of a file read at `baseHash`, or of one that must not exist yet. */
     async save(scope: UserGitScope, request: FileSaveRequest): Promise<GitActionResponse> {
-      const checkout = await open(scope);
+      const checkout = await open(scope, { folder: true });
       const file = reader.writable(checkout.root, request.path);
       let now: string | null = null;
       if (fs.existsSync(file)) {

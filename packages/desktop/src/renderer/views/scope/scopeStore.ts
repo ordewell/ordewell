@@ -30,7 +30,10 @@ export interface ScopeSession {
 
 export interface ScopeState {
   repos: RepoInfo[];
-  /** The repo the Explorer is showing; `.` until the repos are read. */
+  /**
+   * The repo the Explorer is showing: `.` is the workspace folder, which is
+   * also the default where that folder is no repository itself (ADR-0064 R2).
+   */
   repo: string;
   scopes: Readonly<Record<string, ViewScope>>;
   session: ScopeSession | undefined;
@@ -39,6 +42,31 @@ export interface ScopeState {
 }
 
 const CHECKOUT: ViewScope = { kind: 'checkout' };
+
+/** The workspace folder, as a view's `repo` names it. */
+export const WORKSPACE = '.';
+
+/**
+ * Whether the workspace folder is a view of its own beside its repositories:
+ * a folder that is no repository, read from disk with no git (ADR-0064 R2).
+ */
+export function folderIsView(state: Pick<ScopeState, 'repos'>): boolean {
+  return state.repos.length > 0 && !state.repos.some((r) => r.repo === WORKSPACE);
+}
+
+/** What the scope pickers list: the workspace folder first where it is a view of its own, then each repository. */
+export function viewRepos(state: Pick<ScopeState, 'repos' | 'repo'>): string[] {
+  if (folderIsView(state)) return [WORKSPACE, ...state.repos.map((r) => r.repo)];
+  return state.repos.length > 1 ? state.repos.map((r) => r.repo) : [state.repo];
+}
+
+/**
+ * The repository a git surface reads for the window's pick: the pick itself,
+ * or, while the pick is the workspace folder that has no git, its first repository.
+ */
+export function repositoryOf(state: Pick<ScopeState, 'repos' | 'repo'>): string {
+  return state.repos.some((r) => r.repo === state.repo) ? state.repo : state.repos[0]?.repo ?? WORKSPACE;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -95,6 +123,8 @@ export function taskTouches(task: ScopeTask, repo: string, repoCount: number): b
 
 /** The scopes a repo can be switched to, in the order the menu lists them. */
 export function optionsFor(state: ScopeState, repo: string): Array<{ scope: ViewScope; label: string; detail?: string; mark?: string }> {
+  // The folder that is no repository has no branch, integration or task worktree: each of its repositories lists its own.
+  if (repo === WORKSPACE && folderIsView(state)) return [{ scope: CHECKOUT, label: 'Workspace folder' }];
   const branch = state.repos.find((r) => r.repo === repo)?.branch;
   const options: Array<{ scope: ViewScope; label: string; detail?: string; mark?: string }> = [
     { scope: CHECKOUT, label: 'Your checkout', ...(branch ? { detail: branch } : {}) },
@@ -196,7 +226,8 @@ export class ScopeStore {
     const patch: Partial<ScopeState> = { session };
     if (repos) {
       patch.repos = repos;
-      if (!repos.some((r) => r.repo === this.state.repo)) patch.repo = repos[0]?.repo ?? '.';
+      // The workspace folder is the default and what a vanished repository falls back to, never the first repository found.
+      if (!repos.some((r) => r.repo === this.state.repo)) patch.repo = WORKSPACE;
     }
     this.set(patch);
   }

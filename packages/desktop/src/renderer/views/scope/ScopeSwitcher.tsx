@@ -4,13 +4,14 @@ import { AlertTriangle, Check, ChevronDown, Loader2, type LucideIcon } from 'luc
 import type { FrameApi, Unregister, ViewScope } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
 import { all } from '../Stub';
-import { optionsFor, sameScope, scopeName, type ScopeState } from './scopeStore';
+import { folderIsView, optionsFor, sameScope, scopeName, viewRepos, type ScopeState } from './scopeStore';
 import { useScope } from './useScope';
 import './scope.css';
 
-/** A repo's path as the menu names it: `.` is the workspace's own. */
-function repoLabel(repo: string): string {
-  return repo === '.' ? 'Workspace' : repo;
+/** A repo's path as the menu names it: `.` is the workspace's own, its folder where that is no repository. */
+function repoLabel(repo: string, state?: Pick<ScopeState, 'repos'>): string {
+  if (repo !== '.') return repo;
+  return state && folderIsView(state) ? 'Workspace folder' : 'Workspace';
 }
 
 /**
@@ -22,13 +23,13 @@ function ScopeSwitcher({ api }: { api: FrameApi }): JSX.Element {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const scope = store.scopeOf();
-  const multi = state.repos.length > 1;
-  const repos = multi ? state.repos.map((r) => r.repo) : [state.repo];
+  const repos = viewRepos(state);
+  const multi = repos.length > 1;
 
   const choose = (repo: string, next: ViewScope): void => {
     store.select(repo, next);
     setOpen(false);
-    api.announce(`Viewing ${scopeName(next, state.session)}${multi ? ` in ${repoLabel(repo)}` : ''}.`);
+    api.announce(`Viewing ${scopeName(next, state.session)}${multi ? ` in ${repoLabel(repo, state)}` : ''}.`);
   };
 
   return (
@@ -72,8 +73,8 @@ function ScopeGroup({ repo, heading, state, current, onChoose }: {
   onChoose(scope: ViewScope): void;
 }): JSX.Element {
   return (
-    <div role="group" aria-label={repoLabel(repo)}>
-      {heading && <h3 className="frame-section-title scope-repo">{repoLabel(repo)}</h3>}
+    <div role="group" aria-label={repoLabel(repo, state)}>
+      {heading && <h3 className="frame-section-title scope-repo">{repoLabel(repo, state)}</h3>}
       <ul>
         {optionsFor(state, repo).map((option) => {
           const checked = sameScope(option.scope, current);
@@ -107,7 +108,7 @@ function RepoBranch({ api }: { api: FrameApi }): JSX.Element | null {
   else if (scope.kind === 'integration') branch = state.session?.integration.find((i) => i.repo === state.repo)?.branch ?? state.session?.integration[0]?.branch;
   else branch = scopeName(scope, state.session);
   if (!info && !branch) return null;
-  const multi = state.repos.length > 1;
+  const multi = viewRepos(state).length > 1;
   const name = branch ?? (info?.detached ? 'detached HEAD' : '');
   // The tail stays whole while the head takes the ellipsis, so a narrow bar
   // shortens the branch in its middle (design.md, Title bar priority).

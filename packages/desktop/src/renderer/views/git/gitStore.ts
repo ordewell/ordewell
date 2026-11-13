@@ -3,7 +3,7 @@ import type { FrameApi } from '../../frame/api';
 import { callDaemon, messageOf } from '../../session/daemon';
 import { parseSessions } from '../../sessions';
 import { useDaemonStatus } from '../../useDaemonStatus';
-import { deriveSession, type ScopeTask } from '../scope/scopeStore';
+import { deriveSession, repositoryOf, type ScopeTask } from '../scope/scopeStore';
 import { useScope } from '../scope/useScope';
 import { readBranches, readCommit, readLog, readRepos, type Branches, type CommitDetail, type CommitSummary, type Owner, type RepoState } from './gitData';
 
@@ -348,7 +348,8 @@ export function useGit(api: FrameApi): { git: GitStore; state: GitState; repo: s
   const state = useSyncExternalStore(git.subscribe, git.getSnapshot);
   const { store: scope, state: scoped } = useScope(api);
   const connected = useDaemonStatus()?.state === 'connected';
-  const repo = scoped.repo;
+  // The workspace folder that is no repository has no git of its own: the Git view reads one of its repositories (ADR-0064 R2).
+  const repo = repositoryOf(scoped);
   useEffect(() => { if (connected) void git.refresh(repo); }, [git, connected, repo]);
   return { git, state, repo, setRepo: (next) => scope.setRepo(next) };
 }
