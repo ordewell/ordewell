@@ -117,7 +117,7 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
     await env.orchestrator.approveReview();
     await vi.waitFor(() => expect(env.request('r1')).toBeDefined());
     // The record names the links bootstrapped into the worktree, as a real prepare does.
-    env.orchestrator.runs.current!.tasks.r1.repos['.'].linked = ['.env.development'];
+    env.orchestrator.runs.planIsolation!.run.tasks.r1.repos['.'].linked = ['.env.development'];
     writeFileSync(join(repo, '.env.development'), 'TOKEN=1\n');
     writeFileSync(join(repo, 'a.ts'), 'one\ntwo\n');
 
@@ -205,7 +205,7 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
       env.latest('r1').reportComplete({ status: 'done', summary: 'Prototype saved.' });
       await vi.waitFor(() => expect(env.request('c2')).toBeDefined());
       // The builder's worktree, as a real prepare records it.
-      env.orchestrator.runs.current!.tasks.c2.repos['.'].worktree = builder;
+      env.orchestrator.runs.planIsolation!.run.tasks.c2.repos['.'].worktree = builder;
       return env;
     }
 
@@ -257,7 +257,7 @@ describe.skipIf(process.platform === 'win32')("a read-only task's saved patch (A
 
     it('refuses where the task has no worktree of its own', async () => {
       const env = await explored();
-      delete env.orchestrator.runs.current!.tasks.c2;
+      delete env.orchestrator.runs.planIsolation!.run.tasks.c2;
 
       const reply = await env.request('c2').applyPatch!({ task: '#1' });
 

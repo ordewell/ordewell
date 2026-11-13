@@ -2399,8 +2399,11 @@ listener (changed, blocked, handoff, notice, worktrees about to go) — it never
 emits orchestrator events or schedules work itself. A blocked start is handed
 back to the caller to replay. An activation a Stop interrupts opens nothing: one
 interrupted while git mints its run never installs that run over a newer
-activation's, and discards it. The scheduler reads isolation state only through
-it (`openRecord`, `isolating`, `current`). Session and the event relay reach its
+activation's, and discards it. The rest of the plan reads isolation state only
+through its named queries (`taskState`, `openTaskState`, `conflictOf`,
+`taskRepos`, `isolating` and the like), never the run record's shape, which
+stays the controller's, `isolationRecord`'s and `LandingLedger`'s; the record
+itself leaves only as `planIsolation`, the state a plan saves. Session and the event relay reach its
 Merge all, review, clean-up and discard directly — there is no pass-through on
 the orchestrator — and its `requireRun` is the one guard for "no isolated run
 to act on", throwing `PlanEditError`. Git stays in `WorktreeIsolation`.

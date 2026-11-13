@@ -45,8 +45,8 @@ import { capConflictFiles } from './conflictFiles';
 import { resolveWorkspaceEnv, type WorkspaceEnv } from './workspaceEnv';
 import { continuability, reopenMessage, sessionOwner } from './continuation';
 import { quotedList } from '../utils/quotedList';
-import { landedOnOf, revertReach } from './LandingLedger';
-import { inBranchRefusal, revertScope, type RevertScope, type TaskRevertPreview } from './taskRevert';
+import { landedOnOf } from './LandingLedger';
+import { inBranchRefusal, type RevertScope, type TaskRevertPreview } from './taskRevert';
 import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
 import type { StoredHandoff } from '../models/Handoff';
@@ -1070,7 +1070,7 @@ export class TaskOrchestrator {
   resolverRefusal(taskId: string): string | null {
     const task = this.store.get(taskId);
     if (!task) return null;
-    const record = this.runs.current?.tasks[taskId]?.status;
+    const record = this.runs.taskState(taskId);
     // Claimed, an attempt already has the conflict: the record reads `conflict` until its prepare reopens it.
     if (record === 'repairing' || (record === 'conflict' && this.attempts.has(taskId))) return `Task "${task.title}" is repairing its conflict: stop it, then add a resolver if its conflict still waits.`;
     if (this.owesRepair(task)) return `Task "${task.title}" waits to repair its conflict. Stop it to withdraw the repair, then add a resolver.`;
@@ -1081,7 +1081,7 @@ export class TaskOrchestrator {
 
   /** Whether {@link resolverRefusal} and the record both let a resolver be added: the one test an offer of it and its acceptance share. */
   canResolveConflict(taskId: string): boolean {
-    return this.runs.current?.tasks[taskId]?.status === 'conflict' && this.resolverRefusal(taskId) === null;
+    return this.runs.taskState(taskId) === 'conflict' && this.resolverRefusal(taskId) === null;
   }
 
   /** What the conflict repair this task is owed waits for; null when no repair will start by itself. */
@@ -1392,7 +1392,7 @@ export class TaskOrchestrator {
    */
   private withdrawRepairs(): void {
     for (const t of this.store.allTasks) {
-      if ((t.status === 'pending' || t.status === 'approved') && this.runs.current?.tasks[t.id]?.status === 'conflict') this.store.markAwaitingUser(t.id, 'conflict');
+      if ((t.status === 'pending' || t.status === 'approved') && this.runs.taskState(t.id) === 'conflict') this.store.markAwaitingUser(t.id, 'conflict');
     }
   }
 
@@ -2035,7 +2035,7 @@ export class TaskOrchestrator {
     // Mark complete's landing is at work with no attempt, and a usage-limit pause goes on by itself.
     for (const id of this.completing.keys()) live.add(id);
     for (const t of this.store.allTasks) if (pausedOnLimit(t)) live.add(t.id);
-    return revertScope(taskId, { tasks: this.store.allTasks, run: this.runs.current, live, resolvers: (id) => this.landing.liveResolvers(id) });
+    return this.runs.revertScope(taskId, { tasks: this.store.allTasks, live, resolvers: (id) => this.landing.liveResolvers(id) });
   }
 
   /** What a revert of the task would do now: the tasks, newest landing first, or why it would not go ahead. */
@@ -2063,7 +2063,7 @@ export class TaskOrchestrator {
     if (refusal) return { outcome: 'refused', reason: refusal.message };
     const releaseStarts = this.holdStarts();
     // A resolver's merge would land what this ends, so it may not start either.
-    const reach = new Set([...revertReach(taskId, this.store.allTasks, this.runs.current), ...taskIds.flatMap((id) => this.runs.resolversOf(id))]);
+    const reach = new Set([...this.runs.revertReach(taskId, this.store.allTasks), ...taskIds.flatMap((id) => this.runs.resolversOf(id))]);
     this.reverting.add(reach);
     let result: IsolationRevertResult;
     try {

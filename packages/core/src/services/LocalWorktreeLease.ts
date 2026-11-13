@@ -6,7 +6,7 @@ export interface LocalWorktreeLeaseDeps {
   pool: SlotPool;
   /** This Session, as its pool hears it. */
   node: PoolNode;
-  runs: Pick<IsolationRunController, 'attemptCwd' | 'assertDecision' | 'workspaceCwd' | 'release' | 'current'>;
+  runs: Pick<IsolationRunController, 'attemptCwd' | 'assertDecision' | 'workspaceCwd' | 'release' | 'taskRepos' | 'repoRoots' | 'branchesOf' | 'recordedTasks'>;
   workspaceRoot: () => string;
 }
 
@@ -83,24 +83,18 @@ export class LocalWorktreeLease implements ExecutionBackend {
   }
 
   private repos({ task }: LeaseSpec): LeaseRepo[] {
-    const run = this.deps.runs.current;
-    const record = task && run?.tasks[task.id];
-    if (!run || !record) return [];
-    return run.repos.flatMap((repo) => {
-      const entry = record.repos[repo.path];
-      return entry ? [{ path: repo.path, root: repo.root, worktree: entry.worktree, branch: record.branch, integrationBranch: repo.integrationBranch, linked: entry.linked }] : [];
-    });
+    if (!task) return [];
+    return this.deps.runs.taskRepos(task.id).map(({ path, root, worktree, branch, integrationBranch, linked }) => ({ path, root, worktree, branch, integrationBranch, linked }));
   }
 
   /** A workspace root's repositories, as a run knows them, for a backend that copies what they have committed (ADR-0059 L6). */
   checkoutRepos(): readonly LeaseRepo[] {
-    return (this.deps.runs.current?.repos ?? []).map(({ path, root }) => ({ path, root, worktree: root, branch: CHECKOUT_BRANCH, integrationBranch: 'HEAD', linked: [] }));
+    return this.deps.runs.repoRoots.map(({ path, root }) => ({ path, root, worktree: root, branch: CHECKOUT_BRANCH, integrationBranch: 'HEAD', linked: [] }));
   }
 
   /** The run's record says where the work is; the runner's session stays where the runner keeps it, on this machine (L2). */
   private result({ task }: LeaseSpec, session: LeaseSessionState): LeaseResult {
-    const record = task && this.deps.runs.current?.tasks[task.id];
-    return { refs: record ? Object.fromEntries(Object.keys(record.repos).map((repo) => [repo, record.branch])) : {}, sessionState: session };
+    return { refs: task ? this.deps.runs.branchesOf(task.id) : {}, sessionState: session };
   }
 
   letGo(taskId: string, { keep, landing }: { keep: boolean; landing?: Promise<unknown> | null; reason: string }): Promise<void> {
@@ -108,11 +102,7 @@ export class LocalWorktreeLease implements ExecutionBackend {
   }
 
   async list(): Promise<readonly LeaseRecord[]> {
-    return Object.values(this.deps.runs.current?.tasks ?? {}).map((record) => ({
-      taskId: record.taskId,
-      status: record.status,
-      worktrees: Object.values(record.repos).map((repo) => repo.worktree),
-    }));
+    return this.deps.runs.recordedTasks();
   }
 }
 

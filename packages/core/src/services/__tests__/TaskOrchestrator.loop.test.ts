@@ -570,7 +570,7 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
 
     release();
     await vi.waitFor(() => expect(h.spawns('review')).toHaveLength(2));
-    expect(h.orchestrator.runs.openRecord('fix')?.status).toBe('merged');
+    expect(h.orchestrator.runs.openTaskState('fix')).toBe('merged');
   });
 });
 

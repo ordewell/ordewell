@@ -176,7 +176,7 @@ function editor(tasks: Task[]): { editor: PlanEditor; store: PlanStore } {
         resolverRefusal: vi.fn((): string | null => null),
         startWhenAllowed: vi.fn(),
       },
-      runs: { current: null, linkResolver: vi.fn() },
+      runs: { taskState: () => undefined, conflictOf: () => null, handoffBranch: null, linkResolver: vi.fn() },
       broadcast: () => {},
       taskSkills: () => ({ findSkill: () => undefined, searchedDirs: () => [] }),
       notice: vi.fn(),

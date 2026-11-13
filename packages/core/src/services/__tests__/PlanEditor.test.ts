@@ -6,7 +6,7 @@ import type { RunnerCatalog } from '../TaskAssignment';
 import type { SessionMessage } from '../SessionMessage';
 import type { SkillInfo } from '../SkillsService';
 import type { SkillLookup } from '../taskSkills';
-import type { IsolationRun } from '../../interfaces/IWorktreeIsolation';
+import type { TaskConflict } from '../IsolationRunController';
 import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { createTask, type DiscoveredModel, type LegacyPlanState, type RunnerId, type Task } from '../../models/Task';
 
@@ -36,7 +36,7 @@ function tasks(): Task[] {
  * is the session's contract in miniature — the op runs, and only a change is
  * saved and announced — so what the editor hands it is all that is asserted.
  */
-function setup(opts: { tasks?: Task[]; runners?: RunnerId[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; run?: IsolationRun | null; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean; plannedWith?: () => boolean } = {}) {
+function setup(opts: { tasks?: Task[]; runners?: RunnerId[]; plan?: boolean; allowlist?: Partial<Record<RunnerId, string[]>>; catalogs?: Record<RunnerId, RunnerCatalog>; conflict?: TaskConflict; skills?: SkillInfo[]; uncommitted?: SkillLookup['uncommitted']; live?: (taskId: string) => boolean; plannedWith?: () => boolean } = {}) {
   const store = new PlanStore();
   const now = '2026-01-01T00:00:00Z';
   const runners = opts.runners ?? ['claude-code'];
@@ -72,7 +72,13 @@ function setup(opts: { tasks?: Task[]; runners?: RunnerId[]; plan?: boolean; all
     resolverRefusal: vi.fn((): string | null => null),
     startWhenAllowed: vi.fn(),
   };
-  const runs = { current: opts.run ?? null, linkResolver: vi.fn() };
+  const conflict = opts.conflict;
+  const runs = {
+    taskState: (taskId: string) => (conflict && taskId === 't1' ? 'conflict' as const : undefined),
+    conflictOf: (taskId: string) => (taskId === 't1' ? conflict ?? null : null),
+    handoffBranch: conflict ? 'ordewell/run1/integration' : null,
+    linkResolver: vi.fn(),
+  };
   const notice = vi.fn();
   const approve = vi.fn<(ids: readonly string[]) => void>();
   const editor = new PlanEditor({
@@ -483,16 +489,11 @@ describe('PlanEditor.removeTask', () => {
 });
 
 describe('PlanEditor.addConflictResolver', () => {
-  const conflicted: IsolationRun = {
-    id: 'run1', workspaceRoot: '/repo', shared: [], sharedRepos: [],
-    repos: [{ path: '.', root: '/repo', baseRef: 'abc', integrationBranch: 'ordewell/run1/integration' }],
-    tasks: {
-      t1: { taskId: 't1', order: 1, title: 'Setup', branch: 'ordewell/run1/1-t1', workspace: '/wt/1', status: 'conflict', conflictRepo: '.', repos: { '.': { worktree: '/wt/1', linked: [] } } },
-    },
-  };
+  // What the controller answers for t1 after its landing conflicted, in the root repo.
+  const conflicted: TaskConflict = { branch: 'ordewell/run1/1-t1', subject: { title: 'Setup' }, changedRepos: [], repairRepos: [], conflictRepo: '.' };
 
   it('adds a task on the conflicted task\'s runner and model, and links it to the conflict', async () => {
-    const { editor, store, runs, events } = setup({ run: conflicted });
+    const { editor, store, runs, events } = setup({ conflict: conflicted });
 
     await editor.addConflictResolver('t1');
 
@@ -504,7 +505,7 @@ describe('PlanEditor.addConflictResolver', () => {
   });
 
   it('asks the scheduler to start what it added, which a run with no scheduler would not', async () => {
-    const { editor, store, scheduler } = setup({ run: conflicted });
+    const { editor, store, scheduler } = setup({ conflict: conflicted });
 
     await editor.addConflictResolver('t1');
 
@@ -512,7 +513,7 @@ describe('PlanEditor.addConflictResolver', () => {
   });
 
   it('adds nothing when the scheduler says the conflict has its worker, in its words', async () => {
-    const { editor, store, scheduler, runs } = setup({ run: conflicted });
+    const { editor, store, scheduler, runs } = setup({ conflict: conflicted });
     const before = store.planTasks.length;
     scheduler.resolverRefusal.mockReturnValue('Task "Setup" waits to repair its conflict.');
 
@@ -524,7 +525,7 @@ describe('PlanEditor.addConflictResolver', () => {
   });
 
   it('writes the resolver\'s merge message with the Planned-with trailer when the setting is on', async () => {
-    const { editor, store } = setup({ run: conflicted, plannedWith: () => true });
+    const { editor, store } = setup({ conflict: conflicted, plannedWith: () => true });
 
     await editor.addConflictResolver('t1');
 
@@ -532,12 +533,12 @@ describe('PlanEditor.addConflictResolver', () => {
   });
 
   it('refuses a task that did not conflict, or a plan with no run', async () => {
-    await expect(setup({ run: conflicted }).editor.addConflictResolver('t2')).rejects.toBeInstanceOf(PlanEditError);
+    await expect(setup({ conflict: conflicted }).editor.addConflictResolver('t2')).rejects.toBeInstanceOf(PlanEditError);
     await expect(setup().editor.addConflictResolver('t1')).rejects.toThrow(/conflicted/);
   });
 
   it('answers null without a plan', async () => {
-    expect(await setup({ plan: false, run: conflicted }).editor.addConflictResolver('t1')).toBeNull();
+    expect(await setup({ plan: false, conflict: conflicted }).editor.addConflictResolver('t1')).toBeNull();
   });
 
   // Bug: a script has no mode to hand on, so its resolver spawned in `build`, which Qwen Code has no mode by.
@@ -545,7 +546,7 @@ describe('PlanEditor.addConflictResolver', () => {
   const script = (runner: RunnerId) => [createTask({ id: 't1', order: 1, title: 'Setup', type: 'script', commands: [['npm', 'run', 'gen']], assignedRunner: runner })];
 
   it('gives a script task\'s resolver its runner\'s Guarded mode', async () => {
-    const { editor, store } = setup({ run: conflicted, tasks: script('qwen-code'), runners: ['qwen-code'], catalogs: qwen });
+    const { editor, store } = setup({ conflict: conflicted, tasks: script('qwen-code'), runners: ['qwen-code'], catalogs: qwen });
 
     await editor.addConflictResolver('t1');
 
@@ -554,7 +555,7 @@ describe('PlanEditor.addConflictResolver', () => {
 
   // A script never spawns, so a hand-added one may sit on a runner the plan does not run.
   it('admits a script task\'s runner for its resolver, which spawns there in a mode of that runner', async () => {
-    const { editor, store, plan, catalog } = setup({ run: conflicted, tasks: script('qwen-code'), catalogs: qwen });
+    const { editor, store, plan, catalog } = setup({ conflict: conflicted, tasks: script('qwen-code'), catalogs: qwen });
 
     await editor.addConflictResolver('t1');
 

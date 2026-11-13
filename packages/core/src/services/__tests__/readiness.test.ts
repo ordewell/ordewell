@@ -22,7 +22,7 @@ function record(taskId: string, status: IsolationTaskStatus): IsolationTaskRecor
 
 function runsOf(records: Record<string, IsolationTaskRecord> = {}) {
   return {
-    openRecord: (taskId: string) => records[taskId],
+    openTaskState: (taskId: string) => records[taskId]?.status,
     awaitsMerge: (taskId: string) => records[taskId]?.status === 'merged' && !records[taskId]?.inHead,
   };
 }

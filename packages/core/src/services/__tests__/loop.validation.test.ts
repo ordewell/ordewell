@@ -291,7 +291,7 @@ describe('what the rest of core reads of a loop', () => {
       store,
       onHold: new Set(),
       approved: () => true,
-      runs: { openRecord: () => undefined, awaitsMerge },
+      runs: { openTaskState: () => undefined, awaitsMerge },
       merging: false,
       startsHeld: false,
       completing: new Set(),

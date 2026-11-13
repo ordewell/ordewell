@@ -54,16 +54,21 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     unawaited: (work) => { void work.catch(() => undefined); },
   };
   const repairs = new Set(opts.repairs ?? []);
-  const runs: AttemptsDeps['runs'] & Pick<IsolationRunController, 'attemptCwd' | 'assertDecision' | 'workspaceCwd' | 'release'> = {
+  const runs: AttemptsDeps['runs'] & Pick<IsolationRunController, 'attemptCwd' | 'assertDecision' | 'workspaceCwd' | 'release' | 'repoRoots' | 'branchesOf' | 'recordedTasks'> = {
     assertDecision: () => undefined,
     attemptCwd: async () => ({ cwd: '/repo/.ordewell/worktrees/t1', worktree: true }),
     workspaceCwd: async () => ({ cwd: '/repo', worktree: false }),
     snapshotWorkspace: async () => null,
     filesChangedSince: async () => [],
     release: vi.fn(async () => undefined),
-    openRecord: () => undefined,
+    openWorktreesOf: () => [],
+    taskRepos: () => [],
+    workspaceOf: () => undefined,
+    repoRoots: [],
+    branchesOf: () => ({}),
+    recordedTasks: () => [],
     skillLayout: () => ({ repos: [], worktrees: false }),
-    current: null,
+    inRepoGroup: false,
     epoch: 1,
     stillToLetGo: async () => undefined,
   };

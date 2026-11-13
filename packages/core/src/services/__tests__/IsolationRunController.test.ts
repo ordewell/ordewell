@@ -92,10 +92,10 @@ describe('IsolationRunController', () => {
 
       expect(runs.isOpen).toBe(true);
       expect(runs.isolating).toBe(true);
-      expect(runs.current?.id).toBe('run1');
+      expect(runs.planIsolation?.run.id).toBe('run1');
       expect(ops(isolation).filter((op) => op === 'startRun')).toHaveLength(1);
       expect(listener.changed).toHaveBeenCalled();
-      expect(runs.planIsolation).toEqual({ run: runs.current, resolvers: {} });
+      expect(runs.planIsolation?.resolvers).toEqual({});
     });
 
     it('says what the git on this machine holds back, once however many runs open', async () => {
@@ -127,7 +127,7 @@ describe('IsolationRunController', () => {
 
       expect(runs.isOpen).toBe(true);
       expect(runs.isolating).toBe(false);
-      expect(runs.current).toBeNull();
+      expect(runs.planIsolation).toBeNull();
       expect(notifications.info).toHaveBeenCalledWith(expect.stringContaining('Not a git repository'));
       expect(listener.notice).toHaveBeenCalledWith('info', expect.stringContaining('Not a git repository'));
     });
@@ -143,7 +143,7 @@ describe('IsolationRunController', () => {
       await runs.adopt(saved);
       await runs.decide(async () => undefined);
 
-      expect(runs.current?.id).toBe('run1');
+      expect(runs.planIsolation?.run.id).toBe('run1');
       expect(ops(isolation)).toContain('pruneOrphans');
       expect(ops(isolation)).not.toContain('startRun');
     });
@@ -155,7 +155,7 @@ describe('IsolationRunController', () => {
       const t1 = task('t1', 1);
       await runs.decide(async () => undefined);
       await runs.attemptCwd(t1, 'fresh', runs.decision);
-      runs.current!.tasks.t1.status = 'conflict';
+      runs.planIsolation!.run.tasks.t1.status = 'conflict';
       runs.interrupt();
       isolation.availability = { active: false, reason: 'disabled' };
       await runs.decide(async () => undefined);
@@ -176,9 +176,9 @@ describe('IsolationRunController', () => {
       await runs.decide(async () => undefined);
 
       expect(await runs.attemptCwd(task('t1', 1), 'readOnly', runs.decision)).toMatchObject({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
-      expect(runs.current!.tasks.t1.readOnly).toBe(true);
+      expect(runs.planIsolation!.run.tasks.t1.readOnly).toBe(true);
       await runs.attemptCwd(task('t2', 2), 'fresh', runs.decision);
-      expect(runs.current!.tasks.t2.readOnly).toBeUndefined();
+      expect(runs.planIsolation!.run.tasks.t2.readOnly).toBeUndefined();
     });
 
     it('says where the last attempt\'s work was kept when preparing the next one fails', async () => {
@@ -222,7 +222,7 @@ describe('IsolationRunController', () => {
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
       await runs.attemptCwd(t1, 'fresh', runs.decision);
-      runs.current!.tasks.t1.status = 'conflict';
+      runs.planIsolation!.run.tasks.t1.status = 'conflict';
 
       expect(await runs.attemptCwd(t1, 'repair', runs.decision)).toEqual({ cwd: '/fake-worktrees/run1/1-t1', worktree: true });
       expect(isolation.taskIdsFor('reopen')).toEqual(['t1']);
@@ -347,13 +347,13 @@ describe('IsolationRunController', () => {
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
       await runs.attemptCwd(t1, 'fresh', runs.decision);
-      runs.current!.tasks.t1.status = 'merged';
+      runs.planIsolation!.run.tasks.t1.status = 'merged';
 
       await runs.close();
 
       expect(runs.isOpen).toBe(false);
       expect(listener.handoff).toHaveBeenCalledWith(expect.objectContaining({ landed: [expect.objectContaining({ taskId: 't1' })] }));
-      expect(runs.current).not.toBeNull();
+      expect(runs.planIsolation).not.toBeNull();
     });
 
     it('closes a shared run without a handoff', async () => {
@@ -434,11 +434,11 @@ describe('IsolationRunController', () => {
       await vi.waitFor(() => expect(mints).toBe(1));
       runs.interrupt();
       expect(await runs.decide(async () => undefined)).toEqual({ epoch: 2, mode: 'isolated' });
-      expect(runs.current?.id).toBe('run2');
+      expect(runs.planIsolation?.run.id).toBe('run2');
       minted();
 
       expect(await stale).toBe('interrupted');
-      expect(runs.current?.id).toBe('run2');
+      expect(runs.planIsolation?.run.id).toBe('run2');
       expect(runs.isolating).toBe(true);
       expect(discarded).toEqual(['run1']);
     });
@@ -455,7 +455,7 @@ describe('IsolationRunController', () => {
 
       expect(listener.closed).toHaveBeenCalledTimes(1);
       expect(listener.ended).toHaveBeenCalledTimes(1);
-      expect(runs.current).toBeNull();
+      expect(runs.planIsolation).toBeNull();
       expect(runs.planIsolation).toBeNull();
     });
   });
@@ -504,7 +504,7 @@ describe('IsolationRunController', () => {
 
       expect(ops(isolation)).not.toContain('discard');
       expect(listener.ended).not.toHaveBeenCalled();
-      expect(runs.current).not.toBeNull();
+      expect(runs.planIsolation).not.toBeNull();
     });
 
     it.each(['cleanup', 'discard'] as const)('says the run ended on %s, before the save that records it', async (action) => {
@@ -552,7 +552,7 @@ describe('IsolationRunController', () => {
 
       const idle = merged(setup());
       expect(await idle.runs.adopt(await savedRun())).toBe('cleared');
-      expect(idle.runs.current).toBeNull();
+      expect(idle.runs.planIsolation).toBeNull();
       expect(idle.listener.changed).not.toHaveBeenCalled();
       expect(idle.listener.closed).not.toHaveBeenCalled();
 
@@ -566,7 +566,7 @@ describe('IsolationRunController', () => {
       opened.runs.open();
       expect(await adopting).toBe('changed');
       expect(ops(opened.isolation)).not.toContain('discard');
-      expect(opened.runs.current?.id).toBe('run1');
+      expect(opened.runs.planIsolation?.run.id).toBe('run1');
     });
 
     it('mints fresh for a run that starts while the load-time clear deletes the old one', async () => {
@@ -597,8 +597,8 @@ describe('IsolationRunController', () => {
       // The run in force is the one that just opened, whole — not a record whose
       // branches were deleted under it.
       expect(env.runs.isolating).toBe(true);
-      expect(env.runs.current).not.toBeNull();
-      expect(env.runs.current!.tasks).toEqual({});
+      expect(env.runs.planIsolation).not.toBeNull();
+      expect(env.runs.planIsolation!.run.tasks).toEqual({});
     });
 
     it('leaves the last run\'s worktrees in place when a new run is minted while a task is live in it', async () => {
@@ -610,7 +610,7 @@ describe('IsolationRunController', () => {
 
       await runs.decide(async () => undefined);
 
-      expect(runs.current?.id).toBe('run2');
+      expect(runs.planIsolation?.run.id).toBe('run2');
       expect(ops(isolation)).not.toContain('discard');
       expect(notifications.warn).toHaveBeenCalledWith('The last run\'s worktrees are left in place: Task "Task t1" is still running or waiting on you there.');
     });
@@ -627,7 +627,7 @@ describe('IsolationRunController', () => {
 
       const landing = runs.integrate(t1);
       await vi.waitFor(() => expect(listener.changed).toHaveBeenCalledTimes(1));
-      expect(runs.current?.landing?.taskId).toBe('t1');
+      expect(runs.planIsolation?.run.landing?.taskId).toBe('t1');
       release();
 
       expect(await landing).toBe('merged');
@@ -650,7 +650,7 @@ describe('IsolationRunController', () => {
       await runs.decide(async () => undefined);
       const t1 = task('t1', 1);
       await runs.attemptCwd(t1, 'fresh', runs.decision);
-      runs.current!.tasks.t1.conflictRepo = 'api';
+      runs.planIsolation!.run.tasks.t1.conflictRepo = 'api';
       vi.spyOn(isolation, 'verifyRepair').mockRejectedValueOnce(new Error('git died'));
 
       expect(await runs.verifyRepair(t1)).toEqual({ ok: false, reason: 'failed', repo: 'api' });

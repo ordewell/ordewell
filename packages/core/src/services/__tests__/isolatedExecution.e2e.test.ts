@@ -453,15 +453,15 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const { cwd } = await runs.attemptCwd(t1, 'fresh', runs.decision);
     writeFileSync(join(cwd, 'landed.txt'), 'landed\n');
     expect(await runs.integrate(t1)).toBe('merged');
-    const integration = runs.current!.repos[0].integrationBranch;
+    const integration = runs.planIsolation!.run.repos[0].integrationBranch;
     await runs.close();
     // What retrying the task does: its record, the only one in the run, goes.
     await runs.release('t1', { keep: false });
-    expect(runs.current!.tasks).toEqual({});
+    expect(runs.planIsolation!.run.tasks).toEqual({});
 
     await runs.decide(async () => undefined);
 
-    expect(runs.current!.repos[0].integrationBranch).not.toBe(integration);
+    expect(runs.planIsolation!.run.repos[0].integrationBranch).not.toBe(integration);
     expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
   });
 
@@ -470,14 +470,14 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const runs = controllerOver(root);
     await runs.decide(async () => undefined);
     await runs.attemptCwd(createTask({ id: 't1', order: 1, title: 'Idle', prompt: 'do nothing' }), 'fresh', runs.decision);
-    const first = runs.current!.repos[0].integrationBranch;
+    const first = runs.planIsolation!.run.repos[0].integrationBranch;
     await runs.release('t1', { keep: false });
     await runs.close();
 
     await runs.decide(async () => undefined);
 
-    expect(git(root, 'branch', '--list', 'ordewell/*', '--format=%(refname:short)')).toBe(runs.current!.repos[0].integrationBranch);
-    expect(runs.current!.repos[0].integrationBranch).not.toBe(first);
+    expect(git(root, 'branch', '--list', 'ordewell/*', '--format=%(refname:short)')).toBe(runs.planIsolation!.run.repos[0].integrationBranch);
+    expect(runs.planIsolation!.run.repos[0].integrationBranch).not.toBe(first);
   });
 
   it('resumes a session 0.4.23 saved mid-run: drops the attempt the crash cut off, continues the run, and hands it off whole', async () => {

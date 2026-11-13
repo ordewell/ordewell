@@ -146,7 +146,7 @@ describe('LocalWorktreeLease (ADR-0059 L4)', () => {
     await open({ task: t1, workspace: { kind: 'worktree', intent: 'fresh' } });
     const { workspace } = await open({ task: t1, workspace: { kind: 'checkout' } });
     expect(workspace).toEqual({ cwd: '/repo', worktree: false });
-    expect(runs.current?.tasks.t1).toBeUndefined();
+    expect(runs.planIsolation?.run.tasks.t1).toBeUndefined();
     expect(isolation.calls).toContainEqual({ op: 'release', taskId: 't1', keep: false });
   });
 

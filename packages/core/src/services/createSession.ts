@@ -1006,7 +1006,7 @@ export class Session {
       checkpointQuestion: (taskId) => this.orchestrator.getCheckpointQuestion(taskId) ?? undefined,
       landedWork: () => (this.runMergeView() ? 'pending' : this.runs.mergedRun ? 'merged' : null),
       mergeTarget: () => this.position.mergeTarget(),
-      landingError: (taskId) => this.runs.current?.tasks[taskId]?.landingError,
+      landingError: (taskId) => this.runs.landingErrorOf(taskId),
       recentOutput: (taskId) => this.orchestrator.getLiveOutput(taskId, { maxLines: 3 })?.text.trim(),
       reportTail: (taskId) => this.reportTail(taskId),
       reported: (taskId, to) => {

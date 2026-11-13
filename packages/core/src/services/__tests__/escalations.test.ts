@@ -58,7 +58,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     },
     onHold,
     approved: (id) => !(setup.added ?? []).includes(id),
-    runs: { openRecord: () => undefined, awaitsMerge: (id) => unmerged.has(id) },
+    runs: { openTaskState: () => undefined, awaitsMerge: (id) => unmerged.has(id) },
     merging: setup.merging ?? false,
     startsHeld: setup.startsHeld ?? false,
     completing: new Set(),

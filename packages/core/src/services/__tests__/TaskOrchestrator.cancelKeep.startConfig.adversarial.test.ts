@@ -101,7 +101,7 @@ async function deleteWhileOpening(changeCheckout: boolean) {
   held.release();
   await first;
   await flushMicrotasks(30);
-  return { record: env.orchestrator.runs.current?.tasks.t1, releases: env.isolation.calls.filter((c) => c.op === 'release'), found };
+  return { record: env.orchestrator.runs.planIsolation?.run.tasks.t1, releases: env.isolation.calls.filter((c) => c.op === 'release'), found };
 }
 
 describe('a deleted task whose workspace was prepared, then refused by the start-config check', () => {
