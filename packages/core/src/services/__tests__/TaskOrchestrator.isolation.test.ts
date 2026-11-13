@@ -244,7 +244,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
     await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('awaiting_user'));
 
     expect(orchestrator.storeInstance.get('t1')!.verdict!.outcome).toBe('pass');
-    expect(orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('conflict');
+    expect(orchestrator.storeInstance.get('t1')!.awaitingReason).toBe('landing-failed');
     expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'kept' });
     expect(isolation.taskIdsFor('release')).toEqual([]);
     expect(vi.mocked(notifications.error).mock.calls.flat().join('\n')).toMatch(/integrat/i);
@@ -637,7 +637,7 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.storeInstance.get('t1')!.verdict!.outcome).toBe('pass');
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'kept', conflictRepo: 'api' });
       expect(vi.mocked(notifications.error).mock.calls.map((c) => String(c[0]))).toContain(
-        'Task "Task t1" passed, but git could not integrate its work in api, so none of it landed. Its worktrees are kept for inspection.',
+        'Task "Task t1" passed, but git could not integrate its work in api, so none of it landed. Its worktrees are kept for inspection. Once git can, land its work (retry it from its session) to land what it kept without running it again.',
       );
     });
 

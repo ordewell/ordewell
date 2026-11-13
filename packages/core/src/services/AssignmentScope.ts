@@ -83,7 +83,7 @@ export function assignmentConsequence({ status, awaitingReason, resumeAt }: Assi
   if (status === 'awaiting_user' && awaitingReason === 'usage-limit') {
     return resumeAt ? 'paused on a usage limit; resumes there at the reset unless moved' : 'paused on a usage limit; a retry would run it there unless moved';
   }
-  if (status === 'awaiting_user' && (awaitingReason === 'conflict' || awaitingReason === 'files-changed')) return 'waiting for the user; what runs next runs there unless moved';
+  if (status === 'awaiting_user' && (awaitingReason === 'conflict' || awaitingReason === 'landing-failed' || awaitingReason === 'files-changed')) return 'waiting for the user; what runs next runs there unless moved';
   if (status === 'in_progress' || status === 'awaiting_user') return 'already running as assigned';
   return 'runs as assigned unless moved';
 }

@@ -13,7 +13,7 @@ import type { RunMergeView } from './SessionMessage';
 
 /**
  * What an escalation waits on (ADR-0053). `approval`, `checkpoint`, `input`,
- * `conflict`, `files-changed` and `usage-limit` are a task's wait; `failed` and
+ * `conflict`, `landing-failed`, `files-changed` and `usage-limit` are a task's wait; `failed` and
  * `out-of-rounds` its end; `merge-gate`, `unapproved`, `on-hold`, `no-prompt`
  * and `by-hand` what alone keeps a task from starting; `merge-all` and
  * `blocked-run` are the run's own.
@@ -23,6 +23,7 @@ export type EscalationKind =
   | 'checkpoint'
   | 'input'
   | 'conflict'
+  | 'landing-failed'
   | 'files-changed'
   | 'usage-limit'
   | 'failed'
@@ -44,6 +45,7 @@ export type EscalationOptionId =
   | 'reply'
   | 'resume'
   | 'continue'
+  | 'land'
   | 'retry'
   | 'run'
   | 'force-start'
@@ -304,6 +306,13 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
         options: [...(input.resolvable(task.id) ? [{ id: 'resolve-conflict' as const, label: 'Add a resolver task' }] : []), ...retry(row, input), SKIP, ...completeOption(row, input.run)],
       };
     }
+    case 'landing-failed':
+      // It passed and its work is kept: landing it starts nothing, so what holds a new start does not hold it.
+      return {
+        kind: 'landing-failed',
+        reason: naming(row, 'It passed, but git refused to land its work, which is kept. Fix what git said, then land it.', input, rows),
+        options: [{ id: 'land', label: 'Land its work' }, ...retry(row, input), SKIP, ...completeOption(row, input.run)],
+      };
     case 'files-changed':
       return { kind: 'files-changed', reason: naming(row, 'It changed tracked files in your checkout, and nothing was committed.', input, rows), options: [...retry(row, input), SKIP, ...completeOption(row, input.run)] };
     case 'input':
@@ -516,6 +525,7 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'reply': return command({ command: 'message_task', task, text: note ?? '' });
     case 'resume':
     case 'continue': return command({ command: 'retry_task', task, from: 'session', ...(said ? { message: said } : {}) });
+    case 'land': return command({ command: 'retry_task', task, from: 'session' });
     case 'retry': return command({ command: 'retry_task', task, from: 'fresh' });
     case 'run': return command({ command: 'run_task', task });
     case 'force-start': return command({ command: 'force_start', task });

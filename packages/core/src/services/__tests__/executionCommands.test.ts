@@ -982,12 +982,29 @@ describe('the command seam\'s extension points', () => {
       scheduling: () => false, startsHeld: () => false, hasLiveWork: () => true, runHeld: () => false, scheduledRun: () => false, startsPending: () => false, loopCarried: () => false, awaitsResume: () => false, submittedStartWaits: () => false, advancesOnItsOwn: () => false, admitStart: admission,
       running: () => true, holdsSlot: () => true, repairOwed: () => false, maxParallel: () => 3, runBlocked: () => false, heldRefusal: () => null,
       startWaits: () => [], waitingRequests: () => [],
-      runPlan: vi.fn(), joinRun: vi.fn(async () => ''), readyFailed: vi.fn(), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), revertScope: () => ({ taskIds: [] }), revertTask: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), stopAsked: vi.fn(), startAsked: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), resumeNow: vi.fn(),
+      runPlan: vi.fn(), joinRun: vi.fn(async () => ''), readyFailed: vi.fn(), startTask: vi.fn(), forceStart: vi.fn(), markComplete: vi.fn(), markNotDone: vi.fn(), revertScope: () => ({ taskIds: [] }), revertTask: vi.fn(), interrupt: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), stopAsked: vi.fn(), startAsked: vi.fn(), retryTask: vi.fn(), skipTask: vi.fn(), continueTask: vi.fn(), landKept: vi.fn(), resumeNow: vi.fn(),
       messageTask: vi.fn(), forceMessage: vi.fn(), forceSendQueued: vi.fn(), removeQueued: vi.fn(), cancelResume: vi.fn(), awaitsCheckpoint: () => false, answerCheckpoint: vi.fn(), approveReview: vi.fn(), answerRequest: vi.fn(), mergeAll: vi.fn(), runMerged: () => false, record: vi.fn(), guardTripped: vi.fn(), turnHandle: () => undefined,
       draftScript: () => ({ ok: false, errors: ['not here'] }), addScript: vi.fn(), startAtGate: vi.fn(), awaitEnd: vi.fn(async () => {}), owe: vi.fn(), reportTail: () => undefined,
       escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(), checksDelegatedTask: () => false, raiseChild: async () => null, mergeHold: () => [], opsInCheckout: () => [],
     };
   }
+
+  it('lands the kept work of a passed task whose landing git refused on a retry from its session, running nothing again', async () => {
+    let tasks: Task[] = [{ ...task('t1', 1), status: 'awaiting_user', awaitingReason: 'landing-failed', runnerSessionId: 'sess-1' }];
+    const host: ExecutionHost = {
+      ...stubHost(), tasks: () => tasks, running: () => false,
+      landKept: vi.fn(async () => { tasks = [{ ...tasks[0], status: 'completed', awaitingReason: undefined }]; }),
+    };
+    const commands = new ExecutionCommands({ host, consent: { request: vi.fn() } });
+
+    const outcome = await commands.run({ command: 'retry_task', task: 't1', from: 'session' }, { kind: 'user' });
+
+    expect(outcome).toEqual({ ok: true, message: 'Landed the kept work of task #1 "Task t1", without running it again.' });
+    expect(host.landKept).toHaveBeenCalledWith('t1');
+    expect(host.continueTask).not.toHaveBeenCalled();
+    expect(host.retryTask).not.toHaveBeenCalled();
+    expect(vi.mocked(host.record).mock.calls.at(-1)?.[1]).toBe('You landed the kept work of task #1 "Task t1".');
+  });
 
   /** A host whose task 2 waits at its merge gate for task 1's work, on the terminal UI. */
   function gatedHost(mergesByThemselves: boolean): ExecutionHost {
@@ -1114,7 +1131,7 @@ describe('the command seam\'s extension points', () => {
     expect(await commands.run({ command: 'stop_task', task: 't1' }, PLANNER)).toEqual({
       ok: false, outcome: 'refused', message: 'Retried twice already: change the prompt or the model first.',
     });
-    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, { task: expect.objectContaining({ id: 't1' }), ref: '#1', paused: false });
+    expect(guard).toHaveBeenCalledWith(PLANNER, { command: 'stop_task', task: 't1' }, { task: expect.objectContaining({ id: 't1' }), ref: '#1', paused: false, landsKept: false });
     expect(host.guardTripped).toHaveBeenCalledWith(trip);
     expect(host.stopTask).not.toHaveBeenCalled();
   });

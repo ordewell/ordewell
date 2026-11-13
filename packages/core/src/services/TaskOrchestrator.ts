@@ -25,7 +25,7 @@ import type {
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
-import { IsolationRunController, type IsolationDecision, type IsolationStart } from './IsolationRunController';
+import { IsolationRunController, isRefused, type IsolationDecision, type IsolationStart } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { LimitPauses, type LimitWait, type ResumeNow } from './LimitPauses';
 import { IDLE_RUN, heldFrom, nextRunState, type RunEvent, type RunState } from './runState';
@@ -1613,7 +1613,8 @@ export class TaskOrchestrator {
    * it repairs: a Stop since that was admitted withdraws it.
    */
   private settleUnlanded(task: Task, outcome: UnlandedOutcome, admission: Admitted): void {
-    this.store.markAwaitingUser(task.id, 'conflict');
+    // A merge git refused is no conflict: nothing repairs it, and only fixing what git said lands the kept work.
+    this.store.markAwaitingUser(task.id, outcome.kind === 'awaiting_user' && outcome.reason === 'landing-failed' ? 'landing-failed' : 'conflict');
     this.say(outcome.messages);
     if (outcome.kind !== 'repair-needed') return;
     const waitsFor = this.startHolds > 0 ? 'the planner\'s turn ends' : this.onUsageLimit(task) ? 'the usage limit resets' : this.slotsFull() ? 'a slot is free' : null;
@@ -1811,6 +1812,7 @@ export class TaskOrchestrator {
     for (;;) {
       const opened = await this.openFor(taskId, origin, resume);
       if (!admission.current() || opened === 'interrupted') throw new TaskControlError(STOPPED_BEFORE_START);
+      if (isRefused(opened)) throw new TaskControlError(opened.refused);
       if (opened !== 'closed') return opened === 'blocked' ? false : opened;
       // Reopening ticks nothing, so only another settle can close the next run under it too.
       const refused = this.startRefusal(taskId, admission, { revives });
@@ -1949,6 +1951,29 @@ export class TaskOrchestrator {
 
     // A task paused on a usage limit no longer waits on its reset.
     this.limitPauses.recount();
+    this.emit('onTaskChanged');
+    await this.tick();
+  }
+
+  /**
+   * Land the work a passed task kept when git refused its landing, once the
+   * user has fixed what git said. Its verdict was earned and stands, so
+   * nothing is spawned and nothing is vouched for: this is the landing the
+   * pass already owed, tried again (ADR-0013).
+   */
+  async landKeptWork(taskId: string): Promise<void> {
+    const task = this.store.get(taskId);
+    if (!task || task.status !== 'awaiting_user' || task.awaitingReason !== 'landing-failed') {
+      throw new TaskControlError(`Task "${task?.title ?? taskId}" has no kept work waiting to land.`);
+    }
+    this.refuseWhileCompleting(taskId);
+    if (this.releasing.has(taskId)) return;
+    const admission = this.admittedNow();
+    const landing = await this.holdWhileLanding(taskId, this.landing.landKept(task));
+    await this.applyLanding(task, landing, admission, () => {
+      this.starts.completed(taskId);
+      this.notifications.info(`Task "${task.title}" landed its kept work.`);
+    });
     this.emit('onTaskChanged');
     await this.tick();
   }
@@ -2273,6 +2298,12 @@ export class TaskOrchestrator {
         opened = await this.openFor(taskId, origin, replay);
       }
       if (asked && (!admission.current() || opened === 'interrupted')) throw new TaskControlError(STOPPED_BEFORE_START);
+      if (isRefused(opened)) {
+        if (asked) throw new TaskControlError(opened.refused);
+        // Swept along or due at its reset: it stays paused, and the user hears why.
+        this.notifications.error(opened.refused);
+        return;
+      }
       if (opened === 'blocked' || opened === 'interrupted' || opened === 'closed') return;
       const task = this.store.get(taskId);
       // One asked for now resumes without a resume time; any other cancelled meanwhile stays put.
@@ -2781,6 +2812,7 @@ export class TaskOrchestrator {
       // The run a stopped loop settled is gone by the time a retry resumes it.
       if (!this.isScheduling) this.openRun('loop');
       const decision = decidesIsolation(this.attempts.nextKind(id)) ? await this.runs.decide(() => this.tick()) : 'checkout';
+      if (isRefused(decision)) return this.refuseScheduledRun(decision.refused);
       if (decision === 'blocked' || decision === 'interrupted' || decision === 'closed') continue;
       if (!this.startsOnTick) return;
       if (!this.stillReady(id)) continue;
@@ -2791,6 +2823,18 @@ export class TaskOrchestrator {
       }
       await claimed.spawned;
     }
+  }
+
+  /**
+   * A run git could not commit in ends before it claims anything, rather than
+   * waiting armed on the user: Start would find it still scheduling and do
+   * nothing, where ended it asks git again. What already runs (an ops task,
+   * which needs no worktree) goes on; only the scheduler stops.
+   */
+  private refuseScheduledRun(refusal: string): void {
+    this.notifications.error(refusal);
+    if (this.isScheduling) this.transition({ type: 'stop' });
+    this.emit('onTaskChanged');
   }
 
   /**
