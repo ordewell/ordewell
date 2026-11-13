@@ -75,7 +75,7 @@ describe('a signed-out planner', () => {
 
     fireEvent.click(pill());
 
-    expect(api.post).toHaveBeenCalledWith({ type: 'setPlanner', provider: 'claude-code' });
+    expect(api.post).toHaveBeenCalledWith({ type: 'setPlanner', provider: 'claude-code', requestId: expect.any(String) });
   });
 
   it('does not flag a signed-in pill', () => {

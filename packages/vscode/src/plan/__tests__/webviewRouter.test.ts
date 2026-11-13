@@ -435,7 +435,7 @@ describe('webview messages reach the session through one entry point each', () =
 
   describe('a handler that rejects', () => {
     it.each([
-      ['setPlanner', { type: 'setPlanner', provider: 'openrouter' }],
+      ['setPlanner', { type: 'setPlanner', provider: 'openrouter', requestId: 'req-1' }],
       ['setPlannerModel', { type: 'setPlannerModel', modelId: 'some/model' }],
       ['changeSettings', { type: 'changeSettings', change: { key: 'maxParallelSessions', value: 2 } }],
     ] as unknown as Array<[keyof WebviewRouterDeps['extension'], WebviewToHost]>)(
@@ -674,7 +674,7 @@ describe('webview messages reach the session through one entry point each', () =
   it.each([
     [{ type: 'ready' }, 'ready', []],
     [{ type: 'refreshModels' }, 'refreshModels', []],
-    [{ type: 'setPlanner', provider: 'codex' }, 'setPlanner', ['codex']],
+    [{ type: 'setPlanner', provider: 'codex', requestId: 'req-2' }, 'setPlanner', ['codex', 'req-2']],
     [{ type: 'setPlannerModel', modelId: 'gpt-5', effort: 'high' }, 'setPlannerModel', ['gpt-5', 'high']],
     [{ type: 'openTaskLog', taskId: 't1' }, 'openTaskLog', ['t1']],
     [{ type: 'openFile', path: '.ordewell/sessions/s1/tasks/t1/1.patch' }, 'openFile', ['.ordewell/sessions/s1/tasks/t1/1.patch']],

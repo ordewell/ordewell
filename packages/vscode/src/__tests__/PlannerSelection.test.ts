@@ -105,6 +105,26 @@ describe('PlannerSelection.apply', () => {
     ]);
   });
 
+  it('saves the later of two quick picks when the first one\'s catalog answers last', async () => {
+    const { selection } = setup({ codex: [{ modelId: 'gpt-5-codex', variants: [] }], 'claude-code': [{ modelId: 'claude-a', variants: [] }] });
+    const resolver = (selection as unknown as { deps: { modelResolver: { plannerCatalog: (p: PlannerBackendId) => Promise<unknown> } } }).deps.modelResolver;
+    const catalog = resolver.plannerCatalog.bind(resolver);
+    let releaseCodex!: () => void;
+    const codexHeld = new Promise<void>((resolve) => { releaseCodex = resolve; });
+    resolver.plannerCatalog = async (provider) => {
+      if (provider === 'codex') await codexHeld;
+      return catalog(provider);
+    };
+
+    const first = selection.apply('codex');
+    const second = selection.apply('claude-code');
+    await Promise.resolve();
+    releaseCodex();
+    await Promise.all([first, second]);
+
+    expect(new VsCodeConfig().aiProvider).toBe('claude-code');
+  });
+
   it('keeps the model of the planner already in use rather than re-recalling it', async () => {
     const { selection, memory } = setup({ 'claude-code': [{ modelId: 'claude-b', variants: [] }] });
     memory.remember('claude-code', 'claude-b');

@@ -119,6 +119,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.postMessage({ type: 'runnerChoiceSaved', requestId, runnerId, enabled });
   }
 
+  /** Answer one planner pill request, after the planner state it led to. */
+  acknowledgePlannerChoice(requestId: string): void {
+    this.postMessage({ type: 'plannerChoiceSaved', requestId });
+  }
+
   /** Drop the handoff card and every per-task isolation indicator. */
   clearIsolationHandoff(): void {
     this.run.clearIsolation();

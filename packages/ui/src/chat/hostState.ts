@@ -49,6 +49,12 @@ export interface HostState {
    * answer: discovery that began before the save would revive the old state.
    */
   pendingRunners: Partial<Record<RunnerId, { enabled: boolean; requestId: string }>>;
+  /**
+   * A planner pill clicked, until the host's `plannerChoiceSaved` for that
+   * request answers it. Until then the planner state on hand is the previous
+   * planner's, and so are its model and effort.
+   */
+  pendingPlanner: { provider: string; requestId: string } | null;
   /** Queued prompts: what the host is holding for the next planner turn. */
   held: PromptHold;
   /** The last queued text the host gave back; `seq` makes a repeat of the same words land again. */
@@ -161,6 +167,7 @@ export const INITIAL_HOST_STATE: HostState = {
   runnerList: [],
   enabledRunnerIds: [...DEFAULT_RUNNERS],
   pendingRunners: {},
+  pendingPlanner: null,
   held: EMPTY_HOLD,
   unsent: null,
   modesByRunner: {},
@@ -215,6 +222,7 @@ export type HostAction =
   | { type: 'patchError'; error: string }
   | { type: 'patchReady'; ready: boolean }
   | { type: 'runnerChoiceRequested'; runnerId: RunnerId; enabled: boolean; requestId: string }
+  | { type: 'plannerChoiceRequested'; provider: string; requestId: string }
   | { type: 'checkpointAnswered'; answerId: string }
   | { type: 'patchDockHeight'; height: number | undefined }
   | { type: 'patchDockExpanded'; expanded: Updatable<boolean> };
@@ -321,6 +329,14 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       if (!action.enabled && saved) enabledRunnerIds = enabledRunnerIds.filter((id) => id !== action.runnerId);
       return { ...state, enabledRunnerIds, pendingRunners };
     }
+
+    case 'plannerChoiceRequested':
+      return { ...state, pendingPlanner: { provider: action.provider, requestId: action.requestId } };
+
+    case 'plannerChoiceSaved':
+      // An answer to an earlier pick leaves the later one still with the host.
+      if (state.pendingPlanner?.requestId !== action.requestId) return state;
+      return { ...state, pendingPlanner: null };
 
     case 'checkpointAnswered':
       // The question is answered here, before the run says so: remember it so
