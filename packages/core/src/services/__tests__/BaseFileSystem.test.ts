@@ -1560,3 +1560,79 @@ describe('BaseFileSystem runs sealed what it would refuse without asking (ADR-00
     expect(unsealed.sealedRuns).toEqual([]);
   });
 });
+
+/**
+ * A research subagent's commands are the command gate's `subagent` site
+ * (ADR-0008 T6): nobody is asked, a command that would ask is refused, and a
+ * path outside the workspace is not followed. Where a sandbox can seal,
+ * those same commands run sealed instead (ADR-0036 S5), which the suite above
+ * covers; this one has no sandbox, so a refusal is a refusal (S6).
+ */
+describe('BaseFileSystem.subagentBash — a research subagent in the workspace (ADR-0008 T6)', () => {
+  const setup = (grant = true) => {
+    const fs = new TestFileSystem();
+    const request = vi.fn().mockResolvedValue(grant);
+    fs.setApproval({ request });
+    return { fs, request };
+  };
+
+  it('runs an auto-tier command whose paths stay inside the workspace', async () => {
+    const { fs, request } = setup();
+    const outcome = await fs.subagentBash('cat src/a.ts');
+    expect(outcome.success).toBe(true);
+    expect(fs.bashCalls).toEqual(['cat src/a.ts']);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('refuses a command that would ask, without asking, and points the agent at its digest', async () => {
+    const { fs, request } = setup();
+    const outcome = await fs.subagentBash('npm test');
+    expect(outcome).toMatchObject({ success: false, refused: true });
+    expect(outcome.output).toContain('needs user approval, and research agents run in the background');
+    expect(outcome.output).toMatch(/digest/i);
+    expect(fs.bashCalls).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('refuses an auto-tier command naming a path outside the workspace, even one a person would have approved', async () => {
+    const { fs, request } = setup();
+    const outcome = await fs.subagentBash('cat /etc/passwd');
+    expect(outcome).toMatchObject({ success: false, refused: true });
+    expect(outcome.output).toMatch(/outside the workspace/i);
+    expect(fs.bashCalls).toEqual([]);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('follows a cd chain inside the workspace, and refuses one that leaves it', async () => {
+    const { fs } = setup();
+    expect((await fs.subagentBash('cd api && git log -1 && cd ../web && git log -1')).success).toBe(true);
+    expect(fs.bashCalls).toHaveLength(1);
+
+    const outside = await fs.subagentBash('cd api && cat ../../etc/hosts');
+    expect(outside.output).toMatch(/outside the workspace/i);
+    expect(fs.bashCalls).toHaveLength(1);
+  });
+
+  it("refuses what the classifier refuses, which the planner's own shell would also refuse", async () => {
+    const { fs } = setup();
+    const outcome = await fs.subagentBash('rm -rf build');
+    expect(outcome.output).toMatch(/^Command refused: /);
+    expect(fs.bashCalls).toEqual([]);
+  });
+
+  it('hands the signal to the command so a long one can be killed', async () => {
+    class SignalFileSystem extends TestFileSystem {
+      signals: Array<AbortSignal | undefined> = [];
+      protected async execBashImpl(command: string, shell?: ShellLaunch, signal?: AbortSignal): Promise<ToolOutcome> {
+        this.signals.push(signal);
+        return super.execBashImpl(command, shell);
+      }
+    }
+    const fs = new SignalFileSystem();
+    fs.setApproval({ request: vi.fn().mockResolvedValue(false) });
+    const controller = new AbortController();
+    await fs.subagentBash('git log -1', controller.signal);
+    expect(fs.signals).toHaveLength(1);
+    expect(fs.signals[0]).toBe(controller.signal);
+  });
+});

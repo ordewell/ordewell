@@ -45,7 +45,10 @@ function fakeFs(): { fs: IFileSystem; touched: string[] } {
     grep: ok('grep'),
     findSymbol: ok('findSymbol'),
     listDir: ok('listDir'),
-    bash: ok('bash'),
+    bash: ok('plannerBash'),
+    // Which commands a subagent may run is the command gate's to say, and
+    // BaseFileSystem.test.ts's: this loop only has to hand them over.
+    subagentBash: ok('bash'),
     getWorkspaceRoot: () => '/ws',
   };
   return { fs, touched };
@@ -300,18 +303,33 @@ describe('runResearchAgent', () => {
     expect(fetcher.search).toHaveBeenCalledWith('hono routing');
   });
 
-  // T6: an ask-tier bash command from a subagent is refused (subagents can
-  // never prompt) with a message pointing the agent at its digest.
-  it('refuses an ask-tier bash command and points the subagent at its digest', async () => {
+  // T6: a subagent can never prompt, so the filesystem judges its commands
+  // and this loop never runs one by any other route.
+  it("runs a subagent's command through the filesystem's subagent shell, never its planner's", async () => {
     const chat = scriptedChat([
-      toolTurn('bash', { command: 'npm test' }),
+      toolTurn('bash', { command: 'git log -1' }),
       textTurn('digest'),
     ]);
     const { fs, touched } = fakeFs();
 
     await runResearchAgent('brief', { createChat: () => chat, fs });
 
+    expect(touched).toEqual(['bash']);
+    expect(chat.received[0][0].output).toBe('bash output');
+  });
+
+  it('refuses every command where the filesystem cannot judge one for a subagent, and points it at its digest', async () => {
+    const chat = scriptedChat([
+      toolTurn('bash', { command: 'git log -1' }),
+      textTurn('digest'),
+    ]);
+    const { fs, touched } = fakeFs();
+    delete fs.subagentBash;
+
+    await runResearchAgent('brief', { createChat: () => chat, fs });
+
     expect(touched).toEqual([]);
+    expect(chat.received[0][0].output).toMatch(/cannot judge a command for a research agent/);
     expect(chat.received[0][0].output).toMatch(/digest/i);
   });
 
@@ -408,48 +426,6 @@ describe('runResearchAgent', () => {
     expect(result.output).toContain('truncated');
   });
 
-  it('refuses an auto-tier bash command whose argument names a path outside the workspace', async () => {
-    // cat/find/rg/etc. are auto-tier by binary alone; a subagent can never
-    // prompt for approval, so an escaping path must be refused outright
-    // rather than silently forwarded to the real bash.
-    const chat = scriptedChat([
-      toolTurn('bash', { command: 'cat /etc/passwd' }),
-      textTurn('digest'),
-    ]);
-    const { fs, touched } = fakeFs();
-
-    await runResearchAgent('brief', { createChat: () => chat, fs });
-
-    expect(touched).toEqual([]);
-    expect(chat.received[0][0].output).toMatch(/outside the workspace/i);
-  });
-
-  it('still runs an auto-tier bash command whose argument stays inside the workspace', async () => {
-    const chat = scriptedChat([
-      toolTurn('bash', { command: 'cat src/a.ts' }),
-      textTurn('digest'),
-    ]);
-    const { fs, touched } = fakeFs();
-
-    await runResearchAgent('brief', { createChat: () => chat, fs });
-
-    expect(touched).toEqual(['bash']);
-  });
-
-  it('follows a cd chain inside the workspace, and still refuses one that leaves it', async () => {
-    const chat = scriptedChat([
-      toolTurn('bash', { command: 'cd api && git log -1 && cd ../web && git log -1' }),
-      toolTurn('bash', { command: 'cd api && cat ../../etc/hosts' }),
-      textTurn('digest'),
-    ]);
-    const { fs, touched } = fakeFs();
-
-    await runResearchAgent('brief', { createChat: () => chat, fs });
-
-    expect(touched).toEqual(['bash']);
-    expect(chat.received[1][0].output).toMatch(/outside the workspace/i);
-  });
-
   it('an aborted signal stops the loop without executing tools', async () => {
     const ac = new AbortController();
     ac.abort();
@@ -467,8 +443,8 @@ describe('runResearchAgent', () => {
   it('stops part-way through a round rather than finishing every call in it', async () => {
     const ac = new AbortController();
     const { fs, touched } = fakeFs();
-    const stopOnFirst = fs.bash;
-    fs.bash = async (command: string) => {
+    const stopOnFirst = fs.subagentBash!;
+    fs.subagentBash = async (command: string) => {
       ac.abort();
       return stopOnFirst(command);
     };
@@ -493,11 +469,10 @@ describe('runResearchAgent', () => {
     const ac = new AbortController();
     let seen: AbortSignal | undefined;
     const { fs } = fakeFs();
-    fs.bash = (_command: string, signal?: AbortSignal) => new Promise((resolve) => {
+    fs.subagentBash = (_command: string, signal?: AbortSignal) => new Promise((resolve) => {
       seen = signal;
       signal?.addEventListener('abort', () => resolve({ success: false, output: 'stopped', truncated: false }));
     });
-    // Auto-tier, so the non-prompting wrapper lets it through to `fs.bash`.
     const chat = scriptedChat([toolTurn('bash', { command: 'find . -name "*.ts"' }), textTurn('digest')]);
 
     const running = runResearchAgent('brief', { createChat: () => chat, fs, signal: ac.signal });
