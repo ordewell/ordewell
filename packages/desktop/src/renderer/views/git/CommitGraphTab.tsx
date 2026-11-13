@@ -203,7 +203,7 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
               <li key={commit.sha}>
                 <button type="button" className="git-commit" aria-pressed={commit.sha === selected} aria-label={`Commit ${shortSha(commit.sha)}: ${commit.subject}`} onClick={() => setSelected((was) => (was === commit.sha ? undefined : commit.sha))}>
                   <Lanes row={row} width={layout.width} />
-                  <span className="git-refs">{refChips(commit.refs, branches).map((chip) => <Chip key={chip.text} chip={chip} />)}</span>
+                  <span className="git-refs">{refChips(commit.refs, branches).map((chip) => <Chip key={chip.text} chip={chip} lane={row.color} />)}</span>
                   <span className="git-commit-subject">{commit.subject}</span>
                   {linked && <span className="git-chip git-chip-ordewell" title={linked.task.title}>task #{linked.task.order}</span>}
                   <span className="git-commit-meta">{commit.author} · {ago(commit.date)}</span>

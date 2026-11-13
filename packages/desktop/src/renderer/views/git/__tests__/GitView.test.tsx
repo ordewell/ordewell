@@ -426,6 +426,17 @@ describe('the Branches and History views', () => {
     expect(row).toHaveAttribute('title', expect.stringContaining('release/2.4, feature/sso, origin/feature/sso, origin/main, v2.0'));
   });
 
+  it('draws each lane in its palette colour, and the ref chip in the colour of its commit’s lane', async () => {
+    await mount();
+    fireEvent.click(views().getByRole('button', { name: 'History' }));
+    const row = await screen.findByRole('button', { name: /^Commit aaaaaaa: Merge: Wire SSO/ });
+    const lane = /\bgit-lane-(\d)\b/.exec(row.querySelector('svg.git-lanes circle')!.getAttribute('class')!)?.[1];
+    expect(lane).toBeDefined();
+    const chip = within(row).getByText('main');
+    expect(chip).toHaveClass('git-chip-laned');
+    expect(chip.style.getPropertyValue('--git-chip-lane')).toBe(`var(--ow-lane-${lane})`);
+  });
+
   it('marks a branch that its remote-tracking ref shares the commit with, and leads with the checked-out branch', async () => {
     await mount();
     fireEvent.click(views().getByRole('button', { name: 'History' }));
@@ -1143,6 +1154,23 @@ describe('the commit graph', () => {
     const root = list.getByRole('button', { name: /Commit fffffff: Add the login button/ });
     expect(within(root).getByText('Ordewell · ordewell/r7/integration')).toBeInTheDocument();
     expect(within(root).getByText('v1.0')).toBeInTheDocument();
+  });
+
+  it('stripes every ref chip of a commit with that commit’s lane colour, keeping each kind’s own class', async () => {
+    await mount();
+    const list = within(await openGraph());
+    for (const name of [/Commit aaaaaaa/, /Commit fffffff/]) {
+      const row = await list.findByRole('button', { name });
+      const lane = /\bgit-lane-(\d)\b/.exec(row.querySelector('svg.git-lanes circle')!.getAttribute('class')!)?.[1];
+      const chips = [...row.querySelectorAll<HTMLElement>('.git-refs .git-chip')];
+      expect(chips.length).toBeGreaterThan(0);
+      for (const chip of chips) {
+        expect(chip).toHaveClass('git-chip-laned');
+        expect(chip.style.getPropertyValue('--git-chip-lane')).toBe(`var(--ow-lane-${lane})`);
+      }
+    }
+    expect(within(list.getByRole('button', { name: /Commit aaaaaaa/ })).getByText('HEAD')).toHaveClass('git-chip-head');
+    expect(within(list.getByRole('button', { name: /Commit fffffff/ })).getByText('Ordewell · ordewell/r7/integration')).toHaveClass('git-chip-ordewell');
   });
 
   it('links a commit landed from a task to that task', async () => {

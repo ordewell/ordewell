@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { LANE_COLORS } from '../views/git/lanes';
 
 /**
  * WCAG AA for theme.css's values: 4.5:1 for text, 3:1 for what is not text
@@ -41,6 +42,7 @@ const INSETS = ['bg-input', 'bg-code', 'surface-inset'];
 const STATUSES = ['idle', 'running', 'attention', 'passed', 'failed', 'blocked', 'merge', 'warning', 'warning-text', 'error'];
 const AREAS = ['planner', 'sessions', 'explorer', 'changes', 'git'];
 const RUNNERS = ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'];
+const LANES = Array.from({ length: LANE_COLORS }, (_, at) => `lane-${at}`);
 
 const TEXT: Array<[string, string[]]> = [
   ['fg', [...SURFACES, ...INSETS, 'accent-tint', 'diff-inserted', 'diff-removed', 'diff-inserted-word', 'diff-removed-word']],
@@ -64,6 +66,8 @@ const MARKS: Array<[string, string[]]> = [
   ...AREAS.map((area): [string, string[]] => [`area-${area}`, SURFACES]),
   // The runner's mark (the colour as a graphic) is seen on every surface a badge sits on.
   ...RUNNERS.map((runner): [string, string[]] => [`runner-${runner}`, SURFACES]),
+  // A lane is a stroke and a dot on a row, at rest, hovered or selected, and a ref chip's stripe beside its card fill.
+  ...LANES.map((lane): [string, string[]] => [lane, SURFACES]),
 ];
 
 /**
@@ -133,6 +137,21 @@ describe.each(['light', 'dark'] as const)('the %s theme\'s runner colours', (nam
   // Claude Code's clay predates this check and sits near blocked's orange; the five newer runners keep clear of every status.
   it.each(RUNNERS.slice(3).flatMap((runner) => STATUSES.map((status): [string, string] => [runner, status])))('tells %s from status %s', (runner, status) => {
     expect(distance(hex(`runner-${runner}`), hex(`status-${status}`))).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe.each(['light', 'dark'] as const)('the %s theme\'s lane colours', (name) => {
+  const tokens = scheme(name);
+  const hex = (token: string): string => tokens.get(token)!;
+
+  // Lanes side by side are one index apart, but any two can cross, so every pair is told apart, by more than the runners' 5.
+  it.each(LANES.flatMap((lane, at) => LANES.slice(at + 1).map((other): [string, string] => [lane, other])))('tells %s from %s', (lane, other) => {
+    expect(distance(hex(lane), hex(other))).toBeGreaterThanOrEqual(10);
+  });
+
+  // The graph sits beside a commit's file statuses, so no lane reads as passed, failed or Needs you (design.md, Visual language).
+  it.each(LANES.flatMap((lane) => STATUSES.map((status): [string, string] => [lane, status])))('tells %s from status %s', (lane, status) => {
+    expect(distance(hex(lane), hex(`status-${status}`))).toBeGreaterThanOrEqual(5);
   });
 });
 
