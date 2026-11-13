@@ -6,6 +6,8 @@
  */
 export { canSetDependencies, dependencyCandidates, dependentsOf } from './services/PlanTree';
 export { summarizeToolCall } from './services/researchStepSummary';
+// A daemon refusal flattened once, so the desktop renderer reads it as the CLI does.
+export { DaemonRefusal, refusalOf } from './utils/daemonRefusal';
 // Which agent tools write a file, so a surface's summary of a run of calls
 // counts an edit the way a row's diff is decided.
 export { isFileEditTool } from './services/harness/agentTools';

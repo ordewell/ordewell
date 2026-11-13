@@ -8,7 +8,7 @@ import { all } from '../Stub';
 import { FOCUS_COMMIT_COMMAND } from '../changes/mergeAll';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { confirm as askInWindow } from '../../session/ConfirmDialog';
-import { DaemonError } from '../../session/daemon';
+import { DaemonRefusal } from '@ordewell/core/plan-utils';
 import { useSession } from '../../session/useSession';
 import {
   commitCheckout, describeGitError, discardPaths, readCheckout, readStatus, stagePaths, unstagePaths,
@@ -183,7 +183,7 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
       return true;
     } catch (error) {
       setProblem(describeGitError(error));
-      if (error instanceof DaemonError) {
+      if (error instanceof DaemonRefusal) {
         if (error.code === 'pushed') {
           setPushedHead(repo.info.head);
           setAmend(false);
@@ -220,7 +220,7 @@ function RepoSection({ api, host, repo, first, onRefresh }: {
           notifyCheckoutChange();
           return;
         } catch (error) {
-          if (error instanceof DaemonError && error.code === 'confirm_stale' && attempt === 0) {
+          if (error instanceof DaemonRefusal && error.code === 'confirm_stale' && attempt === 0) {
             await onRefresh();
             const fresh = await readStatus(api.workspace, repo.info.repo).catch(() => undefined);
             const still = fresh ? changedPaths(fresh).filter((path) => paths.includes(path)) : [];

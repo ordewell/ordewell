@@ -192,6 +192,7 @@ export type { DockerCli } from './services/container/dockerCli';
 export { abbreviateHome, resolveSkillInvocation, plannerMessage, plannerTranscript, type SkillInvocation } from './services/skillInvocation';
 export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
+export { DaemonRefusal, refusalOf } from './utils/daemonRefusal';
 export { DAEMON_ROUTES, type DaemonRoute, type DaemonRouteId, type HttpMethod, type RouteBody, type RouteResponse, type RouteSpec } from './daemonRoutes';
 export { StreamOrder, stampOf, type Placement } from './utils/streamOrder';
 export { DaemonStream, type ConnectedFrame, type DaemonFrame } from './utils/daemonStream';

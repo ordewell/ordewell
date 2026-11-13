@@ -2,7 +2,8 @@ import { EventEmitter } from 'events';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import http from 'http';
 import { WebSocketServer } from 'ws';
-import { ApiClient, DaemonError, deliveryOf } from '../apiClient';
+import { ApiClient, deliveryOf } from '../apiClient';
+import { DaemonRefusal } from '@ordewell/core';
 import { patient } from '@ordewell/core/testing';
 
 /** Spin up a throwaway server that records which port served each request. */
@@ -141,10 +142,10 @@ describe('ApiClient', () => {
 
     const err = await new ApiClient(srv.port, '/work/app').execute('session-1', { command: 'retry_task', task: 't1', from: 'fresh' }).catch((e: unknown) => e);
 
-    expect(err).toBeInstanceOf(DaemonError);
-    expect((err as DaemonError).code).toBe('session_held');
-    expect((err as DaemonError).status).toBe(409);
-    expect((err as DaemonError).sessionHeld?.holder.pid).toBe(37797);
+    expect(err).toBeInstanceOf(DaemonRefusal);
+    expect((err as DaemonRefusal).code).toBe('session_held');
+    expect((err as DaemonRefusal).status).toBe(409);
+    expect((err as DaemonRefusal).sessionHeld?.holder.pid).toBe(37797);
     expect((err as Error).message).toContain('pid 37797');
     // Refused, so never retried.
     expect(hits).toHaveLength(2);
@@ -170,7 +171,7 @@ describe('ApiClient', () => {
     ['closeSession', (client: ApiClient) => client.closeSession('s1')],
     ['cancelPlanning', (client: ApiClient) => client.cancelPlanning('s1')],
     ['getSessions', (client: ApiClient) => client.getSessions()],
-  ])('turns a 500 from %s into a DaemonError', async (_name, call) => {
+  ])('turns a 500 from %s into a DaemonRefusal', async (_name, call) => {
     const srv = await startCustomServer((_req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'boom' }));
@@ -178,7 +179,7 @@ describe('ApiClient', () => {
     servers.push(srv);
 
     const result = call(new ApiClient(srv.port));
-    await expect(result).rejects.toBeInstanceOf(DaemonError);
+    await expect(result).rejects.toBeInstanceOf(DaemonRefusal);
     await expect(result).rejects.toThrow('boom');
   });
 
@@ -683,7 +684,7 @@ describe('ApiClient — adopting a saved session', () => {
 
 describe('deliveryOf', () => {
   it('reads a daemon refusal as an answer', () => {
-    expect(deliveryOf(new DaemonError('no key', 400))).toBe('answered');
+    expect(deliveryOf(new DaemonRefusal('no key', 400))).toBe('answered');
   });
 
   it('reads a refused connection as never delivered', () => {

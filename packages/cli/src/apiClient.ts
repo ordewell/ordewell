@@ -1,7 +1,7 @@
 import http from 'http';
 import WebSocket from 'ws';
 import { DEFAULT_PORT, isConnectionRefused } from './daemon';
-import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId, DAEMON_ROUTES } from '@ordewell/core';
+import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId, DAEMON_ROUTES, DaemonRefusal, refusalOf } from '@ordewell/core';
 import { routeRequest, sessionOf, socketPath, type CallParts, type QueryKeys, type RouteRequest } from './routeRequest';
 import type {
   AdoptSessionResponse,
@@ -14,14 +14,12 @@ import type {
   ChildPlanResponse,
   ChildTaskControlResponse,
   ChildTreeFrame,
-  ConfirmDifference,
   ContainerChange,
   ContainerChangeResponse,
   ContainerStatus,
   ConversationCompactResponse,
   ConversationForkResponse,
   ConversationRewindResponse,
-  DaemonErrorCode,
   DaemonRouteId,
   ErrorBody,
   AnswerEscalationRequest,
@@ -41,7 +39,6 @@ import type {
   GitDiscardRequest,
   GitRemoteRequest,
   GitStashRequest,
-  LandingBranchHeld,
   MergePreflightResponse,
   UserGitTarget,
   GitBranchesResponse,
@@ -61,7 +58,6 @@ import type {
   OkResponse,
   GlobalRunSettings,
   PlanResponse,
-  PlannerNotReady,
   SurfacePlan,
   SurfacePlanState,
   ResolveConflictResponse,
@@ -73,7 +69,6 @@ import type {
   SessionFrame,
   SessionListResponse,
   SessionMeta,
-  SessionHeld,
   SessionResponse,
   SettingsResponse,
   SettingsUpdateResponse,
@@ -112,31 +107,9 @@ export type ConversationForkResult = ConversationForkResponse;
 export type ConversationRewindResult = ConversationRewindResponse;
 
 /**
- * A refusal the daemon gave, carrying the status and the stable `code` a caller
- * switches on. The message is for display only: nothing may branch on its text.
- */
-export class DaemonError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code?: DaemonErrorCode,
-    readonly plannerNotReady?: PlannerNotReady,
-    /** With `session_held`: the host that runs the session (ADR-0049). */
-    readonly sessionHeld?: SessionHeld,
-    /** With `landing_branch_held`: the live run that lands on the branch (ADR-0062 G7). */
-    readonly landingBranchHeld?: LandingBranchHeld,
-    /** With `confirm_stale`: what the person was shown against what is there now (ADR-0062 G3). */
-    readonly confirmStale?: ConfirmDifference,
-  ) {
-    super(message);
-    this.name = 'DaemonError';
-  }
-}
-
-/**
  * What a rejected call says about whether the daemon got the request. The one
  * place that decides it, so a caller never re-guesses from an error's wording:
- * - `answered`: the daemon replied, with a refusal ({@link DaemonError}) or with
+ * - `answered`: the daemon replied, with a refusal ({@link DaemonRefusal}) or with
  *   a body this client could not use ({@link UnreadableResponseError}).
  * - `refused`: nothing was listening, so the request never arrived and may be replayed.
  * - `unknown`: a timeout, reset or hang-up after the request went out; the daemon
@@ -145,7 +118,7 @@ export class DaemonError extends Error {
 export type Delivery = 'answered' | 'refused' | 'unknown';
 
 export function deliveryOf(err: unknown): Delivery {
-  if (err instanceof DaemonError || err instanceof UnreadableResponseError) return 'answered';
+  if (err instanceof DaemonRefusal || err instanceof UnreadableResponseError) return 'answered';
   return isConnectionRefused(err) ? 'refused' : 'unknown';
 }
 
@@ -183,11 +156,13 @@ function planOf<T extends { plan: unknown }>(data: unknown, route: string): T {
 }
 
 /** A workspace the daemon rejected for lacking a project marker, distinguished from other 400s so the TUI can offer to initialize it instead of just reporting failure. */
-export class WorkspaceInitNeededError extends DaemonError {
-  constructor(message: string, readonly workspace: string) {
-    super(message, 400, 'workspace_not_a_project');
+export class WorkspaceInitNeededError extends DaemonRefusal {
+  constructor(message: string, workspace: string) {
+    super(message, 400, { code: 'workspace_not_a_project', workspace });
     this.name = 'WorkspaceInitNeededError';
   }
+
+  override get workspace(): string { return super.workspace ?? ''; }
 }
 
 /**
@@ -243,10 +218,10 @@ export interface ChildCheckpointAnswer {
 }
 
 /** A non-200 answer as an error. The body is not trusted to be JSON: an HTML error page arrives as a string. */
-function daemonError(status: number, data: unknown, fallback: string): DaemonError {
-  const { error, code, workspace, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale } = (typeof data === 'object' && data !== null ? data : {}) as Partial<ErrorBody>;
-  if (code === 'workspace_not_a_project') return new WorkspaceInitNeededError(error || 'Not a project directory', workspace ?? '');
-  return new DaemonError(error || fallback, status, code, plannerNotReady, sessionHeld, landingBranchHeld, confirmStale);
+function daemonError(status: number, data: unknown, fallback: string): DaemonRefusal {
+  const refusal = refusalOf(status, data, fallback);
+  if (refusal.code === 'workspace_not_a_project') return new WorkspaceInitNeededError(refusalOf(status, data, 'Not a project directory').message, refusal.workspace ?? '');
+  return refusal;
 }
 
 /** A read's target (ADR-0064), its workspace the client's own unless named. */
@@ -302,7 +277,7 @@ export class ApiClient {
     return (adopted.data as Partial<ErrorBody> | undefined)?.code === 'session_held' ? adopted as typeof res : res;
   }
 
-  /** One request whose only good answer is a 200: anything else becomes a {@link DaemonError} carrying the daemon's code. */
+  /** One request whose only good answer is a 200: anything else becomes a {@link DaemonRefusal} carrying the daemon's code. */
   private async call<Id extends DaemonRouteId>(id: Id, fallback: string, parts: CallParts<Id>): Promise<RouteResponse<Id>> {
     const res = await this.send(id, parts);
     if (res.status !== 200) throw daemonError(res.status, res.data, fallback);
@@ -453,7 +428,7 @@ export class ApiClient {
   /**
    * One execution control as the user (ADR-0029): any command at the seam, by
    * the task reference the user typed. The answer is the seam's line and its
-   * payload; a refusal is a {@link DaemonError} worded as the seam worded it.
+   * payload; a refusal is a {@link DaemonRefusal} worded as the seam worded it.
    * Execute, Stop, review approval, checkpoint answers and Merge all keep their
    * own methods, since their routes answer more than the seam does.
    */
@@ -467,7 +442,7 @@ export class ApiClient {
     return res.escalations;
   }
 
-  /** Answer an escalation by its id; a stale one is a {@link DaemonError} saying so. `confirmed` is the user's yes to the option's `confirm`. */
+  /** Answer an escalation by its id; a stale one is a {@link DaemonRefusal} saying so. `confirmed` is the user's yes to the option's `confirm`. */
   answerEscalation(sessionId: string, answer: AnswerEscalationRequest): Promise<ExecuteCommandResponse> {
     return this.call('plans.answerEscalation', 'Could not answer', { params: { sessionId }, body: answer });
   }

@@ -1,6 +1,7 @@
 import type { UserGitTarget } from '@ordewell/core';
 import { filesApi } from '../../files/api';
-import { callDaemon, DaemonError, messageOf } from '../../session/daemon';
+import { DaemonRefusal } from '@ordewell/core/plan-utils';
+import { callDaemon, messageOf } from '../../session/daemon';
 import { diffSides, parsePatch, type DiffSides, type FilePatch } from '../changes/changesModel';
 import { parseCheckoutStatus, parseRepoInfo, type CheckoutStatus, type RepoCheckout } from './checkoutModel';
 
@@ -133,7 +134,7 @@ export async function readCheckoutDiff(
 
 /** Git's refusal in the person's words, with the one code that changes what the view offers named. */
 export function describeGitError(error: unknown): string {
-  if (error instanceof DaemonError) {
+  if (error instanceof DaemonRefusal) {
     switch (error.code) {
       case 'pushed': return 'The last commit is already pushed, so amending it would rewrite history. Amend is unavailable.';
       case 'confirm_stale': return `What you confirmed changed while it was open. ${error.message}`;

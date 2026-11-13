@@ -4087,7 +4087,7 @@ compile on the other. It lives in core because both packages already depend on
 it; the CLI must never import the daemon's runtime. A refusal travels as a stable
 `code`, mapped from core's typed errors (`SessionNotFoundError`, `NoPlanError`,
 `AlreadyExecutingError`, `ConversationBusyError`, `PlannerTurnStoppedError`, …) in one table
-(`routes/errors.ts`) and surfaced to callers as `DaemonError.code`. The REST plan
+(`routes/errors.ts`) and surfaced to callers as `DaemonRefusal.code`. The REST plan
 is the session's own plan state, not the `SerializedPlan` a socket carries.
 `PATCH /api/settings` also answers `switchRecall` — which model a planner switch
 landed on and why — only when the write changed the planner.
