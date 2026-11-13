@@ -936,7 +936,7 @@ export class Session {
         if (this.position.turnsTakeTreeSlots && limit.resendAt && runner) this.orchestrator.plannerLimited(runner, limit.resendAt);
         return limit;
       },
-      contextPaused: (details) => this.turns.contextPaused(details),
+      contextPaused: (details, committed) => this.turns.contextPaused(details, committed),
     });
 
     this.gate = new TurnGate({
