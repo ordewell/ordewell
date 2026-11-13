@@ -129,6 +129,7 @@ once, as the checkpoint is committed, against every value the session holds
 | A command that sets a name | `setx NAME v`, Dockerfile `ENV NAME v`, `set -gx NAME v`, `gh secret set NAME --body v` |
 | A naming field with its sibling value | JSON and ACP `{"name": "NAME", "value": "v"}`, YAML `- name: NAME` / `value: v`, XML `name="NAME" value="v"` |
 | A value below its name | YAML `NAME: \|` with its block, `NAME:` with the value on the next line |
+| A password in a URL's userinfo | `postgres://user:v@host/db` |
 | An auth scheme, a provider's or cloud's key shape, a private key block | `Bearer v`, `sk-…`, `AKIA…`, `-----BEGIN … PRIVATE KEY-----` |
 
 ## Testing decisions
@@ -198,3 +199,4 @@ once, as the checkpoint is committed, against every value the session holds
 - 2026-11-05 — accepted.
 - 2026-11-05 — parts are found inside escapes and through them, escapes are read to a bound, the text channel is one stream, sibling values are read past the gutter, and a read is trimmed after it is redacted.
 - 2026-11-10 — planner summaries are redacted at the checkpoint, a held value named by its variable, and both summary prompts keep a secret's rule, not its value (P1).
+- 2026-11-13 — a URL's userinfo password is read (N1), and the scans that rescanned a long run per name or per command are bounded, so a 64k line redacts in under a second.
