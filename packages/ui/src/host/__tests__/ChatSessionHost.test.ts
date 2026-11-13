@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTask, type DaemonErrorCode, type ExecutionCommand, type Task, type TaskRevertPreview } from '@ordewell/core';
+import { createTask, type DaemonErrorCode, type ExecutionCommand, type MergeWordingHandoff, type Task, type TaskRevertPreview } from '@ordewell/core';
 import { ChatSessionHost, type ChatTurn, type SessionPort, type TurnOutcome } from '../ChatSessionHost';
 import type { ConfirmationRequest } from '../confirmations';
 import { ConversationViewHost } from '../ConversationViewHost';
+import type { MergeAnswer, MergeYes } from '../MergeAll';
 import { TaskActions } from '../TaskControls';
 import type { HostToWebview } from '../../protocol';
 
@@ -10,7 +11,8 @@ import type { HostToWebview } from '../../protocol';
  * A session the test drives: `busy` is the turn the surface saw open, and
  * each turn it is asked for is answered with what `answer` returns. The task
  * controls record what reached the seam, what the user was asked and what was
- * refused, and answer from `state`.
+ * refused, and answer from `state`. The merge seam answers each call with the
+ * next of `state.merges`, an Error being a refusal the seam throws.
  */
 function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise<TurnOutcome> = () => ({ ok: true })) {
   const posts: HostToWebview[] = [];
@@ -28,7 +30,13 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
     reply: 'accept' as 'accept' | null | undefined,
     /** What the seam says to a command, thrown in its own words. */
     seamRefuses: undefined as string | undefined,
+    handoff: undefined as MergeWordingHandoff | undefined,
+    executing: false,
+    merges: [] as (MergeAnswer | Error)[],
   };
+  /** The yeses each call at the merge seam carried, and how many times a Merge all took the seam up. */
+  const merged: MergeYes[] = [];
+  let mergeCalls = 0;
   const executed: ExecutionCommand[] = [];
   const asked: ConfirmationRequest[] = [];
   const refused: string[] = [];
@@ -68,10 +76,22 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
     cancelPlannerResend: vi.fn(async () => undefined),
     retryPlannerCompaction: vi.fn(async () => undefined),
     settled: vi.fn(),
+    handoff: () => state.handoff,
+    isExecuting: () => state.executing,
+    mergeCall: () => {
+      mergeCalls += 1;
+      return async (yes) => {
+        merged.push(yes);
+        const answer = state.merges.shift() ?? { kind: 'done' as const };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      };
+    },
   };
   const chat = new ChatSessionHost(conversation, port);
   return {
-    chat, conversation, state, turns, port, executed, asked, refused, events,
+    chat, conversation, state, turns, port, executed, asked, refused, events, merged,
+    mergeCalls: () => mergeCalls,
     sent: () => turns.map((t) => [t.text, t.turn.now]),
     held: () => posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts').at(-1)?.prompts ?? [],
     unsent: () => posts.flatMap((m) => (m.type === 'promptUnsent' ? [m.text] : [])),
@@ -566,6 +586,222 @@ describe('ChatSessionHost system commands', () => {
 
       await h.chat.release();
       expect(h.sent()).toEqual([['and add tests', false]]);
+    });
+  });
+});
+
+describe('ChatSessionHost Merge all (ADR-0020, ADR-0055 D9)', () => {
+  const held = (hold: 'pastChecks' | 'besideOps', message: string): MergeAnswer => ({ kind: 'held', hold, message });
+  const onMain: MergeWordingHandoff = { repos: [{ path: '.', baseBranch: 'main', landed: [] }] };
+
+  it('asks first, naming where it lands and the checkout rule it insists on, and sends nothing on a no', async () => {
+    const h = harness();
+    h.state.handoff = onMain;
+    h.state.reply = null;
+
+    await expect(h.chat.mergeAll()).resolves.toBe(false);
+
+    expect(h.asked).toHaveLength(1);
+    expect(h.asked[0]).toMatchObject({ kind: 'merge_all' });
+    expect(h.asked[0]!.message).toContain('into main.');
+    expect(h.asked[0]!.message).toContain('Nothing is merged unless main is checked out.');
+    expect(h.mergeCalls()).toBe(0);
+  });
+
+  it('merges once the person said yes, with no yes given beforehand', async () => {
+    const h = harness();
+
+    await expect(h.chat.mergeAll()).resolves.toBe(true);
+
+    expect(h.merged).toEqual([{}]);
+    expect(h.asked.map((q) => q.kind)).toEqual(['merge_all']);
+  });
+
+  it('reads a dismissal as no, as it does a refusal to answer', async () => {
+    for (const reply of [null, undefined] as const) {
+      const h = harness();
+      h.state.reply = reply;
+
+      await expect(h.chat.mergeAll()).resolves.toBe(false);
+      expect(h.mergeCalls()).toBe(0);
+    }
+  });
+
+  it('words the question for a branch it cannot name, and for a run still going', async () => {
+    const h = harness();
+    h.state.executing = true;
+
+    await h.chat.mergeAll();
+    expect(h.asked[0]!.message).toContain('into the branch you have checked out.');
+    expect(h.asked[0]!.message).toContain('The run goes on');
+
+    const idle = harness();
+    await idle.chat.mergeAll();
+    expect(idle.asked[0]!.message).toContain('Merge the isolated run into');
+    expect(idle.asked[0]!.message).not.toContain('The run goes on');
+  });
+
+  it('names every repo of a group and the rule that each is on the branch it started on', async () => {
+    const h = harness();
+    h.state.handoff = { repos: [{ path: 'api', baseBranch: 'main', landed: [{}] }, { path: 'web', baseBranch: 'main', landed: [{}] }] };
+
+    await h.chat.mergeAll();
+
+    expect(h.asked[0]!.message).toContain('into main in each of api, web.');
+    expect(h.asked[0]!.message).toContain('each repository is on the branch it started on');
+  });
+
+  describe('what the seam holds the merge for', () => {
+    it('asks about work no check has passed in the seam\'s own words, and sends its yes on the next call', async () => {
+      const h = harness();
+      h.state.handoff = onMain;
+      h.state.merges = [held('pastChecks', 'Task a has not passed its checks.')];
+
+      await expect(h.chat.mergeAll()).resolves.toBe(true);
+
+      expect(h.asked.map((q) => q.kind)).toEqual(['merge_all', 'merge_past_checks']);
+      expect(h.asked[1]!.message).toBe('Task a has not passed its checks. Merge main anyway?');
+      expect(h.merged).toEqual([{}, { pastChecks: true }]);
+    });
+
+    it('asks about ops tasks running in the checkout, and sends its yes on the next call', async () => {
+      const h = harness();
+      h.state.handoff = onMain;
+      h.state.merges = [held('besideOps', 'Task ops is running in your checkout.')];
+
+      await expect(h.chat.mergeAll()).resolves.toBe(true);
+
+      expect(h.asked.map((q) => q.kind)).toEqual(['merge_all', 'merge_beside_ops']);
+      expect(h.asked[1]!.message).toBe('Task ops is running in your checkout. Merge main anyway?');
+      expect(h.merged).toEqual([{}, { besideOps: true }]);
+    });
+
+    it('asks one question at a time and keeps each yes beside the ones before it', async () => {
+      const h = harness();
+      h.state.merges = [held('pastChecks', 'unchecked'), held('besideOps', 'beside ops')];
+
+      await expect(h.chat.mergeAll()).resolves.toBe(true);
+
+      expect(h.asked.map((q) => q.kind)).toEqual(['merge_all', 'merge_past_checks', 'merge_beside_ops']);
+      expect(h.merged).toEqual([{}, { pastChecks: true }, { pastChecks: true, besideOps: true }]);
+    });
+
+    it('asks in the order the seam holds the merge, not a fixed one', async () => {
+      const h = harness();
+      h.state.merges = [held('besideOps', 'beside ops'), held('pastChecks', 'unchecked')];
+
+      await expect(h.chat.mergeAll()).resolves.toBe(true);
+
+      expect(h.asked.map((q) => q.kind)).toEqual(['merge_all', 'merge_beside_ops', 'merge_past_checks']);
+      expect(h.merged).toEqual([{}, { besideOps: true }, { besideOps: true, pastChecks: true }]);
+    });
+
+    it.each(['pastChecks', 'besideOps'] as const)('stops at a no to the %s question, with the yes it never gave not sent', async (hold) => {
+      const h = harness();
+      h.state.merges = [held(hold, 'held')];
+      // The opening question is answered yes; only the one the seam raised is refused.
+      let answers = 0;
+      h.port.ask = async (request) => { h.asked.push(request); return answers++ === 0 ? request.choices[0]?.id : null; };
+
+      await expect(h.chat.mergeAll()).resolves.toBe(false);
+
+      expect(h.merged).toEqual([{}]);
+      expect(h.asked).toHaveLength(2);
+    });
+
+    it('reads a dismissed question as no, and leaves the seam where it was', async () => {
+      const h = harness();
+      h.state.merges = [held('pastChecks', 'unchecked')];
+      let answers = 0;
+      h.port.ask = async (request) => { h.asked.push(request); return answers++ === 0 ? request.choices[0]?.id : undefined; };
+
+      await expect(h.chat.mergeAll()).resolves.toBe(false);
+
+      expect(h.merged).toEqual([{}]);
+    });
+
+    it.each(['pastChecks', 'besideOps'] as const)('does not ask again for a %s hold it already has a yes for, and throws the seam\'s words', async (hold) => {
+      const h = harness();
+      h.state.merges = [held(hold, 'first'), held(hold, 'still held')];
+
+      await expect(h.chat.mergeAll()).rejects.toThrow('still held');
+
+      expect(h.asked.map((q) => q.kind)).toEqual(['merge_all', hold === 'pastChecks' ? 'merge_past_checks' : 'merge_beside_ops']);
+      expect(h.merged).toHaveLength(2);
+    });
+
+    it('takes the seam up once, so a session switched to meanwhile is not sent a yes meant for another', async () => {
+      const h = harness();
+      h.state.merges = [held('pastChecks', 'unchecked'), held('besideOps', 'beside ops')];
+
+      await h.chat.mergeAll();
+
+      expect(h.merged).toHaveLength(3);
+      expect(h.mergeCalls()).toBe(1);
+    });
+  });
+
+  it('throws the seam\'s refusal, in its words, for the surface to say', async () => {
+    const h = harness();
+    h.state.merges = [new Error('Merge all needs main checked out.')];
+
+    await expect(h.chat.mergeAll()).rejects.toThrow('Merge all needs main checked out.');
+  });
+
+  it('throws a refusal that comes after a yes too, having asked nothing more', async () => {
+    const h = harness();
+    h.state.merges = [held('pastChecks', 'unchecked'), new Error('The run has moved on.')];
+
+    await expect(h.chat.mergeAll()).rejects.toThrow('The run has moved on.');
+
+    expect(h.asked.map((q) => q.kind)).toEqual(['merge_all', 'merge_past_checks']);
+  });
+
+  it('does not touch the prompt hold, the plan or the turns', async () => {
+    const h = harness();
+    h.state.busy = true;
+    h.chat.hold('and add tests');
+
+    await h.chat.mergeAll();
+
+    expect(h.held()).toEqual(['and add tests']);
+    expect(h.turns).toEqual([]);
+    expect(h.executed).toEqual([]);
+    expect(h.port.settled).not.toHaveBeenCalled();
+  });
+
+  describe('when the surface asked the opening question itself (ADR-0062 G8)', () => {
+    it('merges without asking it again', async () => {
+      const h = harness();
+
+      await expect(h.chat.mergeConfirmed()).resolves.toBe(true);
+
+      expect(h.asked).toEqual([]);
+      expect(h.merged).toEqual([{}]);
+    });
+
+    it('still asks what the seam holds the merge for, each once', async () => {
+      const h = harness();
+      h.state.handoff = onMain;
+      h.state.merges = [held('pastChecks', 'unchecked'), held('besideOps', 'beside ops')];
+
+      await expect(h.chat.mergeConfirmed()).resolves.toBe(true);
+
+      expect(h.asked.map((q) => q.kind)).toEqual(['merge_past_checks', 'merge_beside_ops']);
+      expect(h.asked[0]!.message).toBe('unchecked Merge main anyway?');
+      expect(h.merged).toEqual([{}, { pastChecks: true }, { pastChecks: true, besideOps: true }]);
+    });
+
+    it('is false on a no to one of them, and throws a refusal', async () => {
+      const no = harness();
+      no.state.merges = [held('besideOps', 'beside ops')];
+      no.state.reply = null;
+      await expect(no.chat.mergeConfirmed()).resolves.toBe(false);
+      expect(no.merged).toEqual([{}]);
+
+      const refused = harness();
+      refused.state.merges = [new Error('Nothing to merge.')];
+      await expect(refused.chat.mergeConfirmed()).rejects.toThrow('Nothing to merge.');
     });
   });
 });

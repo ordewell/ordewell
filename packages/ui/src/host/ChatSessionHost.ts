@@ -2,6 +2,7 @@ import type { DaemonErrorCode, RunnerId } from '@ordewell/core';
 // The browser-safe entry: the desktop renderer runs this too.
 import { sendNowGivesBack } from '@ordewell/core/plan-utils';
 import type { ConversationViewHost } from './ConversationViewHost';
+import { MergeAll, type MergePort } from './MergeAll';
 import { TaskControls, type TaskControlPort } from './TaskControls';
 
 /** How one planner turn is asked for: a Send now stops the turn in flight and is answered in the one replacing it. */
@@ -17,9 +18,10 @@ export type TurnOutcome = { readonly ok: true } | { readonly ok: false; readonly
 /**
  * What a surface's session answers for the chat: the in-process Session in the
  * extension, the daemon's routes in the desktop app (ADR-0063 H7). The prompt
- * side is here; the plan's controls are {@link TaskControlPort}.
+ * side is here; the plan's controls are {@link TaskControlPort}, and Merge all's
+ * are {@link MergePort}.
  */
-export interface SessionPort extends TaskControlPort {
+export interface SessionPort extends TaskControlPort, MergePort {
   /**
    * Whether a planner turn holds the session as the surface last saw it: a
    * prompt typed now is held, and Send now stops that turn.
@@ -47,16 +49,19 @@ export interface SessionPort extends TaskControlPort {
  * stops the turn in flight. It keeps nothing of its own: the hold lives in the
  * conversation it was written against, so a surface may build one per message.
  * A slash command is the surface's to run before it gets here. The plan's
- * system commands go through it too, so a surface keeps only its transport.
+ * system commands go through it too, and so does Merge all with the questions
+ * it asks, so a surface keeps only its transport.
  */
 export class ChatSessionHost {
   private readonly controls: TaskControls;
+  private readonly merging: MergeAll;
 
   constructor(
     private readonly conversation: ConversationViewHost,
     private readonly port: SessionPort,
   ) {
     this.controls = new TaskControls(port);
+    this.merging = new MergeAll(port);
   }
 
   /**
@@ -115,6 +120,24 @@ export class ChatSessionHost {
    */
   systemCommand(command: string, taskId: string, requestId?: number): Promise<void> {
     return this.controls.systemCommand(command, taskId, requestId);
+  }
+
+  /**
+   * Merge all from the plan card or the handoff, confirmed first and asked about
+   * whatever the seam holds the merge for (ADR-0020, ADR-0055 D9). Resolves
+   * whether it merged; false is a person's no, which leaves the run untouched.
+   * A refusal is thrown, and the surface says it.
+   */
+  mergeAll(): Promise<boolean> {
+    return this.merging.run();
+  }
+
+  /**
+   * Merge all for a surface that asked the opening question itself, in a dialog
+   * of its own (the Changes view's preflight, ADR-0062 G8).
+   */
+  mergeConfirmed(): Promise<boolean> {
+    return this.merging.confirmed();
   }
 
   /**

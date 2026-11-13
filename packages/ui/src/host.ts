@@ -7,6 +7,7 @@
 export { ConversationViewHost, type SavedConversation } from './host/ConversationViewHost';
 export { RunViewHost } from './host/RunViewHost';
 export { ChatSessionHost, type ChatTurn, type SessionPort, type TurnOutcome } from './host/ChatSessionHost';
+export { MergeAll, type MergeAnswer, type MergeCall, type MergePort, type MergeYes } from './host/MergeAll';
 export { TaskActions, TaskControls, type TaskActionPort, type TaskControlPort } from './host/TaskControls';
 export { SessionView, type SessionCue, type SessionSnapshot } from './host/SessionView';
 export { ChildView } from './host/ChildView';
