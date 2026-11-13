@@ -38,6 +38,15 @@ function items(template: MenuItemConstructorOptions[]): MenuItemConstructorOptio
 }
 
 describe('menuTemplate', () => {
+  it('toggles the terminal from the View menu without taking Ctrl+` from the page', () => {
+    const command = vi.fn();
+    const view = template('darwin', false, [], { command }).find((item) => item.label === 'View');
+    const toggle = items(Array.isArray(view?.submenu) ? view.submenu : []).find((item) => item.label === 'Toggle Terminal');
+    expect(toggle?.accelerator).toBeUndefined();
+    toggle?.click?.({} as never, undefined, {} as never);
+    expect(command).toHaveBeenCalledWith('terminal.toggle');
+  });
+
   for (const platform of ['darwin', 'win32', 'linux'] as const) {
     for (const dev of [false, true]) {
       it(`binds none of the frame's chords on ${platform}${dev ? ' in development' : ''}`, () => {

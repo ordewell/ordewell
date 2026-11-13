@@ -220,7 +220,7 @@ export interface TerminalDelivery {
 export type Unsubscribe = () => void;
 
 /** The frame commands (renderer/frame/commands.ts) the application menu offers; the menu names no other. */
-export type MenuCommand = 'layout.reset';
+export type MenuCommand = 'layout.reset' | 'terminal.toggle';
 
 /**
  * What a project window has going that switching it to another folder would
