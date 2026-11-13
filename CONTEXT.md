@@ -3315,7 +3315,10 @@ probe; a subplanner's turn then also waits for a slot of the tree. It holds one
 turn lease from admission to the turn's end, however many times it takes the
 conversation. Every turn admitted beside it passes on that lease and meets the
 conversation's own refusal, so no waiter is stranded when a slot frees. A Stop, a
-newer goal, the plan scope ending or the caller's abort ends a wait at once.
+newer goal, the plan scope ending or the caller's abort ends a wait at once. The
+queue's turns (`PlanTurns`) are admitted without waiting: the queue is pumped
+again when the probe answers or a slot frees, and a Retry compaction at a full
+tree is refused, not queued.
 *Avoid:* "slot waiter", "room waiter"; "turn gate" for it — that is the
 surfaces' stop rule above.
 

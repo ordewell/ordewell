@@ -35,6 +35,17 @@ export interface TurnGateHost {
  */
 export type AdmissionKind = 'session' | 'goal';
 
+/**
+ * What {@link TurnGate.tryAdmit} found, without waiting for any of it: the
+ * turn is `admitted` with the lease in hand; the installed-planner probe has
+ * not `answered` yet; or the tree has no slot (`full`), `why` being the pool's
+ * refusal, whose Session hears {@link TurnGate.freed}.
+ */
+export type TryAdmission =
+  | { kind: 'admitted' }
+  | { kind: 'probing'; answered: Promise<void> }
+  | { kind: 'full'; why: string };
+
 /** A turn admitted and not yet open: settled once, by its admission or by why it must not open. */
 interface Waiter {
   /** It waits for a slot of the tree, not for the probe. */
@@ -71,9 +82,9 @@ export class TurnGate {
    * Admit a turn {@link PlanTurns} does not open — an opening, plan
    * generation, a compaction — and run `enter`, which takes the conversation.
    * The one judgment, in its order: wait for the probe; refuse a held
-   * session, then a planner that cannot plan; then, for a subplanner, wait
-   * for a slot, judging afresh if it had to, since a takeover or a spent
-   * budget may land in that wait. `enter` runs in the tick the turn is
+   * session, then a planner that cannot plan; then take the lease — a
+   * subplanner's, refused, waits for a slot, judging afresh if it had to,
+   * since a takeover or a spent budget may land in that wait. `enter` runs in the tick the turn is
    * admitted, at once when nothing was waited on: awaited first, the turn
    * would take the conversation a tick late, and a message sent alongside it
    * would no longer be refused as one sent during it.
@@ -87,7 +98,7 @@ export class TurnGate {
     try {
       const planner = this.plannerWait(kind, signal);
       if (planner) await planner;
-      const slot = this.host.placed() ? this.slotWait(signal) : null;
+      const slot = this.slotWait(signal);
       if (slot) {
         await slot;
         this.judge(kind);
@@ -99,13 +110,19 @@ export class TurnGate {
     }
   }
 
-  /** Take the lease if none is held; why the pool refused it otherwise. */
-  claim(): string | null {
-    if (this.lease) return null;
-    const reserved = this.host.reserve();
-    if ('refused' in reserved) return reserved.refused;
-    this.lease = reserved.lease;
-    return null;
+  /**
+   * Admit the turn {@link PlanTurns} opens next, as {@link admit} judges a
+   * `session` turn but without waiting: the queue's pump is called again when
+   * the probe answers (`probing`) or the pool frees a slot ({@link freed}), so
+   * a wait of its own would only stand beside those. The judgment throws, as
+   * `admit`'s does. Admitted, the lease is held until {@link settled}, which
+   * the queue's turn gives on its end.
+   */
+  tryAdmit(): TryAdmission {
+    if (!this.host.plannerAnswered()) return { kind: 'probing', answered: this.detected() };
+    this.judge('session');
+    const refused = this.claim();
+    return refused === null ? { kind: 'admitted' } : { kind: 'full', why: refused };
   }
 
   /**
@@ -188,14 +205,18 @@ export class TurnGate {
     return this.detection !== null;
   }
 
-  /** What the queue's turns wait on before they are judged: the probe, or null once it answered. */
-  probe(): Promise<void> | null {
-    return this.host.plannerAnswered() ? null : this.detected();
-  }
-
   /** Whether a lease is held. */
   get holding(): boolean {
     return this.lease !== null;
+  }
+
+  /** Take the lease if none is held; why the pool refused it otherwise. */
+  private claim(): string | null {
+    if (this.lease) return null;
+    const reserved = this.host.reserve();
+    if ('refused' in reserved) return reserved.refused;
+    this.lease = reserved.lease;
+    return null;
   }
 
   private judge(kind: AdmissionKind): void {
@@ -223,9 +244,15 @@ export class TurnGate {
     });
   }
 
-  /** Null with a slot in hand. */
+  /**
+   * Null with the lease in hand, which every Session takes: a root's turn
+   * holds one with no slot behind it (ADR-0059 L1). Only a subplanner waits
+   * for the slot a refusal kept it for; a root's refusal ends the turn.
+   */
   private slotWait(signal: AbortSignal | undefined): Promise<void> | null {
-    if (this.claim() === null) return null;
+    const refused = this.claim();
+    if (refused === null) return null;
+    if (!this.host.placed()) throw new Error(refused);
     return this.wait(signal, true, () => undefined);
   }
 

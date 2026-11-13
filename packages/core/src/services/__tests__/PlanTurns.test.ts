@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
 import { PlanTurns, turnPrompt, type PlanTurnsHost, type TurnPrompt } from '../PlanTurns';
 import { ConversationBusyError, PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
+import type { TryAdmission } from '../TurnGate';
 import { flushMicrotasks } from '../../testing';
 
 function plan(): LegacyPlanState {
@@ -49,8 +50,8 @@ function fakeHost(current: { plan: LegacyPlanState | null } = { plan: plan() }) 
       });
     })),
     notice: vi.fn(),
-    plannerDetecting: vi.fn((): Promise<void> | null => null),
-    assertPlannerReady: vi.fn(),
+    tryAdmit: vi.fn((): TryAdmission => ({ kind: 'admitted' })),
+    turnSettled: vi.fn(),
     plannerRunner: vi.fn((): string | null => 'claude-code'),
     stoppedByUser: vi.fn((_tasks: readonly string[] | undefined) => false),
   } satisfies PlanTurnsHost;
@@ -481,14 +482,14 @@ describe('the planner gate', () => {
     const { host, turns } = fakeHost();
     let found!: () => void;
     const detecting = new Promise<void>((resolve) => { found = resolve; });
-    host.plannerDetecting.mockReturnValue(detecting);
+    host.tryAdmit.mockReturnValue({ kind: 'probing', answered: detecting });
     const runner = new PlanTurns(host);
 
     void runner.enqueue(wakeUp);
     await flushMicrotasks();
     expect(turns).toHaveLength(0);
 
-    host.plannerDetecting.mockReturnValue(null);
+    host.tryAdmit.mockReturnValue({ kind: 'admitted' });
     found();
     await flushMicrotasks();
     expect(turns).toHaveLength(1);
@@ -498,14 +499,14 @@ describe('the planner gate', () => {
   it('opens no turn on a planner that cannot plan, and keeps the wake-ups for one that can', async () => {
     const { host, turns, current } = fakeHost();
     const refusal = new Error('No planner is ready. Pick one with /planner');
-    host.assertPlannerReady.mockImplementation(() => { throw refusal; });
+    host.tryAdmit.mockImplementation(() => { throw refusal; });
     const runner = new PlanTurns(host);
 
     await expect(runner.enqueue(wakeUp)).rejects.toBe(refusal);
     expect(turns).toHaveLength(0);
     expect(current.plan!.pendingTurns!.map((t) => t.text)).toEqual([wakeUp.text]);
 
-    host.assertPlannerReady.mockImplementation(() => {});
+    host.tryAdmit.mockReturnValue({ kind: 'admitted' });
     void runner.enqueue({ source: 'user', text: 'and go on' });
     await flushMicrotasks();
     expect(turns[0].prompt).toMatchObject({ source: 'user', text: 'and go on', wakeUps: [wakeUp.text] });
@@ -518,7 +519,7 @@ describe('the planner gate', () => {
     await flushMicrotasks();
     const second = runner.enqueue({ source: 'user', text: 'two' });
     const refusal = new Error('No planner is ready. Pick one with /planner');
-    host.assertPlannerReady.mockImplementation(() => { throw refusal; });
+    host.tryAdmit.mockImplementation(() => { throw refusal; });
 
     const forced = runner.forceSend({ source: 'user', text: 'now' });
     turns[0].fail(new PlannerTurnStoppedError());
@@ -530,7 +531,7 @@ describe('the planner gate', () => {
   it('a Stop while a wake-up waits for the planner ends it as a stopped turn\'s: dropped, its caller told, and never opened', async () => {
     const { host, turns, current } = fakeHost();
     let found!: () => void;
-    host.plannerDetecting.mockReturnValue(new Promise<void>((resolve) => { found = resolve; }));
+    host.tryAdmit.mockReturnValue({ kind: 'probing', answered: new Promise<void>((resolve) => { found = resolve; }) });
     const runner = new PlanTurns(host);
 
     const delivered = runner.enqueue(wakeUp);
@@ -539,7 +540,7 @@ describe('the planner gate', () => {
     await expect(delivered).rejects.toBeInstanceOf(PlannerTurnStoppedError);
     expect(current.plan!.pendingTurns).toEqual([]);
 
-    host.plannerDetecting.mockReturnValue(null);
+    host.tryAdmit.mockReturnValue({ kind: 'admitted' });
     found();
     await flushMicrotasks();
     expect(turns).toHaveLength(0);
@@ -680,5 +681,88 @@ describe('a context pause after a planner tool committed in the turn', () => {
     await retried;
     expect(current.plan!.plannerContextPause).toBeUndefined();
     expect(current.plan!.pendingTurns ?? []).toEqual([]);
+  });
+});
+
+describe('the slot of the tree', () => {
+  const full: TryAdmission = { kind: 'full', why: 'Parallel 1 is already running a task.' };
+
+  it('holds a turn while the tree is full and opens it when the pool pumps with room', async () => {
+    const { host, turns } = fakeHost();
+    host.tryAdmit.mockReturnValue(full);
+    const runner = new PlanTurns(host);
+
+    void runner.enqueue({ source: 'user', text: 'one' });
+    await flushMicrotasks();
+    expect(turns).toHaveLength(0);
+    expect(host.holdStarts).not.toHaveBeenCalled();
+
+    host.tryAdmit.mockReturnValue({ kind: 'admitted' });
+    runner.pump();
+    expect(turns).toHaveLength(1);
+  });
+
+  it('stands a turn waiting for a slot where one waiting for the planner stands: a Stop ends it', async () => {
+    const { host, turns, current } = fakeHost();
+    host.tryAdmit.mockReturnValue(full);
+    const runner = new PlanTurns(host);
+
+    const waiting = runner.enqueue({ source: 'supervisor', text: 'a wake-up' });
+    await flushMicrotasks();
+    expect(runner.stopQueued()).toBe(true);
+    await expect(waiting).rejects.toBeInstanceOf(PlannerTurnStoppedError);
+    expect(current.plan!.pendingTurns).toEqual([]);
+
+    host.tryAdmit.mockReturnValue({ kind: 'admitted' });
+    runner.pump();
+    expect(turns).toHaveLength(0);
+  });
+
+  describe('a Retry compaction', () => {
+    function paused(inputs: string[]) {
+      const at = '2026-10-11T00:00:00Z';
+      const current = { plan: { ...plan(), plannerContextPause: { model: 'm', at, reason: 'full', inputs }, pendingTurns: [{ id: 'i1', source: 'user' as const, text: 'held', timestamp: at }] } as LegacyPlanState | null };
+      return fakeHost(current);
+    }
+
+    it('is refused at a full tree rather than queued for a slot, its pause kept', async () => {
+      const { host, turns, current } = paused(['i1']);
+      host.tryAdmit.mockReturnValue({ kind: 'full', why: 'Parallel 1 is already running a task.' });
+      const runner = new PlanTurns(host);
+
+      await expect(runner.retryCompaction()).rejects.toThrow('Parallel 1 is already running a task.');
+
+      expect(turns).toHaveLength(0);
+      expect(current.plan!.plannerContextPause).toBeDefined();
+    });
+
+    it('judges afresh once the planner is found', async () => {
+      const { host, turns } = paused(['i1']);
+      let found!: () => void;
+      host.tryAdmit.mockReturnValueOnce({ kind: 'probing', answered: new Promise<void>((resolve) => { found = resolve; }) });
+      const runner = new PlanTurns(host);
+
+      const retried = runner.retryCompaction();
+      await flushMicrotasks();
+      expect(turns).toHaveLength(0);
+      expect(host.tryAdmit).toHaveBeenCalledTimes(1);
+
+      found();
+      await flushMicrotasks();
+      expect(host.tryAdmit).toHaveBeenCalledTimes(2);
+      expect(turns).toHaveLength(1);
+      turns[0].land();
+      await retried;
+    });
+
+    it('gives the lease it took back when the inputs its pause kept no longer wait', async () => {
+      const { host, turns } = paused(['gone']);
+      const runner = new PlanTurns(host);
+
+      await expect(runner.retryCompaction()).rejects.toThrow(/no longer waits/);
+
+      expect(turns).toHaveLength(0);
+      expect(host.turnSettled).toHaveBeenCalledTimes(1);
+    });
   });
 });

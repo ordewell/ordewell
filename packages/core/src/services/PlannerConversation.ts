@@ -374,7 +374,7 @@ export interface PlannerConversationHost {
   capturePrd(text: string): void;
   /** The planner turn was stopped or abandoned: whatever it is waiting on (a parked approval) will never be answered. */
   turnAborted(): void;
-  /** A planner turn is about to take the conversation, which nothing holds now. Throws why it may not. */
+  /** A planner turn is about to take the conversation, which nothing holds now. */
   turnClaiming?(): void;
   /** A planner turn let the conversation go, so the next one may take it. */
   turnReleased?(): void;
