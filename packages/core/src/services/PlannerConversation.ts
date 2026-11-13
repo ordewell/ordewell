@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ConversationRequest, ConversationTurn, IAiService, TurnRun } from './AiService';
-import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt } from './PlanRepair';
+import { reEmitPlanPrompt, repairLoop, resubmitEditPrompt, resubmitPlanPrompt, taskOpsRejectedPrompt, type RepairVerdict } from './PlanRepair';
 import { renderTaskQueryAnswer, taskQuerySignature, TASK_QUERY_ANSWER_OR_OPS, TASK_QUERY_REMINDER, TASK_READ_TOOLS_REMINDER, type LiveOutputLookup, type TaskQuery, type TaskQueryCatalog } from './TaskQuery';
 import { taskOpsProtocol, type TaskOp } from './TaskOps';
 import { readOnlyMode, readOnlyRunners } from './ModeResolver';
@@ -14,7 +14,7 @@ import { flattenTasksWithParents, isUserMessage } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
-import { planChangeErrorText, type PassedChange, type PlanChangeCheck, type PlanChangeError } from './PlanChangeCheck';
+import { planChangeErrorText, type CheckedChange, type PassedChange, type PlanChangeCheck, type PlanChangeError } from './PlanChangeCheck';
 import { PLANNER_TURN_ENDED } from './plannerTools';
 import { classifyRunnerStop, type TurnFailure } from './runnerExit';
 import type { PlannerLimit } from './PlannerResend';
@@ -348,6 +348,11 @@ export interface PlannerConversationHost {
    */
   liveOutput: LiveOutputLookup;
   isExecuting(): boolean;
+  /**
+   * Why this node's plan takes no change at all, whatever the turn: a child
+   * whose report is taken (ADR-0055 D7). Null, or absent, when it may.
+   */
+  changeRefusal?(): string | null;
   /** The session's single mutation ritual: op → persist → notify (default: the plan). */
   mutate(op: () => boolean, notify?: () => void): LegacyPlanState | null;
   broadcast: SessionBroadcaster;
@@ -595,6 +600,15 @@ export interface ReplyOptions {
 const WHOLE_PLAN_WHILE_RUNNING =
   'Tasks are running, so a whole new plan cannot replace this one now. Change the tasks that have not started with task edits instead, or ask the user to stop the run first.';
 
+/** A reply's change as its land tick left it: landed, refused there by the turn's change rule, or failed its check. */
+type ReplyLanding = { plan: LegacyPlanState } | { refused: string } | { errors: string[] };
+
+function landedOrErrors(landed: { plan?: LegacyPlanState; refused?: string }, checked: CheckedChange): ReplyLanding {
+  if (landed.plan) return { plan: landed.plan };
+  if (landed.refused) return { refused: landed.refused };
+  return { errors: checked.ok ? [] : checked.errors.map(planChangeErrorText) };
+}
+
 /**
  * The planner conversation (ADR-0002), end to end: the persisted dialogue
  * record, the live model context behind it, and every turn from the user's
@@ -826,7 +840,7 @@ export class PlannerConversation {
     const ended: ToolCommit = { ok: false, errors: [{ field: 'tasks', message: PLANNER_TURN_ENDED }] };
     const turn = this.toolTurn(turnId);
     if (!turn) return ended;
-    const refused = this.toolRefusal(turn, change.kind);
+    const refused = this.changeRefusal(turn, change.kind);
     if (refused) return { ok: false, errors: [{ field: 'tasks', message: refused }] };
     let landedIn: UserTurn | undefined;
     let refusedAt: string | undefined;
@@ -834,7 +848,7 @@ export class PlannerConversation {
     const checked = await this.host.planChanges.check(change.kind === 'plan' ? { kind: 'plan', tasks: change.tasks } : { kind: 'ops', ops: change.ops }, 'land', (passed) => {
       // The skill check waits on git, which a stop, rewind or session switch may outlast.
       if (this.toolTurn(turnId) !== turn) return;
-      refusedAt = this.toolRefusal(turn, change.kind);
+      refusedAt = this.changeRefusal(turn, change.kind);
       if (refusedAt) return;
       landedIn = turn;
       before = this.host.tasks();
@@ -889,8 +903,15 @@ export class PlannerConversation {
     return turn;
   }
 
-  /** Why the turn may not make this change now: its wake-up level, or a whole plan while tasks run. Asked at the call and again as it commits. */
-  private toolRefusal(turn: UserTurn, kind: PlannerSubmission['kind']): string | undefined {
+  /**
+   * Why the turn may not make this change now: its node has reported, its
+   * wake-up level forbids it, or it is a whole plan while tasks run. The one
+   * rule for a tool call and a reply's envelope alike, asked as the change is
+   * made and again in the tick it would land in.
+   */
+  private changeRefusal(turn: UserTurn, kind: PlannerSubmission['kind']): string | undefined {
+    const node = this.host.changeRefusal?.();
+    if (node) return node;
     const level = turn.wakeUp?.refused(kind === 'plan' ? 'plan' : 'edit');
     if (level) return level;
     return kind === 'plan' && this.host.isExecuting() ? WHOLE_PLAN_WHILE_RUNNING : undefined;
@@ -1744,6 +1765,14 @@ export class PlannerConversation {
     const invalidPlan = (errors: string[], t: SettleableTurn): Settled =>
       refusal(`I tried to commit a plan, but it was invalid:\n- ${errors.join('\n- ')}\n\nThe plan is unchanged. Rephrase the request, or adjust the tasks manually.`, t);
 
+    // A refused change has nothing in it to fix: the planner is told why, and a whole plan while tasks run is pointed at an edit instead.
+    const refusedChange = (refused: string, t: Extract<SettleableTurn, { kind: 'plan' | 'task_ops' }>): RepairVerdict<Settled> => {
+      const errors = [refused];
+      if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t) };
+      const corrective = refused === WHOLE_PLAN_WHILE_RUNNING ? (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) : refused;
+      return { retry: { errors, corrective } };
+    };
+
     let discarding = turn;
     const settled = await repairLoop<SettleableTurn, Settled>({
       first: async () => turn,
@@ -1760,29 +1789,22 @@ export class PlannerConversation {
       interpret: async (reply) => {
         const t = this.besideCommitted(reply, userTurn);
         discarding = t;
-        const refused = t.kind === 'plan' || t.kind === 'task_ops' ? userTurn.wakeUp?.refused(t.kind === 'plan' ? 'plan' : 'edit') : undefined;
-        if (refused) {
-          const errors = [refused];
-          if (!ai.hasActiveConversation() || signal.aborted) return { done: (t.kind === 'plan' ? invalidPlan : invalidOps)(errors, t) };
-          return { retry: { errors, corrective: refused } };
-        }
-        if (t.kind === 'plan' && this.host.isExecuting()) {
-          const errors = [WHOLE_PLAN_WHILE_RUNNING];
-          if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
-          return { retry: { errors, corrective: (tools ? resubmitEditPrompt : taskOpsRejectedPrompt)(errors) } };
-        }
+        if (t.kind !== 'plan' && t.kind !== 'task_ops') return { done: { turn: t } };
+        const refused = this.changeRefusal(userTurn, t.kind);
+        if (refused) return refusedChange(refused, t);
         if (t.kind === 'plan') {
           this.assertCurrent(userTurn);
           const landed = await this.commitPlan(t, userTurn);
           if ('plan' in landed) return { done: { plan: landed.plan, outcome: 'plan' } };
+          if ('refused' in landed) return refusedChange(landed.refused, t);
           const { errors } = landed;
           if (!ai.hasActiveConversation() || signal.aborted) return { done: invalidPlan(errors, t) };
           return { retry: { errors, corrective: tools ? resubmitPlanPrompt(errors) : reEmitPlanPrompt(errors.join('; ')) } };
         }
-        if (t.kind !== 'task_ops') return { done: { turn: t } };
         this.assertCurrent(userTurn);
         const applied = await this.applyTaskOps(t, userTurn);
         if ('plan' in applied) return { done: { plan: applied.plan, outcome: 'task_ops' } };
+        if ('refused' in applied) return refusedChange(applied.refused, t);
         // No live conversation (or an abort) means no corrective re-send is
         // possible — surface the failure instead of retrying into the void.
         if (!ai.hasActiveConversation() || signal.aborted) {
@@ -1820,17 +1842,17 @@ export class PlannerConversation {
    * lands in the tick the check's rules ran in. Returns the errors on
    * rejection (plan untouched).
    */
-  private async applyTaskOps(turn: Extract<SettleableTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
+  private async applyTaskOps(turn: Extract<SettleableTurn, { kind: 'task_ops' }>, userTurn: UserTurn): Promise<ReplyLanding> {
     this.requirePlan();
-    const landed: { plan?: LegacyPlanState } = {};
+    const landed: { plan?: LegacyPlanState; refused?: string } = {};
     const checked = await this.host.planChanges.check({ kind: 'ops', ops: turn.ops }, 'land', (passed) => {
       // The skill check waits on git, which a stop, rewind or session switch may outlast.
       this.assertStillCurrent(userTurn);
-      landed.plan = this.landChange(userTurn, 'task_ops', passed, turn);
+      landed.refused = this.changeRefusal(userTurn, 'task_ops');
+      if (!landed.refused) landed.plan = this.landChange(userTurn, 'task_ops', passed, turn);
     });
     this.assertStillCurrent(userTurn);
-    if (landed.plan) return { plan: landed.plan };
-    return { errors: checked.ok ? [] : checked.errors.map(planChangeErrorText) };
+    return landedOrErrors(landed, checked);
   }
 
   /**
@@ -1838,15 +1860,15 @@ export class PlannerConversation {
    * is: it waited out the rest of its reply, so the runners it was accepted
    * against may be gone (ADR-0003 V1). Returns the errors on rejection.
    */
-  private async commitPlan(turn: Extract<SettleableTurn, { kind: 'plan' }>, userTurn: UserTurn): Promise<{ plan: LegacyPlanState } | { errors: string[] }> {
-    const landed: { plan?: LegacyPlanState } = {};
+  private async commitPlan(turn: Extract<SettleableTurn, { kind: 'plan' }>, userTurn: UserTurn): Promise<ReplyLanding> {
+    const landed: { plan?: LegacyPlanState; refused?: string } = {};
     const checked = await this.host.planChanges.check({ kind: 'plan', tasks: turn.tasks }, 'land', (passed) => {
       this.assertStillCurrent(userTurn);
-      landed.plan = this.landChange(userTurn, 'plan', passed, turn);
+      landed.refused = this.changeRefusal(userTurn, 'plan');
+      if (!landed.refused) landed.plan = this.landChange(userTurn, 'plan', passed, turn);
     });
     this.assertStillCurrent(userTurn);
-    if (landed.plan) return { plan: landed.plan };
-    return { errors: checked.ok ? [] : checked.errors.map(planChangeErrorText) };
+    return landedOrErrors(landed, checked);
   }
 
   /**

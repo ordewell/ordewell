@@ -313,9 +313,14 @@ export abstract class NodePosition {
     return this.link?.reported() === true;
   }
 
+  /** Why its plan takes no more changes, from any turn: the report describes it as it is (ADR-0055 D7). */
+  changeRefusal(): string | null {
+    return this.reported ? NODE_REPORTED : null;
+  }
+
   /** {@link nodeRefusal}, and a report: a turn can still read a person's message, but no task may start from it. */
   startRefusal(): string | null {
-    return this.nodeRefusal() ?? (this.reported ? NODE_REPORTED : null);
+    return this.nodeRefusal() ?? this.changeRefusal();
   }
 
   /**

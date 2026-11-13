@@ -21,7 +21,7 @@ function host(execute: (command: ExecutionCommand) => Promise<CommandOutcome>, t
     submitPlan: unused, editPlan: unused, tasks: () => [], read: unused, liveOutput: () => null, lastAttempt: () => null,
     taskLogAttempts: () => [], taskLog: () => [], taskDiff: unused,
     runCommand: unused, fetchUrl: unused, webSearch: unused,
-    execute, editsRefused: () => undefined,
+    execute,
   };
 }
 

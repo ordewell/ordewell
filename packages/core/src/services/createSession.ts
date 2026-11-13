@@ -10,7 +10,7 @@ import { PlanChangeCheck, type PlanChangeScope } from './PlanChangeCheck';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
-import { plannerToolHandler, runnersOf, NODE_REPORTED, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
+import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
 import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
@@ -812,7 +812,6 @@ export class Session {
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
     execute: (command, signal) => this.commands.run(command, this.turnActor(), signal),
-    editsRefused: (change) => this.conversation.currentWakeUp?.refused(change),
   });
 
   constructor(parts: SessionParts) {
@@ -898,6 +897,7 @@ export class Session {
       startWaits: (task) => (this.record.planApproved || task.research ? this.orchestrator.startWaits(task) : []),
       liveOutput: (taskId, opts) => this.orchestrator.getLiveOutput(taskId, opts),
       isExecuting: () => this.isExecuting,
+      changeRefusal: () => this.position.changeRefusal(),
       mutate: (op, notify) => this.mutatePlan(op, notify),
       broadcast: (msg) => this.broadcast(msg),
       broadcastPlan: (turnId) => this.announcePlan(turnId),
@@ -2427,7 +2427,6 @@ export class Session {
    */
   private async submitPlanFromTool(tasks: Task[], turn: string | undefined): Promise<PlanEditOutcome> {
     if (!this.plan) return { ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] };
-    if (this.reported) return { ok: false, errors: [{ field: 'tasks', message: NODE_REPORTED }] };
     const committed = await this.conversation.commitFromTool({ kind: 'plan', tasks }, turn);
     if (!committed.ok) return committed;
     const { adjustments, warnings } = committed.passed;
@@ -2446,7 +2445,6 @@ export class Session {
     const refuse = (message: string): PlanEditOutcome => ({ ok: false, errors: [{ message }] });
     await this.liveCatalog();
     if (this.conversation.currentTurnId !== turn) return refuse(PLANNER_TURN_ENDED);
-    if (this.reported) return refuse(NODE_REPORTED);
     if (!this.plan || this.store.planTasks.length === 0) return refuse('There is no plan to edit yet: submit one with submit_plan.');
     const committed = await this.conversation.commitFromTool({ kind: 'task_ops', ops }, turn);
     if (!committed.ok) return committed;

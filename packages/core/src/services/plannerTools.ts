@@ -10,7 +10,7 @@ import {
 } from './TaskQuery';
 import type { TaskOp } from './TaskOps';
 import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
-import type { PlanChange, RecordAnswer, ToolRead } from './PlannerConversation';
+import type { RecordAnswer, ToolRead } from './PlannerConversation';
 import type { DecisionRecordInput } from './decisionRecord';
 import { commandReply, type McpToolReply, type PlannerToolHandler, type PostArgs, type ReadTaskArgs } from './mcp/tools';
 import { isBoardRef } from '../models/Board';
@@ -75,8 +75,6 @@ export interface PlannerToolsHost {
    * call's own cancellation, or its turn ending.
    */
   execute(command: ExecutionCommand, signal?: AbortSignal): Promise<CommandOutcome>;
-  /** Why the open turn may not make this change — a wake-up turn under Watch, say (ADR-0029); undefined when it may. */
-  editsRefused(change: PlanChange): string | undefined;
 }
 
 /**
@@ -204,8 +202,6 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async submitPlan({ tasks }) {
-      const refused = host.editsRefused('plan');
-      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: refused }] }) };
       const turn = host.turnId();
       if (turn === undefined) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ field: 'tasks', message: 'No planning turn is open to take the plan.' }] }) };
       const checked = await host.checkPlan(tasks);
@@ -343,8 +339,6 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
-      const refused = host.editsRefused('edit');
-      if (refused) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: refused }] }) };
       const turn = host.turnId();
       if (turn === undefined) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: 'No planning turn is open to take the edit.' }] }) };
       const outcome = await host.editPlan(taskOps, turn);
