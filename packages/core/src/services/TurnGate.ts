@@ -12,7 +12,9 @@ export interface TurnGateHost {
   plannerDetected(): Promise<void>;
   /** A turn now waits on the probe, or no longer does: the surfaces are told. */
   detecting(waiting: boolean): void;
-  /** Throws why no turn may open now, judged once the probe has answered (ADR-0049 L5). */
+  /** Throws while another host holds the session this Session has open (ADR-0049 L5). */
+  refuseHeld(): void;
+  /** Throws why the planner cannot plan now, judged once the probe has answered (ADR-0009). */
   assertReady(): void;
   /** A turn {@link PlanTurns} opened is under way: its end, not the conversation's, gives the lease back. */
   queuedTurnRunning(): boolean;
@@ -23,6 +25,15 @@ export interface TurnGateHost {
   /** No opening waited for the slot the pool offered: the queue's next turn may take it. */
   pump(): void;
 }
+
+/**
+ * What a turn is judged as. A `session` turn — a reply, a compaction — works
+ * on the session this Session has open, so another host's hold refuses it. A
+ * `goal` is judged by the session it writes (ADR-0049 L5): under a minted id
+ * that is a new one, so a Session that lost its lease may still plan, and
+ * under a host's fixed id the caller claims that session itself once admitted.
+ */
+export type AdmissionKind = 'session' | 'goal';
 
 /** A turn admitted and not yet open: settled once, by its admission or by why it must not open. */
 interface Waiter {
@@ -57,15 +68,35 @@ export class TurnGate {
   constructor(private readonly host: TurnGateHost) {}
 
   /**
-   * The gate for a turn {@link PlanTurns} does not open: an opening, plan
-   * generation, a compaction. Null when it may open at once: awaited
-   * regardless, the turn would take the conversation a tick late, and a
-   * message sent alongside it would no longer be refused as one sent during it.
+   * Admit a turn {@link PlanTurns} does not open — an opening, plan
+   * generation, a compaction — and run `enter`, which takes the conversation.
+   * The one judgment, in its order: wait for the probe; refuse a held
+   * session, then a planner that cannot plan; then, for a subplanner, wait
+   * for a slot, judging afresh if it had to, since a takeover or a spent
+   * budget may land in that wait. `enter` runs in the tick the turn is
+   * admitted, at once when nothing was waited on: awaited first, the turn
+   * would take the conversation a tick late, and a message sent alongside it
+   * would no longer be refused as one sent during it.
+   *
+   * What `enter` returns is awaited. A refusal, an end of the wait, or a
+   * failure of `enter` gives the slot back unless a turn holds the
+   * conversation by then, whose own end does; a caller that must not wait on
+   * the turn it opened returns it wrapped.
    */
-  admit(signal?: AbortSignal): Promise<void> | null {
-    const planner = this.plannerWait(signal);
-    if (!this.host.placed()) return planner;
-    return planner ? planner.then(() => this.slotWait(signal) ?? undefined) : this.slotWait(signal);
+  async admit<T>(kind: AdmissionKind, signal: AbortSignal | undefined, enter: () => T | Promise<T>): Promise<T> {
+    try {
+      const planner = this.plannerWait(kind, signal);
+      if (planner) await planner;
+      const slot = this.host.placed() ? this.slotWait(signal) : null;
+      if (slot) {
+        await slot;
+        this.judge(kind);
+      }
+      return await enter();
+    } catch (err) {
+      this.dropped();
+      throw err;
+    }
   }
 
   /** Take the lease if none is held; why the pool refused it otherwise. */
@@ -167,9 +198,14 @@ export class TurnGate {
     return this.lease !== null;
   }
 
-  private plannerWait(signal: AbortSignal | undefined): Promise<void> | null {
+  private judge(kind: AdmissionKind): void {
+    if (kind === 'session') this.host.refuseHeld();
+    this.host.assertReady();
+  }
+
+  private plannerWait(kind: AdmissionKind, signal: AbortSignal | undefined): Promise<void> | null {
     if (this.host.plannerAnswered()) {
-      this.host.assertReady();
+      this.judge(kind);
       return null;
     }
     return this.wait(signal, false, (waiter) => {
@@ -178,7 +214,7 @@ export class TurnGate {
         if (!this.waiters.has(waiter)) return;
         let outcome: { err: unknown } | null = null;
         try {
-          this.host.assertReady();
+          this.judge(kind);
         } catch (err) {
           outcome = { err };
         }
