@@ -214,11 +214,15 @@ export class PlanTurns {
    * until the user's Retry compaction or Stop. Saved with the failure the turn
    * records. When a planner tool's change in the turn (`committed`) already
    * took its inputs, they are put back, since a Retry compaction can only
-   * reopen the turn on inputs that still wait.
+   * reopen the turn on inputs that still wait, and the pause is `landed`:
+   * they are in the transcript already, so neither the retry nor a Stop's
+   * next turn sends or writes them again. A retry of a landed pause that
+   * pauses again is still on those inputs.
    */
   contextPaused(details: Pick<PlannerContextPause, 'model' | 'reason' | 'done' | 'doneTruncated'>, committed = false): PlannerContextPause {
-    const pause: PlannerContextPause = { ...details, at: new Date().toISOString(), inputs: [...(this.running?.ids ?? [])] };
     const plan = this.host.plan();
+    const landed = committed || (this.running?.recovery === true && plan?.plannerContextPause?.landed === true);
+    const pause: PlannerContextPause = { ...details, at: new Date().toISOString(), inputs: [...(this.running?.ids ?? [])], ...(landed ? { landed: true } : {}) };
     if (plan && committed && this.running) {
       const waiting = new Set((plan.pendingTurns ?? []).map((t) => t.id));
       plan.pendingTurns = [...this.running.batch.filter((t) => !waiting.has(t.id)), ...(plan.pendingTurns ?? [])];
@@ -325,7 +329,10 @@ export class PlanTurns {
    * rejection reaches them, and a Stop or a discard would pass in silence.
    */
   heldWithoutCaller(): readonly PendingPlanTurn[] {
-    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
+    // A landed pause's inputs are in the transcript: dropping them loses nothing.
+    const pause = this.host.plan()?.plannerContextPause;
+    const landed = new Set(pause?.landed ? pause.inputs : []);
+    return (this.host.plan()?.pendingTurns ?? []).filter((t) => t.source === 'user' && !landed.has(t.id) && !this.waiters.has(t.id) && !this.running?.ids.has(t.id));
   }
 
   /** Whether a turn this module opened is in flight. */
@@ -517,10 +524,12 @@ export class PlanTurns {
    * The user's Stop of a planner paused on its context: the paused turn ends
    * as a stopped one would — the user's inputs waiting dropped, each caller
    * told — and the pause goes with it. Wake-ups stay undelivered, as behind
-   * any stopped turn, for the next input to carry.
+   * any stopped turn, for the next input to carry, but for those a planner
+   * tool's change already landed: the planner was told them.
    */
   private dropPause(plan: LegacyPlanState): boolean {
-    const stopped = (plan.pendingTurns ?? []).filter((t) => t.source === 'user');
+    const landed = new Set(plan.plannerContextPause?.landed ? plan.plannerContextPause.inputs : []);
+    const stopped = (plan.pendingTurns ?? []).filter((t) => t.source === 'user' || landed.has(t.id));
     if (stopped.length < (plan.pendingTurns ?? []).length) this.quiet = true;
     this.take(plan, new Set(stopped.map((t) => t.id)));
     delete plan.plannerContextPause;
@@ -623,10 +632,11 @@ export class PlanTurns {
       // A turn that landed nothing still had its say; the user's inputs go
       // with it. A failure, or a force send, leaves the wake-ups undelivered,
       // and a usage limit or a pause on the planner's context leaves
-      // everything, to be sent again.
+      // everything, to be sent again. A retry's landed inputs were delivered
+      // with the change that landed them, so no force send keeps one.
       const dropped = kept
         ? new Set<string>()
-        : outcome.ok || (isInterruption(outcome.err) && !forceStopped)
+        : outcome.ok || (isInterruption(outcome.err) && !forceStopped) || opts.recovery?.landed
           ? ids
           : new Set(batch.filter((t) => t.source === 'user').map((t) => t.id));
       const took = this.take(plan, dropped);

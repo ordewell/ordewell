@@ -1272,7 +1272,8 @@ export class PlannerConversation {
     // that lands the outcome.
     const entries: ConversationMessage[] = wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' }));
     if (fromUser) entries.push(...this.userEntries(message, now, userTurn.forced));
-    this.holdWrites(userTurn, entries, fromUser ? [this.userPrompt(message.text, now)] : []);
+    // A retry of a pause whose turn committed a change answers inputs that change landed already.
+    if (!userTurn.recovery?.pause.landed) this.holdWrites(userTurn, entries, fromUser ? [this.userPrompt(message.text, now)] : []);
 
     const turn = userTurn.recovery?.live
       // The held input already carries what the paused turn was told: nothing is sent anew.
