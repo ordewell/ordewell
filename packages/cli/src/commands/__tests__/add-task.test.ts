@@ -84,6 +84,25 @@ describe('add-task --type', () => {
     expect(errors.join('\n')).toContain('--type');
   });
 
+  it.each([
+    ['last', ['--title', 'Sign the release', '--session-id', 's1', '--type']],
+    ['before another option', ['--title', 'Sign the release', '--type', '--session-id', 's1']],
+  ])('refuses a --type with no value (%s), as `--type $TYPE` with TYPE empty and unquoted leaves it', async (_where, args) => {
+    const api = client([]);
+    const exit = captureExit();
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a.join(' ')); });
+    try {
+      await expect(handleAddTask(args, api)).rejects.toThrow('exit:1');
+    } finally {
+      exit.restore();
+      vi.restoreAllMocks();
+    }
+
+    expect(api.addTask).not.toHaveBeenCalled();
+    expect(errors.join('\n')).toContain('--type');
+  });
+
   it.each([['user', 'user'], ['ai', 'ai']])('accepts %s', async (given, sent) => {
     const api = client([]);
 

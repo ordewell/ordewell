@@ -26,8 +26,14 @@ export async function handleWeb(subArgs: string[]): Promise<void> {
 
     // The child shares this process's group but a signal sent to this pid
     // alone would otherwise kill the wrapper and leave the server on its port.
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-      process.on(signal, () => { child.kill(signal); });
+    // Not on Windows: libuv turns kill(SIGINT|SIGTERM) into TerminateProcess,
+    // which would end the server before its own handler ran shutdown() (and
+    // removed the daemon token file), and refuses SIGHUP with ENOSYS. There the
+    // child receives the console event itself.
+    if (process.platform !== 'win32') {
+      for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+        process.on(signal, () => { child.kill(signal); });
+      }
     }
 
     child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
