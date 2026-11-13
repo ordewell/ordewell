@@ -14,6 +14,12 @@ export interface ToolOutcome {
    * the run (ADR-0036 S1).
    */
   signal?: NodeJS.Signals;
+  /**
+   * The envelope decided this call and nothing ran: refused by its rules or
+   * denied by the user. A caller that counts reads (ADR-0068) gives the call
+   * back, which a command that ran and failed must not get.
+   */
+  refused?: true;
 }
 
 export interface ReadFileOpts {

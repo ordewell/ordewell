@@ -329,4 +329,34 @@ describe('tool rounds — the planner read limit (ADR-0068)', () => {
 
     expect(chat.toolResultsSent[1][0].output).toContain('(78 KB)');
   });
+  it('gives back a call the envelope refused, so a refused read costs nothing (R1)', async () => {
+    const refused = { success: false, output: 'Command not approved: make', truncated: false, refused: true as const };
+    const ran: string[] = [];
+    const fs = fakeFileSystem({
+      bash: async (command) => { ran.push(command); return command.startsWith('make') ? refused : { success: true, output: 'ok', truncated: false }; },
+    });
+    const chat = new ScriptedChat([
+      toolTurn([{ name: 'bash', args: { command: 'make a' }, id: '1' }, { name: 'bash', args: { command: 'make b' }, id: '2' }]),
+      toolTurn([{ name: 'bash', args: { command: 'ls' }, id: '3' }]),
+      proseTurn('done'),
+    ]);
+
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fs), readLimit: limitOf({ calls: 2, bytes: 1_000_000 }) });
+
+    expect(ran).toEqual(['make a', 'make b', 'ls']);
+    expect(chat.toolResultsSent[1][0].output).toBe('ok');
+  });
+
+  it('still counts a command that ran and failed', async () => {
+    const fs = fakeFileSystem({ bash: async () => ({ success: false, output: 'exit 1', truncated: false }) });
+    const chat = new ScriptedChat([
+      toolTurn([{ name: 'bash', args: { command: 'false' }, id: '1' }, { name: 'bash', args: { command: 'false' }, id: '2' }]),
+      toolTurn([{ name: 'bash', args: { command: 'ls' }, id: '3' }]),
+      proseTurn('done'),
+    ]);
+
+    await new TestService(fakeConfig()).runTurn({ ...ctxFor(chat, fs), readLimit: limitOf({ calls: 2, bytes: 1_000_000 }) });
+
+    expect(chat.toolResultsSent[1][0].output).toMatch(/^Read limit reached/);
+  });
 });
