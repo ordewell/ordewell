@@ -49,10 +49,17 @@ export class ParsedLine {
   ) {}
 
   static parse(command: string, shell: LineShell = {}): ParsedLine {
+    return ParsedLine.lex(command, dialectFor(shell.dialect), shell.cdpathSet ?? false);
+  }
+
+  /** A rewrite of this line (startup flags, pinned addresses), read under this line's shell: a rewrite never changes the rules it is read by. */
+  reparse(command: string): ParsedLine {
+    return ParsedLine.lex(command, this.dialect, this.cdpathSet);
+  }
+
+  private static lex(command: string, dialect: Dialect, cdpathSet: boolean): ParsedLine {
     const text = command.trim();
     const offset = command.length - command.trimStart().length;
-    const dialect = dialectFor(shell.dialect);
-    const cdpathSet = shell.cdpathSet ?? false;
     const lexed = lexAll(text, dialect, cdpathSet);
     lexed.segments.forEach(freezeSegment);
     Object.freeze(lexed.segments);

@@ -106,8 +106,11 @@ function refused(output: string): ToolOutcome {
  *
  * Delegation is explicit rather than a spread — `fs` is a class instance, so
  * its methods live on the prototype and would not survive being copied.
+ *
+ * Exported only so the command gate's `subagent` site can be proven to decide
+ * as this does, until this wrapper's `bash` moves onto the gate.
  */
-function nonPromptingFs(fs: IFileSystem): IFileSystem {
+export function nonPromptingFs(fs: IFileSystem): IFileSystem {
   const withinWorkspace = (p: string | undefined): boolean =>
     resolveWithin(fs.getWorkspaceRoot(), p ?? '.').inside;
 
