@@ -3319,7 +3319,11 @@ Every measure is optional because backends report different subsets; absent
 means "not reported", never zero. A turn's `result` states its own token sum:
 a call whose usage did not stream is taken from it once, as a turn total
 (`aggregate`) that adds to no meter — only a call says what the context was
-left at.
+left at. Every runner adapter builds its records through one
+`UsageRecordBuilder`, mapping only its own protocol's fields into it: the
+builder counts a call with an id once, records no call that reported only
+zeros (one that failed before its provider answered), and gives only the main
+thread's calls a context or a window.
 *Avoid:* filling a missing number from a price table or an estimate made by
 Ordewell — prices go stale and a subscription runner has no per-token price at
 all (ADR-0017);

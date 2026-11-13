@@ -405,9 +405,14 @@ describe('endTurn', () => {
       expect('cachedInputTokens' in record).toBe(false);
     });
 
-    it('keeps a reported zero', () => {
+    it('records no turn that reported only zeros, which is no measurement', () => {
       const events = endTurn(newTurn({ source: 's' }), 'end_turn', { inputTokens: 0, outputTokens: 0 }, new TurnOutcome());
-      expect(events[0]).toEqual({ type: 'usage', record: { source: 's', inputTokens: 0, outputTokens: 0 } });
+      expect(events).toEqual([{ type: 'turn_end' }]);
+    });
+
+    it('keeps a reported zero beside a measure', () => {
+      const events = endTurn(newTurn({ source: 's' }), 'end_turn', { inputTokens: 5, outputTokens: 0 }, new TurnOutcome());
+      expect(events[0]).toEqual({ type: 'usage', record: { source: 's', inputTokens: 5, outputTokens: 0 } });
     });
 
     it.each([[undefined], [null], [{}], [{ totalTokens: 9 }], [{ inputTokens: null }]])('reports nothing for %j', (usage) => {
