@@ -651,8 +651,18 @@ describe('a merge result the pane did not ask for', () => {
     expect(lastMessage(state)).toMatchObject({ role: 'error', text: expect.stringContaining('Merged nothing, so every tree is as it was: . would conflict in a.ts') });
   });
 
-  it('says where an automatic Merge all landed', () => {
-    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: { outcome: 'merged' }, trigger: { kind: 'gate', taskId: 't1' }, sessionId: 's1' });
+  it('adds no second line for an automatic Merge all that landed, which the transcript already says', () => {
+    const before = withHandoff();
+    for (const trigger of [{ kind: 'gate' as const, taskId: 't1' }, { kind: 'run_end' as const }]) {
+      const { state } = apply(before, { type: 'isolationMerged', result: { outcome: 'merged' }, trigger, sessionId: 's1' });
+
+      expect(messagesOf(state)).toHaveLength(messagesOf(before).length);
+      expect(state.handoff).toBeNull();
+    }
+  });
+
+  it('says where a merge landed that Ordewell did not run by itself', () => {
+    const { state } = apply(withHandoff(), { type: 'isolationMerged', result: { outcome: 'merged' }, sessionId: 's1' });
 
     expect(lastMessage(state)).toMatchObject({ role: 'system', text: expect.stringContaining('Merged ordewell/r1/integration into your checked-out branch') });
   });

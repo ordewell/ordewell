@@ -76,17 +76,17 @@ it('keeps context first and exact frame geometry with wide labels and narrow dim
   expect(footer(state, 15)).toEqual(['Planner ctx 61…']);
 });
 
-it('adopts quota greetings independently of run stamps, including held empty reconnect snapshots', () => {
+it('adopts quota greetings independently of run stamps, including those that arrive while a session opens', async () => {
   let state = initialState({ sessionId: 's', plannerProvider: 'codex' });
   const inbound = createInbound((action) => { state = reduce(state, action).state; }, 's');
   const receive = inbound.receive;
   receive({ type: 'run_snapshot', sessionId: 's', stream: 'daemon', seq: 100, view: state.run });
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 1, limits: [codex] });
   expect(footer(state)).toEqual(['Codex 5h 24% used']);
-  inbound.holdSnapshot();
+  const opening = inbound.openFrom(async () => ({ apply: () => {} }));
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 2, limits: [] });
   expect(footer(state)).toEqual(['Codex 5h 24% used']);
-  inbound.releaseSnapshot(true);
+  await opening;
   expect(footer(state)).toEqual([]);
   receive({ type: 'account_limits', sessionId: 's', stream: 'daemon', revision: 1, limits: [codex] });
   expect(footer(state)).toEqual([]);

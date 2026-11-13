@@ -166,7 +166,9 @@ broadcast it accounts for, and every held frame at or below it is dropped, so
 nothing the read holds is drawn twice. A surface subclasses it with what it
 draws; when it follows the socket again after a drop is **ReconnectBackoff**
 (`utils/reconnectBackoff.ts`), the one wait every surface uses. ui's
-`DaemonSessionStream` is the desktop's.
+`DaemonSessionStream` is the desktop's, and `tui/inbound.ts`'s is the TUI's: it
+batches streamed deltas into one repaint and opens a session or child plan from
+its own read.
 
 **Session link** (`tui/sessionLink.ts`) — the TUI's one socket per (client,
 session): it owns the follow socket, its reconnect with backoff, the run's end and

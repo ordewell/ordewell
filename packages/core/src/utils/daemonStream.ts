@@ -55,6 +55,8 @@ export abstract class DaemonStream<L> {
   private again = false;
   private held: Ordered[] = [];
   private closed = false;
+  /** Callers of {@link reload} waiting for a load to finish. */
+  private waiting: Array<() => void> = [];
   /** Quota reads are numbered on their own count, per daemon. */
   private limitsAt: { stream: string; revision: number } | null = null;
 
@@ -85,6 +87,31 @@ export abstract class DaemonStream<L> {
   close(): void {
     this.closed = true;
     this.held = [];
+    this.settle();
+  }
+
+  /**
+   * Takes the view as already drawn by other means, so frames go straight
+   * through until a gap: a surface that started the session itself has no
+   * transcript to read before its first frame.
+   */
+  protected assumeWhole(): void {
+    this.whole = true;
+  }
+
+  /**
+   * Reads now instead of at the next frame, holding every frame meanwhile, for
+   * a surface that loads the session as part of opening it. Resolves when the
+   * view was drawn from a read and the frames held behind it delivered, or when
+   * the read failed or the stream closed: the failure itself goes to `failed`.
+   */
+  protected reload(): Promise<void> {
+    const done = new Promise<void>((resolve) => { this.waiting.push(resolve); });
+    if (this.closed) this.settle();
+    // A read already out may predate this call.
+    else if (this.loading) this.again = true;
+    else this.load();
+    return done;
   }
 
   /** The tree is whole each time, so it is never held behind a load. */
@@ -131,12 +158,20 @@ export abstract class DaemonStream<L> {
       const held = this.held;
       this.held = [];
       for (const frame of held) if (!coveredBy(position, frame)) this.deliver(frame);
+      this.settle();
     }, (error: unknown) => {
       if (this.closed) return;
       // Still held, and the next frame asks again.
       this.loading = false;
       this.failed(error);
+      this.settle();
     });
+  }
+
+  private settle(): void {
+    const waiting = this.waiting;
+    this.waiting = [];
+    for (const resolve of waiting) resolve();
   }
 
   private deliver(frame: Ordered): void {

@@ -344,7 +344,7 @@ function reduceAction(state: TuiState, action: Action): Step {
     // takes them (below).
     case 'isolationMerged': {
       if (stale(state, action.sessionId)) return step(state);
-      return step(withoutHandoffOverlay(foldRun(announceMerge(state, action.result), { type: 'isolation_merge', result: action.result })));
+      return step(withoutHandoffOverlay(foldRun(announceMerge(state, action.result, action.trigger !== undefined), { type: 'isolation_merge', result: action.result })));
     }
 
     case 'mergeAbandoned': {

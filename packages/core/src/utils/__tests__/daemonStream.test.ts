@@ -25,6 +25,10 @@ class Recorder extends DaemonStream<Read> {
     this.drawn.push(`read:${state.label}`);
     return state.position;
   }
+
+  /** What a surface that loads while opening, or starts its own session, does with the base. */
+  begin(whole: boolean): void { if (whole) this.assumeWhole(); }
+  now(): Promise<void> { return this.reload(); }
 }
 
 function follow(...reads: Array<Read | Error>) {
@@ -174,5 +178,57 @@ describe('DaemonStream', () => {
 
     expect(got.stream.drawn).toEqual([]);
     expect(got.read).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes frames straight through when the view was taken as whole, until a gap', async () => {
+    const got = follow({ label: 'r1' });
+    got.stream.begin(true);
+    got.feed(output(1), output(2));
+    expect(got.stream.drawn).toEqual(['task_output:1', 'task_output:2']);
+    expect(got.read).not.toHaveBeenCalled();
+
+    got.feed(output(5));
+    expect(got.read).toHaveBeenCalledTimes(1);
+    await got.answer();
+    expect(got.stream.drawn).toEqual(['task_output:1', 'task_output:2', 'read:r1', 'task_output:5']);
+  });
+
+  it('reads on demand, holds what arrives meanwhile, and resolves once those frames are delivered', async () => {
+    const got = follow({ label: 'r1', position: { stream: 'd1', seq: 1 } });
+    got.stream.begin(true);
+    const done = got.stream.now();
+    expect(got.read).toHaveBeenCalledTimes(1);
+    got.feed(snapshot(1), output(1), output(2));
+    expect(got.stream.drawn).toEqual([]);
+
+    await got.answer();
+    await done;
+
+    expect(got.stream.drawn).toEqual(['read:r1', 'task_output:2']);
+  });
+
+  it('reads again for a demand made while a read is out, since that read may predate it', async () => {
+    const got = follow({ label: 'r1' }, { label: 'r2' });
+    const first = got.stream.now();
+    const second = got.stream.now();
+    await got.answer();
+    expect(got.stream.drawn).toEqual([]);
+    await got.answer();
+    await Promise.all([first, second]);
+
+    expect(got.stream.drawn).toEqual(['read:r2']);
+  });
+
+  it('resolves a demand whose read failed, and one outstanding when the stream closes', async () => {
+    const got = follow(new Error('daemon away'));
+    const failed = got.stream.now();
+    await got.answer();
+    await failed;
+    expect(got.failed).toHaveBeenCalledTimes(1);
+
+    const closing = got.stream.now();
+    got.stream.close();
+    await closing;
+    await got.stream.now();
   });
 });
