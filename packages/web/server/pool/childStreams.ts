@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { ChildFrame, ChildPlanHandle, RunSnapshotFrame, SessionFrame, StreamStamp } from '@ordewell/core';
+import type { StreamSequence } from './streamSequence';
 
 interface Watched {
   sockets: Set<WebSocket>;
@@ -15,9 +16,8 @@ interface Watched {
  */
 export class ChildStreams {
   private readonly watched = new Map<string, Watched>();
-  private readonly sequence = new Map<string, number>();
 
-  constructor(private readonly stream: string, private readonly hears: (ws: WebSocket, workspace: string | undefined) => boolean) {}
+  constructor(private readonly sequence: StreamSequence, private readonly hears: (ws: WebSocket, workspace: string | undefined) => boolean) {}
 
   /**
    * Snapshot and watching in one turn, as a root's socket has them: no frame can
@@ -50,7 +50,7 @@ export class ChildStreams {
   }
 
   position(rootId: string, childId: string): StreamStamp {
-    return { stream: this.stream, seq: this.sequence.get(keyOf(rootId, childId)) ?? 0 };
+    return this.sequence.position(keyOf(rootId, childId));
   }
 
   closeRoot(rootId: string, code: number): void {
@@ -64,9 +64,7 @@ export class ChildStreams {
   }
 
   private send(key: string, sockets: Set<WebSocket>, workspace: string | undefined, frame: ChildFrame): void {
-    const seq = (this.sequence.get(key) ?? 0) + 1;
-    this.sequence.set(key, seq);
-    const payload = JSON.stringify({ ...frame, stream: this.stream, seq } satisfies SessionFrame);
+    const payload = JSON.stringify({ ...frame, ...this.sequence.next(key) } satisfies SessionFrame);
     for (const ws of sockets) {
       if (ws.readyState === ws.OPEN && this.hears(ws, workspace)) ws.send(payload);
     }
@@ -78,4 +76,5 @@ export class ChildStreams {
   }
 }
 
+// A root's own stream is keyed by its bare id, which never holds a NUL: the two never share a count.
 const keyOf = (rootId: string, childId: string) => `${rootId}\0${childId}`;

@@ -157,6 +157,17 @@ a snapshot covers, and where a gap or daemon restart means the client must read
 the session again. The TUI and the desktop share it; the TUI reads the session
 back on a gap while no turn of its own is out.
 
+**Daemon stream** (`DaemonStream`, `utils/daemonStream.ts`) — one daemon socket
+followed behind a REST read: its frames are ordered by StreamOrder, held while
+the read is out, and the read is made again on a gap or a restarted daemon. The
+read names its **stream position** (`SessionResponse.position`,
+`AdoptSessionResponse.position`, `ChildPlanResponse.position`), the last
+broadcast it accounts for, and every held frame at or below it is dropped, so
+nothing the read holds is drawn twice. A surface subclasses it with what it
+draws; when it follows the socket again after a drop is **ReconnectBackoff**
+(`utils/reconnectBackoff.ts`), the one wait every surface uses. ui's
+`DaemonSessionStream` is the desktop's.
+
 **Session link** (`tui/sessionLink.ts`) — the TUI's one socket per (client,
 session): it owns the follow socket, its reconnect with backoff, the run's end and
 a lost run. A planner turn the TUI did not send (a wake-up, a resend, another

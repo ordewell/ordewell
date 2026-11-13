@@ -5,7 +5,7 @@ import type {
 } from '@ordewell/core';
 import {
   checkoutRule, confirmedOverride, DELEGATION_OFFERED, loopRemovalRefusal, manualOverrideStopFirst, mergeTarget, overrideNeedsConfirmation,
-  rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
+  ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, taskActionCommand, titledRefs, titledTaskRefOf, VENDORS, walkPlan, type OverrideDirection,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
@@ -140,9 +140,6 @@ export interface DaemonHostOptions {
   now?: () => number;
 }
 
-const REJOIN_MIN_MS = 1000;
-const REJOIN_MAX_MS = 30_000;
-
 const SYSTEM_TASK_ACTIONS = {
   cancel: 'cancel',
   cancelResume: 'cancel-resume',
@@ -234,7 +231,7 @@ class SessionStream extends DaemonSessionStream {
     super(sessionView, post, hooks);
   }
 
-  protected override loaded(state: DaemonSessionState): undefined {
+  protected override loaded(state: DaemonSessionState): StreamStamp | undefined {
     if (!this.fresh()) return super.loaded(state);
     if (state.run) this.sessionView.adopt({ run: state.run });
     return undefined;
@@ -272,7 +269,7 @@ export class DaemonHost {
   /** What each chat instance keeps across a remount, by the place it is drawn in. */
   private readonly savedStates = new Map<string, unknown>();
   private rejoin: (() => void) | null = null;
-  private rejoinDelay = REJOIN_MIN_MS;
+  private readonly rejoinBackoff = new ReconnectBackoff();
   /** Continue here is adopting the session: a second click is the same takeover, not another. */
   private continuing = false;
   private navigator: SessionNavigator | null = null;
@@ -1758,7 +1755,7 @@ export class DaemonHost {
         return;
       }
       if (!isFrame(event.frame)) return;
-      this.rejoinDelay = REJOIN_MIN_MS;
+      this.rejoinBackoff.reset();
       const wasGenerating = this.generating;
       stream.receive(event.frame);
       this.toTaskLogs(event.frame);
@@ -1784,8 +1781,7 @@ export class DaemonHost {
     const offStatus = window.ordewell.daemon.onStatus((status) => { if (status.state === 'connected') again(); });
     const timer = setTimeout(() => {
       void window.ordewell.daemon.status().then((status) => { if (status.state === 'connected') again(); });
-    }, this.rejoinDelay);
-    this.rejoinDelay = Math.min(this.rejoinDelay * 2, REJOIN_MAX_MS);
+    }, this.rejoinBackoff.next());
     this.rejoin = () => { offStatus(); clearTimeout(timer); };
   }
 
@@ -1802,7 +1798,7 @@ export class DaemonHost {
     const joined = await window.ordewell.daemon.join(sessionId);
     if (sessionId !== this.sessionId || this.snapshot.link !== link) return;
     if (joined.ok) {
-      this.rejoinDelay = REJOIN_MIN_MS;
+      this.rejoinBackoff.reset();
       this.update({ link: { kind: 'joined', holder: joined.holder } });
       this.dispose();
       this.follow(sessionId);
@@ -1818,8 +1814,7 @@ export class DaemonHost {
     if (joined.reason === 'unreachable') {
       // Its pid still holds the lease: the holder is away, not gone, and nothing may continue it here yet.
       if (!link.away) this.update({ link: { ...link, away: true } });
-      const timer = setTimeout(() => { void this.rejoinHolder(sessionId); }, this.rejoinDelay);
-      this.rejoinDelay = Math.min(this.rejoinDelay * 2, REJOIN_MAX_MS);
+      const timer = setTimeout(() => { void this.rejoinHolder(sessionId); }, this.rejoinBackoff.next());
       this.rejoin = () => clearTimeout(timer);
       return;
     }
@@ -1847,6 +1842,7 @@ export class DaemonHost {
         conversation: saved.conversation ?? {},
         ...(saved.run ? { run: saved.run } : {}),
         ...(saved.plannerTurnId ? { plannerTurnId: saved.plannerTurnId } : {}),
+        ...(saved.position ? { position: saved.position } : {}),
       };
     }
     const adopted = await callDaemon('sessions.load', { id: sessionId, workspace: this.workspace });
@@ -1855,6 +1851,7 @@ export class DaemonHost {
       conversation: adopted.plan,
       ...(adopted.run ? { run: adopted.run } : {}),
       ...(adopted.plannerTurnId ? { plannerTurnId: adopted.plannerTurnId } : {}),
+      ...(adopted.position ? { position: adopted.position } : {}),
     };
   }
 

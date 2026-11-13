@@ -338,6 +338,13 @@ export interface SessionResponse {
   plannerTurnId?: string;
   /** The planner compaction running now, as {@link AdoptSessionResponse.plannerCompaction}. */
   plannerCompaction?: PlannerCompactionMessage;
+  /**
+   * The last broadcast of the session's socket this read accounts for, taken
+   * in the same turn as the read. Only a live session's: the saved file is no
+   * point in a stream. Absent from a daemon older than the field, when a
+   * client can only apply every frame it held behind the read.
+   */
+  position?: StreamStamp;
 }
 
 export interface AdoptSessionResponse extends OkResponse {
@@ -357,6 +364,8 @@ export interface AdoptSessionResponse extends OkResponse {
    * can, and the id is the one its end will carry. Absent when none is.
    */
   plannerCompaction?: PlannerCompactionMessage;
+  /** What of the adopted session's socket this answer accounts for, as {@link SessionResponse.position}. */
+  position?: StreamStamp;
 }
 
 export interface TaskLogAttemptsResponse {

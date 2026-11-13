@@ -194,6 +194,8 @@ export { PlanEditError } from './services/PlanEditError';
 export type * from './daemonContract';
 export { DAEMON_ROUTES, type DaemonRoute, type DaemonRouteId, type HttpMethod, type RouteBody, type RouteResponse, type RouteSpec } from './daemonRoutes';
 export { StreamOrder, stampOf, type Placement } from './utils/streamOrder';
+export { DaemonStream, type ConnectedFrame, type DaemonFrame } from './utils/daemonStream';
+export { ReconnectBackoff } from './utils/reconnectBackoff';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
