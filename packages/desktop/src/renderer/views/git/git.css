@@ -101,21 +101,30 @@
 .git-file-dir { flex: 1 1 0; color: var(--ow-fg-secondary); font: var(--ow-type-small); }
 
 /*
- * Lanes are drawn in neutrals, never in a status or area colour: those mean a
- * state or a place elsewhere (design.md, Visual language). The first lane, the
- * history's own first-parent line, is a step stronger than the rest; the other
- * lanes tell apart by where they run, not by hue (lanes.ts LANE_COLORS still
- * hands every lane an index, and only index 0 is set apart).
+ * Each lane carries a hue from the --ow-lane-* palette, by the index lanes.ts
+ * gives it, so a line can be followed by its colour where lines cross and a
+ * commit's ref chips can say which line they are on. The palette keeps clear
+ * of the status colours (design.md, Visual language), so no lane reads as a
+ * state. The first lane, the history's own first-parent line, stays a step
+ * heavier.
  */
-.git-lanes { --git-lane: var(--ow-fg-muted); --git-lane-first: var(--ow-fg-secondary); --git-lane-node: var(--ow-bg); }
-.git-lanes path, .git-lanes circle { stroke: var(--git-lane); fill: none; stroke-width: 1.5; }
-.git-lanes circle { fill: var(--git-lane); stroke-width: 2; }
-.git-lanes .git-lane-0 { stroke: var(--git-lane-first); stroke-width: 2; }
-.git-lanes circle.git-lane-0 { fill: var(--git-lane-first); }
+.git-lanes { --git-lane-node: var(--ow-bg); }
+.git-lanes path, .git-lanes circle { stroke: var(--git-lane, var(--ow-fg-muted)); fill: none; stroke-width: 1.5; }
+.git-lanes circle { fill: var(--git-lane, var(--ow-fg-muted)); stroke-width: 2; }
+.git-lanes .git-lane-0 { --git-lane: var(--ow-lane-0); stroke-width: 2; }
+.git-lanes .git-lane-1 { --git-lane: var(--ow-lane-1); }
+.git-lanes .git-lane-2 { --git-lane: var(--ow-lane-2); }
+.git-lanes .git-lane-3 { --git-lane: var(--ow-lane-3); }
+.git-lanes .git-lane-4 { --git-lane: var(--ow-lane-4); }
+.git-lanes .git-lane-5 { --git-lane: var(--ow-lane-5); }
+.git-lanes .git-lane-6 { --git-lane: var(--ow-lane-6); }
+.git-lanes .git-lane-7 { --git-lane: var(--ow-lane-7); }
 /* A merge is a ring: its hole is the row's own background, so it reads on a hovered or selected row too. */
 .git-lanes circle.git-merge { fill: var(--git-lane-node); }
 .git-hrow:hover .git-lanes { --git-lane-node: var(--ow-bg-hover); }
 .git-hrow[aria-current='true'] .git-lanes { --git-lane-node: var(--ow-bg-selected); }
+.git-commit:hover .git-lanes { --git-lane-node: var(--ow-bg-hover); }
+.git-commit[aria-pressed='true'] .git-lanes { --git-lane-node: var(--ow-bg-selected); }
 
 /* The sidebar's two views. One narrow switch, as the plan graph's density is: the pressed half is the view shown. */
 .git-mode { display: flex; margin: 0 var(--ow-space-3); border: 1px solid var(--ow-border-widget); border-radius: var(--ow-radius-sm); overflow: hidden; }
@@ -162,7 +171,7 @@
  */
 .git-hrow-refs { display: contents; }
 /* One chip, at least 64 px of its name or all of it (design.md O7), and at most 60% of the line; the +N beside it never shrinks. */
-.git-hrow-refs .git-chip { max-width: 60%; min-width: min(64px, calc(var(--chars, 8) * 1ch + 10px)); }
+.git-hrow-refs .git-chip { max-width: 60%; min-width: min(64px, calc(var(--chars, 8) * 1ch + 12px)); }
 .git-hrow-refs .git-chip-more { flex: none; min-width: 0; color: var(--ow-fg-secondary); }
 .git-chip-mark { flex: none; margin-inline-start: var(--ow-space-half); vertical-align: -1px; }
 .git-hrow-info { flex: 1 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -175,3 +184,11 @@
 .git-scope-select { flex: 1 1 auto; min-width: 0; width: auto; text-overflow: ellipsis; }
 .git-scope-row .ow-icon-button { flex: none; }
 .git-list .srow.git-viewing { background: var(--ow-bg-selected); --srow-fill: var(--ow-bg-selected); }
+
+/*
+ * A ref chip takes its commit's lane hue as a stripe on its leading edge, so it
+ * says which line it labels; its fill, weight, dashes and italics still tell
+ * HEAD, the checkout, Ordewell and tags apart. Last in the file, so neither the
+ * HEAD fill's transparent border nor the checkout's stronger one paints over it.
+ */
+.git-chip.git-chip-laned { border-inline-start: 3px solid var(--git-chip-lane); }

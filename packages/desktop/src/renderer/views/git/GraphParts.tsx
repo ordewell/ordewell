@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Cloud } from 'lucide-react';
 import type { RefChip } from './gitModel';
-import type { GraphRow } from './lanes';
+import { LANE_COLORS, type GraphRow } from './lanes';
 
 /*
  * What the full-width graph and the sidebar's history both draw a commit
@@ -42,11 +42,17 @@ export function chipTitle(chip: RefChip): string {
   return chip.kind === 'head' ? 'HEAD: your checkout' : `${chip.text}: ${chip.kind === 'remote' ? 'remote branch' : chip.kind}`;
 }
 
-export function Chip({ chip, tracked }: { chip: RefChip; tracked?: string }): JSX.Element {
-  const classes = ['git-chip', `git-chip-${chip.kind}`, chip.current ? 'git-chip-current' : ''].filter(Boolean).join(' ');
+/** The token a lane's colour index (GraphRow.color) is drawn in, for whatever else shows that commit. */
+export function laneColor(color: number): string {
+  return `var(--ow-lane-${((color % LANE_COLORS) + LANE_COLORS) % LANE_COLORS})`;
+}
+
+/** `lane` is the colour index of the commit the chip sits on, so the chip carries its line's hue. */
+export function Chip({ chip, tracked, lane }: { chip: RefChip; tracked?: string; lane?: number }): JSX.Element {
+  const classes = ['git-chip', `git-chip-${chip.kind}`, chip.current ? 'git-chip-current' : '', lane === undefined ? '' : 'git-chip-laned'].filter(Boolean).join(' ');
   const text = chip.kind === 'ordewell' ? `Ordewell · ${chip.text}` : chip.text;
   // --chars lets the sidebar's 64 px floor give way to a name shorter than it, so "main" is not padded out to a pill.
-  const style = { '--chars': text.length + (tracked ? 2 : 0) } as CSSProperties;
+  const style = { '--chars': text.length + (tracked ? 2 : 0), ...(lane === undefined ? {} : { '--git-chip-lane': laneColor(lane) }) } as CSSProperties;
   return (
     <span className={classes} style={style} title={tracked ? `${chipTitle(chip)}\nAlso on ${tracked}` : chipTitle(chip)}>
       {text}

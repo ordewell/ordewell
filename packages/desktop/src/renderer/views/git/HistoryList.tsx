@@ -123,7 +123,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
                   <span className="git-hrow-meta">
                     {lead && (
                       <span className="git-hrow-refs">
-                        <Chip chip={lead} tracked={lead.tracked} />
+                        <Chip chip={lead} tracked={lead.tracked} lane={layout.rows[i]!.color} />
                         {more > 0 && <span className="git-chip git-chip-more">+{more}</span>}
                       </span>
                     )}
