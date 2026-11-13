@@ -5,7 +5,7 @@
  * nice rm -rf x` has to be reduced to the `rm` before any tier is consulted.
  */
 
-import { toSegment, type Dialect, type Segment } from './shellLexer';
+import { mayBecomeFlag, toSegment, type Dialect, type Segment } from './shellLexer';
 
 /**
  * How a wrapper's own arguments are skipped to reach the command it will run.
@@ -51,6 +51,13 @@ export interface WrapperSpec {
    * the assignment refusal answers for them.
    */
   acceptsAssignments?: boolean;
+  /**
+   * Remove variables from the command's environment (`env -u`, `env -i`, a
+   * bare `-`). Refused: the pin that keeps git from reading a committed bare
+   * repository's config travels as `GIT_CONFIG_*` variables (PLANNER_GIT_ENV
+   * in researchShell.ts), and these drop it.
+   */
+  clearingFlags?: string[];
 }
 
 const HELP_FLAGS = ['--help', '--version'];
@@ -78,13 +85,14 @@ const HELP_FLAGS = ['--help', '--version'];
  */
 export const WRAPPER_FAMILY: Record<string, WrapperSpec> = {
   env: {
-    valueFlags: ['-u', '--unset', '-C', '--chdir'],
-    booleanFlags: ['-i', '--ignore-environment', '-0', '--null', '-v', '--debug',
+    valueFlags: ['-C', '--chdir'],
+    booleanFlags: ['-0', '--null', '-v', '--debug',
       // Optional-value flags: see WrapperSpec.booleanFlags.
       '--block-signal', '--default-signal', '--ignore-signal', '--list-signal-handling',
       ...HELP_FLAGS],
     stringFlags: ['-S', '--split-string'],
     acceptsAssignments: true,
+    clearingFlags: ['-u', '--unset', '-i', '--ignore-environment', '-'],
   },
   nice: {
     valueFlags: ['-n', '--adjustment'],
@@ -240,9 +248,10 @@ function joinedShortFlag(list: string[], token: string): string | undefined {
  * refused binary sitting harmlessly in its argument list — a wrapped `rm` back
  * on the prompt tier, which is exactly what unwrapping exists to prevent.
  */
-export function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[]): WrapperScan {
+export function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[], seg?: Segment): WrapperScan {
   const valueFlags = spec.valueFlags ?? [];
   const stringFlags = spec.stringFlags ?? [];
+  const clearingFlags = spec.clearingFlags ?? [];
   const assignments: string[] = [];
   let positionals = spec.positionals ?? 0;
   let i = 0;
@@ -251,6 +260,23 @@ export function scanWrapperArgs(binary: string, spec: WrapperSpec, args: string[
     const token = args[i];
     // `--` ends the wrapper's options; whatever follows is the command.
     if (token === '--') { i++; break; }
+
+    // The table reads each word as written, but a glob or variable where an
+    // option or the command may stand can become any flag (`env [-]i`).
+    if (seg && mayBecomeFlag(seg, token)) {
+      return {
+        kind: 'refuse',
+        reason: `The shell may expand "${token}" into a flag for the wrapper "${binary}", so this classifier cannot tell what it would run or with what environment. Write the wrapper's arguments literally, and re-run.`,
+      };
+    }
+
+    const clearing = token.startsWith('--') ? token.split('=')[0] : token;
+    if (clearingFlags.includes(clearing) || joinedShortFlag(clearingFlags, token)) {
+      return {
+        kind: 'refuse',
+        reason: `"${binary} ${clearing}" removes variables from the command's environment, among them the settings that keep it read-only. Re-run without it.`,
+      };
+    }
 
     if (/^-./.test(token)) {
       const eq = token.startsWith('--') ? token.indexOf('=') : -1;
@@ -325,7 +351,7 @@ function unwrapXargs(seg: Segment, dialect: Dialect): { seg: Segment } | { reaso
   if (seg.piped) {
     return { reason: 'Piping into "xargs" turns another command\'s output into arguments this classifier cannot see. Run the producing command on its own and read its output.' };
   }
-  const scan = scanWrapperArgs('xargs', XARGS_SPEC, seg.args);
+  const scan = scanWrapperArgs('xargs', XARGS_SPEC, seg.args, seg);
   if (scan.kind === 'refuse') return { reason: scan.reason };
   const command = scan.kind === 'command' ? scan.tokens : [];
   const replace = xargsReplaceString(seg.args.slice(0, seg.args.length - command.length));
@@ -383,7 +409,7 @@ export function unwrap(seg: Segment, dialect: Dialect): Unwrapped {
     const spec = (isCmd ? CMD_WRAPPER_FAMILY[current.binary.toLowerCase()] : undefined)
       ?? WRAPPER_FAMILY[current.binary.toLowerCase()];
     if (!spec) break;
-    const scan = scanWrapperArgs(current.binary, spec, current.args);
+    const scan = scanWrapperArgs(current.binary, spec, current.args, current);
     if (scan.kind === 'refuse') return { seg: { ...current, assignments }, wrappers, runner, reason: scan.reason };
     // No residual command: the wrapper is the whole invocation (`env` on its
     // own prints the environment), so it is classified under its own name.

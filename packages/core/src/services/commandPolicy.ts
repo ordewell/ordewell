@@ -43,7 +43,7 @@
  */
 
 import type { ShellDialect } from './researchShell';
-import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, type Segment } from './shellLexer';
+import { SHELL_STATE_COMMANDS, dialectFor, lexAll, literalCdTarget, mayBecomeFlag, mayBeginWith, mayExpandTo, shellRewrites, type Segment } from './shellLexer';
 import { REFUSED_RUNNERS, XARGS_TARGETS, unwrap } from './commandRunners';
 import { FLAG_POLICY, UNIVERSAL_FLAGS, flagLabel, matchFlag, scanFlags, subcommandOf, takesNextToken, valueFlagIn } from './flagPolicy';
 import { AWK_FAMILY, JQ_FAMILY, SED_FAMILY, awkProgramArgs, awkRefusal, jqRefusal, sedOnlyPrints, sedProgramArgs, sedRefusal } from './filterPrograms';
@@ -767,6 +767,25 @@ function remoteListingTexts(seg: Segment): string[] {
   return scanFlags({ ...git, args: gitArgsAfterSubcommand(git) })?.operands ?? [];
 }
 
+/** find's actions that run a command, delete, or write a file: each a single word the shell may assemble. */
+const FIND_ACTIONS = ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'];
+
+/** The arguments up to and including the first one the shell passes as written. */
+function leadingWords(seg: Segment): string[] {
+  const end = seg.args.findIndex((a) => !shellRewrites(seg, a));
+  return end < 0 ? seg.args : seg.args.slice(0, end + 1);
+}
+
+/**
+ * Every flag check here compares the words as written, and the shell expands a
+ * glob, a brace list or a variable before the program sees it: `sort -k *`
+ * becomes `sort -k -oout …` once the repository holds a file named `-oout`
+ * (ADR-0008). Such a word is read as possibly any flag, so it is refused.
+ */
+function expandedFlagReason(binary: string, word: string): string {
+  return `The shell may expand "${word}" into a flag for "${binary}" (a file named "-…" matches a glob, and a variable or substitution can hold one), and flags are only read-only as written. Start a file glob with "./" or put it after "--", write variables out literally, and re-run.`;
+}
+
 function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string | undefined {
   const web = webCommand(seg, trustedResolves);
   if (web?.reason) return web.reason;
@@ -805,7 +824,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // `enable -f lib.so name` loads a shared object into the shell, which runs
   // its code on load — a program from the repository, as `source` would run a
   // script. Plain `enable` only lists or toggles builtins.
-  if (seg.binary === 'enable' && seg.args.some((a) => /^-[a-zA-Z]*f/.test(a))) {
+  if (seg.binary === 'enable' && seg.args.some((a) => /^-[a-zA-Z]*f/.test(a) || mayBecomeFlag(seg, a))) {
     return `"enable -f" loads a shared library into the shell, which runs its code. Use the read-only research tools, or describe it as a task.`;
   }
   // A shell keyword or compound-command opener (`{`, `if`, `time`, `for`, ...)
@@ -830,8 +849,10 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // the subcommand, so these have to be caught here.
   // bash's `printf -v NAME` assigns a shell variable, `PATH` and `CDPATH`
   // included, which steers every later bare command and `cd` on the line to
-  // where no word names. It is the one option printf has, so it is leading.
-  if (seg.binary === 'printf' && seg.args[0]?.startsWith('-v')) {
+  // where no word names. It is the one option printf has, so it is leading:
+  // the first word, or a later one should the shell expand those before it to
+  // nothing.
+  if (seg.binary === 'printf' && leadingWords(seg).some((a) => mayBeginWith(seg, a, '-v'))) {
     return `"printf -v" assigns a shell variable, which can change what a later command or "cd" resolves to. You are a read-only planner: print the text instead.`;
   }
   if (seg.binary === 'git') {
@@ -857,7 +878,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     }
     if (sub === 'branch' || sub === 'tag') {
       const flag = seg.args.find((a) => ['-D', '-d', '-m', '-M', '--delete', '--move'].includes(a))
-        ?? after.find(swallowsRefName);
+        ?? after.find(swallowsRefName)
+        ?? after.find((a) => mayBecomeFlag(seg, a));
       if (flag) {
         return `"git ${sub} ${flag}" mutates refs. You are a read-only planner: ${EFFECT_ROUTE}`;
       }
@@ -878,7 +900,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // run an arbitrary inner command — the exact bypass this classifier exists
   // to close. Refuse rather than prompt: the inner command is unauditable.
   if (seg.binary === 'find') {
-    const flag = seg.args.find((a) => ['-exec', '-execdir', '-ok', '-okdir', '-delete'].includes(a));
+    const flag = seg.args.find((a) => FIND_ACTIONS.some((action) => mayExpandTo(seg, a, action)));
     if (flag) {
       return `find with "${flag}" runs an inner command this classifier cannot inspect. Use the read-only research tools on find's output, or describe the change as a task.`;
     }
@@ -889,9 +911,14 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // read. One the shell rewrites first cannot be: a `$` that survives lexing
   // may be an expansion, and which token holds it is not tracked.
   if (SED_FAMILY.includes(seg.binary) || AWK_FAMILY.includes(seg.binary) || JQ_FAMILY.includes(seg.binary)) {
-    if (AWK_FAMILY.includes(seg.binary) && seg.args.some((a) => a === 'inplace')) {
+    if (AWK_FAMILY.includes(seg.binary) && seg.args.some((a) => mayExpandTo(seg, a, 'inplace'))) {
       return `"${seg.binary} -i inplace" edits files in place. You are a read-only planner — describe the change as a task instead.`;
     }
+    // Their flags are read as written by the program checks below (`sed -i`
+    // edits in place), so a word the shell may turn into one is refused first.
+    // Not stopped at `--`: `sed -e -- …` hands `-e` the `--`.
+    const flag = seg.args.find((a) => mayBecomeFlag(seg, a));
+    if (flag !== undefined) return expandedFlagReason(seg.binary, flag);
     const program = SED_FAMILY.includes(seg.binary) ? sedRefusal(seg.binary, seg.args)
       : AWK_FAMILY.includes(seg.binary) ? awkRefusal(seg.binary, seg.args)
         : jqRefusal(seg.binary, seg.args);
@@ -908,7 +935,8 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
     if (seg.stdinRedirected) {
       return `Feeding "${seg.binary}" from a redirect, here-document or here-string would run code this classifier cannot inspect. Read the file instead, or describe it as a task.`;
     }
-    const inline = seg.args.find((a) => isInlineCodeFlag(family, a))
+    const inline = seg.args.find((a) => isInlineCodeFlag(family, a) || mayBecomeFlag(seg, a)
+      || (shellRewrites(seg, a) && mayBeginWith(seg, a, '/') && ['pwsh', 'powershell', 'cmd'].includes(family)))
       ?? (family === 'deno' ? seg.args.find((a) => a === 'eval') : undefined);
     if (inline !== undefined) {
       return `Inline code via "${seg.binary} ${inline}" is not available to the planner. Use the read-only research tools, or describe it as a task.`;
@@ -946,6 +974,7 @@ function refusalFor(seg: Segment, trustedResolves?: ReadonlySet<string>): string
   // flags that run helper programs or write files are closed as a class instead
   // of one at a time.
   const scan = scanFlags(seg);
+  if (scan?.rewritten !== undefined) return expandedFlagReason(seg.binary, scan.rewritten);
   if (scan?.unknown) {
     return `"${scan.unknown}" is not a flag this classifier knows to be read-only on "${seg.binary}", and flags on otherwise read-only binaries can run a helper program or write a file. Re-run with read-only flags only, or describe the work as a task.`;
   }
@@ -1110,7 +1139,7 @@ export function classifyCommand(command: string, opts: CommandPolicyOptions = {}
   // A `cd` that runs silently still picks the repository a remote listing
   // reaches, as `-C` does, so that listing is held to the line too: under its
   // own words, approving `origin` in one repository covered `origin` in every
-  // other (ADR-0027). So does a wrapper (`env -C`, `env -u HOME`), whose own
+  // other (ADR-0027). So does a wrapper (`env -C`, `nice`), whose own
   // words never reach a scope, and anything else on the line that asks: it may
   // be a name that moves the shell no list here holds (a cmd.exe drive switch,
   // `cd..`), and its scope keeps only its name.

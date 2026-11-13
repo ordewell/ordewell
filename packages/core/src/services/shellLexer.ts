@@ -716,6 +716,104 @@ function isComputedWord(token: string, dialect: Dialect): boolean {
   return false;
 }
 
+/** One piece of a word as the shell may expand it: a literal character, any one character, or any run. */
+type WordPart = string | 'one' | 'any';
+
+/**
+ * A word's shape once the shell has expanded it, or `anything` when an
+ * expansion may stand for any text, extra words included (`$X` splits).
+ *
+ * Read per segment, not per word: quotes are gone, so a quoted `*` sitting
+ * beside an unquoted glob counts as one too. That only ever over-reads a word,
+ * which is the safe side for a flag check. A brace list and a bracket
+ * expression stand for any run and any one character; whose members they
+ * hold is not worth modelling for a check that refuses.
+ */
+function wordShape(seg: Segment, word: string): WordPart[] | 'anything' {
+  if (seg.expandable && (/[$`]/.test(word) || /%[A-Za-z_][^%]*%|![A-Za-z_][^!]*!/.test(word))) return 'anything';
+  const braces = seg.expandable && /\{[^{}]*(?:,|\.\.)[^{}]*\}/.test(word);
+  const parts: WordPart[] = [];
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i];
+    if (braces && c === '{') {
+      let depth = 0;
+      let j = i;
+      for (; j < word.length; j++) {
+        if (word[j] === '{') depth++;
+        else if (word[j] === '}' && --depth === 0) break;
+      }
+      if (j < word.length) { parts.push('any'); i = j; continue; }
+    }
+    if (seg.globbed && c === '*') { parts.push('any'); continue; }
+    if (seg.globbed && c === '?') { parts.push('one'); continue; }
+    if (seg.globbed && c === '[') {
+      let from = i + 1;
+      if (word[from] === '!' || word[from] === '^') from++;
+      // A `]` first in the set is a member, not the close.
+      if (word[from] === ']') from++;
+      const close = word.indexOf(']', from);
+      if (close > 0) { parts.push('one'); i = close; continue; }
+    }
+    parts.push(c);
+  }
+  return parts;
+}
+
+// A table rather than backtracking, which a word of many `*` makes exponential.
+function shapeMatches(parts: WordPart[], target: string, prefixOnly: boolean): boolean {
+  // reach[t]: some way through the parts so far consumes exactly `t` characters of target.
+  let reach: boolean[] = new Array<boolean>(target.length + 1).fill(false);
+  reach[0] = true;
+  for (const part of parts) {
+    const next: boolean[] = new Array<boolean>(target.length + 1).fill(false);
+    for (let t = 0; t <= target.length; t++) {
+      if (!reach[t]) continue;
+      if (t === target.length && prefixOnly) return true;
+      if (part === 'any') for (let u = t; u <= target.length; u++) next[u] = true;
+      else if (t < target.length && (part === 'one' || part === target[t])) next[t + 1] = true;
+    }
+    reach = next;
+  }
+  return reach[target.length];
+}
+
+/** Whether the shell may replace `word` with text the command line does not spell. */
+export function shellRewrites(seg: Segment, word: string): boolean {
+  const shape = wordShape(seg, word);
+  return shape === 'anything' || shape.some((part) => part === 'one' || part === 'any');
+}
+
+/**
+ * Whether `word`, once the shell has expanded it, may begin with `prefix`.
+ *
+ * The literal `startsWith` a flag check would write trusts the word as
+ * written, and the shell does not: `printf -[v] PATH .` runs `printf -v` once
+ * a file named `-v` exists, and the repository being read decides that
+ * (ADR-0008).
+ */
+export function mayBeginWith(seg: Segment, word: string, prefix: string): boolean {
+  const shape = wordShape(seg, word);
+  return shape === 'anything' || shapeMatches(shape, prefix, true);
+}
+
+/** Whether `word`, once the shell has expanded it, may be exactly `target`. See {@link mayBeginWith}. */
+export function mayExpandTo(seg: Segment, word: string, target: string): boolean {
+  const shape = wordShape(seg, word);
+  return shape === 'anything' || shapeMatches(shape, target, false);
+}
+
+/** A word the shell may rewrite into a flag: an expansion whose result may begin with a dash. */
+export function mayBecomeFlag(seg: Segment, word: string): boolean {
+  const shape = wordShape(seg, word);
+  if (shape !== 'anything' && /^--[A-Za-z0-9][\w-]*=/.test(word)) {
+    // A glob or brace list after a literal `--name=` rewrites only the value,
+    // and its results are never split into further words, so the flag stays
+    // the one written (`--include=*.ts`). A variable may split, so it stays.
+    return false;
+  }
+  return shellRewrites(seg, word) && mayBeginWith(seg, word, '-');
+}
+
 export function toSegment(tokens: string[], piped: boolean, dialect: Dialect): Segment {
   const rest = [...tokens];
   const assignments: string[] = [];
