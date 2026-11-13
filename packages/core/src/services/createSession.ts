@@ -1813,19 +1813,17 @@ export class Session {
   get planTasks(): ReadonlyArray<Readonly<Task>> { return this.store.planTasks; }
 
   /**
-   * The relay announces every orchestrator event and makes the saves they owe
-   * first; this adds the events the Session announces itself, each saved
-   * before its announcement too so no surface sees a decision the disk lacks.
+   * The relay announces most orchestrator events; this adds the ones the
+   * Session announces itself, and the saves give each the save it owes before
+   * its announcement (`SessionSaves.observe`), so no surface sees a decision
+   * the disk lacks.
    */
   private observer(): OrchestratorObserver {
-    const relay = this.events.observer(() => this.plan, this.saves);
-    return {
+    const relay = this.events.observer(() => this.plan);
+    return this.saves.observe({
       ...relay,
-      onRunStarted: ({ origin }) => {
-        if (!this.plan) return;
-        this.supervision.runStarted(origin);
-        this.saves.after();
-        this.announcePlan();
+      onRunStarted: () => {
+        if (this.plan) this.announcePlan();
       },
       onAutoMerge: ({ trigger, result }) => {
         if (!this.plan) return;
@@ -1848,16 +1846,6 @@ export class Session {
         this.funds.woken(this.runs.childSession(data.taskId) ?? '');
         relay.onCheckpoint(data);
       },
-      // A script's effects do not wait for a save, and a reload that finds it
-      // unstarted would offer to run them again as if they never ran (ADR-0035).
-      onScriptClaimed: () => this.saves.after(),
-      // Saved the moment it settles: a shared run has no run record to save
-      // it mid-run, so a crash would otherwise lose every verdict since the
-      // last Session operation.
-      onTaskSettled: ({ taskId }) => {
-        const task = this.store.get(taskId);
-        this.saves.once(() => { if (task) this.supervision.taskSettled(task); });
-      },
       onUsageLimitWait: ({ taskId, runner, resumeAt, cancelled }) => {
         if (!cancelled) this.supervision.observe({ kind: 'usage_limit', taskId, runner, resumeAt });
       },
@@ -1868,13 +1856,21 @@ export class Session {
       onRunClosed: () => { this.closedUnannounced = true; },
       onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {
-        this.saves.after();
+        // What waited goes ahead of the run's close, as ahead of its end.
         this.events.flushStatus(this.plan);
         this.announceClosed();
         this.events.executionComplete(this.plan);
         this.supervision.runFinished();
       },
-    };
+    }, {
+      onRunStarted: ({ origin }) => {
+        if (this.plan) this.supervision.runStarted(origin);
+      },
+      onTaskSettled: ({ taskId }) => {
+        const task = this.store.get(taskId);
+        if (task) this.supervision.taskSettled(task);
+      },
+    });
   }
 
   /**
@@ -3018,9 +3014,7 @@ export class Session {
     // The opening stopped here may still be awaiting a spawn; an Execute after
     // this Stop starts afresh instead of joining a run that no longer stands.
     this.runOpening = null;
-    this.events.holdStatus(() => this.orchestrator.stop());
-    this.saves.after();
-    this.events.releaseStatus(this.plan);
+    this.saves.sync(() => this.orchestrator.stop());
     this.approvals.clear((request) => request.kind === 'task_start');
     this.broadcast({ type: 'execution_stopped' });
   }
@@ -3185,27 +3179,22 @@ export class Session {
     // attempt logs it left, so upgrading keeps the chats it already had. A
     // manual task's handoff log is not an attempt, and stays no chat.
     if (adopting) this.creditLoggedAttempts(plan.tasks);
-    // Held, so a task the load puts back is not saved here: whether a load saves is the caller's to say.
-    this.events.holdStatus(() => this.orchestrator.loadPlan(plan.tasks, plan.runners));
-    this.saves.loaded();
-    // Loading normalizes statuses (a stored `blocked` goes) on the store's
-    // copy; the adopted plan shows that result, not the caller's input.
-    this.syncPlanTasks();
-    // The run record is taken synchronously; the orphan prune and the look at
-    // what the user has merged since are awaited in the background, and git
-    // serializes them ahead of any worktree a run adds.
-    if (adopting) {
-      void this.adoptRun(plan, opts?.persist !== false || opts?.sessionId !== undefined);
-      // What the surfaces were last sent is not saved; a settled run is handed
-      // over again as its resend would, until git says what of it is merged.
-      this.sentHandoff = this.owedHandoff();
-      // Last, once the run is taken over: what waits now was there before this load (ADR-0053).
-      this.escalationNotifier.baseline(this.escalations());
-    }
-    // The load has happened: the file has the plan as it came, and the next
-    // save carries what adopting it added.
-    if (opts?.persist !== false) this.saves.after();
-    this.events.releaseStatus(this.plan);
+    this.saves.load(() => this.orchestrator.loadPlan(plan.tasks, plan.runners), () => {
+      // Loading normalizes statuses (a stored `blocked` goes) on the store's
+      // copy; the adopted plan shows that result, not the caller's input.
+      this.syncPlanTasks();
+      // The run record is taken synchronously; the orphan prune and the look at
+      // what the user has merged since are awaited in the background, and git
+      // serializes them ahead of any worktree a run adds.
+      if (adopting) {
+        void this.adoptRun(plan, opts?.persist !== false || opts?.sessionId !== undefined);
+        // What the surfaces were last sent is not saved; a settled run is handed
+        // over again as its resend would, until git says what of it is merged.
+        this.sentHandoff = this.owedHandoff();
+        // Last, once the run is taken over: what waits now was there before this load (ADR-0053).
+        this.escalationNotifier.baseline(this.escalations());
+      }
+    }, opts?.persist !== false);
     // A reopened session shows its token line again without waiting for the
     // next turn: announce the totals the moment the plan is adopted.
     if (this.usage.hasUsage) this.broadcast(this.usage.message());

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LegacyPlanState } from '../../models/Task';
 import type { SessionHeld } from '../sessionLease';
-import { SessionSaves } from '../SessionSaves';
+import { SessionSaves, type SavedEvent } from '../SessionSaves';
+import type { OrchestratorObserver } from '../TaskOrchestrator';
 
 const plan: LegacyPlanState = {
   tasks: [],
@@ -15,22 +16,13 @@ const otherHost = (hostId: string): SessionHeld => ({
   holder: { hostId, pid: 4242, since: '2026-01-01T00:00:00Z', heartbeatAt: '2026-01-01T00:00:00Z', runnerGroups: [] },
 });
 
-/** A Session's side of the seam: a plan store whose revision and statuses the test moves, and a status relay that records what it sent. */
+/** A Session's side of the seam: a plan store whose revision and statuses the test moves, and a status gate that records what it sent. */
 function harness() {
   const store = { revision: 1, statuses: 'a', statusMark() { return this.statuses; } };
   const sent: string[] = [];
-  let holding = false;
   let owed = false;
   const status = {
-    get holdingStatus() { return holding; },
-    holdStatus<T>(op: () => T): T {
-      holding = true;
-      try {
-        return op();
-      } finally {
-        holding = false;
-      }
-    },
+    holdStatus: <T>(op: () => T): T => op(),
     releaseStatus: () => {
       if (owed) sent.push('status');
       owed = false;
@@ -44,7 +36,7 @@ function harness() {
   const notice = vi.fn<(message: string) => void>();
   const deps = { plan: (): LegacyPlanState | null => plan, write, heldElsewhere: (): SessionHeld | null => null, store, status, notice };
   const saves = new SessionSaves(deps);
-  saves.loaded();
+  saves.load(() => {}, () => {}, false);
   const refuse = () => write.mockImplementation(() => { throw new Error('disk full'); });
   const statusMoved = () => {
     store.revision++;
@@ -53,6 +45,14 @@ function harness() {
   };
   return { saves, deps, store, write, notice, sent, refuse, statusMoved, oweStatus: () => { owed = true; } };
 }
+
+/** Every orchestrator event with no data, as the table names them, with what the one that takes some is given. */
+const settled = { taskId: 't1' };
+const fire = (observer: OrchestratorObserver, event: SavedEvent): void => {
+  if (event === 'onTaskSettled') observer.onTaskSettled?.(settled);
+  else if (event === 'onRunStarted') observer.onRunStarted?.({ origin: 'user' });
+  else observer[event]?.();
+};
 
 describe('SessionSaves', () => {
   beforeEach(() => {
@@ -240,5 +240,109 @@ describe('SessionSaves', () => {
     expect(write).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(10_000);
     expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  describe('what an orchestrator event owes the disk', () => {
+    /** An observer that records each announcement beside the saves, and effects that record theirs. */
+    function observed(env: ReturnType<typeof harness>) {
+      const announce = (name: string) => () => { env.sent.push(`announce ${name}`); };
+      const effect = (name: string) => () => { env.sent.push(`effect ${name}`); };
+      const events: SavedEvent[] = ['onTaskChanged', 'onTick', 'onUsageChanged', 'onIsolationChanged', 'onScriptClaimed', 'onRunStarted', 'onExecutionComplete', 'onTaskSettled'];
+      const announced = Object.fromEntries(events.map((e) => [e, announce(e)]));
+      const effects = Object.fromEntries(events.map((e) => [e, effect(e)]));
+      return env.saves.observe({ ...announced, onCheckpoint: announce('onCheckpoint') }, effects);
+    }
+
+    it.each(['onTaskChanged', 'onTick'] as const)('%s saves a moved status before it is announced, after its effect', (event) => {
+      const env = harness();
+      vi.setSystemTime(10_000);
+      env.store.revision++;
+      env.store.statuses += '+';
+      fire(observed(env), event);
+      expect(env.sent).toEqual([`effect ${event}`, 'save', `announce ${event}`]);
+    });
+
+    it('lets usage be announced before the save it owes, which waits for the timer', () => {
+      const env = harness();
+      env.store.revision++;
+      fire(observed(env), 'onUsageChanged');
+      expect(env.sent).toEqual(['effect onUsageChanged', 'announce onUsageChanged']);
+      vi.advanceTimersByTime(5000);
+      expect(env.sent.at(-1)).toBe('save');
+    });
+
+    it.each(['onIsolationChanged', 'onScriptClaimed', 'onRunStarted', 'onExecutionComplete'] as const)('%s saves after its effect and before it is announced, unpaced', (event) => {
+      const env = harness();
+      vi.setSystemTime(10_000);
+      env.saves.after();
+      env.sent.length = 0;
+      fire(observed(env), event);
+      expect(env.sent).toEqual([`effect ${event}`, 'save', `announce ${event}`]);
+    });
+
+    it('makes one save of all a settled task\'s effect asks for, before the settle is announced', () => {
+      const env = harness();
+      const observer = env.saves.observe({ onTaskSettled: () => { env.sent.push('announce'); } }, {
+        onTaskSettled: (data) => {
+          expect(data).toBe(settled);
+          env.saves.after();
+          env.saves.first();
+        },
+      });
+      fire(observer, 'onTaskSettled');
+      expect(env.sent).toEqual(['save', 'announce']);
+    });
+
+    it('still saves an event that has no effect, or no announcement', () => {
+      const env = harness();
+      const observer = env.saves.observe({});
+      fire(observer, 'onScriptClaimed');
+      fire(observer, 'onTaskSettled');
+      expect(env.write).toHaveBeenCalledTimes(2);
+    });
+
+    it('hands every other event on untouched, with no save', () => {
+      const env = harness();
+      const observer = observed(env);
+      observer.onCheckpoint?.({ taskId: 't1', taskTitle: 'T', summary: '' });
+      expect(env.sent).toEqual(['announce onCheckpoint']);
+    });
+
+    it('leaves a status moved inside a load to the load', () => {
+      const env = harness();
+      const observer = observed(env);
+      env.saves.load(() => {
+        env.statusMoved();
+        fire(observer, 'onTaskChanged');
+      }, () => {}, true);
+      expect(env.sent).toEqual(['effect onTaskChanged', 'announce onTaskChanged', 'save', 'status']);
+    });
+  });
+
+  describe('a load', () => {
+    it('saves what adopting the plan added before the status it held goes', () => {
+      const { saves, sent, statusMoved, store } = harness();
+      saves.load(statusMoved, () => { store.revision++; sent.push('adopt'); }, true);
+      expect(sent).toEqual(['adopt', 'save', 'status']);
+    });
+
+    it('saves nothing when its caller says it may not, and still lets the status go', () => {
+      const { saves, sent, statusMoved } = harness();
+      saves.load(statusMoved, () => {}, false);
+      expect(sent).toEqual(['status']);
+    });
+
+    it('owes nothing for what it put in the store, and owes what adopting it changed', () => {
+      const { saves, write, statusMoved, store } = harness();
+      vi.setSystemTime(10_000);
+      saves.load(statusMoved, () => {}, false);
+      saves.owed('status');
+      expect(write).not.toHaveBeenCalled();
+
+      saves.load(statusMoved, () => { store.revision++; }, false);
+      saves.owed('status');
+      vi.advanceTimersByTime(5000);
+      expect(write).toHaveBeenCalledTimes(1);
+    });
   });
 });
