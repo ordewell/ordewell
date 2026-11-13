@@ -7,7 +7,6 @@ import type { PlannerContextDeps } from './plannerContextBudget';
 import { PlannerBackend } from './PlannerBackend';
 import type { TaskOp } from './TaskOps';
 import { PlanChangeCheck, runsSealed, type PlanChangeScope } from './PlanChangeCheck';
-import { carryPlannedModes } from './ModeResolver';
 import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
@@ -81,7 +80,7 @@ import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './Planner
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { takeUserActions } from '../utils/userActionLog';
-import { approvalRecordOf, flattenTasks, keepExecutionState, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { childLease, describeHeld, describeLost, processLeaseHost, SessionHeldError, UNLEASED, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { refuseUsersCheckout } from './stateRoot';
@@ -2818,11 +2817,10 @@ export class Session {
    * started. The scheduler adopts them into the run under way, or as the plan
    * the next run starts from (`adoptEdit`).
    *
-   * A whole-plan commit is the planner restating every task, so it is laid
-   * over the plan's execution state rather than replacing it: a planner that
-   * answers "add a task" with the full plan must not undo the work already
-   * done. Task ops need no overlay — their applier refuses to touch settled
-   * tasks, and `rearm`, the one op meant to change a status, must stand.
+   * They are stored as the check passed them: a whole-plan commit was laid
+   * over the plan's execution state there, before its rules judged what lands
+   * (ADR-0022 P2), so a planner that answers "add a task" with the full plan
+   * cannot undo the work already done.
    */
   private adoptPlannerTasks(tasks: readonly Task[], how: 'edit' | 'commit'): number {
     this.turnEffects.landed(how, this.orchestrator.admittedNow());
@@ -2831,7 +2829,6 @@ export class Session {
     const runners = this.plan!.runners;
     const before = this.store.planTasks;
     let coerced = [...tasks];
-    if (how === 'commit') coerced = keepExecutionState(before, carryPlannedModes(before, coerced, this.catalog.edit(runners)));
     // Tasks an Act supervisor adds are approved to run, ops tasks included (ADR-0029): choosing Act was the consent.
     const bySupervisor = this.supervisorEditing();
     const { tasks: stamped, added } = stampOrigin(before, coerced, bySupervisor);

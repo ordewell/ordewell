@@ -1364,6 +1364,11 @@ export function stampOrigin(before: readonly Task[], after: readonly Task[], byS
 /** Done, running, or held for the user: execution state only a runner or the user can change. */
 const SETTLED_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>(['completed', 'in_progress', 'awaiting_user']);
 
+/** Whether {@link keepExecutionState} keeps this task exactly as it stands, whatever a rewrite says of it. */
+export function isSettledTask(task: Pick<Task, 'status'>): boolean {
+  return SETTLED_STATUSES.has(task.status);
+}
+
 function holdsSettledWork(task: Task): boolean {
   return SETTLED_STATUSES.has(task.status) || (task.subtasks ?? []).some(holdsSettledWork);
 }
