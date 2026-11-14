@@ -287,7 +287,7 @@ describe('stepFailure', () => {
       type: 'error', message: 'quota', usageLimit: { resetsAt: new Date(resetsAt).toISOString() },
     });
     expect(stepFailure(new ModelError({ kind: 'usage-limit', message: 'quota' }))).toEqual({ type: 'error', message: 'quota', usageLimit: {} });
-    expect(stepFailure(new ModelError({ kind: 'auth', message: 'bad key' }))).toEqual({ type: 'error', message: 'bad key' });
+    expect(stepFailure(new ModelError({ kind: 'auth', message: 'bad key' }))).toMatchObject({ type: 'error', message: expect.stringContaining('bad key'), usageLimit: false });
     expect(stepFailure('plain')).toEqual({ type: 'error', message: 'plain' });
   });
 });

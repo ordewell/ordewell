@@ -59,6 +59,13 @@ describe('SettingsService', () => {
     });
   });
 
+  it('keeps the Ordewell runner step limit only as a positive whole number of calls', () => {
+    for (const [value, kept] of [[3, 3], [0, undefined], [-2, undefined], [1.5, undefined], ['3', undefined]] as const) {
+      fs.writeFileSync(tempFile, JSON.stringify({ ordewellStepLimit: value }));
+      expect(new SettingsService(tempFile).getAll().ordewellStepLimit, String(value)).toBe(kept);
+    }
+  });
+
   it('picks up a write from another process (mtime-based cache invalidation)', () => {
     service.setModelAllowlist('opencode', ['a']);
     expect(service.getModelAllowlist('opencode')).toEqual(['a']);

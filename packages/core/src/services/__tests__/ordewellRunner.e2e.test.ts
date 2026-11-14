@@ -19,7 +19,9 @@ import { closeSessions, makeSession } from './sessionTestKit';
  * worktree and the real in-process loop, with only the provider faked, by the
  * `ordewell-runner` persona of bench/live/mock-provider.mjs. It reads, edits,
  * runs the test through the shell, and ends with task_complete, whose
- * token-bound call is the only thing the verdict rests on.
+ * token-bound call is the only thing the verdict rests on. The
+ * `ordewell-step-limit` persona never finishes by itself, so the step limit's
+ * forced task_complete is what ends its attempt.
  */
 
 const START_MOCK = pathToFileURL(resolve(__dirname, '../../../../../bench/live/start-mock.mjs')).href;
@@ -102,6 +104,24 @@ describe('the built-in Ordewell runner, offline', () => {
     // ADR-0032: the runner's transcript lives outside the workspace, so nothing of it lands.
     expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n').sort()).toEqual(['src/add.mjs', 'test.mjs']);
     expect(existsSync(join(root, 'transcript.jsonl'))).toBe(false);
+    session.destroy();
+  }, patient(90_000));
+
+  it('ends an attempt at its step limit with the report the forced task_complete made, every tool still offered', async () => {
+    const settings = join(tempDir(), 'settings.json');
+    writeFileSync(settings, JSON.stringify({ ordewellStepLimit: 3 }));
+    cleanups.push(setEnv({ ORDEWELL_SETTINGS_PATH: settings }));
+
+    const session = await fixAdd(repo(), 'ordewell-step-limit', 'full');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+    const task = session.planTasks[0];
+    expect(task.verdict).toMatchObject({ outcome: 'fail', reported: 'blocked' });
+    const report = task.handoff?.summary ?? '';
+    expect(report).toContain('Told it was the last call: true.');
+    // The last call keeps the whole toolset, so the provider's cache and the model's view of its tools are unchanged.
+    const offered = report.match(/Offered: ([^.]*)\./)?.[1].split(',') ?? [];
+    expect(offered).toEqual(expect.arrayContaining(['read', 'edit', 'shell', 'task_complete']));
     session.destroy();
   }, patient(90_000));
 

@@ -103,6 +103,12 @@ export interface UserSettings {
    */
   plannerReadLimit?: boolean | { calls?: number; kb?: number };
   /**
+   * The model calls one attempt of the built-in Ordewell runner may make, the
+   * last forced to a report (ADR-0070). Absent means the runner's default.
+   * Set in the file only: no surface offers it.
+   */
+  ordewellStepLimit?: number;
+  /**
    * What a task runner loads of the user's own setup: all of it (`user`) or
    * what a task needs (`minimal`). Absent means `user`. Set in the file only:
    * no surface offers it.
@@ -480,6 +486,9 @@ export class SettingsService {
     }
     const readLimit = readLimitSetting(raw.plannerReadLimit);
     if (readLimit !== undefined) settings.plannerReadLimit = readLimit;
+    if (Number.isInteger(raw.ordewellStepLimit) && (raw.ordewellStepLimit as number) >= 1) {
+      settings.ordewellStepLimit = raw.ordewellStepLimit as number;
+    }
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
     }

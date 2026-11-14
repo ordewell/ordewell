@@ -1,12 +1,13 @@
 import type { AgentEvent } from '../AgentAdapter';
 import type { UsageRecord } from '../../../models/Usage';
-import { isModelError } from '../../model';
+import { isModelError, type ModelError } from '../../model';
 import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCall, ModelUsage, SystemPart, ToolChoice, ToolDefinition, ToolResult as ModelToolResult } from '../../model';
 import { ordewellTools, runTool, type OrdewellTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
 import { Compactor, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
+import { REPEAT_FAIL_AT, REPEAT_NUDGE_AT, RepeatGuard, repeatFailure, repeatNudge } from './repeatGuard';
 
 /**
  * SEAM (b), the step boundary: called before every step's request, with the
@@ -91,6 +92,11 @@ export interface LoopOptions {
   onStepBoundary?: StepBoundaryHook;
   assemble?: RequestAssembler;
   effort?: EffortLevel;
+  /**
+   * Model calls the attempt may make. The last is forced to `task_complete`,
+   * so the attempt ends on a report rather than mid-edit; none is no limit.
+   */
+  stepLimit?: number;
   /** Redacts held secrets (ADR-0061) from everything emitted or written. */
   hide: <T>(value: T) => T;
   emit: (event: AgentEvent) => void;
@@ -101,10 +107,11 @@ export interface TurnOutcome {
   interrupted: boolean;
 }
 
-/** What a step left behind: the tool calls it made, if any. */
+/** What a step left behind: the tool calls it made, if any, and a repeat that ends the attempt. */
 interface StepResult {
   calls: number;
   interrupted: boolean;
+  repeated?: string;
 }
 
 const INTERRUPTED = 'Interrupted: the call was stopped before it finished.';
@@ -122,6 +129,13 @@ const INTERRUPTED = 'Interrupted: the call was stopped before it finished.';
  */
 export class OrdewellLoop {
   private readonly tools: readonly ToolDefinition[];
+  private readonly repeats = new RepeatGuard();
+  /** Requests sent in this attempt, every turn's: what the step limit counts. */
+  private modelCalls = 0;
+  /** Whether a report stands, a `task_complete` its handler accepted since the last message in. */
+  private reported = false;
+  private streaming: Promise<void> = Promise.resolve();
+  private stops = 0;
   private readonly neutral: readonly OrdewellTool[];
   private readonly compactor: Compactor;
 
@@ -147,6 +161,15 @@ export class OrdewellLoop {
     return this.tools;
   }
 
+  /**
+   * Settles once no model request is streaming: the one in flight ends by
+   * itself, its usage recorded, or at once when there is none. Stop waits on
+   * it, within its grace, so the step a report was made in is billed in full.
+   */
+  streamEnded(): Promise<void> {
+    return this.streaming;
+  }
+
   async runTurn(userText: string, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<TurnOutcome> {
     const { store } = this.options;
     let transcript = await store.load();
@@ -162,24 +185,80 @@ export class OrdewellLoop {
       await this.recordMessage(step, { role: 'tool', results });
     }
     await this.recordMessage(step + 1, { role: 'user', text: userText });
+    // A message in voids a report made before it (ADR-0023 D6).
+    this.reported = false;
 
     for (let turnSteps = 0; ; turnSteps++) {
       if (signals.stop.aborted || signals.hard.aborted) return { interrupted: true };
       step += 1;
+      // Past the limit no hook runs, so a message waiting for this boundary is
+      // dropped rather than delivered to a model that can no longer answer it.
+      if (this.limitReached()) return this.endAtLimit(step, signals);
       transcript = await store.load();
       const plan = (await this.options.onStepBoundary?.({ step, turnSteps, transcript, signal: signals.hard })) ?? {};
       if (signals.stop.aborted || signals.hard.aborted) return { interrupted: true };
       if (plan.stop) return { interrupted: false };
       if (plan.inject?.length) {
+        this.reported = false;
         for (const text of plan.inject) await this.recordMessage(step, { role: 'user', text });
-        transcript = await store.load();
       }
-      // After the boundary hook and its injections, so the estimate counts what the request carries.
+      let toolChoice = plan.toolChoice;
+      if (this.isLastCall() && this.options.taskTools.has('task_complete')) {
+        // Every tool stays offered, so the cached prefix holds; only the choice narrows.
+        toolChoice = { name: 'task_complete' };
+        await this.recordMessage(step, { role: 'user', text: lastCallInstruction(this.limit()) });
+      }
+      if (plan.inject?.length || toolChoice !== plan.toolChoice) transcript = await store.load();
+      // After the boundary hook, its injections and the last-call words, so the estimate counts what the request carries.
       transcript = await this.compactor.beforeRequest(transcript, step, signals.hard);
-      const result = await this.runStepRecovering(step, transcript, plan, signals);
+      // One step is one call against the limit, however many overflow retries it takes.
+      this.modelCalls += 1;
+      const result = await this.runStepRecovering(step, transcript, { ...plan, ...(toolChoice ? { toolChoice } : {}) }, signals);
       if (result.interrupted) return { interrupted: true };
-      if (result.calls === 0) return { interrupted: false };
+      if (result.repeated !== undefined) {
+        if (!this.reported) await this.endAttempt(step, result.repeated, signals);
+        return { interrupted: false };
+      }
+      if (result.calls === 0) return this.limitReached() ? this.endAtLimit(step, signals) : { interrupted: false };
     }
+  }
+
+  private limit(): number {
+    return this.options.stepLimit ?? Number.POSITIVE_INFINITY;
+  }
+
+  private limitReached(): boolean {
+    return this.modelCalls >= this.limit();
+  }
+
+  private isLastCall(): boolean {
+    return this.modelCalls === this.limit() - 1;
+  }
+
+  /** The limit is spent: a report stands, or the runner makes the failed one itself. */
+  private async endAtLimit(step: number, signals: { hard: AbortSignal }): Promise<TurnOutcome> {
+    if (!this.reported) {
+      const limit = this.limit();
+      await this.endAttempt(step, `The Ordewell runner reached its step limit of ${limit} model call${limit === 1 ? '' : 's'} without a report through task_complete.`, signals);
+    }
+    return { interrupted: false };
+  }
+
+  /**
+   * Ends the attempt as failed with the reason, through the attempt's own
+   * `task_complete`: the verdict then carries why, where an exit without a
+   * report would only say that none was made. The call is the runner's, not
+   * the model's, so it goes to the log and never into the transcript.
+   */
+  private async endAttempt(step: number, reason: string, signals: { hard: AbortSignal }): Promise<void> {
+    if (!this.options.taskTools.has('task_complete')) throw new Error(reason);
+    const id = `ordewell-stop-${step}-${++this.stops}`;
+    const args = { status: 'failed', summary: reason, reason };
+    this.emit({ type: 'tool_call', id, name: 'task_complete', args });
+    const reply = await this.options.taskTools.call('task_complete', args, signals.hard);
+    this.emit({ type: 'tool_result', id, name: 'task_complete', output: reply.text, success: reply.isError !== true });
+    if (reply.isError === true) throw new Error(`${reason} Its report was refused: ${reply.text}`);
+    this.reported = true;
   }
 
   private assemble(transcript: LoadedTranscript, plan: StepPlan): ModelRequest {
@@ -227,6 +306,11 @@ export class OrdewellLoop {
     const calls: ModelToolCall[] = [];
     const running: Promise<ModelToolResult>[] = [];
     let streamError: unknown;
+    let repeated: string | undefined;
+    let streamed!: () => void;
+    this.streaming = new Promise((resolve) => {
+      streamed = resolve;
+    });
 
     try {
       for await (const event of this.options.client.stream(request, signals.hard)) {
@@ -239,7 +323,13 @@ export class OrdewellLoop {
         } else if (event.type === 'tool-call-complete') {
           calls.push(event.call);
           this.emit({ type: 'tool_call', id: event.call.id, name: event.call.name, args: event.call.arguments });
-          running.push(this.startCall(event.call, signals));
+          const times = this.repeats.see(event.call);
+          if (repeated !== undefined || times >= REPEAT_FAIL_AT) {
+            repeated ??= repeatFailure(event.call);
+            running.push(Promise.resolve(this.settle(event.call, `Not run: ${repeated}`, true)));
+          } else {
+            running.push(this.startCall(event.call, signals, times === REPEAT_NUDGE_AT ? repeatNudge(event.call) : ''));
+          }
         } else if (event.type === 'usage') {
           usage = event.usage;
         } else if (event.type === 'provider-state') {
@@ -249,11 +339,17 @@ export class OrdewellLoop {
     } catch (err) {
       streamError = err;
     }
+    const aborted = signals.hard.aborted;
+    // Recorded before the calls are waited on, so a stop that ends them still keeps the step's bill. It
+    // covers the request and the assistant message recorded from its reply below, and not the tool
+    // results, which the next estimate adds; a failed step with no call records no reply.
+    const replied = calls.length > 0 || (text !== '' && (streamError === undefined || aborted));
+    if (usage) await this.recordUsage(step, usage, request.messages.length + (replied ? 1 : 0));
+    streamed();
 
     if (thinking) this.emit({ type: 'thinking', text: thinking });
     if (text) this.emit({ type: 'assistant_text', runId, text });
 
-    const aborted = signals.hard.aborted;
     if (streamError !== undefined && !aborted) {
       // Nothing of a failed step is recorded but the calls already running,
       // whose results the transcript needs to stay a valid conversation.
@@ -265,9 +361,7 @@ export class OrdewellLoop {
     } else {
       await this.recordStep(step, text, calls, providerState, running);
     }
-    // The usage counts the request and the assistant message recorded from its reply, and not the tool results, which the next estimate adds.
-    if (usage) await this.recordUsage(step, usage, request.messages.length + (calls.length > 0 || text ? 1 : 0));
-    return { calls: calls.length, interrupted: aborted || signals.stop.aborted };
+    return { calls: calls.length, interrupted: aborted || signals.stop.aborted, ...(repeated !== undefined ? { repeated } : {}) };
   }
 
   private async recordStep(
@@ -283,17 +377,14 @@ export class OrdewellLoop {
   }
 
   /** Starts one call now; settles to its result, never rejects. */
-  private async startCall(call: ModelToolCall, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<ModelToolResult> {
-    const settle = (output: string, isError: boolean): ModelToolResult => {
-      const shown = this.options.hide(output);
-      this.emit({ type: 'tool_result', id: call.id, name: call.name, output: shown, success: !isError });
-      return { callId: call.id, name: call.name, output: shown, ...(isError ? { isError: true } : {}) };
-    };
+  private async startCall(call: ModelToolCall, signals: { stop: AbortSignal; hard: AbortSignal }, nudge: string): Promise<ModelToolResult> {
+    const settle = (output: string, isError: boolean): ModelToolResult => this.settle(call, output + nudge, isError);
     if (signals.stop.aborted || signals.hard.aborted) return settle(INTERRUPTED, true);
     if (call.argumentsError) return settle(`Invalid arguments for ${call.name}: ${call.argumentsError}`, true);
     try {
       if (this.options.taskTools.has(call.name)) {
         const reply = await this.options.taskTools.call(call.name, call.arguments, signals.hard);
+        if (call.name === 'task_complete' && reply.isError !== true) this.reported = true;
         return settle(reply.text, reply.isError === true);
       }
       // Only what this attempt was offered: a read-only one has no write path to name (ADR-0046).
@@ -305,6 +396,12 @@ export class OrdewellLoop {
       if (signals.hard.aborted) return settle(INTERRUPTED, true);
       return settle(`${call.name} failed: ${err instanceof Error ? err.message : String(err)}`, true);
     }
+  }
+
+  private settle(call: ModelToolCall, output: string, isError: boolean): ModelToolResult {
+    const shown = this.options.hide(output);
+    this.emit({ type: 'tool_result', id: call.id, name: call.name, output: shown, success: !isError });
+    return { callId: call.id, name: call.name, output: shown, ...(isError ? { isError: true } : {}) };
   }
 
   private async recordUsage(step: number, usage: ModelUsage, covers: number): Promise<void> {
@@ -340,16 +437,39 @@ export class OrdewellLoop {
   }
 }
 
-/** A failed step as the event the session routes: a usage limit pauses the task, the rest fail it. */
+function lastCallInstruction(limit: number): string {
+  return `[Ordewell] This is your last model call: the attempt has reached its step limit of ${limit} model calls. Call task_complete now and report what is done and what is not, so the next attempt can continue from there.`;
+}
+
+/**
+ * A failed step as the event the session routes. A usage limit pauses the task
+ * until its reset (ADR-0018 U1). Every other failure says in its field that it
+ * was not the limit, so no word of a provider's message ("quota exceeded per
+ * minute") reads as one, and its words are put the way E1's reader
+ * (runnerExit.classifyRunnerStop) takes them: a provider still failing or
+ * throttling after the client's own retries is a turn a later try may pass,
+ * and anything else (a bad key, a bad request) fails the same way every time.
+ */
 export function stepFailure(err: unknown): Extract<AgentEvent, { type: 'error' }> {
-  if (isModelError(err)) {
-    return {
-      type: 'error',
-      message: err.message,
-      ...(err.kind === 'usage-limit' ? { usageLimit: err.resetsAt !== undefined ? { resetsAt: new Date(err.resetsAt).toISOString() } : {} } : {}),
-    };
+  if (!isModelError(err)) return { type: 'error', message: err instanceof Error ? err.message : String(err) };
+  if (err.kind === 'usage-limit') {
+    return { type: 'error', message: err.message, usageLimit: err.resetsAt !== undefined ? { resetsAt: new Date(err.resetsAt).toISOString() } : {} };
   }
-  return { type: 'error', message: err instanceof Error ? err.message : String(err) };
+  return { type: 'error', message: failureWords(err), usageLimit: false };
+}
+
+function failureWords(err: ModelError): string {
+  const status = err.status !== undefined ? `HTTP ${err.status}` : undefined;
+  switch (err.kind) {
+    case 'transient':
+      return `The provider is failing (${status ?? (err.network ? 'unreachable' : 'stream error')}, service unavailable) after retries: ${err.message}`;
+    case 'rate-limited':
+      return `The provider is rate limiting requests (${status ?? 'HTTP 429'}) after retries: ${err.message}`;
+    case 'auth':
+      return `The provider refused the key${status ? ` (${status})` : ''}: ${err.message}. Check it, or replace it with /key.`;
+    default:
+      return status ? `${err.message} (${status})` : err.message;
+  }
 }
 
 /** A zod-made schema's `$schema` key, which some providers refuse in a tool definition. */
