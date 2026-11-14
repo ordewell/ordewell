@@ -364,7 +364,9 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   if (start.kind !== 'own') return stranded(row, start, input, rows);
   const body = [...rows.values()].filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
-  return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
+  // A retry of the check would run it against the tree that stopped the loop and fail again at once, and a body task that did not run is no wait of its own to retry from.
+  const stopped = ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows);
+  return { kind: 'failed', ...stopped, options: stopped.options.filter((o) => o.id !== 'retry' && o.id !== 'continue') };
 }
 
 /** Merge all as the user is offered it: with what it would carry past its check (ADR-0055 D9) and the ops tasks it would go beside (ADR-0020) named, when there are any. */

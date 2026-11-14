@@ -224,7 +224,7 @@ describe('what waits on a person, task by task', () => {
     ['a loop out of rounds', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 2 }, loopRound: 2 }), task('b', 2, { status: 'skipped', dependencies: ['c'] })], { attempts: { c: 2 } },
       [{ id: 'out-of-rounds:c:2', kind: 'out-of-rounds', options: ['retry', 'skip', 'complete'] }]],
     ['a loop stopped by a skipped body task, whose check is the only thing left to list', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 3 } }), task('b', 2, { status: 'skipped', dependencies: ['c'] })], { attempts: { c: 1 } },
-      [{ id: 'failed:c:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }]],
+      [{ id: 'failed:c:1', kind: 'failed', options: ['skip', 'complete'] }]],
     ['a loop stopped by a failed body task lists the body task once, not its check', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 3 } }), task('b', 2, { ...failed, dependencies: ['c'] })], { attempts: { b: 1, c: 1 } },
       [{ id: 'failed:b:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }]],
     ['a blocked dependent lists its cause, once', [task('t1', 1, failed), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })], { attempts: { t1: 1 } },

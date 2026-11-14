@@ -1978,7 +1978,10 @@ export class TaskOrchestrator {
     // A task paused on a usage limit no longer waits on its reset.
     this.limitPauses.recount();
     this.emit('onTaskChanged');
-    await this.tick();
+    // Vouched for, the task releases its dependents as a retry that passes would, so a run that
+    // ended on a failure goes on for them; a Stop since leaves the run stopped.
+    if (completesTask(landing) && admission.current()) await (this.continueRun('user') ?? this.tick());
+    else await this.tick();
   }
 
   /**
