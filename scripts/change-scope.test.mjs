@@ -416,6 +416,8 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/live/drive-conversation.mjs', {}, {}, ['harness', 'planner']],
     ['bench/live/drive-taskops.mjs', {}, {}, ['harness', 'planner']],
     ['bench/live/drive-conversation.test.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/live/runner-smoke.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/live/runner-smoke.test.mjs', {}, {}, ['bench', 'harness']],
     ['bench/lib/data-dir.mjs', {}, {}, ['bench', 'harness', 'planner']],
     ['bench/lib/data-dir.test.mjs', {}, {}, ['bench', 'harness', 'planner']],
     ['bench/live/drive-binary.mjs', {}, {}, ['binary']],
