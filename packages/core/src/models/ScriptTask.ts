@@ -19,7 +19,7 @@ export const MAX_SCRIPT_TIMEOUT_MS = 24 * 60 * 60_000;
 export type ScriptBody =
   /** Argument vectors run in order with no shell, stopping at the first that fails. */
   | { commands: string[][]; timeoutMs: number }
-  /** One script, run by the research shell's interpreter. */
+  /** One script, run by the research shell's interpreter, or the shell its first `#!` line names (ADR-0035). */
   | { script: string; timeoutMs: number };
 
 /** The fields that make up a script task's body: what consent is given to. */

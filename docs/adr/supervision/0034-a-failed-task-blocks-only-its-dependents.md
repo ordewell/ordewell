@@ -92,9 +92,9 @@ starting as usual.
   is finished.
   A task waiting on the user, on hold, at a merge gate or on a usage limit
   keeps the run open, as before.
-- **A retry or a skip continues the run.** Retrying or skipping a task of a
-  run that ended on a failure re-arms the scheduler, so the tasks the failed
-  one blocked start once its retry passes, or on a skip once the work behind it is done — by the user,
+- **A retry, a skip or Mark complete continues the run.** Retrying, skipping or
+  marking complete a task of a run that ended on a failure re-arms the scheduler, so the tasks the failed
+  one blocked start once its retry passes, or on a skip or Mark complete once the work behind it is done — by the user,
   or by an Act supervisor within its loop guards. A run a usage-limit pause
   holds meanwhile stays held: the retry makes it the plan's run, which the
   reset then lets go (ADR-0018 U1). A planner edit made in between is
@@ -176,3 +176,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-24 — a hold set by a stop or a taken-back completion survives starting the plan again, the user's Stop of the run and an edit of the same plan; it was cleared by all three.
 - 2026-10-31 — a load and an edit outside a run leave a failed task failed, so its block stands; Execute gives the fresh chance ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a failed task an edit makes manual has nothing to retry, so it stops being failed, in a run or not ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+- 2026-11-14 — Mark complete of a task in a run that ended on a failure continues that run, as a retry or a skip does.

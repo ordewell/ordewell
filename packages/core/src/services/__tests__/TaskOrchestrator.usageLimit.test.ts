@@ -172,10 +172,13 @@ describe('a task paused on a usage limit', () => {
 
     sessions[0].emitEvent({ type: 'error', message: 'Rate limit reached for gpt-5.5.', usageLimit: false });
     sessions[0].emitTurnEnd('failed');
-    await until(() => task('t1').status === 'awaiting_user');
+    await flushMicrotasks();
 
-    expect(task('t1').awaitingReason).toBe('input');
+    // The provider's throttle, not the account's limit: the turn is tried again (ADR-0018 E1).
+    expect(task('t1').status).toBe('in_progress');
     expect(waits).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sessions[0].fromOrdewell).toHaveLength(1);
   });
 
   it('pauses the same way when the runner exits on the limit', async () => {

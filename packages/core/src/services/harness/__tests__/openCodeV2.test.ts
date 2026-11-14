@@ -655,6 +655,38 @@ describe('OpenCode 2.x — a turn', () => {
     adapter.dispose();
   });
 
+  // OpenCode 2.x keeps the provider's status beside the words, as 1.x does in statusCode (ADR-0018 E1).
+  it.each([
+    ['a 400', { type: 'provider.invalid-request', status: 400, message: 'Provider returned error' }, 'Provider returned error (HTTP 400)', 'stopped'],
+    ['a 401', { type: 'provider.auth', status: 401, message: 'Provider returned error' }, 'Provider returned error (HTTP 401)', 'stopped'],
+    ['a 502', { type: 'provider.internal', status: 502, message: 'Provider returned error' }, 'Provider returned error (HTTP 502)', 'transient'],
+    ['a 502 with an empty message', { type: 'provider.internal', status: 502, message: '' }, 'provider.internal (HTTP 502)', 'transient'],
+    ['a 503 with an empty message', { type: 'provider.transport', status: 503, message: '' }, 'provider.transport (HTTP 503)', 'transient'],
+    ['a 401 with an empty message', { type: 'provider.auth', status: 401, message: '' }, 'provider.auth (HTTP 401)', 'stopped'],
+    ['an auth error with no status', { type: 'provider.auth', message: 'Provider returned error' }, 'Provider returned error (provider.auth)', 'stopped'],
+    ['an invalid request with no status', { type: 'provider.invalid-request', message: 'Provider returned error' }, 'Provider returned error (provider.invalid-request)', 'stopped'],
+    ['a spent quota with no status', { type: 'provider.quota', message: 'Provider returned error' }, 'Provider returned error (provider.quota)', 'stopped'],
+    ['a content filter with no status', { type: 'provider.content-filter', message: 'Provider returned error' }, 'Provider returned error (provider.content-filter)', 'stopped'],
+    ['an unsupported operation with no status', { type: 'provider.unsupported-operation', message: 'Provider returned error' }, 'Provider returned error (provider.unsupported-operation)', 'stopped'],
+    ['an internal error with no status', { type: 'provider.internal', message: 'Provider returned error' }, 'Provider returned error (provider.internal)', 'transient'],
+    ['invalid output with no status', { type: 'provider.invalid-output', message: 'Provider returned error' }, 'Provider returned error (provider.invalid-output)', 'transient'],
+  ])('keeps the provider\'s side of %s beside its words', async (_name, error, message, stop) => {
+    const { classifyRunnerStop } = await import('../../runnerExit');
+    const server = fakeServer();
+    const { adapter } = await start(server, taskStart());
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (e) => events.push(e));
+    const stream = await server.stream();
+    await until(() => server.requests.some((r) => r.path.endsWith('/prompt')));
+    stream.push(started());
+    stream.push(frame('session.execution.failed', { error }));
+    await turn;
+
+    expect(events).toEqual([{ type: 'error', message }]);
+    expect(classifyRunnerStop(message)).toBe(stop);
+    adapter.dispose();
+  });
+
   it('ends the turn from /api/session/active when the end frame never arrives', async () => {
     const server = fakeServer({
       [`GET /api/session/${SES}/message`]: () => ({ data: [{ id: 'msg_idle', type: 'idle', outcome: 'succeeded' }] }),

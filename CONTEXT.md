@@ -520,7 +520,9 @@ brief, or one whose finding out needs a worktree (a failing test, a build, a
 reproduction), another runner or model to judge it, or the user to see it and
 be able to stop it. Evidence only a later task acts on is a plain read-only
 task that task depends on, reading the findings in its handoff. A first plan
-may be research tasks alone when it cannot be outlined without them.
+may be research tasks alone when it cannot be outlined without them: their
+reports keep the authority of the user's turn that added them, so the planner
+plans the rest on them at any supervisor level.
 Orientation, a conclusion the planner needs this turn that no task acts on,
 stays in the turn, in its own reads or its own agents; a search, rounds of
 research each deciding the next, is the `explore` skill (ADR-0037 R5).
@@ -1807,7 +1809,8 @@ files, a usage-limit pause with no resume scheduled, a failed task, a *Loop*
 out of rounds, or, in an open run, a task that nothing but a person holds back
 (its *Merge gate*, a hold, its approval, nothing to run, a user task), or a
 reverted task in any run; and of the run itself, landed work with nothing left
-to move it, and a *Blocked run*.
+to move it, a *Blocked run*, and, below Act, a planner reply to a *Wake-up turn*
+that nothing will follow, which the user answers by writing to the planner.
 It carries an id that names the wait and not just its attempt, which can wait
 many times, so a later wait is another escalation; the task it belongs to, which
 links to the
@@ -2256,7 +2259,7 @@ gate, and lands nothing: no ops task. A **Delegated task**'s check, and what a
 task whose body is a literal script that Ordewell runs itself, with no runner,
 model or mode. The body is `commands`, argument vectors run in order with no
 shell and stopping at the first that fails, or `script`, one script for the
-research shell's interpreter, outside the planner's sandbox; a time limit
+research shell's interpreter, or for the shell its first `#!` line names, outside the planner's sandbox; a time limit
 (ten minutes unless the task sets one) ends it as failed. It is top-level only,
 runs at the workspace root with the workspace's environment, and is an ops task
 in everything else: the merge gate, the Merge-all exclusion and the tracked-file

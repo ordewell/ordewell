@@ -102,3 +102,32 @@ describe('Skip: a task ends without landing its work', () => {
     expect(h.promptOf('b')).toContain('### Task 1: Task a\n- Skipped: the host cannot run it. None of its work landed, so it is not in your tree; do not count on it.');
   });
 });
+
+describe('Mark complete: a run that ended on the failure goes on for what the task released', () => {
+  it('starts the dependents of a failed task the user vouches for, as a retry that passes would', async () => {
+    const h = setup([task('a', 1), task('b', 2, ['a'])]);
+    await h.orchestrator.approveReview();
+    await h.fail('a');
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalledTimes(1));
+    expect(h.spawned()).not.toContain('b');
+
+    await h.orchestrator.markTaskComplete('a');
+
+    await h.pass('b');
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalledTimes(2));
+    expect(h.orchestrator.status).toBe('completed');
+  });
+
+  it('leaves a run that ended on the failure ended when the task it vouches for releases nothing', async () => {
+    const h = setup([task('a', 1), task('b', 2), task('c', 3, ['b'])]);
+    await h.orchestrator.approveReview();
+    await h.fail('a');
+    await h.fail('b');
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalledTimes(1));
+
+    await h.orchestrator.markTaskComplete('a');
+
+    expect(h.spawned()).not.toContain('c');
+    expect(h.orchestrator.isRunning).toBe(false);
+  });
+});

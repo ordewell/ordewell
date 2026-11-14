@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { escalationAct, escalations, type Escalation, type EscalationInput, type EscalationRun } from '../escalations';
 import { planStartWaits } from '../readiness';
+import { redactAgentText } from '../../utils/redactSecrets';
 import { createTask, type Task } from '../../models/Task';
 import type { PendingApproval } from '../PendingApprovals';
 import type { RunMergeView } from '../SessionMessage';
@@ -23,6 +24,8 @@ interface Setup {
   live?: string[];
   attempts?: Record<string, number>;
   checkpoints?: Record<string, string>;
+  /** Task id → why its live attempt's last turn failed, in its runner's words. */
+  turnFailures?: Record<string, string>;
   added?: string[];
   onHold?: Record<string, string>;
   unmerged?: string[];
@@ -75,6 +78,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     },
     live: (id) => (setup.live ?? []).includes(id),
     checkpoint: (id) => setup.checkpoints?.[id],
+    turnFailure: (id) => setup.turnFailures?.[id],
     waitsForApproval: (id) => (setup.added ?? []).includes(id),
     startQueued: (id) => (setup.startsAlone ?? []).includes(id),
     resolvable: (id) => !(setup.unresolvable ?? []).includes(id),
@@ -224,7 +228,7 @@ describe('what waits on a person, task by task', () => {
     ['a loop out of rounds', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 2 }, loopRound: 2 }), task('b', 2, { status: 'skipped', dependencies: ['c'] })], { attempts: { c: 2 } },
       [{ id: 'out-of-rounds:c:2', kind: 'out-of-rounds', options: ['retry', 'skip', 'complete'] }]],
     ['a loop stopped by a skipped body task, whose check is the only thing left to list', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 3 } }), task('b', 2, { status: 'skipped', dependencies: ['c'] })], { attempts: { c: 1 } },
-      [{ id: 'failed:c:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }]],
+      [{ id: 'failed:c:1', kind: 'failed', options: ['skip', 'complete'] }]],
     ['a loop stopped by a failed body task lists the body task once, not its check', [task('c', 1, { status: 'failed', verdict: failedVerdict('failed'), loop: { body: ['b'], maxRounds: 3 } }), task('b', 2, { ...failed, dependencies: ['c'] })], { attempts: { b: 1, c: 1 } },
       [{ id: 'failed:b:1', kind: 'failed', options: ['retry', 'skip', 'complete'] }]],
     ['a blocked dependent lists its cause, once', [task('t1', 1, failed), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })], { attempts: { t1: 1 } },
@@ -400,6 +404,22 @@ describe('an escalation\'s other fields', () => {
     expect(only.reason).toBe('Checkpoint: Ship it?');
   });
 
+  it('names the error a wait for input follows when its turn failed (ADR-0018 E1)', () => {
+    const waiting = task('t1', 1, { status: 'awaiting_user', awaitingReason: 'input' });
+    const [failed] = listFor([waiting], { live: ['t1'], turnFailures: { t1: 'API Error: 502 Bad Gateway' }, run: { advancing: true } });
+    expect(failed.reason).toBe('Waiting for your input. Its turn failed: API Error: 502 Bad Gateway');
+    const [plain] = listFor([waiting], { live: ['t1'], run: { advancing: true } });
+    expect(plain.reason).toBe('Waiting for your input.');
+  });
+
+  it('redacts a key the turn error carries, as any text a runner wrote', () => {
+    const key = 'sk-ant-api03-' + 'A1b2C3d4E5'.repeat(9) + '-AAAAAA';
+    const waiting = task('t1', 1, { status: 'awaiting_user', awaitingReason: 'input' });
+    const [failed] = listFor([waiting], { live: ['t1'], turnFailures: { t1: `API Error: 401 invalid x-api-key ${key}` }, run: { advancing: true } });
+    expect(redactAgentText(`x ${key}`)).not.toContain(key);
+    expect(failed.reason).not.toContain(key);
+  });
+
   it('asks before an AI task is marked complete, and not before a manual one is', () => {
     const [ai] = listFor([task('t1', 1, { status: 'awaiting_user', awaitingReason: 'files-changed', ops: true })]);
     expect(ai.options.find((o) => o.id === 'complete')?.confirm).toMatch(/^Mark task #1 "Task t1" complete\? You vouch/);
@@ -441,5 +461,32 @@ describe('what an id names', () => {
     expect(single).toMatchObject({ repos: ['.'], reason: 'Tracked files have uncommitted changes, so tasks cannot run in isolated worktrees.' });
     const [group] = listFor([], { run: { blocked: { start: 2, repos: ['web', 'api'] } } });
     expect(group).toMatchObject({ repos: ['web', 'api'], reason: 'Tracked files have uncommitted changes in web, api, so tasks cannot run in isolated worktrees.' });
+  });
+});
+
+describe('a planner reply to a wake-up that waits on the user (ADR-0053, ADR-0029)', () => {
+  const at = '2026-11-14T10:00:00.000Z';
+  const closed = { open: false, plannerWaits: at };
+
+  it('is the run\'s own wait once nothing is left to run, answered in the conversation', () => {
+    const [entry, ...rest] = listFor([task('t1', 1, { status: 'completed' })], { run: closed });
+    expect(rest).toEqual([]);
+    expect(entry).toMatchObject({ id: `planner:${at}`, kind: 'planner', options: [] });
+    expect(entry.task).toBeUndefined();
+    expect(entry.reason).toContain('Reply to the planner');
+  });
+
+  it('comes after the work waiting to be merged', () => {
+    const merge: RunMergeView = { waitingAtGate: false, paused: false, repos: [], landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] };
+    expect(shape(listFor([task('t1', 1, { status: 'completed' })], { attempts: { t1: 1 }, run: { ...closed, merge, id: 'r1' } })).map((e) => e.kind))
+      .toEqual(['merge-all', 'planner']);
+  });
+
+  it.each<[string, Partial<EscalationRun>]>([
+    ['while the run is open', { open: true, plannerWaits: at }],
+    ['while something moves a task on unasked', { open: false, advancing: true, plannerWaits: at }],
+    ['when no reply waits', { open: false }],
+  ])('is left out %s', (_name, run) => {
+    expect(listFor([task('t1', 1, { status: 'completed' })], { run })).toEqual([]);
   });
 });

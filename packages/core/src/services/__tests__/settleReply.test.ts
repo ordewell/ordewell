@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { settleReply, type ReplyAttempt, type SettleReplyOptions } from '../settleReply';
 import type { ResearchProgress, ResearchStep } from '../../models/Task';
 import type { TurnRun } from '../AiService';
@@ -153,6 +153,73 @@ describe('settleReply', () => {
 
     expect(turn).toEqual({ kind: 'message', text: 'Claude Code exited with code 1: not logged in', researchLog: [], failed: true });
     expect(m.sent).toHaveLength(1);
+  });
+
+  // The planner's turn its provider failed is tried again, as a task's is (ADR-0018 E1).
+  describe('a call its provider failed', () => {
+    const BAD_GATEWAY = 'API Error: 502 Bad Gateway';
+
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('is tried again after the backoff, and the reply to the try settles the turn', async () => {
+      const m = model(reply('', { failure: BAD_GATEWAY }), reply('Which store: SQLite or Postgres?'));
+
+      const settled = settleReply(m.opts());
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(m.sent).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const turn = await settled;
+
+      expect(turn).toEqual({ kind: 'message', text: 'Which store: SQLite or Postgres?', researchLog: [] });
+      expect(m.sent).toHaveLength(2);
+      expect(m.sent[1]).toContain(BAD_GATEWAY);
+    });
+
+    it('redacts a key the error carries from the try', async () => {
+      const key = 'sk-ant-api03-' + 'A1b2C3d4E5'.repeat(9) + '-AAAAAA';
+      const m = model(reply('', { failure: `${BAD_GATEWAY} (x-api-key ${key})` }), reply('Done.'));
+
+      const settled = settleReply(m.opts());
+      await vi.advanceTimersByTimeAsync(30_000);
+      await settled;
+
+      expect(m.sent[1]).toContain(BAD_GATEWAY);
+      expect(m.sent[1]).not.toContain(key);
+    });
+
+    it('settles on the error once every try has failed', async () => {
+      const m = model(...Array.from({ length: 4 }, () => reply('', { failure: BAD_GATEWAY })), reply('never asked for'));
+
+      const settled = settleReply(m.opts());
+      await vi.advanceTimersByTimeAsync(30_000 + 60_000 + 120_000);
+      const turn = await settled;
+
+      expect(turn).toEqual({ kind: 'message', text: BAD_GATEWAY, researchLog: [], failed: true });
+      expect(m.sent).toHaveLength(4);
+    });
+
+    it('stops waiting when the turn is stopped, and settles on the error', async () => {
+      const stop = new AbortController();
+      const m = model(reply('', { failure: BAD_GATEWAY }), reply('never asked for'));
+
+      const settled = settleReply(m.opts({ signal: stop.signal }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      stop.abort();
+      const turn = await settled;
+
+      expect(turn).toMatchObject({ text: BAD_GATEWAY, failed: true });
+      expect(m.sent).toHaveLength(1);
+    });
+
+    it('is not tried again on the usage limit, which has its own wait', async () => {
+      const m = model(reply('', { failure: BAD_GATEWAY, usageLimit: {} }), reply('never asked for'));
+
+      const turn = await settleReply(m.opts());
+
+      expect(turn).toMatchObject({ text: BAD_GATEWAY, failed: true, usageLimit: {} });
+      expect(m.sent).toHaveLength(1);
+    });
   });
 
   // A harness agent asked to wait for its backgrounded subagents answers in a

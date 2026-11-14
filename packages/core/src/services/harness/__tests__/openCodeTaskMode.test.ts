@@ -517,6 +517,39 @@ describe('OpenCodeAdapter task mode — when a turn ends', () => {
     adapter.dispose();
   });
 
+  // OpenCode's APIError keeps the provider's status in `data.statusCode`, apart
+  // from the router's words: only the status says whether a try may pass.
+  it('keeps the status of a provider\'s 4xx beside its words, so the turn is not retried as transient', async () => {
+    const { classifyRunnerStop } = await import('../../runnerExit');
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(assistant('msg_a', { error: { name: 'APIError', data: { message: 'Provider returned error', statusCode: 401, isRetryable: false } } }));
+    stream.push(status('idle'));
+    await turn;
+    expect(events).toEqual([{ type: 'error', message: 'Provider returned error (HTTP 401)' }]);
+    expect(classifyRunnerStop(events[0] as { message: string })).toBe('stopped');
+    adapter.dispose();
+  });
+
+  it('keeps the status of a provider\'s 5xx on a session error, so the turn is retried', async () => {
+    const { classifyRunnerStop } = await import('../../runnerExit');
+    const server = fakeServer();
+    const { adapter } = await startTask(server);
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(status('busy'));
+    stream.push({ type: 'session.error', properties: { sessionID: SES, error: { name: 'APIError', data: { message: 'Provider returned error', statusCode: 503, isRetryable: true } } } });
+    stream.push(status('idle'));
+    await turn;
+    expect(events).toEqual([{ type: 'error', message: 'Provider returned error (HTTP 503)' }]);
+    expect(classifyRunnerStop(events[0] as { message: string })).toBe('transient');
+    adapter.dispose();
+  });
+
   it('fails the turn when the server exits mid-turn, and reports the exit once', async () => {
     const server = fakeServer();
     const { adapter, spawned } = await startTask(server);

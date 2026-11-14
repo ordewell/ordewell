@@ -234,7 +234,7 @@ const runScriptInput = z.object({
   title: z.string().trim().min(1).describe('What the script does, as its task in the plan is titled.'),
   commands: z.array(z.array(z.string())).optional()
     .describe('Argument vectors run in order with no shell, stopping at the first that fails, like [["git", "push", "origin", "main"]]. Exactly one of commands or script.'),
-  script: z.string().optional().describe('A script, run by the shell your run_command uses, for an effect that needs one (a pipe, a loop). Exactly one of commands or script.'),
+  script: z.string().optional().describe('A script, run by the shell your own commands use unless its first line is a #! line naming another shell (bash, zsh), for an effect that needs one (a pipe, a loop). Exactly one of commands or script.'),
   timeoutMs: z.number().optional().describe('Its time limit in milliseconds; ten minutes when left out.'),
   dependencies: z.array(taskRef).optional().describe('Tasks in the plan it runs after. It waits for the user to merge their work into their branch first.'),
 });

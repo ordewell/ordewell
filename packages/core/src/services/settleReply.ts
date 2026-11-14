@@ -3,6 +3,8 @@ import type { ResearchLogEntry, ResearchProgress, ResearchStep, RunnerId } from 
 import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageLimitSignal } from './harness/AgentAdapter';
 import type { RunnerModeInfo } from './ModeResolver';
+import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS } from './runnerExit';
+import { redactAgentText } from '../utils/redactSecrets';
 import {
   classifyPlannerReply, type PlannerReplyClassification, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, repairLoop, truncatedPlanReEmitPrompt,
 } from './PlanRepair';
@@ -113,6 +115,7 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
     }
   };
   let nudged = false;
+  let providerRetries = 0;
   let current: ReplyAttempt | undefined;
 
   // An empty reply (budget models do this after tool use; an agent can end on
@@ -122,6 +125,15 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
     const attempt = await opts.send(text);
     current = attempt;
     researchLog.push(...attempt.researchLog);
+    // A call its provider failed is tried again in the same conversation, as a task's turn is (ADR-0018 E1).
+    if (providerFailed(attempt) && providerRetries < PROVIDER_RETRY_DELAYS_MS.length) {
+      const delay = PROVIDER_RETRY_DELAYS_MS[providerRetries];
+      providerRetries += 1;
+      if (await waited(delay, opts.signal)) {
+        discard(attempt);
+        return send(providerRetryPrompt(attempt.failure ?? ''));
+      }
+    }
     if (attempt.text.trim() || attempt.aborted || attempt.failure !== undefined || nudged) return attempt;
     nudged = true;
     discard(attempt);
@@ -179,6 +191,38 @@ export async function settleReply(opts: SettleReplyOptions): Promise<Conversatio
 }
 
 const said = (attempt: ReplyAttempt): string => attempt.fullText ?? attempt.text;
+
+/** The call ended on its provider's error: a 5xx, an overload, a throttle that is not the usage limit. */
+function providerFailed(attempt: ReplyAttempt): boolean {
+  if (attempt.failure === undefined || attempt.aborted) return false;
+  return classifyRunnerStop({ message: attempt.failure, ...(attempt.usageLimit !== undefined && { usageLimit: attempt.usageLimit }) }) === 'transient';
+}
+
+/** Wait out a backoff; false when the turn was stopped first, which ends the wait. */
+function waited(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** How much of a provider's error the retry repeats: some carry a whole response body. */
+const PROVIDER_ERROR_CLIP = 300;
+
+function providerRetryPrompt(failure: string): string {
+  // The provider's words, which the conversation shows: redacted as all runner text is, then cut.
+  const clean = redactAgentText(failure);
+  const error = clean.length > PROVIDER_ERROR_CLIP ? `${clean.slice(0, PROVIDER_ERROR_CLIP)}…` : clean;
+  return `Your last reply failed on a provider error, not on anything you did: ${error}. Continue where you left off and answer the user's last message.`;
+}
 
 function deniedStep(attempt: ReplyAttempt): ResearchStep | undefined {
   return attempt.researchLog.find((e): e is ResearchStep => !('type' in e) && e.outcome === 'denied');

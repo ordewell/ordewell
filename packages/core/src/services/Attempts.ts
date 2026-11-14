@@ -16,7 +16,7 @@ import type { IsolationDecision, IsolationRunController } from './IsolationRunCo
 import type { Landing, LandingOutcome } from './Landing';
 import { TaskStartConfig } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
-import { classifyRunnerStop, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
+import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
 import {
   attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
@@ -37,6 +37,7 @@ import { blobsIn, type NodeBoard, type WorkBlobs } from './Board';
 import { isBoardRef } from '../models/Board';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
+import { redactAgentText } from '../utils/redactSecrets';
 import type { ApplyPatchArgs, McpToolReply, PostArgs } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
@@ -124,6 +125,10 @@ interface TaskAttempt extends EndedAttempt {
   turnOutputFrom: number;
   /** The completion reminder went out: once per attempt, so a second turn without `task_complete` waits for input. */
   reminded: boolean;
+  /** Tries of a turn its provider failed spent in a row (ADR-0018 E1); a turn that ends any other way starts them over. */
+  providerRetries: number;
+  /** The try waiting out its backoff, until it goes or the attempt ends. */
+  providerRetry: ReturnType<typeof setTimeout> | null;
   /**
    * Its runner was told to stop (ADR-0018, L1). What it reports as it winds
    * down is still this attempt's, though the attempt has ended.
@@ -541,6 +546,8 @@ export class Attempts {
       env: {},
       turnOutputFrom: 0,
       reminded: false,
+      providerRetries: 0,
+      providerRetry: null,
       runnerStopped: false,
       planScope: this.planScope,
       script,
@@ -605,6 +612,7 @@ export class Attempts {
     if (attempt) {
       attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
+      dropProviderRetry(attempt);
       store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
       this.deps.output.detach(taskId);
       attempt.shell?.end();
@@ -719,6 +727,11 @@ export class Attempts {
   /** What the task's waiting checkpoint asks, whole; undefined once it settles or when none waits. */
   checkpointQuestion(taskId: string): string | undefined {
     return this.verifier.getCheckpointQuestion(taskId);
+  }
+
+  /** Why the running attempt's last turn failed, in its runner's words; undefined when it did not. */
+  turnFailure(taskId: string): string | undefined {
+    return this.live.get(taskId)?.turnError?.message;
   }
 
   /**
@@ -907,6 +920,8 @@ export class Attempts {
         this.noteReceipt(task.id, attempt, event.type === 'completion_received' ? event.status : null);
       }
       if (event.type === 'turn_start') {
+        // A turn the user opened while a try waited is the try: one more would land on top of it.
+        dropProviderRetry(attempt);
         attempt.turnError = null;
         attempt.turnOutputFrom = session.getOutput().length;
       } else if (event.type === 'error') attempt.turnError = event;
@@ -1387,9 +1402,15 @@ export class Attempts {
       session.kill();
       return;
     }
-    if (reason === 'failed' && attempt.turnError !== null && classifyRunnerStop(attempt.turnError) === 'usage-limit') {
+    const stop = reason === 'failed' && attempt.turnError !== null ? classifyRunnerStop(attempt.turnError) : null;
+    if (stop === 'usage-limit') {
       // The runner is still up, but no turn can run until the limit resets.
       this.host.unawaited(this.stopOnLimit(taskId, attempt), `Could not pause task "${store.get(taskId)?.title ?? taskId}" on its usage limit`);
+      return;
+    }
+    if (stop !== 'transient') attempt.providerRetries = 0;
+    else if (attempt.providerRetries < PROVIDER_RETRY_DELAYS_MS.length) {
+      this.retryTurn(taskId, attempt, session);
       return;
     }
     if (reason === 'completed' && !attempt.reminded) {
@@ -1406,6 +1427,32 @@ export class Attempts {
     store.markAwaitingUser(taskId, 'input');
     this.verifier.pauseIdle(taskId);
     this.host.emit('onTaskSettled', { taskId });
+    this.host.emit('onTaskChanged');
+  }
+
+  /**
+   * Try a turn its provider failed again, in the same session, once its
+   * backoff has passed (ADR-0018 E1). The task stays in progress meanwhile, so
+   * nothing asks the user; its silence is not watched, as no turn runs.
+   */
+  private retryTurn(taskId: string, attempt: TaskAttempt, session: IRunnerSession): void {
+    const delay = PROVIDER_RETRY_DELAYS_MS[attempt.providerRetries];
+    attempt.providerRetries += 1;
+    // The runner's words go to the user and back to it, redacted as all its text is.
+    const error = clip(redactAgentText(attempt.turnError?.message ?? ''));
+    const title = this.deps.store.get(taskId)?.title ?? taskId;
+    this.verifier.pauseIdle(taskId);
+    this.host.tell('info', `Task "${title}": its turn failed on a provider error (${error}). Trying again in ${delay / 1000} s (try ${attempt.providerRetries} of ${PROVIDER_RETRY_DELAYS_MS.length}).`);
+    attempt.providerRetry = setTimeout(() => {
+      attempt.providerRetry = null;
+      if (this.live.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided || session.turnState() === 'working') return;
+      if (this.deps.store.get(taskId)?.status !== 'in_progress') return;
+      try {
+        this.message(taskId, providerRetryMessage(error), 'message', (live, message) => live.sendMessage(message, 'ordewell'));
+      } catch (err) {
+        this.host.tell('warn', `Could not try task "${title}" again after its provider error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }, delay);
     this.host.emit('onTaskChanged');
   }
 
@@ -1635,6 +1682,20 @@ const CONTROL_WORDS = {
 
 /** What Ordewell tells a runner whose turn ended without a `task_complete` call (ADR-0018, W1). */
 const COMPLETION_REMINDER = 'Your turn ended without calling `task_complete`. If the task is done, call `task_complete` with status `done` and a summary of at most 1,500 characters for the next reader. Put atomic findings in findings and the long form in report (at most 20,000 characters). If you are blocked, call it with status `blocked` and the reason. If you need something from the user, say exactly what and end your turn.';
+
+/** How much of a provider's error a notice or the retry repeats: some carry a whole response body. */
+const PROVIDER_ERROR_CLIP = 300;
+
+const clip = (text: string): string => (text.length > PROVIDER_ERROR_CLIP ? `${text.slice(0, PROVIDER_ERROR_CLIP)}…` : text);
+
+function providerRetryMessage(error: string): string {
+  return `Your last turn failed on a provider error, not on the task: ${error}. Continue the task from where you left off.`;
+}
+
+function dropProviderRetry(attempt: TaskAttempt): void {
+  if (attempt.providerRetry) clearTimeout(attempt.providerRetry);
+  attempt.providerRetry = null;
+}
 
 /** How much of an ops task's last attempt the next one is shown. */
 const OPS_RETRY_TAIL_LINES = 60;

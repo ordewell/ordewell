@@ -11,13 +11,14 @@ import { waitOf, type StartWait, type StartWaitKind } from './readiness';
 import type { ExecutionCommand } from './ExecutionCommands';
 import type { PendingApproval } from './PendingApprovals';
 import type { RunMergeView } from './SessionMessage';
+import { redactAgentText } from '../utils/redactSecrets';
 
 /**
  * What an escalation waits on (ADR-0053). `approval`, `checkpoint`, `input`,
  * `conflict`, `landing-failed`, `files-changed` and `usage-limit` are a task's wait; `failed` and
  * `out-of-rounds` its end; `merge-gate`, `unapproved`, `on-hold`, `no-prompt`
- * and `by-hand` what alone keeps a task from starting; `merge-all` and
- * `blocked-run` are the run's own.
+ * and `by-hand` what alone keeps a task from starting; `merge-all`,
+ * `blocked-run` and `planner` are the run's own.
  */
 export type EscalationKind =
   | 'approval'
@@ -35,7 +36,8 @@ export type EscalationKind =
   | 'no-prompt'
   | 'by-hand'
   | 'merge-all'
-  | 'blocked-run';
+  | 'blocked-run'
+  | 'planner';
 
 export type EscalationOptionId =
   | 'allow'
@@ -125,6 +127,12 @@ export interface EscalationRun {
    * repositories (`.` for the workspace's own), when one waits on it; null when none does.
    */
   blocked: { start: number; repos: readonly string[] } | null;
+  /**
+   * When the planner's latest reply, written for a wake-up below Act, waits on
+   * the user: its timestamp. Absent when the user spoke last, a wake is owed or
+   * the planner is at work, since then the reply is not the last word (ADR-0029).
+   */
+  plannerWaits?: string;
 }
 
 /** What the list is derived from: nothing here is kept for it. */
@@ -140,6 +148,8 @@ export interface EscalationInput {
   live: (taskId: string) => boolean;
   /** What the task's waiting checkpoint asks, whole. */
   checkpoint: (taskId: string) => string | undefined;
+  /** Why the task's live attempt's last turn failed, in its runner's words: what a wait for input follows from (ADR-0018 E1). */
+  turnFailure: (taskId: string) => string | undefined;
   /** Added since the user approved the plan, and left for them (ADR-0035). */
   waitsForApproval: (taskId: string) => boolean;
   /** Queued to start with no scheduler, once what holds it clears. */
@@ -319,9 +329,19 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
     case 'input':
     case undefined:
       return live
-        ? { kind: 'input', reason: 'Waiting for your input.', options: [{ id: 'reply', label: 'Reply', note: 'required' }, SKIP, ...completeOption(row, input.run)] }
+        ? { kind: 'input', reason: inputReason(input.turnFailure(task.id)), options: [{ id: 'reply', label: 'Reply', note: 'required' }, SKIP, ...completeOption(row, input.run)] }
         : { kind: 'input', ...ended(row, 'It was waiting for your input, and no runner is left to read a reply.', input, rows) };
   }
+}
+
+/** How much of a turn's error a reason repeats: a provider's can carry a whole response body. */
+const TURN_FAILURE_CLIP = 300;
+
+function inputReason(failure: string | undefined): string {
+  // The runner's words, so redacted as all its text is, and before the cut, so no key is left half-shown.
+  const error = failure === undefined ? undefined : redactAgentText(failure).trim();
+  if (!error) return 'Waiting for your input.';
+  return `Waiting for your input. Its turn failed: ${error.length > TURN_FAILURE_CLIP ? `${error.slice(0, TURN_FAILURE_CLIP)}…` : error}`;
 }
 
 /**
@@ -364,7 +384,9 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   if (start.kind !== 'own') return stranded(row, start, input, rows);
   const body = [...rows.values()].filter((r) => task.loop?.body.includes(r.task.id));
   if (body.some((r) => r.task.status === 'failed' || waitOf(input.waits.get(r.task.id) ?? [], 'blocked'))) return null;
-  return { kind: 'failed', ...ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows) };
+  // A retry of the check would run it against the tree that stopped the loop and fail again at once, and a body task that did not run is no wait of its own to retry from.
+  const stopped = ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows);
+  return { kind: 'failed', ...stopped, options: stopped.options.filter((o) => o.id !== 'retry' && o.id !== 'continue') };
 }
 
 /** Merge all as the user is offered it: with what it would carry past its check (ADR-0055 D9) and the ops tasks it would go beside (ADR-0020) named, when there are any. */
@@ -477,9 +499,10 @@ function attemptsDigest(taskIds: readonly string[], input: EscalationInput, rows
 /**
  * Everything that will not move without a person (ADR-0053), in the order of
  * what stops the most first: a run that cannot start, then the plan's tasks in
- * order, then the work waiting to be merged. Pure and derived, as `planBlocks`
- * and `startWaits` are: nothing is stored, so nothing has to be cleared, and it
- * survives a reload as the waits it reads do.
+ * order, then the work waiting to be merged, then a planner reply waiting on
+ * its answer. Pure and derived, as `planBlocks` and `startWaits` are: nothing
+ * is stored, so nothing has to be cleared, and it survives a reload as the
+ * waits it reads do.
  */
 export function escalations(input: EscalationInput): Escalation[] {
   const rows: Rows = new Map(flattenTasksWithParents(input.tasks).map((row) => [row.task.id, row]));
@@ -501,7 +524,14 @@ export function escalations(input: EscalationInput): Escalation[] {
     reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => rows.get(t.taskId)?.ref ?? t.taskId).join(', ')}.`,
     options: [mergeOption(input)],
   }];
-  return [...blocked, ...tasks, ...merge];
+  // Below Act no one but the user answers the planner, so a run with nothing left to move ends on its reply (ADR-0029).
+  const planner: Escalation[] = run.plannerWaits === undefined || run.open || run.advancing ? [] : [{
+    id: `planner:${run.plannerWaits}`,
+    kind: 'planner',
+    reason: 'The planner waits on you: its last reply, to a run update, asks what comes next. Reply to the planner to continue.',
+    options: [],
+  }];
+  return [...blocked, ...tasks, ...merge, ...planner];
 }
 
 /** What a chosen option comes to: a command at the seam, or a Session operation that has none. */

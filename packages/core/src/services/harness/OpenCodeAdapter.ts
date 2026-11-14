@@ -108,10 +108,13 @@ interface OpenCodePermissionAsk {
   tool?: { messageID?: string; callID?: string };
 }
 
-/** OpenCode's errors are tagged unions: `{ name, data: { message } }`. */
+/**
+ * OpenCode's errors are tagged unions: `{ name, data: { message } }`. An
+ * `APIError` also carries the provider's HTTP status in `statusCode`.
+ */
 interface OpenCodeError {
   name?: string;
-  data?: { message?: string };
+  data?: { message?: string; statusCode?: unknown };
 }
 
 interface OpenCodeMessageInfo {
@@ -213,8 +216,15 @@ function permissionDetail(ask: OpenCodePermissionAsk): string {
   return JSON.stringify({ ...(scope ? { scope } : {}), ...(ask.metadata ?? {}) });
 }
 
+/**
+ * The error's words, with the provider's status beside them: a router's
+ * "Provider returned error" is a retryable failure or the request's own only
+ * by its status (ADR-0018 E1), and OpenCode keeps that apart from the words.
+ */
 function errorText(error: OpenCodeError): string {
-  return error.data?.message || error.name || 'OpenCode reported an error.';
+  const words = error.data?.message || error.name || 'OpenCode reported an error.';
+  const status = error.data?.statusCode;
+  return typeof status === 'number' && Number.isInteger(status) ? `${words} (HTTP ${status})` : words;
 }
 
 function flatModelId(providerID: string | undefined, modelID: string | undefined): string | undefined {
@@ -887,7 +897,7 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   private settle(reply: OpenCodeMessageResponse | null, turn: TurnState, onEvent: (e: AgentEvent) => void): void {
     const failure = typeof reply?.error === 'string'
       ? reply.error
-      : (reply?.error as { message?: string } | undefined)?.message ?? reply?.info?.error?.data?.message;
+      : (reply?.error as { message?: string } | undefined)?.message ?? (reply?.info?.error?.data?.message ? errorText(reply.info.error) : undefined);
     if (failure) {
       onEvent({ type: 'error', message: failure });
       return;

@@ -63,3 +63,16 @@ describe('a token serving the research agent (ADR-0066)', () => {
     await server.dispose();
   });
 });
+
+describe('run_script (review 132)', () => {
+  it('says a #! line may name another shell, the only interpreters a script is handed to', () => {
+    const tool = toolListing(PLANNER_TOOLS).find((t) => t.name === 'run_script') as unknown as { inputSchema: { properties: { script: { description: string } } } };
+    expect(tool.inputSchema.properties.script.description).toMatch(/a #! line naming another shell \(bash, zsh\)/);
+    expect(tool.inputSchema.properties.script.description).not.toMatch(/another interpreter/);
+  });
+  it('names the shell the planner\'s own commands use, which is cmd.exe on Windows without Git Bash', () => {
+    const tool = toolListing(PLANNER_TOOLS).find((t) => t.name === 'run_script') as unknown as { inputSchema: { properties: { script: { description: string } } } };
+    expect(tool.inputSchema.properties.script.description).toMatch(/^A script, run by the shell your own commands use unless/);
+    expect(tool.inputSchema.properties.script.description).not.toMatch(/POSIX sh/);
+  });
+});

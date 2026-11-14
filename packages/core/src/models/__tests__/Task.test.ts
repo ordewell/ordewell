@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason, migrateLoadedTasks } from '../Task';
+import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason, migrateLoadedTasks, wakeUpReply } from '../Task';
 import { serializeTask, serializeTaskStatus, surfaceTask } from '../../services/SessionMessage';
-import type { LegacyPlanState, Task, PlanState, Message, TaskSnapshot } from '../Task';
+import type { LegacyPlanState, Task, PlanState, Message, TaskSnapshot, ConversationMessage } from '../Task';
 
 describe('LegacyPlanState conversation fields', () => {
   it('createEmptyPlan carries no dialogue or PRD markdown by default', () => {
@@ -546,5 +546,27 @@ describe('migrateLoadedTasks: who skipped a task', () => {
     migrateLoadedTasks(tasks);
     expect(tasks[0]).not.toHaveProperty('skipOrigin');
     expect(tasks[0].subtasks[0].skipOrigin).toBe('loop');
+  });
+});
+
+describe('wakeUpReply (ADR-0029)', () => {
+  const at = (n: number) => `2026-11-14T10:00:0${n}.000Z`;
+  const user = (n: number): ConversationMessage => ({ role: 'user', content: 'do it', timestamp: at(n) });
+  const wake = (n: number): ConversationMessage => ({ role: 'user', content: 'Run update: the run finished', timestamp: at(n), kind: 'wake_up' });
+  const said = (n: number, kind?: ConversationMessage['kind']): ConversationMessage => ({ role: 'assistant', content: 'noted', timestamp: at(n), ...(kind ? { kind } : {}) });
+
+  it.each<[string, ConversationMessage[], string | undefined]>([
+    ['a supervisor note on a wake-up', [user(0), said(1), wake(2), said(3, 'supervisor')], at(3)],
+    ['a report turn\'s reply on a wake-up, which speaks for the user', [user(0), said(1), wake(2), said(3)], at(3)],
+    ['a reply that says something and commits a plan', [user(0), said(1), wake(2), said(3), said(4, 'plan_generated')], at(4)],
+    ['a reply past what the turn did at the seam and noted', [wake(0), said(1, 'execution'), said(2, 'supervisor'), said(3, 'system')], at(2)],
+    ['a reply to the user', [wake(0), said(1, 'supervisor'), user(2), said(3)], undefined],
+    ['a reply to the user and wake-ups together', [user(0), wake(1), said(2)], undefined],
+    ['a wake-up not answered yet', [wake(0), said(1, 'supervisor'), wake(2)], undefined],
+    ['a wake-up whose turn failed', [wake(0), said(1, 'supervisor'), wake(2), said(3, 'error')], undefined],
+    ['the user writing since', [wake(0), said(1, 'supervisor'), user(2)], undefined],
+    ['a conversation with no wake-up', [user(0), said(1, 'plan_generated')], undefined],
+  ])('%s', (_name, history, expected) => {
+    expect(wakeUpReply(history)).toBe(expected);
   });
 });

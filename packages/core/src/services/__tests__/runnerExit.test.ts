@@ -53,6 +53,62 @@ describe('classifyRunnerStop', () => {
     expect(classifyRunnerStop({ message: "You've hit your usage limit. Try again later." })).toBe('usage-limit');
   });
 
+  // What the runners end a turn with when their provider failed it, not the
+  // account or the task: Claude Code's API error, OpenCode's provider error.
+  it.each([
+    'API Error: 502 Bad Gateway',
+    'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+    'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+    'Provider returned error',
+    '{"error":{"message":"Provider returned error","code":502}}',
+    '429 Provider returned error',
+    'unexpected status 503 Service Unavailable',
+    'stream error: HTTP 504 Gateway Timeout',
+    // OpenCode 2.x, where the frame carried a type and no status.
+    'Provider returned error (provider.transport)',
+    'Provider returned error (provider.timeout)',
+    'Provider returned error (provider.invalid-output)',
+  ])('reads a transient provider error from %j', (message) => {
+    expect(classifyRunnerStop({ message })).toBe('transient');
+  });
+
+  it('reads a rate limit the runner said was not its usage limit as transient', () => {
+    expect(classifyRunnerStop({ message: 'Rate limit reached for gpt-5.5.', usageLimit: false })).toBe('transient');
+    expect(classifyRunnerStop({ message: 'API Error: 503 Service Unavailable', usageLimit: false })).toBe('transient');
+  });
+
+  it('keeps a usage limit apart from a transient error, whatever else its words say', () => {
+    expect(classifyRunnerStop({ message: 'API Error: 429 You have hit your usage limit.' })).toBe('usage-limit');
+    expect(classifyRunnerStop({ message: 'Provider returned error', usageLimit: {} })).toBe('usage-limit');
+  });
+
+  it.each([
+    'Tests failed: expected 500 to equal 200',
+    'The server returned 404 Not Found',
+    'Error: ENOENT: no such file or directory',
+    'Invalid API key · Please run /login',
+    // A router's error with a 4xx beside it is the request's or the key's: it fails the same way on every try.
+    '403 Provider returned error',
+    'API Error: 403 Provider returned error',
+    '{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"maximum context length exceeded"}}}',
+    '{"error":{"message":"Provider returned error","code":401}}',
+    '{"error":{"message":"Provider returned error","code":"400"}}',
+    'Provider returned error (statusCode: 400)',
+    'Provider returned error (HTTP 401)',
+    'Error 400: Provider returned error',
+    "This model's maximum context length is 128000 tokens. Provider returned error",
+    'Provider returned error: context_length_exceeded',
+    // OpenCode 2.x, where the frame carried a type and no status.
+    'Provider returned error (provider.auth)',
+    'Provider returned error (provider.invalid-request)',
+    'Provider returned error (provider.quota)',
+    'Provider returned error (provider.content-filter)',
+    'Provider returned error (provider.unsupported-operation)',
+    'Provider returned error (provider.no-route)',
+  ])('does not read a transient error from %j', (message) => {
+    expect(classifyRunnerStop({ message })).toBe('stopped');
+  });
+
   it('does not read a limit signature buried far above the tail', () => {
     const buried = 'usage limit reached\n' + 'x'.repeat(5000);
     expect(classifyRunnerStop(buried)).toBe('stopped');

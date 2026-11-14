@@ -358,6 +358,25 @@ and completion evidence.
   `onUsageLimitWait` announces each pause and
   each change to its resume, with the time or null, for a supervisor to wake on;
   a cancelled resume is marked as one, so it wakes nobody.
+- **Provider errors (E1).** A turn that fails on its provider's error, not
+  the account's or the task's, has not failed the task either: an HTTP 5xx,
+  Claude Code's `API Error: 5xx`, an overload, OpenCode's `Provider returned
+  error` unless a 4xx status other than 429 beside it, or words naming a
+  context too long, say the request or the key was refused (OpenCode keeps an
+  `APIError`'s status in its `statusCode`, which the adapter puts beside the
+  words as `HTTP <status>`), or a throttle the runner's own field says is not its usage limit
+  (Codex's `rateLimitExceeded`). `classifyRunnerStop` reads it from the turn's
+  error as `transient`, after U1: a usage limit, by its field or its words,
+  keeps U1's pause. The task stays `in_progress` with no escalation, and the
+  turn is tried again in its saved session, told the error, after 30, 60 and
+  120 seconds, with a notice for each. A turn that ends any other way starts
+  the count over, and a turn the user opens in the wait is the try and drops
+  the pending one, as ending the attempt does. When the last try fails too, the
+  task waits for input as any failed turn does, and the escalation's reason
+  names the error. The error is the runner's text, so the notice, the try and
+  the reason carry it redacted, as the rest of its text is. The planner's turn follows the same rule in `settleReply`,
+  each call its provider failed resent in the same conversation; a stop during
+  the wait ends it, and the turn settles on the error.
 - **Task log persistence (P1).** Append-only, per attempt, at
   `.ordewell/sessions/<session>/tasks/<task>/<attempt>.jsonl`, holding
   normalized events with long tool output trimmed; a run's text events carry
@@ -517,6 +536,14 @@ transport is retained for take-over.
   behaviour when only a paused task's move carried work over: the earlier
   runner's files were discarded unseen. The carry-over is the same for every
   move.
+- **A provider error waits for input at once.** The earlier rule: an outage
+  of a minute stopped an unattended run behind a "waiting for your input" that
+  named nothing to answer.
+- **A provider error pauses as a usage limit does (U1).** It holds every
+  start on that runner for a reset nobody announced; the next turn usually
+  gets through, and other tasks need not wait for it.
+- **Retrying without a bound.** An outage that lasts would spend the run's
+  time unseen; after the bounded tries the user decides.
 - **Storing the log inside the session JSON.** That file is rewritten on every
   save; an append-only file per attempt is not.
 
@@ -564,3 +591,6 @@ transport is retained for take-over.
 - 2026-11-12 — L1: a wind-down after `task_complete` lets an OpenCode 2.x step in flight end within the interrupt grace before interrupting, a second stop killing at once; an aborted OpenCode 2.x turn is interrupted, with a one-second grace, before its server is disposed of.
 - 2026-11-13 — W1: an interrupt asked for and not refused ends its turn interrupted on every runner, even when the turn finished as it landed; an error of the turn's own still outranks it.
 - 2026-11-13 — W1: a subagent an interrupt cut short finishes `stopped` on every runner, not `failed`, and one tracker per adapter reports each subagent's start and finish once, where the planner service did.
+- 2026-11-14 — E1: a turn its provider failed (a 5xx, an overload, a throttle that is not the usage limit) is tried again in its saved session after a 30, 60 and 120 second backoff, the planner's as a task's, before input is asked with the error in its reason.
+- 2026-11-14 — E1: a `Provider returned error` with a 4xx status other than 429 is not transient; the error is redacted wherever it is repeated.
+- 2026-11-14 — E1: OpenCode's `APIError` status is kept beside its words, a status code written as `statusCode` or a quoted string counts, and a context too long is not transient without a status.

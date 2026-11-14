@@ -207,7 +207,7 @@ export function whoExploresSection(agents: InTurnAgents): string[] {
     '- Read it yourself: the project\'s own guides (README, AGENTS.md or CLAUDE.md, its glossary, its ADR index), a map of its directories, and targeted lookups (a known file, a symbol, one grep) whose detail decides your next step or question. Stop when you can decide the next step, not when you understand the whole architecture.',
     agentTier,
     '- A task: when finding out needs a worktree (reproduce, build, prototype), another runner or model\'s judgement, or the user\'s sight and power to stop it, or when a later task will act on its findings. That later task depends on it and gets the findings in its handoff: do not retell them in its brief. Make it a research task only when you must decide something on its report; otherwise a read-only task its readers depend on. A loop\'s fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read`. Take in a research task\'s summary, and pull its full report with task_output only where the plan rests on the detail.',
-    '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you. A vague goal the user can clarify is not one: ask first.',
+    '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you, at any supervisor level. A vague goal the user can clarify is not one: ask first.',
     '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks. Where it is which of several approaches to take, the skill has explorers save their prototypes with save_patch, choose on a check fixed beforehand, and has the build task depend on the chosen explorer and apply its patch with apply_patch.',
     '- Give each delegated piece a self-contained brief, since a task never sees this conversation: its goal, its inputs, what to report back, and how its result will be checked. Plan the integration step, and prefer evidence you can check (a test, an exit code) over a task\'s own word.',
     // The record, not a summary, is what a checkpoint carries over intact (ADR-0067), so it is kept as things are decided.
@@ -250,7 +250,7 @@ export const NATIVE_SHELL_GUIDE = [
  * would then run unattended.
  */
 export const AUTORUN_ON =
-  'AUTORUN is on: a plan you submit starts when your reply ends, without the user\'s review. When you are ready to plan, write the outline in your reply as the plan\'s summary and submit the plan in the same reply; do not wait for the user to confirm it, and do not start its tasks yourself. Still ask clarifying questions first when the goal is vague or a decision would materially change the outcome.';
+  'AUTORUN is on: a plan you submit starts when your reply ends, without the user\'s review. When ready, write the outline in your reply as the plan\'s summary and submit the plan in the same reply; do not wait for the user to confirm it, and do not start its tasks yourself. Still ask clarifying questions first when the goal is vague or a decision would materially change the outcome.';
 
 /** A turn where the user turned autorun off: the outline gate is back. */
 export const AUTORUN_OFF =
@@ -327,7 +327,7 @@ const EXECUTION_TOOLS_SECTION = [
   'RUNNING THE PLAN:',
   'When the user asks you to start, stop or retry work, do it with these tools rather than asking them to. Ordewell checks every call, may ask the user first, and a refusal says why and what would be accepted. When you suggest something only the user does, name it by the control SURFACE AND SETTINGS lists for it, never a button it does not name.',
   '- run_plan starts the whole plan, or makes the tasks already running one scheduled run, so their dependents start; run_task starts one task now, and nothing starts after it on its own.',
-  '- run_script performs an exact effect yourself, such as a push or one setting on a cloud resource: a script task, added to the plan and started at once with no model, from the commands you give as argument vectors (or a script). The user consents to it as written, unless AUTORUN is on and autonomy is Full. An effect that needs judgment is an ops task.',
+  '- run_script performs an exact effect yourself, such as a push: a script task, added to the plan and started at once, from argument vectors or a script. The user consents to it as written, unless AUTORUN is on and autonomy is Full. An effect that needs judgment is an ops task.',
   '- stop_task stops one running task; stop_run stops every running task and keeps the plan.',
   '- retry_task starts a new attempt of a failed, stopped or waiting task: "fresh" from its prompt, or "session" to continue its saved session with a message. To change what it is told, edit its prompt with edit_plan first.',
   '- message_task sends a running task a message, or answers one waiting for input.',
@@ -368,14 +368,14 @@ function opsTaskSection(conversation: boolean): string[] {
     '- A change task (the default) edits repository files. Omit "ops".',
     '- An ops task changes no repository files: it acts on systems outside the repository (a cloud CLI, a deployment, a pipeline) or on the git refs and history of the user\'s branch (push, tag, reword). Set "ops": true. Only top-level "ai" tasks can be ops; a subtask runs with its parent.',
     '- Ops tasks run in the user\'s own checkout, after the user has merged the change tasks they depend on. Make an ops task depend on every change task whose result it acts on.',
-    '- Split a request that mixes the two into a change task and an ops task that depends on it: "bump the version and redeploy" is a change task that bumps and commits the version, then an ops task that pushes and watches the pipeline.',
+    '- Split a request that mixes the two into a change task and an ops task that depends on it: "bump the version and redeploy" is a change task that commits the bump, then an ops task that pushes and watches the pipeline.',
     '- Two ops tasks that collide must not run in parallel — make one depend on the other: git operations on one branch (a push and a reword), or builds, installs or file writes in the checkout.',
-    '- An ops task runs until what it acts on has finished: one that watches a pipeline is done when the pipeline ends.',
+    '- An ops task runs until what it acts on finishes, such as the pipeline it watches.',
     ...(conversation
       ? [
         '- A question is not a task: answer it in this conversation, from your research.',
         '- A change to the world takes one of three shapes. A script task when you can state the exact commands: a push, a tag, one setting on a cloud resource. An ops task when the work needs judgment: watching a pipeline and reacting to it, a step that depends on what the last one found. A change task for files.',
-        '- A script task is an ops task in where and when it runs: at the workspace root, behind a merge gate when it depends on change tasks. Its verdict is its exit status, and its log is what ran and what it printed. Chain script tasks that build or write there too.',
+        '- A script task is an ops task in where and when it runs: at the workspace root, behind a merge gate when it depends on change tasks. Its log is what ran and what it printed. Chain script tasks that build or write there too.',
       ]
       : []),
   ];
@@ -466,13 +466,13 @@ export function buildConversationSystemPrompt(
 const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/^You are Ordewell's project planner: the coordinator of a run, not its main worker\. You work out the goal with the user, /, 'You are a subplanner: Ordewell\'s project planner for one part of a larger plan, its coordinator, not its main worker. You work out the goal from your brief, '],
   [/^2\. Ask clarifying questions grounded in your findings\. Reference actual files\. When the goal is vague, .*$/m, '2. No person reads this conversation, so nobody answers a question: decide from your findings, and write what you assumed into the task it bears on. What only someone above you can decide ends this with task_complete and status "blocked", saying exactly what is needed.'],
-  [/ Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail\./, ' Be direct: avoid preamble, summaries and explanations.'],
+  [/ Be direct: no preamble, summaries or explanations the user did not ask for\./, ' Be direct: avoid preamble, summaries and explanations.'],
   [/: once your turn ends, nothing you say reaches the user\./, ': once your turn ends, nothing you say reaches anyone.'],
   [/ At a phase boundary, or once it shows your context past .*$/m, ''],
   [/ the decisions agreed with the user and the plan\./, ' your brief and the plan.'],
   [/ Reads run at once; anything else is approved or refused by the user's settings\./, ' Reads run at once, and nothing asks: what the allowlist does not cover runs sealed, or is refused.'],
   [/^- Synthesize tool findings\b.*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
-  [/^- A first plan may be research tasks alone, (.*?) A vague goal the user can clarify is not one: ask first\./m, '- A first plan may be research tasks alone, $1'],
+  [/^(- A first plan may be research tasks alone, .*? wake you), at any supervisor level\. A vague goal .*? ask first\./m, '$1.'],
   [/^- A small effect you can state as exact commands: one script task\. In the user's turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan\./m, '- A small effect you can state as exact commands: one script task, in the plan or with run_script.'],
   [/^- AUTORUN is on: .*$/m, '- Your plan starts when your reply ends. Once submit_plan has taken it, end your reply with one line, and do not start its tasks yourself.'],
   [/^.*"autonomy": AFK \(agent works autonomously\) or HITL \(needs user confirmation\).*$/m, '- "autonomy": always AFK: nobody below the root confirms anything'],
@@ -545,7 +545,7 @@ function planJsonExample(runnerChoices: string, includeScripts = true): string[]
     '{',
     '  "tasks": [',
     '    {',
-    '      "id": "unique-task-id (any short unique string, e.g. task-1)",',
+    '      "id": "unique-task-id, e.g. task-1",',
     '      "order": 1,',
     '      "title": "Concise title",',
     '      "description": "What this task accomplishes",',
@@ -596,11 +596,11 @@ function delegationSection({ tokens, delegatedTasks, grantable }: PlannerDelegat
  */
 const PLANNER_TOOLS_CATALOG = [
   'RUNNERS, MODELS AND MODES:',
-  'Which runners, models and modes you may assign can change while you plan: the user may enable a runner or edit the model allowlist at any time. Read them just before you submit, never from memory:',
-  '1. Call list_runners: the enabled runners, and which of them have a read-only mode.',
-  '2. Call list_models for each runner you will assign: its allowed models, with their thinking-effort variants.',
+  'The runners, models and modes you may assign change as the user enables a runner or edits the model allowlist: read them just before you submit, never from memory:',
+  '1. Call list_runners: the enabled runners, and which have a read-only mode.',
+  '2. Call list_models for each runner you will assign: its allowed models and their thinking-effort variants.',
   '3. Call submit_plan with the whole plan. "assignedRunner" must be a runner list_runners returned, "assignedModel.modelId" a modelId list_models returned for that runner.',
-  '4. If submit_plan returns errors, fix exactly what each one names and call it again in the same reply. If it reports "coerced" changes, tell the user what was changed.',
+  '4. If submit_plan returns errors, fix exactly what each one names and call it again in the same reply. If it reports "coerced" changes, tell the user what changed.',
   '',
 ];
 
@@ -617,7 +617,7 @@ const PLANNER_TOOLS_CATALOG = [
 function strategySection(execution: boolean): string[] {
   return [
     'STRATEGY:',
-    'Before you outline anything, decide what kind of goal this is:',
+    'Before outlining, decide what kind of goal this is:',
     '- A question your research can answer: answer it here, in your reply. No plan.',
     execution
       ? '- A small effect you can state as exact commands: one script task. In the user\'s turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan. An effect that needs judgment is an ops task.'
@@ -646,7 +646,7 @@ function buildConversationBody(
     ? 'call list_runners and list_models, then submit the final task plan with submit_plan'
     : 'emit the final task plan as a JSON object with a "tasks" array';
   return [
-    `You are Ordewell's project planner: the coordinator of a run, not its main worker. You work out the goal with the user, choose the approach, and hand the hands-on work to agents and tasks, producing structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'} when the goal needs one. Your own context is for the whole picture and for integration. Be direct: avoid unnecessary preamble, summaries, or explanations unless the user asks for detail.`,
+    `You are Ordewell's project planner: the coordinator of a run, not its main worker. You work out the goal with the user, choose the approach, and hand the hands-on work to agents and tasks, producing structured task plans ${tools ? 'through the submit_plan tool' : 'as JSON'} when the goal needs one. Your own context is for the whole picture and for integration. Be direct: no preamble, summaries or explanations the user did not ask for.`,
     '',
     ...defaultsSection(agents),
     'WORKFLOW:',
@@ -661,7 +661,7 @@ function buildConversationBody(
     '',
     researchPhaseBlock(tools, variant.researchShell),
     '',
-    ...(tools ? ['Ordewell skills load only through load_skill; do not use the native Skill tool or read skill files directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
+    ...(tools ? ['Ordewell skills load only through load_skill, never the native Skill tool or a skill file read directly.', ...plannerSkillsBlock(variant.skills ?? []), ''] : []),
     ...(autorun
       ? [
         'OUTLINE PHASE (AUTORUN is on):',
@@ -672,7 +672,7 @@ function buildConversationBody(
         `- When you are ready to propose a plan, show a prose outline first, not ${tools ? 'submit_plan' : 'JSON'}: the user corrects an outline more cheaply than a plan.`,
       ]),
     '- Format: a numbered list of the plan\'s tasks in order, each with what it does and what it changes or reports. For a build, each item is a vertical tracer-bullet slice, with the files/layers it touches.',
-    '- Example, for a build: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes\n3. Build login page (src/ui/Login.tsx) — form component with validation"',
+    '- Example, for a build: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes"',
     ...(autorun
       ? []
       : [
@@ -687,7 +687,8 @@ function buildConversationBody(
     '',
     'A script task runs its body with no model, and takes this shape instead:',
     '{ "id": "push-1", "order": 3, "title": "Push the release branch", "description": "What it does", "type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK" }',
-    '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run by the shell your own commands use. Give exactly one of the two.',
+    '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run by the shell your own commands use unless its first line is a #! line naming another shell (bash, zsh). Give exactly one of the two.',
+    '- A script task is an effect or a check, never a probe: its verdict is its exit status, so one that exits non-zero by design fails. Research is for your own reads, agents and research tasks (WHO EXPLORES).',
     '- "timeoutMs" is its time limit in milliseconds; ten minutes when left out.',
     `- ${TASK_KINDS.script.topLevelOnly ? 'Only a top-level task can be one. ' : ''}Leave out ${forbiddenFields('script').map((f) => `"${f}"`).join(', ')}.`,
     '',
@@ -704,7 +705,7 @@ function buildConversationBody(
     '- "autonomy": AFK (agent works autonomously) or HITL (needs user confirmation)',
     '- "sliceType": Same vocabulary as autonomy.',
     '- User tasks (type "user") always have sliceType "HITL".',
-    '- "sliceType" is required on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
+    '- "sliceType" is required on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with the same required fields, not a bare label.',
     '',
     ...taskSkillsSection(variant.skills ?? []),
     'DEPENDENCY & PARALLELISM:',
@@ -718,15 +719,15 @@ function buildConversationBody(
     'When the strategy is a build, these rules apply as well. No other strategy is planned as vertical slices.',
     '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path, not a horizontal layer.',
     '- Size each slice to fit a single fresh agent session\'s context window.',
-    '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
-    '- Wide mechanical refactors (rename a shared symbol, retype a column) are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
+    '- If preparatory refactoring would make the feature easier, make it a leading task the dependent slices depend on ("make the change easy, then make the easy change").',
+    '- Wide mechanical refactors (rename a shared symbol, retype a column) are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites in batches, and a final contract task depending on all migrations deletes the old form.',
     '- "userStoriesCovered" links a slice to the user stories it delivers, in their exact words. Leave it out when the goal states none.',
     '- Reference specific files and patterns from your research in task prompts.',
     SHARED_APPEND_FILE_RULE,
     ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
     '',
     'LOOPS:',
-    'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: the check runs, and while it fails with rounds left, the body runs and then the check runs again. Use one only for an explicit iterate-until goal or a specific acceptance condition that needs independent repeated checking and fixing: tests that exist, a command that can be rerun or code that changed never make a loop. When you infer a loop the user did not ask for, give its reason in the outline.',
+    'A loop repeats a check with its fix until the check passes. Ordewell runs the rounds itself, with no turn of yours in between: while the check fails with rounds left, the body runs and the check runs again. Use one only for an explicit iterate-until goal or a specific acceptance condition that needs independent repeated checking and fixing: tests that exist, a command that can be rerun or code that changed never make a loop. When you infer a loop the user did not ask for, give its reason in the outline.',
     '- Put "loop": { "body": ["fix-id", ...], "maxRounds": 3 } on the check. "body" names, by id, the top-level tasks that fix what the check finds. Each depends on the check, and otherwise only on what the check depends on or on other tasks of the body. Whatever comes after the loop depends on the check, never on a body task.',
     '- The check is a top-level AI or script task with no subtasks. A body task is a top-level AI or script task in one loop only, never a manual task, and has no subtasks either: each round runs a task again whole, so give each step its own task.',
     '- Make the check test the acceptance condition itself, such as a test written against the spec, not merely that the suite is green, and write that test apart from the fix where you can, in a task before the loop, so the fix cannot bend it. Prefer a script task as the check wherever a command can judge the work: its exit status is evidence you can check, 0 passes and anything else fails and starts a round.',
@@ -748,7 +749,7 @@ function buildConversationBody(
       ]),
     '',
     'CONVENTIONS:',
-    '- When suggesting libraries, frameworks, or patterns, first check the codebase already uses them (package.json, imports): a well-known library is not therefore installed.',
+    '- Before suggesting a library, framework or pattern, check the codebase uses it (package.json, imports): being well known does not make it installed.',
     '- Follow the project\'s existing style, naming and patterns.',
     '',
     ...(tools
@@ -757,7 +758,7 @@ function buildConversationBody(
     'MODEL SELECTION GUIDELINES:',
     '- Use stronger models for complex refactoring, architecture changes, security-critical code.',
     '- Use weaker/faster models for simple file operations, test generation, config changes, documentation.',
-    `- Assign thinkingEffort based on task complexity, choosing only from the assigned model's "variants" list ${tools ? 'from list_models' : 'above'}. Omit thinkingEffort if the model has no variants.`,
+    `- Assign thinkingEffort by task complexity, only from the assigned model's "variants" ${tools ? 'in list_models' : 'above'}; omit it if the model has none.`,
     '',
     'READ-ONLY TASKS:',
     modeGuide,
@@ -796,7 +797,7 @@ function taskSkillsSection(skills: readonly SkillInfo[]): string[] {
   const attachable = modelInvocableTaskSkills(skills);
   return [
     'TASK SKILLS:',
-    '- "skills" optionally lists task skills by name; their instructions are put in that task\'s prompt when it runs.',
+    '- "skills" optionally lists task skills by name; their instructions go into that task\'s prompt when it runs.',
     '- A name that does not exist yet is accepted with a warning, so a task may name a skill that a task it depends on creates (.ordewell/skills/<name>/SKILL.md). Only skills with applies-to: task can be attached.',
     '- When the user asks to use a task skill, attach it to the tasks it fits.',
     ...(attachable.length === 0 ? [] : [
