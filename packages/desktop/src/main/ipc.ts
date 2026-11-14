@@ -318,6 +318,7 @@ export function registerIpc(deps: IpcDeps): void {
   handle(CHANNELS.terminalOpen, (event, spec) => deps.terminals.channel.open(callerOf(event), spec));
   handle(CHANNELS.terminalWrite, (event, id, data) => { deps.terminals.channel.write(callerOf(event), id, data); });
   handle(CHANNELS.terminalResize, (event, id, cols, rows) => { deps.terminals.channel.resize(callerOf(event), id, cols, rows); });
+  handle(CHANNELS.terminalWord, (event, id, direction) => { deps.terminals.channel.word(callerOf(event), id, direction); });
   handle(CHANNELS.terminalOpenLink, async (_event, url) => {
     const link = webLink(url);
     if (!link) return { ok: false, message: 'Only http and https links open from the terminal.' };

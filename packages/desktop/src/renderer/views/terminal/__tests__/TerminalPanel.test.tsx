@@ -33,6 +33,7 @@ interface World {
   resize: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   openLink: ReturnType<typeof vi.fn>;
+  word: ReturnType<typeof vi.fn>;
   open: ReturnType<typeof vi.fn>;
   clipboard: { readText: ReturnType<typeof vi.fn>; writeText: ReturnType<typeof vi.fn> };
   session: { t3: string; t4: string };
@@ -45,7 +46,7 @@ interface World {
 function world(): World {
   const w: World = {
     ptys: [], write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
-    openLink: vi.fn(async () => ({ ok: true })), open: vi.fn(),
+    openLink: vi.fn(async () => ({ ok: true })), word: vi.fn(async () => undefined), open: vi.fn(),
     clipboard: { readText: vi.fn(async () => ({ ok: true, text: 'from the clipboard' })), writeText: vi.fn(async () => ({ ok: true })) },
     session: { t3: 'active', t4: 'integrated' },
     stream: () => undefined, openResult: undefined,
@@ -65,7 +66,7 @@ function world(): World {
     w.ptys.push({ id, spec, emit: onEvent });
     return { ok: true, id, cwd: '/work/acme', shell: 'zsh' };
   });
-  bridge.terminal = { open: w.open, write: w.write, resize: w.resize, close: w.close, openLink: w.openLink };
+  bridge.terminal = { open: w.open, write: w.write, resize: w.resize, close: w.close, openLink: w.openLink, word: w.word };
   bridge.clipboard = w.clipboard;
   return w;
 }
@@ -109,13 +110,26 @@ describe('the terminal panel', () => {
     expect(w.ptys[0]?.spec).toMatchObject({ repo: '.', scope: { kind: 'checkout' } });
   });
 
-  it('describes the unavailable shortcut on macOS', async () => {
-    world();
+  it('describes the unavailable shortcut on macOS until the shell joins the word link (ADR-0069)', async () => {
+    const w = world();
     await mount('darwin');
     toggle();
     await screen.findByRole('tab', { name: /zsh/ });
-    expect(within(panel()).getByRole('tabpanel')).toHaveAccessibleDescription(/Option\+Left\/Right is temporarily unavailable/);
-    expect(within(panel()).getByText(/Option\+Left\/Right is temporarily unavailable/)).toBeVisible();
+    expect(within(panel()).getByRole('tabpanel')).toHaveAccessibleDescription(/Option\+Left\/Right moves by words only at the prompt of macOS’s own zsh/);
+    expect(within(panel()).getByText(/in this terminal it does nothing/)).toBeVisible();
+    terms[0]!.options.onWord?.('left');
+    expect(w.word).not.toHaveBeenCalled();
+
+    act(() => w.ptys[0]?.emit({ kind: 'words' }));
+    expect(within(panel()).queryByText(/in this terminal it does nothing/)).not.toBeInTheDocument();
+    expect(within(panel()).getByRole('tabpanel')).not.toHaveAttribute('aria-describedby');
+    expect(within(panel()).getByRole('tab', { name: /zsh/ })).toBeInTheDocument();
+    terms[0]!.options.onWord?.('right');
+    expect(w.word).toHaveBeenCalledWith(w.ptys[0]!.id, 'right');
+
+    act(() => w.ptys[0]?.emit({ kind: 'exit', exitCode: 0 }));
+    terms[0]!.options.onWord?.('left');
+    expect(w.word).toHaveBeenCalledTimes(1);
   });
 
   it('opens the panel for a login and runs it in the checkout, ending when its process does', async () => {

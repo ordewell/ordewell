@@ -70,6 +70,7 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
           { repo: '.', scope: { kind: 'checkout' }, cols: size.cols, rows: size.rows, login: { runner } },
           (event: TerminalEvent) => {
             if (event.kind === 'data') { handle.write(event.data); return; }
+            if (event.kind !== 'exit') return;
             handle.write('\r\n\x1b[2m[Process exited.]\x1b[0m\r\n');
             pty.current = undefined;
             ended();

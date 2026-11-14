@@ -1,7 +1,7 @@
 import '@xterm/xterm/css/xterm.css';
 import { clipboardChord } from './clipboard';
 import { findLinks } from './links';
-import { unavailableWordChord } from './wordKeys';
+import { macWordChord } from './wordKeys';
 import { buildTerminalTheme, TERMINAL_FONT, TERMINAL_FONT_SIZE, type TerminalTheme } from './terminalTheme';
 
 /**
@@ -17,6 +17,8 @@ export interface TermOptions {
   onData(data: string): void;
   /** A link the user activated (modifier + click). */
   onLink(url: string): void;
+  /** Option+Left/Right on macOS, at the shell's own screen; absent, the chord does nothing. */
+  onWord?(direction: 'left' | 'right'): void;
   screenReaderMode: boolean;
   /** The clipboard's text; rejects with why it could not be read, for the user. */
   readClipboard(): Promise<string>;
@@ -79,8 +81,11 @@ export async function createTerm(options: TermOptions, mac: boolean): Promise<Te
     if (event.type !== 'keydown') return true;
     // Ctrl+` toggles the panel (the frame's command), so it must reach the window, not the shell.
     if (event.key === '`' && event.ctrlKey && !event.metaKey && !event.altKey) return false;
-    if (unavailableWordChord(event, mac)) {
+    const word = macWordChord(event, mac);
+    if (word) {
       event.preventDefault();
+      // A full-screen program (vim, less, tmux) owns the alternate screen, and the shell's prompt is not there.
+      if (term.buffer.active.type === 'normal') options.onWord?.(word);
       return false;
     }
     const chord = clipboardChord(event, mac);

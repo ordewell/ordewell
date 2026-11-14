@@ -150,6 +150,7 @@ const bridge: OrdewellBridge = {
     },
     write: (id, data) => ipcRenderer.invoke(CHANNELS.terminalWrite, id, data),
     resize: (id, cols, rows) => ipcRenderer.invoke(CHANNELS.terminalResize, id, cols, rows),
+    word: (id, direction) => ipcRenderer.invoke(CHANNELS.terminalWord, id, direction),
     async close(id) {
       terminalListeners.delete(id);
       await ipcRenderer.invoke(CHANNELS.terminalClose, id);

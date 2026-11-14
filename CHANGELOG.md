@@ -74,9 +74,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   leaves the screen at once** instead of waiting to be answered.
 - **A disk that refuses a save is now told once** while it keeps refusing,
   instead of the plan stopping on an error or failing silently.
-- **Option+Left/Right is temporarily unavailable in the desktop terminal on macOS.**
-  The shortcut sends no input while reliable shell integration is developed;
-  previous translations could delete text or trigger application keybindings.
+- **Option+Left/Right moves by words at the prompt of macOS's own zsh in the
+  desktop terminal, and does nothing anywhere else.** It sends no input: the
+  shell moves through a private link only when idle at its prompt, so vim, SSH,
+  tmux, nested shells and custom key bindings never see it. A zsh with a
+  zshenv, and other shells, keep the shortcut off, and the terminal says so.
+  Previous translations could delete text or trigger application keybindings.
 
 ## [0.13.1] - 2026-11-07
 
