@@ -155,7 +155,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   | a report arrived | `task_report` ([ADR-0037](0037-research-tasks-wake-the-planner.md)) |
   | the run ended | `run_finished`, with no merge window |
 
-  Any other event but a pass, `task_failed` and `task_idle` among them, is held until the first
+  Any other event but a pass, `task_failed`, `task_idle` and `running_long` among them, is held until the first
   of these, each of which is read from the plan:
   - **nothing can start** on this node without a decision;
   - **the cohort is done**: every task that became ready with this one has ended, read as every
@@ -164,7 +164,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   - **a supervisor at Act can retry it**: at Act, a `task_failed` for a task any other task
     depends on, however far back and ready or not, is due at its own merge window, as an event
     that wakes at once is. A retry then runs beside the rest instead of after it. A failure
-    nothing depends on, `task_idle`, and every event at Watch stay held, since a Watch
+    nothing depends on, `task_idle`, `running_long`, and every event at Watch stay held, since a Watch
     supervisor cannot retry;
   - **a maximum age**: 80% of the planner's cache TTL once anything is held, so a wake finds its
     prefix warm. Each connector states its TTL, the shortest it may be since that is the one a wake
@@ -179,7 +179,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   slowest task. There are no keep-warm pings: they are model turns that grow the context.
 - **Bounded wakes (R5).** A wake has a size cap, 24,000 characters, with one line per ride-along
   event of at most 120: a pass, or a held event that holds no work back. A digest names a task in at
-  most 80, so a long title is cut and the line still says what happened. What woke the planner goes
+  most 80, so a long title is cut and the line still says what happened. A `running_long` line
+  is the exception: it carries its facts whole, up to 360 characters, and the digest says once,
+  after the attention lines, what the supervisor can do about one, so the planner's system prompt
+  does not grow. What woke the planner goes
   first, whole items only. Overflow becomes counts and a pointer: `task_query` reads the rest. The
   cap is on what the turn sends, so updates that waited for one turn are bounded together, and the
   transcript keeps them all. The newest is what opened the turn, so it stays whole and the oldest
@@ -446,3 +449,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-01 — from review: VS Code's handoff panel holds what an author wrote, every line indented on the one set of breaks, as the TUI does for every handoff (R3).
 - 2026-11-02 — from an audit of the flow: R2's counts read the tree as it stands while a report's list reads what stood on it, a listing and a board's map page on rather than stop, a board and a page spend a read through `task_output`, and a reference with no attempt reads the logs where a retry cleared the digest.
 - 2026-11-10 — R4: at Act, a failure another task depends on wakes at its merge window, so a retry runs beside the rest.
+- 2026-11-14 — R4, R5: `running_long` ([ADR-0018](../runners/0018-structured-runner-transport.md) W1) is held as `task_idle` is, a later one for the same task replaces the first, and its line carries its facts whole with the advice once.

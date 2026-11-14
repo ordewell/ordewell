@@ -22,7 +22,7 @@ describe('createWakePolicy', () => {
     expect(policy.poll(1_000_000)).toBeNull();
   });
 
-  it.each(['task_failed', 'waiting_input', 'waiting_approval', 'task_idle', 'landing_conflict', 'auto_merge_stopped'] as const)(
+  it.each(['task_failed', 'waiting_input', 'waiting_approval', 'task_idle', 'running_long', 'landing_conflict', 'auto_merge_stopped'] as const)(
     'wakes for %s',
     (kind) => {
       const policy = createWakePolicy({ debounceMs: DEBOUNCE, facts: () => DUE });
@@ -123,6 +123,23 @@ describe('createWakePolicy', () => {
 
       policy.push(event('task_idle', 2000, 't1'));
       expect(policy.poll(2000 + DEBOUNCE)?.attention).toEqual([event('task_idle', 2000, 't1')]);
+    });
+
+    it('keeps one running-long flag per task, at its first place and stamp, with the latest facts', () => {
+      const policy = createWakePolicy({ debounceMs: DEBOUNCE, facts: () => DUE });
+      const flag = (at: number, taskId: string, elapsedMs: number): RunEvent => ({
+        kind: 'running_long', taskId, at, runningLong: { reason: 'duration', elapsedMs, thresholdMs: elapsedMs, compactions: 0, attempt: 1 },
+      });
+      policy.push(flag(0, 't1', 30));
+      policy.push(event('task_failed', 100, 't2'));
+      policy.push(flag(200, 't1', 60));
+      policy.push(flag(300, 't3', 30));
+
+      expect(policy.poll(DEBOUNCE)?.attention).toEqual([
+        { ...flag(200, 't1', 60), at: 0 },
+        event('task_failed', 100, 't2'),
+        flag(300, 't3', 30),
+      ]);
     });
 
     it('collapses only silence: two waiting_input events from one task both reach the supervisor', () => {
@@ -276,7 +293,7 @@ describe('wakeDue (ADR-0057 R4)', () => {
     expect(wakeDue([event('task_failed', 0, 't1'), event('waiting_input', 90_000, 't2')], none, DEBOUNCE)).toEqual({ at: 90_000 + DEBOUNCE, reason: 'at_once' });
   });
 
-  it.each(['task_failed', 'task_idle'] as const)('%s with nothing else to go by waits for the cache\'s age, and an unknown cache reads as five minutes', (kind) => {
+  it.each(['task_failed', 'task_idle', 'running_long'] as const)('%s with nothing else to go by waits for the cache\'s age, and an unknown cache reads as five minutes', (kind) => {
     expect(wakeDue([event(kind, 1000, 't1')], facts(), DEBOUNCE)).toEqual({ at: 1000 + 0.8 * UNKNOWN_CACHE_TTL_MS, reason: 'max_age' });
     expect(UNKNOWN_CACHE_TTL_MS).toBe(300_000);
   });

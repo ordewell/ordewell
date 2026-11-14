@@ -1830,6 +1830,10 @@ export class Session {
       onTaskIdle: ({ taskId, idleSince }) => {
         this.supervision.observe({ kind: 'task_idle', taskId, detail: `no output since ${idleSince}` });
       },
+      // Advisory, as a quiet task's flag is (ADR-0018 W1): the supervisor weighs it, nothing stops.
+      onTaskRunningLong: ({ taskId, runningLong }) => {
+        this.supervision.observe({ kind: 'running_long', taskId, runningLong });
+      },
       onRunClosed: () => { this.closedUnannounced = true; },
       onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {

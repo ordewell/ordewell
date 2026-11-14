@@ -40,7 +40,7 @@ export interface RunnerOption {
  * streams — `task_started` reaches it before the plan refresh does — so the
  * card's editability reads it when present.
  */
-export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage' | 'delegation'> & { status?: Task['status'] };
+export type TaskCardRun = Pick<RunTask, 'idleSince' | 'completionReceived' | 'attaching' | 'runningLong' | 'awaitingApproval' | 'isolation' | 'mergeGate' | 'continuable' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'verdict' | 'loopRound' | 'attempted' | 'attemptUsage' | 'delegation'> & { status?: Task['status'] };
 
 /** A signed-out agent's way in, as its pills word it, and the Log in that runs it where Ordewell can (ADR-0052). */
 export interface RunnerSignInView {
@@ -141,13 +141,14 @@ const STATUS_BADGE: Record<TaskStatusKind, { label: string; cls: string }> = {
   awaiting: { label: 'Awaiting User', cls: 'status-blocked' },
 };
 
-/** The status badge: what an awaiting task waits on, a report received, a runner still connecting Ordewell's tools, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
-export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'receipt' | 'attaching' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
+/** The status badge: what an awaiting task waits on, a report received, a runner still connecting Ordewell's tools, a task running long, why it is held, the failure a blocked one waits on, or why one was skipped, outranks the generic word. */
+export function statusBadge(row: Pick<TaskRowView, 'status' | 'awaiting' | 'receipt' | 'attaching' | 'runningLong' | 'blockedBy' | 'skipReason' | 'holdReason'>): { label: string; cls: string } {
   const badge = STATUS_BADGE[row.status];
   if (row.status === 'skipped') return { ...badge, label: skippedLabel(row.skipReason) };
   if (row.awaiting) return { ...badge, label: row.awaiting };
   if (row.receipt) return { ...badge, label: row.receipt };
   if (row.attaching) return { ...badge, label: row.attaching };
+  if (row.runningLong) return { ...badge, label: row.runningLong };
   if (row.holdReason) return { ...badge, label: holdLabel(row.holdReason) };
   return { ...badge, label: row.blockedBy ? blockedByLabel(row.blockedBy) : badge.label };
 }
@@ -442,6 +443,7 @@ export function cardRowView(task: Task, run: TaskCardRun | undefined, context: {
     idleSince: run?.idleSince ?? null,
     completionReceived: run?.completionReceived,
     attaching: run?.attaching,
+    runningLong: run?.runningLong ?? null,
     awaitingApproval: run?.awaitingApproval ?? 0,
     isolation: run?.isolation ?? null,
     mergeGate: run?.mergeGate,

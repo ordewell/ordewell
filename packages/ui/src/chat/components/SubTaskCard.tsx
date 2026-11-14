@@ -76,6 +76,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
     idleSince: run?.idleSince ?? null,
     completionReceived: run?.completionReceived,
     attaching: run?.attaching,
+    runningLong: run?.runningLong ?? null,
     awaitingApproval: run?.awaitingApproval ?? 0,
     isolation,
     mergeGate: run?.mergeGate,

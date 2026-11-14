@@ -44,6 +44,8 @@ export interface TaskView {
   completionReceived?: RunTask['completionReceived'];
   /** Which spawn of its starting runner waits for Ordewell's tools to connect (ADR-0025). */
   attaching?: RunTask['attaching'];
+  /** Its running attempt's last running-long flag (ADR-0018 W1): advice the row shows, never a status. */
+  runningLong?: RunTask['runningLong'];
   dependencies: string[];
   assignedRunner?: string;
   taskMode?: string;

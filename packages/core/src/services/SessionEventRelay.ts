@@ -38,7 +38,7 @@ export interface SessionEventRelayDeps {
   /** Where isolation notices go, for a host whose notifications are not seen by the user. */
   onNotice?: (notice: SessionNotice) => void;
   store: Pick<PlanStore, 'allTasks' | 'planTasks' | 'snapshot' | 'statusMark'>;
-  orchestrator: Pick<TaskOrchestrator, 'judgingOnce' | 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'loopStranded' | 'runMergeView' | 'activity' | 'taskIsolation'>;
+  orchestrator: Pick<TaskOrchestrator, 'judgingOnce' | 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getRunningLong' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'loopStranded' | 'runMergeView' | 'activity' | 'taskIsolation'>;
   /** Shared with the Session, which snapshots, restores and clears it. */
   usage: PlannerUsageLedger;
   /** What a subplanner's budget hears of each planner call (ADR-0056 M5); absent at the root, which is charged nothing. */
@@ -69,7 +69,7 @@ export interface SessionEventRelayDeps {
  * ({@link SessionEventRelay.executionComplete}). A model switch is a plan edit,
  * which Session's editor announces as one.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onIsolationHandoff' | 'onRunClosed' | 'onScriptClaimed' | 'onExecutionComplete'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onTaskRunningLong' | 'onIsolationHandoff' | 'onRunClosed' | 'onScriptClaimed' | 'onExecutionComplete'>>;
 
 /**
  * Status updates held back until what they announce is saved, and let go
@@ -318,6 +318,7 @@ export class SessionEventRelay implements StatusGate {
         holdReason: this.orchestrator.holdReason(t.id),
         completionReceived: this.orchestrator.getCompletionReceipt(t.id),
         attaching: this.orchestrator.getToolsAttaching(t.id),
+        runningLong: this.orchestrator.getRunningLong(t.id),
         loopStranded: this.orchestrator.loopStranded(t.id),
         delegation: t.type === 'delegated' ? this.delegation(t.id) : undefined,
       })),

@@ -1024,6 +1024,16 @@ approval" is derived from the task's pending approvals.
 *Avoid:* "idle" (a silence guess, and its timer still runs during a turn),
 "paused", "blocked" (a dependency term).
 
+**Running long** (ADR-0018, W1) — the advisory flag on an AI task's attempt
+whose running time passed max(30 min, 3× the longest wall time of an AI task
+that passed in its plan), doubled after each flag, or whose own runner session
+compacted its context by itself. Time waiting on a person is left out. It
+carries the running time, the threshold and the task it came from, the live
+and peak context, the model's window and the compactions so far. The
+supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or
+fails anything. A quiet task is silent, and a task running long may be busy.
+*Avoid:* "stuck", "slow", "timeout" (a script task's limit, which does end it).
+
 **Completion reminder** (ADR-0018, W1) — the one message Ordewell sends a
 runner whose turn ended cleanly without a `task_complete` call, telling it to
 call the tool with `done` and its handoff, or `blocked` and the reason, or

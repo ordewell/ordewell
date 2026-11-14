@@ -10,6 +10,7 @@ import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolatio
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
 import { composeCompactionNudge, delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
+import { runningLongThreshold, type RunningLongEvent } from './RunningLong';
 import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
@@ -162,6 +163,8 @@ interface TaskAttempt extends EndedAttempt {
    * Progress for surfaces: the wait itself is the runner's.
    */
   attaching: 1 | 2 | null;
+  /** Its latest running-long flag (ADR-0018 W1), advisory: null until it runs long or compacts on its own. */
+  runningLong: RunningLongEvent | null;
   /**
    * Aborted as the attempt ends, so a runner still starting — waiting for its
    * tools to attach, or respawning — is taken back then, not once it reports.
@@ -400,7 +403,8 @@ export class Attempts {
    * ending an attempt must not forget how often the task has run.
    */
   private readonly spawnCounts = new Map<string, number>();
-  private readonly verifier = new VerdictEngine();
+  // Read when a flag falls due, so a task that passed meanwhile raises the threshold (ADR-0018 W1).
+  private readonly verifier = new VerdictEngine({ runningLongThreshold: () => runningLongThreshold(this.deps.store.planTasks) });
   /** What the workspace env has already warned about, so a run says it once, not per task. */
   private readonly envWarnings = new Set<string>();
   private readonly host: AttemptsHost;
@@ -429,6 +433,14 @@ export class Attempts {
     // going silent is news to a supervisor: null also comes on teardown.
     this.verifier.onIdleChange((taskId, idleSince) => {
       if (idleSince) this.host.emit('onTaskIdle', { taskId, idleSince });
+      this.host.emit('onTaskChanged');
+    });
+    // Advisory like going quiet: shown on the row, and the supervisor's to weigh (ADR-0018 W1, ADR-0057 R4).
+    this.verifier.onRunningLong((taskId, facts) => {
+      const attempt = this.live.get(taskId);
+      if (!attempt) return;
+      attempt.runningLong = { ...facts, attempt: attempt.attempt };
+      this.host.emit('onTaskRunningLong', { taskId, runningLong: attempt.runningLong });
       this.host.emit('onTaskChanged');
     });
   }
@@ -505,6 +517,11 @@ export class Attempts {
     return this.live.get(taskId)?.attaching ?? null;
   }
 
+  /** The live attempt's latest running-long flag; null when it has none. */
+  runningLong(taskId: string): RunningLongEvent | null {
+    return this.live.get(taskId)?.runningLong ?? null;
+  }
+
   /** The kind a task's next attempt starts as, short of a repair or a continue: what is weighed before one exists. */
   nextKind(taskId: string): AttemptKind {
     const task = this.deps.store.get(taskId);
@@ -557,6 +574,7 @@ export class Attempts {
       patch: null,
       receipt: null,
       attaching: null,
+      runningLong: null,
       spawning: new AbortController(),
       lease: claim.lease,
       // A child plan's sessions hold their own; this one is no session (ADR-0056 M5).

@@ -100,13 +100,15 @@ attention events are:
 - a task is waiting for input;
 - a task is waiting for approval;
 - a task went idle;
+- a task ran long, or its runner compacted its context on its own
+  ([ADR-0018](../runners/0018-structured-runner-transport.md) W1);
 - a landing conflict (ADR-0015);
 - an automatic Merge all at a merge gate that stopped;
 - the run finished;
 - **new:** a task paused on a usage limit, with the time it resumes (#84).
   Every task one runner's limit pauses is one entry.
 
-A failure and a task gone idle need nobody yet, so they are held until the plan
+A failure, a task gone idle and one running long need nobody yet, so they are held until the plan
 says it is time or the planner's prompt cache would go cold (ADR-0057 R4). Every
 other event wakes it at once.
 
@@ -782,3 +784,4 @@ until #30 exists.
 - 2026-11-01 — a Stop reaches a subtree, tombstone first, and a child's claim reads its ancestors' ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D16).
 - 2026-11-09 — a refusal of the user's own action names the action and the user's surface's control for it rather than a card or button, and a refused `merge_all` with automatic merging on says the merge happens by itself ([ADR-0030](0030-global-run-settings.md)).
 - 2026-11-14 — below Act, a wake-up's reply that leaves nothing to run is listed as a `planner` escalation until the user writes; Watch still changes nothing ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
+- 2026-11-14 — a task running long, or whose runner compacted on its own, is an attention event, held as a quiet task's is (ADR-0018 W1).
