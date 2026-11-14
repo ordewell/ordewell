@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]},"sequence_number":1}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"The answer is","sequence_number":2}
+
+event: response.incomplete
+data: {"type":"response.incomplete","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"incomplete","output":[],"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":300,"input_tokens_details":{"cached_tokens":0},"output_tokens":64,"output_tokens_details":{"reasoning_tokens":60},"total_tokens":364}},"sequence_number":3}
+

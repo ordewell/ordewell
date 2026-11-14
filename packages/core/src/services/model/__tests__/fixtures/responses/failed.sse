@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"failed","output":[],"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.2 in organization org-x on tokens per min. Please try again in 1.5s."}},"sequence_number":1}
+
