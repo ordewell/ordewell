@@ -15,6 +15,7 @@ import type { TaskShell, ToolOutcome } from '../interfaces/IFileSystem';
 import { AbstractRunner, AbstractRunnerSession, type RunnerSpawnOptions } from './AbstractRunner';
 import { runnerEnv } from './harness/runnerEnv';
 import { resolveResearchShell, type ResearchShell } from './researchShell';
+import { findOnPath, interpreterMissing, interpreterOf, isShell, notAShell, shebangArgv, shebangOf, type Shebang } from './scriptShebang';
 
 /**
  * What runs a script task's attempt, where a runner id would name a coding
@@ -237,11 +238,12 @@ export class ScriptSession extends AbstractRunnerSession {
    */
   private sealedStep(step: ScriptRun, shell: TaskShell): Promise<ScriptStatus> {
     if (!shell.hold) return Promise.resolve({ code: null, signal: null, error: 'this host cannot run it sealed' });
+    const argv = 'argv' in step ? step.argv : this.shebangArgv(step.script);
     return shell.hold(async (runs) => {
       const root = runs.worktrees.find((tree) => this.setup.cwd === tree || this.setup.cwd.startsWith(`${tree}${path.sep}`));
       if (root === undefined) return { code: null, signal: null, error: `${this.setup.cwd} is no worktree of this task` };
       const inside = path.relative(root, this.setup.cwd);
-      const line = 'argv' in step ? step.argv.map(shellQuoted).join(' ') : step.script;
+      const line = argv ? argv.map(shellQuoted).join(' ') : (step as { script: string }).script;
       const outcome = await runs.run(inside ? `cd ${shellQuoted(inside)} && ${line}` : line, root);
       const output = this.secrets.hide(outcome.output);
       if (output) this.printError(output.endsWith('\n') ? output : `${output}\n`);
@@ -251,11 +253,12 @@ export class ScriptSession extends AbstractRunnerSession {
 
   /**
    * What a lease launches for a step. Nothing of this host's goes with it: a
-   * script is the container's own `sh`, whatever shell this host would have
-   * picked, and only what the lease hands over crosses.
+   * script is the container's own `sh`, or the interpreter its `#!` line names
+   * there, whatever shell this host would have picked, and only what the lease
+   * hands over crosses.
    */
   private async placedLaunch(step: ScriptRun, placement: RunnerPlacement): Promise<StepLaunch> {
-    const [command, ...args] = 'argv' in step ? step.argv : ['sh', '-c', step.script];
+    const [command, ...args] = 'argv' in step ? step.argv : (this.shebangArgv(step.script) ?? ['sh', '-c', step.script]);
     const placed = await placement.place({ command, args, env: {}, files: [] });
     return { file: placed.command, args: placed.args, shell: false, placed };
   }
@@ -277,10 +280,58 @@ export class ScriptSession extends AbstractRunnerSession {
       const plan = await planDirectLaunch(program, args, this.setup.launch);
       return { file: plan.file, args: plan.args, shell: false, ...(plan.verbatim ? { verbatim: true } : {}) };
     }
+    const shebang = shebangOf(step.script);
+    if (shebang) return this.shebangLaunch(shebang, step.script);
     const shell = this.setup.shell();
     return shell.file === null
       ? { file: step.script, args: [], shell: true }
       : { file: shell.file, args: [...shell.args, step.script], shell: false };
+  }
+
+  /**
+   * The argument vector for a body whose first line is a `#!` line, as a POSIX
+   * place (a container, the sealed shell) runs it; null for a body with none.
+   * The interpreter is looked up where it runs, so only whether it is a shell
+   * is judged here.
+   */
+  private shebangArgv(script: string): string[] | null {
+    const shebang = shebangOf(script);
+    if (!shebang) return null;
+    const { name } = interpreterOf(shebang);
+    if (!isShell(name)) throw new Error(notAShell(shebang, name));
+    return shebangArgv(shebang, script);
+  }
+
+  /**
+   * A body run by the interpreter its `#!` line names, on this host. It must
+   * be there before anything starts, so a missing one fails the task saying
+   * which, where a shell's own "not found" would be one line of stderr. On
+   * Windows a POSIX path means nothing to CreateProcess: `bash` and `sh` are
+   * the research shell's Git Bash (ADR-0010), and any other shell is looked up
+   * on PATH as `<name>.exe`.
+   */
+  private shebangLaunch(shebang: Shebang, script: string): StepLaunch {
+    const { name, words } = interpreterOf(shebang);
+    const searchPath = this.setup.env.PATH ?? this.setup.env.Path;
+    if (this.setup.platform !== 'win32') {
+      if (!findOnPath(name, searchPath)) throw new Error(interpreterMissing(shebang, name));
+      if (!isShell(name)) throw new Error(notAShell(shebang, name));
+      const [file, ...args] = shebangArgv(shebang, script);
+      return { file, args, shell: false };
+    }
+    const exists = this.setup.launch.exists ?? ((candidate: string) => fs.existsSync(candidate));
+    const base = path.win32.basename(name).replace(/\.exe$/i, '').toLowerCase();
+    let file: string | null = null;
+    // `/bin/bash` is rooted, not absolute, to Windows: only a drive or share path names a file there.
+    if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(name)) file = exists(name) ? name : null;
+    else if (base === 'bash' || base === 'sh') file = this.setup.shell().file;
+    else for (const dir of (searchPath ?? '').split(path.win32.delimiter)) {
+      const candidate = dir && path.win32.join(dir, `${base}.exe`);
+      if (candidate && exists(candidate)) { file = candidate; break; }
+    }
+    if (file === null) throw new Error(interpreterMissing(shebang, name, base === 'bash' || base === 'sh' ? 'Install Git for Windows, which provides bash.' : undefined));
+    if (!isShell(name)) throw new Error(notAShell(shebang, name));
+    return { file, args: [...words, '-c', script], shell: false };
   }
 
   private spawnStep(launch: StepLaunch): Promise<ScriptStatus> {

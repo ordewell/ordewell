@@ -9,6 +9,7 @@ import type { ScriptExit, StructuredEvent } from '../../interfaces/IRunner';
 import { DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from '../../models/ScriptTask';
 import type { PlacedLaunch, RunnerLaunch, RunnerPlacement } from '../executionLease';
 import { patient } from '../../testing';
+import type { OwnSealedRuns, TaskShell } from '../../interfaces/IFileSystem';
 
 /**
  * A script task's body as it really runs (ADR-0035): real processes, at a real
@@ -181,6 +182,129 @@ describe('ScriptRunner: a script', () => {
     const exit = await run.exit;
     expect(exit).toEqual({ outcome: 'failed', status: { code: 4, signal: null }, errorTail: 'no such resource group\n' });
     expect(ofType(run.events, 'script_exit')).toEqual([expect.objectContaining({ code: 4, signal: null })]);
+  });
+});
+
+describe('ScriptRunner: a script with a #! line (ADR-0035)', () => {
+  // `set -o pipefail` and `[[ ]]` are bash's: the host's default `sh` (dash on Linux CI) refuses the first.
+  const bashOnly = 'set -o pipefail\nwords=$(printf "a b" | cat)\n[[ $words == "a b" ]] && echo "bash says $words"\n';
+  const winShell = { file: 'C:\\Git\\bin\\bash.exe', args: ['-c'], dialect: 'posix' as const, utilsDir: null };
+  const cmdShell = { file: null, args: [], dialect: 'cmd' as const, utilsDir: null };
+
+  it('runs a bash-only body with the interpreter it names, and passes', async () => {
+    const script = `#!/usr/bin/env bash\n${bashOnly}`;
+    const run = await start({ script });
+
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(run.output()).toBe('bash says a b\n');
+    // The record of what ran is the literal text, #! line included.
+    expect(ofType(run.events, 'script_run')).toEqual([{ type: 'script_run', script }]);
+  });
+
+  it('hands a body with no #! line to the host shell exactly as before', async () => {
+    const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+    const run = await start({ script: 'echo hi' }, { deps: { spawn, shell: () => ({ file: null, args: [], dialect: 'posix', utilsDir: null }) } });
+
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(spawn).toHaveBeenCalledWith('echo hi', [], expect.objectContaining({ shell: true }));
+  });
+
+  it('keeps the interpreter\'s own flags from the #! line', async () => {
+    const run = await start({ script: '#!/bin/sh -e\nfalse\necho unreachable' });
+
+    const exit = await run.exit;
+    expect(exit).toMatchObject({ outcome: 'failed', status: { code: 1 } });
+    expect(run.output()).toBe('');
+  });
+
+  it('fails, naming the interpreter, when the #! line names one that is not there', async () => {
+    const run = await start({ script: '#!/usr/bin/env ordewell-no-such-interpreter\necho unreachable' });
+
+    const exit = await run.exit;
+    expect(exit).toMatchObject({ outcome: 'failed', status: { code: null, signal: null } });
+    expect(exit.outcome === 'failed' && exit.status.error).toMatch(/could not find "ordewell-no-such-interpreter".*#!\/usr\/bin\/env ordewell-no-such-interpreter/);
+    expect(run.output()).toBe('');
+  });
+
+  it('fails, naming the interpreter, when an absolute #! path is not there', async () => {
+    const run = await start({ script: '#!/opt/ordewell-nowhere/bash\necho unreachable' });
+
+    const exit = await run.exit;
+    expect(exit.outcome === 'failed' && exit.status.error).toMatch(/could not find "\/opt\/ordewell-nowhere\/bash"/);
+  });
+
+  it('refuses an interpreter that is no shell, saying which ones it hands a script to', async () => {
+    const run = await start({ script: '#!/usr/bin/env python3\nprint(1)' });
+
+    const exit = await run.exit;
+    expect(exit.outcome === 'failed' && exit.status.error).toMatch(/"python3".*sh, bash/s);
+  });
+
+  it('runs it in the container\'s own interpreter, as written', async () => {
+    const asked: RunnerLaunch[] = [];
+    const lease: RunnerPlacement = {
+      cwd: '/task/work/repo',
+      place: async (launch) => { asked.push(launch); return { ...{ command: node, args: ['-e', ''] }, env: {}, stop: vi.fn(), ended: vi.fn() }; },
+      reach: async (url) => url,
+      blob: async () => undefined,
+    };
+
+    const run = await start({ script: `#!/usr/bin/env bash\n${bashOnly}` }, { placement: lease });
+
+    await run.exit;
+    expect(asked).toEqual([{ command: '/usr/bin/env', args: ['bash', '-c', `#!/usr/bin/env bash\n${bashOnly}`], env: {}, files: [] }]);
+  });
+
+  it('runs it sealed through the interpreter it names', async () => {
+    const lines: string[] = [];
+    const sealed = {
+      run: async () => ({ success: true, output: '' }),
+      end: () => {},
+      hold: async <T,>(work: (runs: OwnSealedRuns) => Promise<T>) => work({
+        worktrees: [fs.realpathSync(os.tmpdir())], touched: false, scratch: os.tmpdir(),
+        run: async (line: string) => { lines.push(line); return { success: true, output: '', truncated: false }; },
+      }),
+    } as unknown as TaskShell;
+    const cwd = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'ordewell-sealed-'));
+    workspaces.push(cwd);
+    const runner = new ScriptRunner();
+    const session = await runner.spawn({ taskId: 't1', runner: 'script', prompt: '', cwd, sealed, script: { script: '#!/usr/bin/env bash\necho it\'s', timeoutMs: DEFAULT_SCRIPT_TIMEOUT_MS } });
+    const exit = new Promise<ScriptExit>((resolve) => session.onScriptExit(resolve));
+
+    expect(await exit).toEqual({ outcome: 'passed' });
+    expect(lines[0]).toMatch(/'\/usr\/bin\/env' 'bash' '-c' '#!\/usr\/bin\/env bash\necho it'\\''s'$/);
+  });
+
+  describe('on Windows (ADR-0010)', () => {
+    it('resolves #!/usr/bin/env bash to Git Bash', async () => {
+      const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+      const script = `#!/usr/bin/env bash\n${bashOnly}`;
+      const run = await start({ script }, { deps: { spawn, platform: 'win32', shell: () => winShell } });
+
+      expect(await run.exit).toEqual({ outcome: 'passed' });
+      expect(spawn).toHaveBeenCalledWith('C:\\Git\\bin\\bash.exe', ['-c', script], expect.objectContaining({ shell: false }));
+    });
+
+    it('reads #!/bin/bash and #!/bin/sh the same way', async () => {
+      const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+      for (const line of ['#!/bin/bash -e', '#!/bin/sh -e']) {
+        const run = await start({ script: `${line}\ntrue` }, { deps: { spawn, platform: 'win32', shell: () => winShell } });
+        await run.exit;
+      }
+      expect(spawn.mock.calls.map(([file, args]) => [file, args.slice(0, -1)])).toEqual([
+        ['C:\\Git\\bin\\bash.exe', ['-e', '-c']],
+        ['C:\\Git\\bin\\bash.exe', ['-e', '-c']],
+      ]);
+    });
+
+    it('fails naming the interpreter when no Git Bash is there to be it', async () => {
+      const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+      const run = await start({ script: '#!/usr/bin/env bash\ntrue' }, { deps: { spawn, platform: 'win32', shell: () => cmdShell } });
+
+      const exit = await run.exit;
+      expect(exit.outcome === 'failed' && exit.status.error).toMatch(/could not find "bash".*Git for Windows/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
   });
 });
 
