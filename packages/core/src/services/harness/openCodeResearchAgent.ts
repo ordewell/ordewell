@@ -438,7 +438,7 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
         const name = (data.id && names.get(data.id)) ?? '';
         const success = frame.type === 'session.tool.success';
         if (!allowed.has(name)) { if (success) trip(`${name || 'an unnamed tool'} ran`); return; }
-        const output = success ? (data.content ?? []).map((part) => part.text ?? '').join('') : (data.error?.message ?? 'failed');
+        const output = success ? (data.content ?? []).map((part) => part.text ?? '').join('') : (data.error?.message || 'failed');
         const step: ResearchStep = {
           id: `subrs-${subagentId}-${Date.now()}-${steps}`,
           tool: name.slice(RESEARCH_MCP_SERVER.length + 1) as ResearchStep['tool'],

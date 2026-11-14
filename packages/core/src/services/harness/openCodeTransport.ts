@@ -138,7 +138,7 @@ export interface V2Error { type?: string; message?: string; status?: unknown }
  * OpenCodeAdapter); words that say more than that stand as they are.
  */
 export function v2ErrorText(error: V2Error | undefined): string | undefined {
-  const words = error?.message ?? error?.type;
+  const words = error?.message || error?.type;
   if (!words) return undefined;
   if (typeof error?.status === 'number' && Number.isInteger(error.status)) return `${words} (HTTP ${error.status})`;
   return error?.type && error.type !== words && /\bprovider returned error\b/i.test(words) ? `${words} (${error.type})` : words;

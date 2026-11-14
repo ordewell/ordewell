@@ -791,7 +791,7 @@ export class OpenCodeV2 {
         const wrongShell = state.wrongShell.get(id);
         const success = frame.type === 'session.tool.success' && !wrongShell;
         if (success && this.role === 'planner') this.rememberSaved(data.metadata);
-        const output = wrongShell ?? (success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message ?? data.error?.type ?? '');
+        const output = wrongShell ?? (success ? editDiff(data.metadata) || contentText(data.content) : data.error?.message || data.error?.type || '');
         onEvent({ type: 'tool_result', id, name: state.toolNames.get(id) ?? 'tool', output, success, subagentId });
         if (!subagentId) this.finishChild(id, success, output, onEvent);
         return;
