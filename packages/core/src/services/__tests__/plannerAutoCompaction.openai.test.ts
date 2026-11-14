@@ -10,11 +10,19 @@ import { SUMMARY_LIMITS } from '../contextSummary';
 
 const createSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('openai', () => ({
-  default: class {
-    chat = { completions: { create: createSpy } };
-  },
-}));
+// The real Chat Completions adapter, its transport each test's `createSpy`: given a request's wire body, it returns the chunks to stream back.
+vi.mock('../model', async (importOriginal) => {
+  const { overChatCompletions } = await import('./plannerWire');
+  const actual = await importOriginal<typeof import('../model')>();
+  return {
+    ...actual,
+    // Google keeps its own adapter, so a switch to it is seen on the wire Gemini speaks.
+    createModelClient: (options: import('../model').ModelClientOptions) => options.provider === 'google'
+      ? actual.createModelClient(options)
+      : overChatCompletions(options, (body, call) => createSpy(body, call)),
+    withRetry: (client: import('../model').ModelClient) => client,
+  };
+});
 
 import { makeSession, testWorkspace } from './sessionTestKit';
 

@@ -153,7 +153,8 @@ describe('OrdewellAdapter', () => {
     await store.append({ v: 1, kind: 'message', at: 'then', step: 1, message: { role: 'user', text: 'Earlier.' } });
     await adapter.start(taskOptions({ resumeSessionId: 'the-session' }));
     await adapter.send('Go on.', () => {});
-    expect(client.requests[0]?.system).toEqual(system);
+    // The saved text is sent as it was; the assembler only adds the cache breakpoint the prompt did not mark.
+    expect(client.requests[0]?.system).toEqual([{ text: 'the saved prompt', cacheBreakpoint: true }]);
     expect(client.requests[0]?.messages).toEqual([{ role: 'user', text: 'Earlier.' }, { role: 'user', text: 'Go on.' }]);
   });
 

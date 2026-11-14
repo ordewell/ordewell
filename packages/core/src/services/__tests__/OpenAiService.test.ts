@@ -9,12 +9,18 @@ import type { SkillInfo } from '../SkillsService';
 const createSpy = vi.hoisted(() => vi.fn());
 const clientSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('openai', () => ({
-  default: class {
-    chat = { completions: { create: createSpy } };
-    constructor(opts: unknown) { clientSpy(opts); }
-  },
-}));
+// The real Chat Completions adapter, its transport each test's `createSpy`: given a request's wire body, it returns the chunks to stream back.
+vi.mock('../model', async (importOriginal) => {
+  const { overChatCompletions } = await import('./plannerWire');
+  return {
+    ...await importOriginal<typeof import('../model')>(),
+    createModelClient: (options: import('../model').ModelClientOptions) => {
+      clientSpy(options);
+      return overChatCompletions(options, (body, call) => createSpy(body, call));
+    },
+    withRetry: (client: import('../model').ModelClient) => client,
+  };
+});
 
 import { OpenAiService } from '../OpenAiService';
 import { PlannerUsageLedger } from '../PlannerUsage';
@@ -430,7 +436,7 @@ describe('OpenAiService credentials', () => {
     );
   });
 
-  it('lets a keyless openai_compatible endpoint through with a placeholder key', async () => {
+  it('lets a keyless openai_compatible endpoint through, its adapter sending a placeholder key', async () => {
     const service = new OpenAiService(cfg({
       aiProvider: 'openai_compatible',
       orchestratorModel: 'openai_compat:llama3',
@@ -441,7 +447,8 @@ describe('OpenAiService credentials', () => {
 
     expect(() => service.ensureInit()).not.toThrow();
     await plan(service);
-    expect((clientSpy.mock.calls[0][0] as { apiKey: string }).apiKey).toBeTruthy();
+    expect((clientSpy.mock.calls[0][0] as { apiKey: string }).apiKey).toBe('');
+    expect(createSpy).toHaveBeenCalled();
   });
 });
 

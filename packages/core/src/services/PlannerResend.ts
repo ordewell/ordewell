@@ -66,7 +66,9 @@ export class PlannerResend {
     this.resentAt = null;
     this.waits.clear();
     const name = runner ?? 'Planner';
-    const reset = runner && !relapsed ? readUsageLimitReset(runner, said, now) : null;
+    // An API planner has no runner and no words to read, but its client's
+    // error states the reset as a field, which `said` carries.
+    const reset = relapsed ? null : readUsageLimitReset(runner ?? '', said, now);
     if (!reset) {
       if (plan) plan.plannerResend = runner ? { runner } : {};
       const held = relapsed ? 'hit it again right after the resend' : 'did not say when it resets';
@@ -90,7 +92,7 @@ export class PlannerResend {
   limitedAfterChange(said: TurnFailure): PlannerLimit {
     const runner = this.host.plannerRunner() ?? undefined;
     const now = new Date();
-    const reset = runner ? readUsageLimitReset(runner, said, now) : null;
+    const reset = readUsageLimitReset(runner ?? '', said, now);
     const when = reset ? `, resets ${resumeTime(reset, now)}` : '';
     return { text: `${runner ?? 'Planner'} usage limit${when}. What the planner changed before it stays, and nothing waits to be sent again.`, resendAt: null, held: 'had already made its change', answered: true };
   }

@@ -22,6 +22,7 @@ import type { ModelShortcut } from './ModelShortcuts';
 import { extractProvider } from './ModelShortcuts';
 import { ModelCatalog } from './ModelCatalog';
 import { discoverGeminiModels } from './ModelDiscovery';
+import { enrichCatalogModel } from './ModelDetails';
 
 export interface FetchAllProviderModelsOptions {
   apiKeys: Record<string, string>;
@@ -154,7 +155,9 @@ export async function fetchAllProviderModels(
     const [provider] = entries[i];
     const result = results[i];
     if (result.status === 'fulfilled') {
-      models[provider] = result.value;
+      // After the fetch and its file cache, so a fresher models.dev applies to
+      // a catalog fetched an hour ago without clearing anything.
+      models[provider] = result.value.map((m) => enrichCatalogModel(provider as AiProvider, m));
     } else {
       models[provider] = [];
       const reason = result.reason;
@@ -182,6 +185,10 @@ function perMTok(prompt: string, completion: string): string | undefined {
   if (!isFinite(p) || !isFinite(c)) return undefined;
   const fmt = (n: number) => String(+(n * 1_000_000).toFixed(2));
   return `${fmt(p)}/${fmt(c)}`;
+}
+
+function catalogPricing(m: CatalogModel): string | undefined {
+  return m.pricing?.prompt && m.pricing?.completion ? perMTok(m.pricing.prompt, m.pricing.completion) : undefined;
 }
 
 export function toOrchestratorOptions(
@@ -216,7 +223,9 @@ export function toOrchestratorOptions(
       } else {
         const meta = getProviderMeta(provider);
         providerLabel = s?.provider || meta?.shortLabel || provider;
-        pricing = s?.pricing;
+        // The curated shortcut's price first; the catalog's own (merged from
+        // models.dev) covers every model no shortcut names.
+        pricing = s?.pricing ?? catalogPricing(m);
       }
 
       options.push({

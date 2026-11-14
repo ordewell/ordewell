@@ -568,6 +568,14 @@ const server = http.createServer((req, res) => {
       });
     }
     res.write(sseChunk({}, turn.toolCalls ? 'tool_calls' : 'stop'));
+    // Only the built-in runner reads usage, and only its smoke harness
+    // (runner-smoke.mjs) needs figures to print: a rough count, with the prompt served from cache once a tool
+    // result is in it, as a provider's automatic prefix cache would.
+    if ((model ?? '').endsWith('/ordewell-runner')) {
+      const promptTokens = Math.ceil(body.length / 4);
+      const completionTokens = Math.ceil(JSON.stringify(turn).length / 4);
+      res.write(`data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens, prompt_tokens_details: { cached_tokens: (messages ?? []).some((m) => m.role === 'tool') ? Math.floor(promptTokens * 0.8) : 0 } } })}\n\n`);
+    }
     res.write('data: [DONE]\n\n');
     res.end();
   });

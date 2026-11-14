@@ -8,6 +8,9 @@ import { homeEnv, patient, removeDir, setEnv } from './packages/core/src/testEnv
 // its own env, so this only silences the CLI, daemon and extension code that
 // starts one as a side effect, and every child process they spawn.
 process.env.ORDEWELL_NO_VERSION_CHECK = '1';
+// Nor models.dev: model details come from the bundled snapshot. A test of the
+// refresh builds its own store with its own env.
+process.env.ORDEWELL_NO_MODELS_DEV = '1';
 
 // A host agent session (an Ordewell planner, say) exports the planner it chose.
 // CI has none, and a test must not plan with the host's agent: the settings
