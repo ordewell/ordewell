@@ -8,7 +8,7 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
+import { composeCompactionNudge, delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { runningLongThreshold, type RunningLongEvent } from './RunningLong';
 import type { PlanStore } from './PlanStore';
@@ -951,9 +951,25 @@ export class Attempts {
         });
       }
     });
+    if (task.type === 'ai') session.onEvent((event) => {
+      if (event.type === 'compaction' && event.trigger === 'auto') this.nudgeAfterCompaction(task.id, attempt, session);
+    });
     session.onTurnEnd((reason) => this.turnEnded(task.id, attempt, session, reason));
     // The runner names its session once it has begun, and no event says when.
     if (task.type !== 'delegated') session.onEvent(() => this.noteNativeSession(task, attempt, session));
+  }
+
+  /**
+   * The runner compacted its own context (ADR-0018, C3), and the summary it
+   * kept may have lost where its brief ended: it is told the brief again, and
+   * to finish, through the queue a message_task uses, so a harness that takes
+   * nothing mid-turn reads it at the next one. Once per compaction; none to an
+   * attempt that ended or waits for the user, whom a message would put back to work.
+   */
+  private nudgeAfterCompaction(taskId: string, attempt: TaskAttempt, session: IRunnerSession): void {
+    const task = this.deps.store.get(taskId);
+    if (!task || this.live.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided || task.status !== 'in_progress') return;
+    session.sendMessage(composeCompactionNudge(task, { lands: writesCommit(attempt.kind) }), 'ordewell');
   }
 
   /**

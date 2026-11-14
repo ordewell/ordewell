@@ -127,6 +127,25 @@ and completion evidence.
   in the worktree. The first message is the task's prompt and its context
   only. The attempt's token is not part of any of it; it travels in the MCP
   connection.
+- **A runner that meets its brief stops, and a compaction says so again (C3).**
+  A runner can meet its brief's done criterion and keep going into the scope of
+  later tasks, never committing or calling `task_complete`; compaction makes it
+  likelier, since its own summary may drop where the brief ended. The contract
+  (C2) therefore says that once the brief's done criterion holds the runner
+  commits, if its work lands as a commit, and calls `task_complete`, and that
+  work beyond the brief belongs to other tasks and goes in the handoff as an
+  open question or a follow-up. And when a task's runner reports a compaction
+  of its own session it started itself (`trigger: 'auto'`; the user's
+  `/compact` is not one), Ordewell sends it one message through the queue
+  `message_task` uses (M1), marked `from: 'ordewell'` and logged as any queued
+  message is: the task's title and description, and that if what the brief asks
+  is done it should commit (a task that lands nothing is not asked to) and call
+  `task_complete` now, leaving work beyond the brief to other tasks. It is sent
+  once per compaction, so two give two. It is never sent to an attempt that has
+  ended or decided, or whose task waits on the user, whom a message would put
+  back to work. A harness that takes nothing mid-turn delivers it at its next
+  turn, as it does any queued message (ADR-0023 D4). It asks for no verdict: only
+  the `task_complete` call settles the task (W1).
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -612,3 +631,4 @@ transport is retained for take-over.
 - 2026-11-14 — E1: a `Provider returned error` with a 4xx status other than 429 is not transient; the error is redacted wherever it is repeated.
 - 2026-11-14 — E1: OpenCode's `APIError` status is kept beside its words, a status code written as `statusCode` or a quoted string counts, and a context too long is not transient without a status.
 - 2026-11-14 — W1: an AI task's attempt that runs past max(30 min, 3× the longest passed AI task's wall time), doubled after each flag, or whose runner session compacts on its own, is flagged running long, as advice.
+- 2026-11-14 — C3: the completion contract tells a runner to commit and call `task_complete` once its brief's done criterion holds and to name work beyond it in the handoff; after a compaction of the runner's own session Ordewell queues it one message restating its brief with that instruction.

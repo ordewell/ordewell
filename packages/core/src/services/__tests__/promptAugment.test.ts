@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createTask, type Task, type TaskSkillSnapshot } from '../../models/Task';
 import type { HandoffDigest, HandoffFinding } from '../../models/Handoff';
 import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
-import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeContinuationPrompt, READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE, summarizeOutput } from '../promptAugment';
+import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeCompactionNudge, composeContinuationPrompt, READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE, summarizeOutput } from '../promptAugment';
 
 describe('summarizeOutput', () => {
   it('clips output to last 500 chars', () => {
@@ -493,6 +493,18 @@ describe('composeAugmentedPrompt', () => {
 
   it('asks that a number a later task may need sit in the summary or a finding, not only in the report', () => {
     expect(TASK_COMPLETION_CONTRACT).toMatch(/number you measured.*\(a timing, a count, a size\).*in the summary or a finding, not only in the report/);
+  });
+
+  it('tells the runner to commit and call task_complete once its done criterion holds, and to name work beyond its brief in the handoff', () => {
+    expect(TASK_COMPLETION_CONTRACT).toContain('Once your brief\'s done criterion holds, commit (if your work lands as a commit) and call `task_complete`: work beyond your brief belongs to other tasks, so name it in your handoff (an open question or a follow-up) instead of doing it.');
+  });
+
+  it('words the post-compaction nudge by whether the task lands a commit', () => {
+    const task = createTask({ id: 'a', title: 'Audit', prompt: 'Read the parser.' });
+    expect(composeCompactionNudge(task, { lands: true })).toContain('commit and call `task_complete` now');
+    const readOnly = composeCompactionNudge(task, { lands: false });
+    expect(readOnly).toContain('call `task_complete` now');
+    expect(readOnly).not.toContain('commit');
   });
 
   it('tells the runner to wait on the PID of a process it started, never on a match by command name', () => {
