@@ -404,7 +404,9 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     expect(rule).toMatch(/The test: if the finding a later task acts on would end up in its brief, a task finds it; if it only decides what you say or ask the user, it stays in your turn\./);
     expect(rule).toMatch(/Make it a research task only when you must decide something on its report; otherwise a read-only task its readers depend on\./);
     expect(rule).toMatch(/Take in a research task's summary, and pull its full report with task_output only where the plan rests on the detail\./);
-    expect(rule).toMatch(/- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you\./);
+    expect(rule).toMatch(/- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks\. With the supervisor at Act in SURFACE AND SETTINGS, you plan the rest when their reports wake you\./);
+    // Below Act a wake-up cannot edit the plan, so a research-only plan would settle with only the research done.
+    expect(rule).toMatch(/Below Act a wake-up cannot extend the plan: plan with them the work they feed, or tell the user they will be asked to continue once the reports are in\./);
     expect(rule).toMatch(/A vague goal the user can clarify is not one: ask first\./);
   });
 
@@ -870,6 +872,7 @@ describe('the strategy step and the context rules (#108)', () => {
     expect(strategy).toMatch(/Plan the fix once the reports name the cause/);
     expect(strategy).toMatch(/- An open problem with no known path: a search \(WHO EXPLORES\)\. Plan only the first round of exploration, as research tasks/);
     expect(strategy).toMatch(/extend the plan with the next round/);
+    expect(strategy).toMatch(/Below Act, tell the user they will be asked to continue once the reports are in\./);
   });
 
   it('offers run_script for an exact effect only where the execution tools are', () => {
@@ -942,7 +945,9 @@ describe('script tasks in the conversation prompt (ADR-0035)', () => {
     expect(p).toContain('"type": "ai|user|script"');
     expect(p).toContain('"type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK"');
     expect(p).toMatch(/"commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails/);
-    expect(p).toMatch(/give "script" instead.*Give exactly one of the two/);
+    expect(p).toMatch(/give "script" instead: one script, run under POSIX sh unless its first line is a #! line naming another interpreter\. Give exactly one of the two/);
+    // A probe that exits non-zero by design would read as a failed task.
+    expect(p).toMatch(/- A script task is an effect or a check, never a probe: its verdict is its exit status, so one that exits non-zero by design fails\. Research is for your own reads, agents and research tasks \(WHO EXPLORES\)\./);
     expect(p).toMatch(/"timeoutMs" is its time limit in milliseconds; ten minutes when left out/);
     expect(p).toContain('Only a top-level task can be one. Leave out ' + forbiddenFields('script').map((f) => `"${f}"`).join(', ') + '.');
   });
@@ -1104,6 +1109,12 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
 
   it('points a subplanner at no SURFACE AND SETTINGS block, which it is never sent', () => {
     expect(prompt({ subplanner: brief })).not.toContain('SURFACE AND SETTINGS');
+  });
+
+  it('lets a subplanner, whose wake-ups always act, plan the rest of a research-only first plan on the reports', () => {
+    const text = prompt({ subplanner: brief });
+    expect(text).toContain('- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you.\n');
+    expect(text).not.toMatch(/Below Act/);
   });
 
   it('tells a subplanner how it ends, what it may not change, and that nobody answers it', () => {
