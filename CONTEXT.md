@@ -2256,7 +2256,7 @@ gate, and lands nothing: no ops task. A **Delegated task**'s check, and what a
 task whose body is a literal script that Ordewell runs itself, with no runner,
 model or mode. The body is `commands`, argument vectors run in order with no
 shell and stopping at the first that fails, or `script`, one script for the
-research shell's interpreter, outside the planner's sandbox; a time limit
+research shell's interpreter, or for the shell its first `#!` line names, outside the planner's sandbox; a time limit
 (ten minutes unless the task sets one) ends it as failed. It is top-level only,
 runs at the workspace root with the workspace's environment, and is an ops task
 in everything else: the merge gate, the Merge-all exclusion and the tracked-file

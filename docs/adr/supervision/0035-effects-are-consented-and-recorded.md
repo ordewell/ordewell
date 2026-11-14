@@ -68,7 +68,16 @@ writes repository files.**
   body is either `commands`, a list of argument vectors run in order with no
   shell and stopping at the first that fails, or `script`, one script run by
   the interpreter the planner's own commands use (the research shell,
-  ADR-0011), outside the planner's sandbox, as a task runs. It has no runner,
+  ADR-0011), outside the planner's sandbox, as a task runs. A `script` whose
+  first line is a `#!` line runs with the shell that line names instead
+  (`#!/usr/bin/env bash`, `#!/bin/bash -e`): the body is what the user
+  consented to, so the interpreter comes from that text, and the log shows it
+  as the first line of the script. It is handed `-c <script>`, so it must be a
+  shell (`sh`, `bash`, `dash`, `ash`, `zsh`, `ksh`); another language's
+  program is refused, and a shell that is not there fails the task naming it,
+  before anything runs. This holds sealed and in a container, where the name
+  is looked up where the script runs. On Windows `bash` and `sh` are Git Bash,
+  as for any script, and a body with no `#!` line runs as before. It has no runner,
   model or mode, and no subtasks, and is never one: like an ops task, it is
   top-level only.
 - **It is an ops task in everything ADR-0020 says about where and when ops
@@ -415,3 +424,4 @@ minute is recorded beside its start.
 - 2026-11-01 — a script task marked `readOnly` runs sealed in a throwaway worktree, past no gate (ADR-0055 D8).
 - 2026-11-01 — below the root a mandate takes over the consent table and the allowlist, one list per level (ADR-0056 M6, M9).
 - 2026-11-01 — under the `containers` setting a script task runs in a container, on a copy of what the workspace has committed, and brings nothing back (ADR-0059 L5).
+- 2026-11-14 — a `script` body whose first line is a `#!` line runs with the shell it names, on every path a body takes; before, `sh -c` ignored the line and a bash-only body failed in dash (`set -o pipefail`).
