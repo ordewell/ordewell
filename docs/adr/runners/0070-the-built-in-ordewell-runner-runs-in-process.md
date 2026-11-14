@@ -2,7 +2,7 @@
 status: accepted
 implemented: partial
 amends: ["0022", "0025"]
-note: "Built: Full mode on chat-completions. Later slices: Guarded and read-only gates, run_command and the other task tools, the step limit and repeat guard, compaction and caching, the models.dev catalog, the other dialects, and the planner on ModelClient."
+note: "Built: Full mode on chat-completions. Later slices: Guarded and read-only gates, run_command and the other task tools, the step limit and repeat guard, the models.dev catalog, the other dialects, and the planner on ModelClient."
 ---
 
 # 0070 — The built-in Ordewell runner runs in-process
@@ -69,6 +69,41 @@ already holds, and is driven by `StructuredSession` like every other runner.**
 - **Completion is the token-bound `task_complete` alone**
   ([ADR-0025](0025-structured-only-runners.md)). The loop ending a turn, or the
   model saying it is done, proves nothing.
+- **Context is managed by the runner** (`compaction.ts`), to spend fewer tokens without losing the task:
+  - **Fill.** Every step reports its usage with the model's context window, a
+    defaulted one included, since compaction acts on the same figure, and with
+    the prompt plus reply as `contextTokens`, so `ContextWindowFill` reads the
+    meter. A compaction resets it to the compacted size.
+  - **Trigger.** Before each request the next prompt is estimated: the provider's
+    last count (the whole prompt and its reply) plus an estimate of what was
+    recorded since, or the whole prompt estimated when there is no count (a fresh
+    attempt, the step after a compaction). Past the window minus a reserve, 15%
+    of the window and at least 16k tokens, the conversation is compacted. The
+    threshold is never under half the window, so a window under about 32k does not
+    compact on every step. Estimates count four characters to a token.
+  - **Summary.** A separate call, with no tools, writes the messages between the
+    kept head and tail under fixed headings: Objective, Requirements, Decisions,
+    Work State (Completed, Active, Blocked), Next Move, Relevant Files, Important
+    Context. A missing heading earns one reminder; one still missing is filled
+    with "(not recorded)" so the shape never varies.
+  - **Kept word for word.** The task message (its prompt and the earlier tasks'
+    handoffs) and a tail of up to a quarter of the window. The tail starts at the
+    earliest user message that fits, else the earliest assistant message, and
+    never at a tool result, so a call stays with its result.
+  - **Persisted.** A `compaction` transcript line names the replaced range and
+    holds the summary message; the lines before it stay on disk and the fold
+    applies it, so a resume continues from the compacted conversation. The task
+    log gets a `compaction` event with the sizes before and after, and the summary
+    call's spend is billed under the `compaction` purpose, apart from the meter.
+  - **Overflow.** When the provider refuses a request as too long (a context
+    overflow), the same step is retried from a conversation compacted to 0.85,
+    0.7, 0.5 and then 0.35 of the window, the tail shrinking with it, before the
+    refusal fails the step.
+  - **Cache hints.** Every request marks breakpoints after the tool list, after
+    the system prompt and at the last message. The tool list and the system prompt
+    are fixed for the attempt (the prompt is read back from the transcript, never
+    rebuilt), and nothing that changes between steps, such as a count or a clock,
+    is in them.
 
 ## Key properties
 
@@ -108,9 +143,9 @@ Three later pieces build on the loop, each at one seam, handed in through
 - **The transcript store and the request assembler** (`TranscriptStore`,
   `RequestAssembler`): the store is the one record of what the model has seen,
   JSON lines in `<data dir>/runners/ordewell/sessions/<id>/transcript.jsonl`,
-  and the assembler is the one place a request is built from it. Compaction
-  folds old messages in either; caching places its breakpoints in the
-  assembler.
+  and the assembler is the one place a request is built from it, and places
+  its cache breakpoints. Compaction rewrites the stored transcript instead (see
+  the context bullet above), so what is assembled is always what a resume loads.
 
 ## Testing decisions
 
@@ -125,7 +160,7 @@ comes from that call.
 
 - The Guarded and read-only gates, and `checkpoint`, `apply_patch`,
   `save_patch`, `run_command`, `fetch` and `web_search` as native tools.
-- The step limit, the repeat guard, compaction and prompt caching.
+- The step limit and the repeat guard.
 - Per-family tool shapes: one neutral set serves every model until a family
   measurably needs its own.
 - Moving the planner onto `ModelClient`. Only the planner moves; the runner is
@@ -154,6 +189,7 @@ comes from that call.
 ## History
 
 - 2026-11-14 — accepted; Full mode on chat-completions implemented.
+- 2026-11-14 — context fill, compaction and cache breakpoints implemented.
 - 2026-11-14 — the model catalog implemented: each provider's `/models` says
   which models exist, models.dev fills window, reply cap, prices and
   capabilities (daily background fetch, cache under the data directory, bundled

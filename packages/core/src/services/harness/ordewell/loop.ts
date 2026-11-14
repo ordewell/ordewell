@@ -5,6 +5,7 @@ import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCal
 import { findTool, ordewellTools, runTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
+import { Compactor, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
 
 /**
@@ -36,8 +37,9 @@ export interface StepPlan {
 
 /**
  * SEAM (c), request assembly: the one place a step's request is built from the
- * transcript. The compaction task folds old messages here (or in the store's
- * `load`), and the caching task places its breakpoints here.
+ * transcript, and where the cache breakpoints are placed (ADR-0070). Compaction
+ * is not here: it rewrites the stored transcript, so what is assembled is
+ * always what a resume would load.
  */
 export type RequestAssembler = (input: AssemblyInput) => ModelRequest;
 
@@ -50,9 +52,22 @@ export interface AssemblyInput {
   effort?: EffortLevel;
 }
 
+/**
+ * The cached prefix is the tool list, then the system prompt, then the
+ * messages. The first two are the attempt's own and never change within it
+ * (the system prompt is read back from the transcript, not rebuilt), so a
+ * breakpoint after each, and one on the last message, make every step read the
+ * previous step's prefix. A system prompt that marks no part gets its last one
+ * marked: the hint is the assembler's to guarantee, not the prompt's.
+ */
+function withSystemBreakpoint(system: readonly SystemPart[]): SystemPart[] {
+  if (system.length === 0 || system.some((part) => part.cacheBreakpoint)) return [...system];
+  return system.map((part, i) => (i === system.length - 1 ? { ...part, cacheBreakpoint: true } : part));
+}
+
 export const assembleRequest: RequestAssembler = (input) => ({
   model: input.model.model,
-  system: [...input.system],
+  system: withSystemBreakpoint(input.system),
   messages: [...input.transcript.messages],
   tools: [...input.tools],
   ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
@@ -105,6 +120,7 @@ const INTERRUPTED = 'Interrupted: the call was stopped before it finished.';
  */
 export class OrdewellLoop {
   private readonly tools: readonly ToolDefinition[];
+  private readonly compactor: Compactor;
 
   constructor(private readonly options: LoopOptions) {
     // Fixed for the attempt, in a fixed order, so the cached prefix holds.
@@ -112,6 +128,15 @@ export class OrdewellLoop {
       ...ordewellTools.map((tool) => ({ name: tool.name, description: tool.description, parameters: { ...tool.parameters } })),
       ...options.taskTools.definitions.map(withoutSchemaKey),
     ];
+    this.compactor = new Compactor({
+      client: options.client,
+      model: options.model,
+      store: options.store,
+      tools: this.tools,
+      fallbackSystem: options.system,
+      record: (entry) => this.record(entry),
+      emit: (event) => this.emit(event),
+    });
   }
 
   get toolDefinitions(): readonly ToolDefinition[] {
@@ -145,17 +170,47 @@ export class OrdewellLoop {
         for (const text of plan.inject) await this.recordMessage(step, { role: 'user', text });
         transcript = await store.load();
       }
-      const request = (this.options.assemble ?? assembleRequest)({
-        model: this.options.model,
-        system: transcript.system ?? this.options.system,
-        transcript,
-        tools: this.tools,
-        ...(plan.toolChoice ? { toolChoice: plan.toolChoice } : {}),
-        ...(this.options.effort ? { effort: this.options.effort } : {}),
-      });
-      const result = await this.runStep(step, request, signals);
+      // After the boundary hook and its injections, so the estimate counts what the request carries.
+      transcript = await this.compactor.beforeRequest(transcript, step, signals.hard);
+      const result = await this.runStepRecovering(step, transcript, plan, signals);
       if (result.interrupted) return { interrupted: true };
       if (result.calls === 0) return { interrupted: false };
+    }
+  }
+
+  private assemble(transcript: LoadedTranscript, plan: StepPlan): ModelRequest {
+    return (this.options.assemble ?? assembleRequest)({
+      model: this.options.model,
+      system: transcript.system ?? this.options.system,
+      transcript,
+      tools: this.tools,
+      ...(plan.toolChoice ? { toolChoice: plan.toolChoice } : {}),
+      ...(this.options.effort ? { effort: this.options.effort } : {}),
+    });
+  }
+
+  /**
+   * One step, and when the provider refuses its request as too long, the same
+   * step again from a conversation compacted to a smaller share of the window
+   * (0.85, 0.7, 0.5, then 0.35) before the refusal is the step's failure. Only
+   * a refusal that left nothing recorded is retried: a step that got as far as
+   * a tool call has moved the conversation on.
+   */
+  private async runStepRecovering(step: number, transcript: LoadedTranscript, plan: StepPlan, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<StepResult> {
+    const fractions = [...OVERFLOW_FRACTIONS];
+    let current = transcript;
+    for (;;) {
+      try {
+        return await this.runStep(step, this.assemble(current, plan), signals);
+      } catch (err) {
+        if (!isModelError(err) || err.kind !== 'context-overflow' || signals.hard.aborted) throw err;
+        if ((await this.options.store.load()).messages.length !== current.messages.length) throw err;
+        let shrunk: LoadedTranscript | undefined;
+        // A fraction that changes nothing (the conversation is already that small) falls through to the next.
+        while (shrunk === undefined && fractions.length > 0) shrunk = await this.compactor.shrink(current, step, signals.hard, fractions.shift() as number);
+        if (shrunk === undefined) throw err;
+        current = shrunk;
+      }
     }
   }
 
@@ -206,7 +261,8 @@ export class OrdewellLoop {
     } else {
       await this.recordStep(step, text, calls, providerState, running);
     }
-    if (usage) await this.recordUsage(step, usage);
+    // The usage counts the request and the assistant message recorded from its reply, and not the tool results, which the next estimate adds.
+    if (usage) await this.recordUsage(step, usage, request.messages.length + (calls.length > 0 || text ? 1 : 0));
     return { calls: calls.length, interrupted: aborted || signals.stop.aborted };
   }
 
@@ -246,8 +302,8 @@ export class OrdewellLoop {
     }
   }
 
-  private async recordUsage(step: number, usage: ModelUsage): Promise<void> {
-    await this.record({ v: 1, kind: 'usage', at: now(), step, usage });
+  private async recordUsage(step: number, usage: ModelUsage, covers: number): Promise<void> {
+    await this.record({ v: 1, kind: 'usage', at: now(), step, usage, covers });
     const { model } = this.options;
     const record: UsageRecord = {
       source: 'ordewell',
@@ -257,7 +313,10 @@ export class OrdewellLoop {
       ...(usage.cacheReadTokens !== undefined ? { cachedInputTokens: usage.cacheReadTokens } : {}),
       // Only the provider's own figure (ADR-0070): no price table makes one up.
       ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
-      ...(model.known.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      // Always: compaction acts on this window, so the meter must read the same one, a default included.
+      contextWindow: model.contextWindow,
+      // The prompt plus the reply it produced is what the next prompt starts from.
+      ...(usage.inputTokens !== undefined ? { contextTokens: usage.inputTokens + (usage.outputTokens ?? 0) } : {}),
     };
     this.emit({ type: 'usage', record });
   }

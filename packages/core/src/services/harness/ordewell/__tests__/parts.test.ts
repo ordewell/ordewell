@@ -60,7 +60,7 @@ describe('FileTranscriptStore', () => {
     expect(store.dir).toBe(path.join(root, 's1'));
     expect(await store.exists()).toBe(true);
     expect(readFileSync(path.join(root, 's1', 'transcript.jsonl'), 'utf8').trim().split('\n')).toHaveLength(3);
-    expect(await new FileTranscriptStore('s1', root).load()).toEqual({ model: 'openrouter:m', system: [{ text: 'sys' }], messages: [{ role: 'user', text: 'hi' }], steps: 2 });
+    expect(await new FileTranscriptStore('s1', root).load()).toEqual({ model: 'openrouter:m', system: [{ text: 'sys' }], messages: [{ role: 'user', text: 'hi' }], steps: 2, compactions: 0 });
   });
 
   it('skips a torn last line rather than failing the resume', async () => {
