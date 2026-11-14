@@ -812,7 +812,11 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
 /** The facts of a running-long flag, worded for the supervisor to weigh (ADR-0018 W1). */
 function runningLongLine(task: string, facts: RunningLongEvent | undefined, describe: (taskId: string) => string): string {
   if (!facts) return `${task} has run long`;
-  const context = facts.contextTokens === undefined ? '' : `; context ${tokens(facts.contextTokens)}${facts.contextWindow ? ` of ${tokens(facts.contextWindow)}` : ''} tokens${facts.peakContextTokens === undefined ? '' : `, peak ${tokens(facts.peakContextTokens)}`}`;
+  const window = facts.contextWindow ? ` of ${tokens(facts.contextWindow)}` : '';
+  // A compaction that states no size (Codex, OpenCode) leaves the live context unknown, but the peak still says it ran full.
+  const context = facts.contextTokens !== undefined
+    ? `; context ${tokens(facts.contextTokens)}${window} tokens${facts.peakContextTokens === undefined ? '' : `, peak ${tokens(facts.peakContextTokens)}`}`
+    : facts.peakContextTokens !== undefined ? `; context unknown since compacting, peak ${tokens(facts.peakContextTokens)}${window} tokens` : '';
   const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
