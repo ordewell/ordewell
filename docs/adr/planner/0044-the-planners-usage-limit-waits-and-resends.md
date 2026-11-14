@@ -61,6 +61,10 @@ ended a turn Ordewell started.**
   another cause is not the limit, and its words do not overrule that. Claude Code
   and others that report only words are read by their words, as before. This
   holds for tasks, planner turns and supervisor wake-ups alike.
+- **An API planner's client states the limit as a field.** Its usage-limit
+  error carries the reset (`resetsAt`), which the wait reads; a rate limit or
+  transient failure is retried by the client on the provider's Retry-After and
+  is never the limit.
 
 ## Key properties
 
@@ -91,3 +95,4 @@ ended a turn Ordewell started.**
 
 - 2026-10-17 — accepted and implemented: the planner's wait and resend, `/resend cancel`, the in-flight rule, and Codex's structured limit signals.
 - 2026-10-18 — loading a session holds saved inputs for a new message instead of rearming its resend timer.
+- 2026-11-14 — an API planner's turn ends on a usage-limit error from its `ModelClient` and waits for the reset that error states. Before it, an API planner's limit stated no reset to wait for.
