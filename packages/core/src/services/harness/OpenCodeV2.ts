@@ -10,7 +10,7 @@ import type { ProjectMcpServer } from './repoConfig';
 import type { RaisedRequest } from './permissionLedger';
 import {
   autoApproves, delay, EventStreamLostError, interruptAcknowledged, openCodePermissions, openCodePlannerAsk, plannerSystem, openEventStream, permissionReply, raiseOnce, settleTurn, splitModelId, streamTurn,
-  SESSION_TITLE, openCodeCall, turnLatch, type EventStream, type OpenCodeTokens, type StreamTurn, type TurnLatch,
+  SESSION_TITLE, openCodeCall, turnLatch, v2ErrorText, type EventStream, type OpenCodeTokens, type StreamTurn, type V2Error, type TurnLatch,
 } from './openCodeTransport';
 import { settleWithin } from './settleWithin';
 import { SubagentTracker, subagentBrief } from './subagentTracker';
@@ -87,7 +87,7 @@ interface V2Frame {
     name?: string;
     input?: Record<string, unknown>;
     content?: V2ToolContent[];
-    error?: { type?: string; message?: string };
+    error?: V2Error;
     model?: { id?: string; providerID?: string };
     cost?: number;
     tokens?: OpenCodeTokens;
@@ -673,7 +673,7 @@ export class OpenCodeV2 {
 
     if (!isChild) {
       if (frame.type === 'session.compaction.failed' && data.reason === 'manual') {
-        turn.failure = data.error?.message ?? data.error?.type ?? 'OpenCode did not compact the session.';
+        turn.failure = v2ErrorText(data.error) ?? 'OpenCode did not compact the session.';
         return;
       }
       if (frame.type === 'session.compaction.ended') {
@@ -689,7 +689,7 @@ export class OpenCodeV2 {
         if (!turn.live || turn.done) return;
         turn.outcome = frame.type === 'session.execution.succeeded' ? 'succeeded' : frame.type === 'session.execution.failed' ? 'failed' : 'interrupted';
         // A shell that escaped the launcher already named the failure (N2); OpenCode's own error must not replace it.
-        if (turn.outcome === 'failed') turn.failure ??= data.error?.message ?? data.error?.type ?? null;
+        if (turn.outcome === 'failed') turn.failure ??= v2ErrorText(data.error) ?? null;
         turn.finish();
         return;
       }
