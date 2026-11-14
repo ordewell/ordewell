@@ -520,7 +520,9 @@ brief, or one whose finding out needs a worktree (a failing test, a build, a
 reproduction), another runner or model to judge it, or the user to see it and
 be able to stop it. Evidence only a later task acts on is a plain read-only
 task that task depends on, reading the findings in its handoff. A first plan
-may be research tasks alone when it cannot be outlined without them.
+may be research tasks alone when it cannot be outlined without them, and
+below the Act supervisor level it also holds the work they feed or says the
+user will be asked to continue.
 Orientation, a conclusion the planner needs this turn that no task acts on,
 stays in the turn, in its own reads or its own agents; a search, rounds of
 research each deciding the next, is the `explore` skill (ADR-0037 R5).
