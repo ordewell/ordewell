@@ -3,6 +3,7 @@ import type { DiscoveredModel } from '../../../models/Task';
 import type { RunnerEnv } from '../../../plugins/types';
 import { PROVIDER_PRIORITY, VENDORS, vendorApiKeyIn, vendorBaseUrlIn } from '../../apiProviders';
 import type { CatalogModel } from '../../ModelCatalog';
+import type { EffortLevel } from '../../model';
 
 /**
  * What the loop and its later slices (compaction, caching, the step limit)
@@ -24,6 +25,8 @@ export interface ModelInfo {
   pricing: { input: number; output: number; cacheRead: number; cacheWrite: number };
   supportsTools: boolean;
   supportsReasoning: boolean;
+  /** The effort levels to offer: empty unless the model is known to reason. */
+  efforts: EffortLevel[];
   known: Record<'contextWindow' | 'maxOutputTokens' | 'pricing' | 'supportsTools' | 'supportsReasoning', boolean>;
 }
 
@@ -62,6 +65,7 @@ export function defaultModelInfo(provider: AiProvider, model: string): ModelInfo
     label: model,
     ...DEFAULT_MODEL_INFO,
     pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    efforts: [],
     known: { contextWindow: false, maxOutputTokens: false, pricing: false, supportsTools: false, supportsReasoning: false },
   };
 }
@@ -70,6 +74,18 @@ export function defaultModelInfo(provider: AiProvider, model: string): ModelInfo
 function perMillion(price: string): number | undefined {
   const value = Number(price);
   return price.trim() !== '' && Number.isFinite(value) && value >= 0 ? value * 1_000_000 : undefined;
+}
+
+const EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/**
+ * models.dev lists levels the adapters have no name for (`none`, `minimal`,
+ * `default`), which are dropped. A model known to reason that lists none we
+ * can offer still takes the three every adapter maps.
+ */
+function effortsFor(listed: string[] | undefined): EffortLevel[] {
+  const offered = EFFORT_LEVELS.filter((level) => listed?.includes(level));
+  return offered.length > 0 ? offered : ['low', 'medium', 'high'];
 }
 
 export function modelInfoFromCatalog(provider: AiProvider, entry: CatalogModel): ModelInfo {
@@ -86,8 +102,13 @@ export function modelInfoFromCatalog(provider: AiProvider, entry: CatalogModel):
   const input = perMillion(entry.pricing.prompt);
   const output = perMillion(entry.pricing.completion);
   if (input !== undefined && output !== undefined) {
-    info.pricing = { input, output, cacheRead: 0, cacheWrite: 0 };
+    info.pricing = { input, output, cacheRead: entry.cachePricing?.read ?? 0, cacheWrite: entry.cachePricing?.write ?? 0 };
     info.known.pricing = true;
+  }
+  if (entry.reasoning !== undefined) {
+    info.supportsReasoning = entry.reasoning;
+    info.known.supportsReasoning = true;
+    if (entry.reasoning) info.efforts = effortsFor(entry.efforts);
   }
   if (entry.tools !== undefined) {
     info.supportsTools = entry.tools;
@@ -132,12 +153,14 @@ export async function listProviderModels(env: RunnerEnv, fetchImpl?: typeof fetc
 /** The runner's model list, grouped by provider through `runnerProvider`. */
 export async function discoverProviderModels(env: RunnerEnv, fetchImpl?: typeof fetch): Promise<DiscoveredModel[]> {
   const infos = await listProviderModels(env, fetchImpl);
-  return infos.map((info) => ({
+  // A model the catalog knows takes no tools cannot run this runner at all, so
+  // it is not offered; one the catalog is silent on stays (the default assumes tools).
+  return infos.filter((info) => !(info.known.supportsTools && !info.supportsTools)).map((info) => ({
     modelId: info.id,
     modelLabel: info.label,
     runnerProvider: info.provider,
     runnerProviderLabel: VENDORS[info.provider].label,
-    variants: [],
+    variants: info.efforts.map((level) => ({ id: level, label: level })),
     ...(info.known.contextWindow ? { contextWindow: info.contextWindow } : {}),
     ...(info.known.maxOutputTokens ? { maxOutputTokens: info.maxOutputTokens } : {}),
   }));
