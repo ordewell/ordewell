@@ -1,0 +1,6 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-err","object":"chat.completion.chunk","created":1731500500,"model":"z-ai/glm-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"Start"},"finish_reason":null}]}
+
+data: {"error":{"code":502,"message":"Provider returned error","metadata":{"provider_name":"Chutes"}}}
+

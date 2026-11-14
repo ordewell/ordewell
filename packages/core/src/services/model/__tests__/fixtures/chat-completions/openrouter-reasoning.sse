@@ -1,0 +1,18 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1731500300-abc","provider":"Anthropic","model":"anthropic/claude-sonnet-4.5","object":"chat.completion.chunk","created":1731500300,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"Checking","reasoning_details":[{"type":"reasoning.text","text":"Checking","format":"anthropic-claude-v1","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1731500300-abc","provider":"Anthropic","model":"anthropic/claude-sonnet-4.5","object":"chat.completion.chunk","created":1731500300,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":" the plan.","reasoning_details":[{"type":"reasoning.text","text":" the plan.","format":"anthropic-claude-v1","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1731500300-abc","provider":"Anthropic","model":"anthropic/claude-sonnet-4.5","object":"chat.completion.chunk","created":1731500300,"choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning":"","reasoning_details":[{"type":"reasoning.text","signature":"EqQBCkgIBRABGAIiQL3sig==","format":"anthropic-claude-v1","index":0}]},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1731500300-abc","provider":"Anthropic","model":"anthropic/claude-sonnet-4.5","object":"chat.completion.chunk","created":1731500300,"choices":[{"index":0,"delta":{"role":"assistant","content":"Done."},"finish_reason":null,"native_finish_reason":null,"logprobs":null}]}
+
+data: {"id":"gen-1731500300-abc","provider":"Anthropic","model":"anthropic/claude-sonnet-4.5","object":"chat.completion.chunk","created":1731500300,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop","native_finish_reason":"end_turn","logprobs":null}]}
+
+data: {"id":"gen-1731500300-abc","provider":"Anthropic","model":"anthropic/claude-sonnet-4.5","object":"chat.completion.chunk","created":1731500300,"choices":[],"usage":{"prompt_tokens":8000,"completion_tokens":30,"total_tokens":8030,"cost":0.0042,"is_byok":false,"prompt_tokens_details":{"cached_tokens":6000,"cache_write_tokens":1900},"cost_details":{"upstream_inference_cost":null},"completion_tokens_details":{"reasoning_tokens":12}}}
+
+data: [DONE]
+

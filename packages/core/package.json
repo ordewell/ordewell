@@ -98,6 +98,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@google/genai": "^3.3.0",
     "@google/generative-ai": "^0.21.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "markdown-it": "^14.3.2",
