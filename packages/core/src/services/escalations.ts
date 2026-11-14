@@ -11,6 +11,7 @@ import { waitOf, type StartWait, type StartWaitKind } from './readiness';
 import type { ExecutionCommand } from './ExecutionCommands';
 import type { PendingApproval } from './PendingApprovals';
 import type { RunMergeView } from './SessionMessage';
+import { redactAgentText } from '../utils/redactSecrets';
 
 /**
  * What an escalation waits on (ADR-0053). `approval`, `checkpoint`, `input`,
@@ -337,7 +338,8 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
 const TURN_FAILURE_CLIP = 300;
 
 function inputReason(failure: string | undefined): string {
-  const error = failure?.trim();
+  // The runner's words, so redacted as all its text is, and before the cut, so no key is left half-shown.
+  const error = failure === undefined ? undefined : redactAgentText(failure).trim();
   if (!error) return 'Waiting for your input.';
   return `Waiting for your input. Its turn failed: ${error.length > TURN_FAILURE_CLIP ? `${error.slice(0, TURN_FAILURE_CLIP)}…` : error}`;
 }

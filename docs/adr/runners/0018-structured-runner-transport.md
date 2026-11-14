@@ -361,7 +361,8 @@ and completion evidence.
 - **Provider errors (E1).** A turn that fails on its provider's error, not
   the account's or the task's, has not failed the task either: an HTTP 5xx,
   Claude Code's `API Error: 5xx`, an overload, OpenCode's `Provider returned
-  error`, or a throttle the runner's own field says is not its usage limit
+  error` unless a 4xx status other than 429 beside it says the request or the
+  key was refused, or a throttle the runner's own field says is not its usage limit
   (Codex's `rateLimitExceeded`). `classifyRunnerStop` reads it from the turn's
   error as `transient`, after U1: a usage limit, by its field or its words,
   keeps U1's pause. The task stays `in_progress` with no escalation, and the
@@ -370,7 +371,8 @@ and completion evidence.
   the count over, and a turn the user opens in the wait is the try and drops
   the pending one, as ending the attempt does. When the last try fails too, the
   task waits for input as any failed turn does, and the escalation's reason
-  names the error. The planner's turn follows the same rule in `settleReply`,
+  names the error. The error is the runner's text, so the notice, the try and
+  the reason carry it redacted, as the rest of its text is. The planner's turn follows the same rule in `settleReply`,
   each call its provider failed resent in the same conversation; a stop during
   the wait ends it, and the turn settles on the error.
 - **Task log persistence (P1).** Append-only, per attempt, at
@@ -588,3 +590,4 @@ transport is retained for take-over.
 - 2026-11-13 — W1: an interrupt asked for and not refused ends its turn interrupted on every runner, even when the turn finished as it landed; an error of the turn's own still outranks it.
 - 2026-11-13 — W1: a subagent an interrupt cut short finishes `stopped` on every runner, not `failed`, and one tracker per adapter reports each subagent's start and finish once, where the planner service did.
 - 2026-11-14 — E1: a turn its provider failed (a 5xx, an overload, a throttle that is not the usage limit) is tried again in its saved session after a 30, 60 and 120 second backoff, the planner's as a task's, before input is asked with the error in its reason.
+- 2026-11-14 — E1: a `Provider returned error` with a 4xx status other than 429 is not transient; the error is redacted wherever it is repeated.

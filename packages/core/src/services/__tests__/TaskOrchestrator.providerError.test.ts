@@ -43,7 +43,7 @@ function setup() {
   /** Every status t1 was seen in, so a wait for the user that came and went still shows. */
   const seen: string[] = [];
   orchestrator.subscribe({ onTaskChanged: () => { const t = orchestrator.storeInstance.get('t1'); if (t) seen.push(t.status); } });
-  return { orchestrator, sessions, spawn: runner.spawn, seen, task };
+  return { orchestrator, sessions, spawn: runner.spawn, seen, task, notifications };
 }
 
 /** The provider's failure as the structured transport delivers it: the turn's error event, then a failed turn. */
@@ -130,6 +130,21 @@ describe('a turn its provider failed', () => {
     expect(task('t1').status).toBe('in_progress');
     await vi.advanceTimersByTimeAsync(30_000);
     expect(sessions[0].fromOrdewell).toHaveLength(4);
+  });
+
+  it('redacts a key the error carries from the notice and the try, as any text a runner wrote', async () => {
+    const { notifications, sessions } = await started();
+    const key = 'sk-ant-api03-' + 'A1b2C3d4E5'.repeat(9) + '-AAAAAA';
+
+    failTurn(sessions[0], `API Error: 502 Bad Gateway (x-api-key ${key})`);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(sessions[0].fromOrdewell).toHaveLength(1);
+    expect(sessions[0].fromOrdewell[0]).toContain(BAD_GATEWAY);
+    expect(sessions[0].fromOrdewell[0]).not.toContain(key);
+    const told = vi.mocked(notifications.info).mock.calls.map(([text]) => String(text)).join('\n');
+    expect(told).toContain(BAD_GATEWAY);
+    expect(told).not.toContain(key);
   });
 
   it('does not retry an error that is not the provider\'s', async () => {

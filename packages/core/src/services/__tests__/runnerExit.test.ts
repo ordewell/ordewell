@@ -60,6 +60,8 @@ describe('classifyRunnerStop', () => {
     'API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
     'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     'Provider returned error',
+    '{"error":{"message":"Provider returned error","code":502}}',
+    '429 Provider returned error',
     'unexpected status 503 Service Unavailable',
     'stream error: HTTP 504 Gateway Timeout',
   ])('reads a transient provider error from %j', (message) => {
@@ -81,6 +83,11 @@ describe('classifyRunnerStop', () => {
     'The server returned 404 Not Found',
     'Error: ENOENT: no such file or directory',
     'Invalid API key · Please run /login',
+    // A router's error with a 4xx beside it is the request's or the key's: it fails the same way on every try.
+    '403 Provider returned error',
+    'API Error: 403 Provider returned error',
+    '{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"maximum context length exceeded"}}}',
+    '{"error":{"message":"Provider returned error","code":401}}',
   ])('does not read a transient error from %j', (message) => {
     expect(classifyRunnerStop({ message })).toBe('stopped');
   });
