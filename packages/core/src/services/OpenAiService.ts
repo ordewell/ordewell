@@ -1,8 +1,5 @@
-import OpenAI from 'openai';
-import { v4 as uuidv4 } from 'uuid';
 import {
   Task,
-  ConversationMessage,
   DiscoveredModel,
   ResearchLogEntry,
   ResearchProgress,
@@ -25,212 +22,48 @@ import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
-import { BaseAiService, ResearchChat, ResearchTurn, ToolResult, ConversationTurnContext } from './BaseAiService';
-import { listsPost, toOpenAiTools, toOpenAiSubagentTools } from './researchTools';
+import { BaseAiService, ResearchChat, ConversationTurnContext } from './BaseAiService';
+import { listsPost, plannerToolDefinitions, subagentToolDefinitions } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
-import { BudgetedChat, condenseConversation, type CallInput, type ChatCompaction, type ContextSummarizer } from './budgetedChat';
+import { condenseConversation, type ContextSummarizer } from './budgetedChat';
 import type { SummaryCall } from './contextSummary';
 import { CONTEXT_BUDGET, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
 import type { UsageRecord } from '../models/Usage';
-
-/** The subset of an OpenAI-compatible `usage` block this service reads. OpenRouter
- *  adds `cost` (credits, USD) and `prompt_tokens_details.cached_tokens`. */
-interface StreamUsage {
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  prompt_tokens_details?: { cached_tokens?: number };
-  cost?: number;
-}
-
-const KEYLESS_PLACEHOLDER = 'not-needed';
-
-type Message = OpenAI.Chat.Completions.ChatCompletionMessageParam;
-
-interface ChatOptions {
-  /** Resolved per API call, never captured: a key or endpoint changed mid-conversation must reach the next turn. */
-  client: () => OpenAI;
-  /** Resolved per API call like the client: a model picked mid-conversation must reach the next turn. */
-  model: () => string;
-  tools: OpenAI.Chat.Completions.ChatCompletionTool[];
-  /** Live reasoning deltas during a turn, so the UI isn't frozen while a reasoning
-   * model thinks for tens of seconds before it emits any tool call or content. */
-  onReasoning?: (delta: string, segmentId: string) => void;
-  /** Live answer-content deltas, so planner messages stream into the chat as they
-   * are produced instead of appearing all at once when the turn completes. */
-  onContent?: (delta: string, segmentId: string) => void;
-  /** The serving provider id, stamped on usage records. */
-  source?: () => string;
-  /** One report per API call — the only way a call's usage leaves this chat. */
-  onUsage?: (record: UsageRecord) => void;
-  budget?: ChatBudget;
-  compaction?: ChatCompaction;
-}
-
-/**
- * A refusal of a prompt too long for the model's window. The code is OpenAI's,
- * as its SDK maps the error; the wording is OpenAI's too, which compatible
- * servers echo (not checked against each one live). Any other refusal is not
- * an overflow, and fails the turn as it always did.
- */
-function isContextOverflow(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false;
-  const { status, code, message } = err as { status?: unknown; code?: unknown; message?: unknown };
-  if (status !== 400) return false;
-  return code === 'context_length_exceeded' || (typeof message === 'string' && /maximum context length/i.test(message));
-}
-
-/** The window an overflow refusal states, in OpenAI's wording: the whole window, the reply's share included. */
-function statedLimits(err: unknown): ModelLimits | undefined {
-  const message = err && typeof err === 'object' ? (err as { message?: unknown }).message : undefined;
-  const stated = typeof message === 'string' ? /maximum context length is ([\d,]+) tokens/i.exec(message)?.[1] : undefined;
-  const window = stated ? Number(stated.replace(/,/g, '')) : NaN;
-  return Number.isSafeInteger(window) && window > 0 ? { contextWindow: window } : undefined;
-}
-
-/**
- * The one record for an API call, built only from what the provider reported.
- * OpenRouter's `cost` is in USD (its credits are dollar-pegged); nothing is
- * estimated. A field the provider left out stays absent. The context the call
- * leaves is its prompt and its completion: the API's own `total_tokens`, and
- * the reply the next call's prompt carries.
- */
-function usageRecord(source: string, model: string, reported: StreamUsage | undefined): UsageRecord | undefined {
-  if (!reported) return undefined;
-  const record: UsageRecord = { source, model };
-  let hasMeasure = false;
-  if (reported.prompt_tokens !== undefined) { record.inputTokens = reported.prompt_tokens; hasMeasure = true; }
-  if (reported.completion_tokens !== undefined) { record.outputTokens = reported.completion_tokens; hasMeasure = true; }
-  if (reported.prompt_tokens_details?.cached_tokens !== undefined) {
-    record.cachedInputTokens = reported.prompt_tokens_details.cached_tokens;
-    hasMeasure = true;
-  }
-  if (reported.cost !== undefined) { record.reportedCost = { amount: reported.cost, currency: 'USD', ...(record.source === 'openrouter' ? { kind: 'billed' } : {}) }; hasMeasure = true; }
-  if (record.inputTokens !== undefined) record.contextTokens = record.inputTokens + (record.outputTokens ?? 0);
-  return hasMeasure ? record : undefined;
-}
-
-class OpenAiResearchChat extends BudgetedChat<Message> {
-  constructor(messages: Message[], private readonly opts: ChatOptions) {
-    super(messages, JSON.stringify(opts.tools).length, CONTEXT_BUDGET.defaultMaxOutputTokens, {
-      model: opts.model,
-      source: () => opts.source?.() ?? 'openai',
-      onUsage: opts.onUsage,
-      budget: opts.budget,
-      compaction: opts.compaction,
-    });
-  }
-
-  protected userMessage(text: string): Message {
-    return { role: 'user', content: text };
-  }
-
-  protected resultMessages(results: ToolResult[]): Message[] {
-    return results.map((r) => ({ role: 'tool', tool_call_id: r.id!, content: r.output }));
-  }
-
-  protected notExecuted(callId: string, _name: string, text: string): Message {
-    return { role: 'tool', tool_call_id: callId, content: text };
-  }
-
-  protected replayed(messages: ReadonlyArray<Pick<ConversationMessage, 'role' | 'content'>>): Message[] {
-    return messages.map((m) => ({ role: m.role, content: m.content }));
-  }
-
-  protected isContextOverflow(err: unknown): boolean {
-    return isContextOverflow(err);
-  }
-
-  protected statedLimits(err: unknown): ModelLimits | undefined {
-    return statedLimits(err);
-  }
-
-  protected async callApi(input: CallInput<Message>, model: string, maxTokens: number, signal?: AbortSignal): Promise<ResearchTurn> {
-    const messages = [...this.history.view(), ...input.messages];
-    const sentChars = this.history.chars + this.toolsChars + this.history.charsOf(input.messages);
-    // Stream the turn so reasoning surfaces live. A non-streamed completion blocks
-    // for the model's entire think time with no signal — the "0 steps / nothing for
-    // a long time" symptom on reasoning models. Tool-call deltas are reassembled by
-    // index into the final message the loop acts on.
-    const stream = await this.opts.client().chat.completions.create({
-      model,
-      messages,
-      tools: this.opts.tools,
-      tool_choice: 'auto',
-      stream: true,
-      // Explicit cap, matching streamPlanText: with max_tokens unset, some
-      // OpenRouter providers default far lower and silently cut long plan
-      // emissions mid-JSON. On a known window it leaves the prompt its room.
-      max_tokens: maxTokens,
-      // Exact prompt-token usage arrives in the final chunk: the measurement
-      // the next call's budget estimate is calibrated on.
-      stream_options: { include_usage: true },
-    }, signal ? { signal } : undefined);
-
-    // One API call is one segment: the text a call streams ends where its tool
-    // calls begin, and the next call's text starts a segment of its own.
-    const segmentId = uuidv4();
-    let content = '';
-    let reasoning = '';
-    let finishReason: string | undefined;
-    let promptTokens: number | undefined;
-    let reported: StreamUsage | undefined;
-    const toolAcc = new Map<number, { id: string; name: string; args: string }>();
-
-    for await (const chunk of stream) {
-      const usage = chunk.usage as StreamUsage | undefined;
-      if (usage) { reported = usage; promptTokens = usage.prompt_tokens; }
-      const fr = chunk.choices[0]?.finish_reason;
-      if (fr) finishReason = fr;
-      const delta = chunk.choices[0]?.delta as
-        | { content?: string; reasoning?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }
-        | undefined;
-      if (!delta) continue;
-      if (delta.reasoning) { reasoning += delta.reasoning; this.opts.onReasoning?.(delta.reasoning, segmentId); }
-      if (delta.content) { content += delta.content; this.opts.onContent?.(delta.content, segmentId); }
-      for (const tc of delta.tool_calls ?? []) {
-        const acc = toolAcc.get(tc.index) ?? { id: '', name: '', args: '' };
-        if (tc.id) acc.id = tc.id;
-        if (tc.function?.name) acc.name = tc.function.name;
-        if (tc.function?.arguments) acc.args += tc.function.arguments;
-        toolAcc.set(tc.index, acc);
-      }
-    }
-
-    const usage = usageRecord(this.opts.source?.() ?? 'openai', model, reported);
-    if (usage) this.opts.onUsage?.(usage);
-    this.opts.budget?.gauge.record(model, sentChars, promptTokens);
-
-    const accepted = [...toolAcc.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v).filter((v) => v.name);
-
-    // Rebuild the assistant message so subsequent turns (which reference tool_call_id)
-    // stay consistent with what we executed.
-    const assistantMsg: Message = accepted.length > 0
-      ? { role: 'assistant', content: content || null, tool_calls: accepted.map((v) => ({ id: v.id, type: 'function', function: { name: v.name, arguments: v.args } })) }
-      : { role: 'assistant', content };
-    this.history.append(...input.messages, assistantMsg);
-
-    const toolCalls: ResearchTurn['toolCalls'] = accepted.map((v) => {
-      let args: Record<string, unknown> = {};
-      try { args = JSON.parse(v.args); } catch { /* empty */ }
-      return { name: v.name, args, id: v.id };
-    });
-    return { text: content, toolCalls, hasToolCalls: toolCalls.length > 0, reasoning: reasoning || undefined, finishReason, promptTokens, segmentId };
-  }
-}
+import type { EffortLevel, ModelClient } from './model';
+import {
+  ModelPlannerChat,
+  PlannerClients,
+  modelSummaryCall,
+  plannerEffort,
+  plannerRequest,
+  streamReply,
+  type ModelClientFactory,
+  type PlannerMessage,
+} from './modelPlannerChat';
 
 /** What an API planner is built with beyond its config. */
 export interface OpenAiServiceDeps extends PlannerContextDeps {
   turnBudgets?: TurnBudgets;
+  /** How a client is made for the provider's dialect; tests hand in a fake. */
+  modelClient?: ModelClientFactory;
 }
 
+/**
+ * The API planner for every vendor but Google, which `GeminiService` serves.
+ * It reaches its model through a `ModelClient` by the vendor's dialect
+ * (ADR-0002): Anthropic over Messages, OpenAI over Responses, every other
+ * vendor over Chat Completions.
+ */
 export class OpenAiService extends BaseAiService implements IAiService {
-  private client: OpenAI | null = null;
-  private clientCredentials = '';
+  private readonly clients: PlannerClients;
   /** Outlives a conversation: what a model's provider measured still holds for the next one on it. */
   private readonly gauge = new TokenGauge();
 
-  constructor(config: IConfig, private readonly deps: OpenAiServiceDeps = {}) { super(config, deps.turnBudgets); }
+  constructor(config: IConfig, private readonly deps: OpenAiServiceDeps = {}) {
+    super(config, deps.turnBudgets);
+    this.clients = new PlannerClients(deps.modelClient);
+  }
 
   private limitsOf(model: string): ModelLimits | undefined {
     return this.deps.modelLimits?.(this.config.aiProvider, model);
@@ -255,29 +88,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
    * what a summary of its context is written by. Its usage is reported like
    * any call's, for the caller to mark as measuring no context.
    */
-  private readonly summaryCall: SummaryCall = async ({ model, instructions, input, maxOutputTokens, signal }, onUsage) => {
-    const stream = await this.getClient().chat.completions.create({
-      model,
-      messages: [{ role: 'system', content: instructions }, { role: 'user', content: input }],
-      stream: true,
-      max_tokens: maxOutputTokens,
-      stream_options: { include_usage: true },
-    }, signal ? { signal } : undefined);
-    let text = '';
-    let finishReason: string | undefined;
-    let reported: StreamUsage | undefined;
-    for await (const chunk of stream) {
-      if (chunk.usage) reported = chunk.usage as StreamUsage;
-      const fr = chunk.choices[0]?.finish_reason;
-      if (fr) finishReason = fr;
-      // Reasoning is not the summary: only the reply's content is.
-      const content = (chunk.choices[0]?.delta as { content?: string } | undefined)?.content;
-      if (content) text += content;
-    }
-    const usage = usageRecord(this.config.aiProvider, model, reported);
-    if (usage) onUsage(usage);
-    return { text, finishReason };
-  };
+  private readonly summaryCall: SummaryCall = modelSummaryCall(() => this.getClient(), () => this.config.aiProvider, true);
 
   private summarizer(): ContextSummarizer {
     const model = this.requireModel('orchestratorModel', this.config.orchestratorModel);
@@ -301,22 +112,17 @@ export class OpenAiService extends BaseAiService implements IAiService {
 
   /**
    * Rebuilt whenever the key or endpoint differs from the one the client was
-   * made with. A Session outlives `/key` and endpoint edits, so a client cached
-   * for good kept sending the previous key: the provider answered 401 for a
-   * key the user had already replaced.
+   * made with (`PlannerClients`). A keyless local server (ollama, LM Studio)
+   * is a valid `openai_compatible` target: its adapter sends a placeholder.
    */
-  private getClient(): OpenAI {
+  private getClient(): ModelClient {
     const provider = this.vendor();
-    const baseURL = this.config.getProviderBaseUrl(provider);
-    // Keyless local servers (ollama, LM Studio) are valid `openai_compatible`
-    // targets, but the SDK refuses an empty key outright.
-    const apiKey = this.config.getProviderApiKey(provider) || KEYLESS_PLACEHOLDER;
-    const credentials = `${baseURL}\n${apiKey}`;
-    if (!this.client || credentials !== this.clientCredentials) {
-      this.client = new OpenAI({ baseURL, apiKey });
-      this.clientCredentials = credentials;
-    }
-    return this.client;
+    return this.clients.get(provider, this.config.getProviderApiKey(provider), this.config.getProviderBaseUrl(provider));
+  }
+
+  /** The planner's effort dial, read per call as its model is. */
+  private effort(): EffortLevel | undefined {
+    return plannerEffort(this.config.plannerThinkingEffort);
   }
 
   /** The vendor this service talks to; `createAiService` routes every other planner elsewhere. */
@@ -348,7 +154,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
     return id;
   }
 
-  reset(): void { this.activeAbort?.abort(); this.client = null; this.conversation = null; }
+  reset(): void { this.activeAbort?.abort(); this.clients.reset(); this.conversation = null; }
 
   // --- BaseAiService abstract methods ---
 
@@ -359,39 +165,31 @@ export class OpenAiService extends BaseAiService implements IAiService {
     onReasoning?: (token: string) => void,
     signal?: AbortSignal,
   ): Promise<string> {
-    const client = this.getClient();
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [{ role: 'user', content: prompt }];
+    const messages: PlannerMessage[] = [{ role: 'user', content: prompt }];
     if (repairHint) messages.push({ role: 'user', content: repairHint });
     const model = this.requireModel('orchestratorModel', this.config.orchestratorModel);
-    const stream = await client.chat.completions.create({
-      model,
-      messages,
-      stream: true,
-      max_tokens: replyTokens(this.limitsOf(model)),
-    }, { signal });
-    let fullResponse = '';
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta as { content?: string; reasoning?: string } | undefined;
-      // Only content contributes to the text handed to the parser; reasoning is routed
-      // to the thinking trace so chain-of-thought can never pollute the JSON.
-      const reasoning = delta?.reasoning;
-      if (reasoning) onReasoning?.(reasoning);
-      const token = delta?.content;
-      if (token) { fullResponse += token; onToken(token); }
-    }
-    return fullResponse;
+    const effort = this.effort();
+    // Only the reply's text is handed to the parser; thinking is routed to the
+    // trace so chain-of-thought can never pollute the JSON.
+    const reply = await streamReply(
+      this.getClient(),
+      plannerRequest(messages, { model, tools: [], maxOutputTokens: replyTokens(this.limitsOf(model)), ...(effort ? { effort } : {}) }),
+      signal,
+      { onText: onToken, ...(onReasoning ? { onThinking: onReasoning } : {}) },
+    );
+    return reply.text;
   }
 
   /** A research subagent: fresh history, digest contract, cheap model, read-only tools. */
   protected createSubagentChat(onReasoning?: (delta: string) => void, onUsage?: (record: UsageRecord) => void, only?: ReadonlySet<string>): ResearchChat | null {
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: buildSubagentSystemPrompt(only !== undefined) },
-    ];
-    return new OpenAiResearchChat(messages, {
+    const messages: PlannerMessage[] = [{ role: 'system', content: buildSubagentSystemPrompt(only !== undefined) }];
+    // No effort: the planner's dial is its own, and a subagent keeps the cheap model's default.
+    return new ModelPlannerChat(messages, {
       client: () => this.getClient(),
       model: () => this.requireModel('researchSubagentModel', this.config.researchSubagentModel),
-      tools: toOpenAiSubagentTools(only),
-      onReasoning,
+      tools: subagentToolDefinitions(only),
+      wantedReply: CONTEXT_BUDGET.defaultMaxOutputTokens,
+      ...(onReasoning ? { onReasoning: (delta: string) => onReasoning(delta) } : {}),
       source: () => this.config.aiProvider,
       onUsage,
     });
@@ -414,7 +212,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
 
     const userText = req.goal;
 
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    const messages: PlannerMessage[] = [
       { role: 'system', content: `${systemPrompt}\n\n${buildResearchToolsPrompt()}` },
     ];
     for (const m of req.priorHistory ?? []) {
@@ -423,10 +221,12 @@ export class OpenAiService extends BaseAiService implements IAiService {
 
     let currentProgress = req.onProgress;
     const host = req.compaction;
-    const chat = new OpenAiResearchChat(messages, {
+    const chat = new ModelPlannerChat(messages, {
       client: () => this.getClient(),
       model: () => this.requireModel('orchestratorModel', this.config.orchestratorModel),
-      tools: toOpenAiTools(req.plannerTools !== undefined, listsPost(req.plannerTools)),
+      tools: plannerToolDefinitions(req.plannerTools !== undefined, listsPost(req.plannerTools)),
+      effort: () => this.effort(),
+      wantedReply: CONTEXT_BUDGET.defaultMaxOutputTokens,
       onReasoning: (delta, segmentId) => currentProgress({ type: 'thinking', text: delta, segmentId }),
       onContent: (delta, segmentId) => currentProgress({ type: 'text_delta', text: delta, segmentId }),
       source: () => this.config.aiProvider,
@@ -484,14 +284,14 @@ export class OpenAiService extends BaseAiService implements IAiService {
     const userText = `User goal: ${userDescription}`;
     const firstMessage = `${buildResearchToolsPrompt()}\n\nExplore the workspace to understand the codebase, then generate the plan.\n\n${userText}`;
 
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: systemPrompt },
-    ];
+    const messages: PlannerMessage[] = [{ role: 'system', content: systemPrompt }];
 
-    const researchChat: ResearchChat = new OpenAiResearchChat(messages, {
+    const researchChat: ResearchChat = new ModelPlannerChat(messages, {
       client: () => this.getClient(),
       model: () => this.requireModel('orchestratorModel', this.config.orchestratorModel),
-      tools: toOpenAiTools(),
+      tools: plannerToolDefinitions(),
+      effort: () => this.effort(),
+      wantedReply: CONTEXT_BUDGET.defaultMaxOutputTokens,
       onReasoning: (delta) => onProgress({ type: 'thinking', text: delta }),
       source: () => this.config.aiProvider,
       onUsage: (record) => onProgress({ type: 'usage', record }),

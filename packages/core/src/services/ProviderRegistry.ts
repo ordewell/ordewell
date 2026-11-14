@@ -25,7 +25,7 @@ const HARNESS_PLANNERS: readonly ProviderRegistration[] = BUILTIN_MANIFESTS
   .filter((manifest) => connectorFor(manifest.name)?.plans === true)
   .map((manifest) => ({
     id: manifest.name, label: manifest.displayName, shortLabel: manifest.displayName,
-    serviceType: 'cli', runnerId: manifest.name,
+    runnerId: manifest.name,
     defaultBaseUrl: '',
     apiKeyEnvVar: '',
     detectEnvVars: [],
@@ -92,8 +92,10 @@ export function resolveProviderFromPrefix(id: string): AiProvider | null {
  */
 export const CLI_PROVIDERS: readonly RunnerId[] = HARNESS_PLANNERS.map((registration) => registration.id);
 
+/** A vendor whose key an OpenAI-style `GET /models` checks: every one but Gemini's own API. */
 export function isOpenAiProvider(id: PlannerBackendId): boolean {
-  return getProviderMeta(id)?.serviceType === 'openai';
+  const meta = getProviderMeta(id);
+  return meta !== undefined && meta.runnerId === undefined && id !== 'google';
 }
 
 /**
@@ -104,7 +106,7 @@ export function isOpenAiProvider(id: PlannerBackendId): boolean {
  * catalog).
  */
 export function isCliProvider(id: PlannerBackendId): boolean {
-  return getProviderMeta(id)?.serviceType === 'cli';
+  return getProviderMeta(id)?.runnerId !== undefined;
 }
 
 /** The runner a harness planner drives, or null for a vendor provider or an unknown id. */

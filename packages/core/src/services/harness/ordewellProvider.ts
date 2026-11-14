@@ -31,7 +31,8 @@ export function ordewellProvider(env: VendorEnv, reaches: (vendor: AiProvider, b
   const explicit = Object.hasOwn(VENDORS, named) ? (named as AiProvider) : null;
   for (const vendor of explicit ? [explicit, ...PROVIDER_PRIORITY] : PROVIDER_PRIORITY) {
     const meta = VENDORS[vendor];
-    if (meta.serviceType !== 'openai') continue;
+    // An agent is handed an OpenAI-compatible endpoint, which Gemini's own API is not.
+    if (vendor === 'google') continue;
     const apiKey = vendorApiKeyIn(env, vendor);
     if (!apiKey) continue;
     // A custom endpoint is configured only by naming it; its default is a guess at a local server.

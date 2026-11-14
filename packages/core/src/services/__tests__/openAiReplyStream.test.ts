@@ -7,11 +7,17 @@ import { planJson } from './harnessTestKit';
 
 const createSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('openai', () => ({
-  default: class {
-    chat = { completions: { create: createSpy } };
-  },
-}));
+// The real Chat Completions adapter, its transport each test's `createSpy`: given a request's wire body, it returns the chunks to stream back.
+vi.mock('../model', async (importOriginal) => {
+  const { overChatCompletions } = await import('./plannerWire');
+  return {
+    ...await importOriginal<typeof import('../model')>(),
+    createModelClient: (options: import('../model').ModelClientOptions) => {
+      return overChatCompletions(options, (body, call) => createSpy(body, call));
+    },
+    withRetry: (client: import('../model').ModelClient) => client,
+  };
+});
 
 import { OpenAiService } from '../OpenAiService';
 import { PlannerTurnStoppedError } from '../PlannerConversation';
@@ -204,7 +210,7 @@ describe('OpenAI planner reply stream', () => {
   });
 
   it('ends a turn whose backend fails as an error', async () => {
-    createSpy.mockRejectedValueOnce(new Error('503 upstream unavailable'));
+    createSpy.mockRejectedValueOnce(Object.assign(new Error('503 upstream unavailable'), { status: 503 }));
     const { session, streamed } = openAiSession();
 
     await expect(session.startPlanning('add persistence', ['claude-code'])).rejects.toThrow('503');
