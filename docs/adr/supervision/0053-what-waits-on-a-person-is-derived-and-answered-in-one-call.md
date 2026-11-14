@@ -55,7 +55,8 @@ existing command for that wait.**
 ## What is listed
 
 Kinds on a task come first in the plan's order, each runner approval ahead of
-its task's own wait; `blocked-run` comes ahead of them and `merge-all` after.
+its task's own wait; `blocked-run` comes ahead of them, then `merge-all` and
+`planner` after.
 Mark complete is offered on an AI or script task only while nothing could move
 it on, since the seam refuses it otherwise
 ([ADR-0029](0029-the-supervisor.md)); a user task's is always offered.
@@ -82,6 +83,7 @@ it on, since the seam refuses it otherwise
 | `by-hand` | A user task nothing else holds | Mark complete | `mark_complete` |
 | `merge-all` | Landed work, nothing moving and no gate listed | Merge all | `merge_all` |
 | `blocked-run` | A run a dirty checkout turned away | Stash and continue, Run without isolation | `Session.continueWithStash`, `continueWithoutIsolation` |
+| `planner` | Below Act, the planner's latest reply answers wake-ups alone ([ADR-0029](0029-the-supervisor.md)), and nothing is left to follow it: no run open or advancing, no planner turn, queued input, owed wake-up or resend; never a subplanner's | None: the user answers by writing to the planner, which ends it | the conversation |
 
 A task whose attempt ended, listed as `failed`, `out-of-rounds`, `conflict`,
 `files-changed`, or a `checkpoint` or `input` with no runner left, offers no Retry
@@ -157,6 +159,7 @@ task's id is `kind:task:attempt`, then whatever of these it has.
 | Any other kind on a task | `Task.waitsEnded`, when it is not 0. |
 | `merge-all` | The run, and a digest of the attempts it would merge, in place of a task and attempt. |
 | `blocked-run` | Which of the session's starts a dirty checkout turned away, in place of a task and attempt: a replay can be turned away again in the same run. In memory, as the parked start is. |
+| `planner` | The reply's timestamp, in place of a task and attempt: the next wake-up's reply is another wait. |
 
 `Task.waitsEnded` counts the waits ended since the task's latest attempt
 started: `PlanStore` adds one as a task moves off any status but `in_progress`,
@@ -496,3 +499,4 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-11-01 — a subplanner's question reaches the list as its delegated task's checkpoint, naming the child, and Approve may carry a raise (ADR-0056 M5, M8). Merge all names a check that has not passed in its confirmation (ADR-0055 D9).
 - 2026-11-01 — a parked question a restart lost is listed, quoting it, and a delegated task's check that waits on approval says its delegated task has ended (ADR-0055 D8, D17).
 - 2026-11-01 — VS Code draws the list as a control on the usage line with a dropdown upward, closed by default, and `/inbox` turns the view off and on (#30).
+- 2026-11-14 — a planner reply to a wake-up below Act that leaves nothing to run is listed as `planner`, answered in the conversation (ADR-0029).

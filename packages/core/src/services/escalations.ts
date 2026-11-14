@@ -16,8 +16,8 @@ import type { RunMergeView } from './SessionMessage';
  * What an escalation waits on (ADR-0053). `approval`, `checkpoint`, `input`,
  * `conflict`, `landing-failed`, `files-changed` and `usage-limit` are a task's wait; `failed` and
  * `out-of-rounds` its end; `merge-gate`, `unapproved`, `on-hold`, `no-prompt`
- * and `by-hand` what alone keeps a task from starting; `merge-all` and
- * `blocked-run` are the run's own.
+ * and `by-hand` what alone keeps a task from starting; `merge-all`,
+ * `blocked-run` and `planner` are the run's own.
  */
 export type EscalationKind =
   | 'approval'
@@ -35,7 +35,8 @@ export type EscalationKind =
   | 'no-prompt'
   | 'by-hand'
   | 'merge-all'
-  | 'blocked-run';
+  | 'blocked-run'
+  | 'planner';
 
 export type EscalationOptionId =
   | 'allow'
@@ -125,6 +126,12 @@ export interface EscalationRun {
    * repositories (`.` for the workspace's own), when one waits on it; null when none does.
    */
   blocked: { start: number; repos: readonly string[] } | null;
+  /**
+   * When the planner's latest reply, written for a wake-up below Act, waits on
+   * the user: its timestamp. Absent when the user spoke last, a wake is owed or
+   * the planner is at work, since then the reply is not the last word (ADR-0029).
+   */
+  plannerWaits?: string;
 }
 
 /** What the list is derived from: nothing here is kept for it. */
@@ -490,9 +497,10 @@ function attemptsDigest(taskIds: readonly string[], input: EscalationInput, rows
 /**
  * Everything that will not move without a person (ADR-0053), in the order of
  * what stops the most first: a run that cannot start, then the plan's tasks in
- * order, then the work waiting to be merged. Pure and derived, as `planBlocks`
- * and `startWaits` are: nothing is stored, so nothing has to be cleared, and it
- * survives a reload as the waits it reads do.
+ * order, then the work waiting to be merged, then a planner reply waiting on
+ * its answer. Pure and derived, as `planBlocks` and `startWaits` are: nothing
+ * is stored, so nothing has to be cleared, and it survives a reload as the
+ * waits it reads do.
  */
 export function escalations(input: EscalationInput): Escalation[] {
   const rows: Rows = new Map(flattenTasksWithParents(input.tasks).map((row) => [row.task.id, row]));
@@ -514,7 +522,14 @@ export function escalations(input: EscalationInput): Escalation[] {
     reason: `The run's landed work waits for Merge all: ${run.merge?.landed.map((t) => rows.get(t.taskId)?.ref ?? t.taskId).join(', ')}.`,
     options: [mergeOption(input)],
   }];
-  return [...blocked, ...tasks, ...merge];
+  // Below Act no one but the user answers the planner, so a run with nothing left to move ends on its reply (ADR-0029).
+  const planner: Escalation[] = run.plannerWaits === undefined || run.open || run.advancing ? [] : [{
+    id: `planner:${run.plannerWaits}`,
+    kind: 'planner',
+    reason: 'The planner waits on you: its last reply, to a run update, asks what comes next. Reply to the planner to continue.',
+    options: [],
+  }];
+  return [...blocked, ...tasks, ...merge, ...planner];
 }
 
 /** What a chosen option comes to: a command at the seam, or a Session operation that has none. */

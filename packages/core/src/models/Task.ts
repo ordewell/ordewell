@@ -776,6 +776,30 @@ export function isUserMessage(entry: Pick<ConversationMessage, 'role' | 'kind'>)
   return entry.role === 'user' && entry.kind !== 'skill_load' && entry.kind !== 'wake_up';
 }
 
+/**
+ * The timestamp of the planner's latest reply when it answers wake-ups alone
+ * (ADR-0029): no message of the user's came with them or since, and no wake-up
+ * is still unanswered. Host notices, calls at the seam, skill loads,
+ * compactions and failed turns are no reply and no input, so they are passed over.
+ */
+export function wakeUpReply(history: readonly ConversationMessage[]): string | undefined {
+  let reply: ConversationMessage | undefined;
+  let woke = false;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (isUserMessage(entry)) return undefined;
+    if (entry.kind === 'wake_up') {
+      if (!reply) return undefined;
+      woke = true;
+    } else if (entry.role === 'assistant' && (entry.kind === undefined || entry.kind === 'supervisor' || entry.kind === 'plan_generated')) {
+      // A turn may say something and commit a plan: past its inputs is the turn before.
+      if (woke) break;
+      reply ??= entry;
+    }
+  }
+  return woke ? reply?.timestamp : undefined;
+}
+
 /** A follow-up an older build queued behind a run's batch boundary; read only to carry it over as a {@link PendingPlanTurn}. */
 export interface QueuedMessage {
   id: string;
