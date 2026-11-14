@@ -115,7 +115,10 @@ export class RunningLongClock {
   usage(record: UsageRecord): void {
     // A subagent's context is not the attempt's, and an aggregate names no current context.
     if (this.stopped || record.subagentId || record.aggregate) return;
+    const before = this.meter;
     this.meter = addPlannerUsage(this.meter, record);
+    // A peak is measured against one model's window: another model's does not carry over.
+    if (before.model !== this.meter.model || before.source !== this.meter.source) this.peak = undefined;
     this.measure();
   }
 

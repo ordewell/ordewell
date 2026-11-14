@@ -168,8 +168,19 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'sonnet', contextTokens: 150_000 } });
     vi.advanceTimersByTime(30 * MINUTE);
 
-    expect(flags[0]).toMatchObject({ contextTokens: 150_000, peakContextTokens: 600_000 });
+    expect(flags[0]).toMatchObject({ contextTokens: 150_000, peakContextTokens: 150_000 });
     expect(flags[0].contextWindow).toBeUndefined();
+  });
+
+  it('sets no peak against the window of a model it was not measured on', () => {
+    const { session, flags } = watched();
+
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 150_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus-1m', contextWindow: 1_000_000 } });
+    vi.advanceTimersByTime(30 * MINUTE);
+
+    expect(flags[0]).toMatchObject({ contextWindow: 1_000_000, compactions: 0 });
+    expect(flags[0].peakContextTokens).toBeUndefined();
   });
 
   it('flags nothing for a script task, which has its own time limit', () => {

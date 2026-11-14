@@ -816,7 +816,8 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
   // A compaction that states no size (Codex, OpenCode) leaves the live context unknown, but the peak still says it ran full.
   const context = facts.contextTokens !== undefined
     ? `; context ${tokens(facts.contextTokens)}${window} tokens${facts.peakContextTokens === undefined ? '' : `, peak ${tokens(facts.peakContextTokens)}`}`
-    : facts.peakContextTokens !== undefined ? `; context unknown since compacting, peak ${tokens(facts.peakContextTokens)}${window} tokens` : '';
+    // Only a compaction names a cause: a /clear or a model switch clears the live size as well.
+    : facts.peakContextTokens !== undefined ? `; context unknown${facts.compactions > 0 ? ' since compacting' : ''}, peak ${tokens(facts.peakContextTokens)}${window} tokens` : '';
   const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;

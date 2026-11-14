@@ -86,6 +86,14 @@ describe('wakeUpDigest', () => {
         .toBe('- task #4 "Task t4"\'s runner compacted its context on its own, once this attempt, after 12m 00s running; context unknown since compacting, peak 190k of 200k tokens');
     });
 
+    it('names no compaction for an unknown context when the attempt never compacted, as after a /clear', () => {
+      const event = runningLong('t4', { reason: 'duration', elapsedMs: 65 * MINUTE, thresholdMs: 60 * MINUTE, contextWindow: 200_000, peakContextTokens: 150_000, compactions: 0 });
+
+      const line = wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1];
+      expect(line).toContain('; context unknown, peak 150k of 200k tokens');
+      expect(line).not.toContain('compacting');
+    });
+
     it('says what the supervisor can do once however many tasks run long, and not at all when none does', () => {
       const digest = wakeUpDigest({ attention: [runningLong('t4'), { kind: 'task_idle', taskId: 't5', at: 0 }, runningLong('t6')], sinceLast: [] }, describeTask);
 
