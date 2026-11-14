@@ -6,6 +6,14 @@ import { createEmptyPlan } from '../../models/Task';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { makeSession, saves, testWorkspace } from './sessionTestKit';
 
+// The real Gemini adapter over the fetch each test stubs, with no retry around
+// it: a refused call fails at once, as these tests script it. The Retry-After
+// policy is ModelClient's own, and tested with it.
+vi.mock('../model', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../model')>(),
+  withRetry: (client: import('../model').ModelClient) => client,
+}));
+
 interface Part {
   text?: string;
   functionCall?: { name: string; args: Record<string, unknown> };
@@ -20,6 +28,9 @@ interface SentRequest {
   refused?: true;
 }
 
+/** A turn of function responses, which Gemini takes as the user's. */
+const answersCalls = (c: Content | undefined): boolean => c !== undefined && c.parts.length > 0 && c.parts.every((p) => p.functionResponse);
+
 /** Why `contents` breaks Gemini's function-calling rules, or null: a call is answered by the very next turn, one response per call, by name and in order. */
 function pairingProblem(contents: Content[]): string | null {
   if (contents[0]?.role !== 'user') return 'the first turn is not the user\'s';
@@ -28,10 +39,10 @@ function pairingProblem(contents: Content[]): string | null {
     const calls = c.role === 'model' ? c.parts.filter((p) => p.functionCall).map((p) => p.functionCall!.name) : [];
     const next = contents[i + 1];
     if (calls.length > 0 && next) {
-      const answers = next.role === 'function' ? next.parts.map((p) => p.functionResponse?.name) : [];
+      const answers = answersCalls(next) ? next.parts.map((p) => p.functionResponse?.name) : [];
       if (JSON.stringify(answers) !== JSON.stringify(calls)) return `turn ${i + 1} does not answer the calls of turn ${i}`;
     }
-    if (c.role === 'function') {
+    if (answersCalls(c)) {
       const before = contents[i - 1];
       if (before?.role !== 'model' || !before.parts.some((p) => p.functionCall)) return `turn ${i} answers no function call`;
     }
@@ -108,11 +119,11 @@ const callsTools = (...calls: Array<[string, Record<string, unknown>]>): Reply =
 const says = (text: string, finishReason = 'STOP'): Reply => () => [{ candidates: [{ content: { role: 'model', parts: [{ text }] }, finishReason }] }];
 
 const out = (chars: number, fill = 'x'): ToolOutcome => ({ success: true, output: fill.repeat(chars), truncated: false });
-const responses = (req: SentRequest) => req.contents.flatMap((c) => (c.role === 'function' ? c.parts.map((p) => p.functionResponse!) : []));
+const responses = (req: SentRequest) => req.contents.flatMap((c) => (answersCalls(c) ? c.parts.map((p) => p.functionResponse!) : []));
 /** The function responses a request sends after its last model turn: what that turn's calls returned. */
 const trailing = (req: SentRequest) => {
   const last = req.contents.map((c) => c.role).lastIndexOf('model');
-  return req.contents.slice(last + 1).flatMap((c) => (c.role === 'function' ? c.parts.map((p) => p.functionResponse!.response.output.length) : []));
+  return req.contents.slice(last + 1).flatMap((c) => (answersCalls(c) ? c.parts.map((p) => p.functionResponse!.response.output.length) : []));
 };
 
 const GOAL = 'run the build';

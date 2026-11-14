@@ -144,7 +144,9 @@ describe('keyless first-run entry points at the process boundary', () => {
       for await (const chunk of req) body += String(chunk);
       vendorRequests.push({ authorization: req.headers.authorization, body });
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.end('data: ' + JSON.stringify({ id: 'reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'Which database?' }, finish_reason: null }] }) + '\n\ndata: [DONE]\n\n');
+      res.end('data: ' + JSON.stringify({ id: 'reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'Which database?' }, finish_reason: null }] }) + '\n\n'
+        // A complete reply names why it stopped; a stream without that was cut off.
+        + 'data: ' + JSON.stringify({ id: 'reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n');
     });
     attachWsHandler(server, pool, admission);
     client = new ApiClient(port, workspace);

@@ -23,6 +23,11 @@ interface SentRequest {
   promptTokens: number;
 }
 
+/** A turn of function responses, which Gemini takes as the user's. */
+const answersCalls = (c: Content | undefined): boolean => c !== undefined && c.parts.length > 0 && c.parts.every((p) => p.functionResponse);
+/** A turn's role, a turn of function responses its own, as Gemini once named it. */
+const turnKind = (c: Content): string => (answersCalls(c) ? 'function' : c.role);
+
 /**
  * Why `contents` breaks Gemini's turn rules, or null: no two turns in a row
  * are of one role, and a call is answered by the very next turn, one response
@@ -32,14 +37,14 @@ function pairingProblem(contents: Content[]): string | null {
   if (contents[0]?.role !== 'user') return 'the first turn is not the user\'s';
   for (const [i, c] of contents.entries()) {
     if (c.parts.length === 0) return `turn ${i} has no parts`;
-    if (i > 0 && c.role === contents[i - 1].role) return `turn ${i} has the role of turn ${i - 1}`;
+    if (i > 0 && turnKind(c) === turnKind(contents[i - 1])) return `turn ${i} has the role of turn ${i - 1}`;
     const calls = c.role === 'model' ? c.parts.filter((p) => p.functionCall).map((p) => p.functionCall!.name) : [];
     const next = contents[i + 1];
     if (calls.length > 0 && next) {
-      const answers = next.role === 'function' ? next.parts.map((p) => p.functionResponse?.name) : [];
+      const answers = answersCalls(next) ? next.parts.map((p) => p.functionResponse?.name) : [];
       if (JSON.stringify(answers) !== JSON.stringify(calls)) return `turn ${i + 1} does not answer the calls of turn ${i}`;
     }
-    if (c.role === 'function') {
+    if (answersCalls(c)) {
       const before = contents[i - 1];
       if (before?.role !== 'model' || !before.parts.some((p) => p.functionCall)) return `turn ${i} answers no function call`;
     }
@@ -100,7 +105,7 @@ const callsTools = (...calls: Array<[string, Record<string, unknown>]>): Reply =
 const says = (text: string, finishReason = 'STOP'): Reply => () => [{ candidates: [{ content: { role: 'model', parts: [{ text }] }, finishReason }] }];
 
 const out = (chars: number, fill = 'x'): ToolOutcome => ({ success: true, output: fill.repeat(chars), truncated: false });
-const responses = (req: SentRequest) => req.contents.flatMap((c) => (c.role === 'function' ? c.parts.map((p) => p.functionResponse!) : []));
+const responses = (req: SentRequest) => req.contents.flatMap((c) => (answersCalls(c) ? c.parts.map((p) => p.functionResponse!) : []));
 const textOf = (c: Content) => c.parts.map((p) => p.text ?? '').join('');
 
 const GOAL = 'map the cache';
@@ -211,11 +216,13 @@ describe('a Gemini planner that cannot prune enough room', () => {
     expect(provider.summaries.length).toBeGreaterThanOrEqual(1);
     for (const req of provider.requests.slice(2)) expect(req.promptTokens).toBeLessThanOrEqual(limit);
     const last = provider.requests.at(-1)!;
-    // The note joins the user's turn as a part of its own: the user's message is its own part, unchanged.
-    const turn = last.contents.find((c) => c.parts.some((p) => p.text?.startsWith('[Context note from Ordewell]')))!;
+    // The note joins the user's turn after the user's message, which goes first and unchanged.
+    const turn = last.contents.find((c) => c.parts.some((p) => p.text?.includes('\n\n[Context note from Ordewell]')))!;
     expect(turn.role).toBe('user');
-    expect(turn.parts.map((p) => p.text?.slice(0, 28))).toEqual([expect.stringContaining('run all the steps'), '[Context note from Ordewell]']);
-    expect(turn.parts[1].text).toMatch(/^- bash\(\{"command":"make step0"\}\) → s+/m);
+    expect(turn.parts).toHaveLength(1);
+    const [message, note] = String(turn.parts[0].text).split('\n\n[Context note from Ordewell]');
+    expect(message).toContain('run all the steps');
+    expect(note).toMatch(/^- bash\(\{"command":"make step0"\}\) → s+/m);
     expect(history(session).some((m) => m.kind === 'compaction')).toBe(false);
   });
 
@@ -413,12 +420,14 @@ describe('a Gemini planner opening a new plan', () => {
     expect(bash).toHaveBeenCalledTimes(1);
     expect(provider.requests.map((r) => r.contents.map((c) => c.role))).toEqual([
       ['user'],
-      ['user', 'model', 'function'],
-      ['user', 'model', 'function', 'model', 'user'],
+      ['user', 'model', 'user'],
+      ['user', 'model', 'user', 'model', 'user'],
     ]);
+    // The instructions open the turn and the goal joins them, its budget block after it and only there.
     const [opening] = provider.requests[0].contents;
-    expect(opening.parts).toHaveLength(2);
-    expect(opening.parts[0].text).not.toContain('add a cache\n\nCONTEXT');
-    expect(opening.parts[1].text).toContain('add a cache');
+    expect(opening.parts).toHaveLength(1);
+    const text = String(opening.parts[0].text);
+    expect(text).toMatch(/\n\nadd a cache\n\nCONTEXT AND BUDGETS \(this turn\):[^]*$/);
+    expect(text.indexOf('CONTEXT AND BUDGETS (this turn):')).toBe(text.lastIndexOf('CONTEXT AND BUDGETS (this turn):'));
   });
 });
