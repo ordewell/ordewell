@@ -662,6 +662,11 @@ describe('OpenCode 2.x — a turn', () => {
     ['a 502', { type: 'provider.internal', status: 502, message: 'Provider returned error' }, 'Provider returned error (HTTP 502)', 'transient'],
     ['an auth error with no status', { type: 'provider.auth', message: 'Provider returned error' }, 'Provider returned error (provider.auth)', 'stopped'],
     ['an invalid request with no status', { type: 'provider.invalid-request', message: 'Provider returned error' }, 'Provider returned error (provider.invalid-request)', 'stopped'],
+    ['a spent quota with no status', { type: 'provider.quota', message: 'Provider returned error' }, 'Provider returned error (provider.quota)', 'stopped'],
+    ['a content filter with no status', { type: 'provider.content-filter', message: 'Provider returned error' }, 'Provider returned error (provider.content-filter)', 'stopped'],
+    ['an unsupported operation with no status', { type: 'provider.unsupported-operation', message: 'Provider returned error' }, 'Provider returned error (provider.unsupported-operation)', 'stopped'],
+    ['an internal error with no status', { type: 'provider.internal', message: 'Provider returned error' }, 'Provider returned error (provider.internal)', 'transient'],
+    ['invalid output with no status', { type: 'provider.invalid-output', message: 'Provider returned error' }, 'Provider returned error (provider.invalid-output)', 'transient'],
   ])('keeps the provider\'s side of %s beside its words', async (_name, error, message, stop) => {
     const { classifyRunnerStop } = await import('../../runnerExit');
     const server = fakeServer();

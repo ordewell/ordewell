@@ -64,6 +64,10 @@ describe('classifyRunnerStop', () => {
     '429 Provider returned error',
     'unexpected status 503 Service Unavailable',
     'stream error: HTTP 504 Gateway Timeout',
+    // OpenCode 2.x, where the frame carried a type and no status.
+    'Provider returned error (provider.transport)',
+    'Provider returned error (provider.timeout)',
+    'Provider returned error (provider.invalid-output)',
   ])('reads a transient provider error from %j', (message) => {
     expect(classifyRunnerStop({ message })).toBe('transient');
   });
@@ -97,6 +101,10 @@ describe('classifyRunnerStop', () => {
     // OpenCode 2.x, where the frame carried a type and no status.
     'Provider returned error (provider.auth)',
     'Provider returned error (provider.invalid-request)',
+    'Provider returned error (provider.quota)',
+    'Provider returned error (provider.content-filter)',
+    'Provider returned error (provider.unsupported-operation)',
+    'Provider returned error (provider.no-route)',
   ])('does not read a transient error from %j', (message) => {
     expect(classifyRunnerStop({ message })).toBe('stopped');
   });
