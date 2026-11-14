@@ -80,7 +80,7 @@ import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './Planner
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { takeUserActions } from '../utils/userActionLog';
-import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, wakeUpReply, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { describeHeld, describeLost, SessionHeldError, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
@@ -956,8 +956,10 @@ export class Session {
     });
 
     this.turns = new PlanTurns({
+      // A planner turn's start and end move no task, yet a wake-up's reply waiting on the user comes and goes with them.
       turnStarting: () => {
         this.saves.after();
+        this.events.waitsMayHaveChanged(this.plan);
       },
       plan: () => (this.closed ? null : this.plan),
       conversationBusy: () => this.conversation.isTurnInFlight,
@@ -972,7 +974,10 @@ export class Session {
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
       tryAdmit: () => this.gate.tryAdmit(),
-      turnSettled: () => this.gate.settled(),
+      turnSettled: () => {
+        this.gate.settled();
+        this.events.waitsMayHaveChanged(this.plan);
+      },
       // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
         if (this.orchestrator.isRunning || this.orchestrator.startsPending) await this.saves.control(() => this.orchestrator.tick());
@@ -1112,8 +1117,23 @@ export class Session {
         opsInCheckout: this.opsInCheckout(),
         id: this.runs.planIsolation?.run.id ?? null,
         blocked: this.runs.blocked ? { start: this.runs.blockedStarts, repos: this.runs.blockedIn } : null,
+        ...this.plannerWaits(),
       },
     });
+  }
+
+  /**
+   * Below Act a wake-up's turn can only talk to the user, so its reply is the
+   * run's last word once no turn, input or wake-up is left to follow it. At
+   * Act the supervisor carries the run, and a subplanner answers its parent
+   * (ADR-0029).
+   */
+  private plannerWaits(): { plannerWaits?: string } {
+    if (!this.plan || this.position.answersToParent || this.supervision.standing().level === 'act') return {};
+    if (this.isPlannerBusy || this.turns.turnRunning || (this.plan.pendingTurns?.length ?? 0) > 0) return {};
+    if (this.supervision.wakeOwed || this.plan.plannerResend?.at !== undefined) return {};
+    const at = wakeUpReply(this.plan.conversationHistory ?? []);
+    return at === undefined ? {} : { plannerWaits: at };
   }
 
   /** What holds a merge nobody asked for here, as a list or a refusal names it (ADR-0055 D9). */

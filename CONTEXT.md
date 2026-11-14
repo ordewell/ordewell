@@ -1807,7 +1807,8 @@ files, a usage-limit pause with no resume scheduled, a failed task, a *Loop*
 out of rounds, or, in an open run, a task that nothing but a person holds back
 (its *Merge gate*, a hold, its approval, nothing to run, a user task), or a
 reverted task in any run; and of the run itself, landed work with nothing left
-to move it, and a *Blocked run*.
+to move it, a *Blocked run*, and, below Act, a planner reply to a *Wake-up turn*
+that nothing will follow, which the user answers by writing to the planner.
 It carries an id that names the wait and not just its attempt, which can wait
 many times, so a later wait is another escalation; the task it belongs to, which
 links to the

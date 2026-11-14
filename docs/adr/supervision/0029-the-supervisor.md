@@ -141,6 +141,29 @@ its note (`kind: 'supervisor'`). The rules of its level are told to it after
 the run update, whole once a context and then in a line on a change
 ([ADR-0057](0057-information-moves-by-reference.md) R5), and never saved.
 
+### Below Act, a wake-up's reply that ends the run waits on the user
+
+Watch does not widen: a wake-up turn under Watch still edits nothing and
+submits no plan, and a turn under Off has no wake-ups but a report's. A report
+turn keeps the authority of the turn that started its research (ADR-0037), so
+a research-only first plan the user started can still be extended from its
+report. A wake-up the user's authority does not reach, such as the run's end
+under Watch, can only talk. When nothing is left to follow it, that reply is
+where the run stops, and the stop is listed as the user's to answer: below
+Act, a `planner` escalation
+([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md))
+holds while the planner's latest reply answers wake-ups alone, with no message
+of the user's among its inputs or since, and while nothing could move the run on
+without the user: no run open or advancing, no planner turn busy or running, no
+queued input, owed wake-up or resend. It is derived like every other
+escalation (`wakeUpReply` in `packages/core/src/models/Task.ts`, the session's
+`plannerWaits`) and ends when the user writes to the planner. At Act it is not
+listed, since the supervisor carries the run, and neither is a subplanner's,
+whose reply goes to its parent. Every Watch run that ends with a supervisor note
+lists it, and so does an Off run whose last report turn only talked. That is
+deliberate: below Act nobody but the user answers the planner, and an
+unattended run that stops there should say so where the user looks.
+
 ### Live planner turns replace the between-batches queue
 
 The pending plan edit queue is removed. **A user message during a run and a
@@ -637,6 +660,11 @@ until #30 exists.
   press it; a merge by proxy adds a route to the user's branch for nothing.
 - **Rejected: a separate supervisor model or process.** It would not know why
   the tasks exist, and the user would have two conversations about one plan.
+- **Rejected: let a wake-up under Watch submit a plan, or edit one that has
+  only research in it.** It would let a level the user chose so as to be told,
+  not acted for, change what runs, and Watch would become Act for any plan that
+  starts with research. Listing the reply as waiting on the user keeps Watch's
+  consent and still lets an unattended run say where it stopped.
 - **Rejected: a supervisor the run waits on.** A planner crash, hang or limit
   would stop work that does not need it. The run degrades to Off instead.
 - **Rejected: auto-merge only with a supervisor.** Merging at gates needs no
@@ -753,3 +781,4 @@ until #30 exists.
 - 2026-11-01 — landed work whose check has not passed holds the supervisor's `merge_all` and the automatic merges (ADR-0055 D9); a child's questions go to its parent, and what lowers a root ends a child (ADR-0056 M8).
 - 2026-11-01 — a Stop reaches a subtree, tombstone first, and a child's claim reads its ancestors' ([ADR-0055](0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) D16).
 - 2026-11-09 — a refusal of the user's own action names the action and the user's surface's control for it rather than a card or button, and a refused `merge_all` with automatic merging on says the merge happens by itself ([ADR-0030](0030-global-run-settings.md)).
+- 2026-11-14 — below Act, a wake-up's reply that leaves nothing to run is listed as a `planner` escalation until the user writes; Watch still changes nothing ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).

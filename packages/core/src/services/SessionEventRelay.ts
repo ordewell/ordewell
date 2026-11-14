@@ -269,7 +269,7 @@ export class SessionEventRelay implements StatusGate {
    * that with all those before them. The notifier reads the list as it goes
    * out, so it is told of them then, each once.
    */
-  private waitsMayHaveChanged(plan: LegacyPlanState | null): void {
+  waitsMayHaveChanged(plan: LegacyPlanState | null): void {
     if (!plan || !this.statusWindow || this.statusHeld || this.waitsSent || waitIds(this.escalations()) === this.sentWaits) this.statusCanWait(plan);
     else this.status(plan);
   }

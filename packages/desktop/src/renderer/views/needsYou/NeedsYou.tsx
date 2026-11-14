@@ -15,6 +15,7 @@ import './needsYou.css';
 const RUN_TITLES: Readonly<Record<string, string>> = {
   'merge-all': 'The run is waiting to be merged',
   'blocked-run': 'The run could not start',
+  planner: 'The planner is waiting on you',
 };
 
 const KIND_WORDS: Readonly<Record<Escalation['kind'], string>> = {
@@ -34,6 +35,7 @@ const KIND_WORDS: Readonly<Record<Escalation['kind'], string>> = {
   'by-hand': 'yours to do',
   'merge-all': 'merge all',
   'blocked-run': 'dirty checkout',
+  planner: 'your reply',
 };
 
 export type KindTone = 'attention' | 'failed' | 'blocked' | 'merge';
