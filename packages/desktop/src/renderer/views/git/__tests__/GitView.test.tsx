@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DaemonStatus } from '../../../../shared/bridge';
+import type { ActionResult, DaemonStatus } from '../../../../shared/bridge';
 import type { RouteParams } from '../../../../shared/routes';
 import { registerFrameCommands } from '../../../frame/commands';
 import { Frame } from '../../../frame/Frame';
@@ -689,6 +689,23 @@ describe('the commit card', () => {
     expect(refs.getByText('your checkout’s branch · also on origin/main')).toBeInTheDocument();
     expect(await shown.findByText('Why it changed.')).toBeInTheDocument();
     expect(shown.getByText('2 files, +3 −1')).toBeInTheDocument();
+  });
+
+  it('copies the full sha through the bridge, and says so when it could not', async () => {
+    const { row } = await history();
+    const writeText = vi.fn(async (_text: string): Promise<ActionResult> => ({ ok: true }));
+    Object.assign((window as unknown as { ordewell: Record<string, unknown> }).ordewell, { clipboard: { writeText } });
+    hover(row);
+    const shown = within(screen.getByRole('tooltip', { name: 'Commit aaaaaaa' }));
+
+    fireEvent.click(shown.getByRole('button', { name: 'Copy the full sha' }));
+    expect(await shown.findByRole('button', { name: 'Copied the full sha' })).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledWith(sha('a'));
+
+    writeText.mockResolvedValueOnce({ ok: false, message: 'The clipboard could not be written: busy' });
+    fireEvent.click(shown.getByRole('button', { name: 'Copied the full sha' }));
+    expect(await shown.findByRole('button', { name: 'Could not copy the sha' })).toBeInTheDocument();
+    expect(document.querySelector('.frame-live')).toHaveTextContent('Could not copy the sha: The clipboard could not be written: busy');
   });
 
   it('is the same card from the subject or a ref chip, and reads the message once however often it opens', async () => {

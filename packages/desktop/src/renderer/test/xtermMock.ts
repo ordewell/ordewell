@@ -5,8 +5,10 @@ export interface FakeTerm extends TermHandle {
   options: TermOptions;
   /** Everything the shell has written to it. */
   output: string;
-  /** What fit() will report. */
+  /** What fit() will report: the grid the host has room for. */
   grid: { cols: number; rows: number };
+  /** What size() reports: like xterm's, 80x24 until fitted, then the last grid fit() took. */
+  fitted: { cols: number; rows: number };
   disposed: boolean;
   element: HTMLElement;
   /** The user typing. */
@@ -30,12 +32,13 @@ export function fakeXtermModule(): { createTerm: (options: TermOptions, mac: boo
         options,
         output: '',
         grid: { cols: 100, rows: 30 },
+        fitted: { cols: 80, rows: 24 },
         disposed: false,
         element,
         mount: vi.fn((parent: HTMLElement) => { if (element.parentElement !== parent) parent.replaceChildren(element); }),
         write: vi.fn((data: string) => { term.output += data; element.textContent = term.output; }),
-        fit: vi.fn(() => term.grid),
-        size: () => term.grid,
+        fit: vi.fn(() => { term.fitted = { ...term.grid }; return term.fitted; }),
+        size: () => term.fitted,
         focus: vi.fn(),
         setTheme: vi.fn(),
         dispose: vi.fn(() => { term.disposed = true; element.remove(); }),

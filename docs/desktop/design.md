@@ -2552,6 +2552,7 @@ table; the renderer never gives a URL, a header or a method.
 | `terminal.open({ repo, scope, cols, rows }, onEvent)` → `{ id, shell, cwd }` | Starts a PTY ([terminal rule](#the-terminal-rule)). The window's workspace is implied, and `onEvent` receives the PTY's output and exit |
 | `terminal.write(id, data)` / `terminal.resize(id, cols, rows)` / `terminal.close(id)` | PTY input and size |
 | `terminal.openLink(url)` | Opens an `http:` or `https:` address the terminal printed; any other scheme is refused in main |
+| `clipboard.readText()` / `clipboard.writeText(text)` | Plain text for the terminal and Copy SHA. The session grants the page no web clipboard permission, so this is its only route. The preload asks only during a key press or click, and main answers only the focused window, for a string within a cap |
 | `prefs.get()` / `prefs.set(key, value)` | App-local preferences: window bounds, theme, and the [layout](#persistence-and-reset-layout) per workspace |
 | `update.state()` | "disabled" in a build that is not signed (macOS: and notarized); see ADR-0063 H9 |
 
@@ -2668,7 +2669,10 @@ How it is built:
   the session stream. It is also announced to screen readers.
 - **Copy and paste** use Cmd+C and Cmd+V on macOS, and Ctrl+Shift+C and
   Ctrl+Shift+V elsewhere, so Ctrl+C stays an interrupt. The context menu
-  copies a selection, and otherwise pastes. A web address on a line opens with
+  copies a selection, and otherwise pastes. A paste goes through xterm's own
+  paste, so a shell that asked for bracketed paste gets it, and a copy or
+  paste that fails says why in a banner. Both reach the clipboard through
+  `clipboard.*`, never `navigator.clipboard`. A web address on a line opens with
   Cmd (macOS) or Ctrl and a click, through `terminal.openLink`.
 - **Packaging.** node-pty is a native addon.
   - electron-builder rebuilds it for the app's Electron once per target

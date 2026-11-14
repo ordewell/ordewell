@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { DaemonProbe, DaemonStopOutcome } from '@ordewell/core/daemon-client';
+import { DAEMON_CONTRACT, type DaemonProbe, type DaemonStopOutcome } from '@ordewell/core/daemon-client';
 import type { DaemonStatus } from '../../../shared/bridge';
 import { DaemonManager, type DaemonManagerDeps, type OwnedProcess } from '../DaemonManager';
 import { findLiveRuns, type DaemonGet, type LiveRun } from '../liveRuns';
@@ -414,6 +414,80 @@ describe('DaemonManager: version mismatch', () => {
     const { daemon } = manager(w);
     await daemon.connect();
     expect((await daemon.restart()).ok).toBe(false);
+  });
+});
+
+/**
+ * This build's contract against a daemon of 0.13.1 from before the Explorer
+ * read the workspace folder itself: it answers contract 2 and the same version
+ * as this app, and refuses repo "." in a folder that is not a repository.
+ */
+describe('DaemonManager: a daemon from before workspace-folder reads', () => {
+  const THIS_APP = { version: '0.13.1', contract: DAEMON_CONTRACT };
+  const before = (live?: boolean): DaemonProbe => ({
+    kind: 'daemon',
+    identity: { pid: 42, version: '0.13.1', contract: 2, ...(live !== undefined ? { live } : {}) },
+  });
+
+  it('shows the mismatch, naming both contracts, and drives nothing there', async () => {
+    const w = world(before(false));
+    const { daemon } = manager(w, { app: THIS_APP });
+    await daemon.connect();
+    expect(daemon.current()).toEqual({
+      state: 'mismatch',
+      port: PORT,
+      daemon: { version: '0.13.1', contract: 2 },
+      app: THIS_APP,
+    });
+    expect(daemon.isConnected()).toBe(false);
+    expect(w.fork).not.toHaveBeenCalled();
+  });
+
+  it('leaves it running, and its run with it, while a run is live there', async () => {
+    const w = world(before(true));
+    const stopExternal = vi.fn(async (): Promise<DaemonStopOutcome> => ({ kind: 'stale' }));
+    const liveRuns = vi.fn(async (): Promise<LiveRun[]> => [{ sessionId: 's1', goal: 'Ship it', workspace: '/ags-repos' }]);
+    const { daemon } = manager(w, { app: THIS_APP, stopExternal, liveRuns });
+    await daemon.connect();
+
+    expect(await daemon.restart()).toEqual({ ok: false, message: 'A run is live on that daemon (“Ship it” in /ags-repos), so it can\'t restart now.' });
+    expect(stopExternal).not.toHaveBeenCalled();
+    expect(w.fork).not.toHaveBeenCalled();
+    expect(daemon.current().state).toBe('mismatch');
+  });
+
+  it('leaves it running when it says work is under way, though it lists no run', async () => {
+    const w = world(before(true));
+    const stopExternal = vi.fn(async (): Promise<DaemonStopOutcome> => ({ kind: 'stale' }));
+    const { daemon } = manager(w, { app: THIS_APP, stopExternal });
+    await daemon.connect();
+
+    const result = await daemon.restart();
+    expect(result.ok ? '' : result.message).toMatch(/under way on that daemon/);
+    expect(stopExternal).not.toHaveBeenCalled();
+  });
+
+  it('replaces it with the bundled daemon once it is idle, and owns that one', async () => {
+    const w = world(before(false));
+    w.state.childContract = DAEMON_CONTRACT;
+    const stopExternal = vi.fn(async (): Promise<DaemonStopOutcome> => {
+      w.set({ kind: 'unreachable' });
+      return { kind: 'stopped', pid: 42, filePid: 42 };
+    });
+    const { daemon } = manager(w, { app: THIS_APP, stopExternal });
+    await daemon.connect();
+
+    expect(await daemon.restart()).toEqual({ ok: true });
+    expect(stopExternal).toHaveBeenCalledWith(PORT);
+    expect(daemon.current()).toMatchObject({ state: 'connected', owned: true, daemon: { contract: DAEMON_CONTRACT } });
+  });
+
+  it('names a stale bundled daemon, built from an older core, instead of driving it', async () => {
+    const w = world({ kind: 'unreachable' });
+    w.state.childContract = 2;
+    const { daemon } = manager(w, { app: THIS_APP });
+    await daemon.connect();
+    expect(daemon.current()).toMatchObject({ state: 'failed', message: `The bundled daemon speaks contract 2; this app was built for ${DAEMON_CONTRACT}.` });
   });
 });
 

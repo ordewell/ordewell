@@ -47,9 +47,13 @@ Linux, which runs the app with `--new-window`.
 
 ```bash
 npm install                                   # from the repository root
-npm run build                                 # core first: the daemon and the UI come from dist/
 npm run desktop:dev                           # Vite + Electron, renderer hot reload
 ```
+
+`desktop:dev` and `desktop:package` first rebuild `@ordewell/core`, `ui` and
+`web` ([`scripts/workspace-builds.mjs`](scripts/workspace-builds.mjs)): the
+daemon and the UI come from their `dist/`, and one left from an older checkout
+would run under a current app with nothing to tell them apart.
 
 A change to `src/main` or `src/preload` needs `desktop:dev` restarted; a change
 to `src/renderer` reloads in place. To run the built app instead:

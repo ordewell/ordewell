@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type 
 import { createPortal } from 'react-dom';
 import { Copy } from 'lucide-react';
 import { IconButton } from '@ordewell/ui/design';
+import { writeClipboardText } from '../../clipboard';
 import type { FrameApi } from '../../frame/api';
 import type { Branches, CommitDetail, CommitSummary } from './gitData';
 import { ago, commitWhen, plural, refChips, shortSha, summarizeRefs } from './gitModel';
@@ -165,7 +166,7 @@ function CommitCard({ id, api, repo, commit, lane, branches, at, onEnter, onLeav
   const git = gitStoreFor(api);
   const [detail, setDetail] = useState(() => git.cachedCommit(repo, commit.sha));
   const [failed, setFailed] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
   const panel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -195,8 +196,12 @@ function CommitCard({ id, api, repo, commit, lane, branches, at, onEnter, onLeav
     : `${commit.parents.length > 1 ? 'Parents' : 'Parent'} ${commit.parents.map(shortSha).join(', ')}${commit.parents.length > 1 ? ' · merge' : ''}`;
 
   const copy = (): void => {
-    void navigator.clipboard?.writeText(commit.sha).then(() => setCopied(true), () => undefined);
+    void writeClipboardText(commit.sha).then(() => setCopied('copied'), (err: unknown) => {
+      setCopied('failed');
+      api.announce(`Could not copy the sha: ${err instanceof Error ? err.message : String(err)}`);
+    });
   };
+  const copyLabel = copied === 'copied' ? 'Copied the full sha' : copied === 'failed' ? 'Could not copy the sha' : 'Copy the full sha';
 
   return createPortal(
     <div
@@ -214,7 +219,7 @@ function CommitCard({ id, api, repo, commit, lane, branches, at, onEnter, onLeav
       <div className="git-card-facts">
         <p className="git-card-row">
           <span className="git-card-sha">{shortSha(commit.sha)}</span>
-          <IconButton icon={Copy} size={12} className="git-card-copy" label={copied ? 'Copied the full sha' : 'Copy the full sha'} title={commit.sha} onClick={copy} />
+          <IconButton icon={Copy} size={12} className="git-card-copy" label={copyLabel} title={commit.sha} onClick={copy} />
           <span className="git-card-author">{commit.author}{commit.email && <span className="git-card-dim"> &lt;{commit.email}&gt;</span>}</span>
         </p>
         <p className="git-card-row git-card-dim">{[relative, commitWhen(commit.date)].filter(Boolean).join(' · ')}</p>

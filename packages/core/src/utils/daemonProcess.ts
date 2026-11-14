@@ -22,13 +22,17 @@ export const DEFAULT_DAEMON_PORT = 3742;
  * a client before it drives a daemon it did not start (ADR-0063 H3). Raise it
  * whenever a body in `daemonContract.ts` or a socket frame changes in a way an
  * older client or daemon would misread, and whenever a client comes to need a
- * route an older daemon lacks: the same contract attaches, so such a client
- * would drive that daemon into a 404. A field only added need not.
+ * route, or a value on an existing route, that an older daemon lacks or
+ * refuses: the same contract attaches, so such a client would drive that
+ * daemon into a 404 or a refusal it cannot tell from a real one. A field only
+ * added, which an older side ignores or does without, need not.
  *
  * 2: the desktop's card edits go to `plans.cardEdit`, which no contract-1
  * daemon serves.
+ * 3: the desktop's Explorer reads the workspace folder itself, as repo `.`,
+ * which a contract-2 daemon refuses in a folder that is not a repository.
  */
-export const DAEMON_CONTRACT = 2;
+export const DAEMON_CONTRACT = 3;
 
 // Paths are read at call time, not import time: a test (and a shell that
 // re-exports HOME) changes the home directory after this module loads.

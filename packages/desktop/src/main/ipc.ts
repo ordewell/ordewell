@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
+import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type NotificationClick, type NotificationRequest, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
 import { buildRequest, childStreamPath, liveSessionOf, namingWorkspace, segmentError, sessionStreamPath, type BuildResult } from '../shared/routes';
@@ -8,11 +8,12 @@ import type { HolderConnections, HolderProxy } from './daemon/holders';
 import type { DaemonProxy } from './daemon/proxy';
 import type { AttentionNotifier } from './notifications';
 import { validPref, type PrefsStore } from './prefs';
+import { readClipboard, writeClipboard } from './clipboard';
 import { droppedFolder } from './droppedFolder';
 import type { ProjectOpener } from './projectOpener';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
-import { bringForward } from './testWindows';
+import { bringForward, windowsHidden } from './testWindows';
 import { webLink } from './terminal/link';
 import type { TerminalChannel } from './terminal/TerminalChannel';
 import type { TerminalHost } from './terminal/TerminalHost';
@@ -317,6 +318,7 @@ export function registerIpc(deps: IpcDeps): void {
   handle(CHANNELS.terminalOpen, (event, spec) => deps.terminals.channel.open(callerOf(event), spec));
   handle(CHANNELS.terminalWrite, (event, id, data) => { deps.terminals.channel.write(callerOf(event), id, data); });
   handle(CHANNELS.terminalResize, (event, id, cols, rows) => { deps.terminals.channel.resize(callerOf(event), id, cols, rows); });
+  handle(CHANNELS.terminalWord, (event, id, direction) => { deps.terminals.channel.word(callerOf(event), id, direction); });
   handle(CHANNELS.terminalOpenLink, async (_event, url) => {
     const link = webLink(url);
     if (!link) return { ok: false, message: 'Only http and https links open from the terminal.' };
@@ -324,6 +326,12 @@ export function registerIpc(deps: IpcDeps): void {
     return { ok: true };
   });
   handle(CHANNELS.terminalClose, (event, id) => { deps.terminals.channel.close(callerOf(event), id); });
+
+  // A test run's windows are never focused, so there the trusted frame is enough (testWindows.ts).
+  const inUse = (event: IpcMainInvokeEvent): boolean =>
+    windowsHidden() || BrowserWindow.fromWebContents(event.sender)?.isFocused() === true;
+  handle(CHANNELS.clipboardReadText, (event) => readClipboard(clipboard, inUse(event)));
+  handle(CHANNELS.clipboardWriteText, (event, text) => writeClipboard(clipboard, inUse(event), text));
 
   daemon.onStatus((status) => windows.broadcast(EVENTS.daemonStatus, status));
   nativeTheme.on('updated', () => windows.broadcast(EVENTS.theme, currentTheme()));

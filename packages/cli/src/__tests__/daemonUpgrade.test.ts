@@ -124,6 +124,30 @@ describe('a CLI meeting a daemon of another version', () => {
     expect(daemonStarts()).toHaveLength(1);
   });
 
+  // 0.13.1 builds from before the Explorer read the workspace folder itself
+  // answer contract 2 and this version, and refuse repo "." outside a repository.
+  it('does not drive a daemon from before workspace-folder reads, though it reports the same version', async () => {
+    const port = await findFreePort();
+    const idle = await earlierDaemon(port, { version: '0.13.1', contract: 2, live: false });
+
+    expect(await ensureDaemonOwned(port, { quiet: true })).toEqual({ port, owned: true });
+
+    await vi.waitFor(() => expect(alive(idle)).toBe(false));
+    expect(await probeDaemon(port)).toMatchObject({ kind: 'daemon', identity: { contract: DAEMON_CONTRACT } });
+  });
+
+  it('leaves a daemon from before workspace-folder reads running while it has work under way', async () => {
+    const port = await findFreePort();
+    const busy = await earlierDaemon(port, { version: '0.13.1', contract: 2, live: true });
+
+    const refusal = await ensureDaemonOwned(port, { quiet: true }).then(() => undefined, (err: Error) => err.message);
+
+    expect(refusal).toContain('It has work under way');
+    expect(refusal).toContain(`ordewell stop --server --port ${port}`);
+    expect(alive(busy)).toBe(true);
+    expect(daemonStarts()).toEqual([]);
+  });
+
   it('leaves a daemon it cannot drive running while work is under way there, and says how to go on', async () => {
     const port = await findFreePort();
     const earlier = await earlierDaemon(port, { version: '0.12.9', contract: DAEMON_CONTRACT + 1, live: true });

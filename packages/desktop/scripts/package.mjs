@@ -6,8 +6,8 @@
 // quick way to check what a package holds. Anything else goes to
 // electron-builder as it is, so `--arch x64` or `--config.mac.target=zip` work.
 //
-// Order is not optional: @ordewell/core and @ordewell/web must be built first
-// (the root `npm run build` does), because the packaged daemon is web's dist.
+// Core, ui and web are rebuilt first (workspace-builds.mjs): the packaged
+// daemon is web's dist, and main and the renderer bundle core's and ui's.
 //
 // Signing is decided here from the environment (ADR-0063 H9): with no signing
 // secrets the build is the unsigned one, ad hoc on macOS; with a complete set
@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runRetryingNetwork } from '../../../scripts/network-retry.mjs';
+import { buildWorkspaces } from './workspace-builds.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const ESIGNER_HOOK = fileURLToPath(new URL('esigner-sign.mjs', import.meta.url));
@@ -256,20 +257,19 @@ function run(file, args, env = withoutSigning(process.env)) {
 }
 
 async function main() {
-  const missing = [
-    ['@ordewell/core', join(root, '..', 'core', 'dist', 'index.js')],
-    ['@ordewell/web', join(root, '..', 'web', 'dist', 'server', 'main.js')],
-  ].filter(([, file]) => !existsSync(file));
-  if (missing.length > 0) {
-    console.error(`Build ${missing.map(([name]) => name).join(' and ')} first: run \`npm run build\` at the repository root.`);
-    process.exit(1);
-  }
-
   let plan;
   try {
     plan = releasePlan(process.env, process.platform);
   } catch (error) {
     console.error(error.message);
+    process.exit(1);
+  }
+
+  // Undefined drops a variable from the child's environment: like every step
+  // but electron-builder, the builds see no signing secret.
+  const failed = buildWorkspaces(undefined, Object.fromEntries(SIGNING_VARIABLES.map((name) => [name, undefined])));
+  if (failed) {
+    console.error(failed);
     process.exit(1);
   }
   for (const note of plan.notes) console.log(note);
