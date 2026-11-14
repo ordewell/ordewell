@@ -4,6 +4,7 @@ import { devNull, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { IPty } from 'node-pty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { completedLine } from '../../../../shared/__tests__/ptyScreen';
 import { createTerm, type TermHandle } from '../xterm';
 
 /** A real PTY checks that swallowing the chord leaves the next input intact. */
@@ -96,6 +97,14 @@ describe.skipIf(process.platform === 'win32')('Option+Left/Right through real xt
           return match;
         });
       },
+      /** A whole line starting with `start` on the screen since the mark, whatever modes the shell switched around it. */
+      async line(start: string): Promise<string> {
+        return vi.waitFor(() => {
+          const found = completedLine(output.slice(at.mark), start);
+          if (found === undefined) throw new Error(`no line ${JSON.stringify(start)} yet: ${JSON.stringify(output.slice(at.mark))}`);
+          return found;
+        });
+      },
       mark(): void { at.mark = output.length; },
       type(text: string): void { child.write(text); },
       /** Presses Option+Arrow on the textarea, waits for the program to answer, and returns what the chord sent. */
@@ -125,7 +134,7 @@ describe.skipIf(process.platform === 'win32')('Option+Left/Right through real xt
   }
   const ran = async (s: Awaited<ReturnType<typeof session>>): Promise<string> => {
     s.type('\r');
-    return (await s.waitFor(/\r\n(one[^\r\n]*)\r\n/))[1];
+    return s.line('one');
   };
 
   for (const shell of SHELLS) {

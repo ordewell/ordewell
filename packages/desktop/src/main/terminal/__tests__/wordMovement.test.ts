@@ -3,6 +3,7 @@ import { devNull } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { IPty } from 'node-pty';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { completedLine } from '../../../shared/__tests__/ptyScreen';
 
 /**
  * What the bytes Option+Left/Right could send do in the shells a user starts
@@ -15,11 +16,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * - ESC b / ESC f, which it sends to a program that hides the cursor: a word in
  *   emacs mode. In vi insert mode the ESC leaves insert mode and the letter waits
  *   for the next key, which this pins as the reason they are not the default.
- * - ESC[1;3D / ESC[1;3C, xterm's own: unbound in emacs mode, and in vi mode the
- *   trailing C is "change to end of line", which deletes at once.
+ * - ESC[1;3D / ESC[1;3C, xterm's own: unbound in zsh's emacs mode, and in its
+ *   vi mode the trailing C is "change to end of line", which deletes at once.
+ *   bash 3.2, macOS's /bin/bash, does the same; bash 5's readline binds them to
+ *   a word in vi insert mode, but an inputrc can take that away again.
  *
  * zsh is read by its own ZLE state ($BUFFER, $CURSOR, $KEYMAP) from a widget
- * on ^T; bash 3.2 has no READLINE_LINE, so it is read by what `echo` prints.
+ * on ^T; bash 3.2 has no READLINE_LINE, so it is read by what `echo` prints,
+ * taken off the screen since bash 5 wraps it in bracketed-paste switches.
  */
 
 const REQUIRED_TOOLS = new Set((process.env.ORDEWELL_REQUIRE_TOOLS ?? '').split(/[\s,]+/).filter(Boolean));
@@ -54,10 +58,26 @@ describe.skipIf(process.platform === 'win32')('word movement bytes in the stock 
 
   /**
    * Runs `setup`, types LINE, then each key press as its own write, a beat
-   * apart as a person presses them, and returns the output from LINE on once
-   * `until` matches it.
+   * apart as a person presses them, and returns what `read` finds in the
+   * output from LINE on once it finds anything.
    */
-  async function drive(file: string, args: string[], env: Record<string, string>, setup: string, keys: string[], until: RegExp) {
+  async function drive<T>(file: string, args: string[], env: Record<string, string>, setup: string, keys: string[], read: (output: string) => T | undefined) {
+    const { term, output } = await start(file, args, env, setup);
+    const mark = output().length;
+    term.write(LINE);
+    for (const key of keys) {
+      await sleep(100);
+      term.write(key);
+    }
+    return vi.waitFor(() => {
+      const found = read(output().slice(mark));
+      if (found === undefined) throw new Error(`not yet: ${JSON.stringify(output().slice(mark))}`);
+      return found;
+    });
+  }
+
+  /** A shell at its prompt once `setup` has run. */
+  async function start(file: string, args: string[], env: Record<string, string>, setup: string) {
     const term = pty.spawn(file, args, {
       cols: 120, rows: 30, cwd: process.cwd(),
       // No EDITOR or VISUAL: zsh starts in vi mode when either names vi; the mode here is the setup's.
@@ -70,17 +90,7 @@ describe.skipIf(process.platform === 'win32')('word movement bytes in the stock 
     const prompts = output.split(PROMPT).length;
     term.write(`${setup}\r`);
     await vi.waitFor(() => { if (output.split(PROMPT).length <= prompts) throw new Error('setup has not finished'); });
-    const mark = output.length;
-    term.write(LINE);
-    for (const key of keys) {
-      await sleep(100);
-      term.write(key);
-    }
-    return vi.waitFor(() => {
-      const match = until.exec(output.slice(mark));
-      if (!match) throw new Error(`not yet: ${JSON.stringify(output.slice(mark))}`);
-      return match;
-    });
+    return { term, output: () => output };
   }
 
   const zshFile = onPath('zsh');
@@ -96,7 +106,7 @@ describe.skipIf(process.platform === 'win32')('word movement bytes in the stock 
       `dump() { print -rn -- $'\\r\\n'"DUMP<\${(V)BUFFER}|\${CURSOR}|\${KEYMAP}>"$'\\r\\n' }; zle -N dump; ` +
       `for m in emacs viins vicmd; bindkey -M $m '^T' dump; bindkey -${mode}`;
     const zsh = async (mode: 'e' | 'v', keys: string[]) => {
-      const [, buffer, cursor, keymap] = await drive(zshFile, ['-f'], {}, setup(mode), [...keys, DUMP], DUMPED);
+      const [, buffer, cursor, keymap] = await drive(zshFile, ['-f'], {}, setup(mode), [...keys, DUMP], (output) => DUMPED.exec(output) ?? undefined);
       // `main` is whichever of emacs and viins bindkey -e / -v linked it to.
       return { buffer, cursor: Number(cursor), keymap: keymap === 'main' ? (mode === 'e' ? 'emacs' : 'viins') : keymap };
     };
@@ -127,9 +137,20 @@ describe.skipIf(process.platform === 'win32')('word movement bytes in the stock 
 
   if (!bashFile) missing('bash');
   else describe('bash --norc', () => {
-    const bash = async (mode: 'emacs' | 'vi', keys: string[]): Promise<string | undefined> => {
-      const match = await drive(bashFile, ['--norc', '--noprofile'], { INPUTRC: devNull }, `set -o ${mode}`, [...keys, 'X', '\r'], /\r\n(one[^\r\n]*)\r\n/);
-      return match[1];
+    const args = ['--norc', '--noprofile'];
+    const env = { INPUTRC: devNull };
+    /** The line `echo` printed once `keys` and then X were typed into LINE and it ran. */
+    const bash = (mode: 'emacs' | 'vi', keys: string[], setup = ''): Promise<string> =>
+      drive(bashFile, args, env, `set -o ${mode}${setup && `; ${setup}`}`, [...keys, 'X', '\r'], (output) => completedLine(output, 'one'));
+    /** What this bash's vi insert keymap binds `seq` to, as `bind -p` lists it, or undefined when nothing. */
+    const viInsertBinding = async (seq: string): Promise<string | undefined> => {
+      const { term, output } = await start(bashFile, args, env, 'set -o vi');
+      const mark = output().length;
+      term.write(`bind -m vi-insert -p | grep -F '${seq}": '; echo PROBED\r`);
+      await vi.waitFor(() => { if (completedLine(output().slice(mark), 'PROBED') === undefined) throw new Error('bind has not answered'); });
+      // `bind -p` spells ESC as \e or, with convert-meta on, as \M-.
+      const listed = completedLine(output().slice(mark), '"');
+      return listed && /": (\S+)$/.exec(listed)?.[1];
     };
 
     for (const mode of ['emacs', 'vi'] as const) {
@@ -148,8 +169,16 @@ describe.skipIf(process.platform === 'win32')('word movement bytes in the stock 
       expect(await bash('vi', [left(9), '\x1bf'])).toBe('one two three');
     });
 
-    it("in vi mode, xterm's ESC[1;3C deletes to the end of the line at once", async () => {
-      expect(await bash('vi', [left(9), '\x1b[1;3C'])).toBe('one X');
+    it("in vi mode, xterm's ESC[1;3C moves a word where readline binds it, and deletes to the end of the line where not", async () => {
+      // bash 3.2's readline leaves it unbound, bash 5's binds it to forward-word; anything else is a new case to look at.
+      const binding = await viInsertBinding('[1;3C');
+      expect([undefined, 'forward-word']).toContain(binding);
+      expect(await bash('vi', [left(9), '\x1b[1;3C'])).toBe(binding === 'forward-word' ? 'one twoX three' : 'one X');
+    });
+
+    it("in vi mode, xterm's ESC[1;3C deletes to the end of the line in every bash once it is unbound", async () => {
+      // As an inputrc can leave it. bash 3.2 keeps the space before `two`, bash 5 takes it too.
+      expect(await bash('vi', [left(9), '\x1b[1;3C'], String.raw`bind -m vi-insert -r '\e[1;3C'`)).toMatch(/^one ?X$/);
     });
   });
 });
