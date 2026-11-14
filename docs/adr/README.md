@@ -324,7 +324,7 @@ How runners are driven, messaged and given Ordewell tools.
 | [0023](runners/0023-messages-reach-a-running-task.md) | Messages reach a running task between tool calls | accepted | [0018](runners/0018-structured-runner-transport.md) | [0060](runners/0060-acp-runners-are-data-on-one-connector.md) |
 | [0025](runners/0025-structured-only-runners.md) | Structured-only runners | accepted | supersedes [0007](runners/0025-structured-only-runners.md) | [0060](runners/0060-acp-runners-are-data-on-one-connector.md), [0070](runners/0070-the-built-in-ordewell-runner-runs-in-process.md) |
 | [0060](runners/0060-acp-runners-are-data-on-one-connector.md) | ACP runners are data on one connector | accepted | [0008](planner-envelope/0008-planner-exploration-envelope.md), [0009](planner/0009-coding-agents-as-planners.md), [0018](runners/0018-structured-runner-transport.md), [0022](runners/0022-ordewell-mcp-server.md), [0023](runners/0023-messages-reach-a-running-task.md), [0025](runners/0025-structured-only-runners.md), [0026](planner-envelope/0026-one-envelope-for-every-planner.md), [0028](planner-envelope/0028-planners-never-run-repository-config.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md) | — |
-| [0070](runners/0070-the-built-in-ordewell-runner-runs-in-process.md) | The built-in Ordewell runner runs in-process | accepted, partly implemented | [0022](runners/0022-ordewell-mcp-server.md), [0025](runners/0025-structured-only-runners.md) | — |
+| [0070](runners/0070-the-built-in-ordewell-runner-runs-in-process.md) | The built-in Ordewell runner runs in-process | accepted | [0022](runners/0022-ordewell-mcp-server.md), [0025](runners/0025-structured-only-runners.md) | — |
 
 ### isolation/
 

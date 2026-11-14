@@ -1,8 +1,6 @@
 ---
 status: accepted
-implemented: partial
 amends: ["0022", "0025"]
-note: "Built: Full mode on chat-completions. Later slices: Guarded and read-only gates, run_command and the other task tools, the step limit and repeat guard, the models.dev catalog, the other dialects, and the planner on ModelClient."
 ---
 
 # 0070 — The built-in Ordewell runner runs in-process
@@ -112,10 +110,18 @@ already holds, and is driven by `StructuredSession` like every other runner.**
   line passes its redaction
   ([ADR-0061](../platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
   No key reaches a shell child's environment, in any mode.
-- **A mode not built refuses.** The runner declares its three modes with
-  the autonomous, safe and read-only tags `ModeResolver` reads. An attempt in a
-  mode whose gate is not built refuses to start with a message naming it, and
-  never runs as Full ([ADR-0001](../routing/0001-autonomous-mode-resolution.md)).
+- **A mode is never widened.** The runner declares its three modes with
+  the autonomous, safe and read-only tags `ModeResolver` reads. An attempt runs
+  in the mode it was planned at, and an unknown mode refuses to start rather than
+  running as Full ([ADR-0001](../routing/0001-autonomous-mode-resolution.md)). A
+  read-only task is read-only whatever level it was planned at.
+- **Lifecycle.** An attempt makes at most the step limit's model calls
+  (`ordewellStepLimit` in the settings file, default 200); the last is told so and
+  forced to `task_complete`. The repeat guard nudges the third identical tool call
+  in a row and ends the attempt as failed on the fourth. Messages to a running
+  task reach the model between steps, an interrupt stops cooperatively, a usage
+  limit pauses the attempt, and a resume reads the transcript back; one with no
+  session start is not resumable.
 
 ## Modes
 
@@ -125,12 +131,14 @@ already holds, and is driven by `StructuredSession` like every other runner.**
 | Guarded | safe | Edits inside the worktree go ahead; every shell command asks. *Allow for this task* grants a command prefix that must match the whole command line, never only its first word. |
 | Read-only | read-only | No edit tools. The sealed `run_command` ([ADR-0046](../planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)) is the only shell. |
 
-A change task's shell runs unsandboxed in every mode; sandboxing it is a later
-hardening step.
+The shell runs unsandboxed in every mode that has one; sandboxing it is a later
+hardening step. Guarded's prefix grant lasts for the attempt, matches only a
+whole command line made of the prefix and plain arguments, and never a line with
+a shell operator.
 
 ## Seams
 
-Three later pieces build on the loop, each at one seam, handed in through
+Three pieces build on the loop, each at one seam, handed in through
 `OrdewellAdapterOptions`:
 
 - **The gate** (`ToolGate`) is asked before each neutral tool runs and may
@@ -158,13 +166,12 @@ comes from that call.
 
 ## Out of scope
 
-- The Guarded and read-only gates, and `checkpoint`, `apply_patch`,
-  `save_patch`, `run_command`, `fetch` and `web_search` as native tools.
-- The step limit and the repeat guard.
 - Per-family tool shapes: one neutral set serves every model until a family
   measurably needs its own.
-- Moving the planner onto `ModelClient`. Only the planner moves; the runner is
-  on it already.
+- Sandboxing the shell.
+- A live-verified provider matrix: the effort and model tables of the Responses
+  and Gemini adapters, and the Anthropic key header, are checked by recorded
+  fixtures only; `bench/live/runner-smoke.mjs` is the hand-run check.
 
 ## Considered options
 
@@ -181,7 +188,10 @@ comes from that call.
 
 ## Consequences
 
-- A provider key is enough to plan and to run a task.
+- A provider key is enough to plan and to run a task. The API planner reaches
+  each provider through the same `ModelClient`, by its dialect
+  ([ADR-0002](../planner/0002-planner-as-conversation-loop.md),
+  [ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
 - Ordewell owns the runner's prompt, tools and modes, and so their defects.
 - The runner runs in the host's process: a tool that hangs or a loop that leaks
   costs the host, not a child it can kill.
@@ -194,3 +204,5 @@ comes from that call.
   which models exist, models.dev fills window, reply cap, prices and
   capabilities (daily background fetch, cache under the data directory, bundled
   snapshot as the offline fallback; `ModelDetails.ts`).
+- 2026-11-14 — the modes, the step limit, the repeat guard, the Anthropic
+  Messages, Responses and Gemini dialects, and the planner on `ModelClient` implemented; fully implemented.

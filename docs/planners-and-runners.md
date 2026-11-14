@@ -1,8 +1,9 @@
 # Planners and runners
 
 Ordewell uses a model in two roles. The **planner** reads your repository and writes
-the plan; it never writes code. A **runner** is a coding-agent CLI, such as Claude
-Code, Codex or OpenCode, that runs one task of the plan in its own session. The two
+the plan; it never writes code. A **runner** runs one task of the plan in its own session: either a coding-agent
+CLI, such as Claude Code, Codex or OpenCode, or Ordewell's own
+[built-in runner](#the-built-in-runner), which needs only a provider key. The two
 get their models and credentials in different ways, described below.
 [CONTEXT.md](../CONTEXT.md) defines these terms.
 
@@ -50,14 +51,18 @@ login; with a value that cannot serve an agent, such as a provider whose key is
 missing, the planner delegates with research tasks and the chat says why.
 
 An **API planner** calls a provider's API, with your key where the provider needs
-one. Providers include OpenRouter, Google Gemini, DeepSeek, Moonshot / Kimi and xAI;
+one. It reaches Anthropic natively through the Messages API, with prompt caching and
+extended thinking at the planner's effort, and OpenAI through the Responses API;
+Google Gemini and every other provider have their own paths, all through one
+provider-neutral client that also retries and reports usage limits. Providers include OpenRouter, Google Gemini, DeepSeek, Moonshot / Kimi and xAI;
 `ordewell planner` shows the full list and marks each provider whose key is missing
 with the environment variable it reads, such as `(no DEEPSEEK_API_KEY)`. The
 planner's model is one of that provider's models.
 
-A provider key adds an API planner, but installing a runner is separate. A `DEEPSEEK_API_KEY` or
-`MOONSHOT_API_KEY` lets DeepSeek or Kimi models plan; tasks still run on the built-in
-runners. An installed Qwen Code or Cline does run on that key, though, so neither
+A provider key adds an API planner and also lets the built-in runner run tasks on
+that provider's models; an installed coding-agent CLI is separate. A `DEEPSEEK_API_KEY` or
+`MOONSHOT_API_KEY` lets DeepSeek or Kimi models plan, and the built-in runner run
+tasks on them. An installed Qwen Code or Cline does run on that key, though, so neither
 needs a login of its own: the key of the provider `AI_PROVIDER` names, else the first
 one configured, is handed to it at each start, its start as the planner included.
 Qwen Code takes any OpenAI-compatible provider's key; Cline takes the key of a
@@ -68,7 +73,8 @@ its own sign-in.
 
 ## Who runs tasks
 
-Every AI task runs on a runner, and each runner is set up outside Ordewell:
+Every AI task runs on a runner. A coding-agent CLI is set up outside Ordewell, and the
+[built-in runner](#the-built-in-runner) needs only a provider key:
 
 - **Installed.** The runner's CLI must be on your PATH. `ordewell runners` lists the
   runners and marks the ones offered to the planner.
@@ -89,6 +95,62 @@ successfully stays until the daemon restarts or a provider key or base URL chang
 The planner gives each AI task a runner, a model, a thinking effort and a mode, and
 you can change any of them before the run. A model an API planner can use is not
 thereby one a runner offers: pick a task's model from its runner's choices.
+
+## The built-in runner
+
+The runner `ordewell` ("Ordewell") is a coding-agent loop that runs inside Ordewell
+itself and calls a provider's API with the keys Ordewell holds
+([ADR-0070](adr/runners/0070-the-built-in-ordewell-runner-runs-in-process.md)). It
+needs no CLI installed and no sign-in: it is available as soon as one provider has a
+key, saved with `/key` or `ordewell key set <provider> <key>` (see
+[where keys live](#where-keys-live)). With no key it is listed as signed out, and
+`/key` is its sign-in. It runs tasks only; the API planner does the planning on the
+same key. `ordewell runners` and `/runners` list it with the others.
+
+**Models.** Its models are those of every provider that has a key, grouped by
+provider, such as `openrouter` or `anthropic`, and a task's model is written
+`<provider>:<model>`. A provider's own listing decides which models exist. Ordewell
+fills in each model's context window, reply cap, prices and capabilities from the
+[models.dev](https://models.dev) catalog; a model known to take no tools is not
+offered, and thinking efforts are offered only for models known to reason. The
+catalog is read with one `GET https://models.dev/api.json`, at most once a day in the
+background, and sends no data about you. It is cached in `models-dev.json` in
+Ordewell's data directory, and a snapshot bundled with Ordewell serves when it
+cannot be fetched. `ORDEWELL_NO_MODELS_DEV=1` turns the fetch off, and
+`ORDEWELL_MODELS_DEV_URL` points it at another address; set either in
+`~/.ordewell/.env` or where the daemon starts.
+
+**Modes.**
+
+| Mode | What it means |
+| --- | --- |
+| Full | Every tool runs without asking. File edits stay inside the task's worktree, and the shell's environment carries none of your provider keys. |
+| Guarded | Reads and edits inside the worktree go ahead. Every shell command asks you: *Allow*, *Allow for this task*, or *Deny* with a note the model reads. *Allow for this task* grants a command prefix for the rest of that attempt; it covers a command only when the whole line is the prefix, or the prefix and plain arguments, never a line with `;`, `&`, `|`, a backtick, `$(`, `>`, `<` or a line break. |
+| Read-only | For read-only tasks. No edit or shell tool; the task reads files and runs sealed commands only ([ADR-0046](adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)). |
+
+In Full and Guarded the shell is not sandboxed.
+
+**Step limit.** An attempt may make a limited number of model calls; the last one is
+told so and must report with `task_complete`. The limit is `ordewellStepLimit` in
+`settings.json` in Ordewell's data directory (`~/.ordewell`), a whole number of at
+least 1, and defaults to 200. No surface sets it. The runner also stops an attempt
+whose model makes the same tool call with the same arguments four times in a row.
+
+**Resuming and messages.** The runner keeps each attempt's conversation in a
+transcript under Ordewell's data directory, outside your repository, so a resumed
+task continues from it, and compacts a long conversation itself.
+
+**Smoke test.** `bench/live/runner-smoke.mjs` runs one small fix-the-test task per
+provider dialect through a real session and reports the verdict and tokens. It
+**spends API credit** and is run by hand, never by CI:
+
+```bash
+npm run build -w packages/core && node bench/live/runner-smoke.mjs
+```
+
+It reads provider keys from your shell and `~/.ordewell/.env`. A dialect with no key
+prints UNVERIFIED, never a pass. `ORDEWELL_SMOKE_MODELS=<provider>:<model>,…` runs
+exactly those models, and `ORDEWELL_SMOKE_TIMEOUT_MS` sets the time per task.
 
 ## See and change what is configured
 
@@ -172,5 +234,5 @@ anything as you
 
 ## Adding a coding agent
 
-Only a built-in runner can run tasks or plan as a harness planner. To add one, see
+Only a built-in runner (one declared in Ordewell's own manifests) can run tasks or plan as a harness planner. To add one, see
 [Adding a runner](../CONTRIBUTING.md#adding-a-runner).

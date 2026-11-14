@@ -34,7 +34,9 @@ plans wait for your approval by default; run settings let you automate execution
 and merging.
 
 Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the box,
-and can be mixed freely within one plan. Install it on Linux or macOS with one
+and can be mixed freely within one plan. Ordewell also has a built-in runner that
+needs no coding agent installed: a provider API key is enough
+([planners and runners](docs/planners-and-runners.md#the-built-in-runner)). Install it on Linux or macOS with one
 line, with no Node.js needed:
 
 ```bash
@@ -82,7 +84,7 @@ For VS Code, install Ordewell from the [Marketplace](https://marketplace.visuals
 In Cursor, Windsurf or VSCodium, get it from [Open VSX](https://open-vsx.org/extension/ordewell/ordewell).
 
 **Requirements:** a [supported coding agent](https://ordewell.ai/docs#runners),
-installed and signed in. git 2.38 or newer is recommended: tasks then run in
+installed and signed in, or a provider API key for the built-in runner. git 2.38 or newer is recommended: tasks then run in
 their own worktrees. Without it, they run directly in your folder.
 
 **On Windows**, install with npm. [Git for Windows](https://gitforwindows.org/)
