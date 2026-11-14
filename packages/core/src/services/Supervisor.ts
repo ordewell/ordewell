@@ -817,9 +817,9 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
   }
-  const base = facts.basis ? facts.basis.wallTimeMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
+  const base = facts.basis ? facts.basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
   const from = facts.basis
-    ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(facts.basis.wallTimeMs)} task ${describe(facts.basis.taskId)} passed in`
+    ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(facts.basis.runningMs)} task ${describe(facts.basis.taskId)} passed in`
     : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
   const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
   const compacted = facts.compactions > 0 ? `; compacted ${times(facts.compactions)}` : '';

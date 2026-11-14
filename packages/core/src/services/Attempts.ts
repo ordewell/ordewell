@@ -631,7 +631,7 @@ export class Attempts {
       attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
       dropProviderRetry(attempt);
-      store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined);
+      store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, this.verifier.runningMs(taskId));
       this.deps.output.detach(taskId);
       attempt.shell?.end();
       attempt.web?.end();

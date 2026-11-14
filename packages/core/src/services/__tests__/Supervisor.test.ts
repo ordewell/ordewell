@@ -55,7 +55,7 @@ describe('wakeUpDigest', () => {
 
     it('names its running time, the threshold and the task it was computed from, its context and its compactions, then what the supervisor can do', () => {
       const event = runningLong('t4', {
-        basis: { taskId: 't2', wallTimeMs: 20 * MINUTE }, contextTokens: 150_000, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 1,
+        basis: { taskId: 't2', runningMs: 20 * MINUTE }, contextTokens: 150_000, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 1,
       });
 
       expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')).toEqual([
