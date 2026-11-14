@@ -361,8 +361,10 @@ and completion evidence.
 - **Provider errors (E1).** A turn that fails on its provider's error, not
   the account's or the task's, has not failed the task either: an HTTP 5xx,
   Claude Code's `API Error: 5xx`, an overload, OpenCode's `Provider returned
-  error` unless a 4xx status other than 429 beside it says the request or the
-  key was refused, or a throttle the runner's own field says is not its usage limit
+  error` unless a 4xx status other than 429 beside it, or words naming a
+  context too long, say the request or the key was refused (OpenCode keeps an
+  `APIError`'s status in its `statusCode`, which the adapter puts beside the
+  words as `HTTP <status>`), or a throttle the runner's own field says is not its usage limit
   (Codex's `rateLimitExceeded`). `classifyRunnerStop` reads it from the turn's
   error as `transient`, after U1: a usage limit, by its field or its words,
   keeps U1's pause. The task stays `in_progress` with no escalation, and the
@@ -591,3 +593,4 @@ transport is retained for take-over.
 - 2026-11-13 — W1: a subagent an interrupt cut short finishes `stopped` on every runner, not `failed`, and one tracker per adapter reports each subagent's start and finish once, where the planner service did.
 - 2026-11-14 — E1: a turn its provider failed (a 5xx, an overload, a throttle that is not the usage limit) is tried again in its saved session after a 30, 60 and 120 second backoff, the planner's as a task's, before input is asked with the error in its reason.
 - 2026-11-14 — E1: a `Provider returned error` with a 4xx status other than 429 is not transient; the error is redacted wherever it is repeated.
+- 2026-11-14 — E1: OpenCode's `APIError` status is kept beside its words, a status code written as `statusCode` or a quoted string counts, and a context too long is not transient without a status.
