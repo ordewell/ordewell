@@ -34,13 +34,16 @@ interface Term {
   press(chord: Chord): { sent: string[]; prevented: boolean };
   /** Output from the program, as if the shell had drawn it. */
   write(data: string): void;
+  /** Once xterm has parsed what was written: it parses on a later tick. */
+  parsed(): Promise<void>;
 }
 
-async function terminal(mac: boolean): Promise<Term> {
+async function terminal(mac: boolean, onWord?: (direction: 'left' | 'right') => void): Promise<Term> {
   const sent: string[] = [];
   handle = await createTerm({
     onData: (data) => sent.push(data),
     onLink: () => undefined,
+    ...(onWord ? { onWord } : {}),
     screenReaderMode: false,
     // Nothing here reads or writes the clipboard; a rejection is what a failed bridge call looks like.
     readClipboard: () => Promise.reject(new Error('no clipboard in this test')),
@@ -65,6 +68,7 @@ async function terminal(mac: boolean): Promise<Term> {
       return { sent: [...sent], prevented: event.defaultPrevented };
     },
     write: (data) => handle?.write(data),
+    parsed: () => new Promise((resolve) => { setTimeout(resolve, 20); }),
   };
 }
 
@@ -77,6 +81,24 @@ describe('the terminal keyboard on macOS', () => {
       expect(term.press({ ...RIGHT, alt: true })).toEqual({ sent: [], prevented: true });
     }
     expect(term.press({ key: 'x', keyCode: 88 }).sent).toEqual(['x']);
+  });
+
+  it('asks for a word move on the shell\'s screen, and not while a full-screen program has the alternate one (ADR-0069)', async () => {
+    const onWord = vi.fn();
+    const term = await terminal(true, onWord);
+    term.write('$ echo one two');
+    expect(term.press({ ...LEFT, alt: true })).toEqual({ sent: [], prevented: true });
+    expect(term.press({ ...RIGHT, alt: true })).toEqual({ sent: [], prevented: true });
+    expect(onWord.mock.calls).toEqual([['left'], ['right']]);
+    term.write('\x1b[?1049h');
+    await term.parsed();
+    expect(term.press({ ...LEFT, alt: true })).toEqual({ sent: [], prevented: true });
+    expect(onWord).toHaveBeenCalledTimes(2);
+    term.write('\x1b[?1049l');
+    await term.parsed();
+    term.press({ ...LEFT, alt: true, composing: true });
+    term.press({ ...LEFT, alt: true, shift: true });
+    expect(onWord).toHaveBeenCalledTimes(2);
   });
 
   it('leaves the other keys as xterm sends them', async () => {

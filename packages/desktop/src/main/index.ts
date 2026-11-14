@@ -24,6 +24,7 @@ import { TerminalChannel } from './terminal/TerminalChannel';
 import { fileSystemPlacement } from './terminal/placement';
 import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
+import { openWordLink } from './terminal/wordLink';
 import { closePrompt, onLastWindowClosed, quitPrompt, runsQuitStops } from './lifecycle';
 import { droppedFolder } from './droppedFolder';
 import { launchAction, launchDataOf, OpenProjectsMemory, parseLaunchArgs, type LaunchData } from './launch';
@@ -176,6 +177,7 @@ async function main(): Promise<void> {
     home: app.getPath('home'),
     // The same PATH the daemon and its runners get, not the GUI launch's.
     env: async () => withPath(process.env, await augmentedPath()),
+    words: (file, env) => openWordLink(process.platform, file, env),
   });
 
   // A red disc drawn over a taskbar button on Windows, where no numeric badge exists.

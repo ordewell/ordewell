@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TerminalEvent } from '../../../shared/bridge';
-import { TerminalHost, validSize, type StartOptions } from '../TerminalHost';
+import { TerminalHost, validSize, type StartOptions, type WordChannel } from '../TerminalHost';
 import { fakeSpawn } from './fakePty';
 
 function setup() {
@@ -136,5 +136,45 @@ describe('TerminalHost', () => {
     const host = new TerminalHost(vi.fn(() => { throw new Error('no pty'); }));
     expect(() => host.start({ id: 1, owner: 1, file: 'x', args: [], cwd: '/', env: {}, cols: 1, rows: 1, send: vi.fn() })).toThrow('no pty');
     expect(host.size).toBe(0);
+  });
+
+  it('sends a linked shell\'s keys and chords through its word link, and closes the link with the shell (ADR-0069)', () => {
+    const { host, fake, sent, options } = setup();
+    let linked: (() => void) | undefined;
+    const words = (): WordChannel & { [K in keyof WordChannel]: ReturnType<typeof vi.fn> } => ({
+      attach: vi.fn((_pty, done: () => void) => { linked = done; }), write: vi.fn(), word: vi.fn(), dispose: vi.fn(),
+    });
+    const first = words();
+    host.start({ ...options(1), words: first });
+    expect(first.attach).toHaveBeenCalledWith(fake.ptys[0], expect.any(Function));
+    linked?.();
+    expect(sent).toEqual([{ id: 1, event: { kind: 'words' } }]);
+
+    host.write(1, 1, 'ls');
+    host.word(1, 1, 'left');
+    host.word(2, 1, 'right');
+    expect(first.write).toHaveBeenCalledWith('ls');
+    expect(fake.ptys[0]!.write).not.toHaveBeenCalled();
+    expect(first.word.mock.calls).toEqual([['left']]);
+    expect(() => host.word(1, 1, 'up')).toThrow(/left or right/);
+    expect(() => host.word(1, 1, undefined)).toThrow(/left or right/);
+
+    host.close(1, 1);
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    const second = words();
+    host.start({ ...options(2), words: second });
+    fake.ptys[1]!.exit(0);
+    expect(second.dispose).toHaveBeenCalledTimes(1);
+    const third = words();
+    host.start({ ...options(3), words: third });
+    host.killAll();
+    expect(third.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing with the chord for a shell without a link', () => {
+    const { host, fake, options } = setup();
+    host.start(options(1));
+    host.word(1, 1, 'left');
+    expect(fake.ptys[0]!.write).not.toHaveBeenCalled();
   });
 });

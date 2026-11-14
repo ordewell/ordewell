@@ -1,6 +1,8 @@
-/** Verify the disabled macOS chord through Electron and a real shell. */
+/** Verify the macOS word chord through Electron and a real shell (ADR-0069). */
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
 
 let sandbox: Sandbox | undefined;
@@ -38,7 +40,7 @@ test.afterAll(async () => {
 // Option is the word chord only on macOS; elsewhere it is Ctrl, which xterm sends as it is.
 test.skip(process.platform !== 'darwin', 'the Option chord is macOS\'s');
 
-test('Option+Left/Right leaves the shell line and subsequent input intact', async () => {
+test('Option+Left/Right moves by words in a linked zsh, and otherwise leaves the line and later input intact', async () => {
   if (!app || !sandbox) throw new Error('the app did not launch');
   let win: Page = await app.firstWindow();
   win = await openFolder(app, win, sandbox.repo);
@@ -65,6 +67,13 @@ test('Option+Left/Right leaves the shell line and subsequent input intact', asyn
   await win.keyboard.press('Control+Backquote');
   await expect(screen).toBeVisible();
   await expect.poll(async () => (await rows(screen)).some((row) => row.trim() !== '')).toBe(true);
+  // macOS's own zsh with no zshenv joins the link (the sandbox's HOME has none); any other
+  // login shell keeps the banner, and the chord must do nothing there.
+  const dotdir = process.env.ZDOTDIR ?? sandbox.home;
+  const linked = (process.env.SHELL || '/bin/zsh') === '/bin/zsh'
+    && !['/etc/zshenv', '/etc/zshenv.zwc', join(dotdir, '.zshenv'), join(dotdir, '.zshenv.zwc')].some((path) => existsSync(path));
+  await expect(win.locator('#terminal-word-keys')).toHaveCount(linked ? 0 : 1);
+  const expected = linked ? 'one two XYthree' : 'one two threeXY';
 
   // The login shell is the developer's, zsh or bash: each is put in the mode by its own command.
   for (const [mode, setup] of [['emacs', 'bindkey -e'], ['vi', 'bindkey -v']] as const) {
@@ -78,7 +87,7 @@ test('Option+Left/Right leaves the shell line and subsequent input intact', asyn
       await option('ArrowRight');
       await option('ArrowLeft');
       await win.keyboard.type('XY');
-      await ran('one two threeXY');
+      await ran(expected);
     });
   }
 });

@@ -28,6 +28,8 @@ export interface TerminalTab {
   phase: TabPhase;
   /** Why it failed to start, or how the process ended. */
   message: string | undefined;
+  /** Its shell joined the word link: Option+Left/Right moves by words at its prompt (ADR-0069). */
+  words: boolean;
 }
 
 export interface TerminalState {
@@ -53,6 +55,7 @@ interface Entry {
    * compared with what its shell has, not with what another tab's was told.
    */
   pty: { cols: number; rows: number } | undefined;
+  words: boolean;
   /** A login's waiters: the agent's status command is the verdict, not this exit. */
   ended(): void;
 }
@@ -137,11 +140,11 @@ export class TerminalStore {
     const key = `terminal-${++this.counter}`;
     let ended: () => void = () => undefined;
     const done = new Promise<void>((resolve) => { ended = resolve; });
-    const entry: Entry = { term: undefined, ptyId: undefined, closed: false, pty: undefined, ended };
+    const entry: Entry = { term: undefined, ptyId: undefined, closed: false, pty: undefined, words: false, ended };
     this.entries.set(key, entry);
     this.set({
       tabs: [...this.state.tabs, {
-        key, scope, repo, shell: undefined, name: options.name, phase: 'starting', message: undefined,
+        key, scope, repo, shell: undefined, name: options.name, phase: 'starting', message: undefined, words: false,
         scopeLabel: terminalLabel(scope, task, repo, scopes.repos.length),
       }],
       active: key,
@@ -151,6 +154,7 @@ export class TerminalStore {
       const term = await createTerm({
         onData: (data) => { if (entry.ptyId !== undefined) void window.ordewell.terminal.write(entry.ptyId, data); },
         onLink: (url) => { void window.ordewell.terminal.openLink(url); },
+        onWord: (direction) => { if (entry.ptyId !== undefined && entry.words) void window.ordewell.terminal.word(entry.ptyId, direction); },
         screenReaderMode: false,
         readClipboard: readClipboardText,
         writeClipboard: writeClipboardText,
@@ -197,10 +201,12 @@ export class TerminalStore {
   private onEvent(key: string, entry: Entry, event: TerminalEvent): void {
     if (entry.closed || !entry.term) return;
     if (event.kind === 'data') { entry.term.write(event.data); return; }
+    if (event.kind === 'words') { entry.words = true; this.patchTab(key, { words: true }); return; }
+    entry.words = false;
     const message = event.exitCode === 0 ? 'Process exited.' : `Process exited with code ${event.exitCode}.`;
     entry.term.write(`\r\n\x1b[2m[${message} Close this tab to dismiss it.]\x1b[0m\r\n`);
     entry.ptyId = undefined;
-    this.patchTab(key, { phase: 'exited', message });
+    this.patchTab(key, { phase: 'exited', message, words: false });
     entry.ended();
   }
 
