@@ -1,6 +1,7 @@
 import type { Task, Verdict, VerificationCheck } from '../models/Task';
 import type { IRunnerSession, ScriptExit, ScriptFullOutput, ScriptStatus } from '../interfaces/IRunner';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
+import { RUNNING_LONG_FLOOR_MS, RunningLongClock, type RunningLongFacts, type RunningLongThreshold } from './RunningLong';
 
 export type VerdictListener = (taskId: string, verdict: Verdict) => void;
 export type CheckpointListener = (taskId: string, summary: string) => void;
@@ -8,6 +9,13 @@ export type CheckpointListener = (taskId: string, summary: string) => void;
 export type CheckpointWithdrawnListener = (taskId: string) => void;
 /** Fires on every idleSince transition (null→timestamp on silence, timestamp→null on resume/teardown). */
 export type IdleListener = (taskId: string, idleSince: string | null) => void;
+/** A running AI attempt ran long or compacted on its own (ADR-0018 W1): advisory, it settles nothing. */
+export type RunningLongListener = (taskId: string, facts: RunningLongFacts) => void;
+
+export interface VerdictEngineOptions {
+  /** How long an attempt may run before it is flagged, read again as tasks pass; the floor alone when absent. */
+  runningLongThreshold?: () => RunningLongThreshold;
+}
 
 /**
  * No output for this long, with no tool call in flight, marks a running task
@@ -66,6 +74,14 @@ export class VerdictEngine {
    * was flagged again after every line, and each flag woke the planner.
    */
   private idleFlags = new Map<string, number>();
+  /** The running time of each AI task's current attempt (ADR-0018 W1). */
+  private clocks = new Map<string, RunningLongClock>();
+  private runningLongListeners: RunningLongListener[] = [];
+  private readonly runningLongThreshold: () => RunningLongThreshold;
+
+  constructor(options: VerdictEngineOptions = {}) {
+    this.runningLongThreshold = options.runningLongThreshold ?? (() => ({ ms: RUNNING_LONG_FLOOR_MS }));
+  }
 
   onVerdict(listener: VerdictListener): void {
     this.listeners.push(listener);
@@ -83,6 +99,10 @@ export class VerdictEngine {
     this.idleListeners.push(listener);
   }
 
+  onRunningLong(listener: RunningLongListener): void {
+    this.runningLongListeners.push(listener);
+  }
+
   /** Advisory silence timestamp for a task, or null if it isn't idle. */
   getIdleSince(taskId: string): string | null {
     return this.idleSince.get(taskId) ?? null;
@@ -95,12 +115,31 @@ export class VerdictEngine {
   pauseIdle(taskId: string): void {
     this.idlePaused.add(taskId);
     this.clearIdle(taskId);
+    this.syncClock(taskId);
   }
 
   private resumeIdle(taskId: string): void {
     const gen = this.generations.get(taskId);
     if (!this.idlePaused.delete(taskId) || gen === undefined) return;
+    this.syncClock(taskId);
     this.touchIdle(taskId, gen);
+  }
+
+  /**
+   * An attempt's running time stops while it waits on a person, for input, a
+   * checkpoint or an approval, and goes on when it does. A tool call in flight
+   * is the runner working, so it counts.
+   */
+  private syncClock(taskId: string): void {
+    const clock = this.clocks.get(taskId);
+    if (!clock) return;
+    if (this.idlePaused.has(taskId) || this.openApprovals.get(taskId)?.size) clock.hold();
+    else clock.run();
+  }
+
+  private stopClock(taskId: string): void {
+    this.clocks.get(taskId)?.stop();
+    this.clocks.delete(taskId);
   }
 
   /** Restart the silence timer on fresh output; broadcasts the null transition if it was idle. */
@@ -158,6 +197,7 @@ export class VerdictEngine {
    */
   starting(taskId: string): void {
     const gen = this.bumpGeneration(taskId);
+    this.stopClock(taskId);
     this.idlePaused.delete(taskId);
     this.openApprovals.delete(taskId);
     this.openCalls.delete(taskId);
@@ -185,6 +225,16 @@ export class VerdictEngine {
     this.openCalls.delete(task.id);
     this.idleFlags.delete(task.id);
     this.touchIdle(task.id, gen);
+    this.stopClock(task.id);
+    // A script has its own timeoutMs, and a person's task has no runner (ADR-0018 W1).
+    const clock = task.type === 'ai' ? new RunningLongClock(this.runningLongThreshold, (facts) => {
+      if (this.generations.get(task.id) !== gen) return;
+      for (const l of this.runningLongListeners) l(task.id, facts);
+    }) : undefined;
+    if (clock) {
+      this.clocks.set(task.id, clock);
+      clock.run();
+    }
     session.onOutput(() => {
       if (this.generations.get(task.id) === gen) this.touchIdle(task.id, gen);
     });
@@ -213,6 +263,8 @@ export class VerdictEngine {
       else if (event.type === 'permission_decided' || event.type === 'permission_withdrawn') this.waitClosed(this.openApprovals, task.id, event.id, gen);
       else if (event.type === 'tool_call') this.waitOpened(this.openCalls, task.id, event.id);
       else if (event.type === 'tool_result') this.waitClosed(this.openCalls, task.id, event.id, gen);
+      else if (event.type === 'usage') clock?.usage(event.record);
+      else if (event.type === 'compaction') clock?.compaction(event.trigger, event.postTokens);
     });
     session.onTaskComplete((report, refuted) => this.signalComplete(task.id, gen, report, refuted));
     session.onScriptExit((exit) => this.signalScriptExit(task.id, gen, exit));
@@ -319,12 +371,14 @@ export class VerdictEngine {
     open.add(id);
     waits.set(taskId, open);
     this.clearIdle(taskId);
+    this.syncClock(taskId);
   }
 
   private waitClosed(waits: Map<string, Set<string>>, taskId: string, id: string, gen: number): void {
     const open = waits.get(taskId);
     if (!open?.delete(id) || open.size) return;
     waits.delete(taskId);
+    this.syncClock(taskId);
     this.touchIdle(taskId, gen);
   }
 
@@ -343,6 +397,7 @@ export class VerdictEngine {
     this.openApprovals.delete(taskId);
     this.openCalls.delete(taskId);
     this.idleFlags.delete(taskId);
+    this.stopClock(taskId);
     this.clearIdle(taskId);
   }
 
@@ -388,6 +443,8 @@ export class VerdictEngine {
     this.openApprovals.clear();
     this.openCalls.clear();
     this.idleFlags.clear();
+    for (const clock of this.clocks.values()) clock.stop();
+    this.clocks.clear();
     this.generations.clear();
   }
 }

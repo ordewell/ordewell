@@ -104,6 +104,18 @@ export function attachingLabel(task: { status: string; attaching?: 1 | 2 }): str
   return task.attaching === 2 ? "Connecting Ordewell's tools, retry" : "Connecting Ordewell's tools";
 }
 
+/**
+ * That a running attempt has run long or its runner's context compacted on
+ * its own (ADR-0018 W1); null otherwise. Advice, as a quiet task's flag is:
+ * the task still runs, and nothing about it was decided.
+ */
+export function runningLongLabel(task: { status: string; runningLong?: { compactions: number } | null }): string | null {
+  if (!isTaskRunning(task) || !task.runningLong) return null;
+  const { compactions } = task.runningLong;
+  if (compactions === 0) return 'Running long';
+  return `Running long, context compacted ${compactions === 1 ? 'once' : `${compactions} times`}`;
+}
+
 /** Runner requests a task waits on (ADR-0018, A1); null when none do. */
 export function approvalLabel(count: number | undefined): string | null {
   if (!count) return null;

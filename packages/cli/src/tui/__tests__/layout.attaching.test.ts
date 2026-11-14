@@ -45,3 +45,19 @@ describe('plan pane: a runner starting while Ordewell\'s tools attach (ADR-0025)
     expect(plain(next)).toContain('could not connect to Ordewell\'s tools');
   });
 });
+
+describe('plan pane: a running attempt that runs long (ADR-0018 W1)', () => {
+  const runningLong = { reason: 'duration' as const, elapsedMs: 1_800_000, thresholdMs: 1_800_000, compactions: 1, attempt: 1 };
+
+  it('says so on the row, beside the runner', () => {
+    expect(plain(joined(runTask({ runningLong })))).toContain('running long, context compacted once · claude-code');
+  });
+
+  it('drops it once a status update no longer carries it', () => {
+    const state = joined(runTask({ runningLong }));
+
+    const next = reduce(state, { type: 'runMessage', message: { type: 'status_update', tasks: [{ id: 't1', status: 'in_progress', verdict: null }] }, sessionId: 's1' }).state;
+
+    expect(plain(next)).not.toContain('running long');
+  });
+});

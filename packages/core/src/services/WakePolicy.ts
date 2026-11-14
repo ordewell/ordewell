@@ -1,5 +1,6 @@
 import { flattenTasks, type Task, type TurnAuthority } from '../models/Task';
 import type { StartWait, StartWaitKind } from './readiness';
+import type { RunningLongEvent } from './RunningLong';
 
 /**
  * When the supervisor wakes during a run (#27, ADR-0057 R4). The decision is
@@ -23,6 +24,7 @@ export type RunEventKind =
   | 'waiting_approval'
   | 'approval_denied'
   | 'task_idle'
+  | 'running_long'
   | 'landing_conflict'
   | 'landing_failed'
   | 'usage_limit'
@@ -45,6 +47,8 @@ export type RunEvent = {
   taskIds?: string[];
   /** `task_report` only: the result the planner asked for. */
   report?: TaskReportEvent;
+  /** `running_long` only: how long the attempt has run against what, and its context (ADR-0018 W1). */
+  runningLong?: RunningLongEvent;
 };
 
 /** What a digest says between a task and its report, which a surface finds the report by to draw it apart from the update's other lines. */
@@ -67,7 +71,7 @@ export interface WakeBatch {
 }
 
 /** The events no one is waiting on: held until the plan or the cache says it is time, or an Act supervisor can retry a failure (ADR-0057 R4). */
-const HELD_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['task_failed', 'task_idle']);
+const HELD_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['task_failed', 'task_idle', 'running_long']);
 
 /** Whether an event is held rather than waking at once. */
 export function isHeldEvent(event: Pick<RunEvent, 'kind'>): boolean {
@@ -291,6 +295,15 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
       // silence and output is one fact, while two waiting_input events are two
       // questions.
       if (event.kind === 'task_idle' && attention.some((e) => e.kind === 'task_idle' && e.taskId === event.taskId)) return;
+      // A task still running long is one fact too, but its latest flag says the
+      // most; it keeps the first one's stamp, so a later flag cannot hold the wake off.
+      if (event.kind === 'running_long') {
+        const at = attention.findIndex((e) => e.kind === 'running_long' && e.taskId === event.taskId);
+        if (at >= 0) {
+          attention = attention.map((e, i) => (i !== at ? e : { ...event, at: e.at }));
+          return;
+        }
+      }
       if (event.kind === 'run_finished' && attention.some((e) => e.kind === 'run_finished')) return;
       if (event.kind === 'usage_limit') {
         // One limit is one fact however many of its runner's tasks it pauses:

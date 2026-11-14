@@ -16,6 +16,7 @@ import { canContinue } from './continuation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
 import { blockingFailures, type BlockingSubject } from './blocking';
 import type { SkipOrigin } from '../models/SkipOrigin';
+import type { RunningLongEvent } from './RunningLong';
 
 export type SerializedTaskStatus = {
   id: string;
@@ -40,6 +41,12 @@ export type SerializedTaskStatus = {
    * miss holds the task, which `holdReason` says.
    */
   attaching?: 1 | 2;
+  /**
+   * The live attempt's latest running-long flag (ADR-0018 W1): advisory, as
+   * `idleSince` is. Absent until it runs long or compacts on its own, and once
+   * the attempt ends.
+   */
+  runningLong?: RunningLongEvent;
   /** Absent unless the plan has an isolation run, so a shared-root plan's updates are unchanged. */
   isolation?: TaskIsolation;
   /** What an `awaiting_user` task waits on, when it was saved (ADR-0018, W1). */
@@ -412,7 +419,7 @@ export type PlanSnapshot = { type: 'plan_snapshot'; plan: SurfacePlan | SurfaceP
 /** What only the status stream says about a task; a plan refresh keeps these as they were. */
 export type RunTaskStatus = Partial<Pick<
   SerializedTaskStatus,
-  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'attempted' | 'delegation'
+  'verdict' | 'idleSince' | 'completionReceived' | 'attaching' | 'runningLong' | 'isolation' | 'checkpoint' | 'queued' | 'continuable' | 'awaitingApproval' | 'mergeGate' | 'forcedPastGate' | 'waitsForApproval' | 'holdReason' | 'loopStranded' | 'handoff' | 'attempted' | 'delegation'
 >>;
 
 /** A task in the run view: the plan's fields, then the status stream's. */
@@ -542,6 +549,8 @@ export interface TaskStatusFacts {
   completionReceived: Verdict['reported'] | null;
   /** Which spawn of a starting runner waits for Ordewell's tools: 1, or 2 after its one respawn. */
   attaching: 1 | 2 | null;
+  /** The live attempt's latest running-long flag. */
+  runningLong: RunningLongEvent | null;
   /** A loop's check between rounds that nothing will run. */
   loopStranded: boolean;
   /** A delegated task's row: its child's tasks, what is left of its budget, a Stop still winding down. */
@@ -561,6 +570,7 @@ export function serializeTaskStatus(
     holdReason = null,
     completionReceived = null,
     attaching = null,
+    runningLong = null,
     loopStranded = false,
     delegation = undefined,
   }: Partial<TaskStatusFacts> = {},
@@ -575,6 +585,7 @@ export function serializeTaskStatus(
     idleSince,
     ...(completionReceived ? { completionReceived } : {}),
     ...(attaching ? { attaching } : {}),
+    ...(runningLong ? { runningLong } : {}),
     ...(t.attempted ? { attempted: true as const } : {}),
     ...(t.attemptUsage ? { attemptUsage: structuredClone(t.attemptUsage) } : {}),
     ...(isolation ? { isolation } : {}),
