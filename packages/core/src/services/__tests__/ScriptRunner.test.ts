@@ -226,7 +226,8 @@ describe('ScriptRunner: a script with a #! line (ADR-0035)', () => {
     expect(run.output()).toBe('');
   });
 
-  it('fails, naming the interpreter, when an absolute #! path is not there', async () => {
+  // Windows reads a rooted bash or sh as the research shell's Git Bash (ADR-0010), so this path runs there; its twin below covers Windows.
+  it.skipIf(process.platform === 'win32')('fails, naming the interpreter, when an absolute #! path is not there', async () => {
     const run = await start({ script: '#!/opt/ordewell-nowhere/bash\necho unreachable' });
 
     const exit = await run.exit;
@@ -295,6 +296,15 @@ describe('ScriptRunner: a script with a #! line (ADR-0035)', () => {
         ['C:\\Git\\bin\\bash.exe', ['-e', '-c']],
         ['C:\\Git\\bin\\bash.exe', ['-e', '-c']],
       ]);
+    });
+
+    it('fails naming the interpreter when a drive #! path is not there', async () => {
+      const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+      const run = await start({ script: '#!C:\\nowhere\\bash.exe\ntrue' }, { deps: { spawn, platform: 'win32', shell: () => winShell, launch: { exists: () => false } } });
+
+      const exit = await run.exit;
+      expect(exit.outcome === 'failed' && exit.status.error).toMatch(/could not find "C:\\nowhere\\bash\.exe"/);
+      expect(spawn).not.toHaveBeenCalled();
     });
 
     it('fails naming the interpreter when no Git Bash is there to be it', async () => {
