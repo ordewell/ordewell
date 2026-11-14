@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-11-14
+
+### Added
+
+- **A task that runs long is flagged.** An AI task's attempt that runs well
+  past what the plan's finished AI tasks took, or whose runner compacts its
+  context on its own, is flagged running long in its task row. It is advice,
+  not a verdict.
+
 ### Changed
 
 - **A run's notices now read as they do in the terminal.** The timeline says
@@ -9,6 +18,15 @@
   it is, and "Execution finished: 2/3 tasks complete · 1 failed." (or
   "stopped") when a run ends. A task that starts twice without a retry between
   is announced once.
+- **The planner's own reads in one turn are limited,** on by default; past the
+  limit it is told to delegate the rest to a research agent or task.
+  `plannerReadLimit` in the settings file or `ORDEWELL_PLANNER_READ_LIMIT`
+  changes or turns it off.
+- **A script task runs with the shell its `#!` line names,** and a turn that
+  fails on a transient provider error (a 5xx, a 429 or a dropped connection) is
+  retried.
+- **The model picker no longer colours a model by its family,** and text that
+  was smaller than 11px is now 11px.
 
 ### Fixed
 
@@ -23,7 +41,12 @@
 - **Queued messages now behave the same in the planner chat, a task chat and
   the terminal.** A turn's end and Send now (`Ctrl+Enter`, `Cmd+Enter` on macOS,
   or "Send all now") send everything queued as one message, in the order typed,
-  even with an empty input; Esc takes back only the newest.
+  even with an empty input; Esc takes back only the newest, and in a task chat
+  empties the queue before going back to the planner.
+- **The planner model picker holds while a planner switch is pending,** so the
+  previous runner's models and efforts can no longer be picked.
+- **Mark complete goes on with a run that had ended,** and a loop whose body
+  did not run no longer offers a check retry that would fail again at once.
 
 ## [0.13.1] - 2026-11-07
 

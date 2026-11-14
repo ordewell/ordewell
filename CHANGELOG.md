@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-11-14
+
 ### Added
 
 - **Contributors:** the installers are linted with one pinned shellcheck
@@ -19,6 +21,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   summary as an annotation, and `npm run test:bench` now fails an assertion
   that compares a native path with a POSIX spelling it would differ from on
   Windows.
+- **A task that runs long is flagged.** An AI task's attempt that runs well
+  past what the plan's finished AI tasks took (never under 30 minutes), or
+  whose runner compacts its context on its own, is flagged running long in the
+  terminal, VS Code and the desktop app. It is advice, not a verdict: the supervisor wakes on it as it does on an idle
+  task, and after a compaction Ordewell sends the runner its brief again.
 
 ### Changed
 
@@ -50,6 +57,37 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   finished: 2/3 tasks complete · 1 failed." (or "stopped"). A task that starts
   twice without a retry between no longer says so twice, in any of them. A
   stopped run's tally counts subtasks too, as the daemon's own tally does.
+- **Planner:** the planner's own reads in one turn are now limited, on by
+  default at 10 calls or 60 KB; past either it is told to delegate the rest to
+  a research agent or task. `plannerReadLimit` in the settings file (`false`,
+  or `{ calls, kb }`) or `ORDEWELL_PLANNER_READ_LIMIT` (`off`, or
+  `<calls>,<kb>`) changes it. Claude Code, Codex and ACP planners' native reads
+  count toward it.
+- **Runners are told to stop once their brief's done criterion holds:** commit,
+  call `task_complete`, and name further work in the handoff instead of doing it.
+- **A script task runs with the shell its `#!` line names** (bash, zsh, `env`
+  forms), and one without a `#!` runs with the shell the planner's own commands
+  use, rather than POSIX `sh`.
+- **A turn that fails on a transient provider error is retried:** a 5xx, a 429
+  or a dropped connection. A 4xx, quota or content-filter error is not, and the
+  wait for your input names the error.
+- **Merge all no longer waits for an ops task working outside the checkout,**
+  once you confirm. Automatic, supervisor and planner merges still wait for it.
+- **Queued messages now behave the same in the planner chat, a task chat and
+  the terminal.** A turn's end and Send now (`Ctrl+Enter`, `Cmd+Enter` on
+  macOS, or "Send all now") send everything queued as one message, in the order
+  typed, even with an empty input; Esc takes back only the newest, and in a task
+  chat empties the queue before going back to the planner.
+- **VS Code and the desktop app:** the model picker no longer colours a model
+  by its family, and text that was smaller than 11px is now 11px.
+- **Desktop app:** the Git sidebar browses a branch's history in place, with
+  Branches and History views, branches in folders by their `/`-names, coloured
+  graph lanes and file statuses, and one commit card on hover. Fetch, Pull and
+  Push show they are busy and refuse a second start. The Sessions list shows
+  every session's live run. The integrated terminal is reachable from the
+  activity bar, the command palette and Settings. Folders named on the command
+  line open at launch, the last session's windows reopen, and New Window is on
+  the app icon's menu as well as in the app.
 
 ### Fixed
 
@@ -80,6 +118,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   tmux, nested shells and custom key bindings never see it. A zsh with a
   zshenv, and other shells, keep the shortcut off, and the terminal says so.
   Previous translations could delete text or trigger application keybindings.
+- **`ordewell plan --yes` reports a plan as committed only once the planner
+  submitted one,** not when a turn ended without one.
+- **Mark complete goes on with a run that had ended,** and a loop whose body
+  did not run no longer offers a check retry that would fail again at once.
+- **A run whose planner has nothing left to start no longer ends in silence:**
+  the planner's reply is listed as a wait in Needs you.
+- **The planner model picker holds while a planner switch is pending,** so the
+  previous runner's models and efforts can no longer be picked.
+- **OpenCode 2.x:** usage is recorded for failed steps, subagents' steps and
+  steps that end late, each call once; a step in flight when a task completes
+  gets a short grace to end; a subagent Ordewell interrupted is reported as
+  stopped, not failed; and an interrupted research step keeps the digest it had
+  gathered.
 
 ## [0.13.1] - 2026-11-07
 
