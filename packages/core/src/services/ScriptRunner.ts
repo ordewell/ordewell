@@ -314,7 +314,9 @@ export class ScriptSession extends AbstractRunnerSession {
     const { name, words } = interpreterOf(shebang);
     const searchPath = this.setup.env.PATH ?? this.setup.env.Path;
     if (this.setup.platform !== 'win32') {
-      if (!findOnPath(name, searchPath)) throw new Error(interpreterMissing(shebang, name));
+      // A relative path is the kernel's to resolve where the script runs, not where the daemon does.
+      const located = name.includes('/') && !path.isAbsolute(name) ? path.resolve(this.setup.cwd, name) : name;
+      if (!findOnPath(located, searchPath)) throw new Error(interpreterMissing(shebang, name));
       if (!isShell(name)) throw new Error(notAShell(shebang, name));
       const [file, ...args] = shebangArgv(shebang, script);
       return { file, args, shell: false };

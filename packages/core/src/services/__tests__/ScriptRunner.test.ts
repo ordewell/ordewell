@@ -509,3 +509,32 @@ describe('ScriptRunner: a credential of its spawn env (ADR-0061, H1)', () => {
     expect(run.output()).toBe('key [REDACTED secret: 36 chars] done\nbad [REDACTED secret: 36 chars]\n');
   });
 });
+
+describe('ScriptRunner: #! lines the kernel runs (review 132)', () => {
+  it('runs #!/bin/sh - (the option terminator) as the kernel does', async () => {
+    const run = await start({ script: '#!/bin/sh -\necho hi' });
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(run.output()).toBe('hi\n');
+  });
+
+  it('runs #!/bin/bash -- as the kernel does', async () => {
+    const run = await start({ script: '#!/bin/bash --\necho hi' });
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(run.output()).toBe('hi\n');
+  });
+
+  it('runs #!/usr/bin/env -u NAME bash: env options that take a value are not the interpreter', async () => {
+    const run = await start({ script: '#!/usr/bin/env -u ORDEWELL_UNSET bash\necho hi' });
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(run.output()).toBe('hi\n');
+  });
+
+  it('finds a relative interpreter where the script runs, not in the daemon\'s cwd', async () => {
+    const cwd = workspace();
+    fs.mkdirSync(path.join(cwd, 'tools'));
+    fs.symlinkSync('/bin/sh', path.join(cwd, 'tools', 'sh'));
+    const run = await start({ script: '#!./tools/sh\necho hi' }, { cwd });
+    expect(await run.exit).toEqual({ outcome: 'passed' });
+    expect(run.output()).toBe('hi\n');
+  });
+});

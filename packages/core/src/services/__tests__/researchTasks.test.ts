@@ -316,3 +316,17 @@ describe('research starts (ADR-0037 R4)', () => {
     session.destroy();
   });
 });
+
+describe('a research-only first plan below Act (review 132)', () => {
+  it.each(['off', 'watch'] as const)('is extended at %s from the report turn its last report and the run end wake', async (supervisorLevel) => {
+    const env = await supervised([], { settings: { supervisorLevel } });
+    await userTurn(env);
+    await add(env, 1);
+    const [r] = research(env);
+    await until(() => env.run.spawnedIds().includes(r.id));
+    await report(env, r.id, 'done', 'Evidence: the cache key omits the tenant.');
+    await until(() => env.planner.calls.length === 2);
+    await land(env, [{ op: 'add', task: { title: 'Fix the cache', prompt: 'fix', sliceType: 'AFK' } }]);
+    expect(flattenTasks(env.session.planTasks).some((t) => t.title === 'Fix the cache')).toBe(true);
+  });
+});
