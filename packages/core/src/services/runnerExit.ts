@@ -38,11 +38,12 @@ const TRANSIENT_RE = /\bAPI Error: 5\d\d\b|\b(?:HTTP|status(?: code)?)[ :]*5\d\d
  * A router's words for any upstream failure, its status beside them. Only the
  * status says whose: a 4xx other than a throttle's 429 (a bad key, a context
  * too long) is the request's, and fails the same way on every try. A context
- * too long says so in words even where no status is printed. Reading a 4xx
+ * too long says so in words even where no status is printed, and OpenCode 2.x
+ * names a bad key or request by its type where it prints no status. Reading a 4xx
  * where there is none only asks the user sooner, so this errs wide.
  */
 const PROVIDER_ERROR_RE = /\bprovider returned error\b/i;
-const CLIENT_ERROR_RE = /(?:\bAPI Error:|\bHTTP(?:\/[\d.]+)?|\bstatus(?:[ _]?code)?|\berror|"(?:code|status|status_?code)"\s*:\s*"?)[ :]*4(?!29)\d\d\b|\b4(?!29)\d\d\s+provider returned error\b|\bmaximum context length\b|\bcontext[ _]length[ _]exceeded\b/i;
+const CLIENT_ERROR_RE = /(?:\bAPI Error:|\bHTTP(?:\/[\d.]+)?|\bstatus(?:[ _]?code)?|\berror|"(?:code|status|status_?code)"\s*:\s*"?)[ :]*4(?!29)\d\d\b|\b4(?!29)\d\d\s+provider returned error\b|\bprovider\.(?:auth|invalid-request)\b|\bmaximum context length\b|\bcontext[ _]length[ _]exceeded\b/i;
 
 /** A provider's throttle, once the runner's own field has said it is not the account's limit. */
 const THROTTLE_RE = /\brate[- ]?limit|\btoo many requests\b|\b429\b/i;

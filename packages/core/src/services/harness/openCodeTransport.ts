@@ -127,6 +127,23 @@ export function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** An OpenCode 2.x error frame's `error`: its status and type travel beside the words. */
+export interface V2Error { type?: string; message?: string; status?: unknown }
+
+/**
+ * A 2.x error's words with what says whose it is: the provider's HTTP status
+ * where the frame carries one, else its type where the words are the router's
+ * generic ones. A "Provider returned error" is retryable or the request's own
+ * only by that (ADR-0018 E1), and 1.x keeps it the same way (`errorText` in
+ * OpenCodeAdapter); words that say more than that stand as they are.
+ */
+export function v2ErrorText(error: V2Error | undefined): string | undefined {
+  const words = error?.message ?? error?.type;
+  if (!words) return undefined;
+  if (typeof error?.status === 'number' && Number.isInteger(error.status)) return `${words} (HTTP ${error.status})`;
+  return error?.type && error.type !== words && /\bprovider returned error\b/i.test(words) ? `${words} (${error.type})` : words;
+}
+
 /** One model call's token counts, as both versions report them. */
 export interface OpenCodeTokens {
   input?: number;

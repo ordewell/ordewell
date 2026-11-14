@@ -11,7 +11,7 @@ import type { ResearchProgress, ResearchStep } from '../../models/Task';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { McpCredential, McpToolContext, McpToolReply, OrdewellMcpServer, SpawnResearchAgentArgs } from '../mcp';
 import { onHostTeardown } from '../../utils/processTree';
-import { openCodeCall, openEventStream, withDeadline, REQUEST_TIMEOUT_MS, type EventStream, type OpenCodeTokens } from './openCodeTransport';
+import { openCodeCall, openEventStream, withDeadline, REQUEST_TIMEOUT_MS, v2ErrorText, type EventStream, type OpenCodeTokens, type V2Error } from './openCodeTransport';
 import { NO_TURN_OPEN, semaphore } from './harnessResearchAgent';
 import { RunnerProcess } from './runnerProcess';
 import { UsageRecordBuilder } from './usageBuilder';
@@ -286,7 +286,7 @@ interface Frame {
   data?: {
     sessionID?: string; parentID?: string; assistantMessageID?: string; id?: string; name?: string; text?: string;
     input?: Record<string, unknown>; content?: { type?: string; text?: string }[];
-    error?: { type?: string; message?: string }; model?: { id?: string; providerID?: string };
+    error?: V2Error; model?: { id?: string; providerID?: string };
     tokens?: OpenCodeTokens; cost?: number;
     /** On `session.usage.recorded`, the kind of call (a string); on a permission ask, the tool call (an object). */
     source?: unknown;
@@ -391,8 +391,8 @@ async function runOne(deps: OpenCodeResearchAgentDeps, brief: string, subagentId
     serve.json('POST', `/api/session/${sessionId}/interrupt`).catch(() => undefined);
   };
   const trip = (why: string) => { violation ??= why; interrupt(); };
-  const failed = (error: { type?: string; message?: string } | undefined) => {
-    const why = error?.message ?? error?.type ?? 'OpenCode failed the research session';
+  const failed = (error: V2Error | undefined) => {
+    const why = v2ErrorText(error) ?? 'OpenCode failed the research session';
     if (error?.type && UNUSABLE_ERRORS.has(error.type)) deps.onUnusable?.(`OpenCode could not run ${deps.model ?? 'the planner\'s model'} on this login (${error.type}: ${why})`);
     failure ??= why;
   };

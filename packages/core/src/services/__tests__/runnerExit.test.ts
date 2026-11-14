@@ -94,6 +94,9 @@ describe('classifyRunnerStop', () => {
     'Error 400: Provider returned error',
     "This model's maximum context length is 128000 tokens. Provider returned error",
     'Provider returned error: context_length_exceeded',
+    // OpenCode 2.x, where the frame carried a type and no status.
+    'Provider returned error (provider.auth)',
+    'Provider returned error (provider.invalid-request)',
   ])('does not read a transient error from %j', (message) => {
     expect(classifyRunnerStop({ message })).toBe('stopped');
   });
