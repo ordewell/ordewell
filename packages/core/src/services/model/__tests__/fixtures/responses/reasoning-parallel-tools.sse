@@ -1,0 +1,69 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"in_progress","output":[]},"sequence_number":0}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"in_progress","output":[]},"sequence_number":1}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[]},"sequence_number":2}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""},"sequence_number":3}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Reading both","sequence_number":4}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":" files.","sequence_number":5}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":0,"text":"Reading both files.","sequence_number":6}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","item_id":"rs_1","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"Reading both files."},"sequence_number":7}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","item_id":"rs_1","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":""},"sequence_number":8}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":1,"delta":"Then search.","sequence_number":9}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":1,"text":"Then search.","sequence_number":10}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"Reading both files."},{"type":"summary_text","text":"Then search."}],"encrypted_content":"gAAAAABo_encrypted_reasoning_blob_1"},"sequence_number":11}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_a","type":"function_call","status":"in_progress","call_id":"call_read_a","name":"read_file","arguments":""},"sequence_number":12}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":2,"item":{"id":"fc_b","type":"function_call","status":"in_progress","call_id":"call_grep_b","name":"grep","arguments":""},"sequence_number":13}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":1,"delta":"{\"path\":","sequence_number":14}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":2,"delta":"{\"pattern\":","sequence_number":15}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_a","output_index":1,"delta":"\"src/a.ts\"}","sequence_number":16}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_b","output_index":2,"delta":"\"TODO\"}","sequence_number":17}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_a","output_index":1,"arguments":"{\"path\":\"src/a.ts\"}","sequence_number":18}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_a","type":"function_call","status":"completed","call_id":"call_read_a","name":"read_file","arguments":"{\"path\":\"src/a.ts\"}"},"sequence_number":19}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_b","output_index":2,"arguments":"{\"pattern\":\"TODO\"}","sequence_number":20}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"id":"fc_b","type":"function_call","status":"completed","call_id":"call_grep_b","name":"grep","arguments":"{\"pattern\":\"TODO\"}"},"sequence_number":21}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"completed","output":[],"usage":{"input_tokens":5400,"input_tokens_details":{"cached_tokens":5120},"output_tokens":190,"output_tokens_details":{"reasoning_tokens":128},"total_tokens":5590}},"sequence_number":22}
+
