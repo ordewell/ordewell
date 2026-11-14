@@ -3,7 +3,7 @@ import type { ChildProcess } from 'child_process';
 import { CONNECTORS } from '../harness/connectors';
 import { RunnerProcess } from '../harness/runnerProcess';
 import type { AgentProcessDeps, AgentStartOptions } from '../harness/AgentAdapter';
-import { fakeSpawn, type FakeAgentProcess } from './harnessTestKit';
+import { fakeSpawn, spawnedConnectors, type FakeAgentProcess } from './harnessTestKit';
 import { FAKE_RUNNERS } from './fakeRunners';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -107,10 +107,10 @@ afterEach(() => {
 });
 
 it('has a refusal for every connector', () => {
-  expect(Object.keys(REFUSED).sort()).toEqual(Object.keys(CONNECTORS).sort());
+  expect(Object.keys(REFUSED).sort()).toEqual(spawnedConnectors().sort());
 });
 
-describe.each(Object.keys(CONNECTORS))('the %s adapter', (runner) => {
+describe.each(spawnedConnectors())('the %s adapter', (runner) => {
   it('leaves no live process behind a start that was refused', async () => {
     const adapter = CONNECTORS[runner].create(tracked(REFUSED[runner].deps()));
 

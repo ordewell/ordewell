@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
 import { RESEARCH_READ_TOOLS, type ResearchToolHandler } from './researchReadTools';
-import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, taskToolSet, toolListing, type McpTool, type PlannerToolHandler, type TaskToolHandler } from './tools';
+import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, taskToolSet, toolListing, type McpTool, type McpToolReply, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
 /**
  * The Ordewell MCP server (ADR-0022): one loopback listener per process,
@@ -83,6 +83,24 @@ export interface McpCredential {
    * server did not issue (a test double), whose holder has no such evidence.
    */
   contact?: McpContact;
+  /**
+   * The same tools, called in this process: for a runner that runs inside
+   * Ordewell and has no MCP client of its own (ADR-0070). Each call reaches
+   * the grant the token names, so a revoke ends it as it ends an HTTP call.
+   */
+  inProcess?: InProcessTools;
+}
+
+/**
+ * A task token's tools without the HTTP hop (ADR-0070, amending ADR-0022 S2):
+ * the listing `tools/list` would answer with and a call that validates and
+ * dispatches exactly as `tools/call` does. Completion stays the token-bound
+ * `task_complete`, since the call goes through the grant, not around it.
+ */
+export interface InProcessTools {
+  list(): ReturnType<typeof toolListing>;
+  /** Never throws for a tool's failure or a revoked token: either is an `isError` reply. */
+  call(name: string, args: unknown, signal: AbortSignal): Promise<McpToolReply>;
 }
 
 /**
@@ -199,7 +217,12 @@ export class OrdewellMcpServer {
 
   async issueTaskToken(scope: TaskTokenScope, handler: TaskToolHandler = {}): Promise<McpCredential> {
     const credential = await this.issue({ role: 'task', scope: { ...scope }, handler, revoked: new AbortController(), calls: new Map(), contact: new ContactRecord() });
-    return { ...credential, ...(scope.readOnly ? { readOnly: true } : {}), ...(scope.board ? { extraTools: ['post'] } : {}) };
+    return {
+      ...credential,
+      ...(scope.readOnly ? { readOnly: true } : {}),
+      ...(scope.board ? { extraTools: ['post'] } : {}),
+      inProcess: this.inProcessTaskTools(credential.token, scope),
+    };
   }
 
   async issuePlannerToken(scope: PlannerTokenScope, handler: PlannerToolHandler = {}): Promise<McpCredential> {
@@ -251,6 +274,26 @@ export class OrdewellMcpServer {
     // to answer; close() alone would wait on it.
     http.closeAllConnections();
     await new Promise<void>((resolve) => http.close(() => resolve()));
+  }
+
+  private inProcessTaskTools(token: string, scope: TaskTokenScope): InProcessTools {
+    const tools = taskToolSet(scope);
+    const inventory = taskInventory(scope);
+    return {
+      list: () => toolListing(tools),
+      call: async (name, args, signal) => {
+        const grant = this.grants.get(token);
+        if (grant?.role !== 'task') return { text: 'This attempt has ended: its tools are no longer served.', isError: true };
+        grant.contact.mark();
+        const tool = tools.find((t) => t.name === name || t.alias === name);
+        if (!tool) return { text: unknownToolMessage(name, inventory), isError: true };
+        try {
+          return await tool.call(grant.handler, args, { signal: AbortSignal.any([grant.revoked.signal, signal]) });
+        } catch (err) {
+          return { text: err instanceof Error ? err.message : String(err), isError: true };
+        }
+      },
+    };
   }
 
   private async issue(grant: Grant): Promise<McpCredential> {

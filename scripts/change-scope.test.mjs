@@ -411,7 +411,7 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/pipeline/fake-opencode/fake-opencode.mjs', {}, {}, ['engine']],
     ['bench/pipeline/fake-provider/fake-provider.mjs', {}, {}, ['engine']],
     ['bench/pipeline/drive-pipeline.mjs', {}, {}, ['bench', 'harness']],
-    ['bench/live/mock-provider.mjs', {}, {}, ['binary', 'desktop', 'harness', 'planner', 'tour']],
+    ['bench/live/mock-provider.mjs', { [CORE]: 'full' }, { [CORE]: 'full' }, ['binary', 'desktop', 'harness', 'merge', 'planner', 'suites', 'tour', 'windows']],
     ['bench/live/scenarios.mjs', {}, {}, ['binary', 'desktop', 'harness', 'planner', 'tour']],
     ['bench/live/drive-conversation.mjs', {}, {}, ['harness', 'planner']],
     ['bench/live/drive-taskops.mjs', {}, {}, ['harness', 'planner']],

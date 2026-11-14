@@ -7,6 +7,7 @@ import { QWEN_CODE_MANIFEST } from './qwen.manifest';
 import { CLINE_MANIFEST } from './cline.manifest';
 import { GEMINI_CLI_MANIFEST } from './gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from './cursor-agent.manifest';
+import { ORDEWELL_MANIFEST } from './ordewell.manifest';
 
 /**
  * The built-in runners, by manifest. With a runner's entry in `CONNECTORS`,
@@ -23,4 +24,5 @@ export const BUILTIN_MANIFESTS: readonly RunnerManifest[] = [
   CLINE_MANIFEST,
   GEMINI_CLI_MANIFEST,
   CURSOR_AGENT_MANIFEST,
+  ORDEWELL_MANIFEST,
 ];

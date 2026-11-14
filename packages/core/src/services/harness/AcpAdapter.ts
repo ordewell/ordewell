@@ -36,6 +36,7 @@ import { compareVersions } from '../../utils/version';
 import { describeSignIn, signInOf, TERMINAL_UI_SIGN_IN } from '../signInHint';
 import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
 import { dirname } from 'path';
+import { spawnedCommand } from '../../plugins/types';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 import { TurnOutcome } from './turnOutcome';
 
@@ -303,7 +304,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     // Every process starts without the contract, a resumed one included, so
     // its first prompt carries it again.
     this.preamble = instructions.kind === 'prompt' ? contract : null;
-    return { command: this.profile.manifest.runner.command, args, env, ...(files.length ? { files } : {}), ...(this.startDir ? { cwd: this.startDir } : {}) };
+    return { command: spawnedCommand(this.profile.manifest), args, env, ...(files.length ? { files } : {}), ...(this.startDir ? { cwd: this.startDir } : {}) };
   }
 
   /**

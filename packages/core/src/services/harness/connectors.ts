@@ -19,6 +19,9 @@ import { QWEN_CODE_PROFILE } from './qwenProfile';
 import { CLINE_PROFILE } from './clineProfile';
 import { GEMINI_CLI_PROFILE } from './geminiProfile';
 import { CURSOR_AGENT_PROFILE } from './cursorProfile';
+import { OrdewellAdapter } from './ordewell/OrdewellAdapter';
+import { ORDEWELL_REPO_CONFIG } from './ordewell/repoConfig';
+import { prefixedToolNames } from './ordewellBinding';
 
 /**
  * One runner's connector: the adapter that drives it over its programmatic
@@ -85,6 +88,15 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   cline: acpConnector(CLINE_PROFILE),
   'gemini-cli': acpConnector(GEMINI_CLI_PROFILE),
   'cursor-agent': acpConnector(CURSOR_AGENT_PROFILE),
+  // In-process (ADR-0070): no MCP client, so its tools carry their own names,
+  // nothing it asks is an Ordewell tool's request, and it is attached once started.
+  ordewell: {
+    create: (deps) => new OrdewellAdapter(deps),
+    plans: false,
+    ordewellTools: { ...prefixedToolNames(''), plannerHidden: () => [], isOrdewellAsk: () => false, attachState: (status) => (status === 'connected' ? 'connected' : 'failed') },
+    repoConfig: ORDEWELL_REPO_CONFIG,
+    signInRoute: { provider: 'openrouter', others: 'any other provider key in Ordewell' },
+  },
 };
 
 /** The connector for a runner id; undefined for an unknown id (including `toString`). */

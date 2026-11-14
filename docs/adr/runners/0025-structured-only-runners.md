@@ -19,11 +19,14 @@ on PATH. Keeping the obsolete path no longer serves a supported runner.
 ## Decision
 
 **Ordewell drives runners only through structured connectors: the native
-`claude-code`, `codex` and `opencode` connectors, and the one ACP connector
+`claude-code`, `codex` and `opencode` connectors, the one ACP connector
 that drives `copilot-cli`
-([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)). Ordewell's MCP
+([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), and the built-in
+`ordewell` runner's in-process connector
+([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)). Ordewell's
 tools must be connected for every coding-agent session, both task runners and
-coding-agent planners.**
+coding-agent planners: over MCP, or, for the in-process runner, as the token's
+own handlers called in this process.**
 
 - Check the runner's MCP attach state after spawn, and a coding-agent planner's
   again before every turn. If attachment fails, dispose the process and its
@@ -52,8 +55,9 @@ coding-agent planners.**
   session methods. Mid-turn steering remains an optional adapter feature;
   an adapter without it uses the turn-end queue (ADR-0023).
 - Remove terminal transport, PTY/tmux machinery, plugin runners and their
-  install/list commands. Built-in manifests hold identity, command, discovery
-  and mode settings; terminal-only invocation fields are absent. Leftover
+  install/list commands. Built-in manifests hold identity, command (or
+  `inProcess`, ADR-0070), discovery and mode settings; terminal-only
+  invocation fields are absent. Leftover
   manifests in `~/.ordewell/plugins/` are ignored, with one notice at host
   startup. No unknown runner is silently routed to a terminal.
 - Task logs are the inspection surface: Enter on a task in the TUI's plan pane,
@@ -257,3 +261,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-11-04 — the rule is that no result is accepted without tools, not that no prompt is sent without them: an ACP runner that attaches on its first turn is sent the task as the check, and that turn is discarded unless the server was contacted before it ended (ADR-0060 R5).
 - 2026-11-04 — Cursor's CLI was found to connect the servers `session/new` hands it over ACP, beyond the `.cursor/mcp.json` servers it documents.
 - 2026-11-05 — a coding-agent planner on an ACP runner that attaches on its first turn sends its goal or message as the check, its turn discarded unheard and failed when the server was not contacted before it ended (ADR-0060 R5).
+- 2026-11-14 — the built-in `ordewell` runner joins the structured connectors; its tools are the token's handlers called in-process, and its completion is still a token-bound `task_complete` (ADR-0070).
