@@ -44,7 +44,9 @@ async function capture(fn: () => Promise<void>): Promise<{ stdout: string; stder
 }
 
 const RUNNERS = { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], headless: false, orchestratorModel: 'x' };
-const COMMITTED = { tasks: [{ id: 't1', order: 1, title: 'Do the thing', type: 'ai' }], runners: ['claude-code'] };
+// A conversation's plan is committed once its history holds the marker the host writes on submit_plan.
+const SUBMITTED = [{ role: 'assistant', content: 'Plan generated with 1 task.', timestamp: '2026-01-01T00:00:00Z', kind: 'plan_generated' }];
+const COMMITTED = { tasks: [{ id: 't1', order: 1, title: 'Do the thing', type: 'ai' }], runners: ['claude-code'], conversationHistory: SUBMITTED };
 const WITH_SUBTASKS = {
   tasks: [
     {
@@ -56,6 +58,7 @@ const WITH_SUBTASKS = {
     },
   ],
   runners: ['claude-code'],
+  conversationHistory: SUBMITTED,
 };
 
 /** Serves /api/runners plus whatever plan payloads the test queues up. */
@@ -272,6 +275,7 @@ describe('handlePlan', () => {
         { id: 't3', order: 3, title: 'Clean up', type: 'script', script: 'rm -rf dist\nls', ops: undefined },
       ],
       runners: ['claude-code'],
+      conversationHistory: SUBMITTED,
     };
     const srv = await planServer({ '/converse/start': { plan: withScript } }, []);
     const { handlePlan } = await import('../plan');
@@ -302,6 +306,7 @@ describe('handlePlan', () => {
         { id: 't3', order: 3, title: 'Sign off', type: 'user', assignedRunner: 'opencode' },
       ],
       runners: ['claude-code'],
+      conversationHistory: SUBMITTED,
     };
     const srv = await planServer({ '/converse/start': { plan: stored } }, []);
     const { handlePlan } = await import('../plan');
@@ -321,6 +326,7 @@ describe('handlePlan', () => {
         { id: 't2', order: 2, title: 'Build', type: 'ai' },
       ],
       runners: ['claude-code'],
+      conversationHistory: SUBMITTED,
     };
     const srv = await planServer({ '/converse/start': { plan: withResearch } }, []);
     const { handlePlan } = await import('../plan');
@@ -341,6 +347,7 @@ describe('handlePlan', () => {
         { id: 't3', order: 3, title: 'Fix the failures', type: 'ai', dependencies: ['t2'] },
       ],
       runners: ['claude-code'],
+      conversationHistory: SUBMITTED,
     };
     const srv = await planServer({ '/converse/start': { plan: withLoop } }, []);
     const { handlePlan } = await import('../plan');
@@ -450,6 +457,39 @@ describe('handlePlan', () => {
     expect(hits.filter((h) => h.includes('/converse/message'))).toHaveLength(2);
     expect(stdout).toContain('Do the thing');
     expect(savedSessions).toHaveLength(1);
+    srv.close();
+  });
+
+  it('keeps answering when the only tasks are script probes the planner ran itself, until it submits a plan', async () => {
+    const probe = { id: 'p1', order: 1, title: 'Probe the schema', type: 'script', status: 'completed' };
+    const asked = {
+      tasks: [probe],
+      conversationHistory: [
+        { role: 'user', content: 'ship it' },
+        { role: 'assistant', content: 'Here is an outline. Shall I submit it?' },
+      ],
+    };
+    const submitted = {
+      tasks: [probe, { id: 't1', order: 2, title: 'Do the thing', type: 'ai' }],
+      runners: ['claude-code'],
+      conversationHistory: [
+        ...asked.conversationHistory,
+        { role: 'user', content: 'yes' },
+        { role: 'assistant', content: 'Plan generated with 1 task.', kind: 'plan_generated' },
+      ],
+    };
+    const hits: string[] = [];
+    const srv = await planServer({ '/converse/start': { plan: asked }, '/converse/message': { plan: submitted } }, hits);
+    const questions: string[] = [];
+    const reader = { ask: async (q: string) => { questions.push(q); return 'yes'; }, close: () => {} };
+    const { handlePlan } = await import('../plan');
+    const { stdout } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp', '--yes'], { api: new ApiClient(srv.port), reader }),
+    );
+    expect(stdout).toContain('Shall I submit it?');
+    expect(questions).toHaveLength(1);
+    expect(hits.filter((h) => h.includes('/converse/message'))).toHaveLength(1);
+    expect(stdout).toContain('Do the thing');
     srv.close();
   });
 
