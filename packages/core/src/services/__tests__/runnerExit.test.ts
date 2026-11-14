@@ -88,6 +88,12 @@ describe('classifyRunnerStop', () => {
     'API Error: 403 Provider returned error',
     '{"error":{"message":"Provider returned error","code":400,"metadata":{"raw":"maximum context length exceeded"}}}',
     '{"error":{"message":"Provider returned error","code":401}}',
+    '{"error":{"message":"Provider returned error","code":"400"}}',
+    'Provider returned error (statusCode: 400)',
+    'Provider returned error (HTTP 401)',
+    'Error 400: Provider returned error',
+    "This model's maximum context length is 128000 tokens. Provider returned error",
+    'Provider returned error: context_length_exceeded',
   ])('does not read a transient error from %j', (message) => {
     expect(classifyRunnerStop({ message })).toBe('stopped');
   });
