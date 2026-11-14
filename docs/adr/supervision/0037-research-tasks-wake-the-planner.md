@@ -123,11 +123,10 @@ before the turn ends.**
     full report with `task_output` only where the plan rests on the detail.
   - *A first plan may be research tasks alone*, when the plan cannot be
     outlined without their evidence: its outline says in a line what each
-    asks, they start as R4 says, and with the supervisor at Act the planner
-    plans the rest when their reports wake it. Below Act a wake-up cannot
-    extend the plan, so the first plan holds the work the research feeds, or
-    the planner tells the user they will be asked to continue once the reports
-    are in. A vague goal the user can clarify is not one: the planner asks
+    asks, they start as R4 says, and the planner plans the rest when their
+    reports wake it. That holds at every supervisor level: a report turn keeps
+    the authority of the user's turn that added its research
+    ([ADR-0029](0029-the-supervisor.md)). A vague goal the user can clarify is not one: the planner asks
     first.
   - *Search*, a problem that needs rounds of branching where each round's
     reports decide the next, is the `explore` skill: rounds of research tasks.
@@ -223,4 +222,4 @@ before the turn ends.**
 - 2026-11-09 — who explores is three tiers: the planner reads the project's guides, a map and targeted lookups itself, sends wider questions to in-turn agents returning digests, and gives tasks what needs a worktree, another model, the user's sight or a later task's action; the context rule and session freshness join it (R5).
 - 2026-11-10 — the agent tier gets a checkable trigger (more than one package or directory tree, or about ten reads for one question), and a planner without agents delegates past it to research tasks instead of reading (R5).
 - 2026-11-10 — the agent tier is decided per area before reading, not by a count of reads, and the prompt names each backend's route (Codex's `spawn_agent`) (R5).
-- 2026-11-14 — a research-only first plan leaves the rest to the report wake-ups only at Act; below Act it holds the work the research feeds or tells the user they will be asked to continue (R5).
+- 2026-11-14 — a research-only first plan leaves the rest to its report turns at every supervisor level, since they keep the authority of the user's turn that added the research; a same-day claim that below Act it must hold the work the research feeds is withdrawn (R5).

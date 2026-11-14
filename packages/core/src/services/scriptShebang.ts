@@ -29,16 +29,32 @@ export function shebangOf(script: string): Shebang | null {
   return program ? { line: first, program, words } : null;
 }
 
+/** `env`'s options whose value is the next word, which names no interpreter. */
+const ENV_VALUED: ReadonlySet<string> = new Set(['-u', '--unset', '-C', '--chdir', '-P']);
+
 /**
  * The interpreter a `#!` line comes to, as a bare name or an absolute path,
  * and the words that follow it. `/usr/bin/env bash -e` is bash with `-e`: `env`
- * only looks the name up, its own options (`-S`, `-i`, `NAME=value`) are
- * skipped.
+ * only looks the name up, its own options (`-S`, `-i`, `-u NAME`,
+ * `NAME=value`) are skipped.
  */
 export function interpreterOf(shebang: Shebang): { name: string; words: string[] } {
-  if (baseName(shebang.program) !== 'env') return { name: shebang.program, words: shebang.words };
-  const at = shebang.words.findIndex((word) => !word.startsWith('-') && !word.includes('='));
-  return at < 0 ? { name: shebang.program, words: [] } : { name: shebang.words[at], words: shebang.words.slice(at + 1) };
+  if (baseName(shebang.program) !== 'env') return { name: shebang.program, words: shellWords(shebang.words) };
+  for (let at = 0; at < shebang.words.length; at++) {
+    const word = shebang.words[at];
+    if (ENV_VALUED.has(word)) at++;
+    else if (!word.startsWith('-') && !word.includes('=')) return { name: word, words: shellWords(shebang.words.slice(at + 1)) };
+  }
+  return { name: shebang.program, words: [] };
+}
+
+/**
+ * The line's words as they can stand before `-c`. `#!/bin/sh -` and
+ * `#!/bin/bash --` end the shell's options for the kernel, which puts the file
+ * after them; before `-c` they would make `-c` the script's name instead.
+ */
+function shellWords(words: string[]): string[] {
+  return words.filter((word) => word !== '-' && word !== '--');
 }
 
 function baseName(file: string): string {
@@ -61,7 +77,7 @@ export function notAShell(shebang: Shebang, name: string): string {
  * words and the body.
  */
 export function shebangArgv(shebang: Shebang, script: string): string[] {
-  return [shebang.program, ...shebang.words, '-c', script];
+  return [shebang.program, ...shellWords(shebang.words), '-c', script];
 }
 
 /** A message naming the interpreter that was not found. */
