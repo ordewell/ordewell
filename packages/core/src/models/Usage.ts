@@ -312,6 +312,12 @@ export interface AttemptUsage extends PlannerUsage {
   startedAt: string;
   endedAt?: string;
   wallTimeMs: number;
+  /**
+   * Of its wall time, what it spent running: a wait on a person (input, a
+   * checkpoint, an approval) left out (ADR-0018 W1). Absent on an attempt
+   * saved before it was kept, and on one that never had a clock.
+   */
+  runningMs?: number;
   /** What was counted of its runner session's running cost as it ended: a continue of that session counts on from it. */
   runnerSessionCost?: RunnerSessionCost;
 }
@@ -327,12 +333,13 @@ export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: s
 }
 
 /** An attempt ends once; ended again once its runner wound down, it only takes the count that runner ended on. */
-export function endAttemptUsage(usage: AttemptUsage, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string): AttemptUsage {
+export function endAttemptUsage(usage: AttemptUsage, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string, runningMs?: number): AttemptUsage {
   const endedAt = usage.endedAt ?? now;
   return {
     ...usage,
     endedAt,
     wallTimeMs: Math.max(0, Date.parse(endedAt) - Date.parse(usage.startedAt)),
+    ...(usage.runningMs === undefined && runningMs !== undefined ? { runningMs } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(runnerSessionCost ? { runnerSessionCost } : {}),
   };

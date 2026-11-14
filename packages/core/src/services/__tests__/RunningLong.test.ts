@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VerdictEngine } from '../VerdictEngine';
-import { runningLongThreshold, type RunningLongFacts } from '../RunningLong';
+import { RunningLongClock, runningLongThreshold, type RunningLongFacts } from '../RunningLong';
 import { createTask, type Task } from '../../models/Task';
 import { FakeRunnerSession } from '../../testing';
 
@@ -50,7 +50,16 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     expect(flags).toEqual([]);
     vi.advanceTimersByTime(1);
 
-    expect(flags).toEqual([{ taskId: 't9', reason: 'duration', elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE, basis: { taskId: 'b', wallTimeMs: 20 * MINUTE }, compactions: 0 }]);
+    expect(flags).toEqual([{ taskId: 't9', reason: 'duration', elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE, basis: { taskId: 'b', runningMs: 20 * MINUTE }, compactions: 0 }]);
+  });
+
+  it('reads a passed attempt\'s running time, not its wall time, which counts its waits on a person', () => {
+    // 5 minutes running over a night's wait for input: the floor holds.
+    const overnight = passed('a', 10 * 60);
+    overnight.attemptUsage![0].runningMs = 5 * MINUTE;
+
+    expect(runningLongThreshold([overnight])).toEqual({ ms: 30 * MINUTE });
+    expect(runningLongThreshold([overnight, passed('b', 20)])).toEqual({ ms: 60 * MINUTE, basis: { taskId: 'b', runningMs: 20 * MINUTE } });
   });
 
   it('keeps the floor when three times the longest passed task is shorter', () => {
@@ -141,6 +150,28 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     });
   });
 
+  it('leaves the live context unknown after a compaction that states no size, as Codex and OpenCode report one', () => {
+    const { session, flags } = watched();
+
+    session.emitEvent({ type: 'usage', record: { source: 'codex', model: 'gpt-5', contextTokens: 190_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'compaction', trigger: 'auto' });
+    session.emitEvent({ type: 'usage', record: { source: 'codex', compacted: true } });
+    vi.advanceTimersByTime(30 * MINUTE);
+
+    expect(flags.map((f) => [f.reason, f.contextTokens, f.peakContextTokens])).toEqual([['compaction', undefined, 190_000], ['duration', undefined, 190_000]]);
+  });
+
+  it('does not measure a new model\'s context against the window of the model before it', () => {
+    const { session, flags } = watched();
+
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus-1m', contextTokens: 600_000, contextWindow: 1_000_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'sonnet', contextTokens: 150_000 } });
+    vi.advanceTimersByTime(30 * MINUTE);
+
+    expect(flags[0]).toMatchObject({ contextTokens: 150_000, peakContextTokens: 600_000 });
+    expect(flags[0].contextWindow).toBeUndefined();
+  });
+
   it('flags nothing for a script task, which has its own time limit', () => {
     const { session, flags } = watched({ task: buildTask({ type: 'script', script: 'sleep 99999' }) });
 
@@ -182,5 +213,23 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     vi.advanceTimersByTime(30 * MINUTE);
 
     expect(flags).toEqual([30, 30]);
+  });
+});
+
+describe('a running-long flag further off than a timer holds', () => {
+  it('waits without spinning: Node fires a timer longer than 2^31-1 ms at once', async () => {
+    const armed = vi.spyOn(globalThis, 'setTimeout');
+    const clock = new RunningLongClock(() => ({ ms: 30 * 24 * 60 * MINUTE }), () => {});
+    try {
+      clock.run();
+      const before = armed.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The test's own timer is the one call expected.
+      expect(armed.mock.calls.length - before).toBe(1);
+      expect(armed.mock.calls[0][1]).toBe(2 ** 31 - 1);
+    } finally {
+      clock.stop();
+      armed.mockRestore();
+    }
   });
 });

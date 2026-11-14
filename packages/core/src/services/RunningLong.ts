@@ -1,5 +1,5 @@
 import { flattenTasks, type Task } from '../models/Task';
-import type { UsageRecord } from '../models/Usage';
+import { addPlannerUsage, type PlannerUsage, type UsageRecord } from '../models/Usage';
 
 /**
  * An attempt that has run this long is worth a look whatever its plan's
@@ -7,7 +7,7 @@ import type { UsageRecord } from '../models/Usage';
  * brief often takes.
  */
 export const RUNNING_LONG_FLOOR_MS = 30 * 60_000;
-/** How many times the longest passed AI task's wall time an attempt may run before it is flagged. */
+/** How many times the longest passed AI task's running time an attempt may run before it is flagged. */
 export const RUNNING_LONG_FACTOR = 3;
 
 /** How long an attempt may run before it is flagged, and the passed task that set it, when one did. */
@@ -16,17 +16,20 @@ export interface RunningLongThreshold {
   basis?: RunningLongBasis;
 }
 
-/** The AI task that passed in the longest wall time, which the threshold is a multiple of. */
+/** The AI task that passed in the longest running time, which the threshold is a multiple of. */
 export interface RunningLongBasis {
   taskId: string;
-  wallTimeMs: number;
+  runningMs: number;
 }
 
 /**
  * The larger of the floor and {@link RUNNING_LONG_FACTOR} times the longest
- * wall time an AI task of this plan passed in, read from the attempt that
+ * running time an AI task of this plan passed in, read from the attempt that
  * passed it. A script task has its own `timeoutMs`, and a failed attempt says
- * nothing of how long the work takes, so neither counts.
+ * nothing of how long the work takes, so neither counts. Its waits on a person
+ * are left out, as the live clock leaves them out: a task that waited overnight
+ * says nothing of how long the work takes either. An attempt saved before its
+ * running time was kept has only its wall time.
  */
 export function runningLongThreshold(tasks: readonly Task[]): RunningLongThreshold {
   let basis: RunningLongBasis | undefined;
@@ -35,9 +38,10 @@ export function runningLongThreshold(tasks: readonly Task[]): RunningLongThresho
     const attempts = task.attemptUsage ?? [];
     const last = attempts[attempts.length - 1];
     if (!last?.endedAt) continue;
-    if (!basis || last.wallTimeMs > basis.wallTimeMs) basis = { taskId: task.id, wallTimeMs: last.wallTimeMs };
+    const runningMs = last.runningMs ?? last.wallTimeMs;
+    if (!basis || runningMs > basis.runningMs) basis = { taskId: task.id, runningMs };
   }
-  const scaled = basis ? basis.wallTimeMs * RUNNING_LONG_FACTOR : 0;
+  const scaled = basis ? basis.runningMs * RUNNING_LONG_FACTOR : 0;
   return basis && scaled > RUNNING_LONG_FLOOR_MS ? { ms: scaled, basis } : { ms: RUNNING_LONG_FLOOR_MS };
 }
 
@@ -65,6 +69,9 @@ export interface RunningLongFacts {
 /** A flag as the supervisor and the surfaces read it: the facts, of the attempt they were counted for. */
 export type RunningLongEvent = RunningLongFacts & { attempt: number };
 
+/** The longest delay a timer keeps: Node fires a longer one at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /**
  * One attempt's running time, and the flags it raises. Time counts only while
  * the attempt runs: {@link hold} while it waits on a person (input, a
@@ -77,8 +84,8 @@ export class RunningLongClock {
   private timer: NodeJS.Timeout | null = null;
   private flags = 0;
   private compactions = 0;
-  private context?: number;
-  private window?: number;
+  /** The main model's context as the usage meter keeps it, by the same rules: a compaction or a model change clears it. */
+  private meter: PlannerUsage = { totals: {} };
   private peak?: number;
   private stopped = false;
 
@@ -95,7 +102,7 @@ export class RunningLongClock {
 
   hold(): void {
     if (this.since === null) return;
-    this.accrued = this.elapsed();
+    this.accrued = this.runningMs();
     this.since = null;
     this.disarm();
   }
@@ -108,26 +115,28 @@ export class RunningLongClock {
   usage(record: UsageRecord): void {
     // A subagent's context is not the attempt's, and an aggregate names no current context.
     if (this.stopped || record.subagentId || record.aggregate) return;
-    if (record.contextWindow && record.contextWindow > 0) this.window = record.contextWindow;
-    this.measure(record.contextTokens ?? record.inputTokens);
+    this.meter = addPlannerUsage(this.meter, record);
+    this.measure();
   }
 
   /** A compaction of the attempt's own session: only one the runner did by itself says the context ran out. */
   compaction(trigger: 'manual' | 'auto', postTokens?: number): void {
     if (this.stopped) return;
-    this.measure(postTokens);
+    // The size before it is gone: with no size after, the context is unknown until the next call measures it.
+    this.meter = { ...this.meter, lastPromptTokens: postTokens };
+    this.measure();
     if (trigger !== 'auto') return;
     this.compactions += 1;
     this.flag(this.facts('compaction', this.due()));
   }
 
-  private measure(tokens: number | undefined): void {
-    if (tokens === undefined) return;
-    this.context = tokens;
-    this.peak = Math.max(this.peak ?? 0, tokens);
+  private measure(): void {
+    const tokens = this.meter.lastPromptTokens;
+    if (tokens !== undefined) this.peak = Math.max(this.peak ?? 0, tokens);
   }
 
-  private elapsed(): number {
+  /** Time spent running so far, waits on a person left out. */
+  runningMs(): number {
     return this.accrued + (this.since === null ? 0 : Date.now() - this.since);
   }
 
@@ -137,7 +146,8 @@ export class RunningLongClock {
 
   private arm(): void {
     this.disarm();
-    this.timer = setTimeout(() => this.ripe(), Math.max(0, this.due() - this.elapsed()));
+    // A flag further off than a timer holds wakes early, and ripe() arms again.
+    this.timer = setTimeout(() => this.ripe(), Math.min(MAX_TIMER_MS, Math.max(0, this.due() - this.runningMs())));
   }
 
   private disarm(): void {
@@ -149,7 +159,7 @@ export class RunningLongClock {
   private ripe(): void {
     this.timer = null;
     const due = this.due();
-    if (this.elapsed() < due) {
+    if (this.runningMs() < due) {
       this.arm();
       return;
     }
@@ -162,11 +172,11 @@ export class RunningLongClock {
     const { basis } = this.threshold();
     return {
       reason,
-      elapsedMs: this.elapsed(),
+      elapsedMs: this.runningMs(),
       thresholdMs,
       ...(basis ? { basis } : {}),
-      ...(this.context !== undefined ? { contextTokens: this.context } : {}),
-      ...(this.window !== undefined ? { contextWindow: this.window } : {}),
+      ...(this.meter.lastPromptTokens !== undefined ? { contextTokens: this.meter.lastPromptTokens } : {}),
+      ...(this.meter.contextWindow !== undefined ? { contextWindow: this.meter.contextWindow } : {}),
       ...(this.peak !== undefined ? { peakContextTokens: this.peak } : {}),
       compactions: this.compactions,
     };

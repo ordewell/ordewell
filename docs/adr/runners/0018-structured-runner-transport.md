@@ -94,16 +94,22 @@ and completion evidence.
   over, so a long run that prints now and then does not wake its reader again
   after every line. An AI task's attempt is also flagged
   **running long**, as advice and never a verdict: once its running time
-  passes the larger of 30 minutes and three times the longest wall time of an
-  AI task that passed in its plan, read again when the timer fires so a task
+  passes the larger of 30 minutes and three times the longest running time of
+  an AI task that passed in its plan (its attempt's, kept as it ends; an attempt
+  saved before that has only its wall time), read again when the timer fires so a task
   that passed meanwhile can put it off, and each flag doubles the time the
   next needs. Only running time counts: a wait on input, a checkpoint or an
-  approval holds the clock, and a usage limit ends the attempt. Each automatic
+  approval holds the clock, and is left out of a passed task's running time
+  too, and a usage limit ends the attempt. Each automatic
   compaction of the task's own runner session flags it once, whatever the
   time; a manual one and a subagent's context do not. The flag carries the
   running time, the threshold and the task it was computed from, the live
   context and the model's window, the peak context (the saved usage keeps only
-  the last) and the compactions so far. A script task has its `timeoutMs` and
+  the last) and the compactions so far. The live context and window follow
+  the usage meter's rules: a compaction that states no size, or a change of
+  model or source, leaves the context unknown until the next call measures it,
+  never the old size, and a new model is not measured against the old one's
+  window. A script task has its `timeoutMs` and
   a delegated task its `budget.wallClockMs`, so neither has this clock; a
   delegated task's children do. Nothing is re-flagged after a restart: a plan
   load ends every interrupted attempt, and the flag is the attempt's. The
@@ -145,7 +151,9 @@ and completion evidence.
   ended or decided, or whose task waits on the user, whom a message would put
   back to work. A harness that takes nothing mid-turn delivers it at its next
   turn, as it does any queued message (ADR-0023 D4). It asks for no verdict: only
-  the `task_complete` call settles the task (W1).
+  the `task_complete` call settles the task (W1). Nor does it hold one back: a
+  `task_complete` call made while it is still queued settles the task, as it
+  would without it (ADR-0023 D6).
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -632,3 +640,4 @@ transport is retained for take-over.
 - 2026-11-14 — E1: OpenCode's `APIError` status is kept beside its words, a status code written as `statusCode` or a quoted string counts, and a context too long is not transient without a status.
 - 2026-11-14 — W1: an AI task's attempt that runs past max(30 min, 3× the longest passed AI task's wall time), doubled after each flag, or whose runner session compacts on its own, is flagged running long, as advice.
 - 2026-11-14 — C3: the completion contract tells a runner to commit and call `task_complete` once its brief's done criterion holds and to name work beyond it in the handoff; after a compaction of the runner's own session Ordewell queues it one message restating its brief with that instruction.
+- 2026-11-14 — W1: the running-long threshold is a multiple of a passed task's running time, waits left out, kept on its attempt as it ends; the live context and window follow the usage meter's rules across a sizeless compaction and a model change. C3: the queued nudge holds no `task_complete` back.

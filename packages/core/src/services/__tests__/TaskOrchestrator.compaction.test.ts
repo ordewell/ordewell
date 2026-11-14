@@ -117,3 +117,32 @@ describe('a runner that compacts its own context is told to finish its brief', (
     expect(h.task('t1')).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
   });
 });
+
+describe('the compaction message holds no completion back (ADR-0023 D6)', () => {
+  it('a runner that compacts and calls task_complete in the same turn passes', async () => {
+    const h = setup();
+    h.orchestrator.loadPlan([plan()]);
+    await h.orchestrator.forceStartTask('t1');
+
+    h.sessions[0].emitEvent({ type: 'compaction', trigger: 'auto' });
+    expect(sentByOrdewell(h.sessions[0])).toHaveLength(1);
+    h.sessions[0].reportComplete({ status: 'done', summary: 'did it' });
+    h.sessions[0].emitTurnEnd('completed');
+
+    await vi.waitFor(() => expect(h.task('t1').status).toBe('completed'));
+  });
+
+  it('a message the person queued beside it still holds the completion, and voids it once delivered', async () => {
+    const h = setup();
+    h.orchestrator.loadPlan([plan()]);
+    await h.orchestrator.forceStartTask('t1');
+
+    h.sessions[0].emitEvent({ type: 'compaction', trigger: 'auto' });
+    h.orchestrator.sendTaskMessage('t1', 'also handle numbers');
+    h.sessions[0].reportComplete({ status: 'done', summary: 'did it' });
+    h.sessions[0].emitTurnEnd('completed');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(h.task('t1').status).toBe('in_progress');
+  });
+});

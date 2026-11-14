@@ -76,6 +76,8 @@ export class VerdictEngine {
   private idleFlags = new Map<string, number>();
   /** The running time of each AI task's current attempt (ADR-0018 W1). */
   private clocks = new Map<string, RunningLongClock>();
+  /** The running time an attempt's clock stopped at, until the task's next attempt starts. */
+  private ran = new Map<string, number>();
   private runningLongListeners: RunningLongListener[] = [];
   private readonly runningLongThreshold: () => RunningLongThreshold;
 
@@ -138,8 +140,20 @@ export class VerdictEngine {
   }
 
   private stopClock(taskId: string): void {
-    this.clocks.get(taskId)?.stop();
+    const clock = this.clocks.get(taskId);
+    if (!clock) return;
+    clock.stop();
+    this.ran.set(taskId, clock.runningMs());
     this.clocks.delete(taskId);
+  }
+
+  /**
+   * The current or last attempt's running time, waits on a person left out:
+   * what a later task's running-long threshold is a multiple of (ADR-0018 W1).
+   * Undefined for a task with no clock.
+   */
+  runningMs(taskId: string): number | undefined {
+    return this.clocks.get(taskId)?.runningMs() ?? this.ran.get(taskId);
   }
 
   /** Restart the silence timer on fresh output; broadcasts the null transition if it was idle. */
@@ -198,6 +212,7 @@ export class VerdictEngine {
   starting(taskId: string): void {
     const gen = this.bumpGeneration(taskId);
     this.stopClock(taskId);
+    this.ran.delete(taskId);
     this.idlePaused.delete(taskId);
     this.openApprovals.delete(taskId);
     this.openCalls.delete(taskId);
@@ -226,6 +241,7 @@ export class VerdictEngine {
     this.idleFlags.delete(task.id);
     this.touchIdle(task.id, gen);
     this.stopClock(task.id);
+    this.ran.delete(task.id);
     // A script has its own timeoutMs, and a person's task has no runner (ADR-0018 W1).
     const clock = task.type === 'ai' ? new RunningLongClock(this.runningLongThreshold, (facts) => {
       if (this.generations.get(task.id) !== gen) return;
@@ -305,7 +321,10 @@ export class VerdictEngine {
 
   private acceptVerdict(taskId: string, verdict: Verdict): void {
     if (this.pendingVerdicts.has(taskId)) return;
-    if (this.sessions.get(taskId)?.queued().length) {
+    // Only what a person queued is news the evidence predates. Ordewell's own
+    // messages (the compaction nudge, ADR-0018 C3) restate the brief and ask
+    // for this very call, so one still queued holds no verdict back.
+    if (this.sessions.get(taskId)?.queued().some((message) => message.from !== 'ordewell')) {
       this.pendingVerdicts.set(taskId, verdict);
       return;
     }
@@ -445,6 +464,7 @@ export class VerdictEngine {
     this.idleFlags.clear();
     for (const clock of this.clocks.values()) clock.stop();
     this.clocks.clear();
+    this.ran.clear();
     this.generations.clear();
   }
 }

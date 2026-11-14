@@ -73,8 +73,10 @@ and never touches the run's tasks.**
   runner opens by itself for such a message is that message's turn, not
   background work (ADR-0018, B1).
 - **Completion evidence waits for the messages (D6).** A completion signal —
-  the `task_complete` call — that arrives while a message is
-  still undelivered is held, not settled. If the turn then ends with nothing
+  the `task_complete` call — that arrives while a message the person sent is
+  still undelivered is held, not settled. A message of Ordewell's own
+  (`from: 'ordewell'`, such as ADR-0018 C3's compaction nudge) tells the
+  runner nothing its evidence predates, so it holds nothing back. If the turn then ends with nothing
   left to deliver, the held verdict is published. If the message is read
   mid-turn, or opens the next turn, the runner has been told something after
   that evidence, so it is discarded and only what the runner reports from
@@ -406,3 +408,4 @@ interrupt (D4 covers it either way).
 - 2026-11-04 — ACP runners take the turn-end queue, with `session/cancel` then `session/prompt` for force send (ADR-0060).
 - 2026-11-10 — F1, F2, F5: a force send and a turn's end glue everything the person queued into one message, instead of sending held messages one at a time.
 - 2026-11-10 — F1: the task log draws the planner chat's queue control ("Send all now") instead of a bar of its own, and the TUI's ctrl-s with an empty composer sends the oldest queued message and so the whole queue, whatever row is picked.
+- 2026-11-14 — D6: only a message the person sent holds completion evidence; one of Ordewell's own still queued does not.
