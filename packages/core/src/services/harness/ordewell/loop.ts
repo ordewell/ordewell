@@ -2,7 +2,7 @@ import type { AgentEvent } from '../AgentAdapter';
 import type { UsageRecord } from '../../../models/Usage';
 import { isModelError } from '../../model';
 import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCall, ModelUsage, SystemPart, ToolChoice, ToolDefinition, ToolResult as ModelToolResult } from '../../model';
-import { findTool, ordewellTools, runTool, type ToolContext, type ToolGate } from './tools';
+import { ordewellTools, runTool, type OrdewellTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
@@ -67,6 +67,8 @@ export interface LoopOptions {
   system: readonly SystemPart[];
   store: TranscriptStore;
   taskTools: TaskTools;
+  /** The attempt's own tools, which its mode decides (ADR-0070); every one when absent (Full). */
+  tools?: readonly OrdewellTool[];
   /** Every field of a tool's context but the signal, which is the turn's. */
   toolContext: Omit<ToolContext, 'signal'>;
   /** SEAM (a): asked before every neutral tool runs; none runs every call (Full). */
@@ -105,11 +107,13 @@ const INTERRUPTED = 'Interrupted: the call was stopped before it finished.';
  */
 export class OrdewellLoop {
   private readonly tools: readonly ToolDefinition[];
+  private readonly neutral: readonly OrdewellTool[];
 
   constructor(private readonly options: LoopOptions) {
+    this.neutral = options.tools ?? ordewellTools;
     // Fixed for the attempt, in a fixed order, so the cached prefix holds.
     this.tools = [
-      ...ordewellTools.map((tool) => ({ name: tool.name, description: tool.description, parameters: { ...tool.parameters } })),
+      ...this.neutral.map((tool) => ({ name: tool.name, description: tool.description, parameters: { ...tool.parameters } })),
       ...options.taskTools.definitions.map(withoutSchemaKey),
     ];
   }
@@ -236,7 +240,8 @@ export class OrdewellLoop {
         const reply = await this.options.taskTools.call(call.name, call.arguments, signals.hard);
         return settle(reply.text, reply.isError === true);
       }
-      const tool = findTool(call.name);
+      // Only what this attempt was offered: a read-only one has no write path to name (ADR-0046).
+      const tool = this.neutral.find((candidate) => candidate.name === call.name);
       if (!tool) return settle(`Unknown tool "${call.name}". The tools are: ${this.tools.map((t) => t.name).join(', ')}.`, true);
       const result = await runTool(tool, call.arguments, { ...this.options.toolContext, signal: signals.hard }, this.options.gate ? { gate: this.options.gate } : {});
       return settle(result.text, result.isError);
