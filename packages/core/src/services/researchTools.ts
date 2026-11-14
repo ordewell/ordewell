@@ -1,13 +1,13 @@
 import { PLANNER_EXECUTION_TOOLS, PLANNER_POST, PLANNER_RECORD, PLANNER_TASK_READ_TOOLS, SEALED_PARAM, SEALED_RUNS, type McpTool, type PlannerToolHandler } from './mcp/tools';
-import type OpenAI from 'openai';
-import { SchemaType, type FunctionDeclaration, type Schema } from '@google/generative-ai';
+import type { ToolDefinition } from './model';
 
 /**
  * Canonical definition of the read-only research tools the planner uses to
- * explore a workspace. Both the OpenAI- and Gemini-backed services drive the
- * same loop over the same tools, so the names, descriptions, and parameter
- * shapes live here once and are projected into each SDK's tool format. Keeping
- * a single source of truth stops the two provider lists from drifting apart.
+ * explore a workspace. Every API planner drives the same loop over the same
+ * tools, so the names, descriptions, and parameter shapes live here once and
+ * are projected into one provider-neutral JSON Schema, which each `ModelClient`
+ * dialect carries in its own wire format. Keeping a single source of truth
+ * stops the provider lists from drifting apart.
  */
 
 type ParamType = 'string' | 'number' | 'array' | 'boolean';
@@ -236,89 +236,36 @@ function plannerListed(board: boolean): readonly McpTool<PlannerToolHandler>[] {
   return [...PLANNER_TASK_READ_TOOLS, PLANNER_RECORD, ...(board ? [PLANNER_POST] : [])];
 }
 
-function projectOpenAi(specs: ResearchToolSpec[]): OpenAI.Chat.Completions.ChatCompletionTool[] {
+function project(specs: ResearchToolSpec[]): ToolDefinition[] {
   return specs.map((t) => ({
-    type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: {
-        type: 'object',
-        properties: Object.fromEntries(Object.entries(t.properties).map(([key, param]) => [key, {
-          type: param.type,
-          description: param.description,
-          ...(param.items ? { items: param.items } : {}),
-          ...(param.enum ? { enum: param.enum } : {}),
-        }])),
-        required: t.required,
-      },
+    name: t.name,
+    description: t.description,
+    parameters: {
+      type: 'object',
+      properties: Object.fromEntries(Object.entries(t.properties).map(([key, param]) => [key, {
+        type: param.type,
+        description: param.description,
+        ...(param.items ? { items: param.items } : {}),
+        ...(param.enum ? { enum: param.enum } : {}),
+      }])),
+      required: t.required,
     },
   }));
 }
 
-/** Project the canonical tools into OpenAI's chat-completions tool format; `plannerTools` adds the task reads and the execution tools, and `board` adds `post` to them. */
-export function toOpenAiTools(plannerTools = false, board = false): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return [...projectOpenAi(conversationSpecs(plannerTools, true)), ...(plannerTools ? plannerListed(board).map((t): OpenAI.Chat.Completions.ChatCompletionTool => ({
-    type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema },
-  })) : [])];
-}
-
-/** The subagent's own tool list in OpenAI format; `only` narrows it, as a confined agent's is (ADR-0066). */
-export function toOpenAiSubagentTools(only?: ReadonlySet<string>): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return projectOpenAi(only ? subagentToolSpecs().filter((t) => only.has(t.name)) : subagentToolSpecs());
-}
-
-const SCHEMA_TYPE: Record<ParamType, SchemaType> = {
-  string: SchemaType.STRING,
-  number: SchemaType.NUMBER,
-  array: SchemaType.ARRAY,
-  boolean: SchemaType.BOOLEAN,
-};
-
 /**
- * Project the canonical tools into Gemini's function-declaration format;
- * `plannerTools` adds the task reads and the execution tools, `board` adds
- * `post` to them, and `subagents` withholds the spawn tool, which this backend
- * cannot run (ADR-0005).
+ * The planner's tools as JSON Schema: `plannerTools` adds the task reads and
+ * the execution tools, `board` adds `post` to them, and `subagents` offers the
+ * spawn tool (ADR-0005), which only a planner with a subagent chat may.
  */
-export function toGeminiToolDeclarations(plannerTools = false, subagents = true, board = false): FunctionDeclaration[] {
-  const tools = conversationSpecs(plannerTools, subagents).map((t) => {
-    const properties: Record<string, Schema> = {};
-    for (const [key, param] of Object.entries(t.properties)) {
-      properties[key] = {
-        type: SCHEMA_TYPE[param.type],
-        description: param.description,
-        ...(param.items ? { items: geminiItems(param.items) } : {}),
-        ...(param.enum ? { format: 'enum', enum: param.enum } : {}),
-      };
-    }
-    // Gemini refuses an object schema with no properties, so a tool that takes none declares no parameters.
-    return Object.keys(properties).length === 0
-      ? { name: t.name, description: t.description }
-      : { name: t.name, description: t.description, parameters: { type: SchemaType.OBJECT, properties, required: t.required } };
-  });
-  const reads = plannerTools ? plannerListed(board).map((t): FunctionDeclaration => {
-    const schema = geminiSchema(t.inputSchema);
-    return { name: t.name, description: t.description,
-      parameters: { ...schema, type: SchemaType.OBJECT, properties: schema.properties ?? {} },
-    };
-  }) : [];
-  return [...tools, ...reads];
+export function plannerToolDefinitions(plannerTools = false, board = false, subagents = true): ToolDefinition[] {
+  return [
+    ...project(conversationSpecs(plannerTools, subagents)),
+    ...(plannerTools ? plannerListed(board).map((t): ToolDefinition => ({ name: t.name, description: t.description, parameters: t.inputSchema })) : []),
+  ];
 }
 
-function geminiItems(items: ResearchToolItems): Schema {
-  return { type: SCHEMA_TYPE[items.type], ...(items.items ? { items: geminiItems(items.items) } : {}) };
-}
-
-function geminiSchema(value: unknown): Schema {
-  const raw = value as { type?: string; description?: string; enum?: string[]; properties?: Record<string, unknown>; required?: string[]; items?: unknown; anyOf?: unknown[] };
-  if (raw.anyOf) return { ...geminiSchema(raw.anyOf[0]), ...(raw.description ? { description: raw.description } : {}) };
-  const description = raw.description ? { description: raw.description } : {};
-  if (raw.type === 'object') return { type: SchemaType.OBJECT, ...description,
-    properties: Object.fromEntries(Object.entries(raw.properties ?? {}).map(([k, v]) => [k, geminiSchema(v)])), required: raw.required ?? [],
-  };
-  if (raw.type === 'array') return { type: SchemaType.ARRAY, ...description, items: geminiSchema(raw.items) };
-  if (raw.type === 'integer' || raw.type === 'number') return { type: SchemaType.NUMBER, ...description };
-  if (raw.type === 'boolean') return { type: SchemaType.BOOLEAN, ...description };
-  return { type: SchemaType.STRING, ...description, ...(raw.enum ? { format: 'enum', enum: raw.enum } : {}) };
+/** The subagent's own tool list; `only` narrows it, as a confined agent's is (ADR-0066). */
+export function subagentToolDefinitions(only?: ReadonlySet<string>): ToolDefinition[] {
+  return project(only ? subagentToolSpecs().filter((t) => only.has(t.name)) : subagentToolSpecs());
 }

@@ -1,7 +1,9 @@
 import type { RunnerManifest } from '../types';
 
-/** The mode a Full attempt runs in: the only one this slice of ADR-0070 runs. */
+/** The runner's modes (ADR-0070), each enforced by Ordewell itself: the runner has no permission system of its own. */
 export const ORDEWELL_FULL_MODE = 'full';
+export const ORDEWELL_GUARDED_MODE = 'guarded';
+export const ORDEWELL_READ_ONLY_MODE = 'read-only';
 
 /**
  * Ordewell's own coding agent (ADR-0070). It has no command: the loop runs in
@@ -23,12 +25,11 @@ export const ORDEWELL_MANIFEST: RunnerManifest = {
   contextFile: 'AGENTS.md',
   contextFileAltPath: 'CLAUDE.md',
 
-  // Guarded and read-only are declared now so plans and pickers know the
-  // runner's tags, but marked unavailable until their gates land (ADR-0070):
-  // an attempt on either must refuse, never run as Full.
+  // The tags are what ModeResolver maps the plan's levels onto: Full is the
+  // autonomous mode, Guarded the safe one, and a read-only task the readOnly one.
   modes: [
     { id: ORDEWELL_FULL_MODE, label: 'Full', description: 'Edits and shell commands run without asking; edits stay in the worktree and the shell holds no provider keys', autonomous: true },
-    { id: 'guarded', label: 'Guarded', description: 'Edits go ahead; every shell command waits for approval', safe: true, unavailable: 'Guarded mode of the Ordewell runner is not built yet; use Full' },
-    { id: 'read-only', label: 'Read-only', description: 'No edit tools; the only shell is the sealed run_command', readOnly: true, unavailable: 'read-only mode of the Ordewell runner is not built yet' },
+    { id: ORDEWELL_GUARDED_MODE, label: 'Guarded', description: 'Reads and edits in the worktree go ahead; every shell command waits for approval', safe: true },
+    { id: ORDEWELL_READ_ONLY_MODE, label: 'Read-only', description: 'No edit, write or shell tools; the only shell is the sealed run_command', readOnly: true },
   ],
 };

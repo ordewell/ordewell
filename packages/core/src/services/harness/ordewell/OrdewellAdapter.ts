@@ -1,21 +1,22 @@
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter, TaskStartOptions } from '../AgentAdapter';
+import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from '../AgentAdapter';
 import type { AttachState } from '../ordewellBinding';
 import { SessionNotResumable } from '../ordewellBinding';
 import { HeldSecrets } from '../../HeldSecrets';
 import { vendorApiKeyIn, vendorBaseUrlIn, VENDORS } from '../../apiProviders';
 import { createModelClient, withRetry } from '../../model';
 import type { EffortLevel, ModelClient } from '../../model';
+import type { ApprovalDecision } from '../../../interfaces/IApproval';
 import type { AiProvider } from '../../../interfaces/IConfig';
-import { ORDEWELL_FULL_MODE } from '../../../plugins/builtin/ordewell.manifest';
+import { attemptModeOf, GuardedShell, toolsOf } from './modes';
 import { lookupModelInfo, parseModelId } from './models';
 import { buildSystemPrompt } from './prompt';
 import { taskToolsOf } from './taskTools';
 import { FileTranscriptStore, ordewellSessionsRoot, type LoadedTranscript, type TranscriptStore } from './transcript';
 import { OrdewellLoop, stepFailure, type RequestAssembler, type StepBoundary, type StepBoundaryHook, type StepPlan } from './loop';
 import { SettingsService } from '../../SettingsService';
-import type { ToolGate } from './tools';
+import type { GateDecision, ToolGate } from './tools';
 
 /** The longest a cooperative stop waits for the step in flight before the stream and tools are aborted. */
 const HARD_ABORT_AFTER_MS = 2_000;
@@ -81,6 +82,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   private readonly gone = new Promise<void>((resolve) => {
     this.ended = resolve;
   });
+  private guard: GuardedShell | null = null;
   private readonly held: HeldSecrets;
 
   constructor(private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
@@ -94,7 +96,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
 
   async start(opts: AgentStartOptions): Promise<void> {
     if (opts.kind !== 'task') throw new Error('The Ordewell runner does not plan: the API planner plans on the same keys.');
-    refuseUnbuiltMode(opts);
+    const mode = attemptModeOf(opts);
     const parsed = opts.model ? parseModelId(opts.model) : undefined;
     if (!opts.model || !parsed) {
       throw new Error(`The Ordewell runner needs a model as <provider>:<model>${opts.model ? `, not "${opts.model}"` : ''}.`);
@@ -126,11 +128,19 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
 
     this.store = store;
     this.attached = inProcess !== undefined;
+    const emit = (event: AgentEvent): void => {
+      this.onActivity?.();
+      this.onEvent?.(event);
+    };
+    // Its requests carry the command line, which may spell out a key the model read (ADR-0061).
+    this.guard = mode === 'guarded' ? new GuardedShell((event) => emit(this.held.hideIn(event))) : null;
+    const gate = composeGates(this.options.gate, this.guard?.gate);
     this.loop = new OrdewellLoop({
       client,
       model,
       system,
       store,
+      tools: toolsOf(mode),
       taskTools: inProcess ? taskToolsOf(inProcess) : { definitions: [], has: () => false, call: async () => ({ text: 'No task tools in this session.', isError: true }) },
       toolContext: {
         worktree: opts.cwd,
@@ -139,16 +149,13 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
         outputDir: path.join(store.dir, 'tool-output'),
         ...(opts.workspaceRoot && path.resolve(opts.workspaceRoot) !== path.resolve(opts.cwd) ? { extraReadRoots: [opts.workspaceRoot] } : {}),
       },
-      ...(this.options.gate ? { gate: this.options.gate } : {}),
+      ...(gate ? { gate } : {}),
       onStepBoundary: (boundary) => this.atBoundary(boundary),
       stepLimit,
       ...(this.options.assemble ? { assemble: this.options.assemble } : {}),
       ...(effort ? { effort } : {}),
       hide: (value) => this.held.hideIn(value),
-      emit: (event) => {
-        this.onActivity?.();
-        this.onEvent?.(event);
-      },
+      emit,
     });
   }
 
@@ -189,6 +196,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const turn = this.turn;
     if (!turn) return false;
     turn.stop.abort();
+    this.guard?.cancelOpen();
     if (!turn.timer) {
       turn.timer = setTimeout(() => turn.hard.abort(), Math.max(0, Math.min(HARD_ABORT_AFTER_MS, Math.floor(timeoutMs / 2))));
       turn.timer.unref?.();
@@ -246,9 +254,9 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     this.exitListeners.push(listener);
   }
 
-  /** Nothing asks in Full; the modes slice raises and answers its own requests. */
-  answerPermission(): boolean {
-    return false;
+  /** Only Guarded asks, and only before a shell command; nothing else is ever open. */
+  answerPermission(id: string, decision: ApprovalDecision): boolean {
+    return this.guard?.answer(id, decision) ?? false;
   }
 
   /** The runner's own spill files, which a task's file tool may read back. */
@@ -262,6 +270,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.guard?.cancelOpen();
     this.turn?.hard.abort();
     this.ended();
     for (const listener of this.exitListeners.splice(0)) listener(0);
@@ -297,10 +306,17 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   }
 }
 
-/** Guarded and read-only are declared but not built: refusing beats running either as Full (ADR-0070). */
-function refuseUnbuiltMode(opts: TaskStartOptions): void {
-  if (opts.flags.readOnly) throw new Error('The Ordewell runner cannot run a read-only task yet: assign another runner, or a change task in Full mode.');
-  if (opts.mode !== ORDEWELL_FULL_MODE) throw new Error(`Mode "${opts.mode}" of the Ordewell runner is not built yet: assign mode "${ORDEWELL_FULL_MODE}" (Full).`);
+/** A test's gate, then the mode's: a call runs only when every gate allows it. */
+function composeGates(...gates: (ToolGate | undefined)[]): ToolGate | undefined {
+  const present = gates.filter((gate): gate is ToolGate => gate !== undefined);
+  if (present.length <= 1) return present[0];
+  return async (call): Promise<GateDecision> => {
+    for (const gate of present) {
+      const decision = await gate(call);
+      if (!decision.allow) return decision;
+    }
+    return { allow: true };
+  };
 }
 
 function defaultClient(deps: AgentProcessDeps): NonNullable<OrdewellAdapterOptions['createClient']> {

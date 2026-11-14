@@ -10,7 +10,6 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, patient, removeDir, setEnv } from '../../testing';
-import type { Session } from '../createSession';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, makeSession } from './sessionTestKit';
@@ -49,7 +48,7 @@ function tempDir(): string {
   return dir;
 }
 
-function repo(): string {
+function repo(files: Record<string, string> = {}): string {
   const root = tempDir();
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.name', 'T');
@@ -58,23 +57,22 @@ function repo(): string {
   mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'src', 'add.mjs'), 'export const add = (a, b) => a - b;\n');
   writeFileSync(join(root, 'test.mjs'), "import { add } from './src/add.mjs';\nif (add(2, 3) === 5) console.log('pass');\nelse { console.log('fail'); process.exit(1); }\n");
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(root, name), content);
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'initial');
   return root;
 }
 
-async function runOne(persona: string): Promise<{ root: string; main: string; session: Session }> {
+/** A session on a real worktree whose one task, "Fix add", the mock's `persona` drives in `taskMode`. */
+async function fixAdd(root: string, persona: string, taskMode: string) {
   const { startMock } = (await import(START_MOCK)) as { startMock: StartMock };
   const { port, child } = await startMock();
   cleanups.push(() => child.kill());
   cleanups.push(setEnv({ OPENROUTER_BASE_URL: `http://127.0.0.1:${port}/v1`, OPENROUTER_API_KEY: 'mock-key' }));
-
-  const root = repo();
-  const main = git(root, 'rev-parse', 'main');
   const tasks: Task[] = [
     createTask({
       id: 't', order: 1, title: 'Fix add', prompt: 'add() in src/add.mjs subtracts; make `node test.mjs` pass.',
-      assignedRunner: 'ordewell', assignedModel: { modelId: `openrouter:mock/${persona}`, modelLabel: 'mock' }, taskMode: 'full',
+      assignedRunner: 'ordewell', assignedModel: { modelId: `openrouter:mock/${persona}`, modelLabel: 'mock' }, taskMode,
     }),
   ];
   const session = makeSession({
@@ -85,15 +83,17 @@ async function runOne(persona: string): Promise<{ root: string; main: string; se
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
   });
   session.loadPlan({ tasks, runners: ['ordewell'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'fix add', root, { sessionId: 'session-ordewell' });
-
-  await session.execute({ command: 'run_plan' }, { kind: 'user' });
-  await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
-  return { root, main, session };
+  return session;
 }
 
 describe('the built-in Ordewell runner, offline', () => {
   it('reads, edits, runs the test and completes a real task in a real worktree, the verdict from task_complete', async () => {
-    const { root, main, session } = await runOne('ordewell-runner');
+    const root = repo();
+    const main = git(root, 'rev-parse', 'main');
+    const session = await fixAdd(root, 'ordewell-runner', 'full');
+
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
     expect(session.planTasks[0].verdict).toMatchObject({ outcome: 'pass', reported: 'done' });
     expect(session.planTasks[0].status).toBe('completed');
 
@@ -112,7 +112,9 @@ describe('the built-in Ordewell runner, offline', () => {
     writeFileSync(settings, JSON.stringify({ ordewellStepLimit: 3 }));
     cleanups.push(setEnv({ ORDEWELL_SETTINGS_PATH: settings }));
 
-    const { session } = await runOne('ordewell-step-limit');
+    const session = await fixAdd(repo(), 'ordewell-step-limit', 'full');
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
     const task = session.planTasks[0];
     expect(task.verdict).toMatchObject({ outcome: 'fail', reported: 'blocked' });
     const report = task.handoff?.summary ?? '';
@@ -120,6 +122,29 @@ describe('the built-in Ordewell runner, offline', () => {
     // The last call keeps the whole toolset, so the provider's cache and the model's view of its tools are unchanged.
     const offered = report.match(/Offered: ([^.]*)\./)?.[1].split(',') ?? [];
     expect(offered).toEqual(expect.arrayContaining(['read', 'edit', 'shell', 'task_complete']));
+    session.destroy();
+  }, patient(90_000));
+
+  it('runs a Guarded task that asks once for `npm test`, then reuses the grant Allow for this task gave', async () => {
+    const root = repo({ 'package.json': JSON.stringify({ name: 'fix-add', private: true, type: 'module', scripts: { test: 'node test.mjs' } }) + '\n' });
+    const session = await fixAdd(root, 'ordewell-guarded', 'guarded');
+    const asked: string[] = [];
+    // A person on the card: the request is the session's own runner approval, answered through it.
+    const answering = setInterval(() => {
+      for (const open of session.outstandingApprovals()) {
+        asked.push(`${open.request.subject} ${open.request.detail ?? ''}`);
+        session.resolveApproval(open.id, { decision: 'allowForTask' });
+      }
+    }, 20);
+    cleanups.push(() => clearInterval(answering));
+
+    await session.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+    expect(session.planTasks[0].verdict).toMatchObject({ outcome: 'pass', reported: 'done' });
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain('npm test');
+    const integration = session.planState?.isolation?.run.repos[0].integrationBranch ?? '';
+    expect(git(root, 'show', `${integration}:src/add.mjs`)).toBe('export const add = (a, b) => a + b;');
     session.destroy();
   }, patient(90_000));
 });

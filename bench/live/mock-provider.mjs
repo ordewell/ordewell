@@ -32,6 +32,10 @@
  *                       read src/add.mjs, fix its `a - b` with edit, run
  *                       `node test.mjs` through shell, then task_complete,
  *                       done only when the test printed "pass"
+ *   mock/ordewell-guarded  the same fix as a Guarded task: `npm test` first,
+ *                       which asks, then the edit, which does not, then
+ *                       `npm test --silent`, which the "Allow for this task"
+ *                       grant for `npm test` covers, then task_complete
  *   mock/ordewell-step-limit  a built-in runner task that never finishes on its
  *                       own: it reads a different file each step until a
  *                       request forces task_complete (the runner's step
@@ -446,6 +450,21 @@ function scriptTurn(model, messages, request = {}) {
     });
   }
 
+  if (persona === 'ordewell-guarded') {
+    // The second run differs from the first only by a plain argument, so one grant covers both (ADR-0070).
+    if (s.toolRounds === 0) return toolCallTurn('shell', { command: 'npm test' });
+    if (s.toolRounds === 1) return toolCallTurn('edit', { path: 'src/add.mjs', oldString: 'a - b', newString: 'a + b' });
+    if (s.toolRounds === 2) return toolCallTurn('shell', { command: 'npm test --silent' });
+    if (s.toolRounds === 3) {
+      const shellResult = [...messages].reverse().find((m) => m.role === 'tool');
+      const passed = String(shellResult?.content ?? '').includes('pass');
+      return toolCallTurn('task_complete', passed
+        ? { status: 'done', summary: 'Fixed add() to sum its arguments; npm test passes.', commit: { subject: 'Fix add() to sum its arguments' } }
+        : { status: 'failed', summary: 'npm test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
+    }
+    return { content: 'Done.' };
+  }
+
   if (persona === 'goal-question') {
     // A question the research answers: one read, then prose. No plan, no tag.
     if (s.toolRounds === 0) return { reasoning: 'Read the README before answering; the goal is a question, not a plan. ', ...toolCallTurn('read_file', { path: 'README.md' }) };
@@ -567,6 +586,14 @@ const server = http.createServer((req, res) => {
       });
     }
     res.write(sseChunk({}, turn.toolCalls ? 'tool_calls' : 'stop'));
+    // Only the built-in runner reads usage, and only its smoke harness
+    // (runner-smoke.mjs) needs figures to print: a rough count, with the prompt served from cache once a tool
+    // result is in it, as a provider's automatic prefix cache would.
+    if ((model ?? '').endsWith('/ordewell-runner')) {
+      const promptTokens = Math.ceil(body.length / 4);
+      const completionTokens = Math.ceil(JSON.stringify(turn).length / 4);
+      res.write(`data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens, prompt_tokens_details: { cached_tokens: (messages ?? []).some((m) => m.role === 'tool') ? Math.floor(promptTokens * 0.8) : 0 } } })}\n\n`);
+    }
     res.write('data: [DONE]\n\n');
     res.end();
   });

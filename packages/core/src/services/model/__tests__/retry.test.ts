@@ -33,7 +33,7 @@ describe('retryDelay', () => {
   });
 
   it('keeps retrying an unreachable provider until its window closes, past the attempt bound', () => {
-    expect(retryDelay(unreachable(), 40, 299_000)).toBe(10000 * (1 + 0.2 * (2 * 0.5 - 1)));
+    expect(retryDelay(unreachable(), 40, 299_000, DEFAULT_RETRY_POLICY, MIDDLE)).toBe(10000 * (1 + 0.2 * (2 * 0.5 - 1)));
     expect(retryDelay(unreachable(), 40, 300_000)).toBeUndefined();
   });
 

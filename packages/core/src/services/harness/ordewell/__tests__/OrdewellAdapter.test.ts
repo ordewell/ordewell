@@ -90,10 +90,10 @@ describe('OrdewellAdapter', () => {
     await expect(adapter.start({ kind: 'planner', cwd: tempDir(), systemPrompt: 'plan' })).rejects.toThrow(/does not plan/);
   });
 
-  it('refuses a read-only task and a mode that is not built, rather than running either as Full', async () => {
+  it('refuses a mode it does not have, and a change task in its read-only mode, rather than running either as Full', async () => {
     const { adapter } = adapterWith([]);
-    await expect(adapter.start(taskOptions({ flags: { permissionMode: 'read-only', modeSettings: {}, readOnly: true } }))).rejects.toThrow(/cannot run a read-only task yet/);
-    await expect(adapter.start(taskOptions({ mode: 'guarded' }))).rejects.toThrow(/Mode "guarded" .* is not built yet: assign mode "full"/);
+    await expect(adapter.start(taskOptions({ mode: 'plan' }))).rejects.toThrow(/has no mode "plan"/);
+    await expect(adapter.start(taskOptions({ mode: 'read-only' }))).rejects.toThrow(/is for a read-only task/);
   });
 
   it('needs a <provider>:<model> id and that provider\'s key, naming /key', async () => {
@@ -130,7 +130,8 @@ describe('OrdewellAdapter', () => {
           list: () => [
             { name: 'task_complete', description: 'end the task', inputSchema: { type: 'object', properties: {} } },
             { name: 'read', description: 'read a task', inputSchema: { type: 'object', properties: {} } },
-            { name: 'checkpoint', description: 'not offered yet', inputSchema: { type: 'object', properties: {} } },
+            { name: 'checkpoint', description: 'ask the user', inputSchema: { type: 'object', properties: {} } },
+            { name: 'something_new', description: 'not one the runner offers', inputSchema: { type: 'object', properties: {} } },
           ],
           call: async (name) => {
             calls.push(name);
@@ -140,7 +141,7 @@ describe('OrdewellAdapter', () => {
       },
     }));
     await adapter.send('Finish.', () => {});
-    expect(client.requests[0]?.tools.map((t) => t.name).slice(-2)).toEqual(['task_complete', 'read_task']);
+    expect(client.requests[0]?.tools.map((t) => t.name).slice(-3)).toEqual(['task_complete', 'read_task', 'checkpoint']);
     expect(calls).toEqual(['task_complete']);
   });
 
@@ -154,7 +155,8 @@ describe('OrdewellAdapter', () => {
     await store.append({ v: 1, kind: 'message', at: 'then', step: 1, message: { role: 'user', text: 'Earlier.' } });
     await adapter.start(taskOptions({ resumeSessionId: 'the-session' }));
     await adapter.send('Go on.', () => {});
-    expect(client.requests[0]?.system).toEqual(system);
+    // The saved text is sent as it was; the assembler only adds the cache breakpoint the prompt did not mark.
+    expect(client.requests[0]?.system).toEqual([{ text: 'the saved prompt', cacheBreakpoint: true }]);
     expect(client.requests[0]?.messages).toEqual([{ role: 'user', text: 'Earlier.' }, { role: 'user', text: 'Go on.' }]);
   });
 

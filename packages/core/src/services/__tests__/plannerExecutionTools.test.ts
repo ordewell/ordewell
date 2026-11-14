@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { OrdewellMcpServer, PLANNER_EXECUTION_TOOLS, mcpClientConfig } from '../mcp';
 import { plannerToolHandler, type PlannerToolsHost } from '../plannerTools';
-import { executionToolSpecs, toGeminiToolDeclarations, toOpenAiTools } from '../researchTools';
+import { executionToolSpecs, plannerToolDefinitions } from '../researchTools';
 import type { CommandOutcome, ExecutionCommand } from '../ExecutionCommands';
 
 const servers: OrdewellMcpServer[] = [];
@@ -136,28 +136,26 @@ describe('the execution tools as the API planner declares them', () => {
 
   it('declare run_script\'s commands as a list of argument vectors, which a provider refuses an array not to say', () => {
     const spec = executionToolSpecs().find((s) => s.name === 'run_script')!;
-    const openAi = toOpenAiTools(true).find((t) => t.function.name === 'run_script')!;
-    const gemini = toGeminiToolDeclarations(true).find((d) => d.name === 'run_script')!;
+    const declared = plannerToolDefinitions(true).find((t) => t.name === 'run_script')!;
 
     expect(spec.required).toEqual(['title']);
     expect(spec.properties.commands).toMatchObject({ type: 'array', items: { type: 'array', items: { type: 'string' } } });
     expect(spec.properties.dependencies).toMatchObject({ type: 'array', items: { type: 'string' } });
-    expect(openAi.function.parameters).toMatchObject({ properties: { commands: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } });
-    expect(gemini.parameters).toMatchObject({ properties: { commands: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } });
+    expect(declared.parameters).toMatchObject({ properties: { commands: { type: 'array', items: { type: 'array', items: { type: 'string' } } } } });
   });
 
-  it('are offered to an OpenAI-compatible conversation only when asked for', () => {
-    const names = (execution: boolean) => toOpenAiTools(execution).map((t) => t.function.name);
+  it('are offered to an API planner\'s conversation only when asked for', () => {
+    const names = (execution: boolean) => plannerToolDefinitions(execution).map((t) => t.name);
 
     expect(names(true)).toEqual(expect.arrayContaining(['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all']));
     expect(names(false)).not.toContain('run_task');
   });
 
-  it('declare no parameters to Gemini for a tool that takes none, which Gemini would refuse as an empty object', () => {
-    const declarations = toGeminiToolDeclarations(true);
+  it('declare an empty object schema for a tool that takes none, which every dialect sends as JSON Schema', () => {
+    const declarations = plannerToolDefinitions(true, false, false);
 
-    expect(declarations.find((d) => d.name === 'run_plan')).toEqual({ name: 'run_plan', description: expect.any(String) });
+    expect(declarations.find((d) => d.name === 'run_plan')!.parameters).toMatchObject({ type: 'object' });
     expect(declarations.find((d) => d.name === 'stop_task')!.parameters).toMatchObject({ properties: { task: { type: 'string' } }, required: ['task'] });
-    expect(toGeminiToolDeclarations().map((d) => d.name)).not.toContain('run_plan');
+    expect(plannerToolDefinitions().map((d) => d.name)).not.toContain('run_plan');
   });
 });

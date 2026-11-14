@@ -2,9 +2,10 @@ import type { AgentEvent } from '../AgentAdapter';
 import type { UsageRecord } from '../../../models/Usage';
 import { isModelError, type ModelError } from '../../model';
 import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCall, ModelUsage, SystemPart, ToolChoice, ToolDefinition, ToolResult as ModelToolResult } from '../../model';
-import { findTool, ordewellTools, runTool, type ToolContext, type ToolGate } from './tools';
+import { ordewellTools, runTool, type OrdewellTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
+import { Compactor, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
 import { REPEAT_FAIL_AT, REPEAT_NUDGE_AT, RepeatGuard, repeatFailure, repeatNudge } from './repeatGuard';
 
@@ -37,8 +38,9 @@ export interface StepPlan {
 
 /**
  * SEAM (c), request assembly: the one place a step's request is built from the
- * transcript. The compaction task folds old messages here (or in the store's
- * `load`), and the caching task places its breakpoints here.
+ * transcript, and where the cache breakpoints are placed (ADR-0070). Compaction
+ * is not here: it rewrites the stored transcript, so what is assembled is
+ * always what a resume would load.
  */
 export type RequestAssembler = (input: AssemblyInput) => ModelRequest;
 
@@ -51,9 +53,22 @@ export interface AssemblyInput {
   effort?: EffortLevel;
 }
 
+/**
+ * The cached prefix is the tool list, then the system prompt, then the
+ * messages. The first two are the attempt's own and never change within it
+ * (the system prompt is read back from the transcript, not rebuilt), so a
+ * breakpoint after each, and one on the last message, make every step read the
+ * previous step's prefix. A system prompt that marks no part gets its last one
+ * marked: the hint is the assembler's to guarantee, not the prompt's.
+ */
+function withSystemBreakpoint(system: readonly SystemPart[]): SystemPart[] {
+  if (system.length === 0 || system.some((part) => part.cacheBreakpoint)) return [...system];
+  return system.map((part, i) => (i === system.length - 1 ? { ...part, cacheBreakpoint: true } : part));
+}
+
 export const assembleRequest: RequestAssembler = (input) => ({
   model: input.model.model,
-  system: [...input.system],
+  system: withSystemBreakpoint(input.system),
   messages: [...input.transcript.messages],
   tools: [...input.tools],
   ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
@@ -68,6 +83,8 @@ export interface LoopOptions {
   system: readonly SystemPart[];
   store: TranscriptStore;
   taskTools: TaskTools;
+  /** The attempt's own tools, which its mode decides (ADR-0070); every one when absent (Full). */
+  tools?: readonly OrdewellTool[];
   /** Every field of a tool's context but the signal, which is the turn's. */
   toolContext: Omit<ToolContext, 'signal'>;
   /** SEAM (a): asked before every neutral tool runs; none runs every call (Full). */
@@ -119,13 +136,25 @@ export class OrdewellLoop {
   private reported = false;
   private streaming: Promise<void> = Promise.resolve();
   private stops = 0;
+  private readonly neutral: readonly OrdewellTool[];
+  private readonly compactor: Compactor;
 
   constructor(private readonly options: LoopOptions) {
+    this.neutral = options.tools ?? ordewellTools;
     // Fixed for the attempt, in a fixed order, so the cached prefix holds.
     this.tools = [
-      ...ordewellTools.map((tool) => ({ name: tool.name, description: tool.description, parameters: { ...tool.parameters } })),
+      ...this.neutral.map((tool) => ({ name: tool.name, description: tool.description, parameters: { ...tool.parameters } })),
       ...options.taskTools.definitions.map(withoutSchemaKey),
     ];
+    this.compactor = new Compactor({
+      client: options.client,
+      model: options.model,
+      store: options.store,
+      tools: this.tools,
+      fallbackSystem: options.system,
+      record: (entry) => this.record(entry),
+      emit: (event) => this.emit(event),
+    });
   }
 
   get toolDefinitions(): readonly ToolDefinition[] {
@@ -180,16 +209,11 @@ export class OrdewellLoop {
         await this.recordMessage(step, { role: 'user', text: lastCallInstruction(this.limit()) });
       }
       if (plan.inject?.length || toolChoice !== plan.toolChoice) transcript = await store.load();
-      const request = (this.options.assemble ?? assembleRequest)({
-        model: this.options.model,
-        system: transcript.system ?? this.options.system,
-        transcript,
-        tools: this.tools,
-        ...(toolChoice ? { toolChoice } : {}),
-        ...(this.options.effort ? { effort: this.options.effort } : {}),
-      });
+      // After the boundary hook, its injections and the last-call words, so the estimate counts what the request carries.
+      transcript = await this.compactor.beforeRequest(transcript, step, signals.hard);
+      // One step is one call against the limit, however many overflow retries it takes.
       this.modelCalls += 1;
-      const result = await this.runStep(step, request, signals);
+      const result = await this.runStepRecovering(step, transcript, { ...plan, ...(toolChoice ? { toolChoice } : {}) }, signals);
       if (result.interrupted) return { interrupted: true };
       if (result.repeated !== undefined) {
         if (!this.reported) await this.endAttempt(step, result.repeated, signals);
@@ -237,6 +261,42 @@ export class OrdewellLoop {
     this.reported = true;
   }
 
+  private assemble(transcript: LoadedTranscript, plan: StepPlan): ModelRequest {
+    return (this.options.assemble ?? assembleRequest)({
+      model: this.options.model,
+      system: transcript.system ?? this.options.system,
+      transcript,
+      tools: this.tools,
+      ...(plan.toolChoice ? { toolChoice: plan.toolChoice } : {}),
+      ...(this.options.effort ? { effort: this.options.effort } : {}),
+    });
+  }
+
+  /**
+   * One step, and when the provider refuses its request as too long, the same
+   * step again from a conversation compacted to a smaller share of the window
+   * (0.85, 0.7, 0.5, then 0.35) before the refusal is the step's failure. Only
+   * a refusal that left nothing recorded is retried: a step that got as far as
+   * a tool call has moved the conversation on.
+   */
+  private async runStepRecovering(step: number, transcript: LoadedTranscript, plan: StepPlan, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<StepResult> {
+    const fractions = [...OVERFLOW_FRACTIONS];
+    let current = transcript;
+    for (;;) {
+      try {
+        return await this.runStep(step, this.assemble(current, plan), signals);
+      } catch (err) {
+        if (!isModelError(err) || err.kind !== 'context-overflow' || signals.hard.aborted) throw err;
+        if ((await this.options.store.load()).messages.length !== current.messages.length) throw err;
+        let shrunk: LoadedTranscript | undefined;
+        // A fraction that changes nothing (the conversation is already that small) falls through to the next.
+        while (shrunk === undefined && fractions.length > 0) shrunk = await this.compactor.shrink(current, step, signals.hard, fractions.shift() as number);
+        if (shrunk === undefined) throw err;
+        current = shrunk;
+      }
+    }
+  }
+
   private async runStep(step: number, request: ModelRequest, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<StepResult> {
     const runId = `step-${step}`;
     let text = '';
@@ -279,14 +339,17 @@ export class OrdewellLoop {
     } catch (err) {
       streamError = err;
     }
-    // Recorded before the calls are waited on, so a stop that ends them still keeps the step's bill.
-    if (usage) await this.recordUsage(step, usage);
+    const aborted = signals.hard.aborted;
+    // Recorded before the calls are waited on, so a stop that ends them still keeps the step's bill. It
+    // covers the request and the assistant message recorded from its reply below, and not the tool
+    // results, which the next estimate adds; a failed step with no call records no reply.
+    const replied = calls.length > 0 || (text !== '' && (streamError === undefined || aborted));
+    if (usage) await this.recordUsage(step, usage, request.messages.length + (replied ? 1 : 0));
     streamed();
 
     if (thinking) this.emit({ type: 'thinking', text: thinking });
     if (text) this.emit({ type: 'assistant_text', runId, text });
 
-    const aborted = signals.hard.aborted;
     if (streamError !== undefined && !aborted) {
       // Nothing of a failed step is recorded but the calls already running,
       // whose results the transcript needs to stay a valid conversation.
@@ -324,7 +387,8 @@ export class OrdewellLoop {
         if (call.name === 'task_complete' && reply.isError !== true) this.reported = true;
         return settle(reply.text, reply.isError === true);
       }
-      const tool = findTool(call.name);
+      // Only what this attempt was offered: a read-only one has no write path to name (ADR-0046).
+      const tool = this.neutral.find((candidate) => candidate.name === call.name);
       if (!tool) return settle(`Unknown tool "${call.name}". The tools are: ${this.tools.map((t) => t.name).join(', ')}.`, true);
       const result = await runTool(tool, call.arguments, { ...this.options.toolContext, signal: signals.hard }, this.options.gate ? { gate: this.options.gate } : {});
       return settle(result.text, result.isError);
@@ -340,8 +404,8 @@ export class OrdewellLoop {
     return { callId: call.id, name: call.name, output: shown, ...(isError ? { isError: true } : {}) };
   }
 
-  private async recordUsage(step: number, usage: ModelUsage): Promise<void> {
-    await this.record({ v: 1, kind: 'usage', at: now(), step, usage });
+  private async recordUsage(step: number, usage: ModelUsage, covers: number): Promise<void> {
+    await this.record({ v: 1, kind: 'usage', at: now(), step, usage, covers });
     const { model } = this.options;
     const record: UsageRecord = {
       source: 'ordewell',
@@ -351,7 +415,10 @@ export class OrdewellLoop {
       ...(usage.cacheReadTokens !== undefined ? { cachedInputTokens: usage.cacheReadTokens } : {}),
       // Only the provider's own figure (ADR-0070): no price table makes one up.
       ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
-      ...(model.known.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      // Always: compaction acts on this window, so the meter must read the same one, a default included.
+      contextWindow: model.contextWindow,
+      // The prompt plus the reply it produced is what the next prompt starts from.
+      ...(usage.inputTokens !== undefined ? { contextTokens: usage.inputTokens + (usage.outputTokens ?? 0) } : {}),
     };
     this.emit({ type: 'usage', record });
   }
