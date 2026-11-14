@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Reading both files.","thought":true},{"functionCall":{"name":"read_file","args":{"path":"src/a.ts"}},"thoughtSignature":"c2lnLWNhbGwtMQ=="},{"functionCall":{"name":"grep","args":{"pattern":"TODO"}}}]},"index":0}],"usageMetadata":{"promptTokenCount":5400,"totalTokenCount":5400},"modelVersion":"gemini-3-flash-preview"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"fc-9","name":"read_file","args":{}}}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":5400,"candidatesTokenCount":30,"cachedContentTokenCount":5120,"totalTokenCount":5490,"thoughtsTokenCount":60},"modelVersion":"gemini-3-flash-preview"}
+
