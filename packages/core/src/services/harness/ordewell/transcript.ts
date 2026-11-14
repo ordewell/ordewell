@@ -13,7 +13,29 @@ import type { ModelMessage, ModelUsage, SystemPart } from '../../model';
 export type TranscriptEntry =
   | { v: 1; kind: 'session'; at: string; model: string; system: SystemPart[] }
   | { v: 1; kind: 'message'; at: string; step: number; message: ModelMessage }
-  | { v: 1; kind: 'usage'; at: string; step: number; usage: ModelUsage };
+  | { v: 1; kind: 'usage'; at: string; step: number; usage: ModelUsage; covers?: number }
+  | CompactionEntry;
+
+/**
+ * The conversation was compacted (ADR-0070). It replaces the messages from
+ * `head` up to `tailFrom` (indices into the conversation as it stood) with
+ * one user message, and keeps the rest word for word, so the lines before it
+ * stay on disk as the record of what was summarized and a resume reads only
+ * what the model last saw.
+ */
+export interface CompactionEntry {
+  v: 1;
+  kind: 'compaction';
+  at: string;
+  step: number;
+  head: number;
+  tailFrom: number;
+  message: Extract<ModelMessage, { role: 'user' }>;
+  preTokens: number;
+  postTokens: number;
+  /** What the summary call spent, which no `usage` line carries. */
+  usage?: ModelUsage;
+}
 
 /** What a transcript holds once read back: the prefix and the conversation to send next. */
 export interface LoadedTranscript {
@@ -22,6 +44,14 @@ export interface LoadedTranscript {
   messages: ModelMessage[];
   /** The last step recorded, so a resumed loop numbers on from it. */
   steps: number;
+  /**
+   * The provider's last count of the prompt and the reply it produced, and how
+   * many of `messages` that count covers: what the next request's size is
+   * measured from. Gone after a compaction, which rewrites the messages.
+   */
+  measured?: { tokens: number; covers: number };
+  /** How many times the conversation has been compacted. */
+  compactions: number;
 }
 
 /**
@@ -77,7 +107,7 @@ export class FileTranscriptStore implements TranscriptStore {
     try {
       raw = await fs.readFile(this.file, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { messages: [], steps: 0 };
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { messages: [], steps: 0, compactions: 0 };
       throw err;
     }
     return foldTranscript(parseLines(raw));
@@ -112,12 +142,12 @@ function parseLines(raw: string): TranscriptEntry[] {
 function isEntry(value: unknown): value is TranscriptEntry {
   if (typeof value !== 'object' || value === null) return false;
   const entry = value as { v?: unknown; kind?: unknown };
-  return entry.v === 1 && (entry.kind === 'session' || entry.kind === 'message' || entry.kind === 'usage');
+  return entry.v === 1 && (entry.kind === 'session' || entry.kind === 'message' || entry.kind === 'usage' || entry.kind === 'compaction');
 }
 
 /** The entries as the conversation the next request sends. */
 export function foldTranscript(entries: readonly TranscriptEntry[]): LoadedTranscript {
-  const out: LoadedTranscript = { messages: [], steps: 0 };
+  const out: LoadedTranscript = { messages: [], steps: 0, compactions: 0 };
   for (const entry of entries) {
     if (entry.kind === 'session') {
       out.model = entry.model;
@@ -125,8 +155,19 @@ export function foldTranscript(entries: readonly TranscriptEntry[]): LoadedTrans
     } else if (entry.kind === 'message') {
       out.messages.push(entry.message);
       out.steps = Math.max(out.steps, entry.step);
+    } else if (entry.kind === 'compaction') {
+      const head = Math.min(entry.head, out.messages.length);
+      const tailFrom = Math.min(Math.max(entry.tailFrom, head), out.messages.length);
+      out.messages = [...out.messages.slice(0, head), entry.message, ...out.messages.slice(tailFrom)];
+      out.steps = Math.max(out.steps, entry.step);
+      out.compactions += 1;
+      delete out.measured;
     } else {
       out.steps = Math.max(out.steps, entry.step);
+      // A usage line from before `covers` existed says nothing a size can be built on.
+      if (entry.covers !== undefined && entry.usage.inputTokens !== undefined) {
+        out.measured = { tokens: entry.usage.inputTokens + (entry.usage.outputTokens ?? 0), covers: entry.covers };
+      }
     }
   }
   return out;
