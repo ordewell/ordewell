@@ -943,7 +943,7 @@ describe('script tasks in the conversation prompt (ADR-0035)', () => {
     expect(p).toContain('"type": "ai|user|script"');
     expect(p).toContain('"type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK"');
     expect(p).toMatch(/"commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails/);
-    expect(p).toMatch(/give "script" instead: one script, run under POSIX sh unless its first line is a #! line naming another shell \(bash, zsh\)\. Give exactly one of the two/);
+    expect(p).toMatch(/give "script" instead: one script, run by the shell your own commands use unless its first line is a #! line naming another shell \(bash, zsh\)\. Give exactly one of the two/);
     // A probe that exits non-zero by design would read as a failed task.
     expect(p).toMatch(/- A script task is an effect or a check, never a probe: its verdict is its exit status, so one that exits non-zero by design fails\. Research is for your own reads, agents and research tasks \(WHO EXPLORES\)\./);
     expect(p).toMatch(/"timeoutMs" is its time limit in milliseconds; ten minutes when left out/);
@@ -1175,5 +1175,14 @@ describe('a research-only first plan (review 132)', () => {
     const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code']);
     expect(p).not.toMatch(/Below Act a wake-up cannot extend the plan/);
     expect(p).not.toMatch(/Below Act, tell the user they will be asked to continue once the reports are in/);
+  });
+});
+
+describe('the shell a script with no #! line runs under (review 132, round 2)', () => {
+  // Without Git Bash on Windows a #!-less script goes to cmd.exe, as run_command does.
+  it.each(['cmd', 'git-bash'] as const)('names the planner\'s own shell, not POSIX sh (research shell: %s)', (researchShell) => {
+    const p = buildConversationSystemPrompt('goal', '', {}, ['codex'], undefined, { harness: true, runner: 'codex', researchShell });
+    expect(p).toContain('one script, run by the shell your own commands use unless its first line is a #! line naming another shell (bash, zsh)');
+    expect(p).not.toContain('POSIX sh unless');
   });
 });
