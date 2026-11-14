@@ -371,6 +371,7 @@ The TUI and the shared conversation view.
 | [0063](surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | The desktop app is an Electron client of the shared daemon, and its renderer never holds the token | accepted | — | [0065](surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md) |
 | [0064](surfaces/0064-a-host-reads-files-and-git-for-the-user-confined-to-the-workspace.md) | A host reads files and git for the user, confined to the workspace and needing no lease | accepted | [0049](isolation/0049-a-session-has-one-live-host.md) | — |
 | [0065](surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md) | The CLI and TUI also ship as a standalone Node binary, installed by one command | accepted | [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md), [0063](surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md) | — |
+| [0069](surfaces/0069-option-arrows-move-by-words-over-a-private-link-to-the-users-zsh.md) | Option+Left/Right moves by words over a private link to the user's zsh, and sends no bytes | accepted | — | — |
 
 ### platform/
 

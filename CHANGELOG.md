@@ -22,10 +22,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
-- **Daemon:** the daemon contract is now 2. The desktop app's card edits use a
-  new `card-edit` route that a 0.13.1 daemon does not serve, so the app and the
-  CLI no longer drive a daemon of an earlier contract: they offer to restart
-  it with their own version (an idle one is replaced, as before).
+- **Daemon:** the daemon contract is now 3. The desktop app's card edits use a
+  new `card-edit` route, and its Explorer reads the workspace folder itself
+  rather than its first repository, neither of which an earlier daemon serves,
+  so the app and the CLI no longer drive a daemon of an earlier contract: they
+  offer to restart it with their own version (an idle one is replaced, as
+  before). A daemon with a live run is left running; restart it once the run
+  ends, or stop it with `ordewell stop --server`.
 - **Planner:** a task's first message no longer carries a plan map (the
   sibling titles, statuses and runners, and the "do ONLY the task marked" line),
   and `ORDEWELL_PLAN_MAP_ENABLED` is gone. The planner is told that each brief
@@ -71,6 +74,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   leaves the screen at once** instead of waiting to be answered.
 - **A disk that refuses a save is now told once** while it keeps refusing,
   instead of the plan stopping on an error or failing silently.
+- **Option+Left/Right moves by words at the prompt of macOS's own zsh in the
+  desktop terminal, and does nothing anywhere else.** It sends no input: the
+  shell moves through a private link only when idle at its prompt, so vim, SSH,
+  tmux, nested shells and custom key bindings never see it. A zsh with a
+  zshenv, and other shells, keep the shortcut off, and the terminal says so.
+  Previous translations could delete text or trigger application keybindings.
 
 ## [0.13.1] - 2026-11-07
 

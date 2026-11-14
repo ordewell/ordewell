@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { DaemonProbe, SessionLeaseRecord } from '@ordewell/core/daemon-client';
+import { DAEMON_CONTRACT, type DaemonProbe, type SessionLeaseRecord } from '@ordewell/core/daemon-client';
 import type { DaemonCallResult, StreamEvent } from '../../../shared/bridge';
 import { HolderConnections, type HolderDeps, type HolderProxy } from '../holders';
 
@@ -90,6 +90,23 @@ describe('HolderConnections.join', () => {
       ok: false,
       reason: 'mismatch',
       message: "The TUI's daemon is 0.9.0 (contract 0); this app speaks contract 1, so it can't join.",
+    });
+    expect(proxies).toEqual([]);
+  });
+
+  it('refuses a session held by a daemon from before workspace-folder reads, though it reports this version', async () => {
+    // Its reader refuses the Explorer's repo "." in a folder that is not a repository.
+    const { connections, proxies } = setup({
+      contract: DAEMON_CONTRACT,
+      probe: async () => ({ kind: 'daemon', identity: { pid: 48200, version: '0.13.1', contract: 2 } }),
+    });
+
+    const joined = await connections.join(WINDOW_A, WORKSPACE, 's1');
+
+    expect(joined).toEqual({
+      ok: false,
+      reason: 'mismatch',
+      message: `The TUI's daemon is 0.13.1 (contract 2); this app speaks contract ${DAEMON_CONTRACT}, so it can't join.`,
     });
     expect(proxies).toEqual([]);
   });

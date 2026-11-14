@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CircleX } from 'lucide-react';
 import { Button, Icon } from '@ordewell/ui/design';
 import type { TerminalEvent } from '../../shared/bridge';
+import { readClipboardText, writeClipboardText } from '../clipboard';
 import { isMac } from '../frame/keys';
 import { SIGN_IN_CLOSED, SIGN_IN_TIMEOUT, waitForSignIn } from '../session/signInWait';
 import type { TermHandle } from '../views/terminal/xterm';
@@ -35,6 +36,8 @@ function messageOf(error: unknown): string {
  */
 export function LoginDialog({ runner, label, platform, onClose, onSignedIn, pollMs, timeoutMs }: LoginDialogProps): JSX.Element {
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
+  // A failed copy or paste leaves the sign-in running, so it is said apart from the phase.
+  const [clipboardNote, setClipboardNote] = useState<string | undefined>(undefined);
   const screen = useRef<HTMLDivElement>(null);
   const term = useRef<TermHandle | null>(null);
   const pty = useRef<number | undefined>(undefined);
@@ -55,6 +58,9 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
           onData: (data) => { if (pty.current !== undefined) void window.ordewell.terminal.write(pty.current, data); },
           onLink: (url) => { void window.ordewell.terminal.openLink(url); },
           screenReaderMode: false,
+          readClipboard: readClipboardText,
+          writeClipboard: writeClipboardText,
+          onClipboardError: (title, reason) => { if (live) setClipboardNote(`${title}: ${reason}`); },
         }, isMac(platform ?? ''));
         if (!live) { handle.dispose(); return; }
         term.current = handle;
@@ -64,6 +70,7 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
           { repo: '.', scope: { kind: 'checkout' }, cols: size.cols, rows: size.rows, login: { runner } },
           (event: TerminalEvent) => {
             if (event.kind === 'data') { handle.write(event.data); return; }
+            if (event.kind !== 'exit') return;
             handle.write('\r\n\x1b[2m[Process exited.]\x1b[0m\r\n');
             pty.current = undefined;
             ended();
@@ -157,6 +164,9 @@ export function LoginDialog({ runner, label, platform, onClose, onSignedIn, poll
             </span>
           ) : null}
         </p>
+        {clipboardNote !== undefined && (
+          <p className="welcome-login-hint" role="alert">{clipboardNote}</p>
+        )}
         {failed && (phase.message === SIGN_IN_CLOSED || phase.message === SIGN_IN_TIMEOUT) && (
           <p className="welcome-login-hint">The agent's own command is in the terminal above. Close this, then choose Log in to run it again.</p>
         )}

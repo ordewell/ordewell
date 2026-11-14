@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalEvent } from '../../../shared/bridge';
 import { fileSystemPlacement } from '../placement';
 import { TerminalChannel, type Caller } from '../TerminalChannel';
-import { TerminalHost } from '../TerminalHost';
+import { TerminalHost, type WordChannel } from '../TerminalHost';
 import { fakeSpawn } from './fakePty';
 
 let root: string;
@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
-function setup(platform: NodeJS.Platform = 'darwin') {
+function setup(platform: NodeJS.Platform = 'darwin', words?: (file: string, env: Record<string, string>) => Promise<(WordChannel & { env: Record<string, string> }) | undefined>) {
   const fake = fakeSpawn();
   const host = new TerminalHost(fake.spawn, { set: (fn) => { fn(); return 0; }, clear: () => undefined });
   const call = vi.fn(async (routeId: string) => (
@@ -29,6 +29,7 @@ function setup(platform: NodeJS.Platform = 'darwin') {
     platform,
     home: root,
     env: async () => ({ SHELL: '/bin/zsh', PATH: '/fixed/path:/usr/bin', ELECTRON_RUN_AS_NODE: '1' }),
+    ...(words ? { words } : {}),
   });
   const sent: Array<{ id: number; event: TerminalEvent }> = [];
   const caller = (owner = 1): Caller => ({ owner, workspace: root, send: (id, event) => sent.push({ id, event }) });
@@ -143,5 +144,29 @@ describe('TerminalChannel (ADR-0062 G11)', () => {
     const result = await channel.open({ owner: 9, send: () => undefined }, spec({ login: { runner: 'not-a-runner' } }));
     expect(result.ok).toBe(false);
     expect(fake.calls).toHaveLength(0);
+  });
+
+  it('starts a shell with its word link\'s variables and carries the chord to it, but gives a login none (ADR-0069)', async () => {
+    const link = { env: { ZDOTDIR: '/link' }, attach: vi.fn(), write: vi.fn(), word: vi.fn(), dispose: vi.fn() };
+    const words = vi.fn(async () => link);
+    const { channel, fake, caller } = setup('darwin', words);
+    await channel.open(caller(), spec());
+    expect(words).toHaveBeenCalledWith('/bin/zsh', expect.objectContaining({ TERM: 'xterm-256color', PATH: '/fixed/path:/usr/bin' }));
+    expect(fake.calls[0]!.env).toMatchObject({ ZDOTDIR: '/link', PATH: '/fixed/path:/usr/bin' });
+    channel.word(caller(2), 1, 'left');
+    channel.word(caller(1), 1, 'right');
+    expect(link.word.mock.calls).toEqual([['right']]);
+
+    await channel.open(caller(), spec({ id: 2, login: { runner: 'codex' } }));
+    expect(words).toHaveBeenCalledTimes(1);
+    expect(fake.calls[1]!.env).not.toHaveProperty('ZDOTDIR');
+  });
+
+  it('closes a word link whose shell could not start', async () => {
+    const link = { env: {}, attach: vi.fn(), write: vi.fn(), word: vi.fn(), dispose: vi.fn() };
+    const { channel, caller } = setup('darwin', async () => link);
+    await channel.open(caller(), spec());
+    expect((await channel.open(caller(), spec())).ok).toBe(false);
+    expect(link.dispose).toHaveBeenCalledTimes(1);
   });
 });

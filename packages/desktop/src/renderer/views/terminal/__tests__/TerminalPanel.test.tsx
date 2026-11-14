@@ -33,7 +33,9 @@ interface World {
   resize: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   openLink: ReturnType<typeof vi.fn>;
+  word: ReturnType<typeof vi.fn>;
   open: ReturnType<typeof vi.fn>;
+  clipboard: { readText: ReturnType<typeof vi.fn>; writeText: ReturnType<typeof vi.fn> };
   session: { t3: string; t4: string };
   /** What the daemon's session stream pushes. */
   stream(): void;
@@ -44,7 +46,9 @@ interface World {
 function world(): World {
   const w: World = {
     ptys: [], write: vi.fn(async () => undefined), resize: vi.fn(async () => undefined), close: vi.fn(async () => undefined),
-    openLink: vi.fn(async () => ({ ok: true })), open: vi.fn(), session: { t3: 'active', t4: 'integrated' },
+    openLink: vi.fn(async () => ({ ok: true })), word: vi.fn(async () => undefined), open: vi.fn(),
+    clipboard: { readText: vi.fn(async () => ({ ok: true, text: 'from the clipboard' })), writeText: vi.fn(async () => ({ ok: true })) },
+    session: { t3: 'active', t4: 'integrated' },
     stream: () => undefined, openResult: undefined,
   };
   installBridge({
@@ -52,7 +56,7 @@ function world(): World {
     'sessions.list': () => [{ id: 's1', goal: 'Ship it', status: 'running', taskCount: 2, updatedAt: '2026-11-03T09:00:00.000Z' }],
     'sessions.get': () => run(w.session),
   });
-  const bridge = (window as unknown as { ordewell: { daemon: Record<string, unknown>; terminal?: unknown } }).ordewell;
+  const bridge = (window as unknown as { ordewell: { daemon: Record<string, unknown>; terminal?: unknown; clipboard?: unknown } }).ordewell;
   const listeners: Array<() => void> = [];
   bridge.daemon.subscribe = vi.fn((_session: string, cb: () => void) => { listeners.push(cb); return () => { listeners.splice(listeners.indexOf(cb), 1); }; });
   w.stream = () => { for (const cb of [...listeners]) cb(); };
@@ -62,7 +66,8 @@ function world(): World {
     w.ptys.push({ id, spec, emit: onEvent });
     return { ok: true, id, cwd: '/work/acme', shell: 'zsh' };
   });
-  bridge.terminal = { open: w.open, write: w.write, resize: w.resize, close: w.close, openLink: w.openLink };
+  bridge.terminal = { open: w.open, write: w.write, resize: w.resize, close: w.close, openLink: w.openLink, word: w.word };
+  bridge.clipboard = w.clipboard;
   return w;
 }
 
@@ -71,8 +76,8 @@ let offs: Array<() => void> = [];
 beforeEach(() => { offs = []; terms.length = 0; });
 afterEach(() => { for (const off of offs) off(); vi.restoreAllMocks(); });
 
-async function mount(): Promise<void> {
-  store = new FrameStore({ workspace: '/work/acme', platform: 'linux' });
+async function mount(platform = 'linux'): Promise<void> {
+  store = new FrameStore({ workspace: '/work/acme', platform });
   offs.push(registerFrameCommands(store), registerViews(store.api));
   render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
 }
@@ -103,6 +108,28 @@ describe('the terminal panel', () => {
     expect(tab).toHaveTextContent('Your checkout');
     expect(w.open).toHaveBeenCalledTimes(1);
     expect(w.ptys[0]?.spec).toMatchObject({ repo: '.', scope: { kind: 'checkout' } });
+  });
+
+  it('describes the unavailable shortcut on macOS until the shell joins the word link (ADR-0069)', async () => {
+    const w = world();
+    await mount('darwin');
+    toggle();
+    await screen.findByRole('tab', { name: /zsh/ });
+    expect(within(panel()).getByRole('tabpanel')).toHaveAccessibleDescription(/Option\+Left\/Right moves by words only at the prompt of macOS’s own zsh/);
+    expect(within(panel()).getByText(/in this terminal it does nothing/)).toBeVisible();
+    terms[0]!.options.onWord?.('left');
+    expect(w.word).not.toHaveBeenCalled();
+
+    act(() => w.ptys[0]?.emit({ kind: 'words' }));
+    expect(within(panel()).queryByText(/in this terminal it does nothing/)).not.toBeInTheDocument();
+    expect(within(panel()).getByRole('tabpanel')).not.toHaveAttribute('aria-describedby');
+    expect(within(panel()).getByRole('tab', { name: /zsh/ })).toBeInTheDocument();
+    terms[0]!.options.onWord?.('right');
+    expect(w.word).toHaveBeenCalledWith(w.ptys[0]!.id, 'right');
+
+    act(() => w.ptys[0]?.emit({ kind: 'exit', exitCode: 0 }));
+    terms[0]!.options.onWord?.('left');
+    expect(w.word).toHaveBeenCalledTimes(1);
   });
 
   it('opens the panel for a login and runs it in the checkout, ending when its process does', async () => {
@@ -149,6 +176,26 @@ describe('the terminal panel', () => {
     await openPanel();
     terms[0]?.link('https://example.com/docs');
     expect(w.openLink).toHaveBeenCalledWith('https://example.com/docs');
+  });
+
+  it('reaches the clipboard only through the bridge, and says when it could not', async () => {
+    const w = world();
+    await openPanel();
+    const options = terms[0]?.options;
+    if (!options) throw new Error('no terminal');
+
+    await expect(options.readClipboard()).resolves.toBe('from the clipboard');
+    await options.writeClipboard('selected');
+    expect(w.clipboard.writeText).toHaveBeenCalledWith('selected');
+
+    w.clipboard.readText.mockResolvedValueOnce({ ok: false, message: 'The clipboard could not be read: busy' });
+    await expect(options.readClipboard()).rejects.toThrow('The clipboard could not be read: busy');
+    act(() => options.onClipboardError('Could not paste', 'The clipboard could not be read: busy'));
+    const banner = await screen.findByRole('region', { name: 'Could not paste' });
+    expect(banner).toHaveTextContent('The clipboard could not be read: busy');
+    expect(document.querySelector('.frame-live')).toHaveTextContent('Could not paste: The clipboard could not be read: busy');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Could not paste' })).not.toBeInTheDocument());
   });
 
   it('tells the shell the grid when the panel is resized', async () => {

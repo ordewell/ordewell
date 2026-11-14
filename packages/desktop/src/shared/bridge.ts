@@ -115,6 +115,10 @@ export interface ActionResult {
   message?: string;
 }
 
+export type ClipboardReadResult =
+  | { ok: true; text: string }
+  | { ok: false; message: string };
+
 export interface ConfirmSpec {
   message: string;
   detail?: string;
@@ -214,7 +218,9 @@ export type TerminalOpenResult =
 
 export type TerminalEvent =
   | { kind: 'data'; data: string }
-  | { kind: 'exit'; exitCode: number; signal?: number };
+  | { kind: 'exit'; exitCode: number; signal?: number }
+  /** The shell's line editor joined the word link: Option+Left/Right moves by words in it (ADR-0069). */
+  | { kind: 'words' };
 
 export interface TerminalDelivery {
   id: number;
@@ -335,8 +341,20 @@ export interface OrdewellBridge {
     write(id: number, data: string): Promise<void>;
     resize(id: number, cols: number, rows: number): Promise<void>;
     close(id: number): Promise<void>;
+    /** Option+Left/Right: a word move the shell makes only at its own prompt, never bytes typed (ADR-0069). */
+    word(id: number, direction: 'left' | 'right'): Promise<void>;
     /** Opens an http(s) address in the OS browser; anything else is refused. The page has no other way out (security.ts). */
     openLink(url: string): Promise<ActionResult>;
+  };
+  /**
+   * The system clipboard's plain text, through main: the session grants the
+   * page no web clipboard permission (security.ts). Each call is honoured only
+   * while the user is pressing a key or clicking in this window; any other
+   * time, and on any failure, the result says why, worded for the user.
+   */
+  clipboard: {
+    readText(): Promise<ClipboardReadResult>;
+    writeText(text: string): Promise<ActionResult>;
   };
 }
 
@@ -375,6 +393,9 @@ export const CHANNELS = {
   terminalResize: 'ordewell:terminal.resize',
   terminalClose: 'ordewell:terminal.close',
   terminalOpenLink: 'ordewell:terminal.openLink',
+  terminalWord: 'ordewell:terminal.word',
+  clipboardReadText: 'ordewell:clipboard.readText',
+  clipboardWriteText: 'ordewell:clipboard.writeText',
 } as const;
 
 export const EVENTS = {
