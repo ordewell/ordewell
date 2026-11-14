@@ -55,6 +55,8 @@ export class FileTranscriptStore implements TranscriptStore {
   private readonly file: string;
   /** Serialises appends: concurrent tool completions must not interleave lines. */
   private tail: Promise<void> = Promise.resolve();
+  /** Whether this store has checked the file's end, which a crash may have left mid-line. */
+  private mended = false;
 
   constructor(readonly sessionId: string, root: string = ordewellSessionsRoot()) {
     if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error(`Invalid Ordewell session id: ${sessionId}`);
@@ -62,12 +64,14 @@ export class FileTranscriptStore implements TranscriptStore {
     this.file = path.join(this.dir, 'transcript.jsonl');
   }
 
+  /** Rejects on any failure but a missing file: one that cannot be read now is not one that is gone. */
   async exists(): Promise<boolean> {
     try {
       await fs.access(this.file);
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
     }
   }
 
@@ -87,11 +91,34 @@ export class FileTranscriptStore implements TranscriptStore {
     const line = `${JSON.stringify(entry)}\n`;
     const write = this.tail.then(async () => {
       await fs.mkdir(this.dir, { recursive: true });
-      await fs.appendFile(this.file, line, 'utf8');
+      // A resumed session's first line would otherwise join the torn one, and be skipped with it.
+      const lead = this.mended ? '' : await this.tornTail();
+      await fs.appendFile(this.file, lead + line, 'utf8');
+      this.mended = true;
     });
     // A failed write fails its own caller, never every later one.
     this.tail = write.catch(() => undefined);
     return write;
+  }
+
+  /** A line break when the file ends inside a line, else nothing. */
+  private async tornTail(): Promise<string> {
+    let handle: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      handle = await fs.open(this.file, 'r');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw err;
+    }
+    try {
+      const { size } = await handle.stat();
+      if (size === 0) return '';
+      const last = Buffer.alloc(1);
+      await handle.read(last, 0, 1, size - 1);
+      return last[0] === 0x0a ? '' : '\n';
+    } finally {
+      await handle.close();
+    }
   }
 }
 

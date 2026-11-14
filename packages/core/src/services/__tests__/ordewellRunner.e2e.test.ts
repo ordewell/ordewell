@@ -10,6 +10,7 @@ import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { StructuredRunner } from '../StructuredRunner';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import { fakeConfig, patient, removeDir, setEnv } from '../../testing';
+import type { Session } from '../createSession';
 import { saveSession } from '../../utils/sessionStore';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, makeSession } from './sessionTestKit';
@@ -19,7 +20,9 @@ import { closeSessions, makeSession } from './sessionTestKit';
  * worktree and the real in-process loop, with only the provider faked, by the
  * `ordewell-runner` persona of bench/live/mock-provider.mjs. It reads, edits,
  * runs the test through the shell, and ends with task_complete, whose
- * token-bound call is the only thing the verdict rests on.
+ * token-bound call is the only thing the verdict rests on. The
+ * `ordewell-step-limit` persona never finishes by itself, so the step limit's
+ * forced task_complete is what ends its attempt.
  */
 
 const START_MOCK = pathToFileURL(resolve(__dirname, '../../../../../bench/live/start-mock.mjs')).href;
@@ -60,32 +63,37 @@ function repo(): string {
   return root;
 }
 
+async function runOne(persona: string): Promise<{ root: string; main: string; session: Session }> {
+  const { startMock } = (await import(START_MOCK)) as { startMock: StartMock };
+  const { port, child } = await startMock();
+  cleanups.push(() => child.kill());
+  cleanups.push(setEnv({ OPENROUTER_BASE_URL: `http://127.0.0.1:${port}/v1`, OPENROUTER_API_KEY: 'mock-key' }));
+
+  const root = repo();
+  const main = git(root, 'rev-parse', 'main');
+  const tasks: Task[] = [
+    createTask({
+      id: 't', order: 1, title: 'Fix add', prompt: 'add() in src/add.mjs subtracts; make `node test.mjs` pass.',
+      assignedRunner: 'ordewell', assignedModel: { modelId: `openrouter:mock/${persona}`, modelLabel: 'mock' }, taskMode: 'full',
+    }),
+  ];
+  const session = makeSession({
+    runner: new StructuredRunner(),
+    isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) }),
+    workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-ordewell',
+    config: fakeConfig({ aiProvider: 'openrouter' }),
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
+  });
+  session.loadPlan({ tasks, runners: ['ordewell'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'fix add', root, { sessionId: 'session-ordewell' });
+
+  await session.execute({ command: 'run_plan' }, { kind: 'user' });
+  await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+  return { root, main, session };
+}
+
 describe('the built-in Ordewell runner, offline', () => {
   it('reads, edits, runs the test and completes a real task in a real worktree, the verdict from task_complete', async () => {
-    const { startMock } = (await import(START_MOCK)) as { startMock: StartMock };
-    const { port, child } = await startMock();
-    cleanups.push(() => child.kill());
-    cleanups.push(setEnv({ OPENROUTER_BASE_URL: `http://127.0.0.1:${port}/v1`, OPENROUTER_API_KEY: 'mock-key' }));
-
-    const root = repo();
-    const main = git(root, 'rev-parse', 'main');
-    const tasks: Task[] = [
-      createTask({
-        id: 't', order: 1, title: 'Fix add', prompt: 'add() in src/add.mjs subtracts; make `node test.mjs` pass.',
-        assignedRunner: 'ordewell', assignedModel: { modelId: 'openrouter:mock/ordewell-runner', modelLabel: 'mock' }, taskMode: 'full',
-      }),
-    ];
-    const session = makeSession({
-      runner: new StructuredRunner(),
-      isolation: createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config: fakeConfig({ worktreeIsolation: true }) }),
-      workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-ordewell',
-      config: fakeConfig({ aiProvider: 'openrouter' }),
-      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
-    });
-    session.loadPlan({ tasks, runners: ['ordewell'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'fix add', root, { sessionId: 'session-ordewell' });
-
-    await session.execute({ command: 'run_plan' }, { kind: 'user' });
-    await vi.waitFor(() => expect(session.planTasks[0].status).not.toMatch(/approved|pending|in_progress/), { timeout: 60_000, interval: 100 });
+    const { root, main, session } = await runOne('ordewell-runner');
     expect(session.planTasks[0].verdict).toMatchObject({ outcome: 'pass', reported: 'done' });
     expect(session.planTasks[0].status).toBe('completed');
 
@@ -96,6 +104,22 @@ describe('the built-in Ordewell runner, offline', () => {
     // ADR-0032: the runner's transcript lives outside the workspace, so nothing of it lands.
     expect(git(root, 'ls-tree', '-r', '--name-only', integration).split('\n').sort()).toEqual(['src/add.mjs', 'test.mjs']);
     expect(existsSync(join(root, 'transcript.jsonl'))).toBe(false);
+    session.destroy();
+  }, patient(90_000));
+
+  it('ends an attempt at its step limit with the report the forced task_complete made, every tool still offered', async () => {
+    const settings = join(tempDir(), 'settings.json');
+    writeFileSync(settings, JSON.stringify({ ordewellStepLimit: 3 }));
+    cleanups.push(setEnv({ ORDEWELL_SETTINGS_PATH: settings }));
+
+    const { session } = await runOne('ordewell-step-limit');
+    const task = session.planTasks[0];
+    expect(task.verdict).toMatchObject({ outcome: 'fail', reported: 'blocked' });
+    const report = task.handoff?.summary ?? '';
+    expect(report).toContain('Told it was the last call: true.');
+    // The last call keeps the whole toolset, so the provider's cache and the model's view of its tools are unchanged.
+    const offered = report.match(/Offered: ([^.]*)\./)?.[1].split(',') ?? [];
+    expect(offered).toEqual(expect.arrayContaining(['read', 'edit', 'shell', 'task_complete']));
     session.destroy();
   }, patient(90_000));
 });

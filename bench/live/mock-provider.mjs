@@ -32,6 +32,11 @@
  *                       read src/add.mjs, fix its `a - b` with edit, run
  *                       `node test.mjs` through shell, then task_complete,
  *                       done only when the test printed "pass"
+ *   mock/ordewell-step-limit  a built-in runner task that never finishes on its
+ *                       own: it reads a different file each step until a
+ *                       request forces task_complete (the runner's step
+ *                       limit), then reports blocked, quoting the tools it
+ *                       was still offered and the runner's last-call words
  *
  * The five `mock/goal-*` personas are the kinds of goal the strategy step
  * teaches (#108), each replying with the plumbing its kind calls for:
@@ -350,7 +355,7 @@ function fitTurn(messages) {
   return { reasoning: 'The widest cards. ', content: fence(DESKTOP_FIT_PLAN) };
 }
 
-function scriptTurn(model, messages) {
+function scriptTurn(model, messages, request = {}) {
   const persona = model.split('/')[1] ?? model;
   const s = shape(messages);
 
@@ -426,6 +431,19 @@ function scriptTurn(model, messages) {
         : { status: 'failed', summary: 'The test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
     }
     return { content: 'Done.' };
+  }
+
+  if (persona === 'ordewell-step-limit') {
+    // Only the runner's last allowed call forces task_complete; until then it keeps working.
+    const forced = request.tool_choice?.function?.name === 'task_complete';
+    if (!forced) return toolCallTurn('read', { path: s.toolRounds % 2 === 0 ? 'src/add.mjs' : 'test.mjs' });
+    const offered = (request.tools ?? []).map((t) => t.function?.name).filter(Boolean).sort().join(',');
+    const lastCall = /last model call/i.test(s.lastUser);
+    return toolCallTurn('task_complete', {
+      status: 'blocked',
+      summary: `Read the code; the fix is not made yet. Offered: ${offered}. Told it was the last call: ${lastCall}.`,
+      reason: 'The step limit ended the attempt before the edit.',
+    });
   }
 
   if (persona === 'goal-question') {
@@ -522,7 +540,7 @@ const server = http.createServer((req, res) => {
     let parsed;
     try { parsed = JSON.parse(body); } catch { res.writeHead(400).end('bad json'); return; }
     const { model, messages } = parsed;
-    const turn = scriptTurn(model ?? 'mock/interviewer', messages ?? []);
+    const turn = scriptTurn(model ?? 'mock/interviewer', messages ?? [], parsed);
 
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
 
