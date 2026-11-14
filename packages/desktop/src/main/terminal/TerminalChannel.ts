@@ -1,6 +1,6 @@
 import { planDirectLaunch, runnerSignIn, workspaceEnvOf } from '@ordewell/core';
 import type { TerminalEvent, TerminalOpenResult } from '../../shared/bridge';
-import { TerminalHost, validSize } from './TerminalHost';
+import { TerminalHost, validSize, type WordChannel } from './TerminalHost';
 import { placeTerminal, type PlacementDeps } from './placement';
 import { shellFor, shellName, terminalEnv } from './shellChoice';
 
@@ -20,6 +20,8 @@ export interface TerminalChannelDeps {
   env(): Promise<NodeJS.ProcessEnv>;
   /** Where a login runs when the window has no checkout: the launcher's window. */
   home: string;
+  /** A word link for a shell that can take one (ADR-0069); absent, Option+Left/Right does nothing. */
+  words?(file: string, env: Record<string, string>): Promise<(WordChannel & { env: Record<string, string> }) | undefined>;
 }
 
 export interface Caller {
@@ -61,6 +63,8 @@ export class TerminalChannel {
 
     const env = await this.deps.env();
     const shell = shellFor(this.deps.platform, env);
+    const shellEnv = terminalEnv(env);
+    const words = await this.deps.words?.(shell.file, shellEnv);
     try {
       this.deps.host.start({
         id,
@@ -68,11 +72,13 @@ export class TerminalChannel {
         file: shell.file,
         args: shell.args,
         cwd: placed.cwd,
-        env: terminalEnv(env),
+        env: words ? { ...shellEnv, ...words.env } : shellEnv,
         ...size,
         send: caller.send,
+        ...(words ? { words } : {}),
       });
     } catch (err) {
+      words?.dispose();
       return { ok: false, message: `Could not start ${shellName(shell.file)}: ${err instanceof Error ? err.message : String(err)}` };
     }
     return { ok: true, id, cwd: placed.cwd, shell: shellName(shell.file) };
@@ -127,6 +133,10 @@ export class TerminalChannel {
 
   write(caller: Caller, id: unknown, data: unknown): void {
     this.deps.host.write(caller.owner, id, data);
+  }
+
+  word(caller: Caller, id: unknown, direction: unknown): void {
+    this.deps.host.word(caller.owner, id, direction);
   }
 
   resize(caller: Caller, id: unknown, cols: unknown, rows: unknown): void {

@@ -1,4 +1,5 @@
 import type { TerminalEvent } from '../../shared/bridge';
+import type { WordDirection, WordPty } from './wordLink';
 
 /**
  * The ptys of the app, owned by main and never by a renderer (ADR-0062 G11):
@@ -23,6 +24,14 @@ export interface PtySpawn {
   (file: string, args: string[], options: { cwd: string; env: Record<string, string>; cols: number; rows: number; name: string }): PtyProcess;
 }
 
+/** A shell's word link (ADR-0069): keystrokes go through it, so a move keeps its place among them. */
+export interface WordChannel {
+  attach(pty: WordPty, linked: () => void): void;
+  write(data: string): void;
+  word(direction: WordDirection): void;
+  dispose(): void;
+}
+
 export interface StartOptions {
   /** The number the page chose; unique per owner. */
   id: number;
@@ -34,6 +43,7 @@ export interface StartOptions {
   cols: number;
   rows: number;
   send(id: number, event: TerminalEvent): void;
+  words?: WordChannel;
 }
 
 interface Entry {
@@ -41,6 +51,7 @@ interface Entry {
   owner: number;
   shell: string;
   flush(): void;
+  words: WordChannel | undefined;
 }
 
 const MIN = 1;
@@ -93,12 +104,15 @@ export class TerminalHost {
       if (pending.length >= BATCH_BYTES) flush();
       else timer ??= this.timers.set(() => { timer = undefined; flush(); }, BATCH_MS);
     });
+    const words = options.words;
     pty.onExit(({ exitCode, signal }) => {
       flush();
+      words?.dispose();
       this.entries.delete(key);
       options.send(options.id, { kind: 'exit', exitCode, ...(signal ? { signal } : {}) });
     });
-    this.entries.set(key, { pty, owner: options.owner, shell: options.file, flush });
+    this.entries.set(key, { pty, owner: options.owner, shell: options.file, flush, words });
+    words?.attach(pty, () => options.send(options.id, { kind: 'words' }));
   }
 
   /** A terminal is reachable by the window that opened it and no other. */
@@ -108,7 +122,15 @@ export class TerminalHost {
 
   write(owner: number, id: unknown, data: unknown): void {
     if (typeof data !== 'string') throw new Error('write takes text');
-    this.find(owner, id)?.pty.write(data);
+    const entry = this.find(owner, id);
+    if (entry?.words) entry.words.write(data);
+    else entry?.pty.write(data);
+  }
+
+  /** Option+Left/Right: the shell moves if its link says it can, and nothing reaches the pty otherwise. */
+  word(owner: number, id: unknown, direction: unknown): void {
+    if (direction !== 'left' && direction !== 'right') throw new Error('word takes left or right');
+    this.find(owner, id)?.words?.word(direction);
   }
 
   resize(owner: number, id: unknown, cols: unknown, rows: unknown): void {
@@ -121,6 +143,7 @@ export class TerminalHost {
     const entry = this.find(owner, id);
     if (!entry) return;
     this.entries.delete(TerminalHost.key(owner, id as number));
+    entry.words?.dispose();
     entry.pty.kill();
   }
 
@@ -129,12 +152,13 @@ export class TerminalHost {
     for (const [key, entry] of [...this.entries]) {
       if (entry.owner !== owner) continue;
       this.entries.delete(key);
+      entry.words?.dispose();
       entry.pty.kill();
     }
   }
 
   killAll(): void {
-    for (const entry of this.entries.values()) entry.pty.kill();
+    for (const entry of this.entries.values()) { entry.words?.dispose(); entry.pty.kill(); }
     this.entries.clear();
   }
 

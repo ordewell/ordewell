@@ -1,7 +1,8 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TerminalEvent, TerminalOpenResult, TerminalOpenSpec } from '../../../shared/bridge';
+import type { ClipboardReadResult, TerminalEvent, TerminalOpenResult, TerminalOpenSpec } from '../../../shared/bridge';
 import { fakeDaemon, ok } from '../../session/__tests__/fakeDaemon';
+import { terms } from '../../test/xtermMock';
 import { LoginDialog } from '../LoginDialog';
 
 vi.mock('../../views/terminal/xterm', async () => (await import('../../test/xtermMock')).fakeXtermModule());
@@ -61,5 +62,21 @@ describe('the launcher\'s login terminal', () => {
     await vi.waitFor(() => expect(second.events).toHaveLength(1));
     act(() => second.events[0]!({ kind: 'exit', exitCode: 1 }));
     await seen(/The terminal closed before sign-in finished\./);
+  });
+
+  it('pastes through the bridge, and says why a paste failed while the sign-in waits on', async () => {
+    world(false);
+    const readText = vi.fn(async (): Promise<ClipboardReadResult> => ({ ok: true, text: 'ABCD-1234' }));
+    Object.assign(window.ordewell, { clipboard: { readText, writeText: vi.fn(async () => ({ ok: true })) } });
+    render(<LoginDialog runner="codex" label="Codex" platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={vi.fn()} />);
+    await seen('Waiting for the sign-in to finish…');
+    const term = terms[terms.length - 1]!;
+    await expect(term.options.readClipboard()).resolves.toBe('ABCD-1234');
+
+    readText.mockResolvedValueOnce({ ok: false, message: 'The clipboard could not be read: busy' });
+    await expect(term.options.readClipboard()).rejects.toThrow('The clipboard could not be read: busy');
+    act(() => term.options.onClipboardError('Could not paste', 'The clipboard could not be read: busy'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not paste: The clipboard could not be read: busy');
+    expect(screen.getByText('Waiting for the sign-in to finish…')).toBeInTheDocument();
   });
 });

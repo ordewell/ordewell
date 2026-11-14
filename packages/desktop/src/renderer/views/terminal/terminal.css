@@ -39,7 +39,11 @@
 .terminal-menu-reason { flex-basis: 100%; color: var(--ow-fg-secondary); font: var(--ow-type-caption); white-space: normal; }
 .terminal-banner { margin: 0; padding: var(--ow-space-1) var(--ow-space-3); background: var(--ow-bg-selected); border-bottom: 1px solid var(--ow-border); color: var(--ow-fg); font: var(--ow-type-small); overflow-wrap: anywhere; }
 .terminal-stage { position: relative; flex: 1; min-height: 0; background: var(--ow-bg); }
-.terminal-host { position: absolute; inset: 0; padding: var(--ow-space-1) 0 0 var(--ow-space-3); overflow: hidden; }
+/*
+ * content-box: the fit addon sizes the grid from this element's computed width and height, which under the
+ * app's border-box would include the padding, fitting a column or two and a row more than are visible.
+ */
+.terminal-host { position: absolute; inset: 0; box-sizing: content-box; padding: var(--ow-space-1) 0 0 var(--ow-space-3); overflow: hidden; }
 .terminal-host[hidden] { display: none; }
 .terminal-host .xterm { height: 100%; }
 .terminal-empty { position: absolute; inset: 0; justify-content: center; }

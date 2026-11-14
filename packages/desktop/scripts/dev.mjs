@@ -1,13 +1,21 @@
-// `npm run desktop:dev`: the renderer from Vite with hot reload, main and the
-// preload built once by tsup, and Electron pointed at the dev server. The dev
-// URL is read only by an unpackaged app (src/main/index.ts).
+// `npm run desktop:dev`: core, ui and web rebuilt (workspace-builds.mjs), the
+// renderer from Vite with hot reload, main and the preload built once by tsup,
+// and Electron pointed at the dev server. The dev URL is read only by an
+// unpackaged app (src/main/index.ts).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { buildWorkspaces } from './workspace-builds.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
+
+const failed = buildWorkspaces();
+if (failed) {
+  console.error(failed);
+  process.exit(1);
+}
 
 const tsup = spawn(process.execPath, [require.resolve('tsup/dist/cli-default.js')], { cwd: root, stdio: 'inherit' });
 const built = await new Promise((resolve) => tsup.on('exit', (code) => resolve(code === 0)));
