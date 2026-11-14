@@ -11,6 +11,12 @@ export interface CatalogModel {
   maxOutputTokens?: number;
   /** Whether the model takes tool definitions, when the catalog lists what it takes. */
   tools?: boolean;
+  /** Whether the model reasons, when a source says (models.dev; see ModelDetails). */
+  reasoning?: boolean;
+  /** Effort levels a reasoning model takes, when a source lists them. */
+  efforts?: string[];
+  /** USD per million tokens, when a source states them. */
+  cachePricing?: { read?: number; write?: number };
 }
 
 interface OpenRouterModel {

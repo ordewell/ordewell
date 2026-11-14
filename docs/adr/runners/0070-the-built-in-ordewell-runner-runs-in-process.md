@@ -128,8 +128,6 @@ comes from that call.
 - The step limit, the repeat guard, compaction and prompt caching.
 - Per-family tool shapes: one neutral set serves every model until a family
   measurably needs its own.
-- The model catalog from each provider's `/models` plus models.dev; until then
-  `ModelInfo` is what the existing listing states, defaulted elsewhere.
 - Moving the planner onto `ModelClient`. Only the planner moves; the runner is
   on it already.
 
@@ -156,3 +154,7 @@ comes from that call.
 ## History
 
 - 2026-11-14 — accepted; Full mode on chat-completions implemented.
+- 2026-11-14 — the model catalog implemented: each provider's `/models` says
+  which models exist, models.dev fills window, reply cap, prices and
+  capabilities (daily background fetch, cache under the data directory, bundled
+  snapshot as the offline fallback; `ModelDetails.ts`).
