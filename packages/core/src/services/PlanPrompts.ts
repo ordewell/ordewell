@@ -687,7 +687,7 @@ function buildConversationBody(
     '',
     'A script task runs its body with no model, and takes this shape instead:',
     '{ "id": "push-1", "order": 3, "title": "Push the release branch", "description": "What it does", "type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK" }',
-    '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run under POSIX sh unless its first line is a #! line naming another shell (bash, zsh). Give exactly one of the two.',
+    '- "commands" is a list of argument vectors, run in order with no shell, stopping at the first that fails. For an effect that needs a shell (a pipe, a loop), give "script" instead: one script, run by the shell your own commands use unless its first line is a #! line naming another shell (bash, zsh). Give exactly one of the two.',
     '- A script task is an effect or a check, never a probe: its verdict is its exit status, so one that exits non-zero by design fails. Research is for your own reads, agents and research tasks (WHO EXPLORES).',
     '- "timeoutMs" is its time limit in milliseconds; ten minutes when left out.',
     `- ${TASK_KINDS.script.topLevelOnly ? 'Only a top-level task can be one. ' : ''}Leave out ${forbiddenFields('script').map((f) => `"${f}"`).join(', ')}.`,

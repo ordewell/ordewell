@@ -483,6 +483,16 @@ describe('ScriptRunner: on Windows', () => {
     expect(await run.exit).toEqual({ outcome: 'passed' });
     expect(spawn).toHaveBeenCalledWith('C:\\tools\\gh.exe', ['pr', 'list'], expect.objectContaining({ shell: false, detached: false, cwd: run.cwd }));
   });
+
+  // The prompt promises the shell the planner's own commands use, so without
+  // Git Bash a #!-less script goes to cmd.exe, as run_command does.
+  it('runs a script with no #! line through cmd.exe when Git Bash is missing', async () => {
+    const cmdShell = { file: null, args: [], dialect: 'cmd' as const, utilsDir: null };
+    const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+    const run = await start({ script: 'echo hi' }, { deps: { spawn, platform: 'win32', shell: () => cmdShell } });
+    await run.exit;
+    expect(spawn).toHaveBeenCalledWith('echo hi', [], expect.objectContaining({ shell: true }));
+  });
 });
 
 describe('ScriptRunner: a credential of its spawn env (ADR-0061, H1)', () => {
