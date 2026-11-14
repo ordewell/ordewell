@@ -272,6 +272,9 @@ const ROOT_OWNERS = [
   [/^bench\/live\/drive-(conversation|taskops)\.mjs$/, owes('planner')],
   // Its offline test runs in bench.
   [/^bench\/live\/drive-conversation\.test\.mjs$/, owes('bench')],
+  // Run by hand against real providers and real keys (it spends credit); only its
+  // offline test, against the mock provider and the built core, runs in bench.
+  [/^bench\/live\/runner-smoke(\.test)?\.mjs$/, owes('bench')],
   [/^bench\/live\/drive-binary\.mjs$/, owes('binary')],
   // Run by hand against a dev build; no check runs them.
   [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright|screenshot-header-tmp)\.mjs$/, owes()],

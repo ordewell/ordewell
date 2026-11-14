@@ -9,11 +9,17 @@ import { PlannerTurnStoppedError } from '../PlannerConversation';
 
 const createSpy = vi.hoisted(() => vi.fn());
 
-vi.mock('openai', () => ({
-  default: class {
-    chat = { completions: { create: createSpy } };
-  },
-}));
+// The real Chat Completions adapter, its transport each test's `createSpy`: given a request's wire body, it returns the chunks to stream back.
+vi.mock('../model', async (importOriginal) => {
+  const { overChatCompletions } = await import('./plannerWire');
+  return {
+    ...await importOriginal<typeof import('../model')>(),
+    createModelClient: (options: import('../model').ModelClientOptions) => {
+      return overChatCompletions(options, (body, call) => createSpy(body, call));
+    },
+    withRetry: (client: import('../model').ModelClient) => client,
+  };
+});
 
 import { makeSession, saves, testWorkspace } from './sessionTestKit';
 import { plan as runPlan, recordingRunner, task } from './supervisorTestKit';

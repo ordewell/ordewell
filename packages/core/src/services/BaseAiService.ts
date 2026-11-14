@@ -23,6 +23,7 @@ import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageRecord } from '../models/Usage';
 import { abortScope } from '../utils/abortScope';
 import { withTurnBudgets, type TurnBudgets } from './PlannerBudgets';
+import { isModelError } from './model';
 
 /**
  * Read-only, side-effect-free tools that can share a round. Deliberately a
@@ -506,73 +507,90 @@ export abstract class BaseAiService {
       return next;
     };
     const runs = (): TurnRun[] => (last ? [...narration, last] : [...narration]);
-    let turn = await call(firstCall ?? (() => chat.sendMessage(message, signal)));
+    try {
+      let turn = await call(firstCall ?? (() => chat.sendMessage(message, signal)));
 
-    // Wrap-up rounds after the tool budget runs out: the pending calls are
-    // answered synthetically (never executed) so the API history stays
-    // valid and the model is pushed to reply in prose. Bounded, because a
-    // model could keep requesting tools forever.
-    let wrapUpRounds = 0;
-    for (let step = 0; turn.hasToolCalls; step++) {
-      if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
-      if (step >= MAX_STEPS) {
-        // Budget exhausted while the model still wants tools. Dropping the
-        // calls here used to surface the model's preamble ("Let me read…")
-        // as the reply and leave dangling tool_calls in the API history.
-        if (wrapUpRounds >= 2) break;
-        wrapUpRounds++;
-        const notice = `Research tool budget for this turn is exhausted (${MAX_STEPS} rounds) — this call was NOT executed and no further tool calls will be. Reply to the user now using what you already learned: summarize your findings and ask how to proceed, ask your next question, or emit the plan JSON.`;
-        // These calls are answered without running. Reporting them as
-        // not-executed steps keeps the budget boundary visible; dropping
-        // them silently made a whole refused round look like it never
-        // happened on every surface.
-        for (const tc of turn.toolCalls) {
-          const step: ResearchStep = {
-            id: `rs-${Date.now()}-budget-${researchLog.length}`,
-            tool: tc.name as ResearchStep['tool'],
-            args: JSON.stringify(tc.args),
-            result: notice,
-            success: false,
-            outcome: 'not_executed',
-            toolCallId: tc.id,
-            timestamp: new Date().toISOString(),
-          };
-          researchLog.push(step);
-          onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
-          onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
+      // Wrap-up rounds after the tool budget runs out: the pending calls are
+      // answered synthetically (never executed) so the API history stays
+      // valid and the model is pushed to reply in prose. Bounded, because a
+      // model could keep requesting tools forever.
+      let wrapUpRounds = 0;
+      for (let step = 0; turn.hasToolCalls; step++) {
+        if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+        if (step >= MAX_STEPS) {
+          // Budget exhausted while the model still wants tools. Dropping the
+          // calls here used to surface the model's preamble ("Let me read…")
+          // as the reply and leave dangling tool_calls in the API history.
+          if (wrapUpRounds >= 2) break;
+          wrapUpRounds++;
+          const notice = `Research tool budget for this turn is exhausted (${MAX_STEPS} rounds) — this call was NOT executed and no further tool calls will be. Reply to the user now using what you already learned: summarize your findings and ask how to proceed, ask your next question, or emit the plan JSON.`;
+          // These calls are answered without running. Reporting them as
+          // not-executed steps keeps the budget boundary visible; dropping
+          // them silently made a whole refused round look like it never
+          // happened on every surface.
+          for (const tc of turn.toolCalls) {
+            const step: ResearchStep = {
+              id: `rs-${Date.now()}-budget-${researchLog.length}`,
+              tool: tc.name as ResearchStep['tool'],
+              args: JSON.stringify(tc.args),
+              result: notice,
+              success: false,
+              outcome: 'not_executed',
+              toolCallId: tc.id,
+              timestamp: new Date().toISOString(),
+            };
+            researchLog.push(step);
+            onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
+            onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
+          }
+          const calls = turn.toolCalls;
+          turn = await call(() => chat.sendToolResults(
+            calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
+            signal,
+          ));
+          continue;
         }
-        const calls = turn.toolCalls;
-        turn = await call(() => chat.sendToolResults(
-          calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
-          signal,
-        ));
-        continue;
+        const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
+        const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
+        researchLog.push(...logEntries);
+        BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
+        turn = await call(() => chat.sendToolResults(toolResults, signal));
       }
-      const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
-      const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
-      researchLog.push(...logEntries);
-      BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
-      turn = await call(() => chat.sendToolResults(toolResults, signal));
+
+      // A plain-reply turn (no tool calls) never passes through the loop
+      // above, so this is the first point it can notice an abort raised
+      // while its HTTP call was already in flight — without it, a stale
+      // turn classifies and returns as a normal plan/message after reset().
+      if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+
+      // Forced break with nothing to show: degrade to a visible failure
+      // instead of an empty planner bubble.
+      if (turn.hasToolCalls && !turn.text.trim()) {
+        return {
+          text: turn.text,
+          researchLog,
+          failure: `I hit the research tool budget for this turn (${MAX_STEPS} rounds) before finishing. Tell me to continue, or narrow the request.`,
+          runs: runs(),
+        };
+      }
+
+      return { text: turn.text, researchLog, cutOff: turn.finishReason === 'length', runs: runs() };
+    } catch (err) {
+      // A spent usage limit ends the attempt as the provider's limit, with
+      // the reset it stated, so the conversation waits for it and sends the
+      // turn again (ADR-0044); any other failure fails the turn as before.
+      // A transient failure was already retried by the client, on Retry-After.
+      if (isModelError(err) && err.kind === 'usage-limit') {
+        return {
+          text: '',
+          researchLog,
+          failure: err.message,
+          usageLimit: err.resetsAt !== undefined ? { resetsAt: new Date(err.resetsAt).toISOString() } : {},
+          runs: runs(),
+        };
+      }
+      throw err;
     }
-
-    // A plain-reply turn (no tool calls) never passes through the loop
-    // above, so this is the first point it can notice an abort raised
-    // while its HTTP call was already in flight — without it, a stale
-    // turn classifies and returns as a normal plan/message after reset().
-    if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
-
-    // Forced break with nothing to show: degrade to a visible failure
-    // instead of an empty planner bubble.
-    if (turn.hasToolCalls && !turn.text.trim()) {
-      return {
-        text: turn.text,
-        researchLog,
-        failure: `I hit the research tool budget for this turn (${MAX_STEPS} rounds) before finishing. Tell me to continue, or narrow the request.`,
-        runs: runs(),
-      };
-    }
-
-    return { text: turn.text, researchLog, cutOff: turn.finishReason === 'length', runs: runs() };
   }
 
   /**
