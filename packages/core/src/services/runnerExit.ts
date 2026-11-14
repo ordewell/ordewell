@@ -32,7 +32,15 @@ const USAGE_LIMIT_RE = /\b(?:usage|session|weekly|daily|monthly) limit\b|\byou['
  * that will fail the same way, and only then asks the user. A bare number is
  * never enough, since a turn's error can quote a test's.
  */
-const TRANSIENT_RE = /\bAPI Error: 5\d\d\b|\b(?:HTTP|status(?: code)?)[ :]*5\d\d\b|\b(?:internal server error|bad gateway|service unavailable|gateway timeout)\b|\bprovider returned error\b|\boverloaded(?:_error)?\b|\bapi_error\b/i;
+const TRANSIENT_RE = /\bAPI Error: 5\d\d\b|\b(?:HTTP|status(?: code)?)[ :]*5\d\d\b|\b(?:internal server error|bad gateway|service unavailable|gateway timeout)\b|\boverloaded(?:_error)?\b|\bapi_error\b/i;
+
+/**
+ * A router's words for any upstream failure, its status beside them. Only the
+ * status says whose: a 4xx other than a throttle's 429 (a bad key, a context
+ * too long) is the request's, and fails the same way on every try.
+ */
+const PROVIDER_ERROR_RE = /\bprovider returned error\b/i;
+const CLIENT_STATUS_RE = /(?:\bAPI Error:|\bHTTP(?:\/[\d.]+)?|\bstatus(?: code)?|"(?:code|status)"\s*:)[ :]*4(?!29)\d\d\b|\b4(?!29)\d\d\s+provider returned error\b/i;
 
 /** A provider's throttle, once the runner's own field has said it is not the account's limit. */
 const THROTTLE_RE = /\brate[- ]?limit|\btoo many requests\b|\b429\b/i;
@@ -68,8 +76,9 @@ export function classifyRunnerStop(said: string | TurnFailure): RunnerStop {
   const tail = wordsOf(said).slice(-USAGE_LIMIT_TAIL);
   const field = typeof said === 'string' ? undefined : said.usageLimit;
   if (field !== undefined ? field : USAGE_LIMIT_RE.test(tail)) return 'usage-limit';
+  if (TRANSIENT_RE.test(tail) || (PROVIDER_ERROR_RE.test(tail) && !CLIENT_STATUS_RE.test(tail))) return 'transient';
   // A throttle the runner said was not its limit (Codex's `rateLimitExceeded`) is the provider's, and passes.
-  if (TRANSIENT_RE.test(tail) || (field === false && THROTTLE_RE.test(tail))) return 'transient';
+  if (field === false && THROTTLE_RE.test(tail)) return 'transient';
   return 'stopped';
 }
 

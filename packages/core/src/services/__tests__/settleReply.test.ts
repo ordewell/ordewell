@@ -176,6 +176,18 @@ describe('settleReply', () => {
       expect(m.sent[1]).toContain(BAD_GATEWAY);
     });
 
+    it('redacts a key the error carries from the try', async () => {
+      const key = 'sk-ant-api03-' + 'A1b2C3d4E5'.repeat(9) + '-AAAAAA';
+      const m = model(reply('', { failure: `${BAD_GATEWAY} (x-api-key ${key})` }), reply('Done.'));
+
+      const settled = settleReply(m.opts());
+      await vi.advanceTimersByTimeAsync(30_000);
+      await settled;
+
+      expect(m.sent[1]).toContain(BAD_GATEWAY);
+      expect(m.sent[1]).not.toContain(key);
+    });
+
     it('settles on the error once every try has failed', async () => {
       const m = model(...Array.from({ length: 4 }, () => reply('', { failure: BAD_GATEWAY })), reply('never asked for'));
 

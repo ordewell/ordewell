@@ -37,6 +37,7 @@ import { blobsIn, type NodeBoard, type WorkBlobs } from './Board';
 import { isBoardRef } from '../models/Board';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
+import { redactAgentText } from '../utils/redactSecrets';
 import type { ApplyPatchArgs, McpToolReply, PostArgs } from './mcp/tools';
 import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
@@ -1437,7 +1438,8 @@ export class Attempts {
   private retryTurn(taskId: string, attempt: TaskAttempt, session: IRunnerSession): void {
     const delay = PROVIDER_RETRY_DELAYS_MS[attempt.providerRetries];
     attempt.providerRetries += 1;
-    const error = clip(attempt.turnError?.message ?? '');
+    // The runner's words go to the user and back to it, redacted as all its text is.
+    const error = clip(redactAgentText(attempt.turnError?.message ?? ''));
     const title = this.deps.store.get(taskId)?.title ?? taskId;
     this.verifier.pauseIdle(taskId);
     this.host.tell('info', `Task "${title}": its turn failed on a provider error (${error}). Trying again in ${delay / 1000} s (try ${attempt.providerRetries} of ${PROVIDER_RETRY_DELAYS_MS.length}).`);

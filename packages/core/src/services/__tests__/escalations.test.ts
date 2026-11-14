@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { escalationAct, escalations, type Escalation, type EscalationInput, type EscalationRun } from '../escalations';
 import { planStartWaits } from '../readiness';
+import { redactAgentText } from '../../utils/redactSecrets';
 import { createTask, type Task } from '../../models/Task';
 import type { PendingApproval } from '../PendingApprovals';
 import type { RunMergeView } from '../SessionMessage';
@@ -409,6 +410,14 @@ describe('an escalation\'s other fields', () => {
     expect(failed.reason).toBe('Waiting for your input. Its turn failed: API Error: 502 Bad Gateway');
     const [plain] = listFor([waiting], { live: ['t1'], run: { advancing: true } });
     expect(plain.reason).toBe('Waiting for your input.');
+  });
+
+  it('redacts a key the turn error carries, as any text a runner wrote', () => {
+    const key = 'sk-ant-api03-' + 'A1b2C3d4E5'.repeat(9) + '-AAAAAA';
+    const waiting = task('t1', 1, { status: 'awaiting_user', awaitingReason: 'input' });
+    const [failed] = listFor([waiting], { live: ['t1'], turnFailures: { t1: `API Error: 401 invalid x-api-key ${key}` }, run: { advancing: true } });
+    expect(redactAgentText(`x ${key}`)).not.toContain(key);
+    expect(failed.reason).not.toContain(key);
   });
 
   it('asks before an AI task is marked complete, and not before a manual one is', () => {

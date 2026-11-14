@@ -4,6 +4,7 @@ import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageLimitSignal } from './harness/AgentAdapter';
 import type { RunnerModeInfo } from './ModeResolver';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS } from './runnerExit';
+import { redactAgentText } from '../utils/redactSecrets';
 import {
   classifyPlannerReply, type PlannerReplyClassification, reEmitPlanPrompt, reEmitTaskOpsPrompt, reEmitTaskQueryPrompt, repairLoop, truncatedPlanReEmitPrompt,
 } from './PlanRepair';
@@ -217,7 +218,9 @@ function waited(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
 const PROVIDER_ERROR_CLIP = 300;
 
 function providerRetryPrompt(failure: string): string {
-  const error = failure.length > PROVIDER_ERROR_CLIP ? `${failure.slice(0, PROVIDER_ERROR_CLIP)}…` : failure;
+  // The provider's words, which the conversation shows: redacted as all runner text is, then cut.
+  const clean = redactAgentText(failure);
+  const error = clean.length > PROVIDER_ERROR_CLIP ? `${clean.slice(0, PROVIDER_ERROR_CLIP)}…` : clean;
   return `Your last reply failed on a provider error, not on anything you did: ${error}. Continue where you left off and answer the user's last message.`;
 }
 
