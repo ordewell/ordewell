@@ -618,6 +618,11 @@ export class TaskOrchestrator {
     return this.attempts.checkpointQuestion(taskId);
   }
 
+  /** Why the task's running attempt's last turn failed, in its runner's words; undefined when it did not. */
+  getTurnFailure(taskId: string): string | undefined {
+    return this.attempts.turnFailure(taskId);
+  }
+
   /** Whether the task waits at a checkpoint its live attempt can still answer. */
   awaitsCheckpoint(taskId: string): boolean {
     return this.attempts.awaitsCheckpoint(taskId);

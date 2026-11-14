@@ -1095,6 +1095,7 @@ export class Session {
       attempt: (task) => this.orchestrator.latestAttempt(task),
       live: (taskId) => this.orchestrator.getAttempt(taskId) !== undefined,
       checkpoint: (taskId) => this.orchestrator.getCheckpointQuestion(taskId),
+      turnFailure: (taskId) => this.orchestrator.getTurnFailure(taskId),
       waitsForApproval: (taskId) => this.record.waitsForApproval(taskId),
       startQueued: (taskId) => this.orchestrator.startQueuedFor(taskId),
       resolvable: (taskId) => this.orchestrator.canResolveConflict(taskId),

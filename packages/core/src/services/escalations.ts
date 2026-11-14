@@ -140,6 +140,8 @@ export interface EscalationInput {
   live: (taskId: string) => boolean;
   /** What the task's waiting checkpoint asks, whole. */
   checkpoint: (taskId: string) => string | undefined;
+  /** Why the task's live attempt's last turn failed, in its runner's words: what a wait for input follows from (ADR-0018 E1). */
+  turnFailure: (taskId: string) => string | undefined;
   /** Added since the user approved the plan, and left for them (ADR-0035). */
   waitsForApproval: (taskId: string) => boolean;
   /** Queued to start with no scheduler, once what holds it clears. */
@@ -319,9 +321,18 @@ function awaiting(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait
     case 'input':
     case undefined:
       return live
-        ? { kind: 'input', reason: 'Waiting for your input.', options: [{ id: 'reply', label: 'Reply', note: 'required' }, SKIP, ...completeOption(row, input.run)] }
+        ? { kind: 'input', reason: inputReason(input.turnFailure(task.id)), options: [{ id: 'reply', label: 'Reply', note: 'required' }, SKIP, ...completeOption(row, input.run)] }
         : { kind: 'input', ...ended(row, 'It was waiting for your input, and no runner is left to read a reply.', input, rows) };
   }
+}
+
+/** How much of a turn's error a reason repeats: a provider's can carry a whole response body. */
+const TURN_FAILURE_CLIP = 300;
+
+function inputReason(failure: string | undefined): string {
+  const error = failure?.trim();
+  if (!error) return 'Waiting for your input.';
+  return `Waiting for your input. Its turn failed: ${error.length > TURN_FAILURE_CLIP ? `${error.slice(0, TURN_FAILURE_CLIP)}…` : error}`;
 }
 
 /**
