@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import { resolve } from 'path';
-import type { RunnerManifest, RunnerAuthSpec, RunnerAuthStatus } from '../plugins/types';
+import { runnerCommand, type RunnerManifest, type RunnerAuthSpec, type RunnerAuthStatus } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
@@ -107,8 +107,8 @@ export async function readRunnerAuth(manifest: RunnerManifest, options: ReadRunn
 
 async function probeRunnerAuth(manifest: RunnerManifest, options: ReadRunnerAuthOptions): Promise<RunnerAuth> {
   const spec = manifest.auth;
-  if (!spec?.statusArgs) return { state: 'unknown' };
-  const command = manifest.runner.command;
+  const command = runnerCommand(manifest);
+  if (!spec?.statusArgs || command === undefined) return { state: 'unknown' };
 
   let answer: RunnerAuthExecResult;
   let env: NodeJS.ProcessEnv;

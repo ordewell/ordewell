@@ -111,7 +111,11 @@ A runner-facing tool joins the task side on the same mechanism.
   later start runs it again; a runner that reports the server `failed` — a
   configuration problem — still fails the task. A coding-agent planner turn
   fails on either outcome, since a turn has no task to hold. There is no
-  marker fallback.
+  marker fallback. The built-in Ordewell runner, which runs inside Ordewell
+  ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)), has no MCP
+  client: its tools are the same token's handlers called in this process
+  (`inProcessTaskTools`), with the same validation and scope, so it is attached
+  once it starts, and its completion is still the token-bound `task_complete`.
 - **Pre-authorized, in every mode (S3).** Calling an Ordewell tool never
   triggers a permission prompt: Claude Code `--allowedTools` with each tool's
   full name, Codex's per-server approval configuration, OpenCode's permission
@@ -387,3 +391,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-04 — S1: Gemini CLI uses the server as a planner too (ADR-0060).
 - 2026-11-04 — S1: Cursor uses the server as a planner too (ADR-0060).
 - 2026-11-05 — S1: Cline uses the server, from a settings file of its own, as a planner too (ADR-0060).
+- 2026-11-14 — S2: an in-process runner's direct calls to the token's handlers are its tools (ADR-0070).

@@ -1,3 +1,4 @@
+import type { RunnerLaunch } from '../../plugins/types';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RunnerInstallation, parseCliVersion } from '../RunnerInstallation';
 import type { ExecImpl } from '../ModelDiscovery';
@@ -20,7 +21,7 @@ import type { LaunchDeps } from '../../utils/launch';
  */
 const POSIX: LaunchDeps = { platform: 'linux' };
 
-function registryWith(...manifests: Array<{ name: string; runner: { command: string } }>): RunnerRegistry {
+function registryWith(...manifests: Array<{ name: string; runner: RunnerLaunch }>): RunnerRegistry {
   const byName = new Map(manifests.map((m) => [m.name, m]));
   return { getManifest: (id: string) => byName.get(id) } as unknown as RunnerRegistry;
 }

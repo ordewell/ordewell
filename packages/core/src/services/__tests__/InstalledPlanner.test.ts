@@ -1,3 +1,4 @@
+import type { RunnerLaunch } from '../../plugins/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunnerInstallation } from '../RunnerInstallation';
 import type { ExecImpl } from '../ModelDiscovery';
@@ -12,7 +13,7 @@ import {
 
 const ALL = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST];
 
-function registryWith(...manifests: Array<{ name: string; runner: { command: string } }>): RunnerRegistry {
+function registryWith(...manifests: Array<{ name: string; runner: RunnerLaunch }>): RunnerRegistry {
   const byName = new Map(manifests.map((m) => [m.name, m]));
   return { getManifest: (id: string) => byName.get(id) } as unknown as RunnerRegistry;
 }
@@ -29,7 +30,7 @@ function installedOnly(...commands: string[]): ExecImpl {
 // answers nothing rather than spawning a real agent.
 const quietAuth: RunnerAuthExec = async () => ({ code: -1, stdout: '', stderr: '' });
 
-function installation(manifests: Array<{ name: string; runner: { command: string } }>, exec: ExecImpl): RunnerInstallation {
+function installation(manifests: Array<{ name: string; runner: RunnerLaunch }>, exec: ExecImpl): RunnerInstallation {
   // Off Windows' PATH lookup: `exec` alone says what is installed here.
   return new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec: quietAuth, launch: { platform: 'linux' } });
 }

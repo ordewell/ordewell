@@ -1,6 +1,6 @@
 import type { AiProvider } from '../interfaces/IConfig';
 import { commandLine } from '../models/ScriptTask';
-import type { RunnerManifest } from '../plugins/types';
+import { runnerCommand, type RunnerManifest } from '../plugins/types';
 import { VENDORS } from './apiProviders';
 
 /**
@@ -52,7 +52,8 @@ export const HEADLESS_CLI_SIGN_IN: SignInSyntax = {
 
 /** The ways into a runner, from its manifest and, for an ACP agent, its profile's key route. */
 export function signInOf(manifest: RunnerManifest, keyRoute?: KeySignInRoute): RunnerSignIn {
-  const login = manifest.auth?.loginArgs.length ? [manifest.runner.command, ...manifest.auth.loginArgs] : undefined;
+  const command = runnerCommand(manifest);
+  const login = command !== undefined && manifest.auth?.loginArgs.length ? [command, ...manifest.auth.loginArgs] : undefined;
   const key = keyRoute
     ? { provider: keyRoute.provider, label: VENDORS[keyRoute.provider].label, ...(keyRoute.others ? { others: keyRoute.others } : {}) }
     : undefined;

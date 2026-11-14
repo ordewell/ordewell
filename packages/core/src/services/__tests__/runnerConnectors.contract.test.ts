@@ -11,7 +11,7 @@ import { CLI_PROVIDERS, providerForRunner, runnerForProvider } from '../Provider
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { fakeConfig, fakeFileSystem } from '../../testing';
-import { modeIds, planJson, type FakeAgentProcess } from './harnessTestKit';
+import { modeIds, planJson, spawnedConnectors, type FakeAgentProcess } from './harnessTestKit';
 import { FAKE_RUNNERS, type FakeRunnerScript } from './fakeRunners';
 
 /**
@@ -66,7 +66,7 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
 const manifests = new RunnerRegistry();
-const runners = Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].ordewellTools);
+const runners = spawnedConnectors().filter((runner) => CONNECTORS[runner].ordewellTools);
 
 function taskStart(runner: string, mode = manifests.get(runner)!.manifest.modes![0].id): AgentStartOptions {
   const flags = resolveTaskRunnerFlags(manifests.get(runner)!.manifest, { mode });
@@ -109,7 +109,7 @@ afterEach(async () => {
 });
 
 it('has a fake for every connector and a runner name for every connector that takes the tools', () => {
-  expect(Object.keys(FAKE_RUNNERS).sort()).toEqual(Object.keys(CONNECTORS).sort());
+  expect(Object.keys(FAKE_RUNNERS).sort()).toEqual(spawnedConnectors().sort());
   expect(Object.keys(RUNNER_NAME).sort()).toEqual([...runners].sort());
   expect(Object.keys(NATIVE_INSTEAD).sort()).toEqual([...runners].sort());
 });

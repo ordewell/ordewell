@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { bearerHeaderValue } from '../../utils/daemonToken';
-import type { McpContact, McpCredential } from './OrdewellMcpServer';
+import type { InProcessTools, McpContact, McpCredential } from './OrdewellMcpServer';
 
 /** The server's name in every runner's MCP configuration, and so in its tool names (`mcp__ordewell__*`). */
 export const ORDEWELL_MCP_SERVER_NAME = 'ordewell';
@@ -23,6 +23,8 @@ export interface McpClientConfig {
    * attach (ADR-0022, S4).
    */
   contact?: McpContact;
+  /** The token's tools called in this process, for a runner that runs inside Ordewell (ADR-0070); every other adapter ignores it. */
+  inProcess?: InProcessTools;
 }
 
 /**
@@ -41,6 +43,7 @@ export function mcpClientConfig(credential: McpCredential): McpClientConfig {
     ...(credential.extraTools?.length ? { extraTools: credential.extraTools } : {}),
     ...(credential.readOnly ? { readOnly: true } : {}),
     ...(credential.contact ? { contact: credential.contact } : {}),
+    ...(credential.inProcess ? { inProcess: credential.inProcess } : {}),
   };
 }
 

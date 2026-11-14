@@ -5,6 +5,7 @@ import { mcpClientConfig } from '../mcp';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { FAKE_RUNNERS } from './fakeRunners';
+import { spawnedConnectors } from './harnessTestKit';
 
 /**
  * A task tool added to the server reaches every runner with no adapter edit:
@@ -33,7 +34,8 @@ const RUNNER_NAME: Record<string, string> = {
   'cursor-agent': 'board_post',
 };
 
-const runners = Object.keys(CONNECTORS).filter((runner) => CONNECTORS[runner].ordewellTools);
+// The in-process runner offers a fixed set of task tools, so its tool list holds for the whole attempt (ADR-0070).
+const runners = spawnedConnectors().filter((runner) => CONNECTORS[runner].ordewellTools);
 const manifests = new RunnerRegistry();
 
 describe.each(runners)('a new task tool on %s', (runner) => {

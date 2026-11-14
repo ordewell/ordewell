@@ -27,7 +27,8 @@ describe('the built-in runner catalog', () => {
   });
 
   it('agrees with the manifest that declares the runner', () => {
-    for (const manifest of BUILTIN_MANIFESTS) {
+    // An in-process runner ships inside Ordewell: there is nothing to install and no planner to offer (ADR-0070).
+    for (const manifest of BUILTIN_MANIFESTS.filter((m) => !m.runner.inProcess)) {
       const entry = RUNNER_CATALOG.find((runner) => runner.id === manifest.name);
       expect(entry?.label, manifest.name).toBe(manifest.displayName);
       expect(entry?.installDocs, manifest.name).toMatch(/^https:\/\//);

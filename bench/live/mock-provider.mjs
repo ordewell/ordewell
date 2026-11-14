@@ -28,6 +28,10 @@
  *   mock/desktop-tour  the desktop tour's plan (DESKTOP_TOUR_PLAN): the
  *                       acceptance plan, then one card of each kind; the fit
  *                       goal gets the widest cards here too
+ *   mock/ordewell-runner  a task for the built-in Ordewell runner (ADR-0070):
+ *                       read src/add.mjs, fix its `a - b` with edit, run
+ *                       `node test.mjs` through shell, then task_complete,
+ *                       done only when the test printed "pass"
  *
  * The five `mock/goal-*` personas are the kinds of goal the strategy step
  * teaches (#108), each replying with the plumbing its kind calls for:
@@ -406,6 +410,22 @@ function scriptTurn(model, messages) {
       return { content: JSON.stringify({ taskQuery: { tasks: ['#2'], fields: ['prompt'] } }) };
     }
     return { content: JSON.stringify({ taskOps: [{ op: 'update', taskId: '#2', changes: { description: `read-confirmed:${marker}` } }] }) };
+  }
+
+  if (persona === 'ordewell-runner') {
+    // One step per tool, so a test sees each land in the transcript in turn.
+    if (s.toolRounds === 0) return { reasoning: 'Read the code before changing it. ', ...toolCallTurn('read', { path: 'src/add.mjs' }) };
+    if (s.toolRounds === 1) return toolCallTurn('edit', { path: 'src/add.mjs', oldString: 'a - b', newString: 'a + b' });
+    if (s.toolRounds === 2) return toolCallTurn('shell', { command: 'node test.mjs' });
+    if (s.toolRounds === 3) {
+      // The verdict rests on what the test printed, so a broken edit or shell reads as failed, not done.
+      const shellResult = [...messages].reverse().find((m) => m.role === 'tool');
+      const passed = String(shellResult?.content ?? '').includes('pass');
+      return toolCallTurn('task_complete', passed
+        ? { status: 'done', summary: 'Fixed add() to sum its arguments; node test.mjs passes.', commit: { subject: 'Fix add() to sum its arguments' } }
+        : { status: 'failed', summary: 'The test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
+    }
+    return { content: 'Done.' };
   }
 
   if (persona === 'goal-question') {

@@ -263,7 +263,12 @@ const ROOT_OWNERS = [
   [/^bench\/pipeline\/(drive-pipeline|pipeline\.test)\.mjs$/, owes('bench')],
   // The mock planner and its scripted goals: the planner loop, the desktop
   // e2e and tour, and the binary's drive all talk to it.
-  [/^bench\/live\/(mock-provider|scenarios)\.mjs$/, owes('planner', 'desktop', 'tour', 'binary')],
+  [/^bench\/live\/scenarios\.mjs$/, owes('planner', 'desktop', 'tour', 'binary')],
+  // The mock is also the provider of core's ordewellRunner.e2e (ADR-0070).
+  [/^bench\/live\/mock-provider\.mjs$/, () => {
+    const suites = allFull(['packages/core']);
+    return { suites, windows: onWindows(suites), checks: ['planner', 'desktop', 'tour', 'binary'] };
+  }],
   [/^bench\/live\/drive-(conversation|taskops)\.mjs$/, owes('planner')],
   // Its offline test runs in bench.
   [/^bench\/live\/drive-conversation\.test\.mjs$/, owes('bench')],
