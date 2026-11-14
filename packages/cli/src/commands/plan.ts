@@ -21,9 +21,15 @@ function runnersOf(plan: PlanBody, requested: string[]): string[] {
   return ('runners' in plan && plan.runners) || requested;
 }
 
-/** The planner committed once it has actual tasks; before that it's still talking. */
+/**
+ * The planner committed once its dialogue records a submitted plan. Task count
+ * cannot say so: a script task the planner runs itself in its turn (a research
+ * probe) is a task before any plan exists, and a reply that outlines a plan and
+ * asks a question would read as committed.
+ */
 function hasCommittedPlan(plan: PlanBody): boolean {
-  return planTasks(plan).length > 0;
+  const history = ('conversationHistory' in plan && plan.conversationHistory) || [];
+  return history.some((entry) => entry.kind === 'plan_generated');
 }
 
 function lastPlannerMessage(plan: PlanBody): string {
