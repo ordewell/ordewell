@@ -32,6 +32,10 @@
  *                       read src/add.mjs, fix its `a - b` with edit, run
  *                       `node test.mjs` through shell, then task_complete,
  *                       done only when the test printed "pass"
+ *   mock/ordewell-guarded  the same fix as a Guarded task: `npm test` first,
+ *                       which asks, then the edit, which does not, then
+ *                       `npm test --silent`, which the "Allow for this task"
+ *                       grant for `npm test` covers, then task_complete
  *
  * The five `mock/goal-*` personas are the kinds of goal the strategy step
  * teaches (#108), each replying with the plumbing its kind calls for:
@@ -424,6 +428,21 @@ function scriptTurn(model, messages) {
       return toolCallTurn('task_complete', passed
         ? { status: 'done', summary: 'Fixed add() to sum its arguments; node test.mjs passes.', commit: { subject: 'Fix add() to sum its arguments' } }
         : { status: 'failed', summary: 'The test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
+    }
+    return { content: 'Done.' };
+  }
+
+  if (persona === 'ordewell-guarded') {
+    // The second run differs from the first only by a plain argument, so one grant covers both (ADR-0070).
+    if (s.toolRounds === 0) return toolCallTurn('shell', { command: 'npm test' });
+    if (s.toolRounds === 1) return toolCallTurn('edit', { path: 'src/add.mjs', oldString: 'a - b', newString: 'a + b' });
+    if (s.toolRounds === 2) return toolCallTurn('shell', { command: 'npm test --silent' });
+    if (s.toolRounds === 3) {
+      const shellResult = [...messages].reverse().find((m) => m.role === 'tool');
+      const passed = String(shellResult?.content ?? '').includes('pass');
+      return toolCallTurn('task_complete', passed
+        ? { status: 'done', summary: 'Fixed add() to sum its arguments; npm test passes.', commit: { subject: 'Fix add() to sum its arguments' } }
+        : { status: 'failed', summary: 'npm test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
     }
     return { content: 'Done.' };
   }

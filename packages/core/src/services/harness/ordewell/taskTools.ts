@@ -3,14 +3,23 @@ import type { InProcessTools } from '../../mcp/OrdewellMcpServer';
 import type { McpToolReply } from '../../mcp/tools';
 
 /**
- * The task tools this slice offers natively, by the name the model sees and the
- * name the token's tool set serves. The task-record `read` is `read_task` here
- * (its alias on the server), since `read` is the file tool. The modes task adds
- * checkpoint, apply_patch, save_patch, run_command, fetch and web_search.
+ * Every task tool the runner offers natively, by the name the model sees and
+ * the name the token's tool set serves. The token decides which exist: a
+ * change task's serves `checkpoint` and `apply_patch`, a read-only task's the
+ * sealed `run_command`, `save_patch`, `fetch` and `web_search` (ADR-0046), a
+ * board's `post`; one it does not list is not offered. The task-record `read`
+ * is `read_task` here (its alias on the server), since `read` is the file tool.
  */
 const OFFERED: readonly { native: string; served: string }[] = [
   { native: 'task_complete', served: 'task_complete' },
   { native: 'read_task', served: 'read' },
+  { native: 'checkpoint', served: 'checkpoint' },
+  { native: 'apply_patch', served: 'apply_patch' },
+  { native: 'run_command', served: 'run_command' },
+  { native: 'save_patch', served: 'save_patch' },
+  { native: 'fetch', served: 'fetch' },
+  { native: 'web_search', served: 'web_search' },
+  { native: 'post', served: 'post' },
 ];
 
 /**

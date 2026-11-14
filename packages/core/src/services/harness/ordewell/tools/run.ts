@@ -8,9 +8,10 @@ export type GateDecision = { allow: true } | { allow: false; reason: string };
  * THE GATE: the one place the loop can ask before a tool runs. Guarded mode
  * asks the user here for a `write` or `exec` call, and the read-only profile
  * refuses them here; with no gate every call runs (Full). It sees the call
- * after its arguments are checked and before anything touches the disk.
+ * after its arguments are checked and before anything touches the disk; the
+ * signal is the call's, so a gate waiting on a person ends with the turn.
  */
-export type ToolGate = (call: { tool: OrdewellTool; args: Readonly<Record<string, unknown>> }) => GateDecision | Promise<GateDecision>;
+export type ToolGate = (call: { tool: OrdewellTool; args: Readonly<Record<string, unknown>>; signal: AbortSignal }) => GateDecision | Promise<GateDecision>;
 
 function typeProblem(tool: OrdewellTool, args: Readonly<Record<string, unknown>>): string | null {
   const { properties, required } = tool.parameters;
@@ -48,7 +49,7 @@ export async function runTool(
   if (problem) return failure(`Invalid arguments for ${tool.name}: ${problem}.`);
 
   if (options.gate) {
-    const decision = await options.gate({ tool, args });
+    const decision = await options.gate({ tool, args, signal: context.signal });
     if (!decision.allow) return failure(decision.reason, { refused: true });
   }
   context.signal.throwIfAborted();
