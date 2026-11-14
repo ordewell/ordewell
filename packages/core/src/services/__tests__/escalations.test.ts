@@ -23,6 +23,8 @@ interface Setup {
   live?: string[];
   attempts?: Record<string, number>;
   checkpoints?: Record<string, string>;
+  /** Task id → why its live attempt's last turn failed, in its runner's words. */
+  turnFailures?: Record<string, string>;
   added?: string[];
   onHold?: Record<string, string>;
   unmerged?: string[];
@@ -75,6 +77,7 @@ function listFor(tasks: Task[], setup: Setup = {}): Escalation[] {
     },
     live: (id) => (setup.live ?? []).includes(id),
     checkpoint: (id) => setup.checkpoints?.[id],
+    turnFailure: (id) => setup.turnFailures?.[id],
     waitsForApproval: (id) => (setup.added ?? []).includes(id),
     startQueued: (id) => (setup.startsAlone ?? []).includes(id),
     resolvable: (id) => !(setup.unresolvable ?? []).includes(id),
@@ -398,6 +401,14 @@ describe('an escalation\'s other fields', () => {
   it('carries the whole checkpoint question as its reason', () => {
     const [only] = listFor([task('t1', 1, { status: 'awaiting_user', awaitingReason: 'checkpoint' })], { live: ['t1'], checkpoints: { t1: 'Ship it?' }, run: { advancing: true } });
     expect(only.reason).toBe('Checkpoint: Ship it?');
+  });
+
+  it('names the error a wait for input follows when its turn failed (ADR-0018 E1)', () => {
+    const waiting = task('t1', 1, { status: 'awaiting_user', awaitingReason: 'input' });
+    const [failed] = listFor([waiting], { live: ['t1'], turnFailures: { t1: 'API Error: 502 Bad Gateway' }, run: { advancing: true } });
+    expect(failed.reason).toBe('Waiting for your input. Its turn failed: API Error: 502 Bad Gateway');
+    const [plain] = listFor([waiting], { live: ['t1'], run: { advancing: true } });
+    expect(plain.reason).toBe('Waiting for your input.');
   });
 
   it('asks before an AI task is marked complete, and not before a manual one is', () => {

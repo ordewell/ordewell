@@ -8,9 +8,11 @@ import type { UsageLimitSignal } from './harness/AgentAdapter';
 
 /**
  * Why a runner stopped, as far as the tail of its own output says. `usage-limit`
- * is the account, not the task, running out; anything else is `stopped`.
+ * is the account, not the task, running out; `transient` is its provider
+ * failing the turn, which a later try of the same turn may not meet
+ * (ADR-0018 E1); anything else is `stopped`.
  */
-export type RunnerStop = 'usage-limit' | 'stopped';
+export type RunnerStop = 'usage-limit' | 'transient' | 'stopped';
 
 /**
  * What a runner says when its account, not the task, ran out. A stop with no
@@ -22,6 +24,25 @@ export type RunnerStop = 'usage-limit' | 'stopped';
  * its phrase is taken whatever the name, as its reset reader takes it.
  */
 const USAGE_LIMIT_RE = /\b(?:usage|session|weekly|daily|monthly) limit\b|\byou['’]ve hit your (?:[\w'’-]+ ){0,3}?limit\b|\brate limit (?:exceeded|reached)\b|\brate[- ]limited\b|\blimit (?:will )?reset\b|\bquota (?:exceeded|reached)\b|\btoo many requests\b/i;
+
+/**
+ * What a runner says when its provider, not the account or the task, failed
+ * the turn: a 5xx, an overload, a provider's own error (ADR-0018 E1). As narrow
+ * as the limit's words, for the same reason: a false positive retries a turn
+ * that will fail the same way, and only then asks the user. A bare number is
+ * never enough, since a turn's error can quote a test's.
+ */
+const TRANSIENT_RE = /\bAPI Error: 5\d\d\b|\b(?:HTTP|status(?: code)?)[ :]*5\d\d\b|\b(?:internal server error|bad gateway|service unavailable|gateway timeout)\b|\bprovider returned error\b|\boverloaded(?:_error)?\b|\bapi_error\b/i;
+
+/** A provider's throttle, once the runner's own field has said it is not the account's limit. */
+const THROTTLE_RE = /\brate[- ]?limit|\btoo many requests\b|\b429\b/i;
+
+/**
+ * The backoff before each try of a turn its provider failed, a task's and the
+ * planner's alike (ADR-0018 E1); its length is how many tries the turn gets
+ * before its error goes to the user.
+ */
+export const PROVIDER_RETRY_DELAYS_MS: readonly number[] = [30_000, 60_000, 120_000];
 
 /** How much of a stopped runner's tail is read for the limit signature: the error is the last thing it prints. */
 const USAGE_LIMIT_TAIL = 4096;
@@ -38,12 +59,18 @@ export interface TurnFailure {
 
 /**
  * Classify a stopped runner from the tail of its own output, or a failed turn
- * from its error. A runner's own field is believed over its words; without
- * one, the words decide.
+ * from its error. A runner's own field is believed over its words on whether
+ * it was the usage limit; without one, the words decide. The limit outranks a
+ * transient error: its words name the account, and retrying before it resets
+ * meets it again.
  */
 export function classifyRunnerStop(said: string | TurnFailure): RunnerStop {
-  if (typeof said !== 'string' && said.usageLimit !== undefined) return said.usageLimit ? 'usage-limit' : 'stopped';
-  return USAGE_LIMIT_RE.test(wordsOf(said).slice(-USAGE_LIMIT_TAIL)) ? 'usage-limit' : 'stopped';
+  const tail = wordsOf(said).slice(-USAGE_LIMIT_TAIL);
+  const field = typeof said === 'string' ? undefined : said.usageLimit;
+  if (field !== undefined ? field : USAGE_LIMIT_RE.test(tail)) return 'usage-limit';
+  // A throttle the runner said was not its limit (Codex's `rateLimitExceeded`) is the provider's, and passes.
+  if (TRANSIENT_RE.test(tail) || (field === false && THROTTLE_RE.test(tail))) return 'transient';
+  return 'stopped';
 }
 
 function wordsOf(said: string | TurnFailure): string {
