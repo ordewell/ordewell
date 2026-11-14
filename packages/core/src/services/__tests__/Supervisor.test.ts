@@ -45,6 +45,70 @@ describe('wakeUpDigest', () => {
     expect(digest).toMatch(/…$/);
   });
 
+  describe('a task running long (ADR-0018 W1)', () => {
+    const MINUTE = 60_000;
+    const runningLong = (taskId: string, facts: Partial<NonNullable<RunEvent['runningLong']>> = {}): RunEvent => ({
+      kind: 'running_long', taskId, at: 0,
+      runningLong: { reason: 'duration', elapsedMs: 65 * MINUTE, thresholdMs: 60 * MINUTE, compactions: 0, attempt: 1, ...facts },
+    });
+    const ADVICE = 'Running long is advice, never a verdict: read the task\'s output with task_output; if its brief\'s done criterion holds, message_task its runner to commit and call task_complete; if the brief is too large, stop_task it and split it; otherwise let it go on.';
+
+    it('names its running time, the threshold and the task it was computed from, its context and its compactions, then what the supervisor can do', () => {
+      const event = runningLong('t4', {
+        basis: { taskId: 't2', runningMs: 20 * MINUTE }, contextTokens: 150_000, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 1,
+      });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')).toEqual([
+        'Run update:',
+        '- task #4 "Task t4" has run long: 1h 05m running, past its 1h 00m threshold (3× the 20m 00s task #2 "Task t2" passed in); context 150k of 200k tokens, peak 190k; compacted once',
+        ADVICE,
+      ]);
+    });
+
+    it('names the floor when no AI task has passed, and a threshold doubled by earlier flags', () => {
+      const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4" has run long: 1h 00m running, past its 1h 00m threshold (the 30m 00s floor, doubled after each earlier flag)');
+    });
+
+    it('names an automatic compaction of its runner\'s session, whatever the time', () => {
+      const event = runningLong('t4', { reason: 'compaction', elapsedMs: 12 * MINUTE, thresholdMs: 30 * MINUTE, contextTokens: 30_000, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 2 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4"\'s runner compacted its context on its own, 2 times this attempt, after 12m 00s running; context 30k of 200k tokens, peak 190k');
+    });
+
+    it('still names the peak and the window when the compaction stated no size, as on Codex and OpenCode', () => {
+      const event = runningLong('t4', { reason: 'compaction', elapsedMs: 12 * MINUTE, thresholdMs: 30 * MINUTE, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 1 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4"\'s runner compacted its context on its own, once this attempt, after 12m 00s running; context unknown since compacting, peak 190k of 200k tokens');
+    });
+
+    it('names no compaction for an unknown context when the attempt never compacted, as after a /clear', () => {
+      const event = runningLong('t4', { reason: 'duration', elapsedMs: 65 * MINUTE, thresholdMs: 60 * MINUTE, contextWindow: 200_000, peakContextTokens: 150_000, compactions: 0 });
+
+      const line = wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1];
+      expect(line).toContain('; context unknown, peak 150k of 200k tokens');
+      expect(line).not.toContain('compacting');
+    });
+
+    it('says what the supervisor can do once however many tasks run long, and not at all when none does', () => {
+      const digest = wakeUpDigest({ attention: [runningLong('t4'), { kind: 'task_idle', taskId: 't5', at: 0 }, runningLong('t6')], sinceLast: [] }, describeTask);
+
+      expect(digest.split('\n').filter((line) => line === ADVICE)).toHaveLength(1);
+      expect(wakeUpDigest({ attention: [{ kind: 'task_idle', taskId: 't5', at: 0 }], sinceLast: [] }, describeTask)).not.toContain('Running long');
+    });
+
+    it('counts a flag left out of a full wake as running long', () => {
+      const failures: RunEvent[] = Array.from({ length: 200 }, (_, i) => ({ kind: 'waiting_input', taskId: `t${i}`, at: 0, detail: 'x'.repeat(200) }));
+      const digest = wakeUpDigest({ attention: [...failures, runningLong('t999')], sinceLast: [] }, describeTask);
+
+      expect(digest).toMatch(/1 running long/);
+    });
+  });
+
   it('names each passed task once', () => {
     const pass = (taskId: string): RunEvent => ({ kind: 'task_passed', taskId, at: 0 });
     const digest = wakeUpDigest({ attention: [{ kind: 'run_finished', at: 0 }], sinceLast: [pass('t1'), pass('t2'), pass('t1'), pass('t3')] }, describeTask);
@@ -430,6 +494,23 @@ describe('Supervisor', () => {
       expect(delivered(h)).toEqual([[expect.stringContaining('task #1 "Task t1" failed'), undefined, true]]);
       expect(supervisor.snapshot().policy.attention).toEqual([]);
       expect(h.wakeUpEnded).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it('wakes nobody for a running-long flag it restored, and keeps it for the next wake', async () => {
+      vi.useFakeTimers();
+      const before = new Supervisor(host({ level: 'act' }), { debounceMs: 10 });
+      before.observe({ kind: 'running_long', taskId: 't1', runningLong: { reason: 'duration', elapsedMs: 1_800_000, thresholdMs: 1_800_000, compactions: 0, attempt: 1 } });
+      const saved = before.snapshot();
+      before.reset();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+      supervisor.restore(saved);
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(delivered(h)).toEqual([[expect.stringContaining('task #1 "Task t1" has run long'), undefined, true]]);
+      expect(supervisor.snapshot().wakeUps).toEqual([]);
       vi.useRealTimers();
     });
 

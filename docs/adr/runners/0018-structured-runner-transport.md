@@ -92,7 +92,30 @@ and completion evidence.
   quiet while one with no call in flight and no output still is. Each flag in
   an attempt doubles the silence the next one needs, and a new attempt starts
   over, so a long run that prints now and then does not wake its reader again
-  after every line. If a queued message is delivered as the
+  after every line. An AI task's attempt is also flagged
+  **running long**, as advice and never a verdict: once its running time
+  passes the larger of 30 minutes and three times the longest running time of
+  an AI task that passed in its plan (its attempt's, kept as it ends; an attempt
+  saved before that has only its wall time), read again when the timer fires so a task
+  that passed meanwhile can put it off, and each flag doubles the time the
+  next needs. Only running time counts: a wait on input, a checkpoint or an
+  approval holds the clock, and is left out of a passed task's running time
+  too, and a usage limit ends the attempt. Each automatic
+  compaction of the task's own runner session flags it once, whatever the
+  time; a manual one and a subagent's context do not. The flag carries the
+  running time, the threshold and the task it was computed from, the live
+  context and the model's window, the peak context (the saved usage keeps only
+  the last) and the compactions so far. The live context and window follow
+  the usage meter's rules: a compaction that states no size, or a change of
+  model or source, leaves the context unknown until the next call measures it,
+  never the old size, and a new model is not measured against the old one's
+  window. A script task has its `timeoutMs` and
+  a delegated task its `budget.wallClockMs`, so neither has this clock; a
+  delegated task's children do. Nothing is re-flagged after a restart: a plan
+  load ends every interrupted attempt, and the flag is the attempt's. The
+  supervisor reads it as it reads a quiet task's (ADR-0057 R4), and rows and
+  cards say "Running long" while the task runs (`RunningLong.ts`,
+  `VerdictEngine`). If a queued message is delivered as the
   turn ends, or the runner still owes one it was handed (M1), the task stays
   `in_progress` with no flicker.
 - **The completion contract lives in the runner's instructions (C2).** A
@@ -110,6 +133,27 @@ and completion evidence.
   in the worktree. The first message is the task's prompt and its context
   only. The attempt's token is not part of any of it; it travels in the MCP
   connection.
+- **A runner that meets its brief stops, and a compaction says so again (C3).**
+  A runner can meet its brief's done criterion and keep going into the scope of
+  later tasks, never committing or calling `task_complete`; compaction makes it
+  likelier, since its own summary may drop where the brief ended. The contract
+  (C2) therefore says that once the brief's done criterion holds the runner
+  commits, if its work lands as a commit, and calls `task_complete`, and that
+  work beyond the brief belongs to other tasks and goes in the handoff as an
+  open question or a follow-up. And when a task's runner reports a compaction
+  of its own session it started itself (`trigger: 'auto'`; the user's
+  `/compact` is not one), Ordewell sends it one message through the queue
+  `message_task` uses (M1), marked `from: 'ordewell'` and logged as any queued
+  message is: the task's title and description, and that if what the brief asks
+  is done it should commit (a task that lands nothing is not asked to) and call
+  `task_complete` now, leaving work beyond the brief to other tasks. It is sent
+  once per compaction, so two give two. It is never sent to an attempt that has
+  ended or decided, or whose task waits on the user, whom a message would put
+  back to work. A harness that takes nothing mid-turn delivers it at its next
+  turn, as it does any queued message (ADR-0023 D4). It asks for no verdict: only
+  the `task_complete` call settles the task (W1). Nor does it hold one back: a
+  `task_complete` call made while it is still queued settles the task, as it
+  would without it (ADR-0023 D6).
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -594,3 +638,6 @@ transport is retained for take-over.
 - 2026-11-14 — E1: a turn its provider failed (a 5xx, an overload, a throttle that is not the usage limit) is tried again in its saved session after a 30, 60 and 120 second backoff, the planner's as a task's, before input is asked with the error in its reason.
 - 2026-11-14 — E1: a `Provider returned error` with a 4xx status other than 429 is not transient; the error is redacted wherever it is repeated.
 - 2026-11-14 — E1: OpenCode's `APIError` status is kept beside its words, a status code written as `statusCode` or a quoted string counts, and a context too long is not transient without a status.
+- 2026-11-14 — W1: an AI task's attempt that runs past max(30 min, 3× the longest passed AI task's wall time), doubled after each flag, or whose runner session compacts on its own, is flagged running long, as advice.
+- 2026-11-14 — C3: the completion contract tells a runner to commit and call `task_complete` once its brief's done criterion holds and to name work beyond it in the handoff; after a compaction of the runner's own session Ordewell queues it one message restating its brief with that instruction.
+- 2026-11-14 — W1: the running-long threshold is a multiple of a passed task's running time, waits left out, kept on its attempt as it ends; the live context and window follow the usage meter's rules across a sizeless compaction and a model change. C3: the queued nudge holds no `task_complete` back.

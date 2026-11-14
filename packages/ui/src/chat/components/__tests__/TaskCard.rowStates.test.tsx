@@ -78,6 +78,24 @@ describe('a task card, pinned before its rules move to core', () => {
     expect(badge()?.textContent).toBe('Running');
   });
 
+  it('says a task running long is running long, with its compactions, and drops it once the run does (ADR-0018 W1)', () => {
+    const task = makeTask({ status: 'in_progress', attempted: true });
+    const runningLong = { reason: 'compaction' as const, elapsedMs: 600_000, thresholdMs: 1_800_000, compactions: 2, attempt: 1 };
+    const { rerender } = render(<TaskCard task={task} models={[]} isExecuting run={{ runningLong }} />);
+    expect(badge()?.textContent).toBe('Running long, context compacted 2 times');
+    expect(badge()?.className).toBe('task-status-badge status-running');
+
+    rerender(<TaskCard task={task} models={[]} isExecuting run={{}} />);
+    expect(badge()?.textContent).toBe('Running');
+  });
+
+  it('says a subtask running long is running long as its parent card does', () => {
+    const parent = makeTask({ id: 'p1', order: 2, title: 'Parent' });
+    const runningLong = { reason: 'duration' as const, elapsedMs: 1_800_000, thresholdMs: 1_800_000, compactions: 0, attempt: 1 };
+    render(<SubTaskCard task={makeTask({ status: 'in_progress', attempted: true })} parentTask={parent} models={[]} isExecuting run={{ runningLong }} />);
+    expect(badge()?.textContent).toBe('Running long');
+  });
+
   it('says a starting subtask\'s runner is connecting Ordewell\'s tools as its parent card does', () => {
     const parent = makeTask({ id: 'p1', order: 2, title: 'Parent' });
     render(<SubTaskCard task={makeTask({ status: 'in_progress', attempted: true })} parentTask={parent} models={[]} isExecuting run={{ attaching: 1 }} />);

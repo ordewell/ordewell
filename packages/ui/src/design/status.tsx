@@ -130,7 +130,7 @@ export function StatusIndicator({ status, size = 16, label, showLabel = false, c
 /** The qualifier a status word carries, in the order a row's badge picks one. */
 function qualifierOf(row: TaskRowView): string | null {
   if (row.status === 'skipped') return row.skipReason ? skippedLabel(row.skipReason) : null;
-  return row.awaiting ?? row.approvals ?? row.receipt ?? row.attaching
+  return row.awaiting ?? row.approvals ?? row.receipt ?? row.attaching ?? row.runningLong
     ?? (row.holdReason ? holdLabel(row.holdReason) : null)
     ?? (row.blockedBy ? blockedByLabel(row.blockedBy) : null);
 }

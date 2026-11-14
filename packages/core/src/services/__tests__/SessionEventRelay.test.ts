@@ -28,7 +28,7 @@ function setup(holds: ReadonlyMap<string, string> = new Map(), escalations?: () 
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
+    orchestrator: { judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
     usage,
     escalations,
   });

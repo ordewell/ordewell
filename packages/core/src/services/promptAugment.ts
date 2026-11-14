@@ -1,6 +1,7 @@
 import type { Task, TaskOutputSummary, TaskSkillSnapshot } from '../models/Task';
 import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
+import { TASK_COMPLETE_TOOL } from './mcp/tools';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf, type TaskLoop } from '../models/Loop';
@@ -313,6 +314,20 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (blocks.length === 0) return basePrompt;
   return `${blocks.join('\n\n')}\n\n${basePrompt}`;
+}
+
+/**
+ * What a runner is told after it compacted its own context (ADR-0018, C3): its
+ * summary may have dropped where the brief ended, so the brief is stated again,
+ * with the way out. `lands` is whether its work lands as a commit.
+ */
+export function composeCompactionNudge(task: Pick<Task, 'title' | 'prompt'>, opts: { lands: boolean }): string {
+  const brief = (task.prompt ?? '').trim();
+  return [
+    '(Ordewell) Your context was just compacted. Your task is:',
+    `${task.title}${brief ? `\n\n${brief}` : ''}`,
+    `If what the brief asks is done, ${opts.lands ? 'commit and call' : 'call'} \`${TASK_COMPLETE_TOOL}\` now. Work beyond the brief belongs to other tasks: leave it, and name it in your handoff.`,
+  ].join('\n\n');
 }
 
 /**

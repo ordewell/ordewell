@@ -100,6 +100,22 @@ describe('a runner starting while Ordewell\'s tools attach (ADR-0025)', () => {
   });
 });
 
+describe('a running attempt that runs long (ADR-0018 W1)', () => {
+  const flag = (compactions: number) => ({ reason: 'duration' as const, elapsedMs: 1_800_000, thresholdMs: 1_800_000, compactions, attempt: 1 });
+
+  it('says so while it runs, with how often its context compacted, and stays running: it is advice, not a status', () => {
+    expect(taskRowView(subject({ status: 'in_progress', runningLong: flag(0) })).runningLong).toBe('Running long');
+    expect(taskRowView(subject({ status: 'in_progress', runningLong: flag(1) })).runningLong).toBe('Running long, context compacted once');
+    expect(taskRowView(subject({ status: 'in_progress', runningLong: flag(3) })).runningLong).toBe('Running long, context compacted 3 times');
+    expect(taskRowView(subject({ status: 'in_progress', runningLong: flag(0) })).status).toBe('running');
+  });
+
+  it('says nothing without a flag, or once the task has left its attempt', () => {
+    expect(taskRowView(subject({ status: 'in_progress' })).runningLong).toBeNull();
+    expect(taskRowView(subject({ status: 'completed', runningLong: flag(2) })).runningLong).toBeNull();
+  });
+});
+
 describe('a task paused on a usage limit', () => {
   const now = new Date(2026, 9, 11, 17, 0);
   const paused = { status: 'awaiting_user', type: 'ai' as const, awaitingReason: 'usage-limit' as const };

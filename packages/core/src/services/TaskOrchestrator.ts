@@ -61,6 +61,7 @@ import { StartLedger, type Offer, type QueuedStart } from './StartLedger';
 import type { NodeBudget } from './TreeLedger';
 import type { ExecutionBackend, LeaseRequest, ReservedLease } from './executionLease';
 import type { SessionHeld } from './sessionLease';
+import type { RunningLongEvent } from './RunningLong';
 
 export { TaskControlError } from './TaskControlError';
 
@@ -143,6 +144,8 @@ export interface OrchestratorObserver {
   onModelSwitched?(data: { taskId: string; sessionId: string; from: RunnerModelRef; model: RunnerModelRef; effort?: string; asked: boolean; attemptEnded: boolean }): void;
   /** A live task's runner went silent (ADR-0018's idle timer); paused while it waits on input, a checkpoint or an approval. */
   onTaskIdle?(data: { taskId: string; idleSince: string }): void;
+  /** A live AI attempt ran long, or its runner's session compacted on its own (ADR-0018 W1): advisory, it settles nothing. */
+  onTaskRunningLong?(data: { taskId: string; runningLong: RunningLongEvent }): void;
   onReviewNeeded?(data: { tasks: Task[]; planRunners: RunnerId[] }): void;
   onReviewApproved?(data: { tasks: Task[] }): void;
   onCheckpoint?(data: { taskId: string; taskTitle: string; summary: string }): void;
@@ -596,6 +599,11 @@ export class TaskOrchestrator {
   /** Which spawn of a live attempt's runner waits for Ordewell's tools to connect (ADR-0025); null when none does. */
   getToolsAttaching(taskId: string): 1 | 2 | null {
     return this.attempts.attaching(taskId);
+  }
+
+  /** A live attempt's latest running-long flag (ADR-0018 W1); null when it has none. */
+  getRunningLong(taskId: string): RunningLongEvent | null {
+    return this.attempts.runningLong(taskId);
   }
 
   /** Recent clean output of a task's latest attempt, running or ended; null if it never ran. */

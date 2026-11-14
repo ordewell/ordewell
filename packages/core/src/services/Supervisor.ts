@@ -4,6 +4,8 @@ import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_AL
 import { classifyRunnerStop } from './runnerExit';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 import { LAND_KEPT_HINT } from './taskReport';
+import { RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, type RunningLongEvent } from './RunningLong';
+import { formatElapsed } from '../conversation/elapsed';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
 
@@ -690,6 +692,7 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   waiting_approval: 'waiting for approval',
   approval_denied: 'denied a request',
   task_idle: 'gone quiet',
+  running_long: 'running long',
   landing_conflict: 'in conflict',
   landing_failed: 'with a landing git refused',
   usage_limit: 'at a usage limit',
@@ -698,6 +701,16 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   run_finished: 'ended',
   task_report: 'reported',
 };
+
+/**
+ * What a supervisor can do about a task running long, said once a wake
+ * (ADR-0018 W1): the wake text carries it, so the planner's system prompt does
+ * not grow by it. Its level's brief says whether it acts or suggests.
+ */
+export const RUNNING_LONG_ADVICE = "Running long is advice, never a verdict: read the task's output with task_output; if its brief's done criterion holds, message_task its runner to commit and call task_complete; if the brief is too large, stop_task it and split it; otherwise let it go on.";
+
+/** A running-long line carries its facts whole: they are what the supervisor weighs, and a ride-along line would cut them off. */
+const RUNNING_LONG_CHARS = 2 * TASK_NAME_CHARS + DETAIL_CHARS;
 
 /** Room kept for the overflow line, which is never left out, and for the note on updates a turn cannot carry beside this one. */
 const OVERFLOW_ROOM = 400 + LEFT_OUT_ROOM;
@@ -720,7 +733,8 @@ export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => str
     ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${name(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
   ];
   const shown = new Set<DigestItem>();
-  let used = 'Run update:'.length + SINCE_LAST.length + OVERFLOW_ROOM;
+  const advised = items.some((item) => item.kind === 'running_long');
+  let used = 'Run update:'.length + SINCE_LAST.length + OVERFLOW_ROOM + (advised ? RUNNING_LONG_ADVICE.length + 1 : 0);
   // Whole items by rank, stopping at the first that does not fit: a smaller one past it would read as more important than it.
   for (const item of [...items].sort((a, b) => a.rank - b.rank)) {
     if (used + item.line.length + 1 > WAKE_MAX_CHARS) break;
@@ -732,6 +746,7 @@ export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => str
   return [
     'Run update:',
     ...items.filter((item) => item.kind !== 'task_passed' && shown.has(item)).map((item) => item.line),
+    ...([...shown].some((item) => item.kind === 'running_long') ? [RUNNING_LONG_ADVICE] : []),
     ...(passes.length > 0 ? [SINCE_LAST, ...passes.map((item) => item.line)] : []),
     ...(left.length > 0 ? [overflowLine(left)] : []),
   ].join('\n');
@@ -750,7 +765,7 @@ function attentionItem(event: RunEvent, describe: (taskId: string) => string, bl
   const line = attentionLine(event, describe, blocked);
   // A failure holding work back is why the wake came, whatever else it was held for.
   if (!isHeldEvent(event) || blocked.length > 0) return { kind: event.kind, rank: 0, line: `- ${line}` };
-  return { kind: event.kind, rank: 1, line: `- ${cut(line, RIDE_ALONG_CHARS - 2)}` };
+  return { kind: event.kind, rank: 1, line: `- ${cut(line, (event.kind === 'running_long' ? RUNNING_LONG_CHARS : RIDE_ALONG_CHARS) - 2)}` };
 }
 
 function attentionLine(event: RunEvent, describe: (taskId: string) => string, blocked: readonly string[]): string {
@@ -766,6 +781,7 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     case 'waiting_approval': return `${task} is waiting for approval${colon}`;
     case 'approval_denied': return `${task}'s runner asked for something nobody here may allow, and was denied${colon}`;
     case 'task_idle': return `${task} has gone quiet${detail ? ` (${detail})` : ''}`;
+    case 'running_long': return runningLongLine(task, event.runningLong, describe);
     case 'landing_conflict': return `${task} finished, but its work conflicts and could not land${colon}`;
     // Not a conflict: no repair lands it, only fixing what git refused. The fix is said whole, outside the cut detail.
     case 'landing_failed': {
@@ -791,6 +807,33 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
       return ids.length === 0 ? paused : `${paused}: ${namedFirst(ids, describe)}`;
     }
   }
+}
+
+/** The facts of a running-long flag, worded for the supervisor to weigh (ADR-0018 W1). */
+function runningLongLine(task: string, facts: RunningLongEvent | undefined, describe: (taskId: string) => string): string {
+  if (!facts) return `${task} has run long`;
+  const window = facts.contextWindow ? ` of ${tokens(facts.contextWindow)}` : '';
+  // A compaction that states no size (Codex, OpenCode) leaves the live context unknown, but the peak still says it ran full.
+  const context = facts.contextTokens !== undefined
+    ? `; context ${tokens(facts.contextTokens)}${window} tokens${facts.peakContextTokens === undefined ? '' : `, peak ${tokens(facts.peakContextTokens)}`}`
+    // Only a compaction names a cause: a /clear or a model switch clears the live size as well.
+    : facts.peakContextTokens !== undefined ? `; context unknown${facts.compactions > 0 ? ' since compacting' : ''}, peak ${tokens(facts.peakContextTokens)}${window} tokens` : '';
+  const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
+  if (facts.reason === 'compaction') {
+    return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
+  }
+  const base = facts.basis ? facts.basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
+  const from = facts.basis
+    ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(facts.basis.runningMs)} task ${describe(facts.basis.taskId)} passed in`
+    : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
+  const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
+  const compacted = facts.compactions > 0 ? `; compacted ${times(facts.compactions)}` : '';
+  return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${from}${doubled})${context}${compacted}`;
+}
+
+/** A token count to the nearest thousand: the supervisor weighs it against the window, not to the token. */
+function tokens(n: number): string {
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
 function listed(items: readonly string[]): string {

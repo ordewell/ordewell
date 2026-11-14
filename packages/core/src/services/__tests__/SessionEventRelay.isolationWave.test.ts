@@ -34,7 +34,7 @@ describe('a run of landings', () => {
       store,
       orchestrator: {
         judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null,
-        getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [],
+        getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [],
         holdReason: () => null, loopStranded: () => false, runMergeView,
         activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
         taskIsolation: () => null,

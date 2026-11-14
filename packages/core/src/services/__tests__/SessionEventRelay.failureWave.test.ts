@@ -36,7 +36,7 @@ describe('a wave of failures', () => {
       store,
       orchestrator: {
         judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null,
-        getToolsAttaching: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [],
+        getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [],
         holdReason: () => null, loopStranded: () => false, runMergeView: () => null,
         activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
         taskIsolation: () => null,

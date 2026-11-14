@@ -1024,6 +1024,16 @@ approval" is derived from the task's pending approvals.
 *Avoid:* "idle" (a silence guess, and its timer still runs during a turn),
 "paused", "blocked" (a dependency term).
 
+**Running long** (ADR-0018, W1) — the advisory flag on an AI task's attempt
+whose running time passed max(30 min, 3× the longest running time of an AI
+task that passed in its plan), doubled after each flag, or whose own runner session
+compacted its context by itself. Time waiting on a person is left out, of both. It
+carries the running time, the threshold and the task it came from, the live
+and peak context, the model's window and the compactions so far. The
+supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or
+fails anything. A quiet task is silent, and a task running long may be busy.
+*Avoid:* "stuck", "slow", "timeout" (a script task's limit, which does end it).
+
 **Completion reminder** (ADR-0018, W1) — the one message Ordewell sends a
 runner whose turn ended cleanly without a `task_complete` call, telling it to
 call the tool with `done` and its handoff, or `blocked` and the reason, or
@@ -1462,8 +1472,8 @@ limit" (it counts calls and bytes, not tokens).
 and optional `findings`, `artifacts`, `report` and `reason`, made with a task's
 *task token*: the only runner completion evidence. It is handed
 to `VerdictEngine`, which alone produces the verdict after checking the current
-generation. Evidence held behind an undelivered message is superseded when
-that message is read. Only `done` passes; `blocked` and `failed` carry their
+generation. Evidence held behind an undelivered message of the person's is
+superseded when that message is read; one of Ordewell's own holds none. Only `done` passes; `blocked` and `failed` carry their
 reason, and the verdict keeps which (`Verdict.reported`): only `failed` starts
 a *Loop*'s round. The `summary` is the short opening of the task's *Handoff*.
 *Avoid:* "self-report" or "the model says it's done" (it is the runner's

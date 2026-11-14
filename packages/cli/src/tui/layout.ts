@@ -1315,13 +1315,13 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
   const bodyPad = parent ? '      ' : '    ';
   // Only a state that wants the user gets a word: a runner approval ("enter
   // opens it") and a task stopped at a question — and a report received while
-  // its attempt winds down, or a runner still connecting Ordewell's tools,
-  // which the spinner alone would hide. Running and
+  // its attempt winds down, a runner still connecting Ordewell's tools, or an
+  // attempt running long (ADR-0018 W1), which the spinner alone would hide. Running and
   // quiet are the status glyph's job — the spinner and the static '~' — so a
   // running row reads `runner · model` and nothing is repeated above it.
   const activity = row.approvals
     ? `${inRow(row.approvals)}: enter opens it`
-    : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : row.attaching ? inRow(row.attaching) : '';
+    : row.awaiting ? inRow(row.awaiting) : row.receipt ? inRow(row.receipt) : row.attaching ? inRow(row.attaching) : row.runningLong ? inRow(row.runningLong) : '';
   const skills = (task.skills ?? []).join(' · ');
   // A delegated task has no runner or model: its child's tasks and what is left of its budget take their place.
   const delegated = DELEGATION_OFFERED ? row.delegated : null;
