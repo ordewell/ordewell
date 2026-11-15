@@ -260,6 +260,8 @@ export function plansRoute(pool: OrchestratorPool) {
       if (outcome.payload?.kind === 'merge_hold') return refuse(c, 409, outcome.message, 'merge_past_check');
       if (outcome.payload?.kind === 'merge_beside_ops') return refuse(c, 409, outcome.message, 'merge_beside_ops');
       if (!outcome.ok) throw new TaskControlError(outcome.message);
+      // The run is already merged and closed: the seam's ok answer with nothing to merge is information, not a fault.
+      if (!outcome.payload) return c.json({ outcome: 'nothing', message: outcome.message } satisfies IsolationMergeResponse);
       throw new Error('Merge all answered without its result.');
     } catch (err) {
       return failure(c, err, 'task edit');

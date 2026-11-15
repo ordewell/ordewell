@@ -83,6 +83,10 @@ export async function handleHandoff(
         }
       });
       if (merged === null) fail(`Not confirmed: nothing was changed. Pass ${flags[declined]}.`);
+      if (merged.outcome === 'nothing') {
+        console.log(merged.message);
+        return;
+      }
       const { ok, message } = mergeOutcome(merged, branch, group, repairedLanded(handoff));
       if (ok) console.log(message);
       else fail(message);
