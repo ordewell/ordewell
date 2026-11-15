@@ -100,11 +100,19 @@ and completion evidence.
   that passed meanwhile can put it off, and each flag doubles the time the
   next needs. Only running time counts: a wait on input, a checkpoint or an
   approval holds the clock, and is left out of a passed task's running time
-  too, and a usage limit ends the attempt. Each automatic
-  compaction of the task's own runner session flags it once, whatever the
-  time; a manual one and a subagent's context do not. The flag carries the
+  too, and a usage limit ends the attempt. An automatic
+  compaction of the task's own runner session flags it, whatever the time; a
+  manual one and a subagent's context do not. Where Ordewell sets the window
+  the runner compacts at (Claude Code's task environment, 150k tokens), a
+  compaction is routine: it flags from the attempt's third, then at the 6th,
+  12th and so on, since past that size each call re-reads a long prefix for
+  little new information and a task compacts a few times in ordinary work.
+  Where Ordewell sets none, the runner compacts near its model's own window,
+  so every compaction flags. The flag carries the
   running time, the threshold and the task it was computed from, the live
-  context and the model's window, the peak context (the saved usage keeps only
+  context and the model's window, the window Ordewell set the runner to
+  compact at when it did (the context line names it, the model's beside it),
+  the peak context (the saved usage keeps only
   the last) and the compactions so far. The live context and window follow
   the usage meter's rules: a compaction that states no size, or a change of
   model or source, leaves the context unknown until the next call measures it,
@@ -641,3 +649,4 @@ transport is retained for take-over.
 - 2026-11-14 — W1: an AI task's attempt that runs past max(30 min, 3× the longest passed AI task's wall time), doubled after each flag, or whose runner session compacts on its own, is flagged running long, as advice.
 - 2026-11-14 — C3: the completion contract tells a runner to commit and call `task_complete` once its brief's done criterion holds and to name work beyond it in the handoff; after a compaction of the runner's own session Ordewell queues it one message restating its brief with that instruction.
 - 2026-11-14 — W1: the running-long threshold is a multiple of a passed task's running time, waits left out, kept on its attempt as it ends; the live context and window follow the usage meter's rules across a sizeless compaction and a model change. C3: the queued nudge holds no `task_complete` back.
+- 2026-11-15 — W1: a compaction flags running long from the attempt's third, then at the 6th, 12th and so on, where Ordewell sets the window the runner compacts at, and from the first where it sets none; the flag names that window. C3's reminder after each compaction is unchanged.

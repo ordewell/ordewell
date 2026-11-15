@@ -246,7 +246,7 @@ export class VerdictEngine {
     const clock = task.type === 'ai' ? new RunningLongClock(this.runningLongThreshold, (facts) => {
       if (this.generations.get(task.id) !== gen) return;
       for (const l of this.runningLongListeners) l(task.id, facts);
-    }) : undefined;
+    }, () => session.compactWindowTokens) : undefined;
     if (clock) {
       this.clocks.set(task.id, clock);
       clock.run();
