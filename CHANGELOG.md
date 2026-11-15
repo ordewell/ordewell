@@ -8,6 +8,36 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A built-in `ordewell` runner.** It runs a task inside Ordewell on a
+  provider key alone (OpenRouter, Anthropic, OpenAI, Gemini and the other
+  OpenAI-compatible providers), with no coding-agent CLI to install, and is
+  listed with the other runners in `ordewell runners` and `/runners`. It has
+  three modes: Full; Guarded, which asks before each shell command, where
+  "Allow for this task" grants a command prefix; and read-only. It resumes
+  with continue, takes messages between steps, can be interrupted, pauses on a
+  usage limit, ends a run past its step limit with a forced `task_complete`,
+  and stops a model that repeats itself. It compacts its context when it
+  fills, marks the prompt for caching, and cuts a stream that goes quiet;
+  `ordewellStreamTimeouts` in the settings file sets how long.
+- **Model details from models.dev.** Each provider's `/models` list is matched
+  against models.dev, with a bundled snapshot to fall back on, so the context
+  size, prices and capabilities of a model show for every provider, in the
+  runner's model list and in the planner's model picker.
+- **Contributors:** `bench/live/runner-smoke.mjs` drives the built-in runner
+  against a live provider, and says why a run failed.
+
+### Changed
+
+- **The API planner's provider calls moved onto a new provider layer.**
+  Anthropic uses the native Messages API, with prompt caching, and thinking
+  when an effort is set. OpenAI uses the Responses API, with reasoning
+  effort. The planner effort setting now applies to API planners. Retries
+  follow a provider's Retry-After, and a usage limit waits until its reset
+  time. Gemini moved to `@google/genai` and no longer sends a fixed
+  temperature or topP.
+
 ## [0.13.2] - 2026-11-14
 
 ### Added
