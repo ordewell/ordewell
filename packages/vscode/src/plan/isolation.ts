@@ -45,7 +45,9 @@ export function mergePort(deps: Pick<PlanManagerDeps, 'session'>): MergePort {
         case 'merge_beside_ops': return { kind: 'held', hold: 'besideOps', message: merged.message };
       }
       if (!merged.ok) throw new Error(merged.message);
-      throw new Error('Merge all answered without its result.');
+      // Nothing left to merge (the run is merged and closed): information, not a fault.
+      void vscode.window.showInformationMessage(merged.message);
+      return { kind: 'done' };
     },
     ask: confirm,
   };
