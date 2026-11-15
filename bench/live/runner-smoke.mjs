@@ -169,12 +169,38 @@ async function runOne(core, testing, { provider, model }, scratch, timeoutMs) {
       if (!branch) reasons.push('no integration branch');
       else if (!fixHolds(root, branch, scratch)) reasons.push('task_complete reported done but the test does not pass on the integration branch');
     }
-    return { reasons };
+    return { reasons, ...(reasons.length > 0 ? { detail: failureDetail(session, task.id) } : {}) };
   } finally {
     session.destroy();
     await session.gone;
   }
 }
+
+/** How many of a failed task's last log events the report shows. */
+const DETAIL_EVENTS = 12;
+
+/**
+ * Why a run failed, read before the session and its scratch home are gone:
+ * the runner's errors (the provider's status and message), what waits on a
+ * person, and the tail of the last attempt's log. Keys are redacted again,
+ * though the runner already hides the ones it holds.
+ */
+export function failureDetail(session, taskId) {
+  const out = [];
+  try {
+    const attempts = session.taskLogAttempts(taskId);
+    const events = attempts.length > 0 ? session.taskLog(taskId, attempts[attempts.length - 1]) : [];
+    for (const e of events) if (e.type === 'error') out.push(`runner error: ${e.message}`);
+    for (const esc of session.escalations()) if (esc.task?.id === taskId) out.push(`escalation (${esc.kind}): ${esc.reason}`);
+    out.push(`log tail (attempt ${attempts[attempts.length - 1] ?? 'none'}, ${events.length} events):`);
+    for (const e of events.slice(-DETAIL_EVENTS)) out.push(`  ${JSON.stringify(e).slice(0, 400)}`);
+  } catch (error) {
+    out.push(`could not read the task log: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return out.map(redactKeys);
+}
+
+const redactKeys = (text) => text.replace(/\b(sk-[a-z]{2,8}-)[\w-]{8,}/gi, '$1…').replace(/\b(AIza)[\w-]{20,}/g, '$1…');
 
 function fmtCost(cost) {
   return cost === undefined ? 'cost n/a' : `cost $${cost.toFixed(5)}`;
@@ -242,7 +268,11 @@ async function main() {
       if (usage.steps === 0 && result.reasons.length === 0) result.reasons.push('no usage was recorded in the transcript');
       const ok = result.reasons.length === 0;
       lines.push(`${ok ? 'PASS' : 'FAIL'}${ok ? '        ' : '        '}${label}  steps ${usage.steps}  in ${usage.input}  out ${usage.output}  cache-read ${usage.cacheRead}  cache-write ${usage.cacheWrite}  ${fmtCost(usage.cost)}  ${cache}  ${((Date.now() - started) / 1000).toFixed(1)}s`);
-      if (!ok) { failures.push(`${label}: ${result.reasons.join('; ')}`); lines.push(`            reason: ${result.reasons.join('; ')}`); }
+      if (!ok) {
+        failures.push(`${label}: ${result.reasons.join('; ')}`);
+        lines.push(`            reason: ${result.reasons.join('; ')}`);
+        for (const line of result.detail ?? []) lines.push(`            ${line}`);
+      }
     }
     if (requested.length > 0) {
       const covered = new Set(plan.map((p) => p.dialect));
