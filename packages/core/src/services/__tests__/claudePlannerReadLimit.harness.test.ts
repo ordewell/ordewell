@@ -30,7 +30,7 @@ afterEach(async () => {
 
 interface Said { tool?: string; native?: boolean; subagent?: boolean; reply?: { text: string; isError: boolean } }
 
-/** Runs one planner turn of native reads in a workspace holding `files`, and returns what each read got back. */
+/** Runs one planner turn of native reads and Ordewell calls in a workspace holding `files`, and returns what each call got back. */
 async function plannerReads(files: Record<string, string>, calls: Array<[string, Record<string, unknown>]>, plannerReadLimit: UserSettings['plannerReadLimit']) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-readlimit-')));
   dirs.push(root);
@@ -55,7 +55,7 @@ async function plannerReads(files: Record<string, string>, calls: Array<[string,
   await session.startPlanning(`Plan the parser. <fake-claude>${JSON.stringify({ turnsFrom: turns })}</fake-claude>`, ['claude-code']);
 
   return readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Said)
-    .filter((line) => line.native).map((line) => ({ tool: line.tool, ...(line.subagent ? { subagent: true } : {}), ...line.reply! }));
+    .filter((line) => line.tool).map((line) => ({ tool: line.tool, ...(line.subagent ? { subagent: true } : {}), ...line.reply! }));
 }
 
 describe('a Claude Code planner\'s native reads under the read limit (ADR-0068)', () => {
@@ -115,6 +115,33 @@ describe('a Claude Code planner\'s native reads under the read limit (ADR-0068)'
     ]);
     expect(replies[2]?.text).toBe('export const b = 2;\n');
     expect(replies[6]?.text).toMatch(/^Read limit reached: you have made 2 reads this turn/);
+  }, patient(60_000));
+
+  // A subagent's Ordewell call carries only the planner's token: its `_meta`
+  // names the tool use the runner announced under the subagent (ADR-0068 R2).
+  it('neither counts nor refuses a subagent\'s run_command, while the planner\'s own past the limit is refused', async () => {
+    const replies = await plannerReads(
+      { 'a.ts': 'export const a = 1;\n', 'b.ts': 'export const b = 2;\n' },
+      [
+        ['run_command', { command: 'cat a.ts' }],
+        ['Agent', { calls: [
+          ['run_command', { command: 'cat a.ts' }],
+          ['run_command', { command: 'cat b.ts' }],
+          ['run_command', { command: 'cat a.ts b.ts' }],
+        ] }],
+        ['run_command', { command: 'cat b.ts' }],
+        ['run_command', { command: 'cat a.ts' }],
+      ],
+      { calls: 2 },
+    );
+
+    expect(replies.map(({ subagent, isError }) => [subagent === true, isError])).toEqual([
+      [false, false],
+      [true, false], [true, false], [true, false],
+      [false, false],
+      [false, true],
+    ]);
+    expect(replies[5]?.text).toMatch(/^Read limit reached: you have made 2 reads this turn/);
   }, patient(60_000));
 });
 
