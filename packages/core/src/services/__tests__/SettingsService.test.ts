@@ -212,12 +212,13 @@ describe('SettingsService', () => {
 
     it('replaces the file whole, so no reader meets it half-written and takes it for empty', () => {
       service.setEnabledRunners(['opencode', 'codex']);
-      const before = fs.statSync(tempFile).ino;
+      // Big, as an NTFS file id is past what a Number holds exactly: two ids a record apart can round to one.
+      const before = fs.statSync(tempFile, { bigint: true }).ino;
 
       service.setAutonomousMode(false);
 
       // A write in place truncates first; a rename swaps the file in one step.
-      expect(fs.statSync(tempFile).ino).not.toBe(before);
+      expect(fs.statSync(tempFile, { bigint: true }).ino).not.toBe(before);
       expect(fs.readdirSync(path.dirname(tempFile))).toEqual([path.basename(tempFile)]);
     });
   });

@@ -207,12 +207,13 @@ describe('sessionStore', () => {
       const meta = saveSession(plan, 'Same goal', tmpDir);
       const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
       const [file] = fs.readdirSync(sessionsDir);
-      const before = fs.statSync(path.join(sessionsDir, file)).ino;
+      // Big, as an NTFS file id is past what a Number holds exactly: two ids a record apart can round to one.
+      const before = fs.statSync(path.join(sessionsDir, file), { bigint: true }).ino;
 
       saveSession({ ...plan, status: 'approved' }, 'Same goal', tmpDir, meta.id);
 
       // A write in place truncates first; a rename swaps the file in one step.
-      const after = fs.statSync(path.join(sessionsDir, file));
+      const after = fs.statSync(path.join(sessionsDir, file), { bigint: true });
       expect(after.ino).not.toBe(before);
       expect(fs.readdirSync(sessionsDir)).toEqual([file]);
       expect(loadSession(meta.id, tmpDir)!.plan.status).toBe('approved');

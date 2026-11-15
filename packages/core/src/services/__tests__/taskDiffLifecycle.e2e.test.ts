@@ -54,7 +54,9 @@ describe('a task diff across task kinds and lifecycle states', () => {
 
   const task = (n: number, extra: Partial<Task> = {}): Task => ({ ...createTask({ id: `t${n}`, order: n, title: `Task ${n}`, prompt: 'x' }), ...extra });
   const save = (session: string, tasks: Task[], saved: IsolationRun | undefined, more: Partial<LegacyPlanState> = {}): void => {
-    const plan = { tasks, runners: ['claude-code'], status: 'approved', ...(saved ? { isolation: { run: structuredClone(saved), resolvers: {} } } : {}), ...more };
+    // A plan always carries its generatedAt, which names the session's file; without it the name follows each
+    // save's clock, a save a second later writes a second file, and a load may read the stale one first.
+    const plan = { tasks, runners: ['claude-code'], status: 'approved', generatedAt: '2026-11-01T00:00:00.000Z', ...(saved ? { isolation: { run: structuredClone(saved), resolvers: {} } } : {}), ...more };
     saveSession(plan as LegacyPlanState, 'goal', workspace, session);
   };
   const patch = Buffer.from('diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-# r\n+# s\n');
