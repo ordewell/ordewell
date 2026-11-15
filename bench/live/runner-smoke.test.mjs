@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
-import { cacheVerdict, DEFAULTS, dialectOfProvider, loadEnvFile, minCacheableTokens } from './runner-smoke.mjs';
+import { cacheVerdict, DEFAULTS, dialectOfProvider, failureDetail, loadEnvFile, minCacheableTokens } from './runner-smoke.mjs';
 import { startMock } from './start-mock.mjs';
 
 const script = path.join(import.meta.dirname, 'runner-smoke.mjs');
@@ -62,8 +62,29 @@ describe('the live smoke harness, offline', () => {
       });
       assert.notEqual(run.status, 0, run.stdout + run.stderr);
       assert.match(run.stdout, /^FAIL +chat-completions/m);
+      assert.match(run.stdout, /^ +log tail \(attempt 1, \d+ events\):$/m);
       assert.match(run.stderr, /FAILED:/);
     } finally { child.kill(); }
+  });
+
+  it('shows why a run failed: the runner\'s error, what waits on a person and the log\'s tail, keys redacted', () => {
+    const key = 'sk-or-v1-0123456789abcdef0123456789abcdef';
+    const events = [
+      { type: 'turn_start', message: 'Fix add' },
+      { type: 'error', message: `404 no endpoint for ${key} (HTTP 404)` },
+      { type: 'turn_end', reason: 'failed' },
+    ];
+    const session = {
+      taskLogAttempts: () => [1],
+      taskLog: (id, attempt) => (id === 't' && attempt === 1 ? events : []),
+      escalations: () => [{ kind: 'input', task: { id: 't' }, reason: 'Waiting for your input. Its turn failed: 404 no endpoint' }, { kind: 'input', task: { id: 'other' }, reason: 'not this one' }],
+    };
+    const detail = failureDetail(session, 't');
+    assert.equal(detail[0], 'runner error: 404 no endpoint for sk-or-… (HTTP 404)');
+    assert.equal(detail[1], 'escalation (input): Waiting for your input. Its turn failed: 404 no endpoint');
+    assert.equal(detail[2], 'log tail (attempt 1, 3 events):');
+    assert.equal(detail.length, 6);
+    assert.ok(detail.every((line) => !line.includes(key)));
   });
 
   it('keeps its tables consistent', () => {
