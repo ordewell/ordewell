@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
-import { cacheVerdict, DEFAULTS, dialectOfProvider, failureDetail, loadEnvFile, minCacheableTokens } from './runner-smoke.mjs';
+import { cachesOnlyImplicitly, cacheVerdict, DEFAULTS, dialectOfProvider, failureDetail, loadEnvFile, minCacheableTokens } from './runner-smoke.mjs';
 import { startMock } from './start-mock.mjs';
 
 const script = path.join(import.meta.dirname, 'runner-smoke.mjs');
@@ -112,6 +112,19 @@ describe('the live smoke harness, offline', () => {
     assert.equal(cacheVerdict({ ...run, steps: 1, cacheWrite: 6000 }, 512).reason, undefined);
     assert.equal(cacheVerdict({ ...run, maxInput: 400, cacheWrite: 6000 }, 512).reason, undefined);
     assert.match(cacheVerdict({ ...run, maxInput: 400 }, 512).cache, /^cache UNVERIFIED/);
+  });
+
+  it('leaves a Google run that read and wrote nothing UNVERIFIED, and keeps the strict rule elsewhere', () => {
+    assert.equal(cachesOnlyImplicitly('openrouter', 'google/gemini-3.1-flash-lite'), true);
+    assert.equal(cachesOnlyImplicitly('google', 'gemini-2.5-flash'), true);
+    for (const [provider, model] of [['openrouter', 'openai/gpt-4.1-mini'], ['openrouter', 'anthropic/claude-haiku-5.5'], ['openrouter', 'qwen/qwen3-coder'], ['anthropic', 'claude-haiku-5-5']]) {
+      assert.equal(cachesOnlyImplicitly(provider, model), false, `${provider}:${model}`);
+    }
+    const run = { steps: 8, maxInput: 3190, cacheRead: 0, cacheWrite: 0 };
+    assert.deepEqual(cacheVerdict(run, 1024, true), { cache: 'cache UNVERIFIED (implicit caching, best-effort)' });
+    assert.deepEqual(cacheVerdict({ ...run, cacheRead: 2990 }, 1024, true), { cache: 'cache ok' });
+    assert.match(cacheVerdict({ ...run, cacheWrite: 3000 }, 1024, true).reason, /written .* but never read/);
+    assert.match(cacheVerdict(run, 1024).reason, /never read or written/);
   });
 
   it('reads .env without overriding what the shell exported', () => {
