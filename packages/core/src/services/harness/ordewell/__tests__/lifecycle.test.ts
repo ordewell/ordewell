@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '../../AgentAdapter';
 import { ModelError } from '../../../model';
+import { createChatCompletionsClient } from '../../../model/adapters/chatCompletions';
+import { BASE_REQUEST, failure, refusal, replay } from '../../../model/__tests__/replay';
 import { classifyRunnerStop, readUsageLimitReset } from '../../../runnerExit';
 import { defaultModelInfo } from '../models';
 import { OrdewellLoop, stepFailure, type LoopOptions } from '../loop';
@@ -156,5 +158,18 @@ describe('a failed step, as E1 and U1 read it', () => {
       const event = stepFailure(new ModelError({ kind, message: 'no', status: 400 }));
       expect(classifyRunnerStop(event), kind).toBe('stopped');
     }
+  });
+
+  it('puts a router\'s refusal in the turn\'s error, its status and words whole, and asks the user instead of retrying', async () => {
+    // OpenRouter's answer, recorded live, when the account's privacy settings
+    // leave a model no endpoint: the same for every request, so no E1 retry.
+    const words = '0 endpoints out of 1 requested are available matching your guardrail restrictions and data policy. We removed them for the following reasons (an endpoint may have matched multiple reasons):\nZDR violation (account settings): 1 endpoint excluded; configurable at https://openrouter.ai/settings/privacy';
+    const body = { error: { message: words, code: 404, metadata: { ineligibility_reasons: [{ reason: 'zdr-violation-by-account', endpoint_count: 1 }] } } };
+    const client = createChatCompletionsClient({ provider: 'openrouter', apiKey: 'sk-test', baseUrl: 'https://openrouter.test/api/v1', fetch: replay(refusal(404, body)).fetch });
+    const event = stepFailure(await failure(client, { ...BASE_REQUEST, model: 'google/gemini-2.5-flash' }));
+    expect(event.usageLimit).toBe(false);
+    expect(event.message).toContain(words);
+    expect(event.message).toMatch(/\(HTTP 404\)$/);
+    expect(classifyRunnerStop(event)).toBe('stopped');
   });
 });
