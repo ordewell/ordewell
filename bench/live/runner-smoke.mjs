@@ -23,8 +23,8 @@
  *
  * Exit 0 when every run that had a key passed; a dialect without a key is
  * UNVERIFIED, never a pass. Caching counts as checked only where the largest
- * prompt exceeded the provider's minimum cacheable prefix and a second step
- * could have read it; then a run that never read or wrote the cache fails.
+ * prompt exceeded the model's minimum cacheable prefix and a second step
+ * could have read it; then a run that never read the cache fails, writes or no.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -46,14 +46,35 @@ export const DEFAULTS = [
 const NATIVE = { anthropic: 'anthropic-messages', openai: 'responses', google: 'gemini' };
 export const dialectOfProvider = (provider) => NATIVE[provider] ?? 'chat-completions';
 
+// A router's model id names the vendor that serves it, whose minimum applies.
+const VENDOR_PREFIX = { anthropic: 'anthropic', google: 'google', openai: 'openai' };
+
 /**
- * The smallest prompt prefix a provider caches. Below it a missing cache hit
+ * The smallest prompt prefix a model caches. Below it a missing cache hit
  * says nothing, so the run reports UNVERIFIED instead of a verdict on caching.
  */
 export function minCacheableTokens(provider, model) {
-  if (provider === 'anthropic') return /haiku/i.test(model) ? 4096 : /opus|fable|mythos/i.test(model) ? 4096 : 2048;
-  if (provider === 'google') return /pro/i.test(model) ? 2048 : 1024;
+  const slash = model.indexOf('/');
+  const vendor = (slash > 0 && VENDOR_PREFIX[model.slice(0, slash)]) || provider;
+  if (vendor === 'anthropic') {
+    if (/haiku[-.]?5/i.test(model)) return 512;
+    return /haiku|opus|fable|mythos/i.test(model) ? 4096 : 2048;
+  }
+  if (vendor === 'google') return /pro/i.test(model) ? 2048 : 1024;
   return 1024;
+}
+
+/**
+ * Caching's verdict from a run's summed usage. Only a read is a hit: a run
+ * that wrote every step and read none paid the write premium for nothing.
+ */
+export function cacheVerdict(usage, min) {
+  if (usage.steps < 2 || usage.maxInput <= min) return { cache: `cache UNVERIFIED (largest prompt ${usage.maxInput} <= ${min} or fewer than 2 steps)` };
+  if (usage.cacheRead > 0) return { cache: 'cache ok' };
+  if (usage.cacheWrite > 0) {
+    return { cache: 'cache MISSING (written, never read)', reason: `the cache was written (${usage.cacheWrite} tokens over ${usage.steps} steps) but never read` };
+  }
+  return { cache: `cache MISSING (prompt reached ${usage.maxInput} > ${min})`, reason: `prompt reached ${usage.maxInput} tokens (minimum cacheable ${min}) but the cache was never read or written` };
 }
 
 /** `.env` lines the way the CLI reads them; a variable already exported wins. */
@@ -103,7 +124,7 @@ function readUsage(dir) {
     }
   };
   walk(dir);
-  const total = { steps: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: undefined, maxInput: 0, anyCache: false };
+  const total = { steps: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: undefined, maxInput: 0 };
   for (const file of files) {
     for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
       if (!line.trim()) continue;
@@ -117,7 +138,6 @@ function readUsage(dir) {
       total.cacheRead += u.cacheReadTokens ?? 0;
       total.cacheWrite += u.cacheWriteTokens ?? 0;
       total.maxInput = Math.max(total.maxInput, u.inputTokens ?? 0);
-      if ((u.cacheReadTokens ?? 0) > 0 || (u.cacheWriteTokens ?? 0) > 0) total.anyCache = true;
       if (u.cost && typeof u.cost.amount === 'number') total.cost = (total.cost ?? 0) + u.cost.amount;
     }
   }
@@ -258,13 +278,8 @@ async function main() {
       const usage = readUsage(homeDir);
       fs.rmSync(path.join(homeDir, '.ordewell'), { recursive: true, force: true });
       const min = minCacheableTokens(entry.provider, entry.model);
-      let cache;
-      if (usage.steps >= 2 && usage.maxInput > min) {
-        cache = usage.anyCache ? 'cache ok' : `cache MISSING (prompt reached ${usage.maxInput} > ${min})`;
-        if (!usage.anyCache && result.reasons.length === 0) result.reasons.push(`prompt reached ${usage.maxInput} tokens (minimum cacheable ${min}) but the cache was never read or written`);
-      } else {
-        cache = `cache UNVERIFIED (largest prompt ${usage.maxInput} <= ${min} or fewer than 2 steps)`;
-      }
+      const { cache, reason: cacheReason } = cacheVerdict(usage, min);
+      if (cacheReason && result.reasons.length === 0) result.reasons.push(cacheReason);
       if (usage.steps === 0 && result.reasons.length === 0) result.reasons.push('no usage was recorded in the transcript');
       const ok = result.reasons.length === 0;
       lines.push(`${ok ? 'PASS' : 'FAIL'}${ok ? '        ' : '        '}${label}  steps ${usage.steps}  in ${usage.input}  out ${usage.output}  cache-read ${usage.cacheRead}  cache-write ${usage.cacheWrite}  ${fmtCost(usage.cost)}  ${cache}  ${((Date.now() - started) / 1000).toFixed(1)}s`);

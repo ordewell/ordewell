@@ -24,12 +24,24 @@ type AssistantWire = OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam
   reasoning_content?: string;
   reasoning_details?: unknown[];
 };
-type Body = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & { reasoning?: { effort: string } };
+type Body = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
+  reasoning?: { effort: string };
+  provider?: { order: readonly string[] };
+};
 
 const KEYLESS_PLACEHOLDER = 'not-needed';
 const EPHEMERAL = { type: 'ephemeral' } as const;
 // Anthropic takes four breakpoints a request; the last message holds one.
 const MAX_SYSTEM_BREAKPOINTS = 3;
+// OpenRouter serves Claude from several upstreams, and its usual pick, Vertex's
+// global endpoint, spreads successive requests over caches that share no
+// entries: a step read the step before it only by chance, and paid a write
+// every time. Bedrock read it on every step, and Anthropic's own API keeps one
+// cache per workspace, so they go first. Fallbacks stay on: an outage, an
+// account that excludes both, or reasoning another upstream signed still
+// routes elsewhere, uncached. A set order turns OpenRouter's sticky routing
+// off, which only ever kept a request on that same scattering endpoint (ADR-0070).
+const CACHE_ROUTING = { order: ['anthropic', 'amazon-bedrock'] } as const;
 
 // Vendors whose models take a top-level `reasoning_effort`; OpenRouter takes
 // its own `reasoning` object and drops it for a model without reasoning.
@@ -122,6 +134,7 @@ export function requestBody(provider: AiProvider, request: ModelRequest, without
     stream: true,
     ...(NO_STREAM_OPTIONS.has(provider) ? {} : { stream_options: { include_usage: true } }),
     ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
+    ...(explicitCache && asksForCache(request) ? { provider: CACHE_ROUTING } : {}),
   };
   if (request.tools.length > 0) {
     body.tools = request.tools.map((t) => ({
@@ -136,6 +149,10 @@ export function requestBody(provider: AiProvider, request: ModelRequest, without
     else body.reasoning_effort = EFFORT[request.effort];
   }
   return body;
+}
+
+function asksForCache(request: ModelRequest): boolean {
+  return request.cache?.atLastMessage === true || request.cache?.afterTools === true || request.system.some((p) => p.cacheBreakpoint);
 }
 
 function wireToolChoice(choice: ToolChoice): OpenAI.Chat.Completions.ChatCompletionToolChoiceOption {
