@@ -412,7 +412,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
   // Briefs written from a bundled manual older than the reference program left whole feature groups to no task.
   it.each(backends)('has a research task check the external facts briefs rest on before they are written, for $name', ({ harness, runner }) => {
     const rule = section(prompt(harness, runner), 'WHO EXPLORES:');
-    expect(rule).toContain("- Check the facts briefs rest on first: where they concern an external system you cannot check from here (a reference program's behaviour or version, an API, a deployed service), a research task establishes them and the briefs cite its report, never a document that may be stale. Below Act, that first plan is the research alone, as above.");
+    expect(rule).toContain("- Check the facts briefs rest on first: where they concern an external system you cannot check from here (a library's or tool's behaviour or version, an API, a deployed service), a task establishes them and the briefs rest on its handoff, never a document that may be stale; a small job's one task checks them itself.");
   });
 
   // The procedure is the explore skill's; the rule only points at it, so a planner that explores knows the prototype survives.
@@ -678,23 +678,23 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
 
   it('still asks for dependencies that reflect genuine ordering: each names what it consumes', () => {
     for (const p of [conversation(false), conversation(LONE_REPO), oneShot(false), oneShot(LONE_REPO)]) {
-      expect(p).toContain('- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where a rule below says two collide.');
+      expect(p).toContain('- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them.');
       expect(p).not.toMatch(/Only add dependencies when/);
     }
   });
 
   it('fans tasks that only add to a contract out from the task that fixes it, never chaining siblings', () => {
     for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
-      expect(p).toMatch(/Once a leading task fixes a contract the rest only add to \(a registry, a layout where each addition is a new file\), each depends on it alone, never on its siblings\./);
+      expect(p).toMatch(/Once a leading task fixes a contract the rest only add to \(a registry or layout where each addition is a new file\), each depends on it alone, never on its siblings\./);
       expect(p).toMatch(/make that shared decision a small leading task that fixes it, not the first layer of a chain\./);
-      expect(p).toMatch(/- Keep one line of reasoning, or a small job, in one task: .* That never chains layers a contract task can decouple\./);
+      expect(p).toMatch(/- Keep one line of reasoning, or a small job, in one task: .* This never justifies chaining layers a contract task can decouple\./);
     }
   });
 
   it('has shared verification built once and each brief ask only for the tests of its slice', () => {
     for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
-      expect(p).toMatch(/- Build shared verification once: where several tasks need the same kind of check \(a harness against a reference, fixtures, golden files\), one early task builds it and each runs it on its own slice\. A brief asks for the tests that prove its slice, not a suite of its own\./);
-      expect(p).toMatch(/Size each slice to fit a single fresh agent session's context window with room to spare: one that would take about as long as doing the whole goal alone is split\./);
+      expect(p).toMatch(/- Build shared verification once: where several tasks need the same kind of check \(a test harness, fixtures, golden files\), one early task builds it and each runs it on its own slice\. Each such brief asks for the tests that prove its slice, not a suite of its own\./);
+      expect(p).toMatch(/Size each slice to fit a single fresh agent session's context window with room to spare: a slice that would fill one is split\./);
     }
   });
 });
@@ -1135,7 +1135,7 @@ describe('delegation in the planner prompt (ADR-0055 D4, D21)', () => {
     const text = prompt({ subplanner: brief });
     expect(text).toContain('- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you.\n');
     expect(text).not.toMatch(/Below Act/);
-    expect(text).toMatch(/a research task establishes them and the briefs cite its report, never a document that may be stale\.\n/);
+    expect(text).toMatch(/a task establishes them and the briefs rest on its handoff, never a document that may be stale; a small job's one task checks them itself\.\n/);
   });
 
   it('tells a subplanner how it ends, what it may not change, and that nobody answers it', () => {
