@@ -840,8 +840,9 @@ export class CliAgentAiService implements IAiService {
             const { id, toolUseId } = event;
             const asked = new AbortController();
             openAsks.set(id, asked);
+            // A subagent's read is the delegation the limit asks for, so it is not the planner's to count (ADR-0068 R2).
             const ownRead = readLimit && event.ask && OWN_READ_ASKS.has(event.ask.kind)
-              && !(toolUseId && pendingCalls.get(toolUseId)?.subagentId);
+              && !event.bySubagent && !(toolUseId && pendingCalls.get(toolUseId)?.subagentId);
             const admission = ownRead ? readLimit.admit() : undefined;
             const decided = admission && !admission.allowed
               ? Promise.resolve<ApprovalDecision>({ decision: 'deny', note: admission.reason })
