@@ -146,6 +146,18 @@ describe('DaemonHost', () => {
     expect(screen.queryByText('Detecting coding agents…')).toBeNull();
   });
 
+  it('shows the planner\'s decision record in the planner conversation, and not in the plan panel', async () => {
+    const decisionRecord = [{ id: 'D1', kind: 'decision' as const, text: 'Use SQLite', why: 'one file, no server', at: 0, timestamp: '2026-01-01T00:00:00.000Z' }];
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: { ...PLAN, decisionRecord }, goal: 'g' }) });
+    const host = hostWith();
+    const { container } = render(<><section data-testid="conversation"><ChatSurface host={host} layout="conversation" /></section><section data-testid="plan"><ChatSurface host={host} layout="plan" /></section></>);
+    await opened(daemon, host);
+    await waitFor(() => expect(screen.getByTestId('conversation').querySelector('.decision-record')?.textContent).toContain('Use SQLite'));
+    expect(screen.getByTestId('plan').querySelector('.plan-list')).not.toBeNull();
+    expect(screen.getByTestId('plan').querySelector('.decision-record')).toBeNull();
+    expect(container.querySelectorAll('.decision-record')).toHaveLength(1);
+  });
+
   it('lists an installed agent the daemon cannot start as unusable, with its reason', async () => {
     const reason = 'GitHub Copilot CLI is too old for Ordewell: found 1.0.104, needs 1.0.105 or later.';
     fakeDaemon({
@@ -851,6 +863,17 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     await act(() => host.handle({ type: 'ready' }));
 
     await waitFor(() => expect(seen).toContainEqual({ type: 'isolationPreview', preview }));
+  });
+
+  it('says what the daemon said when Merge all finds nothing left to merge', async () => {
+    const message = 'This run is already merged and closed: there is nothing to merge.';
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: PLAN, goal: 'g' }), 'plans.isolationMerge': ok({ outcome: 'nothing', message }) });
+    const host = hostWith(async (request) => request.choices[0]!.id);
+    await opened(daemon, host);
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'isolationAction', action: 'merge' }));
+    expect(daemon.calls('plans.isolationMerge')).toHaveLength(1);
+    await waitFor(() => expect(JSON.stringify(seen)).toContain(message));
   });
 
   it('opens the chat\'s settings panel on /settings', async () => {

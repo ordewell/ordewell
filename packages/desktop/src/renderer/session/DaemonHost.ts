@@ -1515,7 +1515,9 @@ export class DaemonHost {
   private mergeCall(sessionId: string): MergeCall {
     return async (yes) => {
       try {
-        await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        const merged = await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        // Nothing left to land (the run is merged and closed): the daemon's words, as the other surfaces say them.
+        if ('outcome' in merged && merged.outcome === 'nothing') this.view.conversation.note('system', merged.message);
         return { kind: 'done' };
       } catch (error) {
         if (error instanceof DaemonRefusal && error.code === 'merge_past_check') return { kind: 'held', hold: 'pastChecks', message: error.message };
