@@ -6,21 +6,24 @@ import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { SkillInfo } from '../SkillsService';
 import { TurnBudgets } from '../PlannerBudgets';
 
-/** The content stream call every model call makes: the chat's, over the history it owns, and the plan emission's. */
+/** What each model call sends: its wire body and the call's signal, answered with `{ stream }` of the chunks to send back. */
 const generateContentStream = vi.hoisted(() => vi.fn());
-/** The model each getGenerativeModel() call was asked for, in order. */
+/** The model each call named, in order. */
 const modelsAsked = vi.hoisted((): string[] => []);
 
-vi.mock('@google/generative-ai', () => ({
-  GoogleGenerativeAI: class {
-    getGenerativeModel = ({ model }: { model: string }) => {
+// The real Gemini adapter, its transport `generateContentStream`, with no retry around it.
+vi.mock('../model', async (importOriginal) => {
+  const { overGemini } = await import('./plannerWire');
+  return {
+    ...await importOriginal<typeof import('../model')>(),
+    createModelClient: (options: import('../model').ModelClientOptions) => overGemini(options, async (body, model, call) => {
       modelsAsked.push(model);
-      // As the SDK does: the instance names the model by its resource path.
-      return { model: `models/${model}`, generateContentStream: generateContentStream };
-    };
-  },
-  SchemaType: { STRING: 'STRING', NUMBER: 'NUMBER', ARRAY: 'ARRAY', BOOLEAN: 'BOOLEAN', OBJECT: 'OBJECT' },
-}));
+      const served = await (generateContentStream(body, { signal: call.signal }) as Promise<{ stream: AsyncIterable<unknown> }>);
+      return served.stream;
+    }),
+    withRetry: (client: import('../model').ModelClient) => client,
+  };
+});
 
 import { GeminiService } from '../GeminiService';
 
@@ -34,6 +37,9 @@ interface StreamRequest {
   contents: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
   tools: Array<{ functionDeclarations: { name: string }[] }>;
 }
+
+/** The system prompt a request carries: the opening user turn, which the goal joins. */
+const systemOf = (request: StreamRequest): string => String(request.contents[0].parts[0].text);
 
 /** What a request adds after the history: the turn the call sends. */
 const sentTurn = (request: StreamRequest) => request.contents[request.contents.length - 1];
@@ -161,7 +167,7 @@ describe('Gemini research chat streaming', () => {
 
     // The tool round happened against the real loop, not inside this test.
     expect(progress.filter((p) => p.type === 'tool_call').map((p) => p.tool)).toEqual(['read_file']);
-    expect(sentTurn(requests[1])).toMatchObject({ role: 'function', parts: [{ functionResponse: { name: 'read_file' } }] });
+    expect(sentTurn(requests[1])).toMatchObject({ role: 'user', parts: [{ functionResponse: { name: 'read_file' } }] });
 
     // Preamble text streamed from the first call under one segment...
     const deltaSegments = progress.filter((p) => p.type === 'text_delta');
@@ -276,12 +282,14 @@ describe('Gemini turn cancellation', () => {
     await expect(turn).rejects.toThrow(/abort/i);
   });
 
+  /** A call that hangs until its signal aborts, so a Stop that reaches the wire is the only way out. */
+  const hangsUntilStopped = () => generateContentStream.mockImplementation((_request: unknown, options?: { signal?: AbortSignal }) =>
+    new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }));
+
   it('passes the signal to the plan-emission content stream too', async () => {
-    generateContentStream.mockReturnValue({
-      stream: (async function* () {
-        yield { candidates: [{ content: { parts: [{ text: '{}' }] } }] };
-      })(),
-    });
+    hangsUntilStopped();
     class ExposedGeminiService extends GeminiService {
       plan(prompt: string, signal: AbortSignal): Promise<string> {
         return this.streamPlanText(prompt, undefined, () => {}, undefined, signal);
@@ -289,24 +297,22 @@ describe('Gemini turn cancellation', () => {
     }
     const caller = new AbortController();
 
-    await new ExposedGeminiService(geminiConfig()).plan('make a plan', caller.signal);
+    const planned = new ExposedGeminiService(geminiConfig()).plan('make a plan', caller.signal);
+    await vi.waitFor(() => expect(generateContentStream).toHaveBeenCalled());
+    caller.abort();
 
-    expect(generateContentStream.mock.calls[0][1]).toEqual({ signal: caller.signal });
+    await expect(planned).rejects.toThrow(/abort/i);
   });
 
   it('passes the signal on the direct-plan path, where research is off', async () => {
-    generateContentStream.mockReturnValue({
-      stream: (async function* () {
-        yield { candidates: [{ content: { parts: [{ text: 'no plan here' }] } }] };
-      })(),
-    });
+    hangsUntilStopped();
     const caller = new AbortController();
 
-    await expect(
-      new GeminiService(geminiConfig()).generatePlanDirect('make a plan', ['claude-code'], {}, () => {}, undefined, undefined, undefined, undefined, caller.signal),
-    ).rejects.toThrow();
+    const planned = new GeminiService(geminiConfig()).generatePlanDirect('make a plan', ['claude-code'], {}, () => {}, undefined, undefined, undefined, undefined, caller.signal);
+    await vi.waitFor(() => expect(generateContentStream).toHaveBeenCalled());
+    caller.abort();
 
-    expect(generateContentStream.mock.calls[0][1]).toEqual({ signal: caller.signal });
+    await expect(planned).rejects.toThrow(/abort/i);
   });
 });
 
@@ -325,8 +331,7 @@ describe('Gemini planner skill catalog', () => {
       skills: [skill('pr-style', 'task'), skill('review-plan', 'planner')],
     });
 
-    const [{ contents }] = generateContentStream.mock.calls[0] as [StreamRequest];
-    const system = String(contents[0].parts[0].text);
+        const system = systemOf(generateContentStream.mock.calls[0][0] as StreamRequest);
     expect(system).toContain('Task skills you may attach:\n- pr-style: pr-style description');
     expect(system).not.toMatch(/review-plan|load_skill/);
   });
@@ -342,8 +347,8 @@ describe('Gemini planner exploration', () => {
       goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: () => {},
     });
 
-    const [{ contents, tools }] = generateContentStream.mock.calls[0] as [StreamRequest];
-    const system = String(contents[0].parts[0].text);
+    const [{ tools }] = generateContentStream.mock.calls[0] as [StreamRequest];
+    const system = systemOf(generateContentStream.mock.calls[0][0] as StreamRequest);
     const at = system.indexOf('\nWHO EXPLORES:\n');
     expect(at).toBeGreaterThan(-1);
     const rule = system.slice(at + 1, system.indexOf('\n\n', at + 1));
@@ -382,10 +387,10 @@ describe('Gemini turn budgets', () => {
     left = 39;
     await service.continueConversation('in-process', () => {});
 
-    expect(requests.map((r) => sentTurn(r).parts.at(-1)?.text)).toEqual([
-      'add a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.',
-      'in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.',
-    ]);
-    expect(requests[0].contents[0].parts[0].text).not.toContain('CONTEXT AND BUDGETS (this turn):');
+    const [first, second] = requests.map((r) => String(sentTurn(r).parts.at(-1)?.text));
+    // The first turn opens with the system prompt, then the goal: the block follows the goal, and only there.
+    expect(first.endsWith('\n\nadd a cache\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 40.')).toBe(true);
+    expect(first.indexOf('CONTEXT AND BUDGETS (this turn):')).toBe(first.lastIndexOf('CONTEXT AND BUDGETS (this turn):'));
+    expect(second).toBe('in-process\n\nCONTEXT AND BUDGETS (this turn):\n- Web reads left this turn: 39.');
   });
 });

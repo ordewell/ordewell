@@ -302,6 +302,27 @@ not an edit to that surface.
      adapter, and give the adapter its own tests with a fake binary.
    - `npm run ci`.
 
+A runner that is a coding-agent CLI is declared as above. A runner that is not
+a command — the built-in `ordewell` runner is the one example — differs in two
+places:
+
+- **The manifest** sets `runner: { inProcess: true }` (`RunnerLaunch`) instead
+  of a command. No `--version` probe runs, the runner counts as installed
+  wherever Ordewell is. Its models come from `modelDiscovery` with the
+  method `providers`.
+- **The connector's adapter** is a `TaskModeAgentAdapter` that spawns nothing:
+  it ignores the process deps, reports its tools attached at once and calls the
+  attempt's task tools in process (`inProcessTaskTools`). `StructuredSession`
+  still drives it, so the queue, approvals, usage and the token-bound
+  `task_complete` are unchanged. Model calls go through `ModelClient`
+  (`services/model/`), never a provider SDK directly. See ADR-0070 and
+  `services/harness/ordewell/`.
+
+The contract tests that start a fake binary (`spawnedConnectors()` in
+`harnessTestKit`) skip an in-process runner on purpose; give it tests against a
+scripted `ModelClient` instead (`ordewell/__tests__/loopKit.ts`). The static UI
+runner catalogs do not list it; the manifest registry does.
+
 There is no list to extend in `cli`, `vscode` or `web`. Two runner ids appear
 there on purpose and are not a place to add yours: the default runner
 (`DEFAULT_RUNNERS`, a product choice), and the legacy per-runner VS Code and

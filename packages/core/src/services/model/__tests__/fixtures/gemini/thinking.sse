@@ -1,0 +1,10 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"**Checking the suite**\n","thought":true}]},"index":0}],"usageMetadata":{"promptTokenCount":900,"totalTokenCount":900},"modelVersion":"gemini-3-flash-preview"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"I should run it first.","thought":true}]},"index":0}],"usageMetadata":{"promptTokenCount":900,"totalTokenCount":900},"modelVersion":"gemini-3-flash-preview"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Running the "}]},"index":0}],"usageMetadata":{"promptTokenCount":900,"totalTokenCount":900},"modelVersion":"gemini-3-flash-preview"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"suite.","thoughtSignature":"c2lnLXRleHQ="}]},"index":0}],"usageMetadata":{"promptTokenCount":900,"totalTokenCount":900},"modelVersion":"gemini-3-flash-preview"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":900,"candidatesTokenCount":4,"totalTokenCount":964,"thoughtsTokenCount":60},"modelVersion":"gemini-3-flash-preview"}
+

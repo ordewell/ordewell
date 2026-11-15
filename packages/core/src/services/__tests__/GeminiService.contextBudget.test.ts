@@ -7,6 +7,14 @@ import { createEmptyPlan } from '../../models/Task';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
 import { makeSession, testWorkspace } from './sessionTestKit';
 import { GeminiService } from '../GeminiService';
+
+// The real Gemini adapter over the fetch each test stubs, with no retry around
+// it: a refused call fails at once, as these tests script it. The Retry-After
+// policy is ModelClient's own, and tested with it.
+vi.mock('../model', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../model')>(),
+  withRetry: (client: import('../model').ModelClient) => client,
+}));
 import { PlannerContextExhaustedError, type ModelLimits } from '../plannerContextBudget';
 import type { ConversationTurnContext } from '../BaseAiService';
 import { STOPPED_TOOL_RESULT } from '../executeTool';
@@ -27,9 +35,12 @@ interface SentRequest {
   promptTokens: number;
 }
 
+/** A turn of function responses, which Gemini takes as the user's. */
+const answersCalls = (c: Content | undefined): boolean => c !== undefined && c.parts.length > 0 && c.parts.every((p) => p.functionResponse);
+
 /**
  * Why `contents` breaks Gemini's function-calling rules, or null: a turn of
- * function calls is answered by the very next turn, a `function` turn holding
+ * function calls is answered by the very next turn, one holding
  * one response per call, by name and in order; a response answers nothing else.
  */
 function pairingProblem(contents: Content[]): string | null {
@@ -39,10 +50,10 @@ function pairingProblem(contents: Content[]): string | null {
     const calls = c.role === 'model' ? c.parts.filter((p) => p.functionCall).map((p) => p.functionCall!.name) : [];
     const next = contents[i + 1];
     if (calls.length > 0 && next) {
-      const answers = next.role === 'function' ? next.parts.map((p) => p.functionResponse?.name) : [];
+      const answers = answersCalls(next) ? next.parts.map((p) => p.functionResponse?.name) : [];
       if (JSON.stringify(answers) !== JSON.stringify(calls)) return `turn ${i + 1} does not answer the calls of turn ${i}`;
     }
-    if (c.role === 'function') {
+    if (answersCalls(c)) {
       const before = contents[i - 1];
       if (before?.role !== 'model' || !before.parts.some((p) => p.functionCall)) return `turn ${i} answers no function call`;
     }
@@ -108,7 +119,7 @@ const says = (text: string): Reply => () => [{ candidates: [{ content: { role: '
 
 const file = (chars: number): ToolOutcome => ({ success: true, output: 'x'.repeat(chars), truncated: false });
 
-const functionResponses = (req: SentRequest) => req.contents.flatMap((c) => (c.role === 'function' ? c.parts.map((p) => p.functionResponse!) : []));
+const functionResponses = (req: SentRequest) => req.contents.flatMap((c) => (answersCalls(c) ? c.parts.map((p) => p.functionResponse!) : []));
 
 function config(over: Partial<IConfig> = {}): IConfig {
   return fakeConfig({ aiProvider: 'google', apiKey: 'gem-key', orchestratorModel: 'gemini:big-model', researchMaxSteps: 40, ...over });
@@ -153,7 +164,7 @@ describe('a Gemini planner keeps every function response it sent', () => {
     expect(turn.kind).toBe('message');
     expect(reads).toEqual(['a.ts', 'b.ts']);
     const retry = provider.requests[2];
-    expect(retry.contents.map((c) => c.role)).toEqual(['user', 'model', 'function', 'user']);
+    expect(retry.contents.map((c) => c.role)).toEqual(['user', 'model', 'user', 'user']);
     expect(functionResponses(retry).map((r) => [r.name, r.response.output.length])).toEqual([['read_file', 2_000], ['read_file', 2_000]]);
     expect(retry.contents.at(-1)?.parts[0].text).toMatch(/^try again/);
   });
@@ -173,7 +184,7 @@ describe('a stopped Gemini planner turn', () => {
     await svc.continueConversation('go on', () => {});
 
     const next = provider.requests[2];
-    expect(next.contents.map((c) => c.role)).toEqual(['user', 'model', 'function', 'user']);
+    expect(next.contents.map((c) => c.role)).toEqual(['user', 'model', 'user', 'user']);
     expect(functionResponses(next)).toHaveLength(1);
     expect(functionResponses(next)[0].response.output).toHaveLength(49_000);
   });
@@ -196,7 +207,7 @@ describe('a stopped Gemini planner turn', () => {
     await svc.continueConversation('never mind', () => {});
 
     const next = provider.requests[1];
-    expect(next.contents.map((c) => c.role)).toEqual(['user', 'model', 'function', 'user']);
+    expect(next.contents.map((c) => c.role)).toEqual(['user', 'model', 'user', 'user']);
     expect(bash).not.toHaveBeenCalled();
     expect(functionResponses(next).map((r) => [r.name, r.response.output])).toEqual([
       ['read_file', 'x'.repeat(100)],
@@ -302,7 +313,7 @@ describe('a Gemini planner budgets each call on its model\'s input limit', () =>
     expect(provider.refusals).toBe(0);
     for (const req of provider.requests) {
       expect(req.promptTokens).toBeLessThanOrEqual(117_964);
-      const turns = req.contents.filter((c) => c.role === 'function');
+      const turns = req.contents.filter(answersCalls);
       for (const t of turns) expect(t.parts).toHaveLength(4);
       for (const out of outputs(req).slice(-12)) expect(out).toHaveLength(25_000);
     }
@@ -355,7 +366,7 @@ describe('what a Gemini planner never prunes, and what it does when that cannot 
     expect(turn.text).toBe('Built.');
     expect(chat.holdsInput?.()).toBe(false);
     const resent = provider.requests.at(-1)!;
-    expect(resent.contents.at(-1)?.role).toBe('function');
+    expect(answersCalls(resent.contents.at(-1))).toBe(true);
     expect(outputs(resent)).toHaveLength(ran);
     expect(bash).toHaveBeenCalledTimes(ran);
   });
@@ -414,9 +425,9 @@ describe('what a Gemini planner never prunes, and what it does when that cannot 
     await svc.continueConversation('next', () => {});
 
     expect(provider.requests.at(-1)!.contents).toEqual([
-      { role: 'user', parts: [{ text: 'system prompt' }, { text: 'Summary of the conversation so far.' }] },
+      { role: 'user', parts: [{ text: 'system prompt\n\nSummary of the conversation so far.' }] },
       { role: 'model', parts: [{ text: 'Reading.' }, { functionCall: { name: 'read_file', args: { path: 'a.ts' } } }] },
-      { role: 'function', parts: [{ functionResponse: { name: 'read_file', response: { output: 'kept' } } }] },
+      { role: 'user', parts: [{ functionResponse: { name: 'read_file', response: { output: 'kept' } } }] },
       { role: 'model', parts: [{ text: 'Read.' }] },
       { role: 'user', parts: [{ text: expect.stringMatching(/^next/) }] },
     ]);
@@ -425,7 +436,7 @@ describe('what a Gemini planner never prunes, and what it does when that cannot 
 });
 
 describe('the model turns a Gemini planner sends back', () => {
-  it('returns a thinking model\'s signature with the turn it came on, and none of its thought text as an answer', async () => {
+  it('returns a thinking model\'s signature with the turn it came on, and its thought text only as thought', async () => {
     const provider = serve({}, [
       () => [
         { candidates: [{ content: { role: 'model', parts: [{ text: 'Weighing which file.', thought: true }] } }] },
@@ -440,7 +451,11 @@ describe('the model turns a Gemini planner sends back', () => {
 
     expect(provider.requests[1].contents[1]).toEqual({
       role: 'model',
-      parts: [{ text: 'Reading it.' }, { functionCall: { name: 'read_file', args: { path: 'a.ts' } }, thoughtSignature: 'sig-1' }],
+      parts: [
+        { text: 'Weighing which file.', thought: true },
+        { text: 'Reading it.' },
+        { functionCall: { name: 'read_file', args: { path: 'a.ts' } }, thoughtSignature: 'sig-1' },
+      ],
     });
   });
 });

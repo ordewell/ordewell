@@ -28,6 +28,19 @@
  *   mock/desktop-tour  the desktop tour's plan (DESKTOP_TOUR_PLAN): the
  *                       acceptance plan, then one card of each kind; the fit
  *                       goal gets the widest cards here too
+ *   mock/ordewell-runner  a task for the built-in Ordewell runner (ADR-0070):
+ *                       read src/add.mjs, fix its `a - b` with edit, run
+ *                       `node test.mjs` through shell, then task_complete,
+ *                       done only when the test printed "pass"
+ *   mock/ordewell-guarded  the same fix as a Guarded task: `npm test` first,
+ *                       which asks, then the edit, which does not, then
+ *                       `npm test --silent`, which the "Allow for this task"
+ *                       grant for `npm test` covers, then task_complete
+ *   mock/ordewell-step-limit  a built-in runner task that never finishes on its
+ *                       own: it reads a different file each step until a
+ *                       request forces task_complete (the runner's step
+ *                       limit), then reports blocked, quoting the tools it
+ *                       was still offered and the runner's last-call words
  *
  * The five `mock/goal-*` personas are the kinds of goal the strategy step
  * teaches (#108), each replying with the plumbing its kind calls for:
@@ -346,7 +359,7 @@ function fitTurn(messages) {
   return { reasoning: 'The widest cards. ', content: fence(DESKTOP_FIT_PLAN) };
 }
 
-function scriptTurn(model, messages) {
+function scriptTurn(model, messages, request = {}) {
   const persona = model.split('/')[1] ?? model;
   const s = shape(messages);
 
@@ -406,6 +419,50 @@ function scriptTurn(model, messages) {
       return { content: JSON.stringify({ taskQuery: { tasks: ['#2'], fields: ['prompt'] } }) };
     }
     return { content: JSON.stringify({ taskOps: [{ op: 'update', taskId: '#2', changes: { description: `read-confirmed:${marker}` } }] }) };
+  }
+
+  if (persona === 'ordewell-runner') {
+    // One step per tool, so a test sees each land in the transcript in turn.
+    if (s.toolRounds === 0) return { reasoning: 'Read the code before changing it. ', ...toolCallTurn('read', { path: 'src/add.mjs' }) };
+    if (s.toolRounds === 1) return toolCallTurn('edit', { path: 'src/add.mjs', oldString: 'a - b', newString: 'a + b' });
+    if (s.toolRounds === 2) return toolCallTurn('shell', { command: 'node test.mjs' });
+    if (s.toolRounds === 3) {
+      // The verdict rests on what the test printed, so a broken edit or shell reads as failed, not done.
+      const shellResult = [...messages].reverse().find((m) => m.role === 'tool');
+      const passed = String(shellResult?.content ?? '').includes('pass');
+      return toolCallTurn('task_complete', passed
+        ? { status: 'done', summary: 'Fixed add() to sum its arguments; node test.mjs passes.', commit: { subject: 'Fix add() to sum its arguments' } }
+        : { status: 'failed', summary: 'The test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
+    }
+    return { content: 'Done.' };
+  }
+
+  if (persona === 'ordewell-step-limit') {
+    // Only the runner's last allowed call forces task_complete; until then it keeps working.
+    const forced = request.tool_choice?.function?.name === 'task_complete';
+    if (!forced) return toolCallTurn('read', { path: s.toolRounds % 2 === 0 ? 'src/add.mjs' : 'test.mjs' });
+    const offered = (request.tools ?? []).map((t) => t.function?.name).filter(Boolean).sort().join(',');
+    const lastCall = /last model call/i.test(s.lastUser);
+    return toolCallTurn('task_complete', {
+      status: 'blocked',
+      summary: `Read the code; the fix is not made yet. Offered: ${offered}. Told it was the last call: ${lastCall}.`,
+      reason: 'The step limit ended the attempt before the edit.',
+    });
+  }
+
+  if (persona === 'ordewell-guarded') {
+    // The second run differs from the first only by a plain argument, so one grant covers both (ADR-0070).
+    if (s.toolRounds === 0) return toolCallTurn('shell', { command: 'npm test' });
+    if (s.toolRounds === 1) return toolCallTurn('edit', { path: 'src/add.mjs', oldString: 'a - b', newString: 'a + b' });
+    if (s.toolRounds === 2) return toolCallTurn('shell', { command: 'npm test --silent' });
+    if (s.toolRounds === 3) {
+      const shellResult = [...messages].reverse().find((m) => m.role === 'tool');
+      const passed = String(shellResult?.content ?? '').includes('pass');
+      return toolCallTurn('task_complete', passed
+        ? { status: 'done', summary: 'Fixed add() to sum its arguments; npm test passes.', commit: { subject: 'Fix add() to sum its arguments' } }
+        : { status: 'failed', summary: 'npm test still fails after the edit.', reason: String(shellResult?.content ?? 'no shell result').slice(0, 300) });
+    }
+    return { content: 'Done.' };
   }
 
   if (persona === 'goal-question') {
@@ -502,7 +559,7 @@ const server = http.createServer((req, res) => {
     let parsed;
     try { parsed = JSON.parse(body); } catch { res.writeHead(400).end('bad json'); return; }
     const { model, messages } = parsed;
-    const turn = scriptTurn(model ?? 'mock/interviewer', messages ?? []);
+    const turn = scriptTurn(model ?? 'mock/interviewer', messages ?? [], parsed);
 
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
 
@@ -529,6 +586,14 @@ const server = http.createServer((req, res) => {
       });
     }
     res.write(sseChunk({}, turn.toolCalls ? 'tool_calls' : 'stop'));
+    // Only the built-in runner reads usage, and only its smoke harness
+    // (runner-smoke.mjs) needs figures to print: a rough count, with the prompt served from cache once a tool
+    // result is in it, as a provider's automatic prefix cache would.
+    if ((model ?? '').endsWith('/ordewell-runner')) {
+      const promptTokens = Math.ceil(body.length / 4);
+      const completionTokens = Math.ceil(JSON.stringify(turn).length / 4);
+      res.write(`data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens, prompt_tokens_details: { cached_tokens: (messages ?? []).some((m) => m.role === 'tool') ? Math.floor(promptTokens * 0.8) : 0 } } })}\n\n`);
+    }
     res.write('data: [DONE]\n\n');
     res.end();
   });

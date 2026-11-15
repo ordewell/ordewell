@@ -1,13 +1,14 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import type { RunnerManifest } from '../plugins/types';
+import { runnerCommand, type RunnerManifest } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import { compareVersions } from '../utils/version';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
-import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, runnerSignIn, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { PROVIDER_PRIORITY, vendorApiKeyIn } from './apiProviders';
 
 const execAsync = promisify(exec);
 
@@ -112,7 +113,10 @@ export class RunnerInstallation {
     if (existing) return existing;
 
     const manifest = this.registry.getManifest(runner);
-    const command = manifest?.runner.command;
+    // An in-process runner is code Ordewell ships, so it is installed whenever
+    // Ordewell is: there is no binary to ask (ADR-0070).
+    if (manifest?.runner.inProcess) return true;
+    const command = manifest && runnerCommand(manifest);
     if (!command) {
       this.cache.set(runner, { installed: false, at: this.now() });
       return false;
@@ -182,8 +186,10 @@ export class RunnerInstallation {
   async runnerUsability(runner: string): Promise<RunnerUsability> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
+    const command = runnerCommand(manifest);
+    if (command === undefined) return { usable: true, auth: await this.inProcessAuth(runner, manifest) };
     if (!(await this.isInstalled(runner))) {
-      return { usable: false, reason: `${manifest.runner.command} is not installed or is not on PATH.` };
+      return { usable: false, reason: `${command} is not installed or is not on PATH.` };
     }
     const version = this.cache.get(runner)?.version;
     // An ACP agent below the version its profile was checked against fails at
@@ -196,11 +202,11 @@ export class RunnerInstallation {
         reason: `${manifest.displayName ?? manifest.name} is too old for Ordewell: found ${version}, needs ${minVersion} or later.`,
       };
     }
-    const spawnable = await this.isSpawnable(manifest.runner.command);
+    const spawnable = await this.isSpawnable(command);
     if (!spawnable) {
       return {
         usable: false,
-        reason: `${manifest.runner.command} answers --version through a shell, but no file Ordewell can start directly was found on PATH. ` +
+        reason: `${command} answers --version through a shell, but no file Ordewell can start directly was found on PATH. ` +
           `The planner speaks to the agent over stdio with no shell in between, so it needs a real executable or a .cmd/.bat shim. ` +
           `Reinstall with the CLI's own installer, or add its install directory to PATH.`,
       };
@@ -251,6 +257,29 @@ export class RunnerInstallation {
 
     this.authInflight.set(key, probe);
     return probe;
+  }
+
+  /**
+   * An in-process runner's sign-in is a provider key in Ordewell (ADR-0070):
+   * signed in with one, signed out with none, `/key` the way in (ADR-0052).
+   * Asked afresh each time, never cached, since `/key` sets one into this very
+   * process and the next look must see it.
+   */
+  private async inProcessAuth(runner: string, manifest: RunnerManifest): Promise<RunnerAuth> {
+    const workspace = this.workspace();
+    let env: Record<string, string | undefined>;
+    try {
+      env = { ...process.env, ...(await this.env(workspace)) };
+    } catch {
+      env = { ...process.env };
+    }
+    const keyed = PROVIDER_PRIORITY.some((provider) => vendorApiKeyIn(env, provider) !== '');
+    const signIn = runnerSignIn(manifest);
+    const auth: RunnerAuth = keyed
+      ? { state: 'signed-in', signIn }
+      : { state: 'signed-out', signIn, detail: 'no provider key' };
+    recordRunnerAuth(runner, auth, workspace);
+    return auth;
   }
 
   /**

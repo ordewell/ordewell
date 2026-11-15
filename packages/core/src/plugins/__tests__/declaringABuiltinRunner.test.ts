@@ -9,6 +9,8 @@ import { ModelResolver } from '../../services/ModelResolver';
 import { supportsTaskMode, type RunnerConnector } from '../../services/harness/connectors';
 import { readUsageLimitReset } from '../../services/runnerExit';
 import { RunnerInstallation } from '../../services/RunnerInstallation';
+import { PROVIDER_PRIORITY, VENDORS } from '../../services/apiProviders';
+import { setEnv } from '../../testEnv';
 
 // A built-in runner is declared in exactly two places: its manifest in the
 // built-in list and its entry in CONNECTORS. This file adds a fake one there and
@@ -35,9 +37,20 @@ const TASKER = vi.hoisted((): RunnerManifest => ({
   modes: [{ id: 'build', label: 'Build', description: 'Edits files', safe: true, autonomous: true }],
 }));
 
+// One with no command at all: its agent runs in Ordewell's own process on a
+// provider key, as the built-in Ordewell runner does (ADR-0070).
+const INHOUSE = vi.hoisted((): RunnerManifest => ({
+  name: 'inhouse',
+  displayName: 'In House',
+  runner: { inProcess: true },
+  features: {},
+  modelDiscovery: { method: 'providers' },
+  modes: [{ id: 'full', label: 'Full', description: 'Edits files', autonomous: true }],
+}));
+
 vi.mock('../builtin', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../builtin')>();
-  return { ...actual, BUILTIN_MANIFESTS: [...actual.BUILTIN_MANIFESTS, ACME, TASKER] };
+  return { ...actual, BUILTIN_MANIFESTS: [...actual.BUILTIN_MANIFESTS, ACME, TASKER, INHOUSE] };
 });
 
 vi.mock('../../services/harness/connectors', async (importOriginal) => {
@@ -48,14 +61,15 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
     usageLimitReset: (tail) => (tail.includes('acme quota, back at noon') ? new Date('2026-10-14T12:00:00Z') : null),
   };
   const tasker: RunnerConnector = { ...borrowed, plans: false };
-  Object.assign(actual.CONNECTORS, { acme, tasker });
+  const inhouse: RunnerConnector = { ...actual.CONNECTORS.ordewell };
+  Object.assign(actual.CONNECTORS, { acme, tasker, inhouse });
   return actual;
 });
 
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'acme', 'tasker']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'ordewell', 'acme', 'tasker', 'inhouse']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
@@ -105,5 +119,61 @@ describe('a built-in runner declared by manifest and connector only', () => {
 
     expect(await installation.plannerUsability('tasker')).toEqual({ usable: false, reason: 'Tasker can run tasks but cannot plan in Ordewell yet.' });
     expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+describe('a built-in runner with no command, declared by manifest and connector only', () => {
+  const noKeys = (): (() => void) => setEnv(Object.fromEntries(PROVIDER_PRIORITY.flatMap((p) => [VENDORS[p].apiKeyEnvVar, ...VENDORS[p].detectEnvVars]).map((name) => [name, undefined])));
+
+  it('is in the runner list, runs tasks and does not plan', () => {
+    expect(new RunnerRegistry().list().map((entry) => entry.manifest.name)).toContain('inhouse');
+    expect(supportsTaskMode('inhouse')).toBe(true);
+    expect(isCliProvider('inhouse')).toBe(false);
+    expect(plannerBackendEntries({ inhouse: { usable: true } }, []).some((e) => e.id === 'inhouse')).toBe(false);
+  });
+
+  it('is installed with Ordewell: no binary is asked', async () => {
+    const exec = vi.fn(async () => ({ stdout: 'ok' }));
+    const installation = new RunnerInstallation(new RunnerRegistry(), exec);
+    expect(await installation.isInstalled('inhouse')).toBe(true);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('reads as signed out with no provider key, with /key as the way in', async () => {
+    const restore = noKeys();
+    try {
+      const usability = await new RunnerInstallation(new RunnerRegistry(), vi.fn(async () => ({ stdout: '' }))).runnerUsability('inhouse');
+      expect(usability.usable).toBe(true);
+      expect(usability.auth?.state).toBe('signed-out');
+      expect(usability.auth?.signIn?.key?.provider).toBe('openrouter');
+      expect(usability.auth?.signIn?.login).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads as signed in once any provider key is set', async () => {
+    const restore = noKeys();
+    const restoreKey = setEnv({ [VENDORS.google.apiKeyEnvVar]: 'test-key' });
+    try {
+      const usability = await new RunnerInstallation(new RunnerRegistry(), vi.fn(async () => ({ stdout: '' }))).runnerUsability('inhouse');
+      expect(usability.auth?.state).toBe('signed-in');
+    } finally {
+      restoreKey();
+      restore();
+    }
+  });
+
+  it('offers no models without a key, and asks no binary for them', async () => {
+    const restore = noKeys();
+    try {
+      const execImpl = vi.fn(async () => ({ stdout: '' }));
+      const resolver = new ModelResolver(new RunnerRegistry(), {} as IConfig, { execImpl });
+      const { inhouse } = await resolver.modelsForRunners(['inhouse']);
+      expect(inhouse ?? []).toEqual([]);
+      expect(execImpl).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 });

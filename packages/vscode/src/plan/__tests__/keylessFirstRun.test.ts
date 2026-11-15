@@ -37,6 +37,19 @@ import { handleStartPlanning, handleContinueConversation, handleStopPlanning, ha
 
 interface FakeAgentProcess extends ChildProcess { emitStdout(chunk: string): void }
 
+const sse = (frames: object[]) => frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('');
+// A vendor's reply in each dialect the planner speaks: OpenAI's own API over
+// Responses, every other OpenAI-shaped vendor over Chat Completions. Each ends
+// as a complete reply does, naming why it stopped; a stream without that was cut off.
+const CHAT_COMPLETIONS_REPLY = sse([
+  { id: 'reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'Which database?' }, finish_reason: null }] },
+  { id: 'reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+]) + 'data: [DONE]\n\n';
+const RESPONSES_REPLY = sse([
+  { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'Which database?', sequence_number: 0 },
+  { type: 'response.completed', sequence_number: 1, response: { id: 'reply', object: 'response', status: 'completed', output: [], usage: { input_tokens: 10, input_tokens_details: { cached_tokens: 0 }, output_tokens: 3, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 13 } } },
+]);
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((answer) => { resolve = answer; });
@@ -81,7 +94,7 @@ describe('VS Code keyless first-run process boundary', () => {
       for await (const chunk of req) body += String(chunk);
       vendorRequests.push({ authorization: req.headers.authorization, body });
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.end('data: ' + JSON.stringify({ id: 'reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'Which database?' }, finish_reason: null }] }) + '\n\ndata: [DONE]\n\n');
+      res.end(req.url?.endsWith('/responses') ? RESPONSES_REPLY : CHAT_COMPLETIONS_REPLY);
     });
     await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
     providerBase = `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1`;

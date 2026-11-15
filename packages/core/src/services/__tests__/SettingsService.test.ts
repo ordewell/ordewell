@@ -59,6 +59,26 @@ describe('SettingsService', () => {
     });
   });
 
+  it('keeps the Ordewell runner step limit only as a positive whole number of calls', () => {
+    for (const [value, kept] of [[3, 3], [0, undefined], [-2, undefined], [1.5, undefined], ['3', undefined]] as const) {
+      fs.writeFileSync(tempFile, JSON.stringify({ ordewellStepLimit: value }));
+      expect(new SettingsService(tempFile).getAll().ordewellStepLimit, String(value)).toBe(kept);
+    }
+  });
+
+  it('keeps each Ordewell stream timeout only as a positive whole number of seconds', () => {
+    for (const [value, kept] of [
+      [{ firstEventSeconds: 240, idleSeconds: 90 }, { firstEventSeconds: 240, idleSeconds: 90 }],
+      [{ firstEventSeconds: 0, idleSeconds: 30 }, { idleSeconds: 30 }],
+      [{ firstEventSeconds: 1.5, idleSeconds: '30' }, {}],
+      [60, undefined],
+      [[60], undefined],
+    ] as const) {
+      fs.writeFileSync(tempFile, JSON.stringify({ ordewellStreamTimeouts: value }));
+      expect(new SettingsService(tempFile).getAll().ordewellStreamTimeouts, JSON.stringify(value)).toEqual(kept);
+    }
+  });
+
   it('picks up a write from another process (mtime-based cache invalidation)', () => {
     service.setModelAllowlist('opencode', ['a']);
     expect(service.getModelAllowlist('opencode')).toEqual(['a']);

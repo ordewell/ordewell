@@ -22,6 +22,17 @@ const SHELLS: Shell[] = [
   { name: 'bash', mode: 'vi', args: ['--norc', '--noprofile'], env: { INPUTRC: devNull }, setup: 'set -o vi' },
 ];
 
+/**
+ * A reply xterm generates itself to a query the program sent (vim asks at startup, and whenever it likes): DECRPM
+ * `CSI ? 12 ; 2 $ y`, the device attributes `CSI ? … c` and `CSI > … c`, and a cursor position `CSI r ; c R`. They
+ * reach the pty like the chord does, and under load can land inside the window a chord is measured over. Nothing
+ * an Option+Arrow chord sends is shaped like one (`ESC b`, `ESC [ 1 ; 3 D`, `ESC O D`), so a wrong chord byte is
+ * still counted; matched whole, so a chord that merely contains one is too.
+ */
+// eslint-disable-next-line no-control-regex -- an escape sequence is the subject
+const TERMINAL_REPORT = /^\x1b\[(?:[?>]?[\d;]*\$y|[?>][\d;]*c|\d+;\d+R)$/;
+const isTerminalReport = (data: string): boolean => TERMINAL_REPORT.test(data);
+
 const onPath = (name: string): string | undefined =>
   (process.env.PATH ?? '').split(delimiter).map((dir) => join(dir, name)).find((file) => existsSync(file));
 
@@ -57,11 +68,13 @@ describe.skipIf(process.platform === 'win32')('Option+Left/Right through real xt
     let output = '';
     let last = Date.now();
     const chords: string[] = [];
+    // Everything xterm sent, to tell when it has answered a query.
+    const sent: string[] = [];
     // Spawned at the grid xterm opens with, which needs the handle first.
     const shell: { child?: IPty } = {};
     const handle = await createTerm({
       // What a chord sends is kept apart from what the test types, to assert on it.
-      onData: (data) => { chords.push(data); shell.child?.write(data); },
+      onData: (data) => { sent.push(data); if (!isTerminalReport(data)) chords.push(data); shell.child?.write(data); },
       onLink: () => undefined,
       screenReaderMode: false,
       readClipboard: () => Promise.reject(new Error('no clipboard in this test')),
@@ -107,14 +120,22 @@ describe.skipIf(process.platform === 'win32')('Option+Left/Right through real xt
       },
       mark(): void { at.mark = output.length; },
       type(text: string): void { child.write(text); },
-      /** Presses Option+Arrow on the textarea, waits for the program to answer, and returns what the chord sent. */
-      async option(arrow: typeof LEFT): Promise<string> {
+      /** Presses Option+Arrow on the textarea, waits for the program to answer, and returns what the chord sent.
+       *  `during` runs right after the key, to put program output in the window the chord is measured over. */
+      async option(arrow: typeof LEFT, during?: () => Promise<void>): Promise<string> {
         chords.length = 0;
         textarea.dispatchEvent(new KeyboardEvent('keydown', {
           key: arrow.key, keyCode: arrow.keyCode, altKey: true, bubbles: true, cancelable: true,
         } as KeyboardEventInit));
+        await during?.();
         await this.settle();
         return chords.join('');
+      },
+      /** The program's output arriving late: what vim does when a startup query is parsed after the first chord. */
+      async emit(data: string, answered: RegExp): Promise<void> {
+        const before = sent.length;
+        handle.write(data);
+        await vi.waitFor(() => { if (!sent.slice(before).some((reply) => answered.test(reply))) throw new Error('xterm has not answered yet'); });
       },
     };
   }
@@ -176,6 +197,23 @@ describe.skipIf(process.platform === 'win32')('Option+Left/Right through real xt
   });
 
   const sh = onPath('sh');
+  describe.skipIf(!sh)('a reply xterm makes to the program\'s own query', () => {
+    it('is not counted as the chord, but a chord byte is', async () => {
+      const s = await session(sh!, ['-c', String.raw`printf ready; sleep 30`], {});
+      await s.waitFor(/ready/);
+      await s.settle();
+      // vim's DECRQM for cursor blink, parsed after the chord was pressed.
+      expect(await s.option(LEFT, () => s.emit('\x1b[?12$p', /\$y$/))).toBe('');
+      expect(isTerminalReport('\x1b[?12;2$y')).toBe(true);
+      expect(isTerminalReport('\x1b[?1;2c')).toBe(true);
+      expect(isTerminalReport('\x1b[>0;276;0c')).toBe(true);
+      expect(isTerminalReport('\x1b[24;80R')).toBe(true);
+      for (const chord of ['\x1bb', '\x1bf', '\x1b[D', '\x1b[C', '\x1bOD', '\x1b[1;3D', '\x1b[1;3C', '\x1b[?12;2$yD', '\x1b[D\x1b[?12;2$y']) {
+        expect(isTerminalReport(chord), JSON.stringify(chord)).toBe(false);
+      }
+    });
+  });
+
   describe.skipIf(!sh)('a program that hides the cursor and draws its own caret', () => {
     it('also sends nothing while the cursor is hidden', async () => {
       const s = await session(sh!, ['-c', String.raw`printf 'ready\033[?25l'; stty raw -echo; head -c 1 | od -An -c; stty sane`], {});

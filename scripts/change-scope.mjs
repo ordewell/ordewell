@@ -263,10 +263,18 @@ const ROOT_OWNERS = [
   [/^bench\/pipeline\/(drive-pipeline|pipeline\.test)\.mjs$/, owes('bench')],
   // The mock planner and its scripted goals: the planner loop, the desktop
   // e2e and tour, and the binary's drive all talk to it.
-  [/^bench\/live\/(mock-provider|scenarios)\.mjs$/, owes('planner', 'desktop', 'tour', 'binary')],
+  [/^bench\/live\/scenarios\.mjs$/, owes('planner', 'desktop', 'tour', 'binary')],
+  // The mock is also the provider of core's ordewellRunner.e2e (ADR-0070).
+  [/^bench\/live\/mock-provider\.mjs$/, () => {
+    const suites = allFull(['packages/core']);
+    return { suites, windows: onWindows(suites), checks: ['planner', 'desktop', 'tour', 'binary'] };
+  }],
   [/^bench\/live\/drive-(conversation|taskops)\.mjs$/, owes('planner')],
   // Its offline test runs in bench.
   [/^bench\/live\/drive-conversation\.test\.mjs$/, owes('bench')],
+  // Run by hand against real providers and real keys (it spends credit); only its
+  // offline test, against the mock provider and the built core, runs in bench.
+  [/^bench\/live\/runner-smoke(\.test)?\.mjs$/, owes('bench')],
   [/^bench\/live\/drive-binary\.mjs$/, owes('binary')],
   // Run by hand against a dev build; no check runs them.
   [/^bench\/live\/(webview-[^/]+|host-driver|load-playwright|screenshot-header-tmp)\.mjs$/, owes()],

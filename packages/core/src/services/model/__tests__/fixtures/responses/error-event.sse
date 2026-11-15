@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_01","object":"response","created_at":1731500000,"model":"gpt-5.2","status":"in_progress","output":[]},"sequence_number":0}
+
+event: error
+data: {"type":"error","code":"context_length_exceeded","message":"Your input exceeds the context window of this model.","param":null,"sequence_number":1}
+

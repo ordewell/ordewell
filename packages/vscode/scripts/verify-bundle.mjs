@@ -27,8 +27,17 @@ const builtins = new Set(builtinModules);
 // A `require(` that opens a string or template literal is text, not a call:
 // Ajv (bundled with the MCP SDK) keeps `'require("ajv/dist/runtime/uri")'`
 // and the like as source for its standalone code output, which never runs here.
+// One on a comment line is an example, not a call: google-auth-library (bundled
+// with @google/genai) documents `const {JWT} = require('google-auth-library');`
+// in a JSDoc block that esbuild keeps.
+const isCommentLine = (index) => {
+  const lineStart = source.lastIndexOf('\n', index) + 1;
+  return /^\s*(\*|\/\/|\/\*)/.test(source.slice(lineStart, index));
+};
 const specifiers = new Set(
-  [...source.matchAll(/(?<![`'"])\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]),
+  [...source.matchAll(/(?<![`'"])\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)]
+    .filter((m) => !isCommentLine(m.index))
+    .map((m) => m[1]),
 );
 
 const unresolvable = [...specifiers].filter((id) => {

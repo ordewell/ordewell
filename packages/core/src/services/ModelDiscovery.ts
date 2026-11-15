@@ -4,12 +4,13 @@ import { promisify } from 'util';
 import * as fsSync from 'fs';
 import { DiscoveredModel } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import type { RunnerManifest, DiscoveryCommand, ApiDiscoveryConfig, ApiAuthMethod, ModelDiscoveryParser, RunnerEnv, RunnerSettingsFiles } from '../plugins/types';
+import { runnerCommand, type RunnerManifest, type DiscoveryCommand, type ApiDiscoveryConfig, type ApiAuthMethod, type ModelDiscoveryParser, type RunnerEnv, type RunnerSettingsFiles } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { expandRunnerHome } from '../utils/runnerHome';
 import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
 import { discoverAcpModels, type AcpModelsAnswer } from './harness/acpModels';
+import { discoverProviderModels } from './harness/ordewell/models';
 
 export type { AppServerModel } from './harness/appServerModels';
 
@@ -588,6 +589,14 @@ export class ModelDiscovery {
     let signedOut: true | undefined;
     const discovery = manifest.modelDiscovery;
 
+    // The in-process runner (ADR-0070) offers every keyed provider's catalog.
+    // A provider whose listing failed offers nothing this time, so a partial
+    // answer is not cached behind a key that works on the next lookup.
+    if (discovery.method === 'providers') {
+      const models = await discoverProviderModels(env, this.fetchImpl);
+      return { models, cacheable: models.length > 0 };
+    }
+
     // 0. App-server JSON-RPC discovery (Codex). Live catalog first, the
     //    runner's own cache file second; falls through on total failure.
     if (discovery.appServer) {
@@ -603,7 +612,8 @@ export class ModelDiscovery {
     //     silent agent offers nothing; the remaining methods answer instead.
     if (discovery.method === 'acp' && discovery.acp) {
       const acpEnv = await acpStartEnv(discovery.acp, env);
-      const answer = acpEnv ? await this.acpClient(manifest.runner.command, discovery.acp.args, { env: acpEnv }) : null;
+      const command = runnerCommand(manifest);
+      const answer = acpEnv && command ? await this.acpClient(command, discovery.acp.args, { env: acpEnv }) : null;
       if (Array.isArray(answer) && answer.length > 0) return { models: mergeCanonicalAliases(answer, manifest), cacheable: true };
       // No answer (signed out, timeout, failed start) is transient and must
       // not be cached behind a working fallback; an agent that answered with

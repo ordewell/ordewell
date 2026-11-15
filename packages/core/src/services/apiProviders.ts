@@ -9,9 +9,7 @@ export interface ProviderRegistration {
   id: PlannerBackendId;
   label: string;
   shortLabel: string;
-  /** `cli` is a harness planner (ADR-0009): a local coding agent, not an HTTP vendor. */
-  serviceType: 'openai' | 'google' | 'cli';
-  /** Harness planners only: the runner id whose manifest, models and binary this provider drives. */
+  /** Harness planners only (ADR-0009): the runner id whose manifest, models and binary this provider drives. */
   runnerId?: RunnerId;
   defaultBaseUrl: string;
   apiKeyEnvVar: string;
@@ -28,7 +26,6 @@ export interface ProviderRegistration {
 export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   openrouter: {
     id: 'openrouter', label: 'OpenRouter', shortLabel: 'OpenRouter',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://openrouter.ai/api/v1',
     apiKeyEnvVar: 'OPENROUTER_API_KEY',
     // Intentionally NOT OPENAI_API_KEY: that belongs to the dedicated `openai`
@@ -44,7 +41,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   google: {
     id: 'google', label: 'Google Gemini', shortLabel: 'Gemini',
-    serviceType: 'google',
     defaultBaseUrl: '',
     apiKeyEnvVar: 'GEMINI_API_KEY',
     detectEnvVars: ['GEMINI_API_KEY'],
@@ -56,7 +52,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   openai_compatible: {
     id: 'openai_compatible', label: 'Custom', shortLabel: 'Custom',
-    serviceType: 'openai',
     defaultBaseUrl: 'http://localhost:11434/v1',
     apiKeyEnvVar: 'OPENAI_COMPATIBLE_API_KEY',
     detectEnvVars: [],
@@ -68,7 +63,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   openai: {
     id: 'openai', label: 'OpenAI', shortLabel: 'OpenAI',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.openai.com/v1',
     apiKeyEnvVar: 'OPENAI_API_KEY',
     detectEnvVars: ['OPENAI_API_KEY'],
@@ -79,7 +73,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   xai: {
     id: 'xai', label: 'xAI', shortLabel: 'xAI',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.x.ai/v1',
     apiKeyEnvVar: 'XAI_API_KEY',
     detectEnvVars: ['XAI_API_KEY'],
@@ -90,7 +83,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   groq: {
     id: 'groq', label: 'Groq', shortLabel: 'Groq',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.groq.com/openai/v1',
     apiKeyEnvVar: 'GROQ_API_KEY',
     detectEnvVars: ['GROQ_API_KEY'],
@@ -101,7 +93,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   deepseek: {
     id: 'deepseek', label: 'DeepSeek', shortLabel: 'DeepSeek',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.deepseek.com/v1',
     apiKeyEnvVar: 'DEEPSEEK_API_KEY',
     detectEnvVars: ['DEEPSEEK_API_KEY'],
@@ -112,7 +103,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   together: {
     id: 'together', label: 'Together AI', shortLabel: 'Together',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.together.xyz/v1',
     apiKeyEnvVar: 'TOGETHER_API_KEY',
     detectEnvVars: ['TOGETHER_API_KEY'],
@@ -123,7 +113,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   mistral: {
     id: 'mistral', label: 'Mistral', shortLabel: 'Mistral',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.mistral.ai/v1',
     apiKeyEnvVar: 'MISTRAL_API_KEY',
     detectEnvVars: ['MISTRAL_API_KEY'],
@@ -134,7 +123,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   anthropic: {
     id: 'anthropic', label: 'Anthropic', shortLabel: 'Anthropic',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.anthropic.com/v1',
     apiKeyEnvVar: 'ANTHROPIC_API_KEY',
     detectEnvVars: ['ANTHROPIC_API_KEY'],
@@ -145,7 +133,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   fireworks: {
     id: 'fireworks', label: 'Fireworks AI', shortLabel: 'Fireworks',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.fireworks.ai/inference/v1',
     apiKeyEnvVar: 'FIREWORKS_API_KEY',
     detectEnvVars: ['FIREWORKS_API_KEY'],
@@ -156,7 +143,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   perplexity: {
     id: 'perplexity', label: 'Perplexity', shortLabel: 'Perplexity',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.perplexity.ai',
     apiKeyEnvVar: 'PERPLEXITY_API_KEY',
     detectEnvVars: ['PERPLEXITY_API_KEY'],
@@ -170,7 +156,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   zhipu: {
     id: 'zhipu', label: 'Zhipu / GLM', shortLabel: 'Zhipu',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     apiKeyEnvVar: 'ZHIPU_API_KEY',
     detectEnvVars: ['ZHIPU_API_KEY'],
@@ -181,7 +166,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   kimi: {
     id: 'kimi', label: 'Moonshot / Kimi', shortLabel: 'Kimi',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.moonshot.cn/v1',
     apiKeyEnvVar: 'MOONSHOT_API_KEY',
     detectEnvVars: ['MOONSHOT_API_KEY'],
@@ -192,7 +176,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   cerebras: {
     id: 'cerebras', label: 'Cerebras', shortLabel: 'Cerebras',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.cerebras.ai/v1',
     apiKeyEnvVar: 'CEREBRAS_API_KEY',
     detectEnvVars: ['CEREBRAS_API_KEY'],
@@ -203,7 +186,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   deepinfra: {
     id: 'deepinfra', label: 'DeepInfra', shortLabel: 'DeepInfra',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.deepinfra.com/v1/openai',
     apiKeyEnvVar: 'DEEPINFRA_API_KEY',
     detectEnvVars: ['DEEPINFRA_API_KEY'],
@@ -214,7 +196,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   doubao: {
     id: 'doubao', label: 'ByteDance / Doubao', shortLabel: 'Doubao',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     apiKeyEnvVar: 'ARK_API_KEY',
     detectEnvVars: ['ARK_API_KEY'],
@@ -225,7 +206,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   qwen: {
     id: 'qwen', label: 'Alibaba / Qwen', shortLabel: 'Qwen',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiKeyEnvVar: 'DASHSCOPE_API_KEY',
     detectEnvVars: ['DASHSCOPE_API_KEY'],
@@ -236,7 +216,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   hunyuan: {
     id: 'hunyuan', label: 'Tencent Hunyuan', shortLabel: 'Hunyuan',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
     apiKeyEnvVar: 'HUNYUAN_API_KEY',
     detectEnvVars: ['HUNYUAN_API_KEY'],
@@ -247,7 +226,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   baichuan: {
     id: 'baichuan', label: 'Baichuan', shortLabel: 'Baichuan',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.baichuan-ai.com/v1',
     apiKeyEnvVar: 'BAICHUAN_API_KEY',
     detectEnvVars: ['BAICHUAN_API_KEY'],
@@ -258,7 +236,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   minimax: {
     id: 'minimax', label: 'MiniMax', shortLabel: 'MiniMax',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.minimax.chat/v1',
     apiKeyEnvVar: 'MINIMAX_API_KEY',
     detectEnvVars: ['MINIMAX_API_KEY'],
@@ -269,7 +246,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   yi: {
     id: 'yi', label: '01.AI / Yi', shortLabel: 'Yi',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.lingyiwanwu.com/v1',
     apiKeyEnvVar: 'YI_API_KEY',
     detectEnvVars: ['YI_API_KEY'],
@@ -280,7 +256,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   stepfun: {
     id: 'stepfun', label: 'StepFun', shortLabel: 'StepFun',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.stepfun.com/v1',
     apiKeyEnvVar: 'STEPFUN_API_KEY',
     detectEnvVars: ['STEPFUN_API_KEY'],
@@ -291,7 +266,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   siliconflow: {
     id: 'siliconflow', label: 'SiliconFlow', shortLabel: 'SiliconFlow',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.siliconflow.cn/v1',
     apiKeyEnvVar: 'SILICONFLOW_API_KEY',
     detectEnvVars: ['SILICONFLOW_API_KEY'],
@@ -302,7 +276,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   cohere: {
     id: 'cohere', label: 'Cohere', shortLabel: 'Cohere',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.cohere.com/v1',
     apiKeyEnvVar: 'COHERE_API_KEY',
     detectEnvVars: ['COHERE_API_KEY'],
@@ -313,7 +286,6 @@ export const VENDORS: Readonly<Record<AiProvider, ProviderRegistration>> = {
   },
   novita: {
     id: 'novita', label: 'Novita AI', shortLabel: 'Novita',
-    serviceType: 'openai',
     defaultBaseUrl: 'https://api.novita.ai/v3/openai',
     apiKeyEnvVar: 'NOVITA_API_KEY',
     detectEnvVars: ['NOVITA_API_KEY'],

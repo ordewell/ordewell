@@ -28,7 +28,7 @@ export function researchAgentSetting(env: VendorEnv): ResearchAgentSetting {
   if (!provider || !model || !Object.hasOwn(VENDORS, provider)) return { kind: 'unavailable', reason: `${FORM}, with a provider Ordewell knows; it is "${value}".` };
   const vendor = provider as AiProvider;
   // The agent runs on the OpenAI-compatible chat service, which Gemini's own API is not.
-  if (VENDORS[vendor].serviceType !== 'openai') return { kind: 'unavailable', reason: `${VENDORS[vendor].label} cannot serve the research agent: name an OpenAI-compatible provider, such as openrouter.` };
+  if (vendor === 'google') return { kind: 'unavailable', reason: `${VENDORS[vendor].label} cannot serve the research agent: name an OpenAI-compatible provider, such as openrouter.` };
   const apiKey = vendorApiKeyIn(env, vendor);
   if (!apiKey) return { kind: 'unavailable', reason: `${RESEARCH_AGENT_MODEL_ENV} names ${VENDORS[vendor].label}, but ${VENDORS[vendor].apiKeyEnvVar} is not set.` };
   return { kind: 'offered', vendor, model, apiKey, baseUrl: vendorBaseUrlIn(env, vendor) };

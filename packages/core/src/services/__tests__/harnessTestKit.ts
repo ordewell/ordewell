@@ -4,7 +4,8 @@ import { join } from 'path';
 import type { ChildProcess } from 'child_process';
 import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
-import { createTaskAdapter } from '../harness/connectors';
+import { CONNECTORS, createTaskAdapter } from '../harness/connectors';
+import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import type { RunnerManifest } from '../../plugins/types';
 import type { McpCredential, OrdewellMcpServer, PlannerTokenScope, PlannerToolHandler } from '../mcp';
 
@@ -17,6 +18,15 @@ import type { McpCredential, OrdewellMcpServer, PlannerTokenScope, PlannerToolHa
  * which is the point. The adapters are not separately mocked; the service
  * tests are what prove each one satisfies the interface.
  */
+
+/**
+ * The connectors whose adapter starts a runner process, which the process and
+ * MCP contracts hold to. An in-process runner spawns nothing and takes its task
+ * tools as direct calls (ADR-0070), so those contracts have nothing of it to check.
+ */
+export function spawnedConnectors(): string[] {
+  return Object.keys(CONNECTORS).filter((runner) => !BUILTIN_MANIFESTS.find((m) => m.name === runner)?.runner.inProcess);
+}
 
 export interface FakeAgentProcess extends ChildProcess {
   /** Everything the adapter wrote to stdin, one entry per write. */

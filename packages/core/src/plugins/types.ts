@@ -3,7 +3,7 @@ import type { DiscoveredModel } from '../models/Task';
 export interface RunnerManifest {
   name: string;
   displayName: string;
-  runner: { command: string };
+  runner: RunnerLaunch;
   features: RunnerFeatures;
   modelDiscovery: RunnerModelDiscovery;
   contextFile?: string;
@@ -16,6 +16,26 @@ export interface RunnerManifest {
    * clause the signed-out hint ends with ("run qwen and sign in there").
    */
   signIn?: string;
+}
+
+/**
+ * How a runner is started: a command on PATH, or `inProcess` for the built-in
+ * Ordewell runner, whose loop is code shipped with Ordewell itself (ADR-0070).
+ * An in-process runner is installed whenever Ordewell is: there is nothing to
+ * probe with `--version` and no login of its own to run.
+ */
+export type RunnerLaunch = { command: string; inProcess?: never } | { inProcess: true; command?: never };
+
+/** The command a runner starts with, or undefined for an in-process runner. */
+export function runnerCommand(manifest: Pick<RunnerManifest, 'runner'>): string | undefined {
+  return manifest.runner.inProcess ? undefined : manifest.runner.command;
+}
+
+/** The command a spawned runner starts with; asking it of an in-process one is a wiring mistake. */
+export function spawnedCommand(manifest: Pick<RunnerManifest, 'runner' | 'name'>): string {
+  const command = runnerCommand(manifest);
+  if (command === undefined) throw new Error(`${manifest.name} runs inside Ordewell and has no command to start.`);
+  return command;
 }
 
 /** What a runner's status command answered, with both streams kept apart. */
@@ -130,9 +150,10 @@ export interface RunnerModelDiscovery {
   /**
    * `acp` asks the running agent over the Agent Client Protocol first; the
    * manifest's `discoveryCommands` and aliases are what it falls back to, so a
-   * runner using it still declares them.
+   * runner using it still declares them. `providers` lists the models of every
+   * API provider with a key in Ordewell, as `<provider>:<model>` (ADR-0070).
    */
-  method: 'command' | 'hardcoded' | 'acp';
+  method: 'command' | 'hardcoded' | 'acp' | 'providers';
   command?: string;
   args?: string[];
   parser?: ModelDiscoveryParser;

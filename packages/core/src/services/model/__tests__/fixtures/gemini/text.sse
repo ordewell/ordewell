@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":"The tests"}]},"index":0}],"usageMetadata":{"promptTokenCount":1200,"totalTokenCount":1200},"modelVersion":"gemini-2.5-flash","responseId":"r1"}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":" pass."}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1200,"candidatesTokenCount":5,"totalTokenCount":1205},"modelVersion":"gemini-2.5-flash","responseId":"r1"}
+

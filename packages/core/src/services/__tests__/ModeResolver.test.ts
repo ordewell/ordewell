@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { carryPlannedModes, plannedMode, readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
 import { createTask } from '../../models/Task';
+import { ORDEWELL_MANIFEST } from '../../plugins/builtin/ordewell.manifest';
+import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
+import { attemptModeOf } from '../harness/ordewell/modes';
 
 const claude: RunnerModeInfo[] = [
   { id: 'default', label: 'Ask before edits', description: 'asks' },
@@ -92,5 +95,28 @@ describe('carryPlannedModes', () => {
   it('reaches subtasks', () => {
     const parent = (child: string) => ({ ...task('p', 'auto'), subtasks: [task('s', child)] });
     expect(carryPlannedModes([parent('acceptEdits')], [parent('bypassPermissions')], catalog)[0].subtasks[0].taskMode).toBe('acceptEdits');
+  });
+});
+
+describe('the Ordewell runner\'s modes (ADR-0070)', () => {
+  const modes = { ordewell: ORDEWELL_MANIFEST.modes ?? [] };
+  /** The mode a planned task's attempt runs in, through the flags a spawn resolves from its manifest. */
+  const attempt = (mode: string | undefined) => {
+    if (mode === undefined) throw new Error('no mode planned');
+    return attemptModeOf({ kind: 'task', cwd: '.', mode, flags: resolveTaskRunnerFlags(ORDEWELL_MANIFEST, { mode }) });
+  };
+
+  it('maps Full and Guarded onto its full and guarded modes, and a read-only task onto read-only at either level', () => {
+    const full = plannedMode('ordewell', modes, {}, true);
+    const guarded = plannedMode('ordewell', modes, {}, false);
+    expect([full, guarded]).toEqual([{ ok: true, mode: 'full' }, { ok: true, mode: 'guarded' }]);
+    expect(plannedMode('ordewell', modes, { readOnly: true }, true)).toEqual({ ok: true, mode: 'read-only' });
+    expect(plannedMode('ordewell', modes, { readOnly: true }, false)).toEqual({ ok: true, mode: 'read-only' });
+  });
+
+  it('starts each planned mode as itself: no mode is unavailable, and read-only reaches the runner as a read-only task', () => {
+    expect(['full', 'guarded', 'read-only'].map((mode) => attempt(mode))).toEqual(['full', 'guarded', 'read-only']);
+    expect(resolveTaskRunnerFlags(ORDEWELL_MANIFEST, { mode: 'read-only' }).readOnly).toBe(true);
+    expect(resolveTaskRunnerFlags(ORDEWELL_MANIFEST, { mode: 'guarded' }).readOnly).toBeUndefined();
   });
 });

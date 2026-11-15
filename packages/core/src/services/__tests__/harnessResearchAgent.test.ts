@@ -7,7 +7,7 @@ import { CONFINED_RESEARCH_TOOLS } from '../ResearchSubagents';
 import { harnessResearchAgent, withResearchAgent, NO_TURN_OPEN } from '../harness/harnessResearchAgent';
 import { PLANNER_RESEARCH_AGENT, PLANNER_TOOLS, plannerToolSet, toolListing, type PlannerToolHandler } from '../mcp/tools';
 import { buildSubagentSystemPrompt, inTurnAgents } from '../PlanPrompts';
-import { toOpenAiSubagentTools } from '../researchTools';
+import { subagentToolDefinitions } from '../researchTools';
 
 const textTurn = (text: string): ResearchTurn => ({ text, toolCalls: [], hasToolCalls: false });
 const toolsTurn = (calls: [string, Record<string, unknown>][]): ResearchTurn => ({
@@ -98,7 +98,7 @@ describe('spawn_research_agent over MCP (ADR-0066)', () => {
     expect(only).toBe(CONFINED_RESEARCH_TOOLS);
     expect(touched).toEqual([]);
     // What the model is offered: only the confined reads, so none of the above is a tool it could name.
-    const offered = (toOpenAiSubagentTools(only) as { function: { name: string } }[]).map((t) => t.function.name).sort();
+    const offered = subagentToolDefinitions(only).map((t) => t.name).sort();
     expect(offered).toEqual([...CONFINED_RESEARCH_TOOLS].sort());
     const outputs = script.received[0].map((r) => r.output);
     expect(outputs).toHaveLength(13);
@@ -251,9 +251,8 @@ describe('spawn_research_agent over MCP (ADR-0066)', () => {
   });
 
   it('offers the agent only its confined tools and tells it so', () => {
-    expect(toOpenAiSubagentTools(CONFINED_RESEARCH_TOOLS).map((t) => (t as { function: { name: string } }).function.name).sort())
-      .toEqual([...CONFINED_RESEARCH_TOOLS].sort());
-    expect(toOpenAiSubagentTools().length).toBeGreaterThan(CONFINED_RESEARCH_TOOLS.size);
+    expect(subagentToolDefinitions(CONFINED_RESEARCH_TOOLS).map((t) => t.name).sort()).toEqual([...CONFINED_RESEARCH_TOOLS].sort());
+    expect(subagentToolDefinitions().length).toBeGreaterThan(CONFINED_RESEARCH_TOOLS.size);
     expect(buildSubagentSystemPrompt(true)).toMatch(/no shell, no web/);
     expect(buildSubagentSystemPrompt(false)).not.toMatch(/no shell, no web/);
   });

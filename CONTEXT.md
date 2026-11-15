@@ -879,15 +879,102 @@ notice with the path. For a task skill named by `/name` it carries no body, only
 the directive to attach.
 *Avoid:* "skill message", "skill event".
 
-**Executor / Runner** — an external coding-agent CLI (Claude Code, Codex,
-OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor over ACP) that runs *one task* in its own
-session through a structured connector. `RunnerRegistry` holds their built-in
-manifests: identity, command, model discovery and mode settings. External
-plugin manifests are ignored with one notice at host startup.
+**Executor / Runner** — a coding agent that runs *one task* in its own session
+through a structured connector: either an external CLI (Claude Code, Codex,
+OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor over
+ACP) or the **Built-in runner**, which runs inside Ordewell and has no command.
+`RunnerRegistry` holds their built-in manifests: identity, command (none for the
+built-in runner), model discovery and mode settings. External plugin manifests
+are ignored with one notice at host startup.
 *Avoid:* "backend", "provider" (provider means the LLM vendor, below).
 
+**Built-in runner** (`ordewell`, "Ordewell"; `OrdewellAdapter`, `OrdewellLoop`,
+ADR-0070) — the runner that ships with Ordewell: a coding-agent loop in the
+Ordewell process (the daemon or the extension host) that calls a provider's API
+through the **ModelClient** with the keys Ordewell holds. It is a task-mode
+adapter behind a `CONNECTORS` entry, driven by `StructuredSession` like any other
+runner, and completes a task only by the token-bound `task_complete`. Its
+manifest's `runner` is `{ inProcess: true }`: no command to probe, so it is
+installed wherever Ordewell is and signed in once any provider has a key. Its
+models are every keyed provider's, as `<provider>:<model>`, split at the first
+colon. It has three modes: Full runs every tool unasked; Guarded asks before each
+`shell` call; read-only has no edit or shell tool and reads natively and runs
+sealed (ADR-0046). It never plans: the API planner plans on the same key.
+*Avoid:* "native runner", "Ordewell agent", "default runner" (`DEFAULT_RUNNERS`
+is a different product choice), "API runner".
+
+**ModelClient** (`services/model/`) — the one provider-neutral interface the
+built-in runner and the API planner call models through:
+`stream(request, signal)` yields neutral events (text and thinking deltas, tool
+calls, usage, provider state, a final finish) and raises a typed `ModelError`
+(`kind`, status, `retryAfterMs`, `resetsAt`). It sits on each vendor's official
+SDK, with the SDKs' own retries off, so `withRetry` is the one retry policy and a
+usage limit is one `ModelError` kind the planner and the runner both read.
+Requests carry cache hints (breakpoints after the tools, on marked system parts
+and at the last message) that an adapter with implicit caching ignores.
+*Avoid:* "provider client", "LLM wrapper", "SDK" (the SDK is what an adapter wraps).
+
+**Dialect** — the wire protocol an adapter of the ModelClient speaks, chosen by
+provider (`dialects.ts`): `anthropic-messages` for Anthropic, `responses` for
+OpenAI, `gemini` for Google, and `chat-completions` for every other provider.
+Each has its own adapter for effort, thinking, caching and errors. A
+`providerState` an adapter returns (signed thinking, encrypted reasoning, thought
+signatures) belongs to its dialect and is carried back unchanged on the next
+request; another dialect's is dropped.
+*Avoid:* "API type", "serviceType" (removed), "protocol" alone (see **Transport**).
+
+**Runner transcript** (`transcript.ts`) — the built-in runner's one record of
+what the model has seen: JSON lines (`session`, `message`, `usage` and
+`compaction` entries) in `<data dir>/runners/ordewell/sessions/<id>/transcript.jsonl`,
+outside every workspace (ADR-0032), keyed by the session id the adapter reports
+as its native session id. Each request is rebuilt from it, a resume reads it
+back, and a compaction rewrites what it folds rather than deleting lines. A
+missing transcript, or one with no session start, makes a resume fail as not
+resumable.
+*Avoid:* "session log" and "history" (the **task log** is what surfaces draw), and
+the planner's transcript, which is a different record.
+
+**Step limit** — the model calls one attempt of the built-in runner may make
+(`ordewellStepLimit` in the global settings file, an integer of at least 1,
+default 200; `OrdewellAdapterOptions.stepLimit` overrides it). The last call is
+told it is the last and forced to `task_complete`, so an attempt that reaches the
+limit ends on a report, not silently.
+*Avoid:* "max turns", "iteration cap".
+
+**Stream timeouts** (`StreamTimeouts`) — how long a model request's stream may
+send no event before `createModelClient` abandons it as a transient failure:
+one allowance before the first event, a shorter one between events
+(`ordewellStreamTimeouts` in the global settings file, in seconds; 180 and 60 by
+default). A cut step is retried; one that had started a tool call keeps it
+rather than run it again.
+*Avoid:* "request timeout" (the SDK's, over the whole request).
+
+**Repeat guard** (`RepeatGuard`) — the built-in runner's check on a stuck model:
+the same tool call with the same arguments three times in a row has its result
+nudged to try another approach, and a fourth is not run and ends the attempt as
+failed, naming the call.
+*Avoid:* "loop detector", "retry limit" (a retry is the **ModelClient**'s).
+
+**Prefix grant** — what *Allow for this task* gives in Guarded mode: the
+proposed command prefix of the `shell` call asked about, valid for the rest of
+that attempt. It covers a line only if the whole line is the prefix, or the prefix
+plus plain arguments; never a line holding `;`, `&`, `|`, a backtick, `$(`, `>`,
+`<` or a newline, and never the first word alone.
+*Avoid:* "allowlist" (that is the model allowlist), "always allow".
+
+**Model catalog** (`ModelDetails.ts`, `models.ts`) — what the built-in runner
+knows of each model: its context window, reply cap, prices, tool and reasoning
+support and effort levels. A provider's own `/models` listing decides which
+models exist and wins for anything it states; models.dev fills the rest (a daily
+background fetch cached in the data directory, a bundled snapshot as the offline
+fallback), and what neither states takes a conservative default, marked in
+`known`. A model known to take no tools is not offered.
+The planner pickers show the same details through `ModelCatalog`.
+*Avoid:* "model registry", "model list" (a provider's listing is only one input).
+
 **Runner connector** (`RunnerConnector`, in the `CONNECTORS` registry) — what
-Ordewell holds for a runner it drives over the runner's own protocol: the
+Ordewell holds for a runner it drives, over the runner's own protocol or, for the
+built-in runner, in process: the
 adapter that serves it as a harness planner (ADR-0009) and as a structured
 task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
 words a usage-limit reset. Its `plans` says whether the runner can also be the
@@ -901,7 +988,8 @@ connector and Ordewell tools are declared, so none of the three can drift apart.
 and mode/discovery settings for the built-in runners); "adapter table".
 
 **Runner process** (`RunnerProcess`, `harness/runnerProcess.ts`) — the one OS
-process a connector's adapter drives, whatever its protocol: launched under the
+process a connector's adapter drives, whatever its protocol (the built-in runner
+has none: it runs in the host's process and its adapter spawns nothing): launched under the
 cleaned runner environment in its own process group, its output decoded as
 UTF-8, its stderr tail kept for the failure message, its end observable, and
 its whole tree killed on dispose (**Kill tree**). Its end is the process's
@@ -919,7 +1007,8 @@ once and the protocol stays in the adapter.
 adapter frees by hand in its own `dispose`.
 
 **Ordewell tool binding** (`OrdewellToolBinding`) — how one connector hands its
-runner the Ordewell MCP server (ADR-0022). It covers the runner's names for the
+runner the Ordewell MCP server (ADR-0022). The built-in runner has none: it calls
+the attempt's task tools in process, the same handlers behind the same token. It covers the runner's names for the
 server's tools (`toolName`/`toolNames`), which of the runner's permission
 requests are for them and so are never refused or left waiting
 (`isOrdewellAsk`, by the tool's exact name or the server's, never a prefix
@@ -4217,7 +4306,8 @@ PowerShell shims are considered even when PATHEXT omits `.ps1`.
 **Runner install probe** (`RunnerInstallation`, `isInstalled`) — how a host
 decides which runners are on this machine before any surface offers one: the
 runner's `<command> --version` over the augmented PATH, a clean exit meaning
-installed and a throw meaning not. The verdict is shallow on purpose — it says
+installed and a throw meaning not. A runner with no command (`inProcess`) is
+installed without a probe. The verdict is shallow on purpose — it says
 the binary answers, never that its login works; that is the **Runner auth**
 verdict beside it. An *installed* verdict is trusted between refreshes; a
 *missing* one also expires on its own, and `refresh()` forgets every verdict, so
