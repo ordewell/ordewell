@@ -369,6 +369,28 @@ describe('ApiClient — endpoints the TUI drives', () => {
     expect(JSON.parse(seen.body)).toEqual({ enabled: false });
   });
 
+  it('says with every planner message which surface sent it, the CLI unless built for the TUI (ADR-0030)', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const server = await startCustomServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        bodies.push(JSON.parse(body) as Record<string, unknown>);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ plan: { tasks: [] } }));
+      });
+    });
+    servers.push(server);
+
+    const cli = new ApiClient(server.port, '/work/app');
+    await cli.startConversation('session-1', 'build it');
+    await cli.sendConversationMessage('session-1', 'Postgres');
+    await cli.forceSendPlannerMessage('session-1', 'now');
+    await new ApiClient(server.port, '/work/app', 'tui').sendConversationMessage('session-1', 'from the TUI');
+
+    expect(bodies.map((b) => b.surface)).toEqual(['cli', 'cli', 'cli', 'tui']);
+  });
+
   it('reports a failed runner toggle', async () => {
     const server = await startCustomServer((_req, res) => {
       res.statusCode = 500;
@@ -655,7 +677,7 @@ describe('ApiClient — adopting a saved session', () => {
 
     expect(await client.forceSendPlannerMessage('s1', 'use Postgres instead')).toEqual({ tasks: [] });
 
-    expect(hits).toEqual(['POST /api/plans/s1/converse/message/now?workspace=%2Fw {"message":"use Postgres instead"}']);
+    expect(hits).toEqual(['POST /api/plans/s1/converse/message/now?workspace=%2Fw {"message":"use Postgres instead","surface":"cli"}']);
   });
 
   it('answers a planner prompt with a yes/no and a runner\'s request with its whole decision', async () => {

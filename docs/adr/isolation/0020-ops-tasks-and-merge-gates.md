@@ -150,7 +150,7 @@ that depends on.**
   says what the hold protects against, asked as a merge past an unpassed
   check is (ADR-0055 D9). Without the yes the merge is refused, and the
   refusal says how to give it on that surface: a prompt in the TUI,
-  `--beside-ops` on `ordewell handoff merge`, a dialog in the desktop app and
+  `--beside-ops` on `ordewell merge`, a dialog in the desktop app and
   VS Code, the merge-all option's own confirmation in the escalation inbox.
   Automatic merges at gates and at the end of a run, and the supervisor's and
   the planner's `merge_all`, keep the hold. Beside a running ops task the

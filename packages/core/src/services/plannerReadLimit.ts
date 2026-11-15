@@ -1,4 +1,5 @@
 import { DEFAULT_PLANNER_READ_LIMIT } from './runSettingsDefaults';
+import type { McpCaller } from './mcp/mcpCaller';
 
 /** How much the planner may read itself in one turn: calls, and the bytes their results held. */
 export interface ReadLimit {
@@ -32,7 +33,7 @@ function kb(bytes: number): string {
  * already delegated, so the refusal says where the rest of the reading goes.
  */
 export class PlannerReadLimit {
-  private spent = { turn: undefined as string | undefined, calls: 0, bytes: 0 };
+  private spent = PlannerReadLimit.fresh(undefined);
 
   constructor(private readonly opts: PlannerReadLimitOptions) {}
 
@@ -81,6 +82,24 @@ export class PlannerReadLimit {
     spent.bytes += bytes;
   }
 
+  /**
+   * A tool use the harness saw one of its subagents make: the Ordewell call
+   * that answers it is the delegate's, not the planner's (ADR-0068 R2).
+   */
+  delegated(toolUseId: string): void {
+    this.current().delegated.add(toolUseId);
+  }
+
+  /**
+   * Whether a call is the planner's own to count. Its runner may say a
+   * subagent made it, or name a tool use `delegated` marked; a call that says
+   * neither is the planner's, so the limit only ever narrows.
+   */
+  owns(caller: McpCaller | undefined): boolean {
+    if (caller?.subagent) return false;
+    return !(caller?.toolUseId && this.current().delegated.delete(caller.toolUseId));
+  }
+
   /** The planner's budget-block line, or nothing while the limit is off. */
   line(): string | undefined {
     const limit = this.opts.limit();
@@ -91,10 +110,14 @@ export class PlannerReadLimit {
     return `Own reads left this turn: ${calls} calls or ${kb(bytes)}, whichever runs out first; then delegate.`;
   }
 
-  private current(): { calls: number; bytes: number } {
+  private current(): { calls: number; bytes: number; delegated: Set<string> } {
     const turn = this.opts.turn();
-    if (this.spent.turn !== turn) this.spent = { turn, calls: 0, bytes: 0 };
+    if (this.spent.turn !== turn) this.spent = PlannerReadLimit.fresh(turn);
     return this.spent;
+  }
+
+  private static fresh(turn: string | undefined) {
+    return { turn, calls: 0, bytes: 0, delegated: new Set<string>() };
   }
 }
 

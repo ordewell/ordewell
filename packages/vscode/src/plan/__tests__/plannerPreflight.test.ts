@@ -266,7 +266,7 @@ describe('a turn after a login done outside the extension', () => {
 
     expect(h.installation.refresh).toHaveBeenCalledTimes(1);
     expect(h.installation.plannerUsability).toHaveBeenCalledWith('claude-code');
-    expect(h.session.continueConversation).toHaveBeenCalledWith('Use Postgres');
+    expect(h.session.continueConversation).toHaveBeenCalledWith('Use Postgres', { surface: 'vscode' });
     expect(h.chatProvider.showError).not.toHaveBeenCalled();
   });
 
@@ -277,7 +277,7 @@ describe('a turn after a login done outside the extension', () => {
     await handleSendMessageNow('Use SQLite instead', h.deps);
 
     expect(h.installation.refresh).toHaveBeenCalledTimes(1);
-    expect(h.session.forceSendPrompt).toHaveBeenCalledWith('Use SQLite instead');
+    expect(h.session.forceSendPrompt).toHaveBeenCalledWith('Use SQLite instead', { surface: 'vscode' });
     expect(h.chatProvider.showError).not.toHaveBeenCalled();
   });
 

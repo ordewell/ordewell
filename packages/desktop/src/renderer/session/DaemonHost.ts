@@ -993,12 +993,12 @@ export class DaemonHost {
         // The chat sends the runners its pills have on, including a click still
         // being saved; the daemon's list is only the fallback (as VS Code does).
         const chosen = runners ?? this.snapshot.state.enabledRunnerIds;
-        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(chosen.length ? { runners: [...chosen] } : {}) });
+        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, surface: 'desktop', ...(chosen.length ? { runners: [...chosen] } : {}) });
         if (sessionId !== this.sessionId) return;
         this.fresh = false;
         this.update({ goal: text });
       } else {
-        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text });
+        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text, surface: 'desktop' });
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);
@@ -1526,7 +1526,9 @@ export class DaemonHost {
   private mergeCall(sessionId: string): MergeCall {
     return async (yes) => {
       try {
-        await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        const merged = await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        // Nothing left to land (the run is merged and closed): the daemon's words, as the other surfaces say them.
+        if ('outcome' in merged && merged.outcome === 'nothing') this.view.conversation.note('system', merged.message);
         return { kind: 'done' };
       } catch (error) {
         if (error instanceof DaemonRefusal && error.code === 'merge_past_check') return { kind: 'held', hold: 'pastChecks', message: error.message };
