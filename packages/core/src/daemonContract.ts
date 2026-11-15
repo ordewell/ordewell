@@ -264,7 +264,12 @@ export interface IsolationDiffResponse {
 }
 
 /** A merge that conflicts or is blocked is an outcome, not a refusal, so it answers 200 with the result. */
-export type IsolationMergeResponse = IsolationMergeResult;
+/** A Merge all asked of a run that has nothing left to land: information in the daemon's words, not a merge result. */
+export interface IsolationMergeNothing {
+  outcome: 'nothing';
+  message: string;
+}
+export type IsolationMergeResponse = IsolationMergeResult | IsolationMergeNothing;
 
 /** A fork the daemon has already adopted. */
 export interface ConversationForkResponse {

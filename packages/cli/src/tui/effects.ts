@@ -833,6 +833,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         dispatch({ type: 'mergeHeld', message: err.message, asked, ...(Object.keys(given).length > 0 ? { given } : {}), sessionId: effect.sessionId });
         return;
       }
+      if (merged.outcome === 'nothing') {
+        dispatch({ type: 'notice', message: merged.message });
+        return;
+      }
       const { ok, message } = mergeOutcome(merged, effect.branch, effect.group === true, effect.repaired ?? []);
       dispatch({ type: ok ? 'notice' : 'failed', message });
       return;

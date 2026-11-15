@@ -146,6 +146,17 @@ describe('ordewell handoff', () => {
     expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
   });
 
+  it('merge on an already merged run prints the daemon\'s words and succeeds', async () => {
+    const message = 'Nothing to merge: everything the run landed is in your branch already, and the run is closed.';
+    const srv = await isolatedDaemon({ '/isolation/merge': { body: { outcome: 'nothing', message } } });
+    const { stdout, stderr, exitCode } = await run(['merge'], srv);
+    srv.close();
+
+    expect(stdout).toContain(message);
+    expect(stderr).not.toContain(message);
+    expect(exitCode).toBeFalsy();
+  });
+
   describe('past a check that has not passed (ADR-0055 D9)', () => {
     const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
     /** The daemon refuses a Merge all that does not carry the yes, naming the check. */

@@ -2344,6 +2344,16 @@ describe('worktree isolation', () => {
     expect(messageOf(h.actions, 'notice')).toBeUndefined();
   });
 
+  it('shows a Merge all on an already merged run as information, not a failure', async () => {
+    const message = 'Nothing to merge: everything the run landed is in your branch already, and the run is closed.';
+    const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'nothing', message }) } as Partial<OrdewellApi>);
+
+    await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
+
+    expect(messageOf(h.actions, 'notice')).toBe(message);
+    expect(messageOf(h.actions, 'failed')).toBeUndefined();
+  });
+
   describe('a Merge all past a check that has not passed (ADR-0055 D9)', () => {
     const ASKED = 'This merges work no check has passed: #2 "Check the subtree" has not.';
 

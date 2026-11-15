@@ -397,6 +397,8 @@ export interface AgentAdapter {
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
+  /** The size Ordewell set the task's runner to compact its context at, when it did (ADR-0057 R4). */
+  readonly compactWindowTokens?: number;
   mcpAttached(sendFirstTurn?: () => Promise<unknown>): Promise<boolean | AttachState>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves

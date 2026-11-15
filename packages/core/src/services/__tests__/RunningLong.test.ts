@@ -136,6 +136,58 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     }]);
   });
 
+  describe('where Ordewell sets the window its runner compacts at (ADR-0057 R4)', () => {
+    const compacting = () => {
+      const watchedRun = watched();
+      watchedRun.session.compactWindowTokens = 150_000;
+      return watchedRun;
+    };
+    const compact = (session: FakeRunnerSession, times: number) => {
+      for (let i = 0; i < times; i += 1) session.emitEvent({ type: 'compaction', trigger: 'auto', postTokens: 20_000 });
+    };
+
+    it('raises nothing for its first and second automatic compactions, and a flag for its third', () => {
+      const { session, flags } = compacting();
+
+      compact(session, 2);
+      expect(flags).toEqual([]);
+      compact(session, 1);
+
+      expect(flags).toEqual([{
+        taskId: 't1', reason: 'compaction', elapsedMs: 0, thresholdMs: 30 * MINUTE, compactions: 3,
+        contextTokens: 20_000, compactionWindow: 150_000, peakContextTokens: 20_000,
+      }]);
+    });
+
+    it('backs off by doubling after the third: the sixth, the twelfth, the twenty-fourth', () => {
+      const { session, flags } = compacting();
+
+      compact(session, 24);
+
+      expect(flags.map((f) => f.compactions)).toEqual([3, 6, 12, 24]);
+    });
+
+    it('counts a manual compaction for nothing, and still flags by time', () => {
+      const { session, flags } = compacting();
+
+      compact(session, 2);
+      session.emitEvent({ type: 'compaction', trigger: 'manual' });
+      expect(flags).toEqual([]);
+      vi.advanceTimersByTime(30 * MINUTE);
+
+      expect(flags.map((f) => [f.reason, f.compactions, f.compactionWindow])).toEqual([['duration', 2, 150_000]]);
+    });
+
+    it('raises one at the first compaction where it sets no window', () => {
+      const { session, flags } = watched();
+
+      session.emitEvent({ type: 'compaction', trigger: 'auto' });
+
+      expect(flags.map((f) => [f.reason, f.compactions])).toEqual([['compaction', 1]]);
+      expect(flags[0].compactionWindow).toBeUndefined();
+    });
+  });
+
   it('carries the live context, its peak and the compactions so far on a later duration flag', () => {
     const { session, flags } = watched();
 
