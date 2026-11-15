@@ -11,6 +11,7 @@ import { removeDir, setEnv } from '../../../../testEnv';
 import { ModelError } from '../../../model';
 import type { ModelClient, ModelEvent } from '../../../model';
 import { CONNECTORS } from '../../connectors';
+import { TASK_TOOLS } from '../../../mcp';
 import { DEFAULT_ORDEWELL_STEP_LIMIT, OrdewellAdapter, type OrdewellAdapterOptions } from '../OrdewellAdapter';
 import { call, deferred, eventsOf, MemoryTranscriptStore, scriptedClient, STOP, type ScriptedStep } from './loopKit';
 import type { McpClientConfig } from '../../../mcp/clientConfig';
@@ -83,6 +84,36 @@ function adapterWith(steps: readonly ScriptedStep[], options: OrdewellAdapterOpt
 describe('OrdewellAdapter', () => {
   it('is the ordewell connector, with no planner', () => {
     expect(CONNECTORS.ordewell?.plans).toBe(false);
+  });
+
+  describe('as an in-process connector', () => {
+    const tools = CONNECTORS.ordewell!.ordewellTools;
+
+    it('names every Ordewell tool by its own name, with no MCP prefix, less what a token hides', () => {
+      expect(tools.toolName('task_complete')).toBe('task_complete');
+      expect(tools.toolNames('task')).toEqual(TASK_TOOLS.map((tool) => tool.name));
+      expect(tools.toolNames('task', ['task_complete'])).not.toContain('task_complete');
+    });
+
+    it('hides no planner tool, since it carries no native one instead of Ordewell\'s', () => {
+      expect(tools.plannerHidden({ kind: 'planner', cwd: '/repo', systemPrompt: 'plan' })).toEqual([]);
+      expect(tools.plannerHidden({ kind: 'planner', cwd: '/repo', systemPrompt: 'plan', nativeSearch: true })).toEqual([]);
+    });
+
+    it('treats no request as an Ordewell tool\'s, even one under an Ordewell tool\'s name', () => {
+      // Its tools are direct calls, so a request for one never arrives as an MCP ask to wave through.
+      // The connector registry types a request as `never`, since each runner's own request type differs.
+      const isAsk = tools.isOrdewellAsk as (ask: unknown) => boolean;
+      expect(isAsk('task_complete')).toBe(false);
+      expect(isAsk('mcp__ordewell__task_complete')).toBe(false);
+    });
+
+    it('reads the attach state from the start alone: connected once started, failed otherwise', () => {
+      expect(tools.attachState('connected')).toBe('connected');
+      for (const status of ['failed', 'pending', 'needs-auth', '', null, undefined]) {
+        expect(tools.attachState(status)).toBe('failed');
+      }
+    });
   });
 
   it('refuses to plan', async () => {
