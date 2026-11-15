@@ -76,12 +76,13 @@ describe('loadState', () => {
   it('replaces the state file whole on every save, so a crash mid-write cannot empty it', () => {
     const statePath = path.join(tmpDir, '.ordewell', 'state.json');
     saveState(plan(), tmpDir);
-    const before = fs.statSync(statePath).ino;
+    // Big, as an NTFS file id is past what a Number holds exactly: two ids a record apart can round to one.
+    const before = fs.statSync(statePath, { bigint: true }).ino;
 
     saveState({ ...plan(), status: 'running' }, tmpDir);
 
     // A write in place truncates first; a rename swaps the file in one step.
-    expect(fs.statSync(statePath).ino).not.toBe(before);
+    expect(fs.statSync(statePath, { bigint: true }).ino).not.toBe(before);
     expect(fs.readdirSync(path.dirname(statePath))).toEqual(['state.json']);
     expect(loadState(tmpDir)!.plan.status).toBe('running');
   });
