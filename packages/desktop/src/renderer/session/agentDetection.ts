@@ -64,6 +64,7 @@ export class AgentDetection {
     this.offStatus?.();
     this.offStatus = null;
     this.emit({ type: 'agentDetection', state: 'detecting' });
+    this.emit({ type: 'modelDiscovery', state: 'loading' });
     const workspace = { workspace: this.workspace };
     const sessionId = this.sessionId?.();
     const settingsQuery = { workspace: this.workspace, ...(sessionId ? { sessionId } : {}) };
@@ -112,6 +113,10 @@ export class AgentDetection {
           errors: models.providerErrors ?? {},
           runnerErrors: models.runnerErrors ?? {},
         });
+        this.emit({ type: 'modelDiscovery', state: 'ready' });
+      })
+      .catch((error: unknown) => {
+        if (current()) this.emit({ type: 'modelDiscovery', state: 'failed', error: messageOf(error) });
       })
       .finally(() => { catalogSettled = true; publish(); });
     const chosen = within(callDaemon('settings.get', settingsQuery), this.timeoutMs, 'its settings')

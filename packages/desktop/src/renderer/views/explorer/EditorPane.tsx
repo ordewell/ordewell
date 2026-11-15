@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { FileWarning } from 'lucide-react';
 import { EmptyState } from '@ordewell/ui/design';
 import { createEditor, loadMonaco, type EditorHandle } from '../../monaco';
+import { EditorSkeleton } from './fileView';
 
 export interface EditorPaneProps {
   /** Names the model: one per tab, so a file open in two scopes is two buffers. */
@@ -21,6 +22,7 @@ export interface EditorPaneProps {
 export function EditorPane({ modelKey, path, text, readOnly, onChange, onSave, handle, onReady }: EditorPaneProps): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState<string>();
+  const [ready, setReady] = useState(false);
   // Callbacks change every render; the editor is made once and calls the latest.
   const callbacks = useRef({ onChange, onSave, onReady });
   callbacks.current = { onChange, onSave, onReady };
@@ -30,6 +32,8 @@ export function EditorPane({ modelKey, path, text, readOnly, onChange, onSave, h
 
   useEffect(() => {
     let disposed = false;
+    setReady(false);
+    setFailed(undefined);
     let created: EditorHandle | undefined;
     loadMonaco().then(
       (monaco) => {
@@ -41,6 +45,7 @@ export function EditorPane({ modelKey, path, text, readOnly, onChange, onSave, h
           onSave: () => callbacks.current.onSave?.(),
         });
         handle.current = created;
+        setReady(true);
         callbacks.current.onReady?.(created);
       },
       (error: unknown) => { if (!disposed) setFailed(error instanceof Error ? error.message : String(error)); },
@@ -60,5 +65,8 @@ export function EditorPane({ modelKey, path, text, readOnly, onChange, onSave, h
   useEffect(() => { handle.current?.setReadOnly(readOnly); }, [readOnly, handle]);
 
   if (failed) return <div className="fv-state"><EmptyState icon={FileWarning} title="The editor could not load" body={failed} /></div>;
-  return <div ref={host} className="ft-editor" data-testid="monaco-host" />;
+  return <div className="fv-editor-wrap" aria-busy={!ready}>
+    {!ready && <EditorSkeleton label="Loading editor…" />}
+    <div ref={host} className="ft-editor" data-testid="monaco-host" style={{ visibility: ready ? undefined : 'hidden' }} />
+  </div>;
 }

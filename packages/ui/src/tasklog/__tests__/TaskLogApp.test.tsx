@@ -437,6 +437,20 @@ describe('the task log tab (ADR-0018, V1)', () => {
   it('asks the host for the log when it mounts', () => {
     render(<TaskLogApp />);
     expect(api.post).toHaveBeenCalledWith({ type: 'ready' });
+    expect(screen.getByText('Loading task log…')).toBeInTheDocument();
+    expect(screen.queryByText('No output yet.')).toBeNull();
+    init();
+    expect(screen.queryByText('Loading task log…')).toBeNull();
+  });
+
+  it('ends a failed initial log read with Retry and never claims the log is empty', () => {
+    render(<TaskLogApp />);
+    send({ type: 'showError', error: 'The log could not be read.' });
+    expect(screen.queryByText('Loading task log…')).toBeNull();
+    expect(screen.queryByText('No output yet.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByText('Loading task log…')).toBeInTheDocument();
+    expect(api.post).toHaveBeenLastCalledWith({ type: 'ready' });
   });
 
   it('draws the saved blocks through the chat components', () => {

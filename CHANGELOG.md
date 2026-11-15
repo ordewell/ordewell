@@ -8,6 +8,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **The desktop app confirms a macOS installation** and offers to eject and
+  trash its matching DMG. Keeping the installer remains the default.
+- **Local desktop startup diagnostics** record bounded timings for the main
+  process, interface and daemon reads, without recording goals or credentials.
+
+### Fixed
+
+- **Desktop startup no longer waits for the login shell before drawing its
+  window,** and the shell's PATH is read correctly when locating coding agents.
+- **Daemon startup recovers when its token changes during the handshake.**
+  Overlapping connection attempts share one startup instead of starting duplicate
+  daemons, and a temporary rejection keeps the starting child under the app's
+  ownership.
+- **Model discovery shows progress while it is pending.** Empty results and
+  failures appear only after the read settles, refreshes retain existing
+  choices, and Settings stays usable while models load. Other desktop views
+  also show named loading states or skeletons.
+- **Apple silicon installers omit unused Intel terminal helpers.**
+- **Homebrew publishing works with macOS's bundled Bash** when a release
+  carries the CLI formula without the desktop cask.
+
 ## [0.13.2] - 2026-11-14
 
 ### Added

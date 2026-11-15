@@ -12,6 +12,9 @@ files:
   - dist/**/*
   - resources/**/*
   - package.json
+  # The rebuilt addon lives in build/Release. Fallback prebuilds include
+  # Intel-only helper executables even in an Apple silicon app.
+  - '!node_modules/node-pty/prebuilds{,/**/*}'
 asar: true
 # The licence, NOTICE and authors travel with the installer as they do with
 # each npm package (scripts/verify-notice.mjs); Electron adds its own

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { GitCommitHorizontal, RefreshCw, X } from 'lucide-react';
-import { Button, EmptyState, IconButton } from '@ordewell/ui/design';
+import { Button, EmptyState, IconButton, LoadingState } from '@ordewell/ui/design';
 import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { messageOf } from '../../session/daemon';
 import { all } from '../Stub';
@@ -93,7 +93,7 @@ function Detail({ api, repo, sha, summary, linked, close }: { api: FrameApi; rep
         </p>
       )}
       {error && <Notice tone="error">{error}</Notice>}
-      {!detail && !error && <p className="git-hint">Loading…</p>}
+      {!detail && !error && <LoadingState inline label="Loading commit…" />}
       {detail && (
         <>
           {detail.commit.body.trim() && <pre className="git-detail-body">{detail.commit.body.trim()}</pre>}
@@ -136,6 +136,7 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
   const [commits, setCommits] = useState<CommitSummary[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
   const [more, setMore] = useState(false);
   const [branches, setBranches] = useState<Branches>();
@@ -147,6 +148,7 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
   useEffect(() => {
     let live = true;
     setError(undefined);
+    setRefreshing(true);
     void (async () => {
       try {
         const [page, read] = await Promise.all([
@@ -164,6 +166,8 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
         }
       } catch (e) {
         if (live) { setError(messageOf(e)); setLoaded(true); }
+      } finally {
+        if (live) setRefreshing(false);
       }
     })();
     return () => { live = false; };
@@ -191,10 +195,11 @@ function Graph({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
     <div className="git-graph">
       <div className="git-graph-bar">
         <span className="git-graph-title"><MiddleText text={ref ?? 'History'} tail={16} />{repo !== '.' && <span className="git-graph-repo">{repo}</span>}</span>
-        <Button size="sm" icon={RefreshCw} onClick={() => setNonce((n) => n + 1)}>Refresh</Button>
+        <Button size="sm" icon={RefreshCw} busy={refreshing} onClick={() => setNonce((n) => n + 1)}>Refresh</Button>
       </div>
       {error && <Notice tone="error">{error}</Notice>}
-      {!loaded && <EmptyState className="git-state-wide" icon={GitCommitHorizontal} title="Loading the history…" />}
+      {!loaded && <LoadingState className="git-state-wide" label="Loading the history…" />}
+      {loaded && refreshing && <LoadingState inline label="Refreshing history…" />}
       {loaded && !error && commits.length === 0 && <EmptyState className="git-state-wide" icon={GitCommitHorizontal} title="This repository has no commits yet." body="Commit something and its history appears here." />}
       <div className="git-graph-body">
         <ul className="git-commits" aria-label="Commits">

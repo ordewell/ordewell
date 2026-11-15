@@ -37,10 +37,10 @@ export function cardFor(status: DaemonStatus): Card | undefined {
     case 'unauthorized':
       return {
         tone: 'error',
-        title: 'The daemon refused this app',
+        title: 'Could not authenticate with the daemon',
         body: status.tokenPresented
-          ? `The daemon on :${status.port} did not accept the token on disk; it may belong to another user. Set ORDEWELL_PORT to use another port.`
-          : `No token was found for the daemon on :${status.port}, so it cannot be reached as this user. Set ORDEWELL_PORT to use another port.`,
+          ? `The daemon on :${status.port} rejected the saved connection token. Retry to read its current token and reconnect.`
+          : `The connection token for the daemon on :${status.port} is not available. Retry once it has finished starting.`,
         actions: [{ action: 'retry', label: 'Retry' }],
       };
     case 'port-taken':

@@ -7,6 +7,7 @@ import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks, type Patched
 import type { HostToTaskLog, TaskLogStatus } from '../shared/taskLogProtocol';
 import { useTaskLogBridge } from '../bridge';
 import { runnerName } from '../design/runners';
+import { LoadingState } from '../design/LoadingState';
 import { taskCommand, useRunnerCommands } from '../chat/components/RunnerCommands';
 import ElapsedTime from '../chat/components/ElapsedTime';
 import AccountLimitRows from '../chat/components/AccountLimitRows';
@@ -70,6 +71,8 @@ export default function TaskLogApp({ composerLabel }: {
   const [status, setStatus] = useState<TaskLogStatus | null>(null);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
   const [stopArmed, setStopArmed] = useState(false);
   const [limits, setLimits] = useState<readonly AccountLimitSnapshot[]>([]);
 
@@ -95,6 +98,8 @@ export default function TaskLogApp({ composerLabel }: {
     const handler = (msg: HostToTaskLog) => {
       switch (msg.type) {
         case 'init':
+          setLoading(false);
+          setLoaded(true);
           // A reload restores this tab by task id, so the id has to outlive the
           // webview's own memory; a child's tab by the child's too, proved
           // against the tree when it comes back.
@@ -122,6 +127,7 @@ export default function TaskLogApp({ composerLabel }: {
           setLimits(msg.limits);
           break;
         case 'showError':
+          setLoading(false);
           setError(msg.error);
           if (msg.draft) { const draft = msg.draft; setText((current) => current.trim() ? current : draft); }
           if (msg.takeBack) {
@@ -295,7 +301,7 @@ export default function TaskLogApp({ composerLabel }: {
           {status.attempts.length > 1 && (
             <label className="task-log-attempt">
               Attempt
-              <select className="ow-select" value={status.attempt} onChange={(e) => bridge.post({ type: 'selectAttempt', attempt: Number(e.target.value) })}>
+              <select className="ow-select" value={status.attempt} onChange={(e) => { setLoading(true); bridge.post({ type: 'selectAttempt', attempt: Number(e.target.value) }); }}>
                 {status.attempts.map((attempt) => <option key={attempt} value={attempt}>{attempt}</option>)}
               </select>
             </label>
@@ -306,15 +312,18 @@ export default function TaskLogApp({ composerLabel }: {
       {error && (
         <div className="task-log-error" role="alert">
           <span>{error}</span>
+          {!loaded && <button type="button" onClick={() => { setError(''); setLoading(true); bridge.post({ type: 'ready' }); }}>Retry</button>}
           <button type="button" onClick={() => setError('')}>Dismiss</button>
         </div>
       )}
 
       {/* Keyed by attempt so a switched-to attempt opens at its newest output, with nothing of another attempt's open. */}
       <div className="task-log-body" key={status?.attempt} ref={followRef}>
-        {blocks.length === 0
+        {loading && <LoadingState label="Loading task log…" />}
+        {!loading && !loaded && <div className="task-log-empty">The task log could not be loaded.</div>}
+        {blocks.length === 0 && loaded && !loading
           ? <div className="task-log-empty">{working ? 'Working…' : 'No output yet.'}</div>
-          : <ConversationBlocks blocks={blocks} asRun={script} onShowPlan={noop}
+          : blocks.length > 0 && <ConversationBlocks blocks={blocks} asRun={script} onShowPlan={noop}
               onAnswerApproval={child ? undefined : (id, decision) => bridge.post({ type: 'answerApproval', id, decision })} />}
       </div>
 

@@ -313,6 +313,11 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   place of text, at the final heights, so nothing moves when the content
   arrives. A load that finishes quickly shows no spinner. A load still pending
   after a moment shows a muted "Loading …" line naming what it loads.
+  Pending reads never show an empty result or an instruction to refresh. Each
+  region settles independently: an agent list can be ready while its model
+  catalog still loads, and settings stay usable while models load. Refreshes
+  keep the last results visible with progress beside them. A failed read ends
+  its loading state with the reason and Retry in that region.
 - *Error* is an inline banner in the region that failed. It gives the daemon's
   message as given, a Retry button, and a *Details* disclosure with the route
   and the status.
