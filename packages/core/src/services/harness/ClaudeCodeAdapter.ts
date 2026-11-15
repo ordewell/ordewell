@@ -618,6 +618,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * `init`, which can be another `/model`'s.
    */
   private modelCommands: { args: string; turnsLeft: number }[] = [];
+  /** Set for a task only: a planner's conversation is the user's, and its window is left to the CLI. */
+  compactWindowTokens?: number;
 
   /**
    * Prepare the native shell before the process starts, or fail the start
@@ -626,6 +628,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * hands it the whole command as one argument (ADR-0036 N2).
    */
   override async start(opts: AgentStartOptions): Promise<void> {
+    this.compactWindowTokens = opts.kind === 'task' ? TASK_COMPACT_WINDOW_TOKENS : undefined;
     this.nativeShell = await this.ownNativeShell(opts);
     await super.start(opts);
   }

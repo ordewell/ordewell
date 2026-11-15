@@ -54,6 +54,19 @@ describe('a Claude task runner\'s compaction window', () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('150000');
   });
 
+  it('is the window the adapter states it compacts at, which a planner has none of', async () => {
+    const { spawned, processDeps } = deps();
+    const task = new ClaudeCodeAdapter(processDeps);
+    await task.start(taskStart());
+    const planner = new ClaudeCodeAdapter(deps().processDeps);
+    await planner.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+    const windows = [task.compactWindowTokens, planner.compactWindowTokens];
+    task.dispose();
+    planner.dispose();
+
+    expect(windows).toEqual([Number(spawned.lastEnv().CLAUDE_CODE_AUTO_COMPACT_WINDOW), undefined]);
+  });
+
   it('is never set for a planner, whose conversation is the user\'s', async () => {
     // Ordewell sets none here, and passes on what the user's own shell set.
     vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
