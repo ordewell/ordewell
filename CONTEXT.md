@@ -941,6 +941,14 @@ told it is the last and forced to `task_complete`, so an attempt that reaches th
 limit ends on a report, not silently.
 *Avoid:* "max turns", "iteration cap".
 
+**Stream timeouts** (`StreamTimeouts`) — how long a model request's stream may
+send no event before `createModelClient` abandons it as a transient failure:
+one allowance before the first event, a shorter one between events
+(`ordewellStreamTimeouts` in the global settings file, in seconds; 180 and 60 by
+default). A cut step is retried; one that had started a tool call keeps it
+rather than run it again.
+*Avoid:* "request timeout" (the SDK's, over the whole request).
+
 **Repeat guard** (`RepeatGuard`) — the built-in runner's check on a stuck model:
 the same tool call with the same arguments three times in a row has its result
 nudged to try another approach, and a fourth is not run and ends the attempt as

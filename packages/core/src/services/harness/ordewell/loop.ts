@@ -1,6 +1,6 @@
 import type { AgentEvent } from '../AgentAdapter';
 import type { UsageRecord } from '../../../models/Usage';
-import { isModelError, type ModelError } from '../../model';
+import { DEFAULT_RETRY_POLICY, isModelError, retryDelay, type ModelError, type RetryPolicy } from '../../model';
 import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCall, ModelUsage, SystemPart, ToolChoice, ToolDefinition, ToolResult as ModelToolResult } from '../../model';
 import { ordewellTools, runTool, type OrdewellTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
@@ -97,6 +97,12 @@ export interface LoopOptions {
    * so the attempt ends on a report rather than mid-edit; none is no limit.
    */
   stepLimit?: number;
+  /**
+   * The policy a step whose stream failed part way is sent again under; the
+   * client's `withRetry` should share it, as it retries the failures before any
+   * event. `random` is the jitter's, for a test to fix.
+   */
+  retry?: { policy?: Partial<RetryPolicy>; random?: () => number };
   /** Redacts held secrets (ADR-0061) from everything emitted or written. */
   hide: <T>(value: T) => T;
   emit: (event: AgentEvent) => void;
@@ -112,6 +118,12 @@ interface StepResult {
   calls: number;
   interrupted: boolean;
   repeated?: string;
+}
+
+/** A step whose stream failed: what it left behind, and whether any event had reached the loop. */
+interface FailedStep extends StepResult {
+  error: unknown;
+  streamed: boolean;
 }
 
 const INTERRUPTED = 'Interrupted: the call was stopped before it finished.';
@@ -136,6 +148,8 @@ export class OrdewellLoop {
   private reported = false;
   private streaming: Promise<void> = Promise.resolve();
   private stops = 0;
+  /** Steps in a row whose stream failed part way, and when the first of them failed: the retry policy's attempt and window. */
+  private cutStreams = { count: 0, since: 0 };
   private readonly neutral: readonly OrdewellTool[];
   private readonly compactor: Compactor;
 
@@ -273,32 +287,66 @@ export class OrdewellLoop {
   }
 
   /**
-   * One step, and when the provider refuses its request as too long, the same
-   * step again from a conversation compacted to a smaller share of the window
-   * (0.85, 0.7, 0.5, then 0.35) before the refusal is the step's failure. Only
-   * a refusal that left nothing recorded is retried: a step that got as far as
-   * a tool call has moved the conversation on.
+   * One step, and two ways it is tried again.
+   *
+   * When the provider refuses its request as too long, the same step runs again
+   * from a conversation compacted to a smaller share of the window (0.85, 0.7,
+   * 0.5, then 0.35) before the refusal is the step's failure. Only a refusal
+   * that left nothing recorded is retried: a step that got as far as a tool
+   * call has moved the conversation on.
+   *
+   * When its stream fails part way (a stall the client's timeouts cut, a
+   * dropped connection) with a failure the retry policy retries, the step is
+   * not lost (ADR-0070). If no tool call ran, the partial reply is dropped and
+   * the same request is sent again. If one did, nothing runs twice: the calls
+   * and their results are already recorded, and the turn goes on to its next
+   * step from them. A failure before any event is the client's `withRetry`'s,
+   * which has already retried it, so it ends the step here.
    */
   private async runStepRecovering(step: number, transcript: LoadedTranscript, plan: StepPlan, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<StepResult> {
     const fractions = [...OVERFLOW_FRACTIONS];
     let current = transcript;
-    for (;;) {
-      try {
-        return await this.runStep(step, this.assemble(current, plan), signals);
-      } catch (err) {
-        if (!isModelError(err) || err.kind !== 'context-overflow' || signals.hard.aborted) throw err;
+    for (let resends = 0; ; ) {
+      const runId = resends === 0 ? `step-${step}` : `step-${step}.${resends + 1}`;
+      const result = await this.runStep(step, runId, this.assemble(current, plan), signals);
+      if (!('error' in result)) {
+        this.cutStreams = { count: 0, since: 0 };
+        return result;
+      }
+      const err = result.error;
+      if (isModelError(err) && err.kind === 'context-overflow' && !signals.hard.aborted) {
         if ((await this.options.store.load()).messages.length !== current.messages.length) throw err;
         let shrunk: LoadedTranscript | undefined;
         // A fraction that changes nothing (the conversation is already that small) falls through to the next.
         while (shrunk === undefined && fractions.length > 0) shrunk = await this.compactor.shrink(current, step, signals.hard, fractions.shift() as number);
         if (shrunk === undefined) throw err;
         current = shrunk;
+        continue;
       }
+      const delayMs = result.streamed ? this.cutStreamDelay(err) : undefined;
+      if (delayMs === undefined) throw err;
+      const { calls, repeated } = result;
+      this.emit({ type: 'command_output', text: retryNote((err as ModelError).message, delayMs, this.cutStreams.count, calls) });
+      try {
+        await sleep(delayMs, signals.hard);
+      } catch {
+        return { calls, interrupted: true };
+      }
+      if (calls > 0 || signals.stop.aborted) return { calls, interrupted: signals.stop.aborted, ...(repeated !== undefined ? { repeated } : {}) };
+      resends += 1;
     }
   }
 
-  private async runStep(step: number, request: ModelRequest, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<StepResult> {
-    const runId = `step-${step}`;
+  /** The gap before a cut step goes on, or `undefined` once the policy gives up on it. */
+  private cutStreamDelay(err: unknown): number | undefined {
+    if (!isModelError(err)) return undefined;
+    if (this.cutStreams.count === 0) this.cutStreams.since = Date.now();
+    this.cutStreams.count += 1;
+    const policy: RetryPolicy = { ...DEFAULT_RETRY_POLICY, ...this.options.retry?.policy };
+    return retryDelay(err, this.cutStreams.count, Date.now() - this.cutStreams.since, policy, this.options.retry?.random);
+  }
+
+  private async runStep(step: number, runId: string, request: ModelRequest, signals: { stop: AbortSignal; hard: AbortSignal }): Promise<StepResult | FailedStep> {
     let text = '';
     let thinking = '';
     let usage: ModelUsage | undefined;
@@ -306,6 +354,7 @@ export class OrdewellLoop {
     const calls: ModelToolCall[] = [];
     const running: Promise<ModelToolResult>[] = [];
     let streamError: unknown;
+    let streamedAny = false;
     let repeated: string | undefined;
     let streamed!: () => void;
     this.streaming = new Promise((resolve) => {
@@ -314,6 +363,7 @@ export class OrdewellLoop {
 
     try {
       for await (const event of this.options.client.stream(request, signals.hard)) {
+        streamedAny = true;
         if (event.type === 'text-delta') {
           text += event.text;
           this.emit({ type: 'assistant_text_delta', runId, text: event.text });
@@ -354,7 +404,7 @@ export class OrdewellLoop {
       // Nothing of a failed step is recorded but the calls already running,
       // whose results the transcript needs to stay a valid conversation.
       if (calls.length > 0) await this.recordStep(step, text, calls, providerState, running);
-      throw streamError;
+      return { calls: calls.length, interrupted: false, error: streamError, streamed: streamedAny, ...(repeated !== undefined ? { repeated } : {}) };
     }
     if (calls.length === 0) {
       if (text) await this.recordMessage(step, { role: 'assistant', text, ...(providerState ? { providerState } : {}) });
@@ -435,6 +485,28 @@ export class OrdewellLoop {
   private emit(event: AgentEvent): void {
     this.options.emit(this.options.hide(event));
   }
+}
+
+/**
+ * The task log's line for a model request the runner sends again: the client's
+ * `withRetry` before any event, the loop after some. `kept` is the tool calls
+ * of a cut step that already ran, whose results the next step reads instead.
+ */
+export function retryNote(reason: string, delayMs: number, retry: number, kept = 0): string {
+  const wait = `${(delayMs / 1000).toFixed(1)} s`;
+  const next = kept > 0
+    ? `Its ${kept} finished tool call${kept === 1 ? '' : 's'} and their results are kept, and the next step goes on from them in ${wait}`
+    : `The step is sent again in ${wait}`;
+  return `[Ordewell] The model request failed: ${reason} ${next} (retry ${retry}).`;
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return; }
+    const onAbort = (): void => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function lastCallInstruction(limit: number): string {

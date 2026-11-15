@@ -109,6 +109,13 @@ export interface UserSettings {
    */
   ordewellStepLimit?: number;
   /**
+   * How long, in seconds, a stream of the built-in Ordewell runner may send
+   * nothing before its request is abandoned and sent again (ADR-0070): before
+   * its first event, and between events. Absent means the runner's defaults.
+   * Set in the file only: no surface offers it.
+   */
+  ordewellStreamTimeouts?: { firstEventSeconds?: number; idleSeconds?: number };
+  /**
    * What a task runner loads of the user's own setup: all of it (`user`) or
    * what a task needs (`minimal`). Absent means `user`. Set in the file only:
    * no surface offers it.
@@ -489,6 +496,8 @@ export class SettingsService {
     if (Number.isInteger(raw.ordewellStepLimit) && (raw.ordewellStepLimit as number) >= 1) {
       settings.ordewellStepLimit = raw.ordewellStepLimit as number;
     }
+    const streamTimeouts = streamTimeoutsSetting(raw.ordewellStreamTimeouts);
+    if (streamTimeouts !== undefined) settings.ordewellStreamTimeouts = streamTimeouts;
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
     }
@@ -570,4 +579,15 @@ export class SettingsService {
     this.cachedStamp = stamp;
     return true;
   }
+}
+
+/** The settings file's `ordewellStreamTimeouts`, each a whole number of seconds of at least 1; a value it cannot use is left out. */
+function streamTimeoutsSetting(raw: unknown): { firstEventSeconds?: number; idleSeconds?: number } | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const { firstEventSeconds, idleSeconds } = raw as Record<string, unknown>;
+  const seconds = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1;
+  return {
+    ...(seconds(firstEventSeconds) ? { firstEventSeconds } : {}),
+    ...(seconds(idleSeconds) ? { idleSeconds } : {}),
+  };
 }

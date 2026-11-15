@@ -5,8 +5,8 @@ import type { AttachState } from '../ordewellBinding';
 import { SessionNotResumable } from '../ordewellBinding';
 import { HeldSecrets } from '../../HeldSecrets';
 import { vendorApiKeyIn, vendorBaseUrlIn, VENDORS } from '../../apiProviders';
-import { createModelClient, withRetry } from '../../model';
-import type { EffortLevel, ModelClient } from '../../model';
+import { createModelClient, DEFAULT_STREAM_TIMEOUTS, withRetry } from '../../model';
+import type { EffortLevel, ModelClient, RetryPolicy, StreamTimeouts } from '../../model';
 import type { ApprovalDecision } from '../../../interfaces/IApproval';
 import type { AiProvider } from '../../../interfaces/IConfig';
 import { attemptModeOf, GuardedShell, toolsOf } from './modes';
@@ -14,7 +14,7 @@ import { lookupModelInfo, parseModelId } from './models';
 import { buildSystemPrompt } from './prompt';
 import { taskToolsOf } from './taskTools';
 import { FileTranscriptStore, ordewellSessionsRoot, type LoadedTranscript, type TranscriptStore } from './transcript';
-import { OrdewellLoop, stepFailure, type RequestAssembler, type StepBoundary, type StepBoundaryHook, type StepPlan } from './loop';
+import { OrdewellLoop, retryNote, stepFailure, type RequestAssembler, type StepBoundary, type StepBoundaryHook, type StepPlan } from './loop';
 import { SettingsService } from '../../SettingsService';
 import type { GateDecision, ToolGate } from './tools';
 
@@ -46,6 +46,10 @@ export interface OrdewellAdapterOptions {
   openStore?: (sessionId: string, root: string) => TranscriptStore;
   /** The step limit, over the settings file's `ordewellStepLimit`. */
   stepLimit?: number;
+  /** How long a stream may go quiet, over the settings file's `ordewellStreamTimeouts`. */
+  streamTimeouts?: StreamTimeouts;
+  /** The retry policy, for a test to shorten its gaps; the default one otherwise. */
+  retry?: { policy?: Partial<RetryPolicy>; random?: () => number };
 }
 
 interface PendingMessage {
@@ -115,11 +119,22 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const store = (this.options.openStore ?? ((id, dir) => new FileTranscriptStore(id, dir)))(sessionId, root);
     const saved = opts.resumeSessionId ? await this.savedSession(store, opts.resumeSessionId) : undefined;
     const system = saved?.system ?? buildSystemPrompt({ cwd: opts.cwd, commits: opts.commits === true });
-    const stepLimit = this.options.stepLimit ?? new SettingsService().getAll().ordewellStepLimit ?? DEFAULT_ORDEWELL_STEP_LIMIT;
+    const settings = new SettingsService().getAll();
+    const stepLimit = this.options.stepLimit ?? settings.ordewellStepLimit ?? DEFAULT_ORDEWELL_STEP_LIMIT;
+    const timeouts = this.options.streamTimeouts ?? streamTimeoutsOf(settings.ordewellStreamTimeouts);
 
     const inProcess = opts.mcp?.inProcess;
     const baseUrl = vendorBaseUrlIn(env, parsed.provider) || undefined;
-    const client = withRetry((this.options.createClient ?? defaultClient(this.deps))(parsed.provider, apiKey, baseUrl));
+    const emit = (event: AgentEvent): void => {
+      this.onActivity?.();
+      this.onEvent?.(event);
+    };
+    const retry = this.options.retry ?? {};
+    const client = withRetry((this.options.createClient ?? defaultClient(this.deps, timeouts))(parsed.provider, apiKey, baseUrl), {
+      ...retry,
+      // In the task log, so a step that took minutes says why (ADR-0070).
+      onRetry: ({ attempt, delayMs, error }) => emit(this.held.hideIn({ type: 'command_output', text: retryNote(error.message, delayMs, attempt) })),
+    });
     const model = await lookupModelInfo(opts.model, env, {
       fetchImpl: this.deps.fetch,
       ...(this.options.modelInfoTimeoutMs !== undefined ? { timeoutMs: this.options.modelInfoTimeoutMs } : {}),
@@ -128,10 +143,6 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
 
     this.store = store;
     this.attached = inProcess !== undefined;
-    const emit = (event: AgentEvent): void => {
-      this.onActivity?.();
-      this.onEvent?.(event);
-    };
     // Its requests carry the command line, which may spell out a key the model read (ADR-0061).
     this.guard = mode === 'guarded' ? new GuardedShell((event) => emit(this.held.hideIn(event))) : null;
     const gate = composeGates(this.options.gate, this.guard?.gate);
@@ -152,6 +163,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
       ...(gate ? { gate } : {}),
       onStepBoundary: (boundary) => this.atBoundary(boundary),
       stepLimit,
+      retry,
       ...(this.options.assemble ? { assemble: this.options.assemble } : {}),
       ...(effort ? { effort } : {}),
       hide: (value) => this.held.hideIn(value),
@@ -319,6 +331,14 @@ function composeGates(...gates: (ToolGate | undefined)[]): ToolGate | undefined 
   };
 }
 
-function defaultClient(deps: AgentProcessDeps): NonNullable<OrdewellAdapterOptions['createClient']> {
-  return (provider, apiKey, baseUrl) => createModelClient({ provider, apiKey, ...(baseUrl ? { baseUrl } : {}), fetch: deps.fetch });
+function defaultClient(deps: AgentProcessDeps, timeouts: StreamTimeouts): NonNullable<OrdewellAdapterOptions['createClient']> {
+  return (provider, apiKey, baseUrl) => createModelClient({ provider, apiKey, ...(baseUrl ? { baseUrl } : {}), fetch: deps.fetch, timeouts });
+}
+
+/** The settings file's timeouts, in seconds there, over the defaults one by one. */
+function streamTimeoutsOf(setting: { firstEventSeconds?: number; idleSeconds?: number } | undefined): StreamTimeouts {
+  return {
+    firstEventMs: setting?.firstEventSeconds !== undefined ? setting.firstEventSeconds * 1000 : DEFAULT_STREAM_TIMEOUTS.firstEventMs,
+    idleMs: setting?.idleSeconds !== undefined ? setting.idleSeconds * 1000 : DEFAULT_STREAM_TIMEOUTS.idleMs,
+  };
 }

@@ -442,4 +442,49 @@ describe('OrdewellAdapter lifecycle', () => {
       restore();
     }
   });
+
+  it('abandons a stream quiet past the settings file\'s timeout and sends the step again, noting it in the task log', async () => {
+    const settingsFile = path.join(tempDir(), 'settings.json');
+    await writeFile(settingsFile, JSON.stringify({ ordewellStreamTimeouts: { firstEventSeconds: 1, idleSeconds: 1 } }));
+    const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile });
+    const chunk = (delta: object, finish: string | null = null) =>
+      `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 1, model: 'mock/test', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+    const requests: string[] = [];
+    const fetch: AgentProcessDeps['fetch'] = async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.includes('chat/completions')) throw new Error('offline');
+      requests.push(url);
+      const quiet = requests.length === 1;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (quiet) {
+            // The request is taken and then nothing comes back, as the qwen3-coder smoke's step 6.
+            init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), { once: true });
+            return;
+          }
+          controller.enqueue(new TextEncoder().encode(`${chunk({ role: 'assistant', content: 'Done.' })}${chunk({}, 'stop')}data: [DONE]\n\n`));
+          controller.close();
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+    try {
+      const store = new MemoryTranscriptStore('the-session', tempDir());
+      const adapter = new OrdewellAdapter({ ...deps(), fetch }, {
+        modelInfoTimeoutMs: 50,
+        openStore: () => store,
+        retry: { policy: { initialDelayMs: 1, maxDelayMs: 1, jitter: 0 } },
+      });
+      await adapter.start(taskOptions());
+      const events: AgentEvent[] = [];
+      await adapter.send('Go.', (event) => events.push(event));
+      expect(requests).toHaveLength(2);
+      expect(eventsOf(events, 'command_output').map((e) => e.text)).toEqual([
+        expect.stringMatching(/no first event within 1 s.*The step is sent again in 0\.0 s \(retry 1\)/),
+      ]);
+      expect(eventsOf(events, 'assistant_text').at(-1)?.text).toBe('Done.');
+    } finally {
+      restore();
+    }
+  });
 });
