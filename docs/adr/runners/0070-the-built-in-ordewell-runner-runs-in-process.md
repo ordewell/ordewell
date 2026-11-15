@@ -101,7 +101,14 @@ already holds, and is driven by `StructuredSession` like every other runner.**
     the system prompt and at the last message. The tool list and the system prompt
     are fixed for the attempt (the prompt is read back from the transcript, never
     rebuilt), and nothing that changes between steps, such as a count or a clock,
-    is in them.
+    is in them. A Claude model reached through OpenRouter carries a provider
+    order, Anthropic's own API and then Bedrock, with fallbacks left on:
+    OpenRouter's usual pick, Vertex's global endpoint, spreads successive
+    requests over caches that share nothing, so a step there pays to write the
+    prefix and reads the previous one only by chance. The order gives up
+    OpenRouter's own choice among Claude's upstreams, and its sticky routing,
+    while one of the two is up; a request either cannot take still routes
+    elsewhere, uncached.
 
 ## Key properties
 
@@ -206,3 +213,5 @@ comes from that call.
   snapshot as the offline fallback; `ModelDetails.ts`).
 - 2026-11-14 — the modes, the step limit, the repeat guard, the Anthropic
   Messages, Responses and Gemini dialects, and the planner on `ModelClient` implemented; fully implemented.
+- 2026-11-15 — a Claude model through OpenRouter is routed to Anthropic, then
+  Bedrock, so its cache is read from the second step on.

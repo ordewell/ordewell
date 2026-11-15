@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
-import { DEFAULTS, dialectOfProvider, loadEnvFile, minCacheableTokens } from './runner-smoke.mjs';
+import { cacheVerdict, DEFAULTS, dialectOfProvider, loadEnvFile, minCacheableTokens } from './runner-smoke.mjs';
 import { startMock } from './start-mock.mjs';
 
 const script = path.join(import.meta.dirname, 'runner-smoke.mjs');
@@ -69,7 +69,28 @@ describe('the live smoke harness, offline', () => {
   it('keeps its tables consistent', () => {
     assert.deepEqual(DEFAULTS.map((d) => dialectOfProvider(d.model.split(':')[0])), DEFAULTS.map((d) => d.dialect));
     assert.equal(minCacheableTokens('openai', 'gpt-5-mini'), 1024);
-    assert.equal(minCacheableTokens('anthropic', 'claude-haiku-5-5'), 4096);
+    assert.equal(minCacheableTokens('anthropic', 'claude-haiku-5-5'), 512);
+    assert.equal(minCacheableTokens('anthropic', 'claude-haiku-4-5'), 4096);
+    assert.equal(minCacheableTokens('anthropic', 'claude-sonnet-5'), 2048);
+  });
+
+  it('takes the minimum of the vendor a router serves the model from', () => {
+    assert.equal(minCacheableTokens('openrouter', 'anthropic/claude-haiku-5.5'), minCacheableTokens('anthropic', 'claude-haiku-5.5'));
+    assert.equal(minCacheableTokens('openrouter', 'anthropic/claude-haiku-4.5'), 4096);
+    assert.equal(minCacheableTokens('openrouter', 'google/gemini-2.5-pro'), 2048);
+    assert.equal(minCacheableTokens('openrouter', 'qwen/qwen3-coder'), 1024);
+  });
+
+  it('counts only a cache read as a hit', () => {
+    const run = { steps: 4, maxInput: 6000, cacheRead: 0, cacheWrite: 0 };
+    assert.deepEqual(cacheVerdict({ ...run, cacheRead: 5000, cacheWrite: 900 }, 512), { cache: 'cache ok' });
+    const written = cacheVerdict({ ...run, cacheWrite: 23000 }, 512);
+    assert.equal(written.cache, 'cache MISSING (written, never read)');
+    assert.match(written.reason, /written .* but never read/);
+    assert.match(cacheVerdict(run, 512).reason, /never read or written/);
+    assert.equal(cacheVerdict({ ...run, steps: 1, cacheWrite: 6000 }, 512).reason, undefined);
+    assert.equal(cacheVerdict({ ...run, maxInput: 400, cacheWrite: 6000 }, 512).reason, undefined);
+    assert.match(cacheVerdict({ ...run, maxInput: 400 }, 512).cache, /^cache UNVERIFIED/);
   });
 
   it('reads .env without overriding what the shell exported', () => {

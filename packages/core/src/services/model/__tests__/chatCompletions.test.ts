@@ -226,6 +226,19 @@ describe('chat-completions adapter: request body', () => {
     expect(body.messages[1]).toEqual({ role: 'user', content: [{ type: 'text', text: 'Run the tests.', cache_control: { type: 'ephemeral' } }] });
   });
 
+  // Live, Vertex's global endpoint (OpenRouter's usual pick for Claude) wrote
+  // nearly every step's whole prompt and read none of it; Bedrock read every step.
+  it('routes a cached Claude request to upstreams whose cache holds across steps, keeping fallbacks', async () => {
+    const cached: ModelRequest = { ...BASE_REQUEST, model: 'anthropic/claude-haiku-5.5', system: [{ text: 'stable', cacheBreakpoint: true }], cache: { atLastMessage: true } };
+    const transport = replay(recorded('text.sse'));
+    await collect(clientFor('openrouter', transport), cached);
+    expect(transport.sent[0].body.provider).toEqual({ order: ['anthropic', 'amazon-bedrock'] });
+
+    expect(requestBody('openrouter', { ...BASE_REQUEST, model: 'anthropic/claude-haiku-5.5' }).provider).toBeUndefined();
+    expect(requestBody('openrouter', { ...cached, model: 'openai/gpt-4.1-mini' }).provider).toBeUndefined();
+    expect(requestBody('openai_compatible', cached).provider).toBeUndefined();
+  });
+
   it('drops state another dialect left, and state that is not its own shape', () => {
     const body = requestBody('openrouter', {
       ...BASE_REQUEST,
