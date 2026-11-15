@@ -129,6 +129,16 @@ already holds, and is driven by `StructuredSession` like every other runner.**
   task reach the model between steps, an interrupt stops cooperatively, a usage
   limit pauses the attempt, and a resume reads the transcript back; one with no
   session start is not resumable.
+- **A quiet stream is abandoned, and nothing runs twice.** `createModelClient`
+  wraps every dialect's client in `withStreamTimeouts`: a request whose stream
+  sends no `ModelEvent` (an SSE keepalive comment is not one) for 180 s before
+  its first event, or 60 s between events, is aborted with a transient
+  `ModelError` (`ordewellStreamTimeouts` in the settings file, in seconds). Before
+  any event `withRetry` sends it again. After one the loop decides, as only it
+  knows what ran: with no tool call started it drops the partial reply and
+  sends the same request again; with one, the calls and their results are
+  already recorded and the turn goes on to its next step from them. Either
+  retry follows the retry policy and leaves a line in the task log.
 
 ## Modes
 
@@ -215,3 +225,5 @@ comes from that call.
   Messages, Responses and Gemini dialects, and the planner on `ModelClient` implemented; fully implemented.
 - 2026-11-15 — a Claude model through OpenRouter is routed to Anthropic, then
   Bedrock, so its cache is read from the second step on.
+- 2026-11-15 — stream timeouts implemented: a stream quiet past them is cut and
+  its step retried, keeping any tool call that already ran.

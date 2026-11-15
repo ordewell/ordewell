@@ -20,6 +20,8 @@ export { ModelError, isModelError, classifyHttpFailure, headerReader, retryAfter
 export type { HeaderReader, HttpFailure, ModelErrorInit, ModelErrorKind } from './ModelError';
 export { DEFAULT_RETRY_POLICY, retryDelay, withRetry } from './retry';
 export type { RetryNotice, RetryOptions, RetryPolicy } from './retry';
+export { DEFAULT_STREAM_TIMEOUTS, withStreamTimeouts } from './streamTimeouts';
+export type { StreamTimeouts } from './streamTimeouts';
 export { dialectOf } from './dialects';
 export type { Dialect } from './dialects';
 export { createModelClient } from './createModelClient';

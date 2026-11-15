@@ -136,6 +136,13 @@ told so and must report with `task_complete`. The limit is `ordewellStepLimit` i
 least 1, and defaults to 200. No surface sets it. The runner also stops an attempt
 whose model makes the same tool call with the same arguments four times in a row.
 
+**Stream timeouts.** A model request whose reply stops arriving is abandoned and
+sent again, as any other passing failure is, with a line in the task log. It may
+wait 180 seconds for its first event and 60 between events; set them as
+`"ordewellStreamTimeouts": { "firstEventSeconds": 180, "idleSeconds": 60 }` in the
+same file. A reply cut after a tool call has run is not sent again: the call's
+result is kept and the model goes on from it.
+
 **Resuming and messages.** The runner keeps each attempt's conversation in a
 transcript under Ordewell's data directory, outside your repository, so a resumed
 task continues from it, and compacts a long conversation itself.
