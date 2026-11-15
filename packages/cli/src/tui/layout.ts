@@ -5,7 +5,8 @@ import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerC
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, standingRecord, type DecisionRecordEntry, type DecisionRecordKind, type DiscoveredModel } from '@ordewell/core';
+import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
+import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
@@ -1618,42 +1619,27 @@ export function helpLayout(rows: number, cols: number, sheet: HelpSheet = 'comma
   return { lines, room, maxScroll: Math.max(0, lines.length - room) };
 }
 
-const RECORD_SECTIONS: ReadonlyArray<[DecisionRecordKind, string]> = [
-  ['decision', 'Decisions'],
-  ['constraint', 'Constraints, in your words'],
-  ['rejected', 'Rejected'],
-  ['question', 'Open questions'],
-];
-
 /**
- * The planner's decision record as a read-only sheet, grouped by kind. What a
- * later entry superseded is hidden unless asked for: it no longer stands, and
- * the planner is not shown it either. The text is the planner's or the user's
+ * The planner's decision record as a read-only sheet, grouped by kind
+ * (`recordView` decides what stands). The text is the planner's or the user's
  * own, so it is sanitized where it is drawn.
  */
 export function recordLayout(record: readonly DecisionRecordEntry[], all: boolean, rows: number, cols: number): HelpLayout {
   const inner = Math.max(1, cols - 2);
-  const standing = new Set(standingRecord(record).map((entry) => entry.id));
-  const hidden = record.length - standing.size;
-  const shown = all ? record : record.filter((entry) => standing.has(entry.id));
-  const supersededBy = new Map(record.flatMap((entry) => (entry.supersedes ? [[entry.supersedes, entry.id] as const] : [])));
+  const view = recordView(record, all);
   const hanging = (text: string, lead: string): string[] =>
     wrap(sanitize(text).replace(/\s+/g, ' ').trim(), Math.max(1, inner - 2 - lead.length)).map((line, i) => `  ${i === 0 ? lead : ' '.repeat(lead.length)}${line}`);
 
   const body: string[] = [];
   if (record.length === 0) {
-    body.push(style.grey('Nothing recorded yet. The planner notes decisions, your constraints, what it rejected and what is still open as the conversation goes.'));
+    body.push(style.grey(RECORD_EMPTY));
   } else {
-    body.push(style.grey(`${standing.size} standing${hidden > 0 ? (all ? ` · ${hidden} superseded (shown)` : ` · ${hidden} superseded (/decisions all shows them)`) : ''}`));
-    for (const [kind, heading] of RECORD_SECTIONS) {
-      const entries = shown.filter((entry) => entry.kind === kind);
-      if (entries.length === 0) continue;
+    body.push(style.grey(`${view.standing} standing${view.hidden > 0 ? (all ? ` · ${view.hidden} superseded (shown)` : ` · ${view.hidden} superseded (/decisions all shows them)`) : ''}`));
+    for (const { heading, entries } of view.sections) {
       body.push('', style.bold(heading));
       for (const entry of entries) {
-        const superseded = supersededBy.get(entry.id);
-        const text = entry.kind === 'constraint' ? `"${entry.text}"` : entry.text;
-        const tag = superseded ? style.grey(` (superseded by ${superseded})`) : '';
-        body.push(...hanging(text, `${entry.id} `).map((line, i) => (i === 0 ? line + tag : line)));
+        const tag = entry.supersededBy ? style.grey(` (superseded by ${entry.supersededBy})`) : '';
+        body.push(...hanging(entry.text, `${entry.id} `).map((line, i) => (i === 0 ? line + tag : line)));
         if (entry.why) body.push(...hanging(entry.why, 'why: ').map((line) => `    ${line.trimStart()}`));
       }
     }
