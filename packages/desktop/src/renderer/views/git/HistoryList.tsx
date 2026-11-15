@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type RefObject } from 'react';
 import { GitCommitHorizontal, RotateCcw } from 'lucide-react';
-import { Button, EmptyState } from '@ordewell/ui/design';
+import { Button, EmptyState, LoadingState } from '@ordewell/ui/design';
 import type { FrameApi } from '../../frame/api';
 import { Notice } from '../sidebarKit';
 import { besideSidebar, useCommitCard } from './CommitCard';
@@ -82,7 +82,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
   if (!history || (history.status !== 'ready' && commits.length === 0)) {
     return history?.status === 'error'
       ? <div className="git-history-state"><Notice tone="error">{history.error}</Notice>{retry}</div>
-      : <EmptyState className="git-state" icon={GitCommitHorizontal} title="Loading the history…" />;
+      : <LoadingState className="git-state" label="Loading the history…" />;
   }
   if (commits.length === 0) return <EmptyState className="git-state" icon={GitCommitHorizontal} title="No commits yet" />;
 
@@ -93,6 +93,7 @@ export function HistoryList({ api, repo, at: ref, branches }: { api: FrameApi; r
 
   return (
     <div className="git-history">
+      {history.rereading && <LoadingState inline label="Refreshing history…" />}
       {history.status === 'error' && <div className="git-history-state"><Notice tone="error">{history.error}</Notice>{retry}</div>}
       <ul
         ref={list}

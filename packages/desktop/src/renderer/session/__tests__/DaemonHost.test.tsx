@@ -130,6 +130,64 @@ describe('DaemonHost', () => {
     await waitFor(() => expect(host.getSnapshot().state.runnersKnown).toBe(true));
     expect(host.getSnapshot().state.enabledRunnerIds).toEqual(['claude-code']);
     expect(daemon.calls('models.list')).toHaveLength(1);
+    expect(host.getSnapshot().state.modelDiscovery).toEqual({ state: 'loading' });
+  });
+
+  it('reports session opening until the saved session has been adopted', async () => {
+    let finish: ((result: ReturnType<typeof ok>) => void) | undefined;
+    fakeDaemon({ 'sessions.load': () => new Promise((resolve) => { finish = resolve; }) });
+    const host = hostWith();
+    const previous = host.sessionId;
+    const opening = host.open('saved');
+    expect(host.getSnapshot().opening).toBe('saved');
+    expect(host.sessionId).toBe(previous);
+    await waitFor(() => expect(finish).toBeDefined());
+    finish?.(ok({ ok: true, plan: PLAN, goal: 'Ship the parser' }));
+    await opening;
+    expect(host.sessionId).toBe('saved');
+    expect(host.getSnapshot().opening).toBeUndefined();
+  });
+
+  it('reports a slow catalog separately from agent detection and retries it', async () => {
+    let answer: ReturnType<typeof ok> | Promise<never> = new Promise<never>(() => undefined);
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }] }),
+      'settings.get': ok({ aiProvider: 'codex' }),
+      'models.list': () => answer,
+    });
+    const host = hostWith(undefined, 100);
+    const first = render(<ChatSurface host={host} layout="conversation" />);
+    expect(await screen.findByText('Loading models…')).toBeInTheDocument();
+    expect(screen.queryByText(/No models discovered/)).toBeNull();
+    await screen.findByText(/Couldn't load models/);
+    expect(host.getSnapshot().state.modelDiscovery?.state).toBe('failed');
+    expect(host.getSnapshot().state.detectionError).toBeNull();
+    // A later mounted pane gets the failure too, rather than returning to an empty picker.
+    first.unmount();
+    render(<ChatSurface host={host} layout="conversation" />);
+    expect(await screen.findByText(/Couldn't load models/)).toBeInTheDocument();
+    answer = ok({ models: [], modelsByRunner: { codex: [{ modelId: 'gpt-5', modelLabel: 'GPT-5', variants: [] }] }, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(host.getSnapshot().state.modelDiscovery?.state).toBe('ready'));
+    expect(screen.queryByText(/Couldn't load models|No models discovered/)).toBeNull();
+    expect(daemon.calls('models.list')).toHaveLength(2);
+  });
+
+  it('keeps a newer catalog pending when an overtaken discovery answers late', async () => {
+    const releases: Array<(answer: ReturnType<typeof ok>) => void> = [];
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }] }),
+      'models.list': () => new Promise((resolve) => { releases.push(resolve); }),
+    });
+    const host = hostWith();
+    const first = host.handle({ type: 'ready' });
+    const second = host.handle({ type: 'refreshModels' });
+    releases[0]!(ok({ models: [], modelsByRunner: {}, modesByRunner: {}, providers: [] }));
+    await first;
+    expect(host.getSnapshot().state.modelDiscovery?.state).toBe('loading');
+    releases[1]!(ok({ models: [], modelsByRunner: {}, modesByRunner: {}, providers: [] }));
+    await second;
+    expect(host.getSnapshot().state.modelDiscovery?.state).toBe('ready');
   });
 
   // No API key and a model catalog still being listed: the coding agent the

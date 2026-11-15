@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, GitBranch, GitCommitHorizontal, Minus, Plus, RefreshCw, Undo2 } from 'lucide-react';
+import { ChevronDown, GitBranch, Minus, Plus, RefreshCw, Undo2 } from 'lucide-react';
 import { discardChangesConfirmation } from '@ordewell/ui/host';
-import { Button, EmptyState, Icon, IconButton } from '@ordewell/ui/design';
+import { Button, EmptyState, Icon, IconButton, LoadingState } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
 import { all } from '../Stub';
@@ -445,7 +445,7 @@ export function CheckoutChanges({ api }: { api: FrameApi }): JSX.Element {
     void refresh();
   }, [landed, refresh]);
 
-  if (!loaded) return <EmptyState className="checkout-state" icon={GitCommitHorizontal} title="Reading your checkout…" />;
+  if (!loaded) return <LoadingState className="checkout-state" label="Reading your checkout…" />;
   if (loaded.repos.length === 0) {
     return <EmptyState className="checkout-state" icon={GitBranch} title={loaded.error ?? 'No git repository in this workspace, so there is nothing to commit.'} />;
   }

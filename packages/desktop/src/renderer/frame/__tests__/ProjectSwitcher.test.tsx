@@ -57,6 +57,21 @@ const items = (): string[] => [...screen.getByRole('menu', { name: 'Switch proje
   .map((item) => item.getAttribute('aria-label') ?? item.textContent ?? '');
 
 describe('the project switcher', () => {
+  it('opens with progress while recent projects load and keeps Open Folder available', async () => {
+    const projects = fakeProjects(RECENTS);
+    let finish: ((list: RecentWorkspace[]) => void) | undefined;
+    projects.port.recents.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const store = new FrameStore({ workspace: HERE, platform: 'linux', projects: projects.port });
+    render(<FrameProvider value={store}><Frame daemon={CONNECTED} /></FrameProvider>);
+    fireEvent.click(switcher());
+    expect(screen.getByText('Loading recent projects…')).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Open Folder…' })).toBeEnabled();
+    expect(screen.queryByText('No other recent folders')).toBeNull();
+    await act(async () => finish?.(RECENTS));
+    expect(screen.queryByText('Loading recent projects…')).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'billing' })).toBeInTheDocument();
+  });
+
   it('names the project, shows its full path as its tooltip and says it opens a menu', () => {
     mount(RECENTS);
     const button = switcher();

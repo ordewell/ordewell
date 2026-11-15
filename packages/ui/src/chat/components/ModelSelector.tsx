@@ -1,6 +1,8 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useContext } from 'react';
 import type { DiscoveredModel, TaskModelAssignment } from '@ordewell/core';
 import { clampThinkingEffort } from '@ordewell/core/plan-utils';
+import { ModelDiscoveryContext } from '../modelLoading';
+import { LoadingState } from '../../design/LoadingState';
 
 type ApiProvider = 'openrouter' | 'google' | 'openai_compatible' | 'openai' | 'xai' | 'groq' | 'deepseek' | 'together' | 'mistral' | 'anthropic' | 'fireworks' | 'perplexity' | 'zhipu' | 'kimi' | 'cerebras' | 'deepinfra' | 'doubao' | 'qwen' | 'hunyuan' | 'baichuan' | 'minimax' | 'yi' | 'stepfun' | 'siliconflow' | 'cohere' | 'novita';
 
@@ -114,8 +116,12 @@ export default function ModelSelector({
   modelApiMapping = {},
   label = 'Model',
   onOpen,
-  unavailable,
+  unavailable: unavailableReason,
 }: ModelSelectorProps) {
+  const discovery = useContext(ModelDiscoveryContext);
+  const loading = discovery?.state === 'loading' && models.length === 0 && unavailableReason === undefined;
+  const failed = discovery?.state === 'failed' && models.length === 0 && unavailableReason === undefined;
+  const unavailable = unavailableReason ?? (loading ? 'Loading models…' : failed ? 'Models unavailable' : undefined);
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<ApiProvider | null>(
@@ -271,8 +277,8 @@ export default function ModelSelector({
             onClick={handleToggle}
             {...(unavailable !== undefined ? { 'aria-disabled': true } : {})}
           >
-            <span className="model-picker-label" title={triggerText} {...(unavailable !== undefined ? { role: 'status' } : {})}>
-              {triggerText}
+            <span className="model-picker-label" title={failed ? discovery?.error : triggerText} {...(unavailable !== undefined && !loading ? { role: 'status' } : {})}>
+              {loading ? <LoadingState inline label={triggerText} /> : triggerText}
             </span>
             <span className={`model-picker-arrow ${open ? 'open' : ''}`}>&#9660;</span>
           </div>
@@ -368,6 +374,8 @@ export default function ModelSelector({
           </select>
         )}
       </div>
+      {discovery?.state === 'loading' && models.length > 0 && unavailableReason === undefined && <LoadingState inline label="Refreshing models…" />}
+      {failed && onOpen && <button type="button" className="btn-secondary" onClick={onOpen}>Retry models</button>}
     </div>
   );
 }

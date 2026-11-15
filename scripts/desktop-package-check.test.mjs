@@ -107,6 +107,13 @@ describe('checkResources', () => {
     assert.deepEqual(checkResources(resources), []);
   });
 
+  it('refuses unused fallback binaries for other architectures in a rebuilt native dependency', () => {
+    const resources = scratch();
+    fill(resources);
+    touch(join(resources, 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds', 'darwin-x64', 'spawn-helper'), header.macho('x64'));
+    assert.match(checkResources(resources).join('\n'), /unused prebuilds are shipped/);
+  });
+
   it('names a daemon file left inside the archive, which a utility process cannot read', () => {
     const resources = scratch();
     fill(resources);

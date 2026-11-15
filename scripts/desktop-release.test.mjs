@@ -269,10 +269,10 @@ describe('the package-manager jobs in release.yml (ADR-0063 H11)', () => {
     // The step decides whether the cask goes; scripts/publish-tap.sh writes
     // the tap, as homebrew-publish.yml's does (publish-tap.test.mjs).
     const notarized = publish.indexOf('notarized === true');
-    const cask = publish.indexOf('cask=(--cask)');
+    const cask = publish.indexOf('set -- "$@" --cask');
     const otherwise = publish.indexOf('else\n', notarized);
-    const call = publish.indexOf('scripts/publish-tap.sh rendered "${TAG#v}" "${cask[@]}"');
-    assert.ok(publish.indexOf('cask=()') < notarized, 'the cask is left out unless the notarized branch adds it');
+    const call = publish.indexOf('scripts/publish-tap.sh "$@"');
+    assert.ok(publish.indexOf('set -- rendered "${TAG#v}"') < notarized, 'the cask is left out unless the notarized branch adds it');
     assert.ok(notarized < cask && cask < otherwise && otherwise < call, 'the cask is passed only on the notarized branch');
     assert.match(publish, /signing\/signing\.json/);
     assert.match(publish, /::notice::the macOS build was not notarized/);

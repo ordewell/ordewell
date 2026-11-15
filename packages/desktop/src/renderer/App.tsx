@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Button, EmptyState, LoadingState } from '@ordewell/ui/design';
 import type { DaemonStatus, WindowContext } from '../shared/bridge';
 import { registerFrameCommands } from './frame/commands';
 import { Frame } from './frame/Frame';
@@ -10,9 +11,12 @@ import { Welcome } from './Welcome';
 /** A workspace window: the frame, with every view module registered into it. */
 function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus | undefined }): JSX.Element | null {
   const [store, setStore] = useState<FrameStore>();
+  const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let live = true;
+    setError(undefined);
     void Promise.all([window.ordewell.app.info(), window.ordewell.prefs.get()]).then(([info, prefs]) => {
       if (!live) return;
       setStore(new FrameStore({
@@ -31,9 +35,9 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
           openDropped: (file) => window.ordewell.app.openDroppedFolder(file),
         },
       }));
-    });
+    }).catch((reason: unknown) => { if (live) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { live = false; };
-  }, [path]);
+  }, [path, attempt]);
 
   useEffect(() => {
     if (!store) return;
@@ -43,7 +47,9 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
     return () => { offMenu(); offViews(); offCommands(); };
   }, [store]);
 
-  if (!store) return null;
+  if (!store) return error
+    ? <EmptyState title="The project could not open" body={error} action={<Button onClick={() => setAttempt((value) => value + 1)}>Retry</Button>} />
+    : <LoadingState label="Opening project…" />;
   return (
     <FrameProvider value={store}>
       <Frame daemon={status} />
@@ -54,10 +60,21 @@ function WorkspaceWindow({ path, status }: { path: string; status: DaemonStatus 
 /** Main decides what this window is; the page only draws it (ADR-0063 H6). */
 export function App(): JSX.Element | null {
   const [context, setContext] = useState<WindowContext>();
+  const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
   const status = useDaemonStatus();
-  useEffect(() => { void window.ordewell.app.context().then(setContext); }, []);
+  useEffect(() => {
+    let live = true;
+    setError(undefined);
+    void window.ordewell.app.context().then((value) => { if (live) setContext(value); }, (reason: unknown) => {
+      if (live) setError(reason instanceof Error ? reason.message : String(reason));
+    });
+    return () => { live = false; };
+  }, [attempt]);
 
   if (context?.kind === 'workspace') return <WorkspaceWindow path={context.path} status={status} />;
-  if (context?.kind !== 'welcome') return null;
+  if (context?.kind !== 'welcome') return error
+    ? <EmptyState title="Ordewell could not open" body={error} action={<Button onClick={() => setAttempt((value) => value + 1)}>Retry</Button>} />
+    : <LoadingState label="Opening Ordewell…" />;
   return <Welcome status={status} />;
 }

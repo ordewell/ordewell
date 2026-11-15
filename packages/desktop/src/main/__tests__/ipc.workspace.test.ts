@@ -23,6 +23,8 @@ describe('a window\'s daemon calls name its workspace', () => {
   const calls: Array<{ path: string }> = [];
   const streams: string[] = [];
   const welcomed = vi.fn();
+  const finishRead = vi.fn();
+  const onDaemonRead = vi.fn(() => finishRead);
   let context: { kind: 'workspace'; path: string } | { kind: 'welcome' };
 
   beforeEach(() => {
@@ -30,6 +32,8 @@ describe('a window\'s daemon calls name its workspace', () => {
     calls.length = 0;
     streams.length = 0;
     context = { kind: 'workspace', path: '/b' };
+    finishRead.mockClear();
+    onDaemonRead.mockClear();
     const proxy = {
       call: (request: { path: string }) => { calls.push(request); return Promise.resolve({ ok: true, status: 200, body: {} }); },
       stream: (path: string) => { streams.push(path); return () => undefined; },
@@ -42,6 +46,7 @@ describe('a window\'s daemon calls name its workspace', () => {
       windows: { contextOf: () => context, openWelcome: welcomed, broadcast: () => undefined },
       proxy,
       holders: { route: () => undefined },
+      onDaemonRead,
     } as unknown as IpcDeps);
   });
 
@@ -60,6 +65,15 @@ describe('a window\'s daemon calls name its workspace', () => {
     invoke(CHANNELS.daemonSubscribe, { rootId: 's1', childId: 'c1' });
 
     expect(streams).toEqual(['/ws/session/s1?workspace=%2Fb', '/ws/session/s1/child/c1?workspace=%2Fb']);
+  });
+
+  it('traces only the validated route id, without its project or payload', async () => {
+    await invoke(CHANNELS.daemonCall, 'sessions.list', { workspace: '/private/project' });
+    expect(onDaemonRead).toHaveBeenCalledWith('sessions.list');
+    expect(finishRead).toHaveBeenCalledWith(true);
+    onDaemonRead.mockClear();
+    await invoke(CHANNELS.daemonCall, '/arbitrary/private/path');
+    expect(onDaemonRead).not.toHaveBeenCalled();
   });
 
   it('opens the welcome window for the new-window request', async () => {

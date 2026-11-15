@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronRight, GitBranch, GitBranchPlus, History, Lo
 import { Archive, ArchiveRestore, RotateCcw } from 'lucide-react';
 import { ArrowRightLeft } from 'lucide-react';
 import { Cloud, RotateCw } from 'lucide-react';
-import { Button, Icon, IconButton } from '@ordewell/ui/design';
+import { Button, Icon, IconButton, LoadingState } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { useDisclosure } from '../../frame/store';
 import { all } from '../Stub';
@@ -383,6 +383,7 @@ function syncStateOf(ctx: GitContext): SyncState {
 function BranchesSkeleton(): JSX.Element {
   return (
     <div className="git-skeleton" role="status" aria-label="Loading branches…" aria-busy="true">
+      <span>Loading branches…</span>
       {[[34, 62, 48], [40, 56]].map((widths, group) => (
         <Fragment key={group}>
           <div className="git-skeleton-row git-skeleton-head"><span className="git-skeleton-bar" style={{ width: '24%' }} /></div>
@@ -435,6 +436,7 @@ function Sidebar({ api }: { api: FrameApi }): JSX.Element {
         </div>
       )}
       {!ctx && !state.error && <BranchesSkeleton />}
+      {ctx && state.loading && <LoadingState inline label="Refreshing branches…" />}
       {ctx && (
         <>
           <div className="git-current" role="group" aria-label="Your checkout">

@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import ModelSelector from '../ModelSelector';
+import { ModelDiscoveryContext } from '../../modelLoading';
 import type { DiscoveredModel } from '@ordewell/core';
 
 function model(modelId: string, modelLabel = modelId, runnerProvider?: string): DiscoveredModel {
@@ -21,6 +22,27 @@ const MAPPING: Record<string, ('openrouter' | 'google')[]> = {
   'google/gemini-2.5-pro': ['google'],
   'local/mystery-model': [],
 };
+
+it('uses shared catalog progress in a task picker and opens only once models are available', () => {
+  const onOpen = vi.fn();
+  const { rerender } = render(<ModelDiscoveryContext.Provider value={{ state: 'loading' }}><ModelSelector models={[]} currentModel={undefined} onChange={vi.fn()} onOpen={onOpen} /></ModelDiscoveryContext.Provider>);
+  fireEvent.click(screen.getByText('Loading models…'));
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.queryByText('No models found')).toBeNull();
+  rerender(<ModelDiscoveryContext.Provider value={{ state: 'ready' }}><ModelSelector models={MODELS} currentModel={undefined} onChange={vi.fn()} onOpen={onOpen} /></ModelDiscoveryContext.Provider>);
+  fireEvent.click(screen.getByText('Select model...'));
+  expect(screen.getByText('GPT-4o')).toBeInTheDocument();
+  expect(onOpen).toHaveBeenCalledOnce();
+});
+
+it('offers Retry for a failed task catalog instead of an empty list', () => {
+  const retry = vi.fn();
+  render(<ModelDiscoveryContext.Provider value={{ state: 'failed', error: 'The daemon did not answer.' }}><ModelSelector models={[]} currentModel={undefined} onChange={vi.fn()} onOpen={retry} /></ModelDiscoveryContext.Provider>);
+  fireEvent.click(screen.getByText('Models unavailable'));
+  expect(screen.queryByText('No models found')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry models' }));
+  expect(retry).toHaveBeenCalledOnce();
+});
 
 function renderSelector(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
   return render(

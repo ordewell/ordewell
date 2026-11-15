@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
 import { ChevronDown, CircleAlert, Plus, SquareTerminal, X } from 'lucide-react';
-import { EmptyState, IconButton } from '@ordewell/ui/design';
+import { EmptyState, IconButton, LoadingState } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { Popover } from '../../frame/Popover';
 import { setLoginTerminalOpener } from '../../session/loginTerminal';
@@ -125,7 +125,7 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
   const active = state.tabs.find((tab) => tab.key === state.active);
   const banner = bannerFor(active, scopes);
   // A tab whose shell never joined the word link swallows the chord, and says so (ADR-0069).
-  const wordKeysOff = api.platform === 'darwin' && active !== undefined && !active.words;
+  const wordKeysOff = api.platform === 'darwin' && active?.phase === 'running' && !active.words;
 
   // The terminals outlive this component; it only lends them its element.
   useLayoutEffect(() => {
@@ -224,6 +224,7 @@ function TerminalPanel({ api }: { api: FrameApi }): JSX.Element {
       {banner && <p className="terminal-banner" role="status">{banner}</p>}
       {wordKeysOff && <p className="terminal-banner" id="terminal-word-keys">Option+Left/Right moves by words only at the prompt of macOS’s own zsh; in this terminal it does nothing.</p>}
       <div className="terminal-stage">
+        {active?.phase === 'starting' && <LoadingState label="Starting terminal…" />}
         <div className="terminal-host" ref={host} role="tabpanel" aria-describedby={wordKeysOff ? 'terminal-word-keys' : undefined} aria-label={active ? `${tabTitle(active)}, ${active.scopeLabel}` : 'Terminal'} hidden={!active || active.phase === 'failed'} />
         {active?.phase === 'failed' && <p className="terminal-failed" role="alert"><CircleAlert size={16} aria-hidden="true" /><span>{active.message}</span></p>}
         {!active && <EmptyState className="terminal-empty" icon={SquareTerminal} title="No terminal is open" body="The plus button opens one in your checkout. Ctrl+` shows or hides this panel." />}

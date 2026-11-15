@@ -23,3 +23,4 @@ export {
   type SectionHeaderProps, type CardProps, type EmptyStateProps, type ToolbarProps,
 } from './design/layout';
 export { Tabs, type TabsProps, type TabItem } from './design/Tabs';
+export { LoadingState, type LoadingStateProps } from './design/LoadingState';

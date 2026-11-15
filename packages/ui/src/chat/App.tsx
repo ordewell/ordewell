@@ -37,6 +37,7 @@ import { isBuiltinSlashCommand, slashHelp } from '../shared/slashCommands';
 import type { EscalationAnswer, HostToWebview, SettingsChange } from '../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../shared/conversationPatch';
 import { useChatBridge } from '../bridge';
+import { ModelDiscoveryContext } from './modelLoading';
 
 const STOP_ARM_MS = 2_000;
 
@@ -137,7 +138,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, pendingPlanner, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
     modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, detectionError, isReady, modelDiscoveryErrors,
-    runnerDiscoveryErrors,
+    runnerDiscoveryErrors, modelDiscovery,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
   const setPlan = useCallback((v: Updatable<HostState['plan']>) => dispatch({ type: 'patchPlan', plan: v }), []);
@@ -1114,6 +1115,7 @@ export default function App({ layout = 'chat', selection, goal }: {
 
   if (layout === 'plan') {
     return (
+      <ModelDiscoveryContext.Provider value={modelDiscovery}>
       <DelegationOfferedContext.Provider value={delegationOffered}>
       <OpenPatchContext.Provider value={handleOpenPatch}>
       <div className="plan-list" ref={planListRef}>
@@ -1123,10 +1125,12 @@ export default function App({ layout = 'chat', selection, goal }: {
       </div>
       </OpenPatchContext.Provider>
       </DelegationOfferedContext.Provider>
+      </ModelDiscoveryContext.Provider>
     );
   }
 
   return (
+    <ModelDiscoveryContext.Provider value={modelDiscovery}>
     <DelegationOfferedContext.Provider value={delegationOffered}>
     <OpenPatchContext.Provider value={handleOpenPatch}>
     {/* Focus targets for a mouse selection, never tab stops. VS Code 1.143+
@@ -1262,16 +1266,22 @@ export default function App({ layout = 'chat', selection, goal }: {
                 modelApiMapping={planner.runner ? {} : orchestratorModelApiMapping}
                 onChange={handleOrchestratorModelChange}
                 label={planner.runner ? 'Model & thinking effort' : 'Model'}
-                unavailable={switchingTo && `Switching to ${switchingTo}…`}
+                unavailable={switchingTo ? `Switching to ${switchingTo}…` : undefined}
               />
-              {!switchingTo && orchestratorModels.length === 0 && (
+              {!switchingTo && modelDiscovery?.state === 'failed' && (
+                <div className="model-discovery-error" role="alert">
+                  Couldn't load models: {modelDiscovery.error}{' '}
+                  <button type="button" className="btn-secondary" onClick={handleModelsRefreshNeeded}>Retry</button>
+                </div>
+              )}
+              {!switchingTo && modelDiscovery?.state !== 'loading' && modelDiscovery?.state !== 'failed' && orchestratorModels.length === 0 && (
                 <div className="model-discovery-error" role="alert">
                   {planner.runner
                     ? (runnerDiscoveryErrors[planner.runner] ?? <>No models discovered for this agent yet: run <code>/refresh</code>.</>)
                     : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
                 </div>
               )}
-              {!switchingTo && Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
+              {!switchingTo && modelDiscovery?.state !== 'loading' && Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
                 <div className="model-discovery-error" role="alert">
                   ⚠ Couldn't load models for{' '}
                   {Object.entries(modelDiscoveryErrors)
@@ -1491,5 +1501,6 @@ export default function App({ layout = 'chat', selection, goal }: {
     </SpeakerLabelsContext.Provider>
     </OpenPatchContext.Provider>
     </DelegationOfferedContext.Provider>
+    </ModelDiscoveryContext.Provider>
   );
 }
