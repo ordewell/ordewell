@@ -11,7 +11,7 @@ import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
-import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
+import { sharedMcpServer, type McpCaller, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
@@ -811,7 +811,7 @@ export class Session {
       if (patch) return Promise.resolve(readSavedPatch(readTaskPatch(this.taskLogLocation, taskId, patch.attempt), patch, options));
       return this.runs.taskDiff(taskId, options);
     },
-    runCommand: (command, signal, opts) => this.ownCommand(command, signal, opts),
+    runCommand: (command, signal, opts, caller) => this.ownCommand(command, signal, opts, caller),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
     execute: (command, signal) => this.commands.run(command, this.turnActor(), signal),
@@ -2490,10 +2490,12 @@ export class Session {
 
   /**
    * A harness planner's `run_command`, charged to its read limit (ADR-0068).
-   * The planner's MCP token is its runner's own subagents' too, so a command
-   * one of them runs here counts against the planner as well.
+   * The planner's MCP token is its runner's own subagents' too: a command the
+   * runner says one of them made is the delegation the limit asks for, so it
+   * runs uncounted, still decided by the envelope (ADR-0068 R2, ADR-0008).
    */
-  private async ownCommand(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome> {
+  private async ownCommand(command: string, signal?: AbortSignal, opts?: BashOptions, caller?: McpCaller): Promise<ToolOutcome> {
+    if (!this.readLimit.owns(caller)) return this.fsAdapter.bash(command, signal, opts);
     const admission = this.readLimit.admit();
     if (!admission.allowed) return { success: false, output: admission.reason, truncated: false };
     const outcome = await this.fsAdapter.bash(command, signal, opts);

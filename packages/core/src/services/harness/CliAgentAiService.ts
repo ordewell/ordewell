@@ -833,6 +833,12 @@ export class CliAgentAiService implements IAiService {
             }
             settle(event.id, output, false, 'denied');
           };
+          // The runner asks before every Ordewell call it makes (the `mcp__*`
+          // ask rule), so a subagent's is known here before the call reaches
+          // the server, which then charges it to no one (ADR-0068 R2).
+          if (readLimit && event.toolUseId && (event.bySubagent || pendingCalls.get(event.toolUseId)?.subagentId)) {
+            readLimit.delegated(event.toolUseId);
+          }
           if (!event.decided && adapter.answerPermission) {
             // Open: the envelope decides it, asking the user where the API
             // planner would (ADR-0026). A call the runner linked settles from
