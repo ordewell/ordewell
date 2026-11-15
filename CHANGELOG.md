@@ -27,6 +27,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   runner's model list and in the planner's model picker.
 - **Contributors:** `bench/live/runner-smoke.mjs` drives the built-in runner
   against a live provider, and says why a run failed.
+- **The desktop app confirms a macOS installation** and offers to eject and
+  trash its matching DMG. Keeping the installer remains the default.
+- **Local desktop startup diagnostics** record bounded timings for the main
+  process, interface and daemon reads, without recording goals or credentials.
 
 ### Changed
 
@@ -37,6 +41,22 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   follow a provider's Retry-After, and a usage limit waits until its reset
   time. Gemini moved to `@google/genai` and no longer sends a fixed
   temperature or topP.
+
+### Fixed
+
+- **Desktop startup no longer waits for the login shell before drawing its
+  window,** and the shell's PATH is read correctly when locating coding agents.
+- **Daemon startup recovers when its token changes during the handshake.**
+  Overlapping connection attempts share one startup instead of starting duplicate
+  daemons, and a temporary rejection keeps the starting child under the app's
+  ownership.
+- **Model discovery shows progress while it is pending.** Empty results and
+  failures appear only after the read settles, refreshes retain existing
+  choices, and Settings stays usable while models load. Other desktop views
+  also show named loading states or skeletons.
+- **Apple silicon installers omit unused Intel terminal helpers.**
+- **Homebrew publishing works with macOS's bundled Bash** when a release
+  carries the CLI formula without the desktop cask.
 
 ## [0.13.2] - 2026-11-14
 

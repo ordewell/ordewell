@@ -148,6 +148,8 @@ export class FakeRunnerSession implements IRunnerSession {
   /** The ones of {@link delivered} Ordewell sent: the completion reminder (ADR-0018, W1). */
   fromOrdewell: string[] = [];
   interrupts = 0;
+  /** Where Ordewell set this runner to compact; unset, as for a runner it sets no window for. */
+  compactWindowTokens?: number;
   private messageCount = 0;
   private turnEndCbs: Array<(reason: StructuredTurnEnd) => void> = [];
   private eventCbs: Array<(event: StructuredEvent) => void> = [];

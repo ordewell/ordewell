@@ -35,8 +35,19 @@ session builds one and every path below asks it.
   the envelope decides it and given back if the envelope refuses it, so a
   refused read costs nothing.
 - **Only the planner's own reads (R2).** A research agent's or a research
-  task's reads are never charged, nor a harness subagent's native read. Web
-  reads have their own budget.
+  task's reads are never charged. A harness subagent's native read or
+  `run_command` is neither counted nor refused: it is the delegation the limit
+  asks for. It stays inside the envelope like any of the planner's calls.
+  Claude Code marks a subagent's permission request with `agent_id`, which the
+  main thread's never carries. For a native read that request comes before the
+  line announcing the subagent's call, so the field is the only sign at that
+  point. A subagent shares the planner's MCP token, so its `run_command` is
+  told apart by what the runner sends with the call. Codex's tools/call
+  `_meta` carries its turn's metadata, whose `parent_thread_id` only a spawned
+  subagent's thread has. Claude Code's carries `claudecode/toolUseId`, the
+  tool use the `mcp__*` ask rule had it ask about first, so the session has
+  already seen whether a subagent made it. A call or request that says neither
+  is counted. Web reads have their own budget.
 - **The refusal says where the rest goes (R3).** It says how much the planner
   has read this turn and tells it to delegate what is left to a research agent
   or a research task, naming the area. The planner's budget block shows what
@@ -64,9 +75,9 @@ session builds one and every path below asks it.
 | Path | Seam |
 | --- | --- |
 | API planner's read tools and `bash` | `BaseAiService.executeToolCalls`, in call order before any runs |
-| `run_command` from a harness planner | the session's own command path (`ownCommand`) |
-| A harness's native reads (Claude Code, OpenCode, ACP) | the permission request, at `CliAgentAiService`, when its ask is `path`, `native-shell` or `native-read`; bytes at its `tool_result` |
-| A Codex planner's reads | `ownCommand`: with the limit on, Codex's own shell and `view_image` are off, so every read is a `run_command` |
+| `run_command` from a harness planner | the session's own command path (`ownCommand`), unless `PlannerReadLimit.owns` finds the call a subagent's: Codex's `_meta` names a parent thread, or Claude Code's `claudecode/toolUseId` is a tool use `CliAgentAiService` saw a subagent ask about (`delegated`) |
+| A harness's native reads (Claude Code, OpenCode, ACP) | the permission request, at `CliAgentAiService`, when its ask is `path`, `native-shell` or `native-read` and it is not a subagent's (`bySubagent`, or a call announced under a subagent); bytes at its `tool_result` |
+| A Codex planner's reads | `ownCommand`: with the limit on, Codex's own shell and `view_image` are off, so every read is a `run_command`; its native subagents' are left out as above |
 | An ACP read that was never asked | `PlannerReadLimit.record`, from its `tool_result` marked `unaskedRead`: counted, not refused |
 | OpenCode's `read`, `glob`, `grep`, `list`, `lsp` | made to ask (`readsAsk`) while the limit is on, both in 1.x's config and in 2.x's session rules, and asked as `native-read`, which the envelope allows |
 
@@ -97,9 +108,17 @@ session builds one and every path below asks it.
   OpenCode planners on two models: the planners' own reads after their first
   delegation fell with the limit, and the plans were no worse on the rubric.
   The sample is small. Dropped for that reason.
-- **Counting a harness subagent's `run_command`.** It is counted, because the
-  harness's subagents share the planner's MCP token and nothing tells them
-  apart there; a native subagent's own reads are not.
+- **Counting a harness subagent's `run_command`.** Once chosen, because the
+  subagents share the planner's MCP token and the token cannot tell them apart.
+  Dropped: it left a Codex planner unable to delegate past its own budget, and
+  the runners' own `_meta` does tell them apart.
+- **Telling a Codex subagent apart through the app-server's `mcpToolCall`
+  item.** Rejected: the item and the tools/call travel on different
+  connections, so the call would be matched to its item by timing. The call's
+  own `_meta` names its thread without that.
+- **An MCP token per subagent.** Rejected: Codex hands a spawned subagent the
+  planner's MCP configuration, headers included, and has no hook to issue it
+  one of its own.
 
 ## Consequences
 
@@ -110,7 +129,11 @@ session builds one and every path below asks it.
   so it can count twice.
 - A Codex planner under the limit has no shell or image viewer of its own, and
   neither do Codex's native subagents, whose reads then go through
-  `run_command` and are charged to the planner's limit.
+  `run_command`, uncounted while Codex's `_meta` names their parent thread.
+- A Claude Code subagent's reads go uncounted only while its permission
+  requests carry `agent_id` (or announce the call under the subagent) and its
+  tools/call carries `claudecode/toolUseId`. A runner that drops a field gets
+  them counted again. That narrows and never widens.
 - A planner that hits the limit must say what it wants read, which is the
   point, and may plan with less than it would have read itself.
 
@@ -119,3 +142,5 @@ session builds one and every path below asks it.
 - 2026-11-11 — accepted.
 - 2026-11-12 — on by default, after the planner bench showed plans no worse.
 - 2026-11-12 — native reads of Claude Code (`LSP`), Codex and ACP counted and refused where the harness allows; two gaps remain.
+- 2026-11-15 — a Claude Code subagent's native reads, told apart by its permission request's `agent_id`, are neither counted nor refused.
+- 2026-11-15 — a Codex or Claude Code subagent's `run_command`, told apart by the runner's tools/call `_meta`, is neither counted nor refused.

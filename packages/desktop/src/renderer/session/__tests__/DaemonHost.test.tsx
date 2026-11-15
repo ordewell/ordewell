@@ -130,6 +130,64 @@ describe('DaemonHost', () => {
     await waitFor(() => expect(host.getSnapshot().state.runnersKnown).toBe(true));
     expect(host.getSnapshot().state.enabledRunnerIds).toEqual(['claude-code']);
     expect(daemon.calls('models.list')).toHaveLength(1);
+    expect(host.getSnapshot().state.modelDiscovery).toEqual({ state: 'loading' });
+  });
+
+  it('reports session opening until the saved session has been adopted', async () => {
+    let finish: ((result: ReturnType<typeof ok>) => void) | undefined;
+    fakeDaemon({ 'sessions.load': () => new Promise((resolve) => { finish = resolve; }) });
+    const host = hostWith();
+    const previous = host.sessionId;
+    const opening = host.open('saved');
+    expect(host.getSnapshot().opening).toBe('saved');
+    expect(host.sessionId).toBe(previous);
+    await waitFor(() => expect(finish).toBeDefined());
+    finish?.(ok({ ok: true, plan: PLAN, goal: 'Ship the parser' }));
+    await opening;
+    expect(host.sessionId).toBe('saved');
+    expect(host.getSnapshot().opening).toBeUndefined();
+  });
+
+  it('reports a slow catalog separately from agent detection and retries it', async () => {
+    let answer: ReturnType<typeof ok> | Promise<never> = new Promise<never>(() => undefined);
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }] }),
+      'settings.get': ok({ aiProvider: 'codex' }),
+      'models.list': () => answer,
+    });
+    const host = hostWith(undefined, 100);
+    const first = render(<ChatSurface host={host} layout="conversation" />);
+    expect(await screen.findByText('Loading models…')).toBeInTheDocument();
+    expect(screen.queryByText(/No models discovered/)).toBeNull();
+    await screen.findByText(/Couldn't load models/);
+    expect(host.getSnapshot().state.modelDiscovery?.state).toBe('failed');
+    expect(host.getSnapshot().state.detectionError).toBeNull();
+    // A later mounted pane gets the failure too, rather than returning to an empty picker.
+    first.unmount();
+    render(<ChatSurface host={host} layout="conversation" />);
+    expect(await screen.findByText(/Couldn't load models/)).toBeInTheDocument();
+    answer = ok({ models: [], modelsByRunner: { codex: [{ modelId: 'gpt-5', modelLabel: 'GPT-5', variants: [] }] }, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(host.getSnapshot().state.modelDiscovery?.state).toBe('ready'));
+    expect(screen.queryByText(/Couldn't load models|No models discovered/)).toBeNull();
+    expect(daemon.calls('models.list')).toHaveLength(2);
+  });
+
+  it('keeps a newer catalog pending when an overtaken discovery answers late', async () => {
+    const releases: Array<(answer: ReturnType<typeof ok>) => void> = [];
+    fakeDaemon({
+      'runners.list': ok({ runners: [{ id: 'codex', name: 'Codex', enabled: true }] }),
+      'models.list': () => new Promise((resolve) => { releases.push(resolve); }),
+    });
+    const host = hostWith();
+    const first = host.handle({ type: 'ready' });
+    const second = host.handle({ type: 'refreshModels' });
+    releases[0]!(ok({ models: [], modelsByRunner: {}, modesByRunner: {}, providers: [] }));
+    await first;
+    expect(host.getSnapshot().state.modelDiscovery?.state).toBe('loading');
+    releases[1]!(ok({ models: [], modelsByRunner: {}, modesByRunner: {}, providers: [] }));
+    await second;
+    expect(host.getSnapshot().state.modelDiscovery?.state).toBe('ready');
   });
 
   // No API key and a model catalog still being listed: the coding agent the
@@ -144,6 +202,18 @@ describe('DaemonHost', () => {
     await waitFor(() => expect(host.getSnapshot().state.plannerKnown).toBe(true));
     expect(host.getSnapshot().state.planner.backends.filter((b) => b.usable).map((b) => b.runner)).toEqual(['claude-code']);
     expect(screen.queryByText('Detecting coding agents…')).toBeNull();
+  });
+
+  it('shows the planner\'s decision record in the planner conversation, and not in the plan panel', async () => {
+    const decisionRecord = [{ id: 'D1', kind: 'decision' as const, text: 'Use SQLite', why: 'one file, no server', at: 0, timestamp: '2026-01-01T00:00:00.000Z' }];
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: { ...PLAN, decisionRecord }, goal: 'g' }) });
+    const host = hostWith();
+    const { container } = render(<><section data-testid="conversation"><ChatSurface host={host} layout="conversation" /></section><section data-testid="plan"><ChatSurface host={host} layout="plan" /></section></>);
+    await opened(daemon, host);
+    await waitFor(() => expect(screen.getByTestId('conversation').querySelector('.decision-record')?.textContent).toContain('Use SQLite'));
+    expect(screen.getByTestId('plan').querySelector('.plan-list')).not.toBeNull();
+    expect(screen.getByTestId('plan').querySelector('.decision-record')).toBeNull();
+    expect(container.querySelectorAll('.decision-record')).toHaveLength(1);
   });
 
   it('lists an installed agent the daemon cannot start as unusable, with its reason', async () => {
@@ -297,7 +367,7 @@ describe('DaemonHost', () => {
     fireEvent.change(box, { target: { value: 'Add a parser' } });
     fireEvent.keyDown(box, { key: 'Enter' });
     await waitFor(() => expect(daemon.calls('plans.converseStart')).toHaveLength(1));
-    expect(daemon.calls('plans.converseStart')[0]?.[1]).toMatchObject({ goal: 'Add a parser' });
+    expect(daemon.calls('plans.converseStart')[0]?.[1]).toMatchObject({ goal: 'Add a parser', surface: 'desktop' });
   });
 
   it('starts the plan on the runners the chat has switched on', async () => {
@@ -349,7 +419,7 @@ describe('DaemonHost held prompts', () => {
 
     await act(() => host.handle({ type: 'sendSystemCommand', command: 'retryPlannerCompaction', taskId: '' }));
 
-    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests' }]]);
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests', surface: 'desktop' }]]);
   });
 
   it('sends a held prompt once the turn\'s answer is in, though its ended frame has not come yet', async () => {
@@ -370,7 +440,7 @@ describe('DaemonHost held prompts', () => {
 
     await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
 
-    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }, { message: 'and add tests' }]);
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first', surface: 'desktop' }, { message: 'and add tests', surface: 'desktop' }]);
   });
 
   it('sends what was typed during a Retry compaction whose ended frame trails the route\'s answer', async () => {
@@ -393,7 +463,7 @@ describe('DaemonHost held prompts', () => {
       daemon.push('s1', { type: 'planner_turn_ended', turnId: 'c1', outcome: 'message', sessionId: 's1', stream: 'd1', seq: 2 });
     });
 
-    await waitFor(() => expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests' }]]));
+    await waitFor(() => expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'and add tests', surface: 'desktop' }]]));
   });
 
   it.each([
@@ -417,9 +487,9 @@ describe('DaemonHost held prompts', () => {
 
     await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
 
-    expect(daemon.calls('plans.converseMessageNow').map(([, body]) => body)).toEqual([{ message: sent }]);
+    expect(daemon.calls('plans.converseMessageNow').map(([, body]) => body)).toEqual([{ message: sent, surface: 'desktop' }]);
     // Nothing was left held to follow the forced turn.
-    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }]);
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first', surface: 'desktop' }]);
     expect(seen.filter((m) => m.type === 'heldPrompts').at(-1)).toMatchObject({ prompts: [] });
   });
 
@@ -462,7 +532,7 @@ describe('DaemonHost held prompts', () => {
     await act(() => host.handle({ type: 'sendMessageNow', text: '' }));
 
     expect(daemon.calls('plans.converseMessageNow')).toEqual([]);
-    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'a normal reply' }]);
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'a normal reply', surface: 'desktop' }]);
   });
 
   it('sends everything held as one message once the turn ends', async () => {
@@ -483,7 +553,7 @@ describe('DaemonHost held prompts', () => {
 
     await act(() => host.handle({ type: 'sendMessage', text: 'first', typed: true }));
 
-    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }, { message: 'one\ntwo' }]);
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first', surface: 'desktop' }, { message: 'one\ntwo', surface: 'desktop' }]);
   });
 
   it.each([
@@ -535,11 +605,11 @@ describe('DaemonHost held prompts', () => {
     await act(async () => { second = host.handle({ type: 'sendMessage', text: 'second', typed: true }); });
     // Not awaited: a prompt sent at once, rather than held, waits on its own turn.
     await act(async () => { void host.handle({ type: 'sendMessage', text: 'third', typed: true }); });
-    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first' }, { message: 'second' }]);
+    expect(daemon.calls('plans.converseMessage').map(([, body]) => body)).toEqual([{ message: 'first', surface: 'desktop' }, { message: 'second', surface: 'desktop' }]);
 
     // The turn that ends sends the held prompt, and waits on that one's turn in turn.
     await act(async () => { finishSecond(); });
-    await waitFor(() => expect(daemon.calls('plans.converseMessage').at(-1)).toEqual([{ sessionId: 's2' }, { message: 'third' }]));
+    await waitFor(() => expect(daemon.calls('plans.converseMessage').at(-1)).toEqual([{ sessionId: 's2' }, { message: 'third', surface: 'desktop' }]));
     await act(async () => { finishSecond(); await second; });
   });
 });
@@ -647,7 +717,7 @@ describe('DaemonHost slash commands the composer offers', () => {
 
     await act(() => host.handle({ type: 'sendMessage', text: '/review-pr fix it', typed: true }));
 
-    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: '/review-pr fix it' }]]);
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: '/review-pr fix it', surface: 'desktop' }]]);
   });
 
   it('opens Settings, where the planner and the allowlist are picked, for /planner and /allowlist', async () => {
@@ -851,6 +921,17 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     await act(() => host.handle({ type: 'ready' }));
 
     await waitFor(() => expect(seen).toContainEqual({ type: 'isolationPreview', preview }));
+  });
+
+  it('says what the daemon said when Merge all finds nothing left to merge', async () => {
+    const message = 'This run is already merged and closed: there is nothing to merge.';
+    const daemon = fakeDaemon({ 'sessions.load': ok({ ok: true, plan: PLAN, goal: 'g' }), 'plans.isolationMerge': ok({ outcome: 'nothing', message }) });
+    const host = hostWith(async (request) => request.choices[0]!.id);
+    await opened(daemon, host);
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'isolationAction', action: 'merge' }));
+    expect(daemon.calls('plans.isolationMerge')).toHaveLength(1);
+    await waitFor(() => expect(JSON.stringify(seen)).toContain(message));
   });
 
   it('opens the chat\'s settings panel on /settings', async () => {
@@ -1149,7 +1230,7 @@ describe('DaemonHost joining a held session', () => {
     expect(await screen.findByText('Parse the config')).toBeInTheDocument();
 
     await act(() => host.handle({ type: 'sendMessage', text: 'Add MFA too', typed: false }));
-    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'Add MFA too' }]]);
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'Add MFA too', surface: 'desktop' }]]);
     // A load at the holder would adopt the session over its live planner turn.
     act(() => host.refreshPlan());
     await waitFor(() => expect(daemon.calls('sessions.get').length).toBeGreaterThan(2));
@@ -1214,7 +1295,7 @@ describe('DaemonHost joining a held session', () => {
     await act(async () => { await continuing; });
     expect(host.getSnapshot()).toMatchObject({ sessionId: 's1', link: null, readOnly: false });
     await act(() => host.handle({ type: 'sendMessage', text: 'Carry on from here.', typed: false }));
-    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'Carry on from here.' }]]);
+    expect(daemon.calls('plans.converseMessage')).toEqual([[{ sessionId: 's1' }, { message: 'Carry on from here.', surface: 'desktop' }]]);
   });
 
   it('joins the holder again when its socket drops while it still holds the session', async () => {

@@ -140,6 +140,16 @@ describe('POST /:sessionId/isolation/merge', () => {
     expect(await (await post(app, 'isolation/merge')).json()).toEqual(result);
   });
 
+  it('answers 200 with the seam\'s words when the run is already merged and closed', async () => {
+    const message = 'Nothing to merge: everything the run landed is in your branch already, and the run is closed.';
+    const app = appFor({ execute: vi.fn().mockResolvedValue({ ok: true, message }) });
+
+    const res = await post(app, 'isolation/merge');
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ outcome: 'nothing', message });
+  });
+
   it('is a 400, with the reason, when the seam refused before merging anything', async () => {
     const app = appFor({ execute: vi.fn().mockResolvedValue({ ok: false, outcome: 'refused', message: 'The run is still running — stop it first' }) });
 

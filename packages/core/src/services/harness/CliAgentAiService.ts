@@ -833,6 +833,12 @@ export class CliAgentAiService implements IAiService {
             }
             settle(event.id, output, false, 'denied');
           };
+          // The runner asks before every Ordewell call it makes (the `mcp__*`
+          // ask rule), so a subagent's is known here before the call reaches
+          // the server, which then charges it to no one (ADR-0068 R2).
+          if (readLimit && event.toolUseId && (event.bySubagent || pendingCalls.get(event.toolUseId)?.subagentId)) {
+            readLimit.delegated(event.toolUseId);
+          }
           if (!event.decided && adapter.answerPermission) {
             // Open: the envelope decides it, asking the user where the API
             // planner would (ADR-0026). A call the runner linked settles from
@@ -840,8 +846,9 @@ export class CliAgentAiService implements IAiService {
             const { id, toolUseId } = event;
             const asked = new AbortController();
             openAsks.set(id, asked);
+            // A subagent's read is the delegation the limit asks for, so it is not the planner's to count (ADR-0068 R2).
             const ownRead = readLimit && event.ask && OWN_READ_ASKS.has(event.ask.kind)
-              && !(toolUseId && pendingCalls.get(toolUseId)?.subagentId);
+              && !event.bySubagent && !(toolUseId && pendingCalls.get(toolUseId)?.subagentId);
             const admission = ownRead ? readLimit.admit() : undefined;
             const decided = admission && !admission.allowed
               ? Promise.resolve<ApprovalDecision>({ decision: 'deny', note: admission.reason })

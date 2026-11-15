@@ -325,6 +325,8 @@ export type HostToWebview =
    * place of "Detecting coding agents…". A runner or planner list ends it.
    */
   | { type: 'agentDetection'; state: 'detecting' | 'failed'; error?: string }
+  /** A pending catalog is not an empty catalog, even when the runner list has already arrived. */
+  | { type: 'modelDiscovery'; state: 'loading' | 'ready' | 'failed'; error?: string }
   | { type: 'setModelDiscoveryErrors'; errors: Record<string, string>; runnerErrors?: Record<string, string> }
   /**
    * A session was (re)loaded: the webview drops the previous session's plan,

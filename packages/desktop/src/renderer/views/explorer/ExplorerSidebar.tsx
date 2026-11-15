@@ -295,6 +295,7 @@ function TreeRow({ row, index, total, focused, checkout, platform, session, onFo
 function Skeleton(): JSX.Element {
   return (
     <div className="ex-skeleton" role="status" aria-label="Loading files" aria-busy="true">
+      <span>Loading files…</span>
       {[62, 44, 70, 38, 54, 48].map((width, index) => (
         <div key={index} className="ex-skeleton-row" style={{ height: ROW_HEIGHT }}>
           <span className="ex-skeleton-icon" />

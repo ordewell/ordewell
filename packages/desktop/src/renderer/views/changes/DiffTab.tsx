@@ -277,7 +277,10 @@ function ReviewDiff({ api, tab, scope, repo, path }: { api: FrameApi; tab: Tab; 
         return <div className="fv-state"><EmptyState icon={FileDiffIcon} title="No change" body="This file has no change here any more." /></div>;
       case 'text':
         if (failed) return <div className="fv-state"><EmptyState icon={FileWarning} title="The diff editor could not load" body={failed} /></div>;
-        return <div ref={hostNode} className="ft-editor" data-testid="monaco-diff-host" onFocus={() => { if (editor) active = editor; }} />;
+        return <div className="fv-editor-wrap" aria-busy={!editor}>
+          {!editor && <EditorSkeleton label="Loading diff editor…" />}
+          <div ref={hostNode} className="ft-editor" data-testid="monaco-diff-host" onFocus={() => { if (editor) active = editor; }} />
+        </div>;
     }
   };
 

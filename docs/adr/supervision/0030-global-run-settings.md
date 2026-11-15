@@ -212,14 +212,23 @@ The system prompt stays the same for every surface and setting, and names
 actions rather than buttons; where it names a user's control it points at the
 block.
 
-The surface is read from the live session lease's host
+The surface is the one the user is on, not the one that started the host: the
+client that sends a planner message says which it is, the terminal UI `tui`,
+an `ordewell` command `cli`, VS Code `vscode` and the desktop app `desktop`
+(`surface` on the converse routes and on VS Code's in-process calls). The
+block names that turn's surface, and a wake turn, which has no message, names
+the surface of the most recent one. A message that states none, from an older
+client, falls back to the live session lease's host
 ([ADR-0049](../isolation/0049-a-session-has-one-live-host.md)): VS Code, the
 desktop app's daemon (marked when it is forked), or a daemon that watches its
 owner's process, which is a terminal UI's. A shared daemon may serve any
 surface, so it reads as unknown, and the controls are named for every surface.
-One table (`services/surfaceControls.ts`) holds how each surface takes each
-action only the user takes; the TUI's are slash commands and keys, `/merge` for
-the merge.
+`UserSurface` in `services/surfaceControls.ts` is the one place that resolves
+it, and one table there holds how each surface takes each action only the user
+takes: the TUI's are slash commands and keys, `/merge` for the merge, and the
+command line's are `ordewell` commands, `ordewell merge` for the merge, with
+the terminal UI's key named where no command exists. A surface is told only
+controls it has.
 
 A refusal or answer at the command seam that tells the planner what the user
 does reads the same table for the session's surface, and a refused merge with
@@ -540,3 +549,4 @@ the daemon reads it from there at generation.
 - 2026-11-05 — a tree's shape limits (ADR-0055 D19) join the run settings, set in the desktop's Settings and printed by `ordewell delegation`.
 - 2026-11-08 — a start the run owes (a hold, queued start, repair, kept resume) is recorded in one ledger, and a user Stop withdraws queued starts, reopens and kept children; a restart does not.
 - 2026-11-09 — the planner is told its user's surface and the run settings in a SURFACE AND SETTINGS block of its turn, not its system prompt, and texts that tell it what the user does name the action and that surface's control rather than a button; with automatic merging on they say the merge happens by itself. A TUI user was told to press buttons the terminal does not have, and asked for merges already automatic.
+- 2026-11-15 — the surface is the one the client sending the message states, kept for a wake turn, with the lease's host only for a client that states none; a `cli` surface names `ordewell` commands. A CLI user, and a TUI joining a shared daemon, were told every surface's controls.

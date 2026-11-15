@@ -84,6 +84,8 @@ export interface SettingsView {
   settings: SettingsResponse | undefined;
   runners: readonly RunnerSetting[];
   models: ModelsResponse | undefined;
+  modelsLoading: boolean;
+  modelsError: string | undefined;
   prefs: Prefs | undefined;
   /** The planner list the chat offers, from core's one list (ADR-0009). */
   backends: readonly PlannerBackend[];
@@ -126,43 +128,59 @@ export function useSettings(host: DaemonHost, sessionId: string): {
     settings: undefined,
     runners: [],
     models: undefined,
+    modelsLoading: true,
+    modelsError: undefined,
     prefs: undefined,
     backends: [],
   });
   const lastFocusRefresh = useRef(0);
+  const readSequence = useRef(0);
 
   const sessionParam = useCallback((): RouteParams => (sessionId ? { sessionId } : {}), [sessionId]);
 
   const read = useCallback(async (mode: 'load' | 'refresh' | 'quiet'): Promise<void> => {
+    const sequence = ++readSequence.current;
+    const current = (): boolean => sequence === readSequence.current;
     if (mode === 'load') setView((current) => ({ ...current, loading: true, error: undefined }));
     if (mode === 'refresh') setView((current) => ({ ...current, busy: true, error: undefined }));
+    setView((current) => ({ ...current, modelsLoading: true, modelsError: undefined }));
+    // The catalog can outlive the settings read: each region settles on its own answer.
+    const catalog = within(callDaemon('models.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its models').then(
+      (models) => {
+        if (current()) setView((value) => ({ ...value, models, modelsLoading: false, backends: plannerBackendsFor(value.runners, models.providers ?? []) }));
+      },
+      (error: unknown) => {
+        if (current()) setView((value) => ({ ...value, modelsLoading: false, modelsError: messageOf(error) }));
+      },
+    );
     try {
-      const [settings, runners, models, prefs] = await Promise.all([
+      const [settings, runners, prefs] = await Promise.all([
         within(callDaemon('settings.get', { workspace: host.workspace, ...sessionParam() }), SETTINGS_TIMEOUT_MS, 'its settings'),
         within(callDaemon('runners.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its coding agents'),
-        within(callDaemon('models.list', { workspace: host.workspace }), SETTINGS_TIMEOUT_MS, 'its models'),
         within(window.ordewell.prefs?.get() ?? Promise.resolve(EMPTY_PREFS), SETTINGS_TIMEOUT_MS, 'its preferences'),
       ]);
+      if (!current()) return;
       const list = runners.runners ?? [];
-      setView({
+      setView((value) => ({
+        ...value,
         loading: false,
         error: undefined,
         busy: false,
         settings,
         runners: list,
-        models,
         prefs,
-        backends: plannerBackendsFor(list, models.providers ?? []),
-      });
+        backends: plannerBackendsFor(list, value.models?.providers ?? []),
+      }));
     } catch (error) {
-      setView((current) => ({ ...current, loading: false, busy: false, error: messageOf(error) }));
+      if (current()) setView((value) => ({ ...value, loading: false, busy: false, error: messageOf(error) }));
     }
+    await catalog;
   }, [host.workspace, sessionParam]);
 
   const refresh = useCallback(() => read('load'), [read]);
   const rescan = useCallback(() => read('refresh'), [read]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); return () => { readSequence.current++; }; }, [refresh]);
   // A sign-in or a saved key changed the daemon's catalog: re-read it without
   // blanking the page, so the row that asked shows the answer where it stands.
   useEffect(() => host.onCatalogChange(() => { void read('quiet'); }), [host, read]);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SURFACE_CONTROLS, USER_ACTIONS, surfaceOf, surfaceSettingsBlock } from '../surfaceControls';
+import { SURFACE_CONTROLS, USER_ACTIONS, UserSurface, clientSurface, surfaceOf, surfaceSettingsBlock } from '../surfaceControls';
+import type { LeaseHostKind } from '../../utils/leaseRecord';
 
 describe('surfaceOf', () => {
   it('names a daemon a TUI owns the terminal UI', () => {
@@ -58,5 +59,53 @@ describe('surfaceSettingsBlock', () => {
 
   it('names no button to a terminal UI user', () => {
     expect(surfaceSettingsBlock(settings)).not.toMatch(/button|card/i);
+  });
+});
+
+describe('UserSurface: the surface of the user who spoke last', () => {
+  const detached: LeaseHostKind = { kind: 'daemon', port: 3742 };
+
+  it('is the surface the sender states, whatever host the daemon is', () => {
+    const surface = new UserSurface(() => detached);
+    surface.heard('cli');
+    expect(surface.current()).toBe('cli');
+    surface.heard('tui');
+    expect(surface.current()).toBe('tui');
+  });
+
+  it('is the host\'s, as before, until a sender states one', () => {
+    expect(new UserSurface(() => detached).current()).toBe('unknown');
+    expect(new UserSurface(() => ({ kind: 'daemon', port: 3742, ownerPid: 4242 })).current()).toBe('tui');
+  });
+
+  it('goes back to the host\'s when a sender states none, as an older client does', () => {
+    const surface = new UserSurface(() => detached);
+    surface.heard('vscode');
+    surface.heard(undefined);
+    expect(surface.current()).toBe('unknown');
+  });
+});
+
+describe('clientSurface', () => {
+  it('takes a surface a client may state, and nothing else', () => {
+    expect(clientSurface('cli')).toBe('cli');
+    expect(clientSurface('desktop')).toBe('desktop');
+    expect(clientSurface('unknown')).toBeUndefined();
+    expect(clientSurface('emacs')).toBeUndefined();
+    expect(clientSurface(3)).toBeUndefined();
+  });
+});
+
+describe('the CLI\'s controls', () => {
+  it('are ordewell commands, `ordewell merge` for the merge', () => {
+    expect(SURFACE_CONTROLS.cli.merge).toBe('ordewell merge');
+    expect(SURFACE_CONTROLS.cli.skipTask).toBe('ordewell skip <id>');
+    expect(SURFACE_CONTROLS.cli.compact).toBe('ordewell compact');
+  });
+
+  it('name no button and no slash command as the CLI\'s own', () => {
+    const block = surfaceSettingsBlock({ surface: 'cli', automaticMerging: 'off', autorun: false, supervisorLevel: 'watch', parallelLimit: 3 });
+    expect(block).toContain('The user is on the ordewell command line');
+    expect(block).not.toMatch(/button|card/i);
   });
 });

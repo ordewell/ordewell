@@ -126,6 +126,12 @@ export interface IRunnerSession {
    * runner nothing secret has none.
    */
   readonly secrets?: HeldSecrets;
+  /**
+   * The size, in tokens, at which Ordewell has set this runner to compact its
+   * own context (ADR-0057 R4): a compaction at it is routine. Absent where
+   * Ordewell sets none, so the runner compacts near its model's own window.
+   */
+  readonly compactWindowTokens?: number;
   onOutput(callback: (text: string) => void): void;
   onExit(callback: (code: number) => void): void;
   /** End the process at once. {@link stop} is how an attempt that is over lets it go. */

@@ -31,6 +31,8 @@ import type { HolderView, JoinRefusal, JoinResult } from '../../shared/bridge';
 export interface SessionSnapshotView {
   sessionId: string;
   goal: string;
+  /** The saved session being opened, while the current one stays visible. */
+  opening?: string;
   /** The chat's state as every message so far reduced it: the same fold each ChatApp makes. */
   state: HostState;
   /** Set when the daemon refused the lease: another host holds the session (#16 draws the banner). */
@@ -84,7 +86,7 @@ export type Confirm = <C extends string>(request: ConfirmationRequest<C>) => Pro
  */
 const CATALOG: ReadonlySet<HostToWebview['type']> = new Set<HostToWebview['type']>([
   'setRunners', 'setModels', 'setModelsByRunner', 'setModesByRunner', 'setConfiguredProviders', 'setModelConfig',
-  'setPlannerBackends', 'agentDetection', 'setModelDiscoveryErrors', 'setModelOptions', 'setModelAllowlist', 'setRunSettings',
+  'setPlannerBackends', 'agentDetection', 'modelDiscovery', 'setModelDiscoveryErrors', 'setModelOptions', 'setModelAllowlist', 'setRunSettings',
 ]);
 
 // The last of each of these says all there is: a chat that mounts after it was sent is given it again.
@@ -510,6 +512,15 @@ export class DaemonHost {
    */
   async open(sessionId: string): Promise<void> {
     const request = ++this.shown;
+    this.update({ opening: sessionId });
+    try {
+      await this.openRequested(sessionId, request);
+    } finally {
+      if (request === this.shown) this.update({ opening: undefined });
+    }
+  }
+
+  private async openRequested(sessionId: string, request: number): Promise<void> {
     // A newer open (or New session) supersedes this one. What it loaded stays
     // with the daemon, which keeps every session it has loaded live; it is
     // just never drawn here, nor its error shown over the newer session.
@@ -982,12 +993,12 @@ export class DaemonHost {
         // The chat sends the runners its pills have on, including a click still
         // being saved; the daemon's list is only the fallback (as VS Code does).
         const chosen = runners ?? this.snapshot.state.enabledRunnerIds;
-        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(chosen.length ? { runners: [...chosen] } : {}) });
+        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, surface: 'desktop', ...(chosen.length ? { runners: [...chosen] } : {}) });
         if (sessionId !== this.sessionId) return;
         this.fresh = false;
         this.update({ goal: text });
       } else {
-        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text });
+        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text, surface: 'desktop' });
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);
@@ -1515,7 +1526,9 @@ export class DaemonHost {
   private mergeCall(sessionId: string): MergeCall {
     return async (yes) => {
       try {
-        await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        const merged = await callDaemon('plans.isolationMerge', { sessionId }, yes);
+        // Nothing left to land (the run is merged and closed): the daemon's words, as the other surfaces say them.
+        if ('outcome' in merged && merged.outcome === 'nothing') this.view.conversation.note('system', merged.message);
         return { kind: 'done' };
       } catch (error) {
         if (error instanceof DaemonRefusal && error.code === 'merge_past_check') return { kind: 'held', hold: 'pastChecks', message: error.message };
@@ -1639,7 +1652,7 @@ export class DaemonHost {
     this.sticky.delete('planUpdated');
     this.sticky.delete('runView');
     this.sticky.delete('children');
-    this.update({ sessionId, goal, ...link, restored: false, readOnly: false, state: reduceHost(this.snapshot.state, { type: 'restoreChat', now: Date.now() }) });
+    this.update({ sessionId, goal, opening: undefined, ...link, restored: false, readOnly: false, state: reduceHost(this.snapshot.state, { type: 'restoreChat', now: Date.now() }) });
     this.follow(sessionId);
     void this.readRunSettings(sessionId);
   }

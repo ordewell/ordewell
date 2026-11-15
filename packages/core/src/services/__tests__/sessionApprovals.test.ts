@@ -13,7 +13,7 @@ import type { GrepOptions, ReadFileOpts, ToolOutcome } from '../../interfaces/IF
 import type { WebRead, WebReadDecision } from '../webReadPolicy';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { fakeMcpServer, fakeSpawn, fixture } from './harnessTestKit';
-import type { McpToolReply } from '../mcp/tools';
+import type { McpToolContext, McpToolReply } from '../mcp/tools';
 
 /**
  * The approval round-trip as every surface sees it: research asks, the Session
@@ -727,6 +727,41 @@ describe('Session planner read limit', () => {
       expect(answers[2]).toEqual(expect.objectContaining({ isError: true }));
       expect(JSON.stringify(answers[2])).toContain('Read limit reached: you have made 2 reads this turn');
       expect(requests[0].readLimit?.enabled).toBe(true);
+    } finally {
+      session.destroy();
+    }
+  });
+
+  it("neither counts nor refuses a run_command its runner says a subagent made, and still sends it through the envelope (ADR-0068 R2)", async () => {
+    const mcp = fakeMcpServer();
+    const fsAdapter = new ProbeFileSystem();
+    const answers: McpToolReply[] = [];
+    const spawned = fakeSpawn([(_written, proc) => {
+      void (async () => {
+        const handler = mcp.plannerHandlers.at(-1)!;
+        const own = { signal: new AbortController().signal };
+        const delegate = { ...own, caller: { subagent: true as const } };
+        const calls: [string, McpToolContext][] = [
+          ['ls', own], ['cat a.ts', delegate], ['cat b.ts', delegate], ['rm c.ts', delegate], ['cat d.ts', delegate], ['cat e.ts', own], ['cat f.ts', own],
+        ];
+        for (const [command, context] of calls) answers.push(await handler.runCommand!({ command }, context));
+        proc.emitStdout(fixture('claude-code', 'prose'));
+      })();
+    }]);
+    const config = fakeConfig({ aiProvider: 'claude-code', autonomousMode: false });
+    const svc = new CliAgentAiService(config, {
+      spawn: spawned.spawn, resolvePath: async () => '/usr/bin', platform: 'linux',
+      isDirectory: () => true, exists: () => true, workspaceRoot: () => '/repo', mcpServer: mcp,
+    });
+    const session = makeSession({
+      config, aiService: svc, mcpServer: mcp, fsAdapter,
+      settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' }, plannerReadLimit: { calls: 2 } }),
+    });
+    try {
+      await session.startPlanning('upgrade the library', ['claude-code']);
+      expect(fsAdapter.bashCalls).toEqual(['ls', 'cat a.ts', 'cat b.ts', 'cat d.ts', 'cat e.ts']);
+      expect(JSON.stringify(answers[3])).toContain('Command refused');
+      expect(JSON.stringify(answers[6])).toContain('Read limit reached: you have made 2 reads this turn');
     } finally {
       session.destroy();
     }

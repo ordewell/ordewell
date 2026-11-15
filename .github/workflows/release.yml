@@ -418,15 +418,15 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          cask=()
+          set -- rendered "${TAG#v}"
           if [ "$DESKTOP_RELEASED" != true ]; then
             echo "::notice::ORDEWELL_RELEASE_DESKTOP is not 'true', so this release has no desktop app and no cask was published, only the formula (ADR-0065 C10)."
           elif node -e 'process.exit(JSON.parse(require("fs").readFileSync("signing/signing.json", "utf8")).notarized === true ? 0 : 1)'; then
-            cask=(--cask)
+            set -- "$@" --cask
           else
             echo "::notice::the macOS build was not notarized, so no cask was published, only the formula: Homebrew requires an app Gatekeeper accepts."
           fi
-          scripts/publish-tap.sh rendered "${TAG#v}" "${cask[@]}"
+          scripts/publish-tap.sh "$@"
           echo "published=true" >> "$GITHUB_OUTPUT"
 
       - name: Say why nothing was published to the tap

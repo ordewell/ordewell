@@ -148,6 +148,50 @@ describe('probeDaemon', () => {
     expect(await isDaemonRunning(server.port)).toBe(true);
   });
 
+  it('rechecks with the new token when startup replaces it while the handshake is in flight', async () => {
+    let fresh = '';
+    server = await serve((req) => {
+      if (!fresh) {
+        fresh = mintDaemonToken(server!.port).token;
+        return { status: 401, body: REFUSAL };
+      }
+      return req.headers.authorization === `Bearer ${fresh}`
+        ? { status: 200, body: JSON.stringify({ pid: 42, contract: 7 }) }
+        : { status: 401, body: REFUSAL };
+    });
+    mintDaemonToken(server.port);
+    expect(await probeDaemon(server.port)).toEqual({ kind: 'daemon', identity: { pid: 42, contract: 7 } });
+    expect(server.seen).toHaveLength(2);
+    expect(server.seen[1].authorization).toBe(`Bearer ${fresh}`);
+  });
+
+  it('does not repeat a rejected handshake when the token has not changed', async () => {
+    server = await serve(() => ({ status: 401, body: REFUSAL }));
+    mintDaemonToken(server.port);
+    expect(await probeDaemon(server.port)).toEqual({ kind: 'unauthorized', tokenPresented: true });
+    expect(server.seen).toHaveLength(1);
+  });
+
+  it('bounds a handshake retry even if the token keeps changing', async () => {
+    server = await serve(() => {
+      mintDaemonToken(server!.port);
+      return { status: 401, body: REFUSAL };
+    });
+    mintDaemonToken(server.port);
+    expect(await probeDaemon(server.port)).toEqual({ kind: 'unauthorized', tokenPresented: true });
+    expect(server.seen).toHaveLength(2);
+  });
+
+  it('does not retry another server\'s rejection when the token changes', async () => {
+    server = await serve(() => {
+      mintDaemonToken(server!.port);
+      return { status: 401, body: 'a different server' };
+    });
+    mintDaemonToken(server.port);
+    expect(await probeDaemon(server.port)).toEqual({ kind: 'unverifiable' });
+    expect(server.seen).toHaveLength(1);
+  });
+
   it.each<[string, number, string]>([
     ['a stranger\'s 401', 401, 'go away'],
     ['a 404 from a daemon older than the route', 404, '{}'],

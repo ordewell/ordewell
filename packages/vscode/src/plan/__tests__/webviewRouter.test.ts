@@ -486,7 +486,7 @@ describe('webview messages reach the session through one entry point each', () =
       await h.route({ type: 'sendSystemCommand', command: 'retryPlannerCompaction' });
 
       expect(converse).toHaveBeenCalledTimes(1);
-      expect(converse).toHaveBeenCalledWith('typed during the retry');
+      expect(converse).toHaveBeenCalledWith('typed during the retry', { surface: 'vscode' });
     });
 
     it('stays held while the planner is still busy', async () => {
@@ -511,7 +511,7 @@ describe('webview messages reach the session through one entry point each', () =
       await h.route({ type: 'sendMessage', text: '/my-skill do it', typed: true });
 
       expect(h.deps.extension.runSlashCommand).toHaveBeenCalledWith('/refresh');
-      expect(converse).toHaveBeenCalledWith('/my-skill do it');
+      expect(converse).toHaveBeenCalledWith('/my-skill do it', { surface: 'vscode' });
     });
 
     it('sends now: a mid-turn message stops the planner turn through forceSendPrompt', async () => {
@@ -520,7 +520,7 @@ describe('webview messages reach the session through one entry point each', () =
 
       await h.route({ type: 'sendMessageNow', text: 'use Postgres instead' });
 
-      expect(force).toHaveBeenCalledWith('use Postgres instead');
+      expect(force).toHaveBeenCalledWith('use Postgres instead', { surface: 'vscode' });
     });
 
     it('sends now with no turn running as a plain send', async () => {
@@ -531,7 +531,7 @@ describe('webview messages reach the session through one entry point each', () =
       await h.route({ type: 'sendMessageNow', text: 'a normal reply' });
 
       expect(force).not.toHaveBeenCalled();
-      expect(converse).toHaveBeenCalledWith('a normal reply');
+      expect(converse).toHaveBeenCalledWith('a normal reply', { surface: 'vscode' });
     });
 
     function lastHold(): readonly string[] | undefined {
@@ -551,7 +551,7 @@ describe('webview messages reach the session through one entry point each', () =
 
       await h.route({ type: 'sendMessageNow', text: typed });
 
-      expect(force.mock.calls).toEqual([[sent]]);
+      expect(force.mock.calls).toEqual([[sent, { surface: 'vscode' }]]);
       expect(lastHold()).toEqual([]);
       // Nothing was left held to follow the forced turn.
       expect(converse).not.toHaveBeenCalled();

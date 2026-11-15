@@ -76,8 +76,9 @@ export AI_PROVIDER=claude-code      # plan with Claude Code, Codex or OpenCode
 
 ordewell plan --goal "Add rate limiting to the public API"
 ordewell run
-ordewell handoff review             # read the diff
-ordewell handoff merge              # bring it onto your branch
+ordewell merge review               # read the diff
+ordewell merge                      # bring it onto your branch
+ordewell decisions                  # what the planner recorded as standing (`all` adds the superseded)
 ```
 
 Run `ordewell --help` for the full list, or `ordewell setup` to write a

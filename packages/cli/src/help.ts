@@ -50,7 +50,8 @@ Planning:
   ordewell compact retry          Retry compaction of a planner paused on its context, and carry its turn on
   ordewell rewind [<n>]           Fork the conversation from before message <n> (no <n>: list them)
   ordewell resend cancel          Keep a planner turn waiting on its usage limit from going at the reset
-  ordewell handoff [action]       Review, merge, discard or clean up an isolated run
+  ordewell decisions [all]        Print the planner's decision record: what stands, by kind (all: with what was superseded)
+  ordewell merge [action]         Merge an isolated run (or: review, discard, cleanup); handoff is the deprecated name
 
 Tasks (<id> is an order number or a task ID):
   ordewell add-task --title "..."  Add a task to the current plan

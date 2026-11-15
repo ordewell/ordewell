@@ -233,6 +233,29 @@ describe('OrdewellMcpServer', () => {
     expect(calls).toEqual(['s2/t1:blocked:no key', 's1/t1:done:built it']);
   });
 
+  // The `_meta` shapes are as recorded from codex-cli 0.167.0 and Claude Code 2.1.325 (ADR-0068 R2).
+  it("tells a planner handler who made a call, from the runner's own request metadata", async () => {
+    const server = newServer();
+    const callers: McpToolContext['caller'][] = [];
+    const runCommand = async (_args: { command: string }, { caller }: McpToolContext): Promise<McpToolReply> => {
+      callers.push(caller);
+      return { text: 'ran' };
+    };
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }, { runCommand }));
+    const codexTurn = (parent?: string) => ({
+      threadId: 'thread-sub', sessionId: 'thread-root',
+      'x-codex-turn-metadata': { thread_id: 'thread-sub', ...(parent ? { parent_thread_id: parent } : {}), thread_source: 'subagent' },
+    });
+
+    await planner.callTool({ name: 'run_command', arguments: { command: 'ls' }, _meta: codexTurn('thread-root') });
+    await planner.callTool({ name: 'run_command', arguments: { command: 'ls' }, _meta: codexTurn() });
+    await planner.callTool({ name: 'run_command', arguments: { command: 'ls' }, _meta: codexTurn('thread-sub') });
+    await planner.callTool({ name: 'run_command', arguments: { command: 'ls' }, _meta: { 'claudecode/toolUseId': 'toolu_01' } });
+    await planner.callTool({ name: 'run_command', arguments: { command: 'ls' } });
+
+    expect(callers).toEqual([{ subagent: true }, undefined, undefined, { toolUseId: 'toolu_01' }, undefined]);
+  });
+
   it('answers a tool with no handler wired as an invocation error that says nothing ran', async () => {
     const server = newServer();
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));

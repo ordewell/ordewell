@@ -1,5 +1,6 @@
 import type { FocusEvent } from 'react';
 import { MessageSquareText } from 'lucide-react';
+import { LoadingState } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { checkAgain, holderShort, joinedName, joinedShort } from '../../session/holder';
@@ -21,11 +22,12 @@ function toComposer(event: FocusEvent<HTMLDivElement>): void {
  * holder is named by what its lease records.
  */
 function HolderChip({ host, announce }: { host: DaemonHost; announce: (text: string) => void }): JSX.Element | null {
-  const { held, link, readOnly, sessionId } = useSession(host);
+  const { held, link, readOnly, sessionId, opening } = useSession(host);
   if (link?.kind === 'joining') {
     const who = held?.holder.host?.kind === 'daemon' && held.holder.host.ownerPid !== undefined ? "the TUI's daemon" : 'the daemon';
-    return <div className="session-holder"><span className="session-holder-chip">Joining {who} on :{link.port} …</span></div>;
+    return <div className="session-holder"><LoadingState inline label={`Joining ${who} on :${link.port} …`} /></div>;
   }
+  if (opening) return <div className="session-holder"><LoadingState inline label="Opening session…" /></div>;
   if (link?.kind === 'joined') {
     const { holder } = link;
     const tui = holder.ownerPid !== undefined;

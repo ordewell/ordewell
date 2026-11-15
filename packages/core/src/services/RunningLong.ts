@@ -60,6 +60,8 @@ export interface RunningLongFacts {
   /** What the main model's context holds now, from the last usage record or compaction. */
   contextTokens?: number;
   contextWindow?: number;
+  /** Where Ordewell set the runner to compact its context, when it did: a compaction there is routine. */
+  compactionWindow?: number;
   /** The most the context has held this attempt: the saved usage keeps only the last. */
   peakContextTokens?: number;
   /** Automatic compactions of the attempt's own runner session so far. */
@@ -68,6 +70,15 @@ export interface RunningLongFacts {
 
 /** A flag as the supervisor and the surfaces read it: the facts, of the attempt they were counted for. */
 export type RunningLongEvent = RunningLongFacts & { attempt: number };
+
+/**
+ * Compactions of a runner that Ordewell set a window for are routine, and
+ * flagged from the third, then each time their count doubles: the 3rd, 6th,
+ * 12th (ADR-0057 R4). Past that window each call re-reads a long prefix for
+ * little new information, so a task compacts a few times in the course of
+ * ordinary work.
+ */
+export const ROUTINE_COMPACTIONS = 3;
 
 /** The longest delay a timer keeps: Node fires a longer one at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -92,6 +103,8 @@ export class RunningLongClock {
   constructor(
     private readonly threshold: () => RunningLongThreshold,
     private readonly flag: (facts: RunningLongFacts) => void,
+    /** The size Ordewell set the runner to compact at; none where the runner compacts near its model's own window. */
+    private readonly compactWindow: () => number | undefined = () => undefined,
   ) {}
 
   run(): void {
@@ -130,7 +143,14 @@ export class RunningLongClock {
     this.measure();
     if (trigger !== 'auto') return;
     this.compactions += 1;
+    if (this.compactWindow() !== undefined && !this.beyondRoutine()) return;
     this.flag(this.facts('compaction', this.due()));
+  }
+
+  /** The 3rd compaction, the 6th, the 12th: the first that is no longer routine, then each doubling. */
+  private beyondRoutine(): boolean {
+    const n = this.compactions / ROUTINE_COMPACTIONS;
+    return Number.isInteger(n) && Number.isInteger(Math.log2(n));
   }
 
   private measure(): void {
@@ -180,6 +200,7 @@ export class RunningLongClock {
       ...(basis ? { basis } : {}),
       ...(this.meter.lastPromptTokens !== undefined ? { contextTokens: this.meter.lastPromptTokens } : {}),
       ...(this.meter.contextWindow !== undefined ? { contextWindow: this.meter.contextWindow } : {}),
+      ...(this.compactWindow() !== undefined ? { compactionWindow: this.compactWindow() } : {}),
       ...(this.peak !== undefined ? { peakContextTokens: this.peak } : {}),
       compactions: this.compactions,
     };

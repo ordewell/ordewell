@@ -87,8 +87,9 @@ export type AgentEvent =
    * `decided` marks a request already answered — by the adapter, as the
    * manifest says the task's mode does, or as a denial — so it is shown, never asked.
    * `ask` is what a planner's open request is for, in the envelope's terms.
+   * `bySubagent` marks one the runner says a subagent of its own raised.
    */
-  | { type: 'permission_request'; id: string; name: string; detail: string; input?: Record<string, unknown>; suggestions?: unknown[]; toolUseId?: string; decided?: ApprovalDecision; ask?: PlannerAsk }
+  | { type: 'permission_request'; id: string; name: string; detail: string; input?: Record<string, unknown>; suggestions?: unknown[]; toolUseId?: string; bySubagent?: boolean; decided?: ApprovalDecision; ask?: PlannerAsk }
   /** The agent withdrew an open request — an interrupt cancels the call it was for. It takes no answer now. */
   | { type: 'permission_cancelled'; id: string }
   /**
@@ -397,6 +398,8 @@ export interface AgentAdapter {
 
 /** What an adapter adds to run a task rather than a planner (ADR-0018). */
 export interface TaskModeAgentAdapter extends AgentAdapter {
+  /** The size Ordewell set the task's runner to compact its context at, when it did (ADR-0057 R4). */
+  readonly compactWindowTokens?: number;
   mcpAttached(sendFirstTurn?: () => Promise<unknown>): Promise<boolean | AttachState>;
   /**
    * Ask the running turn to stop, keeping the process and its session. Resolves

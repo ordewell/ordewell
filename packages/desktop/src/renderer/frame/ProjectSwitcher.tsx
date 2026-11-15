@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Folder } from 'lucide-react';
-import { Icon } from '@ordewell/ui/design';
+import { Icon, LoadingState } from '@ordewell/ui/design';
 import type { RecentWorkspace } from '../../shared/bridge';
 import { middleEllipsis } from '../welcome/model';
 import { formatChord, isMac, parseChord } from './keys';
@@ -39,19 +39,37 @@ export function ProjectSwitcher(): JSX.Element {
   const { projects } = store;
   const here = store.api.workspace;
   const button = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLUListElement>(null);
+  const awaitingFocus = useRef(false);
+  const interacted = useRef(false);
   const [recents, setRecents] = useState<readonly RecentWorkspace[]>();
+  const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
   // Kept while the window lives: someone who opens projects side by side opens several.
   const [newWindow, setNewWindow] = useState(false);
   const open = overlay === 'project';
   const name = workspaceName(here);
 
   useEffect(() => {
+    if (!open) { awaitingFocus.current = false; interacted.current = false; return; }
+    if (!recents) { awaitingFocus.current = true; return; }
+    // Preserve the menu's first-folder focus when its list arrives, unless the person has already moved on.
+    if (awaitingFocus.current && !interacted.current && menu.current?.contains(document.activeElement)) menu.current.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    awaitingFocus.current = false;
+  }, [open, recents]);
+
+  useEffect(() => {
     let live = true;
-    const load = (): void => { void projects.recents().then((list) => { if (live) setRecents(list); }); };
+    const load = (): void => {
+      setError(undefined);
+      void projects.recents().then((list) => { if (live) setRecents(list); }, (reason: unknown) => {
+        if (live) setError(reason instanceof Error ? reason.message : String(reason));
+      });
+    };
     load();
     const off = projects.onRecentsChange(load);
     return () => { live = false; off(); };
-  }, [projects]);
+  }, [projects, attempt]);
 
   const close = (): void => store.setOverlay(undefined);
   const choose = (path: string | undefined, beside = false): void => {
@@ -85,12 +103,13 @@ export function ProjectSwitcher(): JSX.Element {
         <span className="frame-project-name">{name}</span>
         <Icon icon={ChevronDown} size={12} />
       </button>
-      {/* Drawn once the list is in, so focus lands on its first folder rather than below it. */}
-      {open && recents && (
+      {open && (
         <Popover label="Switch project" anchor={button} onClose={close} className="frame-menu frame-project-menu">
-          <ul role="menu" aria-label="Switch project" onKeyDown={onMenuKey}>
+          <ul ref={menu} role="menu" aria-label="Switch project" onPointerDown={() => { interacted.current = true; }} onKeyDown={(event) => { interacted.current = true; onMenuKey(event); }}>
             <li role="presentation" className="frame-menu-heading">Recent</li>
-            {shown.length === 0 && <li role="presentation" className="frame-menu-empty">No other recent folders</li>}
+            {!recents && !error && <li role="presentation" className="frame-menu-empty"><LoadingState inline label="Loading recent projects…" /></li>}
+            {error && <li role="none"><button type="button" role="menuitem" title={error} onClick={() => setAttempt((value) => value + 1)}>Couldn't load recent projects. Retry</button></li>}
+            {recents && shown.length === 0 && <li role="presentation" className="frame-menu-empty">No other recent folders</li>}
             {shown.map((entry) => (
               <li key={entry.path} role="none">
                 <button

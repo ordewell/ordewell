@@ -387,6 +387,8 @@ interface ClaudeLine {
     input?: Record<string, unknown>;
     permission_suggestions?: unknown[];
     tool_use_id?: string;
+    /** Set only when a subagent's call asks (2.1.325): the main thread's carries none. */
+    agent_id?: string;
     mcp_server?: { name?: string };
   };
   /** `control_response`: the answer to a request Ordewell sent, such as an interrupt. */
@@ -618,6 +620,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * `init`, which can be another `/model`'s.
    */
   private modelCommands: { args: string; turnsLeft: number }[] = [];
+  /** Set for a task only: a planner's conversation is the user's, and its window is left to the CLI. */
+  compactWindowTokens?: number;
 
   /**
    * Prepare the native shell before the process starts, or fail the start
@@ -626,6 +630,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * hands it the whole command as one argument (ADR-0036 N2).
    */
   override async start(opts: AgentStartOptions): Promise<void> {
+    this.compactWindowTokens = opts.kind === 'task' ? TASK_COMPACT_WINDOW_TOKENS : undefined;
     this.nativeShell = await this.ownNativeShell(opts);
     await super.start(opts);
   }
@@ -1019,6 +1024,8 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
           input,
           suggestions,
           ...(msg.request.tool_use_id ? { toolUseId: msg.request.tool_use_id } : {}),
+          // A subagent's request comes before the line announcing its call, so only this tells it apart then.
+          ...(msg.request.agent_id ? { bySubagent: true } : {}),
           ...(this.role === 'planner' || this.readOnlySite ? { ask: plannerAsk(name, input, msg.request.mcp_server?.name, this.nativeShell !== null) } : {}),
           ordewell: this.givenOrdewell && CLAUDE_ORDEWELL.isOrdewellAsk(name),
         }, { id, input, suggestions }, emit);

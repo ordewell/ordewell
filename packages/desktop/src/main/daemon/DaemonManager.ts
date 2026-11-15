@@ -49,6 +49,8 @@ export class DaemonManager {
   private restartedForMismatch = false;
   private shuttingDown = false;
   private cancelTimer: (() => void) | undefined;
+  private connecting: Promise<void> | undefined;
+  private starting: Promise<void> | undefined;
   private attempt = 0;
   private readonly listeners = new Set<(status: DaemonStatus) => void>();
   private readonly setTimer: (fn: () => void, ms: number) => () => void;
@@ -95,6 +97,19 @@ export class DaemonManager {
 
   /** The first probe, and the same probe again behind *Retry now*. */
   async connect(): Promise<void> {
+    if (this.shuttingDown) return;
+    if (this.connecting) return this.connecting;
+    if (this.starting) return this.starting;
+    const connection = this.connectOnce();
+    this.connecting = connection;
+    try {
+      await connection;
+    } finally {
+      if (this.connecting === connection) this.connecting = undefined;
+    }
+  }
+
+  private async connectOnce(): Promise<void> {
     this.clearTimer();
     if (this.status.state !== 'reconnecting') this.set({ state: 'connecting', port: this.port });
     await this.apply(decideAttach(await this.deps.probe(this.port), this.deps.app.contract, this.holding));
@@ -235,6 +250,19 @@ export class DaemonManager {
   }
 
   private async startOwned(): Promise<void> {
+    // A contract mismatch stops its child before replacing it. That new
+    // startup must not wait on the startup whose mismatch it is resolving.
+    if (this.starting && this.child) return this.starting;
+    const startup = this.startOnce();
+    this.starting = startup;
+    try {
+      await startup;
+    } finally {
+      if (this.starting === startup) this.starting = undefined;
+    }
+  }
+
+  private async startOnce(): Promise<void> {
     if (this.shuttingDown) return;
     this.set({ state: 'connecting', port: this.port });
     let child: OwnedProcess;
@@ -259,7 +287,7 @@ export class DaemonManager {
         await this.apply(decideAttach(probe, this.deps.app.contract, 'owned'));
         return;
       }
-      if (exited || (probe.kind !== 'unreachable' && probe.kind !== 'daemon')) {
+      if (exited || probe.kind === 'unverifiable') {
         // The child lost the port, most often to a daemon another client
         // started in the same moment: judge whatever holds it now, as a
         // stranger, and never try to take it again from here.
@@ -277,6 +305,10 @@ export class DaemonManager {
         // would find it answering and call this app's own daemon someone
         // else's, or fork a second one beside it.
         await this.stopChild();
+        if (probe.kind === 'unauthorized') {
+          await this.apply(decideAttach(probe, this.deps.app.contract, 'none'));
+          return;
+        }
         this.fail(`The bundled daemon did not answer within ${Math.round(this.readyTimeoutMs / 1000)}s.`);
         return;
       }

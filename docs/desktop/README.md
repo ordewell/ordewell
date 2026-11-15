@@ -155,6 +155,12 @@ The steps below are for installing by hand, from an unsigned build.
 
 ### macOS
 
+After copying Ordewell to Applications, open the installed app. It confirms the
+installation on its first launch. If the matching installer is still mounted,
+you can choose **Move Installer to Trash** to eject it and move its DMG to
+Trash, or **Keep Installer**. The app matches the signed resource seal before
+offering cleanup, so another build's installer is left alone.
+
 Open the `.dmg` and drag Ordewell to Applications. Then, in Finder, right-click
 (or Control-click) Ordewell and choose **Open**, and **Open** again in the
 dialog. Double-clicking the first time only offers *Move to Bin*.
@@ -587,6 +593,14 @@ recent workspaces are in its user-data folder, which Electron names after the
 package rather than the product: `~/Library/Application Support/@ordewell/desktop`
 on macOS, `%APPDATA%\@ordewell\desktop` on Windows and
 `~/.config/@ordewell/desktop` on Linux.
+
+For intermittent slow launches, `startup.log` in that same folder records
+window, login-shell PATH and daemon startup stages, plus the duration of the
+reads that load a project and its harnesses. It records route names, never
+project paths, goals, request bodies or credentials. Logging is bounded and
+keeps an earlier full log as `startup.log.previous`. For the first ten minutes
+after a window loads, it also records delays in that window's renderer and
+renderer process exits. A hidden window's timer throttling is ignored.
 
 If a build from this repository misbehaves, `npm run ci` runs what CI runs,
 including the offline end-to-end walk of the app, and says which step failed.
