@@ -433,6 +433,8 @@ describe('a path outside the workspaces that only some checks read', () => {
     ['bench/planner-eval/goals/g4.json', {}, {}, ['bench', 'harness']],
     ['bench/planner-eval/README.md', {}, {}, []],
     ['bench/planner-eval/.gitignore', {}, {}, []],
+    ['bench/commit0/drive.mjs', {}, {}, ['bench', 'harness']],
+    ['bench/commit0/libraries.example.json', {}, {}, ['bench', 'harness']],
     ['bench/scale/entry.ts', {}, {}, ['bench', 'harness', 'lint']],
 
     // scripts/ and packaging/: test:bench runs scripts/**/*.test.mjs, here and

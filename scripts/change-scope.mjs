@@ -290,6 +290,8 @@ const ROOT_OWNERS = [
   [/^bench\/lib\//, owes('bench', 'planner')],
   // Run by hand against real models; only its offline tests run, in bench.
   [/^bench\/planner-eval\//, owes('bench')],
+  // Run by hand against a real model in Commit0's images; only its offline tests run, in bench.
+  [/^bench\/commit0\//, owes('bench')],
   // Its tests run in bench, and root lint reads its entry.ts.
   [/^bench\/scale\//, owes('bench', 'lint')],
 

@@ -1,0 +1,17 @@
+{
+  "libraries": [
+    {
+      "name": "<the Commit0 library name, as in the dataset's repo field without its owner>",
+      "image": "<the image Commit0 built for it, its dependencies installed>",
+      "workdir": "/testbed",
+      "srcDir": "<the dataset's src_dir>",
+      "testDir": "<the dataset's test.test_dir>",
+      "testCmd": "python -m pytest",
+      "importName": "<the package the tests import>",
+      "distName": "<its distribution name on PyPI>",
+      "baseCommit": "<the dataset's base_commit>",
+      "referenceCommit": "<the dataset's reference_commit, which the leak check proves is gone>",
+      "networkMarker": "network"
+    }
+  ]
+}
