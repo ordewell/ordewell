@@ -239,7 +239,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
         },
       }),
     onExit: () => shutdown(0),
-    // The same pointer `ordewell plan` leaves, so `ordewell handoff`,
+    // The same pointer `ordewell plan` leaves, so `ordewell merge`,
     // The one-shot commands act on the session this
     // TUI is showing instead of saying there is none.
     onSessionChange: (sessionId, state) => {
