@@ -113,6 +113,45 @@ See [its README](planner-eval/README.md) for prerequisites, every flag and
 what each metric means. It writes its results and its builds to
 `<bench dir>/planner-eval/`.
 
+## Commit0 (`bench/commit0/`)
+
+The driver for comparing the built-in `ordewell` runner on Commit0 libraries
+two ways, on one model. Arm A is one hand-written task assigned to the
+`ordewell` runner with no planner. Arm B is `ordewell plan --goal <the same
+text> --runner ordewell --no-chat --yes`, then `ordewell run` and `merge
+--yes`. Each library and arm runs in its own container on an internal Docker
+network. The only way out is a gateway (core's egress sidecar) that opens
+`openrouter.ai` alone. Inside, the box runs Ordewell packed from this
+checkout's built `dist/`, with `ORDEWELL_NO_MODELS_DEV=1`.
+
+```bash
+npm run build
+node bench/commit0/drive.mjs --dry-run --fixture --image <a python image with pytest and git>
+node bench/commit0/drive.mjs --dry-run --libs <libraries.json>
+```
+
+`--dry-run` sets up everything a run would and runs every check, but makes no
+model call, and the OpenRouter key never enters the box. It checks:
+
+- the checkout holds the PR 177 merge
+- the egress: only openrouter.ai answers, through the gateway or around it
+- the model's context window, from OpenRouter's listing and the offline catalog
+  (a missing window or the fallback value fails the run)
+- the reference implementation is out of reach: not in `git log --all`, not in
+  site-packages, not in a pip archive (a planted leak proves the probe catches it)
+- the tests collect with the dependencies already in the image
+- the count of network-marked tests left out
+
+Each step that would call the model is reported UNVERIFIED. `--run` runs the
+arms and spends on the key in `OPENROUTER_API_KEY`. That key must be one the
+run has to itself, its limit set to the arm's cap and its provider pinned in the
+OpenRouter account, since a request cannot pin it. Pass that provider as
+`--provider-pin` so every result records it.
+`libraries.example.json` shows the shape of a library list. Results, per library
+and arm, go to `<bench dir>/commit0/` (`dry-runs/`, `runs/`, `results.jsonl`),
+and so does the packed runtime (`runtime/<sha>`). Its offline tests are
+`bench/commit0/commit0.test.mjs`.
+
 ## Execution pipeline harness (`bench/pipeline/`)
 
 - `fake-claude/` — a deterministic stand-in for the `claude` CLI: no LLM, no
