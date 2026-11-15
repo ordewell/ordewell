@@ -22,7 +22,7 @@ const warned = (...tasks: Record<string, unknown>[]) => {
 describe('scope overlap at plan time', () => {
   it('names two unordered tasks that declare the same path, and takes the plan', () => {
     expect(warned(delegated('a', { paths: ['src/api/'] }), check('ca', 'a'), delegated('b', { paths: ['src/api/users.ts'] }), check('cb', 'b'))).toEqual([
-      'Tasks "Task a" and "Task b" both declare src/api/users.ts, and nothing orders them: give one a dependency on the other, or name an owner.',
+      'Tasks "Task a" and "Task b" both declare src/api/users.ts, and nothing orders them: name one owner, or, where one consumes what the other makes, give it a dependency on that one.',
     ]);
   });
 
@@ -82,6 +82,6 @@ describe('scope overlap on an edit', () => {
     const checked = checker(standing).checkNow({ kind: 'ops', ops: adding as never }, 'submit');
     expect(checked).toMatchObject({ ok: true, warnings: [] });
     const widened = checker(standing).checkNow({ kind: 'ops', ops: [{ op: 'update', taskId: 'b', changes: { scope: { paths: ['src/', 'docs/'] } } }, ...adding] as never }, 'submit');
-    expect(widened).toMatchObject({ ok: true, warnings: ['Tasks "Task b" and "Task z" both declare docs/, and nothing orders them: give one a dependency on the other, or name an owner.'] });
+    expect(widened).toMatchObject({ ok: true, warnings: ['Tasks "Task b" and "Task z" both declare docs/, and nothing orders them: name one owner, or, where one consumes what the other makes, give it a dependency on that one.'] });
   });
 });

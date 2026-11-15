@@ -337,7 +337,7 @@ export function scopeOverlaps(tasks: readonly Task[]): string[] {
     for (const b of scoped.slice(i + 1)) {
       if (ordered(tasks, a, b)) continue;
       const declared = (a.scope?.paths ?? []).flatMap((one) => (b.scope?.paths ?? []).filter((other) => pathsMeet(one, other)).map((other) => narrower(one, other)));
-      if (declared.length > 0) said.push(`Tasks "${a.title}" and "${b.title}" both declare ${[...new Set(declared)].join(', ')}, and nothing orders them: give one a dependency on the other, or name an owner.`);
+      if (declared.length > 0) said.push(`Tasks "${a.title}" and "${b.title}" both declare ${[...new Set(declared)].join(', ')}, and nothing orders them: name one owner, or, where one consumes what the other makes, give it a dependency on that one.`);
       for (const name of a.scope?.provides ?? []) {
         if (b.scope?.provides?.includes(name)) said.push(`Tasks "${a.title}" and "${b.title}" both provide "${name}", and nothing orders them: name one owner.`);
       }
