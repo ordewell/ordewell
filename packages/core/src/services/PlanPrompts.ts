@@ -208,7 +208,7 @@ export function whoExploresSection(agents: InTurnAgents): string[] {
     agentTier,
     '- A task: when finding out needs a worktree (reproduce, build, prototype), another runner or model\'s judgement, or the user\'s sight and power to stop it, or when a later task will act on its findings. That later task depends on it and gets the findings in its handoff: do not retell them in its brief. Make it a research task only when you must decide something on its report; otherwise a read-only task its readers depend on. A loop\'s fix may depend on it only when the check does: make the check depend on it, and the fix reads the report with `read`. Take in a research task\'s summary, and pull its full report with task_output only where the plan rests on the detail.',
     '- A first plan may be research tasks alone, when the plan cannot be outlined without their evidence: the outline is a line per task saying what it asks, and you plan the rest when their reports wake you, at any supervisor level. A vague goal the user can clarify is not one: ask first.',
-    '- Check the facts briefs rest on first: where they concern an external system you cannot check from here (a reference program\'s behaviour or version, an API, a deployed service), a research task establishes them and the briefs cite its report, never a document that may be stale. Below Act, that first plan is the research alone, as above.',
+    '- Check the facts briefs rest on first: where they concern an external system you cannot check from here (a library\'s or tool\'s behaviour or version, an API, a deployed service), a task establishes them and the briefs rest on its handoff, never a document that may be stale; a small job\'s one task checks them itself.',
     '- Search: a problem that needs rounds of branching, where each round\'s reports decide the next, is the explore skill: rounds of research tasks. Where it is which of several approaches to take, the skill has explorers save their prototypes with save_patch, choose on a check fixed beforehand, and has the build task depend on the chosen explorer and apply its patch with apply_patch.',
     '- Give each delegated piece a self-contained brief, since a task never sees this conversation: its goal, its inputs, what to report back, and how its result will be checked. Plan the integration step, and prefer evidence you can check (a test, an exit code) over a task\'s own word.',
     // The record, not a summary, is what a checkpoint carries over intact (ADR-0067), so it is kept as things are decided.
@@ -393,9 +393,9 @@ function opsTaskSection(conversation: boolean): string[] {
 export const PARALLELISM_RULE: readonly string[] = [
   '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a small leading task that fixes it, not the first layer of a chain. A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel.',
   '- Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own. A decision several tasks share (an interface, a name, a limit such as a size ceiling a test pins) is named in each brief that touches it, with the task that owns it.',
-  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where a rule below says two collide. Once a leading task fixes a contract the rest only add to (a registry, a layout where each addition is a new file), each depends on it alone, never on its siblings.',
-  '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs. That never chains layers a contract task can decouple.',
-  '- Build shared verification once: where several tasks need the same kind of check (a harness against a reference, fixtures, golden files), one early task builds it and each runs it on its own slice. A brief asks for the tests that prove its slice, not a suite of its own.',
+  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
+  '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs. This never justifies chaining layers a contract task can decouple.',
+  '- Build shared verification once: where several tasks need the same kind of check (a test harness, fixtures, golden files), one early task builds it and each runs it on its own slice. Each such brief asks for the tests that prove its slice, not a suite of its own.',
 ];
 
 /** The one-shot planner has no DEFAULTS block to say this. */
@@ -476,7 +476,6 @@ const SUBPLANNER_WORDING: readonly (readonly [RegExp, string])[] = [
   [/ Reads run at once; anything else is approved or refused by the user's settings\./, ' Reads run at once, and nothing asks: what the allowlist does not cover runs sealed, or is refused.'],
   [/^- Synthesize tool findings\b.*$/m, '- What you learn reaches the plan above only through your task_complete handoff.'],
   [/^(- A first plan may be research tasks alone, .*? wake you), at any supervisor level\. A vague goal .*? ask first\./m, '$1.'],
-  [/ Below Act, that first plan is the research alone, as above\./, ''],
   [/^- A small effect you can state as exact commands: one script task\. In the user's turn, run it with run_script; when it belongs to a larger plan, make it a script task in that plan\./m, '- A small effect you can state as exact commands: one script task, in the plan or with run_script.'],
   [/^- AUTORUN is on: .*$/m, '- Your plan starts when your reply ends. Once submit_plan has taken it, end your reply with one line, and do not start its tasks yourself.'],
   [/^.*"autonomy": AFK \(agent works autonomously\) or HITL \(needs user confirmation\).*$/m, '- "autonomy": always AFK: nobody below the root confirms anything'],
@@ -721,7 +720,7 @@ function buildConversationBody(
     'BUILD PLANS:',
     'When the strategy is a build, these rules apply as well. No other strategy is planned as vertical slices.',
     '- Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path, not a horizontal layer.',
-    '- Size each slice to fit a single fresh agent session\'s context window with room to spare: one that would take about as long as doing the whole goal alone is split.',
+    '- Size each slice to fit a single fresh agent session\'s context window with room to spare: a slice that would fill one is split.',
     '- If preparatory refactoring would make the feature easier, make it a leading task the dependent slices depend on ("make the change easy, then make the easy change").',
     '- Wide mechanical refactors (rename a shared symbol, retype a column) are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites in batches, and a final contract task depending on all migrations deletes the old form.',
     '- "userStoriesCovered" links a slice to the user stories it delivers, in their exact words. Leave it out when the goal states none.',
@@ -852,7 +851,7 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '',
   'VERTICAL SLICE PLANNING:',
   'Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path that cuts through all layers (schema → backend logic → API/route → UI/consumer → tests). Do not create horizontal layer-by-layer tasks (e.g. "build all models", then "build all routes", then "build all tests"). Each slice should stand alone as a working end-to-end increment.',
-  '- Size each slice to fit a single fresh agent session\'s context window with room to spare: one that would take about as long as doing the whole goal alone is split.',
+  '- Size each slice to fit a single fresh agent session\'s context window with room to spare: a slice that would fill one is split.',
   '- If preparatory refactoring would make the feature easier, make it its own leading task ("make the change easy, then make the easy change") and have dependent slices declare it as a dependency.',
   '- Wide mechanical refactors (rename a shared symbol, retype a column) whose blast radius spans the codebase are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites over in batches, and a final contract task depending on all migrations deletes the old form.',
   '',
