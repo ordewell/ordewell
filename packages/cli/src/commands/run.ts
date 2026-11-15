@@ -126,7 +126,7 @@ export async function followExecution(
       printStatus(event.tasks);
       // Said once per pause: the run waits on a merge only the user makes (ADR-0020).
       const paused = event.runMerge?.paused === true;
-      if (paused && !pausedAtGate) process.stderr.write('· Paused for Merge all: `ordewell handoff merge` merges what has landed, and the waiting tasks start.\n');
+      if (paused && !pausedAtGate) process.stderr.write('· Paused for Merge all: `ordewell merge` merges what has landed, and the waiting tasks start.\n');
       pausedAtGate = paused;
     }
     if (event.type === 'review_needed') {
@@ -154,7 +154,7 @@ export async function followExecution(
       console.log(`\nRun finished on ${handoffBranchName(event)}${where}: ${n} task${n === 1 ? '' : 's'} landed.`);
       if (isRepoGroup(event)) for (const line of repoResultLines(event)) console.log(`  ${line}`);
       if (event.deferredTo === 'supervisor') console.log('  The supervisor may merge it.');
-      console.log('  `ordewell handoff review|merge|discard|cleanup` to land it.');
+      console.log('  `ordewell merge [review|discard|cleanup]` to land it.');
     }
     if (event.type === 'isolation_merge' && event.trigger?.kind === 'run_end' && event.result.outcome === 'merged') {
       console.log('\nRun finished, and merged into your branch automatically.');
