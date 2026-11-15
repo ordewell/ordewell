@@ -216,6 +216,14 @@ describe('chat-completions adapter: request body', () => {
     const implicit = requestBody('openrouter', { ...request, model: 'openai/gpt-5' });
     expect(implicit.messages[0]).toEqual({ role: 'system', content: 'stable\n\nper run' });
     expect(implicit.messages.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c2', content: 'two' });
+
+    // Live, breakpoints on gemini-3.1-flash-lite wrote nothing (OpenRouter
+    // writes from 4096 tokens) and one of three runs still read nothing, so
+    // Gemini is left to its implicit cache, unrouted.
+    const gemini = requestBody('openrouter', { ...request, model: 'google/gemini-3.1-flash-lite' });
+    expect(gemini.messages[0]).toEqual({ role: 'system', content: 'stable\n\nper run' });
+    expect(gemini.messages.at(-1)).toEqual({ role: 'tool', tool_call_id: 'c2', content: 'two' });
+    expect(gemini.provider).toBeUndefined();
   });
 
   it('caps the system breakpoints so the last message keeps one of Anthropic\'s four', () => {

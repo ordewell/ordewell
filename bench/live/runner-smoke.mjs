@@ -24,7 +24,9 @@
  * Exit 0 when every run that had a key passed; a dialect without a key is
  * UNVERIFIED, never a pass. Caching counts as checked only where the largest
  * prompt exceeded the model's minimum cacheable prefix and a second step
- * could have read it; then a run that never read the cache fails, writes or no.
+ * could have read it; then a run that never read the cache fails, writes or no,
+ * except on Google's best-effort implicit cache, where reading and writing
+ * nothing is UNVERIFIED.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -49,13 +51,17 @@ export const dialectOfProvider = (provider) => NATIVE[provider] ?? 'chat-complet
 // A router's model id names the vendor that serves it, whose minimum applies.
 const VENDOR_PREFIX = { anthropic: 'anthropic', google: 'google', openai: 'openai' };
 
+const vendorOf = (provider, model) => {
+  const slash = model.indexOf('/');
+  return (slash > 0 && VENDOR_PREFIX[model.slice(0, slash)]) || provider;
+};
+
 /**
  * The smallest prompt prefix a model caches. Below it a missing cache hit
  * says nothing, so the run reports UNVERIFIED instead of a verdict on caching.
  */
 export function minCacheableTokens(provider, model) {
-  const slash = model.indexOf('/');
-  const vendor = (slash > 0 && VENDOR_PREFIX[model.slice(0, slash)]) || provider;
+  const vendor = vendorOf(provider, model);
   if (vendor === 'anthropic') {
     if (/haiku[-.]?5/i.test(model)) return 512;
     return /haiku|opus|fable|mythos/i.test(model) ? 4096 : 2048;
@@ -65,12 +71,21 @@ export function minCacheableTokens(provider, model) {
 }
 
 /**
- * Caching's verdict from a run's summed usage. Only a read is a hit: a run
- * that wrote every step and read none paid the write premium for nothing.
+ * Google caches these prompts only implicitly, with no guarantee of a hit: the
+ * runner sends Gemini no breakpoints, since live on gemini-3.1-flash-lite
+ * through OpenRouter they wrote nothing and a run still read nothing.
  */
-export function cacheVerdict(usage, min) {
+export const cachesOnlyImplicitly = (provider, model) => vendorOf(provider, model) === 'google';
+
+/**
+ * Caching's verdict from a run's summed usage. Only a read is a hit: a run
+ * that wrote every step and read none paid the write premium for nothing. A
+ * best-effort cache that read and wrote nothing proves nothing either way.
+ */
+export function cacheVerdict(usage, min, implicitOnly = false) {
   if (usage.steps < 2 || usage.maxInput <= min) return { cache: `cache UNVERIFIED (largest prompt ${usage.maxInput} <= ${min} or fewer than 2 steps)` };
   if (usage.cacheRead > 0) return { cache: 'cache ok' };
+  if (implicitOnly && usage.cacheWrite === 0) return { cache: 'cache UNVERIFIED (implicit caching, best-effort)' };
   if (usage.cacheWrite > 0) {
     return { cache: 'cache MISSING (written, never read)', reason: `the cache was written (${usage.cacheWrite} tokens over ${usage.steps} steps) but never read` };
   }
@@ -278,7 +293,7 @@ async function main() {
       const usage = readUsage(homeDir);
       fs.rmSync(path.join(homeDir, '.ordewell'), { recursive: true, force: true });
       const min = minCacheableTokens(entry.provider, entry.model);
-      const { cache, reason: cacheReason } = cacheVerdict(usage, min);
+      const { cache, reason: cacheReason } = cacheVerdict(usage, min, cachesOnlyImplicitly(entry.provider, entry.model));
       if (cacheReason && result.reasons.length === 0) result.reasons.push(cacheReason);
       if (usage.steps === 0 && result.reasons.length === 0) result.reasons.push('no usage was recorded in the transcript');
       const ok = result.reasons.length === 0;
