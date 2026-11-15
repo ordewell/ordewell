@@ -8,6 +8,7 @@ import { stageHunks, unstageHunks, stagePaths, unstagePaths, readCheckoutDiff, d
 import { onCheckoutChange, notifyCheckoutChange } from './checkoutEvents';
 import { hunkAfterLine, sliceHunk } from './checkoutModel';
 import { parseCheckoutDiffTabId } from './checkoutTabs';
+import { EditorSkeleton } from '../explorer/fileView';
 import '../diffKit.css';
 import './checkout.css';
 
@@ -124,7 +125,7 @@ function CheckoutFileDiff({ api, tab, repo, path, kind }: {
   const fileAction = diff?.kind === 'text' && diff.untracked ? 'Stage file' : unstaged ? 'Stage file' : 'Unstage file';
 
   const body = (): JSX.Element => {
-    if (!diff) return <EmptyState className="dk-state" icon={GitCompare} title="Loading the diff…" />;
+    if (!diff) return <EditorSkeleton label="Loading the diff…" />;
     switch (diff.kind) {
       case 'error':
         return (
@@ -139,7 +140,10 @@ function CheckoutFileDiff({ api, tab, repo, path, kind }: {
       case 'unchanged': return <EmptyState className="dk-state" icon={GitCompare} title="This file has no change here any more." />;
       case 'text':
         if (failed) return <EmptyState className="dk-state" icon={FileX} title={`The diff editor could not load: ${failed}`} />;
-        return <div ref={hostNode} className="dk-editor" data-testid="monaco-diff-host" />;
+        return <div className="fv-editor-wrap" aria-busy={!editor}>
+          {!editor && <EditorSkeleton label="Loading diff editor…" />}
+          <div ref={hostNode} className="dk-editor" data-testid="monaco-diff-host" />
+        </div>;
     }
   };
 

@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { augmentedPath, clearAugmentedPathCache, wellKnownBinDirs, withPath } from '../shellPath';
 
 const posixOnly = process.platform === 'win32' ? describe.skip : describe;
@@ -28,6 +30,16 @@ posixOnly('augmentedPath', () => {
 
     const segments = (await augmentedPath(exec)).split(path.delimiter);
     expect(segments).toContain('/only/bin');
+  });
+
+  it('expands PATH in a real shell without consuming the trailing marker as part of the variable name', async () => {
+    const profilePath = path.join(tmpdir(), 'ordewell-login-bin');
+    const result = await augmentedPath(async (command) => {
+      const script = / -c '([^']*)'$/.exec(command)?.[1];
+      expect(script).toBeDefined();
+      return { stdout: execFileSync('/bin/sh', ['-c', script ?? 'exit 1'], { encoding: 'utf8', env: { PATH: profilePath } }) };
+    });
+    expect(result.split(path.delimiter)).toContain(profilePath);
   });
 
   it('falls back to well-known per-user bin dirs when the login shell fails', async () => {

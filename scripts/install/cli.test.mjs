@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -664,8 +664,8 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
         assert.doesNotMatch(result.stdout, /\x1b/, 'no colour when stdout is not a terminal');
       });
 
-      // `command -v` prints a relative PATH entry's match as `old/ordewell`,
-      // and an empty entry's (the current folder) as a bare `ordewell` under dash.
+      // dash's `command -v` leaves relative matches relative; macOS sh
+      // already expands them to an absolute path.
       for (const [label, entry] of [['a relative entry', 'old'], ['an empty entry', ''], ['a dot entry', '.']]) {
         it(`names an older ordewell found through ${label} on PATH, under ${shell}`, (t) => {
           if (!hostHas(shell)) return t.skip(`${shell} is not installed`);
@@ -680,11 +680,18 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
           const result = spawnSync(whichSh(shell), [SH], { cwd, env: { PATH, HOME: home, TMPDIR: tmpdir(), ORDEWELL_CLI_FROM: release(), ORDEWELL_INSTALL_DIR: target }, encoding: 'utf8' });
           assert.equal(result.status, 0, result.stderr);
           assert.equal(spawnSync(whichSh(shell), ['-c', 'ordewell --version'], { cwd, env: { PATH }, encoding: 'utf8' }).stdout.trim(), 'ordewell 0.12.6');
-          const shown = join(old, 'ordewell');
-          assert.match(result.stdout, new RegExp(`It comes first on your PATH: ${shown}\\n`));
-          assert.match(result.stdout, new RegExp(`  delete ${shown}\\n`));
-          assert.match(result.stdout, new RegExp(`put ${target} before ${old.replace(/\/$/, '')} on your PATH`));
-          assert.match(result.stdout, /relative to the folder you are in/);
+          const shown = realpathSync.native(join(old, 'ordewell'));
+          const first = result.stdout.match(/^It comes first on your PATH: (.+)$/m);
+          assert.ok(first, result.stdout);
+          assert.equal(realpathSync.native(first[1]), shown);
+          const removal = result.stdout.match(/^  delete (.+)$/m);
+          assert.ok(removal, result.stdout);
+          assert.equal(realpathSync.native(removal[1]), shown);
+          const order = result.stdout.match(/^  or put (.+) before (.+) on your PATH\.$/m);
+          assert.ok(order, result.stdout);
+          assert.equal(realpathSync.native(order[1]), realpathSync.native(target));
+          assert.equal(realpathSync.native(order[2]), realpathSync.native(old));
+          if (shell === 'dash') assert.match(result.stdout, /relative to the folder you are in/);
         });
       }
     }

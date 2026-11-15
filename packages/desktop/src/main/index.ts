@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
-import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, Tray } from 'electron';
+import { dirname, join } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, Notification, shell, Tray } from 'electron';
 import {
   augmentedPath,
   DAEMON_CONTRACT,
@@ -15,6 +16,7 @@ import {
 import { EVENTS, type RecentWorkspace } from '../shared/bridge';
 import { buildRequest, type RouteId, type RouteParams } from '../shared/routes';
 import { DaemonManager } from './daemon/DaemonManager';
+import { RENDERER_TIMING_SOURCE, rendererDelay } from './rendererTiming';
 import { forkBundledDaemon } from './daemon/forkDaemon';
 import { findLiveRuns, type LiveRun } from './daemon/liveRuns';
 import { HolderConnections } from './daemon/holders';
@@ -32,6 +34,8 @@ import { menuTemplate } from './menu';
 import { registerNewWindowEntries } from './osEntries';
 import { ProjectOpener } from './projectOpener';
 import { AttentionNotifier } from './notifications';
+import { completeMacInstall } from './installCompletion';
+import { StartupLog } from './startupLog';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
 import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from './updater';
@@ -59,6 +63,33 @@ if (!app.requestSingleInstanceLock(thisLaunch)) {
 }
 
 async function main(): Promise<void> {
+  const startupLog = new StartupLog(join(app.getPath('userData'), 'startup.log'));
+  startupLog.record('launch', { version: app.getVersion(), arch: process.arch, packaged: app.isPackaged });
+  app.on('browser-window-created', (_event, win) => {
+    startupLog.record('window.created', { window: win.id });
+    win.once('ready-to-show', () => startupLog.record('window.ready', { window: win.id }));
+    win.webContents.on('did-finish-load', () => {
+      startupLog.record('window.loaded', { window: win.id });
+      void win.webContents.executeJavaScript(RENDERER_TIMING_SOURCE).catch(() => {});
+    });
+    win.webContents.on('console-message', (event) => {
+      const delayMs = rendererDelay(event.message);
+      if (delayMs !== undefined) startupLog.record('renderer.delayed', { window: win.id, delayMs });
+    });
+    win.webContents.on('render-process-gone', (_event, details) => {
+      startupLog.record('renderer.gone', { window: win.id, reason: details.reason, exitCode: details.exitCode });
+    });
+    win.on('unresponsive', () => startupLog.record('window.unresponsive', { window: win.id }));
+    win.on('responsive', () => startupLog.record('window.responsive', { window: win.id }));
+  });
+  let lastTick = performance.now();
+  const responsiveness = setInterval(() => {
+    const now = performance.now();
+    const delayMs = Math.round(now - lastTick - 1000);
+    lastTick = now;
+    if (delayMs >= 1000) startupLog.record('main.delayed', { delayMs });
+  }, 1000);
+  responsiveness.unref();
   // Filled in once each exists: the handlers wired before then find nothing to do.
   const late: { windows?: WindowManager; daemon?: DaemonManager; launch?: (data: LaunchData) => void; open?: (path: string) => void } = {};
   // A launch like `code <folder>`: before the app can open one, it is brought forward.
@@ -82,8 +113,13 @@ async function main(): Promise<void> {
 
   // A GUI launch inherits launchd's or the desktop's PATH, which finds none of
   // the runners; the daemon this app forks inherits whatever is set here.
-  process.env.PATH = await augmentedPath();
+  startupLog.record('shell-path.started');
+  const resolvedPath = augmentedPath().then((path) => {
+    startupLog.record('shell-path.finished');
+    return path;
+  });
   await app.whenReady();
+  startupLog.record('app.ready');
   suppressOsSurfaces();
 
   lockSession(devOrigin);
@@ -124,6 +160,7 @@ async function main(): Promise<void> {
     logPath: daemonLogPath(),
   });
   late.daemon = daemon;
+  daemon.onStatus((status) => startupLog.record('daemon.status', { state: status.state }));
 
   const openProjects = new OpenProjectsMemory();
   const wm = new WindowManager({
@@ -261,6 +298,7 @@ async function main(): Promise<void> {
     updates,
     notifications,
     terminals: { channel: terminalChannel, host: terminalHost },
+    onDaemonRead: (route) => startupLog.request(route),
   });
 
   /** Live runs, or [] when no daemon answers: nothing can be running that this app could lose. */
@@ -316,6 +354,7 @@ async function main(): Promise<void> {
         if (answer.response !== 0) return;
       }
       quitting = true;
+      startupLog.record('quit.started');
       try {
         prefs.set({ openProjects: openProjects.list() });
       } catch (error) {
@@ -329,6 +368,9 @@ async function main(): Promise<void> {
       hideTray();
       terminalHost.killAll();
       await daemon.shutdown();
+      startupLog.record('quit.finished');
+      // The log is best effort even on a disk that stopped answering.
+      await Promise.race([startupLog.flush(), new Promise<void>((resolve) => setTimeout(resolve, 100))]);
       app.exit(0);
     })();
   });
@@ -358,6 +400,17 @@ async function main(): Promise<void> {
   late.launch = (data) => { void launch(data, false); };
 
   await launch(thisLaunch, true);
+  if (mac && app.isPackaged && osSurfacesAllowed() && app.isInApplicationsFolder()) {
+    void completeMacInstall({
+      bundle: dirname(dirname(dirname(app.getPath('exe')))),
+      receipt: join(userData, 'install-completion.json'),
+      show: async (options) => (await dialog.showMessageBox(options)).response,
+      trash: (path) => shell.trashItem(path),
+    }).catch((error: unknown) => { console.warn(`[install] ${error instanceof Error ? error.message : String(error)}`); });
+  }
+  // The welcome window can paint while the user's login profile resolves.
+  // Only the daemon and its runners need the resulting PATH.
+  process.env.PATH = await resolvedPath;
   void updates.start();
   await daemon.connect();
 }

@@ -5,6 +5,7 @@ import type { FrameApi, Tab, Unregister } from '../../frame/api';
 import { createDiffEditor, loadMonaco, type DiffEditorHandle } from '../../monaco';
 import { messageOf } from '../../session/daemon';
 import { all } from '../Stub';
+import { EditorSkeleton } from '../explorer/fileView';
 import { diffSides, parsePatch, type DiffSides } from '../changes/changesModel';
 import '../diffKit.css';
 import { readCommit } from './gitData';
@@ -69,14 +70,17 @@ function CommitDiff({ api, tab }: { api: FrameApi; tab: Tab }): JSX.Element {
 
   const body = (): JSX.Element => {
     switch (read.kind) {
-      case 'loading': return <EmptyState className="dk-state" icon={FileDiffIcon} title="Loading the diff…" />;
+      case 'loading': return <EditorSkeleton label="Loading the diff…" />;
       case 'error':
         return <EmptyState className="dk-state" icon={FileX} title={read.message} action={<Button onClick={() => setRound((n) => n + 1)}>Try again</Button>} />;
       case 'binary': return <EmptyState className="dk-state" icon={FileX} title="This is a binary file, so its change is not shown." />;
       case 'none': return <EmptyState className="dk-state" icon={FileX} title="This commit changes this file’s mode or name only, so there are no lines to show." />;
       case 'text':
         if (failed) return <EmptyState className="dk-state" icon={FileX} title={`The diff editor could not load: ${failed}`} />;
-        return <div ref={hostNode} className="dk-editor" data-testid="monaco-diff-host" />;
+        return <div className="fv-editor-wrap" aria-busy={!editor}>
+          {!editor && <EditorSkeleton label="Loading diff editor…" />}
+          <div ref={hostNode} className="dk-editor" data-testid="monaco-diff-host" />
+        </div>;
     }
   };
 

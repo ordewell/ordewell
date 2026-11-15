@@ -144,6 +144,9 @@ function unpackedAt(resources, entry, exists) {
 /** What a resources directory must hold; returns the failures, none when whole. */
 export function checkResources(resources, exists = existsSync, platform = process.platform, modeOf = (path) => statSync(path).mode, archsOf = (path) => binaryArchs(readFileSync(path))) {
   const failures = [];
+  if (exists(join(resources, 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds'))) {
+    failures.push(`${resources}: node-pty's unused prebuilds are shipped alongside the rebuilt addon, including helpers for other architectures`);
+  }
   if (!exists(join(resources, 'app.asar'))) failures.push(`${resources}: app.asar is missing`);
   for (const entry of UNPACKED_ENTRIES) {
     if (!unpackedAt(resources, entry, exists)) {

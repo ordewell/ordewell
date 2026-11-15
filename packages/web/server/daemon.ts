@@ -78,9 +78,14 @@ export function runDaemon(args: string[]): void {
     app.get('/', (c) => c.json({ message: 'Ordewell API', docs: '/api/workspaces' }));
     server.on('request', createRequestListener(app, admission));
     attachWsHandler(server, pool, admission);
-    pool.getProviderModels().catch((err) => {
-      console.error(`[web] model discovery warmup failed: ${err?.message ?? err}`);
-    });
+    // A desktop window asks for its workspace's models itself. Warming the
+    // daemon's home catalog starts every agent again under a different scope,
+    // competing with that first project load and doing unused work on welcome.
+    if (!args.includes('--desktop-app')) {
+      pool.getProviderModels().catch((err) => {
+        console.error(`[web] model discovery warmup failed: ${err?.message ?? err}`);
+      });
+    }
     console.error(`[web] Ordewell API server: http://localhost:${port}`);
   });
 

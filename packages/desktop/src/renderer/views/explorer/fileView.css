@@ -24,6 +24,9 @@
 .fv-skeleton { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: var(--ow-space-2) var(--ow-space-3); overflow: hidden; }
 .fv-skeleton-line { display: flex; align-items: center; flex: none; height: var(--ow-row); }
 .fv-skeleton-bar { display: block; height: var(--ow-space-2); border-radius: var(--ow-radius-sm); background: var(--ow-bg-hover); }
+.fv-skeleton-label { color: var(--ow-fg-secondary); font: var(--ow-type-small); }
+.fv-editor-wrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fv-editor-wrap > .fv-skeleton { position: absolute; inset: 0; }
 
 .fv-state { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; min-height: 0; overflow: auto; }
 

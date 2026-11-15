@@ -129,7 +129,7 @@ async function loginShellPath(execImpl: ExecFn): Promise<string | null> {
   try {
     // Markers isolate $PATH from any profile noise (motd, echo in .zprofile…).
     const { stdout } = await execImpl(
-      `${shell} -l -c 'echo "${PATH_MARKER}$PATH${PATH_MARKER}"'`,
+      `${shell} -l -c 'echo "${PATH_MARKER}\${PATH}${PATH_MARKER}"'`,
       { timeout: LOGIN_SHELL_TIMEOUT_MS },
     );
     const match = stdout.match(new RegExp(`${PATH_MARKER}([^\\n]*)${PATH_MARKER}`));

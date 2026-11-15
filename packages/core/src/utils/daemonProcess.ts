@@ -121,7 +121,10 @@ export function daemonHttpGet(
   path: string,
   timeoutMs: number = 2000,
 ): Promise<DaemonHttpResponse> {
-  const token = readDaemonToken(port);
+  return httpGetWithToken(port, path, timeoutMs, readDaemonToken(port));
+}
+
+function httpGetWithToken(port: number, path: string, timeoutMs: number, token: string | undefined): Promise<DaemonHttpResponse> {
   const headers: Record<string, string> = token ? { Authorization: bearerHeaderValue(token) } : {};
   return new Promise((resolvePromise, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path, timeout: timeoutMs, headers }, (res) => {
@@ -182,13 +185,23 @@ const DAEMON_REFUSAL_MARK = 'bearer token';
  */
 export async function probeDaemon(port: number, timeoutMs: number = 2000): Promise<DaemonProbe> {
   let res: DaemonHttpResponse;
+  let token = readDaemonToken(port);
   try {
-    res = await daemonHttpGet(port, '/api/server', timeoutMs);
+    res = await httpGetWithToken(port, '/api/server', timeoutMs, token);
+    if (res.status === 401 && res.data.includes(DAEMON_REFUSAL_MARK)) {
+      const fresh = readDaemonToken(port);
+      // A startup can bind between reading the old credential and sending
+      // this request. Recheck once with a changed token; a stable refusal stays one.
+      if (fresh !== undefined && fresh !== token) {
+        token = fresh;
+        res = await httpGetWithToken(port, '/api/server', timeoutMs, token);
+      }
+    }
   } catch (err) {
     return isConnectionRefused(err) ? { kind: 'unreachable' } : { kind: 'unverifiable' };
   }
   if (res.status === 401 && res.data.includes(DAEMON_REFUSAL_MARK)) {
-    return { kind: 'unauthorized', tokenPresented: readDaemonToken(port) !== undefined };
+    return { kind: 'unauthorized', tokenPresented: token !== undefined };
   }
   if (res.status !== 200) return { kind: 'unverifiable' };
   const identity = parseIdentity(res.data);

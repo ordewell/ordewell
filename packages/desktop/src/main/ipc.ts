@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent, type WebContents } from 'electron';
 import { CHANNELS, EVENTS, type AppInfo, type ConfirmSpec, type NotificationClick, type NotificationRequest, type StreamDelivery, type StreamEvent, type TerminalDelivery } from '../shared/bridge';
 import { isAppPage } from '../shared/csp';
-import { buildRequest, childStreamPath, liveSessionOf, namingWorkspace, segmentError, sessionStreamPath, type BuildResult } from '../shared/routes';
+import { buildRequest, childStreamPath, liveSessionOf, namingWorkspace, segmentError, sessionStreamPath, type BuildResult, type RouteId } from '../shared/routes';
 import type { DaemonManager } from './daemon/DaemonManager';
 import type { HolderConnections, HolderProxy } from './daemon/holders';
 import type { DaemonProxy } from './daemon/proxy';
@@ -36,6 +36,7 @@ export interface IpcDeps {
   updates: UpdateController;
   notifications: AttentionNotifier;
   terminals: { channel: TerminalChannel; host: TerminalHost };
+  onDaemonRead?: (route: RouteId) => ((ok: boolean) => void) | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -186,7 +187,15 @@ export function registerIpc(deps: IpcDeps): void {
   handle(CHANNELS.daemonCall, async (event, routeId, params, body) => {
     const built = buildRequest(routeId, namingWorkspace(routeId, params, windowWorkspace(event)), body);
     if (!built.ok) return { ok: false, error: built.error };
-    return targetOf(event, liveSessionOf(routeId, params)).call(built.request);
+    const finish = deps.onDaemonRead?.(routeId as RouteId);
+    let ok = false;
+    try {
+      const result = await targetOf(event, liveSessionOf(routeId, params)).call(built.request);
+      ok = result.ok;
+      return result;
+    } finally {
+      finish?.(ok);
+    }
   });
   handle(CHANNELS.daemonSubscribe, (event, target) => {
     if (!isRecord(target)) throw new Error('subscribe takes a target');

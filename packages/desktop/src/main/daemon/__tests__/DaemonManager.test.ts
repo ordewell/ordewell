@@ -191,6 +191,49 @@ describe('DaemonManager: attach', () => {
 });
 
 describe('DaemonManager: own', () => {
+  it('keeps ownership while a startup handshake briefly sees an old token', async () => {
+    const w = world({ kind: 'unreachable' });
+    let stale = true;
+    const fork = (): OwnedProcess => {
+      const child = w.fork();
+      const probe = w.probe.getMockImplementation()!;
+      w.probe.mockImplementation(async () => {
+        if (stale) { stale = false; return { kind: 'unauthorized', tokenPresented: true }; }
+        return probe();
+      });
+      return child;
+    };
+    const { daemon, statuses } = manager(w, { fork });
+    await daemon.connect();
+    expect(daemon.current()).toMatchObject({ state: 'connected', owned: true });
+    expect(statuses.some((s) => s.state === 'unauthorized')).toBe(false);
+    await daemon.shutdown();
+    expect(w.children[0]?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops its startup child before showing a token rejection that persists', async () => {
+    const w = world({ kind: 'unreachable' });
+    const fork = (): OwnedProcess => {
+      const child = w.fork();
+      w.probe.mockResolvedValue({ kind: 'unauthorized', tokenPresented: true });
+      return child;
+    };
+    const { daemon } = manager(w, { fork, readyTimeoutMs: 30 });
+    await daemon.connect();
+    expect(daemon.current()).toMatchObject({ state: 'unauthorized', tokenPresented: true });
+    expect(w.children[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(daemon.owned).toBe(false);
+  });
+
+  it('shares an initial connection with Retry, so overlapping probes cannot fork two daemons', async () => {
+    const w = world({ kind: 'unreachable' });
+    w.state.answerAfter = 10;
+    const { daemon } = manager(w);
+    await Promise.all([daemon.connect(), daemon.retry()]);
+    expect(w.fork).toHaveBeenCalledTimes(1);
+    expect(daemon.current()).toMatchObject({ state: 'connected', owned: true });
+  });
+
   it('forks the bundled daemon on a free port and owns it once its own PID answers', async () => {
     const w = world({ kind: 'unreachable' });
     w.state.answerAfter = 3;

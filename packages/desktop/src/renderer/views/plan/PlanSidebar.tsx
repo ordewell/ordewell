@@ -1,5 +1,5 @@
 import { Plus } from 'lucide-react';
-import { IconButton, StatusIndicator, type StatusId } from '@ordewell/ui/design';
+import { IconButton, LoadingState, StatusIndicator, type StatusId } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { joinedShort } from '../../session/holder';
@@ -67,7 +67,7 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
 
   // The Reconnecting bar speaks for the daemon (W15): this list keeps what it last read, dimmed and inert, and claims no wait of its own.
   if (!connected && !Array.isArray(sessions)) return <p className="frame-empty">Sessions show here once the daemon is back.</p>;
-  if (sessions === undefined) return <p className="frame-empty">Loading…</p>;
+  if (sessions === undefined) return <LoadingState label="Loading sessions…" />;
   if (typeof sessions === 'string') return <p className="frame-empty error">{sessions}</p>;
   if (sessions.length === 0) return <p className="frame-empty">No sessions yet. Describe a goal to the planner.</p>;
   return (

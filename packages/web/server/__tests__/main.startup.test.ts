@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'child_process';
 import { createServer } from 'http';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { createServer as createNetServer } from 'net';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -68,6 +68,48 @@ async function daemonWithPidFile(name: string, ...extra: string[]) {
 const signalsRunNoHandler = process.platform === 'win32';
 
 describe('daemon startup', () => {
+  it('defers desktop model discovery until a client asks, and keeps it available on demand', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ordewell-desktop-discovery-'));
+    const port = await freePort();
+    const pidFile = join(home, 'daemon.pid');
+    const discovery = join(home, 'discovery');
+    const preload = join(home, 'probes.cjs');
+    // Keep the real daemon and HTTP routes, replacing the external probes so
+    // this regression neither discovers local accounts nor calls a vendor.
+    writeFileSync(preload, [
+      `const core = require(${JSON.stringify(require.resolve('@ordewell/core'))});`,
+      'core.RunnerInstallation.prototype.plannerUsability = async () => ({ usable: false });',
+      'core.RunnerInstallation.prototype.filterInstalled = async () => [];',
+      'core.ModelResolver.prototype.refresh = async () => ({});',
+      'core.ModelResolver.prototype.pickerOptions = async () => [];',
+      `core.ModelResolver.prototype.modelsForRunners = async () => { require('fs').appendFileSync(${JSON.stringify(discovery)}, 'asked\\n'); return { 'claude-code': [{ modelId: 'test-model', modelLabel: 'Test model', variants: [] }] }; };`,
+    ].join('\n'));
+    const child = spawn(process.execPath, ['--require', preload, resolve(__dirname, '../../dist/server/main.js'), '--port', String(port), '--pid-file', pidFile, '--desktop-app'], {
+      env: { HOME: home, USERPROFILE: home, PATH: '', ORDEWELL_DIRENV: '0' },
+      stdio: 'ignore',
+    });
+    try {
+      await waitFor(() => existsSync(pidFile));
+      const token = readFileSync(join(home, '.ordewell', `server-${port}.token`), 'utf8').trim();
+      const get = (route: string) => fetch(`http://127.0.0.1:${port}${route}`, { headers: { Authorization: `Bearer ${token}` } });
+      expect((await get('/api/server')).ok).toBe(true);
+      expect((await get('/api/runners')).ok).toBe(true);
+      expect(existsSync(discovery)).toBe(false);
+
+      const response = await get(`/api/models?workspace=${encodeURIComponent(home)}`);
+      expect(response.ok).toBe(true);
+      expect(await response.json()).toMatchObject({ modelsByRunner: { 'claude-code': [{ modelId: 'test-model' }] } });
+      expect(readFileSync(discovery, 'utf8')).toBe('asked\n');
+    } finally {
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        const closed = new Promise<void>((resolveExit) => child.once('close', () => resolveExit()));
+        child.kill('SIGKILL');
+        await closed;
+      }
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it('writes its PID file only once listening', async () => {
     const { child, pidFile, close } = await daemonWithPidFile('pid');
     try {

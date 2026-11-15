@@ -91,7 +91,8 @@ export function Banner({ tone = 'note', role = 'note', children, actions }: Bann
 export function EditorSkeleton({ label }: { label: string }): JSX.Element {
   const widths = [38, 64, 52, 0, 71, 46, 58, 33, 0, 62];
   return (
-    <div className="fv-skeleton" role="status" aria-label={label}>
+    <div className="fv-skeleton" role="status" aria-label={label} aria-busy="true">
+      <span className="fv-skeleton-label">{label}</span>
       {widths.map((width, index) => (
         <span key={index} className="fv-skeleton-line">
           {width > 0 && <span className="fv-skeleton-bar" style={{ width: `${width}%` }} />}

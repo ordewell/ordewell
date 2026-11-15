@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
-import { ChevronDown, ChevronRight, CircleAlert, KeyRound, LogIn, RotateCw, Settings as SettingsIcon } from 'lucide-react';
-import { Button, EmptyState, Icon } from '@ordewell/ui/design';
+import { ChevronDown, ChevronRight, CircleAlert, KeyRound, LogIn, RotateCw } from 'lucide-react';
+import { Button, EmptyState, Icon, LoadingState } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
 import { describeSignInWays, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
@@ -76,10 +76,11 @@ function RestoreRunDefaults({ disabled, onRestore }: { disabled: boolean; onRest
   );
 }
 
-function Planner({ settings, backends, models, busy, onPlanner, onModel, onEffort }: {
+function Planner({ settings, backends, models, modelsPending, busy, onPlanner, onModel, onEffort }: {
   settings: SettingsResponse;
   backends: readonly PlannerBackend[];
   models: DiscoveredModel[] | undefined;
+  modelsPending: boolean;
   busy: boolean;
   onPlanner(provider: string): void;
   onModel(model: string): void;
@@ -120,7 +121,7 @@ function Planner({ settings, backends, models, busy, onPlanner, onModel, onEffor
       </label>
       <label className="settings-field" htmlFor={modelFieldId}>
         <span className="settings-label">Planner model</span>
-        <select className="ow-select" id={modelFieldId} aria-label="Planner model" value={settings.orchestratorModel} disabled={busy || choices.length === 0} onChange={(event) => onModel(event.target.value)}>
+        <select className="ow-select" id={modelFieldId} aria-label="Planner model" value={settings.orchestratorModel} disabled={busy || modelsPending || choices.length === 0} onChange={(event) => onModel(event.target.value)}>
           {choices.length === 0 && <option value={settings.orchestratorModel}>{settings.orchestratorModel || 'No model listed'}</option>}
           {choices.map((candidate) => <option key={candidate.modelId} value={candidate.modelId}>{candidate.modelLabel || candidate.modelId}</option>)}
         </select>
@@ -146,11 +147,11 @@ function Planner({ settings, backends, models, busy, onPlanner, onModel, onEffor
 function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
   const { sessionId } = useSession(host);
   const { view, refresh, rescan, update, updateRun, setRunner, savePref, setTheme } = useSettings(host, sessionId);
-  const { settings, runners, models, prefs, busy, loading, error, backends } = view;
+  const { settings, runners, models, modelsLoading, modelsError, prefs, busy, loading, error, backends } = view;
   // Held here as well as in the prefs so the disclosure answers the click at once, not after the write.
   const [advancedChoice, setAdvancedChoice] = useState<boolean | undefined>(undefined);
   const advancedOpen = advancedChoice ?? prefs?.settingsAdvancedOpen ?? false;
-  if (loading) return <EmptyState icon={SettingsIcon} title="Loading settings…" />;
+  if (loading && !settings) return <LoadingState label="Loading settings…" />;
   if (!settings) {
     return (
       <EmptyState
@@ -189,7 +190,7 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
         <p>The planner, the runners and the run rules. Every surface shares them; the desktop's own preferences stay in this app.</p>
       </header>
       {error && <p className="settings-error" role="alert"><CircleAlert size={16} aria-hidden="true" /><span>{error}</span></p>}
-      {busy && <p className="settings-saving" role="status">Saving…</p>}
+      {busy && <LoadingState className="settings-saving" inline label={modelsLoading ? 'Refreshing settings…' : 'Saving…'} />}
 
       <section className="settings-section" aria-labelledby="settings-appearance">
         <h3 id="settings-appearance">Appearance</h3>
@@ -209,16 +210,19 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
           backends={backends}
           models={runnerModels as DiscoveredModel[] | undefined}
           busy={busy}
+          modelsPending={!models && (modelsLoading || modelsError !== undefined)}
           onPlanner={(provider) => { void update({ env: { AI_PROVIDER: provider } }); }}
           onModel={(model) => { void update({ orchestratorModel: model }); }}
           onEffort={(effort) => { void update({ plannerThinkingEffort: effort }); }}
         />
+        {modelsLoading && <LoadingState inline label={models ? 'Refreshing models…' : 'Loading models…'} />}
+        {modelsError && <p className="settings-error" role="alert">Couldn't load models: {modelsError}{' '}<Button size="sm" onClick={() => { void rescan(); }}>Retry models</Button></p>}
       </section>
 
       <section className="settings-section" aria-labelledby="settings-runners">
         <div className="settings-section-head">
           <h3 id="settings-runners">Runners</h3>
-          <Button size="sm" icon={RotateCw} disabled={busy} onClick={() => { void rescan(); }}>Refresh</Button>
+          <Button size="sm" icon={RotateCw} busy={modelsLoading && !loading} disabled={busy} onClick={() => { void rescan(); }}>Refresh</Button>
         </div>
         <p className="settings-hint">Which coding agents a task may run on, and which models each may offer.</p>
         <ul className="settings-runners">
@@ -235,7 +239,7 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
                   hint={runnerHint(row) || undefined}
                   onChange={(enabled) => { void setRunner(row.id, enabled); }}
                 />
-                {row.installed ? (
+                {row.installed && !models && modelsLoading ? <LoadingState inline label={`Loading ${row.name} models…`} /> : row.installed && !models && modelsError ? null : row.installed ? (
                   <ModelAllowlist
                     runnerName={row.name}
                     models={models?.modelsByRunner[row.id] ?? []}
