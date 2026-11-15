@@ -28,7 +28,7 @@ afterEach(async () => {
   clearAugmentedPathCache();
 });
 
-interface Said { tool?: string; native?: boolean; reply?: { text: string; isError: boolean } }
+interface Said { tool?: string; native?: boolean; subagent?: boolean; reply?: { text: string; isError: boolean } }
 
 /** Runs one planner turn of native reads in a workspace holding `files`, and returns what each read got back. */
 async function plannerReads(files: Record<string, string>, calls: Array<[string, Record<string, unknown>]>, plannerReadLimit: UserSettings['plannerReadLimit']) {
@@ -55,7 +55,7 @@ async function plannerReads(files: Record<string, string>, calls: Array<[string,
   await session.startPlanning(`Plan the parser. <fake-claude>${JSON.stringify({ turnsFrom: turns })}</fake-claude>`, ['claude-code']);
 
   return readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Said)
-    .filter((line) => line.native).map((line) => ({ tool: line.tool, ...line.reply! }));
+    .filter((line) => line.native).map((line) => ({ tool: line.tool, ...(line.subagent ? { subagent: true } : {}), ...line.reply! }));
 }
 
 describe('a Claude Code planner\'s native reads under the read limit (ADR-0068)', () => {
@@ -88,6 +88,33 @@ describe('a Claude Code planner\'s native reads under the read limit (ADR-0068)'
 
     expect(replies.map(({ tool, isError }) => [tool, isError])).toEqual([['Read', false], ['LSP', true]]);
     expect(replies[1]?.text).toMatch(/^Read limit reached: you have made 1 read this turn \(2 KB\)/);
+  }, patient(60_000));
+
+  it('neither counts nor refuses a subagent\'s reads, while the planner\'s own past the limit are refused', async () => {
+    const replies = await plannerReads(
+      { 'a.ts': 'export const a = 1;\n', 'b.ts': 'export const b = 2;\n' },
+      [
+        ['Read', { file_path: 'a.ts' }],
+        ['Agent', { calls: [
+          ['Read', { file_path: 'a.ts' }],
+          ['Read', { file_path: 'b.ts' }],
+          ['Grep', { pattern: 'export' }],
+          ['Glob', { pattern: '*.ts' }],
+        ] }],
+        ['Read', { file_path: 'b.ts' }],
+        ['Grep', { pattern: 'export' }],
+      ],
+      { calls: 2 },
+    );
+
+    expect(replies.map(({ tool, subagent, isError }) => [tool, subagent === true, isError])).toEqual([
+      ['Read', false, false],
+      ['Read', true, false], ['Read', true, false], ['Grep', true, false], ['Glob', true, false],
+      ['Read', false, false],
+      ['Grep', false, true],
+    ]);
+    expect(replies[2]?.text).toBe('export const b = 2;\n');
+    expect(replies[6]?.text).toMatch(/^Read limit reached: you have made 2 reads this turn/);
   }, patient(60_000));
 });
 

@@ -16,6 +16,8 @@ export interface RaisedRequest {
   /** The runner's own session-scoped grants. Shown on a task's request only: a planner's grants are the session policy's. */
   suggestions?: unknown[];
   toolUseId?: string;
+  /** Raised for a subagent the runner spawned, not the runner's own call: the planner read limit leaves it out (ADR-0068 R2). */
+  bySubagent?: boolean;
   /** What the request is for, in the envelope's terms. Shown on a planner's request only. */
   ask?: PlannerAsk;
   /** One of the Ordewell server's own tools, told apart by exact name (ADR-0022, S3). */
