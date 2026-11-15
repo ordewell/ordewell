@@ -34,6 +34,7 @@ import {
   type Task,
   type CancelPlanningResponse,
   type CancelResumeResponse,
+  clientSurface,
 } from '@ordewell/core';
 import { OrchestratorPool } from '../pool/orchestratorPool';
 import { failure, jsonObject, refuse } from './errors';
@@ -362,14 +363,14 @@ export function plansRoute(pool: OrchestratorPool) {
   // planner committed the plan.
   router.post('/:sessionId/converse/start', async (c) => {
     try {
-      const { goal, runners, workspace, model, allowInit } = await jsonObject<{
-        goal?: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean;
+      const { goal, runners, workspace, model, allowInit, surface } = await jsonObject<{
+        goal?: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean; surface?: unknown;
       }>(c);
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
       // As in generate: none requested is read by the session, after its gate.
       const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : undefined);
-      const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
+      const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit, surface: clientSurface(surface) });
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'converse start', { message: 'Planning failed' });
@@ -380,9 +381,9 @@ export function plansRoute(pool: OrchestratorPool) {
   // The planner decides what happens next.
   router.post('/:sessionId/converse/message', async (c) => {
     try {
-      const { message } = await jsonObject<{ message?: string }>(c);
+      const { message, surface } = await jsonObject<{ message?: string; surface?: unknown }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
-      const plan = await pool.continuePlanning(c.req.param('sessionId'), message, callerWorkspace(c));
+      const plan = await pool.continuePlanning(c.req.param('sessionId'), message, callerWorkspace(c), clientSurface(surface));
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'conversation message');
@@ -394,9 +395,9 @@ export function plansRoute(pool: OrchestratorPool) {
   // anything waiting. With no turn in flight it is the plain send above.
   router.post('/:sessionId/converse/message/now', async (c) => {
     try {
-      const { message } = await jsonObject<{ message?: string }>(c);
+      const { message, surface } = await jsonObject<{ message?: string; surface?: unknown }>(c);
       if (!message) return c.json({ error: 'message is required' }, 400);
-      const plan = await pool.forceSendPrompt(c.req.param('sessionId'), message, callerWorkspace(c));
+      const plan = await pool.forceSendPrompt(c.req.param('sessionId'), message, callerWorkspace(c), clientSurface(surface));
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'conversation message');

@@ -280,7 +280,7 @@ Core, daemon, TUI, CLI and VS Code.
   be merged by hand; a group of one is worded as a single repo.
 - **A group is drawn only when it is one** — a handoff with a repo not at `.`. A
   lone repo at the root reads as a single repo in the overlay, the plan pane,
-  `ordewell run` and `ordewell handoff`.
+  `ordewell run` and `ordewell merge`.
 - The daemon needed no new route: `POST /isolation/merge` answers the per-repo
   result whole, and the handoff travels in the run record and the
   `isolation_handoff` message.

@@ -2436,7 +2436,14 @@ describe('run_command, sealed (ADR-0036)', () => {
   it('hands a sealed run to the session only when the planner asks for one, and returns what it said', async () => {
     expect(await handler.runCommand!({ command: 'for f in *; do :; done', sealed: true }, context)).toEqual({ text: '[Ran sealed as asked: …]\n3' });
     await handler.runCommand!({ command: 'git status' }, context);
-    expect(runCommand.mock.calls.map((call: unknown[]) => call.slice(2))).toEqual([[{ sealed: true }], []]);
+    expect(runCommand.mock.calls.map((call: unknown[]) => call[2])).toEqual([{ sealed: true }, undefined]);
+  });
+
+  it('hands the session who made the call, so a delegate is not charged to the planner (ADR-0068 R2)', async () => {
+    runCommand.mockClear();
+    await handler.runCommand!({ command: 'ls' }, { ...context, caller: { subagent: true } });
+    await handler.runCommand!({ command: 'ls' }, context);
+    expect(runCommand.mock.calls.map((call: unknown[]) => call[3])).toEqual([{ subagent: true }, undefined]);
   });
 
   it('offers `sealed` and says what a sealed run is, for every harness planner', () => {

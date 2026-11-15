@@ -491,6 +491,9 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     into one button ("Claude Code · sonnet ▾").
   - *The conversation,* across the tab's full width, with research steps folded and
     the planner's live step as a line with a running shape.
+  - *The decision record* (ADR-0067), once the planner has written one: a
+    collapsed, read-only "Decision record" section at the foot of the
+    conversation, above the usage line. The plan panel stays rows only.
   - *The plan panel* fills in row by row as the draft streams. A partial task is
     drawn as a skeleton row.
 - **Actions.**

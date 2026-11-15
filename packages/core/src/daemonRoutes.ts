@@ -3,6 +3,7 @@ import type { Task } from './models/Task';
 import type { CardEdit } from './services/CardEdit';
 import type { ExecutionCommand } from './services/ExecutionCommands';
 import type { GlobalRunSettings } from './services/runSettingsDefaults';
+import type { ClientSurface } from './services/surfaceControls';
 import type { ContainerChange, ContainerStatus } from './services/container/containerSetup';
 import type {
   AdoptSessionResponse,
@@ -122,8 +123,10 @@ const WS = ['workspace'] as const;
 /** What the file and git reads take to pick the tree (ADR-0064 R2): the repo and the view scope. */
 const AT = ['workspace', 'repo', 'scope', 'sessionId', 'taskId'] as const;
 
-interface GoalRequest { goal: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean }
+/** `surface`: the client the user typed in, so the planner names its controls (ADR-0030); an older client sends none. */
+interface GoalRequest { goal: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean; surface?: ClientSurface }
 interface MessageRequest { message: string }
+interface PlannerMessageRequest { message: string; surface?: ClientSurface }
 interface ChildCheckpointRequest { question: string; reason?: string }
 interface CheckpointRequest { reason?: string; raiseTokens?: number }
 /** A runner request's whole answer (ADR-0018 A1), or the planner prompt's yes or no. */
@@ -183,8 +186,8 @@ export const DAEMON_ROUTES = {
   'plans.deleteTask': row<OkResponse>()({ method: 'DELETE', path: '/api/plans/:sessionId/tasks/:taskId', query: WS, live: 'sessionId' }),
   'plans.approveReview': row<ApproveReviewResponse>()({ method: 'POST', path: '/api/plans/:sessionId/review/approve', query: WS, live: 'sessionId' }),
   'plans.converseStart': row<PlanResponse, GoalRequest>()({ method: 'POST', path: '/api/plans/:sessionId/converse/start', query: WS, turn: true, live: 'sessionId' }),
-  'plans.converseMessage': row<PlanResponse, MessageRequest>()({ method: 'POST', path: '/api/plans/:sessionId/converse/message', query: WS, turn: true, live: 'sessionId' }),
-  'plans.converseMessageNow': row<PlanResponse, MessageRequest>()({ method: 'POST', path: '/api/plans/:sessionId/converse/message/now', query: WS, turn: true, live: 'sessionId' }),
+  'plans.converseMessage': row<PlanResponse, PlannerMessageRequest>()({ method: 'POST', path: '/api/plans/:sessionId/converse/message', query: WS, turn: true, live: 'sessionId' }),
+  'plans.converseMessageNow': row<PlanResponse, PlannerMessageRequest>()({ method: 'POST', path: '/api/plans/:sessionId/converse/message/now', query: WS, turn: true, live: 'sessionId' }),
   'plans.cancelResend': row<CancelResumeResponse>()({ method: 'POST', path: '/api/plans/:sessionId/converse/resend/cancel', query: WS, live: 'sessionId' }),
   'plans.fork': row<ConversationForkResponse>()({ method: 'POST', path: '/api/plans/:sessionId/conversation/fork', query: WS, live: 'sessionId' }),
   'plans.rewindTargets': row<RewindTargetsResponse>()({ method: 'GET', path: '/api/plans/:sessionId/conversation/rewind-targets', query: WS, live: 'sessionId' }),

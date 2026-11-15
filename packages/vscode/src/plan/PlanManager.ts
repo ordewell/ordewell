@@ -188,6 +188,9 @@ function adoptTurnPlan(prior: string, plan: LegacyPlanState, deps: PlanManagerDe
   finishPlannerTurn(plan, deps, { planChanged: JSON.stringify(plan.tasks) !== prior });
 }
 
+/** Said with each user message, so the planner names VS Code's controls whatever host holds the session (ADR-0030). */
+const FROM_VSCODE = { surface: 'vscode' } as const;
+
 export async function handleStartPlanning(
   userDescription: string,
   deps: PlanManagerDeps,
@@ -206,7 +209,7 @@ export async function handleStartPlanning(
   if (recheck) await recheck;
   // A goal still waiting for the probe is replaced by this one in the session.
   await inPlannerTurn(deps, async () => {
-    const plan = await deps.session.startPlanning(userDescription, requested);
+    const plan = await deps.session.startPlanning(userDescription, requested, FROM_VSCODE);
     deps.setCurrentGoal(userDescription);
     deps.setCurrentPlan(plan);
     finishPlannerTurn(plan, deps);
@@ -225,7 +228,7 @@ export async function handleContinueConversation(
   if (recheck) await recheck;
   await inPlannerTurn(deps, async () => {
     const prior = JSON.stringify(deps.getCurrentPlan().tasks);
-    adoptTurnPlan(prior, await deps.session.continueConversation(text), deps);
+    adoptTurnPlan(prior, await deps.session.continueConversation(text, FROM_VSCODE), deps);
   });
 }
 
@@ -243,7 +246,7 @@ export async function handleSendMessageNow(
   if (recheck) await recheck;
   return inPlannerTurn(deps, async () => {
     const prior = JSON.stringify(deps.getCurrentPlan().tasks);
-    adoptTurnPlan(prior, await deps.session.forceSendPrompt(text), deps);
+    adoptTurnPlan(prior, await deps.session.forceSendPrompt(text, FROM_VSCODE), deps);
   });
 }
 

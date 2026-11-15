@@ -1444,7 +1444,8 @@ export default function App({ layout = 'chat', selection, goal }: {
 
       {layout === 'chat' && renderPlanDock()}
 
-      {layout === 'chat' && <DecisionRecordPanel record={plan?.decisionRecord} />}
+      {/* Past the 'plan' layout's early return, so every layout that reaches here shows it: the desktop's plan panel is rows only (docs/desktop/design.md), and the record sits with the planner conversation. */}
+      <DecisionRecordPanel record={plan?.decisionRecord} />
 
       <UsageLine
         block={usageBlock}

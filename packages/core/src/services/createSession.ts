@@ -11,7 +11,7 @@ import { ApprovalRecord } from './ApprovalRecord';
 import type { TaskQueryCatalog } from './TaskQuery';
 import { SessionCatalog } from './SessionCatalog';
 import { plannerToolHandler, runnersOf, PLANNER_TURN_ENDED, type PlanEditOutcome, type TaskHead } from './plannerTools';
-import { sharedMcpServer, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
+import { sharedMcpServer, type McpCaller, type OrdewellMcpServer, type PlannerToolHandler } from './mcp';
 import { ConversationEditError, PlannerContextPausedError, PlannerConversation, PlannerTurnDiscardedError, PlannerTurnStoppedError, PlannerUsageLimitError, type ConversationCompaction, type ConversationOpening, type PlannerConversationHost, type RewindTarget, type WakeUpTurn } from './PlannerConversation';
 import { forkPlanState, type ForkedDialogue } from './conversationFork';
 import { PlanTurns, type PlanTurnInput } from './PlanTurns';
@@ -23,7 +23,7 @@ import { ChildDirectory } from './ChildDirectory';
 import { ChildPlanRunner, type ChildHost, type ChildNode, type SubplannerLink } from './ChildPlanRunner';
 import { ScopeLines } from './ScopeLines';
 import { DELEGATION_OFFERED, rememberDelegationBudget } from './runSettingsText';
-import { SURFACE_CONTROLS, surfaceOf, surfaceSettingsBlock, type SurfaceSettings } from './surfaceControls';
+import { SURFACE_CONTROLS, UserSurface, surfaceSettingsBlock, type ClientSurface, type SurfaceSettings } from './surfaceControls';
 import { checksDelegatedTask, type DelegatedRow } from '../models/Delegation';
 import type { SlotPool } from './SlotPool';
 import type { OpenLease } from './executionLease';
@@ -116,6 +116,8 @@ import { TurnEffects } from './TurnEffects';
  */
 export interface GeneratePlanOptions {
   signal?: AbortSignal;
+  /** The client the user sent this from; none from an older one (ADR-0030). */
+  surface?: ClientSurface;
 }
 
 /** A message sent behind the conversation's opening while it waits at the planner gate. */
@@ -738,6 +740,8 @@ export class Session {
   private readonly save: SaveSession;
   /** One live host per session (ADR-0049): no save, and no run, without it. */
   private readonly lease: SessionLease;
+  /** Where the user who spoke last is, so the planner names the controls they have (ADR-0030). */
+  private readonly userSurface = new UserSurface(() => this.lease.host?.());
   private readonly saves: SessionSaves;
   /** The orchestrator's run controls, each saved before what it changed is announced. */
   private readonly controls: RunControls;
@@ -811,7 +815,7 @@ export class Session {
       if (patch) return Promise.resolve(readSavedPatch(readTaskPatch(this.taskLogLocation, taskId, patch.attempt), patch, options));
       return this.runs.taskDiff(taskId, options);
     },
-    runCommand: (command, signal, opts) => this.ownCommand(command, signal, opts),
+    runCommand: (command, signal, opts, caller) => this.ownCommand(command, signal, opts, caller),
     fetchUrl: (url) => this.fetcher.fetch(url),
     webSearch: async (query) => this.fetcher.search?.(query),
     execute: (command, signal) => this.commands.run(command, this.turnActor(), signal),
@@ -1219,7 +1223,7 @@ export class Session {
     return {
       tasks: () => (this.plan ? this.store.planTasks : null),
       autonomous: () => this.autonomous(),
-      userControls: () => SURFACE_CONTROLS[surfaceOf(this.lease.host?.())],
+      userControls: () => SURFACE_CONTROLS[this.userSurface.current()],
       mergesByThemselves: () => this.automaticMerging() === 'on',
       autorun: () => this.userRunSettings().autorun,
       submittedStartWaits: () => this.turnEffects.startWaits && this.userRunSettings().autorun,
@@ -1420,13 +1424,14 @@ export class Session {
   /**
    * Where this session's user is and how its run is set, for the planner and
    * the refusals that tell it what the user does (ADR-0030). The surface is
-   * the live host's (ADR-0049). None for a subplanner: its asker is a planner,
+   * the one the user last spoke from, the live host's (ADR-0049) when their
+   * client did not say. None for a subplanner: its asker is a planner,
    * which presses no control.
    */
   private surfaceSettings(): SurfaceSettings | null {
     if (this.position.answersToParent) return null;
     return {
-      surface: surfaceOf(this.lease.host?.()),
+      surface: this.userSurface.current(),
       automaticMerging: this.automaticMerging(),
       autorun: this.userRunSettings().autorun,
       supervisorLevel: this.supervision.standing().level,
@@ -2224,6 +2229,7 @@ export class Session {
    * settlement — is {@link PlannerConversation}'s; the Session hosts it.
    */
   async startPlanning(goal: string, runners?: RunnerId[], options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    this.userSurface.heard(options?.surface);
     // A new goal replaces whatever still waits to open: the latest intent wins.
     this.gate.endAll(() => new PlannerTurnDiscardedError());
     const pending: PendingOpening = { held: [] };
@@ -2296,6 +2302,7 @@ export class Session {
    * whatever else arrives during the turn in flight by the next one.
    */
   async continueConversation(userMessage: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    this.userSurface.heard(options?.surface);
     const input: PlanTurnInput = { source: 'user', ...this.resolveSkillInvocation(userMessage), signal: options?.signal };
     const behind = this.behindOpening(input);
     if (behind) return behind;
@@ -2311,6 +2318,7 @@ export class Session {
    * plain {@link continueConversation}.
    */
   async forceSendPrompt(text: string, options?: GeneratePlanOptions): Promise<LegacyPlanState> {
+    this.userSurface.heard(options?.surface);
     const input: PlanTurnInput = { source: 'user', ...this.resolveSkillInvocation(text), signal: options?.signal };
     // Before the opening opens there is no turn to stop: it goes first behind it.
     if (this.opening?.held) return this.behindOpening(input, true)!;
@@ -2490,10 +2498,12 @@ export class Session {
 
   /**
    * A harness planner's `run_command`, charged to its read limit (ADR-0068).
-   * The planner's MCP token is its runner's own subagents' too, so a command
-   * one of them runs here counts against the planner as well.
+   * The planner's MCP token is its runner's own subagents' too: a command the
+   * runner says one of them made is the delegation the limit asks for, so it
+   * runs uncounted, still decided by the envelope (ADR-0068 R2, ADR-0008).
    */
-  private async ownCommand(command: string, signal?: AbortSignal, opts?: BashOptions): Promise<ToolOutcome> {
+  private async ownCommand(command: string, signal?: AbortSignal, opts?: BashOptions, caller?: McpCaller): Promise<ToolOutcome> {
+    if (!this.readLimit.owns(caller)) return this.fsAdapter.bash(command, signal, opts);
     const admission = this.readLimit.admit();
     if (!admission.allowed) return { success: false, output: admission.reason, truncated: false };
     const outcome = await this.fsAdapter.bash(command, signal, opts);

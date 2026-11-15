@@ -102,7 +102,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // Not const: a daemon we did not start can die and be replaced by one we
   // did, and only the one we started may be stopped on the way out.
   let owned = ownedAtLaunch;
-  const api = new ApiClient(port, workspace);
+  const api = new ApiClient(port, workspace, 'tui');
 
   // eslint-disable-next-line prefer-const
   let terminal: ReturnType<typeof openTerminal> | undefined;
@@ -239,7 +239,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
         },
       }),
     onExit: () => shutdown(0),
-    // The same pointer `ordewell plan` leaves, so `ordewell handoff`,
+    // The same pointer `ordewell plan` leaves, so `ordewell merge`,
     // The one-shot commands act on the session this
     // TUI is showing instead of saying there is none.
     onSessionChange: (sessionId, state) => {
