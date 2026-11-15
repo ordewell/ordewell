@@ -93,7 +93,7 @@ import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
-import type { RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
+import type { ClientSurface, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
 
 /** A fork the pool has adopted: addressable at once, its plan read back from the file it was written to. */
 export interface AdoptedFork {
@@ -1106,11 +1106,11 @@ export class OrchestratorPool {
    * planner had enough context, otherwise the dialogue so far (last
    * assistant message lives in conversationHistory).
    */
-  async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<LegacyPlanState> {
+  async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean; surface?: ClientSurface }): Promise<LegacyPlanState> {
     const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride, workspace).aiProvider);
     if (recheck) await recheck;
     const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
-    return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners));
+    return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners, { surface: options?.surface }));
   }
 
   /**
@@ -1120,14 +1120,14 @@ export class OrchestratorPool {
    * session's own planner gate waits for the probe and judges the planner, as
    * it does for every turn.
    */
-  async continuePlanning(sessionId: string, message: string, workspace: string | undefined): Promise<LegacyPlanState> {
+  async continuePlanning(sessionId: string, message: string, workspace: string | undefined, surface?: ClientSurface): Promise<LegacyPlanState> {
     const session = this.session(sessionId, workspace);
     // A reply is a planner turn like any other: the signed-out refusal offers
     // the runner's own login, which runs outside this process, so ask the
     // workspace's account again before the session's synchronous gate judges.
     const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
     if (recheck) await recheck;
-    return session.continueConversation(message);
+    return session.continueConversation(message, { surface });
   }
 
   /** Condense a session's conversation. The summary turn is a planner turn, so `cancelPlanning` stops it. */
@@ -1145,11 +1145,11 @@ export class OrchestratorPool {
    * waiting. The recheck is the one a reply does before the gate: a login done
    * with the runner's own command is seen here too.
    */
-  async forceSendPrompt(sessionId: string, message: string, workspace: string | undefined): Promise<LegacyPlanState> {
+  async forceSendPrompt(sessionId: string, message: string, workspace: string | undefined, surface?: ClientSurface): Promise<LegacyPlanState> {
     const session = this.session(sessionId, workspace);
     const recheck = this.recheckSignedOutPlanner(session.workspaceRoot, session.plannerProvider);
     if (recheck) await recheck;
-    return session.forceSendPrompt(message);
+    return session.forceSendPrompt(message, { surface });
   }
 
   /** Retry a compaction paused on the planner's context: a planner turn, and gated as one. */
