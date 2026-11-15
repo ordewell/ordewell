@@ -8,15 +8,38 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-11-15
+
 ### Added
 
 - **The desktop app confirms a macOS installation** and offers to eject and
   trash its matching DMG. Keeping the installer remains the default.
 - **Local desktop startup diagnostics** record bounded timings for the main
   process, interface and daemon reads, without recording goals or credentials.
+- **`ordewell merge` is the command-line Merge all,** matching `/merge` in the
+  terminal. `ordewell handoff` still works for a release or two and says it was
+  renamed.
+- **`ordewell decisions [all]` prints the run's decision record,** grouped as
+  the terminal groups it.
+- **The desktop app shows the decision record** in the planner conversation.
+- **The planner is taught to fan a plan out from shared contracts** instead of
+  chaining slices that only add to one, and to check a brief's facts against the
+  code before freezing them.
 
 ### Fixed
 
+- **Merge all on a run with nothing left to merge now says so** in the
+  terminal, VS Code and the desktop app, instead of failing.
+- **The planner is told only the controls of the client you typed in,** so the
+  terminal, command line, VS Code and the desktop app no longer get advice that
+  names another surface's buttons.
+- **A coding-agent subagent's own reads no longer count against the planner's
+  read limit,** for Claude Code's native reads and for `run_command` calls from
+  a Claude Code or Codex planner's subagents.
+- **A routine compaction no longer flags a task as running long** where
+  Ordewell sets the compaction window (Claude Code); the flag comes from the
+  third compaction on.
+- **Contributors:** two Windows-only test failures on main's CI are fixed.
 - **Desktop startup no longer waits for the login shell before drawing its
   window,** and the shell's PATH is read correctly when locating coding agents.
 - **Daemon startup recovers when its token changes during the handshake.**
@@ -4423,7 +4446,9 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.3...HEAD
+[0.13.3]: https://github.com/ordewell/ordewell/compare/v0.13.2...v0.13.3
+[0.13.2]: https://github.com/ordewell/ordewell/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/ordewell/ordewell/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/ordewell/ordewell/compare/v0.12.6...v0.13.0
 [0.12.6]: https://github.com/ordewell/ordewell/compare/v0.12.5...v0.12.6
