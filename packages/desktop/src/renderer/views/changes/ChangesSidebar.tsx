@@ -118,6 +118,7 @@ const LETTER_WORD = { A: 'Added', M: 'Modified', D: 'Deleted' } as const;
 function FilesSkeleton(): JSX.Element {
   return (
     <div className="changes-skeleton" role="status" aria-label="Loading changes" aria-busy="true">
+      <span>Loading changes…</span>
       {[58, 40, 66].map((width, index) => (
         <div key={index} className="changes-skeleton-row"><span className="changes-skeleton-bar" style={{ width: `${width}%` }} /></div>
       ))}

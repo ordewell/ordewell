@@ -147,7 +147,7 @@ describe('handleTui', () => {
     await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
     expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false, cwd: process.cwd() });
     // With its workspace, so a session a restarted daemon dropped is re-adopted from there.
-    expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, process.cwd());
+    expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, process.cwd(), 'tui');
     const frame = fakeTerminal.draw.mock.calls[0][0] as string[];
     expect(frame).toHaveLength(24);
     // Painted before the daemon has answered whether any agent is installed.
@@ -209,7 +209,7 @@ describe('handleTui', () => {
       await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
       const resolved = path.resolve('sub');
       expect(daemon.ensureDaemonOwned).toHaveBeenCalledWith(4000, { detached: false, cwd: resolved });
-      expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, resolved);
+      expect(apiClient.ApiClient).toHaveBeenCalledWith(4000, resolved, 'tui');
     } finally {
       process.chdir(cwd);
       fs.rmSync(parent, { recursive: true, force: true });

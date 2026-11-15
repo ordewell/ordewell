@@ -50,3 +50,4 @@
 .terminal-failed { display: flex; align-items: flex-start; gap: var(--ow-space-2); margin: 0; padding: var(--ow-space-3); color: var(--ow-status-failed); font: var(--ow-type-body); overflow-wrap: anywhere; }
 .terminal-failed svg { flex: none; margin-top: var(--ow-space-half); }
 .terminal-failed span { flex: 1; min-width: 0; }
+.terminal-stage > .ow-loading { position: absolute; inset: 0; z-index: 1; background: var(--ow-bg); }

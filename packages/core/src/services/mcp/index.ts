@@ -1,6 +1,7 @@
 export { OrdewellMcpServer, sharedMcpServer, ORDEWELL_MCP_PATH } from './OrdewellMcpServer';
 export type { McpContact, McpCredential, McpRefusal, TaskTokenScope, PlannerTokenScope, ResearchTokenScope } from './OrdewellMcpServer';
 export { RESEARCH_READ_TOOLS } from './researchReadTools';
+export type { McpCaller } from './mcpCaller';
 export type { ResearchToolHandler } from './researchReadTools';
 export { mcpClientConfig, ownerOnlyConfigFile, ORDEWELL_MCP_SERVER_NAME } from './clientConfig';
 export type { McpClientConfig, OwnerOnlyFile } from './clientConfig';

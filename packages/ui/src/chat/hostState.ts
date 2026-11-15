@@ -85,6 +85,8 @@ export interface HostState {
   detectionError: string | null;
   isReady: boolean;
   modelDiscoveryErrors: Record<string, string>;
+  /** Absent for hosts that have not reported a catalog read's progress. */
+  modelDiscovery: { state: 'loading' | 'ready' | 'failed'; error?: string } | null;
   /** Why a runner's catalog lists nothing, keyed by runner id: a signed-out agent names its sign-in, not a refresh. */
   runnerDiscoveryErrors: Record<string, string>;
   skills: { name: string; description: string; appliesTo?: 'planner' | 'task' }[];
@@ -184,6 +186,7 @@ export const INITIAL_HOST_STATE: HostState = {
   detectionError: null,
   isReady: false,
   modelDiscoveryErrors: {},
+  modelDiscovery: null,
   runnerDiscoveryErrors: {},
   skills: [],
   taskSkills: [],
@@ -511,6 +514,9 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
         modelDiscoveryErrors: action.errors ?? {},
         runnerDiscoveryErrors: action.runnerErrors ?? {},
       };
+
+    case 'modelDiscovery':
+      return { ...state, modelDiscovery: { state: action.state, ...(action.error ? { error: action.error } : {}) } };
 
     case 'setRunners': {
       const list = action.runners ?? [];

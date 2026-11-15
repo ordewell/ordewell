@@ -1,7 +1,7 @@
 import http from 'http';
 import WebSocket from 'ws';
 import { DEFAULT_PORT, isConnectionRefused } from './daemon';
-import { bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId, DAEMON_ROUTES, DaemonRefusal, refusalOf } from '@ordewell/core';
+import { type ClientSurface, bearerHeaderValue, readDaemonToken, tokenSubprotocols, mintSessionId, DAEMON_ROUTES, DaemonRefusal, refusalOf } from '@ordewell/core';
 import { routeRequest, sessionOf, socketPath, type CallParts, type QueryKeys, type RouteRequest } from './routeRequest';
 import type {
   AdoptSessionResponse,
@@ -239,12 +239,15 @@ export class ApiClient {
 
   private port: number;
   private workspace: string;
+  /** Said with each planner message, so the planner names this client's controls (ADR-0030): the CLI's unless the TUI builds it. */
+  private readonly surface: ClientSurface;
   /** A session's open execution stream, so a new one can end it: one run is reported once. */
   private executionStreams = new Map<string, () => void>();
 
-  constructor(port?: number, workspace?: string) {
+  constructor(port?: number, workspace?: string, surface: ClientSurface = 'cli') {
     this.port = port || DEFAULT_PORT;
     this.workspace = workspace ?? ApiClient.defaultWorkspace ?? process.cwd();
+    this.surface = surface;
   }
 
   /**
@@ -380,17 +383,17 @@ export class ApiClient {
   ): Promise<PlanResponse['plan']> {
     return this.planOf('plans.converseStart', 'Planning failed', {
       params: { sessionId },
-      body: { goal, runners: runners || undefined, workspace, allowInit },
+      body: { goal, runners: runners || undefined, workspace, allowInit, surface: this.surface },
     });
   }
 
   sendConversationMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
-    return this.planOf('plans.converseMessage', 'Planner message failed', { params: { sessionId }, body: { message } });
+    return this.planOf('plans.converseMessage', 'Planner message failed', { params: { sessionId }, body: { message, surface: this.surface } });
   }
 
   /** Send now (ADR-0023, F5): stop the planner turn in flight and answer `message` in the turn that replaces it. */
   forceSendPlannerMessage(sessionId: string, message: string): Promise<PlanResponse['plan']> {
-    return this.planOf('plans.converseMessageNow', 'Send now failed', { params: { sessionId }, body: { message } });
+    return this.planOf('plans.converseMessageNow', 'Send now failed', { params: { sessionId }, body: { message, surface: this.surface } });
   }
 
   getRunners(workspace?: string): Promise<RunnersResponse> {

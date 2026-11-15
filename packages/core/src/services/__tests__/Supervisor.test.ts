@@ -79,6 +79,20 @@ describe('wakeUpDigest', () => {
         .toBe('- task #4 "Task t4"\'s runner compacted its context on its own, 2 times this attempt, after 12m 00s running; context 30k of 200k tokens, peak 190k');
     });
 
+    it('names the window the task compacts at, beside its model\'s, when Ordewell sets one', () => {
+      const event = runningLong('t4', { reason: 'compaction', elapsedMs: 12 * MINUTE, thresholdMs: 30 * MINUTE, contextTokens: 16_000, contextWindow: 1_000_000, compactionWindow: 150_000, peakContextTokens: 117_000, compactions: 3 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4"\'s runner compacted its context on its own, 3 times this attempt, after 12m 00s running; context 16k of a 150k compaction window (model window 1000k), peak 117k');
+    });
+
+    it('names the compaction window on an unknown context too, and without a model window when none is known', () => {
+      const event = runningLong('t4', { reason: 'duration', elapsedMs: 65 * MINUTE, thresholdMs: 60 * MINUTE, compactionWindow: 150_000, peakContextTokens: 117_000, compactions: 1 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toContain('; context unknown since compacting, peak 117k of a 150k compaction window');
+    });
+
     it('still names the peak and the window when the compaction stated no size, as on Codex and OpenCode', () => {
       const event = runningLong('t4', { reason: 'compaction', elapsedMs: 12 * MINUTE, thresholdMs: 30 * MINUTE, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 1 });
 

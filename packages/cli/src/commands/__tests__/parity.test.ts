@@ -11,7 +11,6 @@ import { COMMAND_ALIASES, SLASH_COMMANDS } from '../../tui/slash';
  * deliberate act with a reason attached.
  */
 const TUI_ONLY: Record<string, string> = {
-  merge: '`ordewell handoff`, which keeps its name until the headless command is renamed too',
   help: '`ordewell --help`, which is not a subcommand',
   quit: 'nothing to exit — a CLI command has already returned',
   new: 'every `ordewell plan` already starts a fresh session',
@@ -20,8 +19,7 @@ const TUI_ONLY: Record<string, string> = {
   delete: '`ordewell sessions delete <id>`',
   settings: 'a stepped panel over the headless `ordewell auto`, `supervisor`, `automerge`, `trailer`, `autorun`, `delegation` and `parallel` commands',
   open: 'it opens a task\'s view in the full-screen terminal; a shell has no view to switch to, and `ordewell checkpoint` answers from one',
-  inbox: 'it lists what the run waits on from the full-screen terminal\'s live run view and answers in place; each answer is already a headless command (`ordewell retry`, `skip`, `checkpoint`, `handoff`)',
-  decisions: 'it reads the planner\'s decision record from the full-screen terminal; `ordewell status --session-id <id> --json` carries the same record on the session\'s plan',
+  inbox: 'it lists what the run waits on from the full-screen terminal\'s live run view and answers in place; each answer is already a headless command (`ordewell retry`, `skip`, `checkpoint`, `merge`)',
   mouse: 'it configures the full-screen terminal, which only the TUI holds (ORDEWELL_TUI_MOUSE persists it)',
   login: 'it hands the full-screen terminal to the coding agent\'s own login command; on a shell, run that command directly',
 };

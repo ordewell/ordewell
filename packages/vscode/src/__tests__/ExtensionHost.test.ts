@@ -567,7 +567,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     h.chat.messages.fire({ type: 'ready' });
 
     await vi.waitFor(() => expect(h.chat.provider.resendAllState).toHaveBeenCalled());
-    expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', ['claude-code']);
+    expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', ['claude-code'], { surface: 'vscode' });
     expect(h.chat.provider.showPlan).toHaveBeenCalledWith(expect.objectContaining({
       tasks: [expect.objectContaining({ id: 't1' })],
     }));
@@ -799,7 +799,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       await registered('ordewell.compactConversation')();
 
       expect(h.session.spies.startPlanning).toHaveBeenCalledTimes(1);
-      expect(h.session.spies.startPlanning).toHaveBeenCalledWith('typed during the compaction', ['claude-code']);
+      expect(h.session.spies.startPlanning).toHaveBeenCalledWith('typed during the compaction', ['claude-code'], { surface: 'vscode' });
     });
 
     it('stays held while the planner is still busy', async () => {
@@ -824,7 +824,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       h.chat.messages.fire({ type: 'sendMessage', text: '/compact', typed: true });
 
       await vi.waitFor(() => expect(h.session.spies.compactConversation).toHaveBeenCalled());
-      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('first', ['claude-code']));
+      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('first', ['claude-code'], { surface: 'vscode' }));
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(h.session.spies.startPlanning).toHaveBeenCalledTimes(1);
       expect(nextPrompt()).toHaveBeenCalledTimes(1);
@@ -903,7 +903,7 @@ describe('the planner with no planner chosen and no API key (ADR-0009)', () => {
       h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });
       // No runners yet: which are enabled by default is the probe's answer, so
       // the session reads them once its gate opens.
-      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', undefined));
+      await vi.waitFor(() => expect(h.session.spies.startPlanning).toHaveBeenCalledWith('build a parser', undefined, { surface: 'vscode' }));
       expect(h.chat.provider.showError.mock.calls).toEqual([]);
 
       answer({ usable: true });

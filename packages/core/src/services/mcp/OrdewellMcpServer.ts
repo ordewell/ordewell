@@ -4,6 +4,7 @@ import { Server as McpProtocolServer } from '@modelcontextprotocol/sdk/server/in
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, CancelledNotificationSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { extractPresentedToken } from '../../utils/daemonToken';
+import { callerOf } from './mcpCaller';
 import { RESEARCH_READ_TOOLS, type ResearchToolHandler } from './researchReadTools';
 import { PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, plannerToolSet, taskToolSet, toolListing, type McpTool, type McpToolReply, type PlannerToolHandler, type TaskToolHandler } from './tools';
 
@@ -464,7 +465,11 @@ function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inv
       extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: beats } }).catch(() => undefined);
     }, heartbeatMs);
     try {
-      const result = await tool.call(handler, request.params.arguments, { signal: AbortSignal.any([revoked.signal, extra.signal, cancelled.signal]) });
+      const caller = callerOf(request.params._meta);
+      const result = await tool.call(handler, request.params.arguments, {
+        signal: AbortSignal.any([revoked.signal, extra.signal, cancelled.signal]),
+        ...(caller ? { caller } : {}),
+      });
       return { content: [{ type: 'text', text: result.text }], isError: result.isError ?? false };
     } catch (err) {
       return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };

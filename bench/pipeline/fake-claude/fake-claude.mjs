@@ -30,7 +30,8 @@
  * Claude Code's own reads (`Read`, `Grep`, `Glob`, `LSP`) runs natively
  * instead, as the real CLI runs it: it raises `can_use_tool` first when the
  * `--settings` ask rules name the tool, and waits for the answer, and runs
- * unasked when they do not. A file, since a plan's prompts
+ * unasked when they do not. `["Agent", { calls }]` runs those native reads
+ * in a subagent, as the CLI's `Agent` tool does. A file, since a plan's prompts
  * hold cues of their own. What is left of them is kept beside the session,
  * under FAKE_CLAUDE_STATE, for the session's next turn, in this process or in
  * the `--resume` of a parked subplanner (ADR-0055 D18). A planner writes no
@@ -112,14 +113,16 @@ function emit(line) {
   process.stdout.write(`${JSON.stringify({ session_id: sessionId, parent_tool_use_id: null, ...line })}\n`);
 }
 
-function assistant(content) {
+/** A subagent's lines name the `Agent` call that spawned it, as the real CLI's do. */
+function assistant(content, parent = null) {
   messageCount += 1;
-  emit({ type: 'assistant', message: { id: `msg_fake_${messageCount}`, model: MODEL, role: 'assistant', content } });
+  emit({ type: 'assistant', parent_tool_use_id: parent, message: { id: `msg_fake_${messageCount}`, model: MODEL, role: 'assistant', content } });
 }
 
-function toolResult(toolUseId, content, isError = false, structured) {
+function toolResult(toolUseId, content, isError = false, structured, parent = null) {
   emit({
     type: 'user',
+    parent_tool_use_id: parent,
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }] },
     ...(structured ? { tool_use_result: structured } : {}),
   });
@@ -182,14 +185,21 @@ async function post(server, body, extraHeaders = {}) {
   return answer.result;
 }
 
-async function callTool(server, name, args) {
+/** Whether an ask rule names this tool, whole or by a trailing `*` as `mcp__*` does. */
+function asks(name) {
+  return askedTools.has(name) || [...askedTools].some((rule) => rule.endsWith('*') && name.startsWith(rule.slice(0, -1)));
+}
+
+/** A tools/call, carrying the tool use it answers in `_meta` as the real CLI does (2.1.325). */
+async function callTool(server, name, args, toolUseId) {
   const init = await post(server, {
     jsonrpc: '2.0', id: 1, method: 'initialize',
     params: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'fake-claude', version: '1' } },
   });
   const headers = { 'mcp-protocol-version': init.protocolVersion ?? MCP_PROTOCOL_VERSION };
   await post(server, { jsonrpc: '2.0', method: 'notifications/initialized' }, headers);
-  const result = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }, headers);
+  const meta = toolUseId ? { _meta: { 'claudecode/toolUseId': toolUseId } } : {};
+  const result = await post(server, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args, ...meta } }, headers);
   const text = (result.content ?? []).map((b) => b.text ?? '').join('\n');
   return { text, isError: result.isError === true };
 }
@@ -248,16 +258,16 @@ function nativeRead(name, input) {
 }
 
 /** Asks the host whether a tool may run, as `--permission-prompt-tool stdio` does, and waits for its answer. */
-function canUseTool(name, input, toolUseId) {
+function canUseTool(name, input, toolUseId, agentId) {
   askCount += 1;
   const requestId = `fake-ask-${askCount}`;
   const answered = new Promise((resolve) => { pendingAsks.set(requestId, resolve); });
-  emit({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: name, input, tool_use_id: toolUseId } });
+  emit({ type: 'control_request', request_id: requestId, request: { subtype: 'can_use_tool', tool_name: name, input, tool_use_id: toolUseId, ...(agentId ? { agent_id: agentId } : {}) } });
   return answered;
 }
 
-async function nativeCall(id, name, input) {
-  const answer = askedTools.has(name) ? await canUseTool(name, input, id) : { behavior: 'allow', updatedInput: input };
+async function nativeCall(id, name, input, agentId) {
+  const answer = askedTools.has(name) ? await canUseTool(name, input, id, agentId) : { behavior: 'allow', updatedInput: input };
   if (answer?.behavior !== 'allow') return { text: answer?.message ?? 'denied', isError: true };
   try {
     return { text: nativeRead(name, answer.updatedInput ?? input), isError: false };
@@ -266,10 +276,52 @@ async function nativeCall(id, name, input) {
   }
 }
 
+/**
+ * A subagent's Ordewell tool call, in the real CLI's order (2.1.325): its line
+ * announcing the call, then, where an ask rule names it, a `can_use_tool`
+ * carrying its `agent_id`, then the tools/call naming the same tool use.
+ */
+async function subagentMcpCall(server, callId, name, args, agentId, parentId) {
+  const tool = `mcp__ordewell__${name}`;
+  assistant([{ type: 'tool_use', id: callId, name: tool, input: args }], parentId);
+  const answer = asks(tool) ? await canUseTool(tool, args, callId, agentId) : { behavior: 'allow' };
+  if (answer?.behavior !== 'allow') return { text: answer?.message ?? 'denied', isError: true };
+  return callTool(server, name, args, callId);
+}
+
+/**
+ * An `Agent` call whose subagent makes `calls`: native reads, or Ordewell
+ * tools by their bare names. As the real CLI does (2.1.325), a subagent's
+ * `can_use_tool` carries its `agent_id`, and for a native read comes before
+ * the subagent's own line announcing the call.
+ */
+async function subagentCall(id, calls) {
+  assistant([{ type: 'tool_use', id, name: 'Agent', input: { description: 'Explore', prompt: 'Read around', subagent_type: 'Explore' } }]);
+  const agentId = `a${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  for (const [name, args] of calls) {
+    const callId = `toolu_fake_${randomUUID()}`;
+    if (!NATIVE_READS.has(name)) {
+      const reply = await subagentMcpCall(mcpServer(), callId, name, args, agentId, id);
+      logged({ tool: name, subagent: true, reply });
+      toolResult(callId, reply.text, reply.isError, undefined, id);
+      continue;
+    }
+    const reply = await nativeCall(callId, name, args, agentId);
+    assistant([{ type: 'tool_use', id: callId, name, input: args }], id);
+    logged({ tool: name, native: true, subagent: true, reply });
+    toolResult(callId, reply.text, reply.isError, undefined, id);
+  }
+  toolResult(id, 'The subagent read what it was asked.');
+}
+
 async function makeCalls(calls) {
   const server = mcpServer();
   for (const [name, args] of calls) {
     const id = `toolu_fake_${randomUUID()}`;
+    if (name === 'Agent') {
+      await subagentCall(id, args.calls ?? []);
+      continue;
+    }
     if (NATIVE_READS.has(name)) {
       assistant([{ type: 'tool_use', id, name, input: args }]);
       const reply = await nativeCall(id, name, args);
@@ -278,7 +330,7 @@ async function makeCalls(calls) {
       continue;
     }
     assistant([{ type: 'tool_use', id, name: `mcp__ordewell__${name}`, input: args }]);
-    const reply = await callTool(server, name, args);
+    const reply = await callTool(server, name, args, id);
     logged({ tool: name, reply });
     toolResult(id, reply.text, reply.isError);
   }

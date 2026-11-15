@@ -102,6 +102,78 @@ const run = async (args: string[], srv: { port: number }, confirm = vi.fn().mock
   return { ...(await capture(() => handleHandoff(['--workspace', '/tmp/ws', ...args], new ApiClient(srv.port), confirm))), confirm };
 };
 
+const runMerge = async (args: string[], srv: { port: number }, confirm = vi.fn().mockResolvedValue(true)) => {
+  const { handleMerge } = await import('../merge');
+  return { ...(await capture(() => handleMerge(['--workspace', '/tmp/ws', ...args], new ApiClient(srv.port), confirm))), confirm };
+};
+
+describe('ordewell merge', () => {
+  it('bare, asks the same confirmation and merges', async () => {
+    const srv = await isolatedDaemon({ '/isolation/merge': { body: { outcome: 'merged' } } });
+    const { stdout, confirm } = await runMerge([], srv);
+    srv.close();
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Merge ordewell/r1/integration into main?'));
+    expect(srv.hits.some((h) => h.url.endsWith('/isolation/merge'))).toBe(true);
+    expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
+  });
+
+  it('bare, with --yes, says "Nothing to merge" when there is nothing', async () => {
+    const message = 'Nothing to merge: everything the run landed is in your branch already, and the run is closed.';
+    const srv = await isolatedDaemon({ '/isolation/merge': { body: { outcome: 'nothing', message } } });
+    const { stdout, confirm } = await runMerge(['--yes'], srv);
+    srv.close();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(stdout).toContain(message);
+  });
+
+  it('review prints the integration diff', async () => {
+    const srv = await isolatedDaemon({ '/isolation/diff': { body: { diff: 'diff --git a/x b/x' } } });
+    const { stdout } = await runMerge(['review'], srv);
+    srv.close();
+
+    expect(stdout).toBe('diff --git a/x b/x');
+  });
+
+  it('discard asks first', async () => {
+    const srv = await isolatedDaemon();
+    const { confirm, stdout } = await runMerge(['discard'], srv);
+    srv.close();
+
+    expect(confirm).toHaveBeenCalled();
+    expect(stdout).toMatch(/Discarded the run/);
+  });
+
+  it('with an unknown action fails naming the merge usage', async () => {
+    const { handleMerge } = await import('../merge');
+    const { stderr, exitCode } = await capture(() => handleMerge(['deploy']));
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toMatch(/Unknown merge action "deploy"/);
+    expect(stderr).toContain('Usage: ordewell merge [review|discard|cleanup]');
+  });
+});
+
+describe('ordewell handoff (deprecated)', () => {
+  it('merge still merges, and says to use ordewell merge', async () => {
+    const srv = await isolatedDaemon({ '/isolation/merge': { body: { outcome: 'merged' } } });
+    const { stdout, stderr, confirm } = await run(['merge'], srv);
+    srv.close();
+
+    expect(confirm).toHaveBeenCalled();
+    expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
+    expect(stderr).toMatch(/deprecated.*ordewell merge/);
+  });
+
+  it('its usage says to use ordewell merge', async () => {
+    const { handleHandoff } = await import('../handoff');
+    const { stdout } = await capture(() => handleHandoff([]));
+
+    expect(stdout).toMatch(/deprecated.*ordewell merge/);
+  });
+});
+
 describe('ordewell handoff', () => {
   it('with no argument prints the options and needs no daemon', async () => {
     const { handleHandoff } = await import('../handoff');
@@ -144,6 +216,17 @@ describe('ordewell handoff', () => {
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Merge ordewell/r1/integration into main?'));
     expect(srv.hits.some((h) => h.url.endsWith('/isolation/merge'))).toBe(true);
     expect(stdout).toMatch(/Merged ordewell\/r1\/integration/);
+  });
+
+  it('merge on an already merged run prints the daemon\'s words and succeeds', async () => {
+    const message = 'Nothing to merge: everything the run landed is in your branch already, and the run is closed.';
+    const srv = await isolatedDaemon({ '/isolation/merge': { body: { outcome: 'nothing', message } } });
+    const { stdout, stderr, exitCode } = await run(['merge'], srv);
+    srv.close();
+
+    expect(stdout).toContain(message);
+    expect(stderr).not.toContain(message);
+    expect(exitCode).toBeFalsy();
   });
 
   describe('past a check that has not passed (ADR-0055 D9)', () => {

@@ -365,8 +365,8 @@ everything below applies per repo of the group.
   conflicted task in the plan pane and shows a branch and worktree only in a
   task's expanded detail; the handoff overlay (`/merge`) opens on
   `isolation_handoff` when nothing else is open, and a blocked run asks with a
-  three-way picker. The CLI has `ordewell handoff
-  [review|merge|discard|cleanup]` and `ordewell run --stash` /
+  three-way picker. The CLI has `ordewell merge
+  [review|discard|cleanup]` (`ordewell handoff` is its deprecated name) and `ordewell run --stash` /
   `--without-isolation`. VS Code shows the same marks on its task cards, a
   handoff card, and a host modal for a blocked run; merge and discard are
   confirmed first everywhere. Each surface offers Merge all mid-run whenever

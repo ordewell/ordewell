@@ -12,6 +12,7 @@ import type { TaskOp } from './TaskOps';
 import type { CheckedChange, PlanChangeError } from './PlanChangeCheck';
 import type { RecordAnswer, ToolRead } from './PlannerConversation';
 import type { DecisionRecordInput } from './decisionRecord';
+import type { McpCaller } from './mcp/mcpCaller';
 import { commandReply, type McpToolReply, type PlannerToolHandler, type PostArgs, type ReadTaskArgs } from './mcp/tools';
 import { isBoardRef } from '../models/Board';
 import type { TaskLogEvent } from '../models/TaskLog';
@@ -70,7 +71,7 @@ export interface PlannerToolsHost {
   below?(): Promise<Subtree | null>;
   taskDiff(taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
   /** The planner's research shell: classified, confined and approved as the API planner's `bash` is (ADR-0026), or sealed (ADR-0036). */
-  runCommand(command: string, signal: AbortSignal, opts?: BashOptions): Promise<ToolOutcome>;
+  runCommand(command: string, signal: AbortSignal, opts?: BashOptions, caller?: McpCaller): Promise<ToolOutcome>;
   /** A fetch through the session's web fetcher, whose web-read policy decides it (ADR-0027). */
   fetchUrl(url: string): Promise<ToolOutcome>;
   /** A search the same way; undefined when the fetcher has no search. */
@@ -171,8 +172,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       return { text: skill.content };
     },
 
-    async runCommand({ command, sealed }, { signal }) {
-      return commandReply(await (sealed ? host.runCommand(command, signal, { sealed }) : host.runCommand(command, signal)));
+    async runCommand({ command, sealed }, { signal, caller }) {
+      return commandReply(await host.runCommand(command, signal, sealed ? { sealed } : undefined, caller));
     },
 
     async fetch({ url }) {

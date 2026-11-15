@@ -162,7 +162,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
     console.log('\n  [MAN] = manual step: run `ordewell tui` to work through it');
   }
   if (tasks.some((t) => t.ops)) {
-    console.log('  [OPS] = ops task: runs in your checkout once the work it depends on is merged (`ordewell handoff merge`)');
+    console.log('  [OPS] = ops task: runs in your checkout once the work it depends on is merged (`ordewell merge`)');
   }
   if (tasks.some((t) => t.research)) {
     console.log('  [RES] = research task: read-only, lands nothing; its report wakes the planner when it ends');

@@ -6,7 +6,9 @@ import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsServic
 import { LeaseHost } from '../sessionLease';
 import type { LeaseHostKind } from '../../utils/leaseRecord';
 import { fakeConfig, makeSession } from './sessionTestKit';
-import { heldPlanner, NOW, prose, settled, until } from './supervisorTestKit';
+import type { ClientSurface } from '../surfaceControls';
+import { WAKE_DEBOUNCE_MS } from '../Supervisor';
+import { heldPlanner, NOW, prose, settled, supervised, task, until, waitForInput } from './supervisorTestKit';
 
 /**
  * The planner is told where its user is and how the run is set, in a block
@@ -51,17 +53,17 @@ function planning(options: { run?: Partial<GlobalRunSettings>; host?: LeaseHostK
 
 type Env = ReturnType<typeof planning>;
 
-async function opened(env: Env): Promise<void> {
-  const started = env.session.startPlanning('build it', ['claude-code']);
+async function opened(env: Env, surface?: ClientSurface): Promise<void> {
+  const started = env.session.startPlanning('build it', ['claude-code'], { surface });
   await until(() => env.planner.calls.length === 1);
   env.planner.calls[0].finish(prose('Which database?'));
   await started;
   await settled();
 }
 
-async function reply(env: Env, text: string): Promise<string> {
+async function reply(env: Env, text: string, surface?: ClientSurface): Promise<string> {
   const at = env.planner.calls.length;
-  const replied = env.session.continueConversation(text);
+  const replied = env.session.continueConversation(text, { surface });
   await until(() => env.planner.calls.length === at + 1);
   env.planner.calls[at].finish(prose('Noted.'));
   await replied;
@@ -134,7 +136,7 @@ describe('the SURFACE AND SETTINGS block', () => {
     try {
       await opened(env);
       expect(env.sent(0)).toContain('The user is on VS Code.');
-      expect(env.sent(0)).toContain('Merge the run\'s landed work: the Merge all button');
+      expect(env.sent(0)).toContain('Merge the run\'s landed work: the Merge button on the run\'s handoff card (Merge all when the run spans several repositories)');
     } finally {
       env.cleanup();
     }
@@ -173,6 +175,88 @@ describe('the SURFACE AND SETTINGS block', () => {
       expect(JSON.stringify({ ...request, initialMessage: undefined })).not.toContain(HEADER);
     } finally {
       env.cleanup();
+    }
+  });
+});
+
+/**
+ * A detached daemon serves whichever client reaches it, so the surface is the
+ * one the user's message says it came from (ADR-0030), not the daemon's.
+ */
+describe('the surface the user is on', () => {
+  const detached: LeaseHostKind = { kind: 'daemon', port: 3742 };
+
+  it('is the command line for a turn the CLI sends, which names ordewell commands', async () => {
+    const env = planning({ host: detached });
+    try {
+      await opened(env, 'cli');
+      expect(env.sent(0)).toContain('The user is on the ordewell command line');
+      expect(env.sent(0)).toContain('Merge the run\'s landed work: ordewell merge');
+      expect(env.sent(0)).toContain('Skip a task: ordewell skip <id>');
+      expect(env.sent(0)).not.toContain('/merge');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('is the terminal UI for a TUI that joined a detached daemon, which names slash commands', async () => {
+    const env = planning({ host: detached });
+    try {
+      await opened(env, 'tui');
+      expect(env.sent(0)).toContain('The user is on the terminal UI');
+      expect(env.sent(0)).toContain('Merge the run\'s landed work: /merge\n');
+      expect(env.sent(0)).not.toContain('ordewell merge');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('is the host\'s, as before, for a client that states none, unknown on a detached daemon', async () => {
+    const env = planning({ host: detached });
+    try {
+      await opened(env);
+      expect(env.sent(0)).toContain('The user is on a surface Ordewell cannot tell.');
+      expect(env.sent(0)).toContain('Merge the run\'s landed work: /merge in the terminal UI, ordewell merge on the command line,');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('follows the user to another client on the next turn', async () => {
+    const env = planning({ host: detached });
+    try {
+      await opened(env, 'cli');
+      const next = await reply(env, 'Postgres', 'desktop');
+      expect(next).toContain('The user is on the Ordewell desktop app.');
+      expect(next).toContain('Merge the run\'s landed work: Review & Merge all in the title bar');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it('is, in a wake turn no one sent, the surface of the user\'s last message', async () => {
+    const leaseHost = new LeaseHost();
+    leaseHost.describe(detached);
+    const env = await supervised([task('t1', 1), task('t2', 2)], { leaseHost, settings: { supervisorLevel: 'watch' } });
+    try {
+      const replied = env.session.continueConversation('how is it going?', { surface: 'vscode' });
+      await until(() => env.planner.calls.length === 1);
+      env.planner.calls[0].finish(prose('Running.'));
+      await replied;
+      await settled();
+      // A new live context sends the block again, so the wake turn shows which surface it names.
+      env.planner.state.live = false;
+      waitForInput(env.run.of('t1'));
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+      await until(() => env.planner.calls.length === 2);
+      const wake = env.planner.calls[1].message;
+      expect(wake).toContain(HEADER);
+      expect(wake).toContain('The user is on VS Code.');
+      expect(wake).toContain('Skip a task: the task card\'s Skip button');
+    } finally {
+      env.session.destroy();
+      leaseHost.releaseAll();
     }
   });
 });

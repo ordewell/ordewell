@@ -224,13 +224,14 @@ describe('handoff actions (ADR-0013)', () => {
       expect(chatProvider.showError).toHaveBeenCalledWith('Isolation action failed: Still held.');
     });
 
-    it('says so when an ok answer carries no result', async () => {
+    it('shows an ok answer with no result, a run already merged, as information and not an error', async () => {
       showWarningMessage.mockResolvedValue('Merge');
       const { d, session, chatProvider } = deps();
-      session.execute.mockResolvedValue({ ok: true, message: 'Done.' });
+      session.execute.mockResolvedValue({ ok: true, message: 'Nothing to merge: the run is closed.' });
       await handleIsolationAction('merge', undefined, d);
 
-      expect(chatProvider.showError).toHaveBeenCalledWith('Isolation action failed: Merge all answered without its result.');
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith('Nothing to merge: the run is closed.');
+      expect(chatProvider.showError).not.toHaveBeenCalled();
     });
 
     it('re-shows and saves the plan after a merge, and leaves it alone after a no', async () => {

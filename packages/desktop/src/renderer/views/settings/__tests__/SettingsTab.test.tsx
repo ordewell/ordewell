@@ -128,6 +128,20 @@ async function mount(theme: 'system' | 'light' | 'dark' = 'dark', options: World
 }
 
 describe('the Settings view', () => {
+  it('shows settings while models are still loading and settles that region with Retry on failure', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await mount('dark', { hang: 'models' });
+    expect(await screen.findByRole('heading', { name: 'Run' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /Parallel tasks/ })).toBeEnabled();
+    expect(screen.getByRole('combobox', { name: 'Planner' })).toBeEnabled();
+    expect(screen.getByText('Loading models…').closest('[role="status"]')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText(/No models/)).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(SETTINGS_TIMEOUT_MS + 1));
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load models");
+    expect(screen.getByRole('button', { name: 'Retry models' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Run' })).toBeInTheDocument();
+  });
+
   it('draws the planner, the runners and the run rules the daemon holds', async () => {
     await mount();
     expect(await screen.findByRole('heading', { name: 'Planner' })).toBeInTheDocument();

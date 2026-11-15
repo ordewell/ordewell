@@ -3,6 +3,7 @@ import { z } from 'zod/v4';
 import { TASK_QUERY_TASK_FIELDS, OUTPUT_LINES_MAX } from '../TaskQuery';
 import { TASK_LOG_KINDS } from '../taskLogRead';
 import type { ToolOutcome } from '../../interfaces/IFileSystem';
+import type { McpCaller } from './mcpCaller';
 import { HANDOFF_LIMITS } from '../../models/Handoff';
 import { ONE_LINE } from '../../models/lineBreaks';
 import { DECISION_RECORD_KINDS } from '../../models/Task';
@@ -314,6 +315,8 @@ export function checkpointReply(answer: CheckpointAnswer): McpToolReply {
 export interface McpToolContext {
   /** Aborts when the token is revoked or the caller cancels — a waiting handler must stop. */
   signal: AbortSignal;
+  /** Who made the call, when the runner's request says (ADR-0068 R2). */
+  caller?: McpCaller;
 }
 
 type Run<A> = (args: A, context: McpToolContext) => Promise<McpToolReply>;

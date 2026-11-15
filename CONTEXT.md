@@ -2548,14 +2548,14 @@ the task changed, since the conflict in one rolled back all of them.
 In the terminal the same four steps are the handoff overlay (`/merge`, which
 opens it on Merge, and which `isolation_handoff` opens on a screen with nothing
 else open) and
-`ordewell handoff [review|merge|discard|cleanup]`. Merge and discard are asked
+`ordewell merge [review|discard|cleanup]` (`ordewell handoff` is its deprecated name). Merge and discard are asked
 about first, in both — the CLI takes `--yes` as having asked. A surface that was
 not listening — a reloaded session, a reconnected webview or socket — is re-told
 the handoff and the per-task marks by `Session.runSnapshot()`, not rebuilt from
 the saved run record: the daemon's socket greeting and session reads carry it to
 the terminal, and VS Code adopts it whenever its webview reconnects or a session
 is loaded (the handoff card waits while a run executes). The one exception is a
-CLI command reading a saved plan — `ordewell status` and `ordewell handoff` — where
+CLI command reading a saved plan — `ordewell status` and `ordewell merge` — where
 the run record is the only thing it has: `isolationViewOfPlan` reads that record —
 migrating the ADR-0013 shape — into the same view, and the branch, base, block and
 repair lines have one wording in core, so the CLI, the TUI and VS Code cannot draw
