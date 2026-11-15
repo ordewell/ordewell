@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-11-15
+
+### Changed
+
+- **The planner is taught to fan a plan out from shared contracts** instead of
+  chaining slices that only add to one, and to check a brief's facts against the
+  code before freezing them.
+
+### Fixed
+
+- **Merge all on a run with nothing left to merge now says so** instead of
+  failing.
+- **The planner is told only the controls of the client you typed in,** so it no
+  longer names buttons another surface has.
+- **A coding-agent subagent's own reads no longer count against the planner's
+  read limit.**
+- **A routine compaction no longer flags a task as running long** where Ordewell
+  sets the compaction window; the flag comes from the third compaction on.
+
 ## [0.13.2] - 2026-11-14
 
 ### Added
