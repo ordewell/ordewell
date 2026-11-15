@@ -102,7 +102,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // Not const: a daemon we did not start can die and be replaced by one we
   // did, and only the one we started may be stopped on the way out.
   let owned = ownedAtLaunch;
-  const api = new ApiClient(port, workspace);
+  const api = new ApiClient(port, workspace, 'tui');
 
   // eslint-disable-next-line prefer-const
   let terminal: ReturnType<typeof openTerminal> | undefined;

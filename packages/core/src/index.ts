@@ -364,6 +364,7 @@ export { mintSessionId } from './utils/sessionId';
 export { extractPrdBlock, savePrdMarkdown, sanitizeSlug } from './utils/prdStore';
 export type { PrdBlock } from './utils/prdStore';
 export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, containersOffered, DELEGATION_NETWORK_RISK, DELEGATION_RISK, PLANNED_WITH_LABEL, SUPERVISOR_LEVEL_LABEL, automergeSummary, autorunSummary, delegationSummary, keptDelegationBudget, rememberDelegationBudget, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, parseCount, parseDelegation, parseSwitch, supervisorSummary, trailerSummary, treeShapeSummary } from './services/runSettingsText';
+export { CLIENT_SURFACES, SURFACE_CONTROLS, clientSurface, type ClientSurface, type Surface } from './services/surfaceControls';
 export { SettingsService, getSettingsPath, runSettingsOf, RunSettingsError, type UserSettings } from './services/SettingsService';
 export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings, type TreeShape } from './services/runSettingsDefaults';
 export {

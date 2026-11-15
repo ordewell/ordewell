@@ -982,12 +982,12 @@ export class DaemonHost {
         // The chat sends the runners its pills have on, including a click still
         // being saved; the daemon's list is only the fallback (as VS Code does).
         const chosen = runners ?? this.snapshot.state.enabledRunnerIds;
-        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, ...(chosen.length ? { runners: [...chosen] } : {}) });
+        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, surface: 'desktop', ...(chosen.length ? { runners: [...chosen] } : {}) });
         if (sessionId !== this.sessionId) return;
         this.fresh = false;
         this.update({ goal: text });
       } else {
-        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text });
+        response = await callDaemon(now ? 'plans.converseMessageNow' : 'plans.converseMessage', { sessionId }, { message: text, surface: 'desktop' });
         if (sessionId !== this.sessionId) return;
       }
       this.showPlan(response.plan);

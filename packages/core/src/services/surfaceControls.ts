@@ -4,11 +4,21 @@ import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
 
 /**
  * The surface a person drives a session from. The terminal UI has commands and
- * keys, not buttons, so a planner that names a control must name this
- * surface's, or the user is told to press something that is not there
- * (ADR-0030).
+ * keys, not buttons, and the command line only shell commands, so a planner
+ * that names a control must name this surface's, or the user is told to press
+ * something that is not there (ADR-0030).
  */
-export type Surface = 'tui' | 'vscode' | 'desktop' | 'unknown';
+export type Surface = 'tui' | 'cli' | 'vscode' | 'desktop' | 'unknown';
+
+/** A surface a client says it is when it sends the user's message; 'unknown' is only ever inferred. */
+export type ClientSurface = Exclude<Surface, 'unknown'>;
+
+export const CLIENT_SURFACES: readonly ClientSurface[] = ['tui', 'cli', 'vscode', 'desktop'];
+
+/** The surface a request body states, read from untrusted JSON: anything else states none. */
+export function clientSurface(value: unknown): ClientSurface | undefined {
+  return CLIENT_SURFACES.find((surface) => surface === value);
+}
 
 /** Every action only the user takes, which a planner may suggest but never perform. */
 export const USER_ACTIONS = [
@@ -60,14 +70,15 @@ export function actionPhrase(action: UserAction): string {
 
 const SURFACE_NAME: Readonly<Record<Surface, string>> = {
   tui: 'the terminal UI, where every control is a slash command or a key',
+  cli: 'the ordewell command line, where every control is a shell command',
   vscode: 'VS Code',
   desktop: 'the Ordewell desktop app',
   unknown: 'a surface Ordewell cannot tell',
 };
 
 // The names each surface shows: packages/cli/src/tui (slash.ts, planKeys.ts,
-// reducers/taskView.ts), packages/ui's shared cards, and packages/desktop's
-// title bar and task tab.
+// reducers/taskView.ts), packages/cli/src/commands/registry.ts,
+// packages/ui's shared cards, and packages/desktop's title bar and task tab.
 const TUI: SurfaceControls = {
   merge: '/merge',
   answerCheckpoint: '/checkpoint <id> approve, or /checkpoint <id> reject <reason>',
@@ -86,16 +97,39 @@ const TUI: SurfaceControls = {
   compact: '/compact',
 };
 
+// The command line has no command for these four: only the terminal UI's keys
+// reach them, so it names those and says where they are.
+const CLI: SurfaceControls = {
+  merge: 'ordewell merge',
+  answerCheckpoint: 'ordewell checkpoint <id> approve, or ordewell checkpoint <id> reject <reason>',
+  approvePlan: 'ordewell run, which approves the plan as it executes it',
+  runPlan: 'ordewell run',
+  skipTask: 'ordewell skip <id>',
+  forceStart: 'ordewell force-start <id>',
+  markComplete: 'ordewell complete <id>',
+  markNotDone: 'ordewell uncomplete <id>',
+  revertTask: 'ordewell revert <id>',
+  interrupt: 'no command; ctrl-x in the terminal UI (ordewell tui), in the task\'s view (/open <id>)',
+  forceSend: 'no command; ctrl-s on the queued message in the terminal UI (ordewell tui)',
+  takeBackQueued: 'no command; ctrl-r on the queued message in the terminal UI (ordewell tui), in the task\'s view (/open <id>)',
+  cancelResume: 'no command; the c key on the task in the terminal UI\'s plan (ordewell tui)',
+  approveReview: 'ordewell approve',
+  compact: 'ordewell compact',
+};
+
+// Queued messages go as one, so the stack has one Send all now, not one per row
+// (packages/ui PendingMessages).
 const SHARED_CARDS = {
   answerCheckpoint: 'the Approve & Continue or Reject button on the task\'s checkpoint panel',
-  forceSend: 'the queued message\'s Send now button',
+  forceSend: 'the Send all now button under the queued messages',
   takeBackQueued: 'the queued message\'s × button',
   compact: '/compact',
 } as const;
 
 const VSCODE: SurfaceControls = {
   ...SHARED_CARDS,
-  merge: 'the Merge all button on the run\'s handoff card',
+  // The handoff card's button reads Merge for one repository (packages/ui HandoffCard).
+  merge: 'the Merge button on the run\'s handoff card (Merge all when the run spans several repositories)',
   approvePlan: 'the Execute Plan button, or the Ordewell: Approve Plan command',
   runPlan: 'the Execute Plan button',
   skipTask: 'the task card\'s Skip button',
@@ -125,11 +159,12 @@ const DESKTOP: SurfaceControls = {
 
 /** A host that does not say what it is gets every surface's name for the action, so the user finds theirs. */
 function eachSurfaces(action: UserAction): string {
-  return `${TUI[action]} in the terminal UI, ${VSCODE[action]} in VS Code, or ${DESKTOP[action]} in the desktop app`;
+  return `${TUI[action]} in the terminal UI, ${CLI[action]} on the command line, ${VSCODE[action]} in VS Code, or ${DESKTOP[action]} in the desktop app`;
 }
 
 export const SURFACE_CONTROLS: Readonly<Record<Surface, SurfaceControls>> = {
   tui: TUI,
+  cli: CLI,
   vscode: VSCODE,
   desktop: DESKTOP,
   unknown: Object.fromEntries(USER_ACTIONS.map((action) => [action, eachSurfaces(action)])) as Record<UserAction, string>,
@@ -138,13 +173,34 @@ export const SURFACE_CONTROLS: Readonly<Record<Surface, SurfaceControls>> = {
 /**
  * The surface a session's live host serves (ADR-0049): a daemon that watches
  * its parent is a TUI's private one; the desktop app marks the daemon it
- * forks. A shared daemon may serve any surface, so it says none.
+ * forks. A shared daemon may serve any surface, so it says none. Only a
+ * message whose client states no surface falls back to this (UserSurface).
  */
 export function surfaceOf(host: LeaseHostKind | undefined): Surface {
   if (host?.kind === 'vscode') return 'vscode';
   if (host?.kind !== 'daemon') return 'unknown';
   if (host.app === 'desktop') return 'desktop';
   return host.ownerPid !== undefined ? 'tui' : 'unknown';
+}
+
+/**
+ * The surface of the user who spoke last, which is where the planner's next
+ * reply is read: the client that sent the message says which it is, and a wake
+ * turn, which no one sent, keeps the last one's (ADR-0030).
+ */
+export class UserSurface {
+  private stated: ClientSurface | undefined;
+
+  constructor(private readonly host: () => LeaseHostKind | undefined) {}
+
+  /** A message that states no surface comes from an older client, so the host's goes back to deciding. */
+  heard(surface: ClientSurface | undefined): void {
+    this.stated = surface;
+  }
+
+  current(): Surface {
+    return this.stated ?? surfaceOf(this.host());
+  }
 }
 
 /** The header the planner reads its standing facts under; other prompts point at it by this name. */

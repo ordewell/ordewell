@@ -193,7 +193,7 @@ describe('POST /:sessionId/converse/message/now', () => {
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ plan: { tasks: [] } });
-    expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'use Postgres instead', undefined);
+    expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'use Postgres instead', undefined, undefined);
   });
 
   it('needs a message', async () => {
@@ -222,6 +222,35 @@ describe('POST /:sessionId/converse/message/now', () => {
     const res = await post(app, 'converse/message/now', { message: 'now' });
 
     expect(res.status).toBe(409);
+  });
+});
+
+/** The client says which surface its user is on, so the planner names that surface's controls (ADR-0030). */
+describe('the surface a planner message states', () => {
+  it('reaches the session with the goal, a reply and a forced send', async () => {
+    const startPlanning = vi.fn().mockResolvedValue({ tasks: [] });
+    const continuePlanning = vi.fn().mockResolvedValue({ tasks: [] });
+    const forceSendPrompt = vi.fn().mockResolvedValue({ tasks: [] });
+    const app = appFor(poolWith({}, { startPlanning, continuePlanning, forceSendPrompt }));
+
+    expect((await post(app, 'converse/start', { goal: 'build it', workspace: '/repo', surface: 'cli' })).status).toBe(200);
+    expect((await post(app, 'converse/message', { message: 'Postgres', surface: 'tui' })).status).toBe(200);
+    expect((await post(app, 'converse/message/now', { message: 'now', surface: 'desktop' })).status).toBe(200);
+
+    expect(startPlanning).toHaveBeenCalledWith('s1', 'build it', undefined, '/repo', undefined, { allowInit: undefined, surface: 'cli' });
+    expect(continuePlanning).toHaveBeenCalledWith('s1', 'Postgres', undefined, 'tui');
+    expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'now', undefined, 'desktop');
+  });
+
+  it('is none for a message that states none, or one no client is', async () => {
+    const continuePlanning = vi.fn().mockResolvedValue({ tasks: [] });
+    const app = appFor(poolWith({}, { continuePlanning }));
+
+    await post(app, 'converse/message', { message: 'older client' });
+    await post(app, 'converse/message', { message: 'made up', surface: 'unknown' });
+
+    expect(continuePlanning).toHaveBeenNthCalledWith(1, 's1', 'older client', undefined, undefined);
+    expect(continuePlanning).toHaveBeenNthCalledWith(2, 's1', 'made up', undefined, undefined);
   });
 });
 
