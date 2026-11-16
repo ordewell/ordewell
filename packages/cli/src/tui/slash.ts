@@ -56,7 +56,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
   // Models & providers
   { name: 'planner', usage: '/planner [<provider>]', description: 'Pick the planner: harness, model and effort in one go', category: 'models' },
-  { name: 'key', usage: '/key [set <provider> <key>]', description: 'Configure API provider keys', category: 'models' },
+  { name: 'key-set', usage: '/key-set [<provider> [<key>]]', description: 'Set an API key for a provider', category: 'models' },
   { name: 'allowlist', usage: '/allowlist [set <runner> <ids> | clear <runner>]', description: 'Limit which models a runner may use', category: 'models' },
   { name: 'runners', usage: '/runners [<id> on|off]', description: `Enable or disable runners (${runnerIdList()})`, category: 'models' },
   { name: 'login', usage: '/login [<runner>]', description: 'Sign the active coding agent in, or the one named, in this terminal', category: 'models' },
@@ -102,6 +102,8 @@ export const COMMAND_ALIASES: CommandAlias[] = [
   { name: 'resume', target: 'sessions', description: 'Alias for /sessions: open a saved session, not restart a task' },
   // The command that lands a run's work was /handoff until it took the verb the other surfaces use ("Merge all").
   { name: 'handoff', target: 'merge', description: 'Deprecated: use /merge', deprecated: true },
+  // The key command was /key until it took the one word the other surfaces use; `/key set <provider>` still runs.
+  { name: 'key', target: 'key-set', description: 'Deprecated: use /key-set', deprecated: true },
 ];
 
 /** What a deprecated spelling says when it is used; null for a current command or an alias that is a plain synonym. */

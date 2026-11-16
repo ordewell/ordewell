@@ -175,7 +175,7 @@ describe('/planner wizard: leaving', () => {
     const deps = makeDeps({ plannerBackends: async () => [CODEX] });
     await runPlannerWizard(deps);
 
-    expect(warn).toHaveBeenCalledWith('No planner available: install a coding agent, or add an API key with /key.');
+    expect(warn).toHaveBeenCalledWith('No planner available: install a coding agent, or add an API key with /key-set.');
     expect(deps.applyChoice).not.toHaveBeenCalled();
   });
 

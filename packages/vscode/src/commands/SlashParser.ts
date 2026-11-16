@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { listSessions, loadSession } from '@ordewell/core';
+import { isApiProvider, listSessions, loadSession } from '@ordewell/core';
 import type { AiProvider, PlannerBackendId, RunnerRegistry, ModelResolver, SettingsService, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
@@ -105,10 +105,16 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
     await deps.loginPlanner(runner);
     return;
   }
-  if (cmd === '/key') {
-    const allProviders = ['google', 'openrouter', 'openai_compatible', 'openai', 'xai', 'groq', 'deepseek', 'together', 'mistral', 'anthropic', 'fireworks', 'perplexity', 'zhipu', 'kimi', 'cerebras', 'deepinfra', 'doubao', 'qwen', 'hunyuan', 'baichuan', 'minimax', 'yi', 'stepfun', 'siliconflow', 'cohere', 'novita'];
-    const provider = args.find((a) => allProviders.includes(a)) as ApiProvider | undefined;
-    await deps.runApiKeyWizard(provider);
+  if (cmd === '/key-set') {
+    // `/key set <provider>`, the old spelling, arrives here as /key-set with its `set` still first.
+    const [named] = args[0]?.toLowerCase() === 'set' ? args.slice(1) : args;
+    const provider = named?.toLowerCase();
+    if (provider && !isApiProvider(provider)) {
+      vscode.window.showWarningMessage(`Unknown provider: ${named}. Run /key-set with no argument to pick one.`);
+      return;
+    }
+    // A key typed inline is never read: it would sit in the chat history, so the wizard asks for it masked.
+    await deps.runApiKeyWizard(provider as ApiProvider | undefined);
     return;
   }
   if (cmd === '/sessions') {

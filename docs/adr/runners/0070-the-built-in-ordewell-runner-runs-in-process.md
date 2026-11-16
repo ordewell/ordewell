@@ -147,6 +147,13 @@ is one runner per API provider, under the provider's own id and name.**
   line passes its redaction
   ([ADR-0061](../platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
   No key reaches a shell child's environment, in any mode.
+- **A host's own keys are lent to the runner alone.** The VS Code extension
+  keeps the keys a user enters in its SecretStorage, and registers a reader
+  for them (`hostCredentials.ts`); the runner's listing, its default, its
+  catalog and its start read the provider through it, over the environment.
+  The extension host's environment never holds them, so neither a coding agent
+  it spawns nor another extension beside it inherits one. The daemon, whose
+  keys are its environment, registers none.
 - **A mode is never widened.** The runner declares its three modes with
   the autonomous, safe and read-only tags `ModeResolver` reads. An attempt runs
   in the mode it was planned at, and an unknown mode refuses to start rather than
@@ -239,6 +246,11 @@ comes from that call.
   same provider then had two names, "Ordewell" as a runner and "OpenRouter" as
   a planner, and one runner's 100-model line in the planner's catalog was
   filled by its first provider. Dropped for one runner per provider.
+- **The VS Code extension putting its keys into the extension host's
+  environment**, where the runner already reads a key. Rejected: every process
+  the host spawns would inherit them, a coding agent included, which may then
+  run on that key instead of the user's own login, and so would every other
+  extension running in the same host.
 - **One runner per provider under ids of its own (`ordewell-openrouter`).**
   Rejected: it keeps the planner setting's namespace apart, but names one thing
   twice; a planner under a vendor's id is already Ordewell's own loop on that
@@ -277,3 +289,5 @@ comes from that call.
 - 2026-11-16 — one runner per provider under the provider's id and name, installed
   and signed in exactly while that provider is configured, enabled by default
   with its key; the single `ordewell` runner is gone and what named it is moved.
+- 2026-11-16 — VS Code's keys reach the runner from its SecretStorage through a
+  reader the extension registers, never through the extension host's environment.

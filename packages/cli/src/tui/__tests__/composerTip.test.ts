@@ -7,6 +7,7 @@ import { initialState, type TaskLogState, type TaskView, type TuiState } from '.
 
 const ALLOWLIST_TIP = 'Tip: Use /allowlist to limit which models the planner assigns per runner.';
 const RUNNERS_TIP = 'Tip: Use /runners to turn runners on or off.';
+const KEY_TIP = 'Tip: Add an API key with /key-set to run tasks on the built-in runner.';
 
 let wasEnabled: boolean;
 beforeEach(() => { wasEnabled = style.enabled; style.enabled = true; });
@@ -90,5 +91,21 @@ describe('which tip shows (#137)', () => {
     expect(composerText(emptied)).toContain(RUNNERS_TIP);
     // A key that leaves the empty composer empty picks no new tip.
     expect(key(emptied, 'left').composerTipSeq).toBe(1);
+  });
+});
+
+describe('the key tip, while no provider is configured (ADR-0070)', () => {
+  const cycle = (over: Partial<TuiState>): string[] =>
+    Array.from({ length: 10 }, (_, seq) => composerText(at(80, { ...over, composerTipSeq: seq })));
+
+  it('comes round once the catalog says no provider has a key', () => {
+    expect(composerText(at(80, { providersKnown: true, composerTipSeq: 1 }))).toBe(`❯   ${KEY_TIP}`);
+  });
+
+  it('never shows once a provider is configured, nor before the catalog has said', () => {
+    const configured: Partial<TuiState> = { providersKnown: true, configuredProviders: ['openrouter'] };
+    for (const over of [configured, { providersKnown: false }]) {
+      expect(cycle(over).some((row) => row.includes('/key-set'))).toBe(false);
+    }
   });
 });

@@ -900,8 +900,10 @@ like any other runner, and completes a task only by the token-bound
 `task_complete`. Its manifest's `runner` is `{ inProcess: true, provider }`: no
 command to probe, so it is installed, and signed in, exactly while its provider
 is configured (a key, or for a custom endpoint its URL); a provider with no key
-has no runner to list or sign in. With no saved runner choice it is enabled
-beside the installed coding agents. Its models are its provider's catalog, as
+has no runner to list or sign in. The key is the host's environment's, or one
+the host holds outside it and lends the runner alone (`hostCredentials.ts`): VS
+Code's SecretStorage, which never enters the extension host's environment. With
+no saved runner choice it is enabled beside the installed coding agents. Its models are its provider's catalog, as
 `<provider>:<model>`, split at the first colon; a model of another provider is
 refused. It has three modes: Full runs every tool unasked; Guarded asks before
 each `shell` call; read-only has no edit or shell tool and reads natively and

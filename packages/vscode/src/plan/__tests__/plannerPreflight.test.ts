@@ -34,10 +34,10 @@ describe('plannerPreflightError', () => {
     });
   }
 
-  it('sends a vendor planner with no key to /planner first, then offers /key', () => {
+  it('sends a vendor planner with no key to /planner first, then offers /key-set', () => {
     expect(plannerPreflightError(config('openrouter', '', 'openai/gpt-5'), '/repo')).toBe(
       'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
-      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
+      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key-set.',
     );
   });
 
@@ -121,7 +121,7 @@ describe('plannerPreflightError on the extension\'s own config', () => {
 
     expect(plannerPreflightError(config, '/repo')).toBe(
       'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
-      'To plan with OpenAI instead, add OPENAI_API_KEY with /key.',
+      'To plan with OpenAI instead, add OPENAI_API_KEY with /key-set.',
     );
   });
 

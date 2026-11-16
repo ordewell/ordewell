@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -64,9 +64,20 @@ describe('writeEnvVar', () => {
     expect(() => writeEnvVar(file, 'KEY.*', 'value')).toThrow(/valid environment variable/);
   });
 
-  it('rejects a value containing a newline', () => {
+  it('rejects a value containing a newline, writing nothing', () => {
     const file = path.join(home, '.ordewell', '.env');
-    expect(() => writeEnvVar(file, 'KEY', 'one\ntwo')).toThrow(/newline/);
+    expect(() => writeEnvVar(file, 'KEY', 'one\ntwo')).toThrow(/line break/);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('says a write the file system refuses rather than throwing, since the daemon already took the change', () => {
+    // A directory where the file should be: no write can land there.
+    const file = path.join(home, '.ordewell', '.env');
+    fs.mkdirSync(file, { recursive: true });
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => writeEnvVar(file, 'KEY', 'value')).not.toThrow();
+    expect(said).toHaveBeenCalledWith(expect.stringContaining(`Could not write to ${file}`));
+    said.mockRestore();
   });
 });
 

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { RunnerRegistry, ModelResolver, SettingsService, DiscoveredModel } from '@ordewell/core';
+import { configuredProviderRunners, inProcessProvider, withHostCredentials, type RunnerRegistry, type ModelResolver, type SettingsService, type DiscoveredModel } from '@ordewell/core';
 
 // Show the provider exactly as the runner CLI lists it (the prefix before
 // the first `/`) — no renaming, no title-casing.
@@ -24,7 +24,9 @@ export async function configureModelAllowlist(
   win: Pick<typeof vscode.window, 'showQuickPick' | 'withProgress' | 'showWarningMessage'> = vscode.window,
   changed?: (allowlist: Record<string, string[]>) => void,
 ): Promise<void> {
-  const runners = runnerRegistry.list();
+  // A provider runner exists only with its key (ADR-0070): one without has no models to limit.
+  const keyed = new Set<string>(configuredProviderRunners(withHostCredentials(process.env)));
+  const runners = runnerRegistry.list().filter(({ manifest }) => !inProcessProvider(manifest) || keyed.has(manifest.name));
   const runnerItems = runners.map((r) => ({
     label: r.manifest.displayName,
     description: r.manifest.name,

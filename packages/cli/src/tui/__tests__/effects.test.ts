@@ -1245,6 +1245,17 @@ describe('settings', () => {
     expect(h.env.OPENROUTER_API_KEY).toBe('sk-or-1');
   });
 
+  it('asks for the runner list again once a key is stored, since the key lists that provider\'s runner', async () => {
+    const h = harness();
+    h.api.getRunners.mockResolvedValue({
+      runners: [{ id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' }],
+      orchestratorModel: '',
+    });
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+    const loaded = h.actions.find((a) => a.type === 'runnersLoaded') as Extract<Action, { type: 'runnersLoaded' }> | undefined;
+    expect(loaded?.runners.map((r) => [r.id, r.name])).toEqual([['openrouter', 'OpenRouter']]);
+  });
+
   it('never puts an api key in a message the transcript would show', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-secret' }, h.deps);
@@ -1409,7 +1420,7 @@ describe('catalogs and sessions', () => {
     expect(loaded.providerErrors).toEqual({ openai: 'boom' });
   });
 
-  it('forwards which providers are configured — the /key picker checkmarks', async () => {
+  it('forwards which providers are configured — the /key-set picker checkmarks', async () => {
     const h = harness({
       getModels: vi.fn().mockResolvedValue({ models: [], providers: ['openrouter', 'gemini'] }),
     });

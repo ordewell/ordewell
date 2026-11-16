@@ -200,7 +200,9 @@ Key**. Without one there, it reads its API key settings, such as
 
 Each runner starts with Ordewell's environment, so a key exported in your shell, or
 saved with `/key-set` or `ordewell key set` in the terminal UI or CLI, reaches the runners
-too; a key in VS Code's secret storage or settings does not generally reach runners. Ordewell
+too. A key in VS Code's secret storage or settings is never put in the extension host's
+environment: the built-in runner on its provider runs on it, and a coding agent does not
+generally get it. Ordewell
 hands applicable saved keys to Qwen Code, Cline and Gemini CLI for their starts
 and model discovery. Claude Code and Codex can
 also sign in with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, so such a key saved for

@@ -425,7 +425,8 @@ const PLANNER_COMMANDS: ReadonlySet<string> = new Set(SLASH_COMMANDS.map((comman
  */
 function composerTipHint(state: TuiState, room: number): string {
   if (state.taskView || !state.mouseCapture || state.editor.text !== '' || room < 12) return '';
-  const text = composerTip(state.composerTipSeq, PLANNER_COMMANDS);
+  // Until the catalog says which providers are configured, whether a key is set is unknown, and the key tip waits.
+  const text = composerTip(state.composerTipSeq, PLANNER_COMMANDS, state.providersKnown ? { providerKeySet: state.configuredProviders.length > 0 } : {});
   return text ? style.bandGrey(` ${truncate(text, room - 1)}`) : '';
 }
 

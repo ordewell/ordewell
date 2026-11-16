@@ -4,8 +4,11 @@ import { plannerIdChoice, plannerIdList, plannerNamesOr, runnerIdList } from '..
 // Text about planning names the runners whose connector plans; text about
 // runners names every runner.
 describe('runner names, for runners and for planners', () => {
-  it('names every runner where the text is about runners', () => {
-    expect(runnerIdList()).toBe('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent, ordewell');
+  // The built-in runner is one runner per provider (ADR-0070): naming each of
+  // them would bury the coding agents, so the list says what they are instead.
+  it('names every coding agent, then the provider runners as one, where the text is about runners', () => {
+    expect(runnerIdList()).toBe('claude-code, codex, opencode, copilot-cli, qwen-code, cline, gemini-cli, cursor-agent, and each API provider with a key');
+    expect(runnerIdList()).not.toMatch(/ordewell|openrouter/);
   });
 
   it('names only the runners that can plan where the text is about planning', () => {

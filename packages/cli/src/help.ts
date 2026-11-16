@@ -166,7 +166,7 @@ Global options:
 
 Quick Start:
   Run "ordewell", then use /planner to choose a coding agent,
-  or /key to choose an API provider and add its key.
+  or /key-set to choose an API provider and add its key.
 
   To plan from the command line after setup:
     ordewell plan --goal "Your task description"

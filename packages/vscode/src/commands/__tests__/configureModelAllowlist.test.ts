@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureModelAllowlist } from '../configureModelAllowlist';
-import { RunnerRegistry, ModelResolver, SettingsService } from '@ordewell/core';
+import { getProviderMeta, inProcessProvider, RunnerRegistry, ModelResolver, SettingsService, setHostCredentials } from '@ordewell/core';
+import { setEnv } from '@ordewell/core/testing';
 
 describe('configureModelAllowlist', () => {
   let registry: RunnerRegistry;
@@ -26,14 +27,26 @@ describe('configureModelAllowlist', () => {
     };
   });
 
-  it('shows a QuickPick with all runners from the registry', async () => {
+  it('shows a QuickPick with every coding agent, and a provider runner only once its provider has a key', async () => {
     mockWin.showQuickPick.mockResolvedValue(undefined);
+    const cohere = getProviderMeta('cohere');
+    const restoreEnv = setEnv(Object.fromEntries([cohere.apiKeyEnvVar, ...cohere.detectEnvVars].map((name) => [name, undefined])));
+    setHostCredentials(() => ({ OPENROUTER_API_KEY: 'sk-or-held' }));
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    try {
+      await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    } finally {
+      setHostCredentials(undefined);
+      restoreEnv();
+    }
 
     expect(mockWin.showQuickPick).toHaveBeenCalledTimes(1);
     const [items, options] = mockWin.showQuickPick.mock.calls[0];
-    expect(items).toHaveLength(registry.list().length);
+    const agents = registry.list().filter((entry) => !inProcessProvider(entry.manifest));
+    const offered = (items as { runner: string }[]).map((item) => item.runner);
+    expect(offered.slice(0, agents.length)).toEqual(agents.map((entry) => entry.manifest.name));
+    expect(offered).toContain('openrouter');
+    expect(offered).not.toContain('cohere');
     expect(items[0].label).toBe(registry.list()[0].manifest.displayName);
     expect(items[0].runner).toBe(registry.list()[0].manifest.name);
     expect(items[0].description).toBe(registry.list()[0].manifest.name);

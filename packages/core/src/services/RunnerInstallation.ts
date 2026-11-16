@@ -10,6 +10,7 @@ import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
 import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
 import { VENDORS, vendorConfiguredIn } from './apiProviders';
+import { withHostCredentials } from './hostCredentials';
 
 const execAsync = promisify(exec);
 
@@ -280,7 +281,11 @@ export class RunnerInstallation {
     return probe;
   }
 
-  /** Whether the provider is configured in the daemon's environment under the workspace's, as a start would read it. */
+  /**
+   * Whether the provider is configured in the host's environment under the
+   * workspace's, with what the host holds for the runner over both, as a
+   * start would read it.
+   */
   private async providerConfigured(provider: AiProvider): Promise<boolean> {
     let env: Record<string, string | undefined>;
     try {
@@ -288,7 +293,7 @@ export class RunnerInstallation {
     } catch {
       env = { ...process.env };
     }
-    return vendorConfiguredIn(env, provider);
+    return vendorConfiguredIn(withHostCredentials(env), provider);
   }
 
   /**
