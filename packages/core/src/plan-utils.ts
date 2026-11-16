@@ -60,7 +60,7 @@ export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction,
 export { VENDORS, PROVIDER_PRIORITY, endpointUrlProblem, type ProviderRegistration } from './services/apiProviders';
 // The built-in runner is one runner per provider, under the provider's id and name (ADR-0070): a surface
 // tells such a runner from a coding agent here, and never offers it as a harness planner or a Log in.
-export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, configuredProviderRunners } from './services/providerRunners';
+export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed, configuredProviderRunners } from './services/providerRunners';
 // The run view is pure too: a surface seeds its state from the one empty run
 // rather than re-declaring the shape, and a host in a renderer folds it the same way.
 export { EMPTY_RUN, reduceRun } from './services/runView';

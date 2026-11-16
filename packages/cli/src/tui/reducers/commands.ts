@@ -1,6 +1,6 @@
 import {
   PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, endpointUrlProblem, getProviderMeta, isApiProvider, isPlannerBackend, isProviderRunner, providerRunnerLoginNote,
-  runnerForProvider, type AiProvider,
+  providerRunnerNamed, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
@@ -295,11 +295,11 @@ function setKey(state: TuiState, args: string[]): Step {
     if (!isApiProvider(provider)) {
       return fail(state, `Unknown provider: ${provider}. Run /key-set with no arguments to see the list.`);
     }
-    if (key.length === 0) return step({ ...state, overlay: keyPrompt(provider) });
+    if (key.length === 0) return step({ ...state, overlay: keyPrompt(provider, state.customEndpoint) });
     if (provider === CUSTOM) {
       const [baseUrl = '', ...customKey] = key;
       if (endpointUrlProblem(baseUrl)) return fail(state, `Usage: /key-set ${CUSTOM} <base-url> [<key>]`);
-      return step(state, [{ type: 'setApiKey', provider, key: customKey.join(' '), baseUrl }]);
+      return saveCustom(state, customKey.join(' '), baseUrl);
     }
     return step(state, [{ type: 'setApiKey', provider, key: key.join(' ') }]);
   }
@@ -317,15 +317,27 @@ function setKey(state: TuiState, args: string[]): Step {
   return step({ ...state, overlay: { kind: 'picker', picker: picker('API provider key', items, { kind: 'set-key' }) } });
 }
 
-/** The first prompt of a provider's key entry: its key, or for Custom the endpoint, its key asked after. */
-export function keyPrompt(provider: AiProvider): TuiState['overlay'] {
+/**
+ * Save Custom's endpoint, and its key or, given none, no key at all. The
+ * endpoint is held as the one set from here on, so the next `/key-set` offers
+ * it; should the daemon refuse it, it is still what was typed to try again.
+ */
+export function saveCustom(state: TuiState, key: string, baseUrl: string): Step {
+  return step({ ...state, customEndpoint: baseUrl }, [{ type: 'setApiKey', provider: CUSTOM, key, baseUrl }]);
+}
+
+/**
+ * The first prompt of a provider's key entry: its key, or for Custom the
+ * endpoint, starting from `endpoint`, the one it has, with its key asked after.
+ */
+export function keyPrompt(provider: AiProvider, endpoint = ''): TuiState['overlay'] {
   const meta = getProviderMeta(provider);
   if (provider === CUSTOM && meta.baseUrlEnvVar) {
     return {
       kind: 'prompt',
       title: `${meta.label} endpoint URL`,
       hint: `Stored as ${meta.baseUrlEnvVar} in your .env; its key, if it takes one, is asked next`,
-      value: '',
+      value: endpoint,
       action: { kind: 'api-base-url', provider, envVar: meta.baseUrlEnvVar },
     };
   }
@@ -338,13 +350,13 @@ export function keyPrompt(provider: AiProvider): TuiState['overlay'] {
   };
 }
 
-/** Custom's key, once its endpoint is given: optional, so an empty answer saves the endpoint alone. */
+/** Custom's key, once its endpoint is given: optional, so an empty answer saves the endpoint alone and clears the key. */
 export function endpointKeyPrompt(provider: AiProvider, baseUrl: string): TuiState['overlay'] {
   const meta = getProviderMeta(provider);
   return {
     kind: 'prompt',
     title: `${meta.label} API key (optional)`,
-    hint: `Stored as ${meta.apiKeyEnvVar} in your .env; Enter with none for an endpoint that takes no key`,
+    hint: `Stored as ${meta.apiKeyEnvVar} in your .env; Enter with none clears it, for an endpoint that takes no key`,
     value: '',
     action: { kind: 'api-key', provider, envVar: meta.apiKeyEnvVar, baseUrl },
   };
@@ -441,13 +453,17 @@ function runners(state: TuiState, args: string[]): Step {
  * is only worth saying out loud.
  */
 function login(state: TuiState, args: string[]): Step {
+  // Joined, not just `args[0]`: a display label is two words ("Claude Code").
+  const named = args.join(' ').trim();
+  // A provider runner has no login whether or not its key is set, so neither
+  // its row nor the runner list is needed to say what its way in is (ADR-0070).
+  const provider = named ? providerRunnerNamed(named) : undefined;
+  if (provider) return step(say(state, 'system', providerRunnerLoginNote(provider)));
   // An empty list before the daemon answers is not evidence the agent is
   // missing; ask again and say so rather than send the user to install it.
   if (!state.runnersKnown) {
     return step(say(state, 'system', 'Still checking which coding agents are installed. Try /login again in a moment.'), [{ type: 'loadRunners' }]);
   }
-  // Joined, not just `args[0]`: a display label is two words ("Claude Code").
-  const named = args.join(' ').trim();
   const runner = named ? matchRunner(state, named) : runnerForProvider(state.plannerProvider);
 
   if (!runner) {

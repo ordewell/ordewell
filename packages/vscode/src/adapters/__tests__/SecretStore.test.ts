@@ -52,6 +52,18 @@ describe('SecretStore', () => {
     expect(backing.get('openrouterKey')).toBe('sk-or-new'); // persisted
   });
 
+  it('delete() takes the key out of SecretStorage and the cache', async () => {
+    const { store: backing, secrets } = fakeSecrets({ openaiCompatibleKey: 'sk-old' });
+    const store = new SecretStore(secrets as never);
+    await store.load();
+
+    await store.delete('openaiCompatibleKey');
+
+    expect(store.get('openaiCompatibleKey')).toBeUndefined();
+    expect(backing.has('openaiCompatibleKey')).toBe(false);
+    expect(store.configuredProviders()).toEqual([]);
+  });
+
   it('configuredProviders() lists only providers with a non-empty key', async () => {
     const noneStore = new SecretStore(fakeSecrets().secrets as never);
     await noneStore.load();

@@ -35,15 +35,40 @@ interface DialogProps {
 }
 
 /**
+ * The settings write an answer is, the one every key entry of the app sends.
+ * Custom's key is sent even empty: an empty one takes the key saved before
+ * away, which the endpoint just set must not be sent (`removesCredential`).
+ */
+export function keyEntryEnv(answer: KeyEntryAnswer): Record<string, string> {
+  const meta = VENDORS[answer.provider];
+  if (answer.baseUrl !== undefined && meta.baseUrlEnvVar) return { [meta.baseUrlEnvVar]: answer.baseUrl, [meta.apiKeyEnvVar]: answer.key };
+  return answer.key ? { [meta.apiKeyEnvVar]: answer.key } : {};
+}
+
+const listed = (saved: unknown, field: string): unknown[] => {
+  const value = typeof saved === 'object' && saved !== null ? Reflect.get(saved, field) : undefined;
+  return Array.isArray(value) ? value : [];
+};
+
+/** Why the daemon's answer to {@link keyEntryEnv}'s write is no save (`rejectedEnvKeys`), or undefined when it took it. */
+export function keyEntryRefusal(saved: unknown, provider: AiProvider): string | undefined {
+  const rejected = listed(saved, 'rejectedEnvKeys');
+  const meta = VENDORS[provider];
+  if (rejected.includes(meta.apiKeyEnvVar)) return `The daemon refused the ${meta.label} key.`;
+  if (meta.baseUrlEnvVar && rejected.includes(meta.baseUrlEnvVar)) return `The daemon refused the ${meta.label} endpoint.`;
+  return undefined;
+}
+
+/**
  * What to tell the person when the daemon took a key it could not save
  * (`unsavedEnvKeys`): the desktop app has no file of its own, so the key
- * lasts as long as that daemon does. Undefined when it was saved.
+ * lasts as long as that daemon does. Undefined when it was saved. Custom's
+ * endpoint is named first: its key may be one the write only took away.
  */
 export function unsavedKeyWarning(saved: unknown, provider: AiProvider): string | undefined {
-  const unsaved = typeof saved === 'object' && saved !== null ? Reflect.get(saved, 'unsavedEnvKeys') : undefined;
+  const unsaved = listed(saved, 'unsavedEnvKeys');
   const meta = VENDORS[provider];
-  if (!Array.isArray(unsaved)) return undefined;
-  const what = unsaved.includes(meta.apiKeyEnvVar) ? 'key' : meta.baseUrlEnvVar && unsaved.includes(meta.baseUrlEnvVar) ? 'endpoint' : undefined;
+  const what = meta.baseUrlEnvVar && unsaved.includes(meta.baseUrlEnvVar) ? 'endpoint' : unsaved.includes(meta.apiKeyEnvVar) ? 'key' : undefined;
   if (!what) return undefined;
   return `The ${meta.label} ${what} is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.`;
 }
@@ -66,12 +91,19 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
   const field = useRef<HTMLInputElement>(null);
   const titleId = useId();
   const hintId = useId();
+  const urlProblemId = useId();
   const meta = VENDORS[provider];
   const custom = provider === CUSTOM;
-  const ready = custom ? endpointUrlProblem(baseUrl) === undefined : key.trim() !== '';
+  const urlProblem = endpointUrlProblem(baseUrl);
+  const ready = custom ? urlProblem === undefined : key.trim() !== '';
   const answerOf = (): KeyEntryAnswer => (custom ? { provider, key: key.trim(), baseUrl: baseUrl.trim() } : { provider, key });
   const submitOnEnter = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'Enter' && ready) { event.preventDefault(); answer(answerOf()); }
+  };
+  // A key typed for one vendor is never saved as another's.
+  const chooseProvider = (next: AiProvider): void => {
+    setProvider(next);
+    setKey('');
   };
 
   useEffect(() => {
@@ -111,7 +143,7 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
         {request.provider === undefined && (
           <label className="key-entry-field">
             <span>Provider</span>
-            <select className="ow-select" value={provider} onChange={(event) => setProvider(event.target.value as AiProvider)} aria-label="Provider">
+            <select className="ow-select" value={provider} onChange={(event) => chooseProvider(event.target.value as AiProvider)} aria-label="Provider">
               {PROVIDER_PRIORITY.map((id) => <option key={id} value={id}>{providerChoice(id)}</option>)}
             </select>
           </label>
@@ -130,7 +162,11 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
               onKeyDown={submitOnEnter}
+              aria-invalid={baseUrl.trim() !== '' && urlProblem !== undefined}
+              {...(baseUrl.trim() !== '' && urlProblem ? { 'aria-describedby': urlProblemId } : {})}
             />
+            {/* Said only once something is typed: an empty field needs no telling off. */}
+            {baseUrl.trim() !== '' && urlProblem && <span id={urlProblemId} className="key-entry-problem" role="status">{urlProblem}</span>}
           </label>
         )}
         <label className="key-entry-field">

@@ -219,38 +219,46 @@ export class ModelDiscovery {
     const placeHolder = provider === 'google' ? 'AIza…' : 'sk-…';
 
     // Custom is set up by its endpoint, so that comes first, and its key is
-    // optional: a local server takes none (ADR-0070).
+    // optional: a local server takes none (ADR-0070). The setting is a
+    // declared one: VS Code refuses to write any other.
     const endpointSetting = provider === 'openai_compatible' ? meta?.vscodeBaseUrlKey : undefined;
     let endpoint: string | undefined;
-    if (endpointSetting) {
-      endpoint = (await vscodeApi.window.showInputBox({
-        prompt: `Enter the ${providerLabel} endpoint URL`,
-        placeHolder: meta?.defaultBaseUrl,
-        value: config.openaiCompatibleBaseUrl,
-        ignoreFocusOut: true,
-        validateInput: (value) => endpointUrlProblem(value),
-      }))?.trim();
-      if (!endpoint) return;
-    }
 
     for (;;) {
+      if (endpointSetting) {
+        // Asked again after a refusal, from what was typed: the endpoint may be what was wrong.
+        endpoint = (await vscodeApi.window.showInputBox({
+          prompt: `Enter the ${providerLabel} endpoint URL`,
+          placeHolder: meta?.defaultBaseUrl,
+          value: endpoint ?? config.openaiCompatibleBaseUrl,
+          ignoreFocusOut: true,
+          validateInput: (value) => endpointUrlProblem(value),
+        }))?.trim();
+        if (!endpoint) return;
+      }
+
       const key = await vscodeApi.window.showInputBox({
         password: true, placeHolder,
         prompt: endpoint === undefined
           ? `Enter your ${providerLabel} API key`
-          : `Enter your ${providerLabel} API key, or leave it empty for an endpoint that takes none`,
+          : `Enter your ${providerLabel} API key, or leave it empty for an endpoint that takes none (a key saved before is removed)`,
         ignoreFocusOut: true,
       });
       if (key === undefined || (!key && endpoint === undefined)) return;
 
       // Checked where it will be used: a gateway's key is refused at the provider's public host.
       const validation = await vscodeApi.window.withProgress(
-        { location: vscodeApi.ProgressLocation.Notification, title: `Validating ${providerLabel} key…` },
+        { location: vscodeApi.ProgressLocation.Notification, title: endpoint !== undefined && !key ? `Checking the ${providerLabel} endpoint…` : `Validating ${providerLabel} key…` },
         () => validateApiKey(provider!, key, { baseUrl: endpoint ?? config.getProviderBaseUrl(provider!) }),
       );
 
       if (validation.status === 'invalid') {
-        await vscodeApi.window.showErrorMessage(`Invalid API key: ${validation.message}`);
+        // Custom's refusal may be its endpoint's, and with no key given it is.
+        await vscodeApi.window.showErrorMessage(endpoint === undefined
+          ? `Invalid API key: ${validation.message}`
+          : key
+            ? `The ${providerLabel} endpoint or its key was refused: ${validation.message}`
+            : `The ${providerLabel} endpoint did not list its models: ${validation.message}`);
         continue;
       }
       if (validation.status === 'network') {
@@ -263,6 +271,8 @@ export class ModelDiscovery {
 
       if (endpointSetting && endpoint !== undefined) await config.update(endpointSetting, endpoint);
       if (key) await this.deps.secretStore.set(secretKey, key);
+      // No key for an endpoint: the one saved before must not be sent to it.
+      else if (endpoint !== undefined) await this.deps.secretStore.delete(secretKey);
       await this.deps.onApiKeySaved();
       await this.refresh();
       vscodeApi.window.showInformationMessage(endpoint === undefined

@@ -68,5 +68,6 @@ export async function validateApiKey(
     return { status: 'network', message };
   }
   if (response.ok) return { status: 'valid' };
-  return { status: 'invalid', message: response.body || `API rejected the key (HTTP ${response.status})` };
+  // Asked with no key, a refusal is the endpoint's own.
+  return { status: 'invalid', message: response.body || (key ? `API rejected the key (HTTP ${response.status})` : `HTTP ${response.status}`) };
 }

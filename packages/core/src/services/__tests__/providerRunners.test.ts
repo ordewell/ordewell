@@ -20,7 +20,7 @@ import { PROVIDER_PRIORITY, VENDORS, endpointUrlProblem } from '../apiProviders'
 import {
   ALL_PROVIDERS, CLI_PROVIDERS, configuredProviders, getProviderMeta, isCliProvider, plannerBackendEntries, providerForRunner, runnerForProvider,
 } from '../ProviderRegistry';
-import { PROVIDER_RUNNER_IDS, configuredProviderRunners, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote } from '../providerRunners';
+import { PROVIDER_RUNNER_IDS, configuredProviderRunners, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed } from '../providerRunners';
 import { assertAssignedRunners } from '../PlanStore';
 
 /*
@@ -319,6 +319,14 @@ describe('a provider runner\'s way in', () => {
   it('is its key, or for Custom the endpoint, which /key-set replaces: never a login', () => {
     expect(providerRunnerLoginNote('openrouter')).toBe('OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.');
     expect(providerRunnerLoginNote('openai_compatible')).toBe('Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.');
+  });
+
+  // Bug: the terminal UI found a provider runner only in its runner list, so one with no key yet was "no installed coding agent".
+  it('is named by the provider\'s id or label in any case, keyed or not, and never for a coding agent or Perplexity', () => {
+    for (const named of ['openrouter', 'OpenRouter', ' OPENROUTER ']) expect(providerRunnerNamed(named), named).toBe('openrouter');
+    expect(providerRunnerNamed('custom')).toBe('openai_compatible');
+    expect(providerRunnerNamed('openai_compatible')).toBe('openai_compatible');
+    for (const named of ['claude-code', 'Claude Code', 'perplexity', 'toString', '']) expect(providerRunnerNamed(named), named).toBeUndefined();
   });
 
   it('takes Custom\'s endpoint only as an http(s) URL, so a key typed in its place is not saved as one', () => {

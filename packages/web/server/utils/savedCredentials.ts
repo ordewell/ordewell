@@ -1,4 +1,4 @@
-import { PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, writeEnvFileVars } from '@ordewell/core';
+import { PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, removesCredential, writeEnvFileVars } from '@ordewell/core';
 
 /**
  * Provider keys and endpoints set through the daemon outlive it, in the file
@@ -11,12 +11,16 @@ import { PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, writeEnvFileVars }
 
 /**
  * Save the credential variables of an accepted settings write; anything else
- * in it is not saved here. Answers the ones it could not save, every one of
- * them when the write failed: each works for this daemon's life, and only its
- * next start would miss it, which the surface that set it says.
+ * in it is not saved here. An empty one is taken out of the file, as it was
+ * out of the daemon (`removesCredential`): left there, the next start would
+ * load it back. Answers the ones it could not save, every one of them when the
+ * write failed: each works for this daemon's life, and only its next start
+ * would miss it, which the surface that set it says.
  */
 export function saveCredentials(env: Readonly<Record<string, string>>, file: string = globalEnvFile()): string[] {
-  const credentials = Object.fromEntries(Object.entries(env).filter(([key]) => PROVIDER_CREDENTIAL_ENV.has(key)));
+  const credentials = Object.fromEntries(Object.entries(env)
+    .filter(([key]) => PROVIDER_CREDENTIAL_ENV.has(key))
+    .map(([key, value]) => [key, removesCredential(key, value) ? undefined : value]));
   if (Object.keys(credentials).length === 0) return [];
   try {
     writeEnvFileVars(file, credentials);

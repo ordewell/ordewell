@@ -206,6 +206,12 @@
           "default": "",
           "description": "OpenRouter / OpenAI API key (or set OPENROUTER_API_KEY env var)"
         },
+        "ordewell.openaiCompatibleBaseUrl": {
+          "scope": "application",
+          "type": "string",
+          "default": "",
+          "description": "The endpoint of an OpenAI-compatible server (Custom), such as http://localhost:11434/v1 for Ollama, which plans and runs tasks on its models. Ordewell: Configure API Key or /key-set sets it, with the endpoint's key, if it takes one, kept in VS Code's secret storage. Left empty, OPENAI_COMPATIBLE_BASE_URL is read instead. A user setting: the endpoint is sent your key, so a workspace cannot choose it."
+        },
         "ordewell.aiProvider": {
           "type": "string",
           "default": "",

@@ -22,6 +22,7 @@
   padding: 0 var(--ow-space-2);
 }
 .key-entry .key-entry-input:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); }
+.key-entry .key-entry-problem { font: var(--ow-type-small); color: var(--ow-status-failed); }
 /* A destructive yes is the failure colour, filled: it must not read as the safe default. */
 .session-confirm .session-confirm-destructive { background: var(--ow-status-failed); border-color: var(--ow-status-failed); color: var(--ow-bg); }
 .session-confirm .session-confirm-destructive:hover:not(:disabled) { background: var(--ow-status-failed); filter: brightness(1.08); }

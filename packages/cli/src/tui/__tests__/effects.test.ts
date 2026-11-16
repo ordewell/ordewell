@@ -1252,11 +1252,16 @@ describe('settings', () => {
     expect(h.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' } });
     expect(h.env).toMatchObject({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' });
     expect(messageOf(h.actions, 'notice')).toBe('Custom endpoint and key saved to OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY.');
+  });
 
+  // Bug: Custom saved with no key kept the key set before, which was then sent to the new endpoint while the prompt said none.
+  it('clears Custom\'s earlier key, on the daemon and in .env, when the endpoint is saved with none', async () => {
     const keyless = harness();
     await runEffect({ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:11434/v1' }, keyless.deps);
-    expect(keyless.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1' } });
-    expect(messageOf(keyless.actions, 'notice')).toBe('Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL.');
+    // Empty is a removal on both sides of the write (`removesCredential`).
+    expect(keyless.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' } });
+    expect(keyless.env).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' });
+    expect(messageOf(keyless.actions, 'notice')).toBe('Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: OPENAI_COMPATIBLE_API_KEY is cleared.');
   });
 
   it('asks for the runner list again once a key is stored, since the key lists that provider\'s runner', async () => {

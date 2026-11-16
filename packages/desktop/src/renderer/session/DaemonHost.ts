@@ -4,7 +4,7 @@ import type {
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  DaemonRefusal, DELEGATION_OFFERED, isProviderRunner, loopRemovalRefusal, PROVIDER_RUNNER_IDS, providerRunnerLoginNote, ReconnectBackoff, rejoinPlanTree,
+  DaemonRefusal, DELEGATION_OFFERED, isProviderRunner, loopRemovalRefusal, providerRunnerLoginNote, providerRunnerNamed, ReconnectBackoff, rejoinPlanTree,
   signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
@@ -18,7 +18,7 @@ import {
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
-import { askForKey, unsavedKeyWarning, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
 import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
@@ -180,12 +180,6 @@ function hasRunHistory(plan: SurfacePlan): boolean {
 
 function isFrame(value: unknown): value is DaemonFrame {
   return isRecord(value) && typeof value.type === 'string';
-}
-
-/** The provider runner `/login` names by its id or its label, in any case. */
-function providerRunnerNamed(named: string): AiProvider | undefined {
-  const wanted = named.toLowerCase();
-  return PROVIDER_RUNNER_IDS.find((id) => id === wanted || VENDORS[id].label.toLowerCase() === wanted);
 }
 
 /** The holder as a link to a gone one keeps it: the lease names who, and the version was never proved. */
@@ -416,23 +410,13 @@ export class DaemonHost {
   }
 
   private async saveApiKey(answer: KeyEntryAnswer): Promise<void> {
-    const meta = VENDORS[answer.provider];
-    // Custom's endpoint is what sets it up, and its key is optional: one left empty is left as it was.
-    const env: Record<string, string> = {
-      ...(answer.baseUrl !== undefined && meta.baseUrlEnvVar ? { [meta.baseUrlEnvVar]: answer.baseUrl } : {}),
-      ...(answer.key ? { [meta.apiKeyEnvVar]: answer.key } : {}),
-    };
     const saved = await callDaemon('settings.update', undefined, {
-      env,
+      env: keyEntryEnv(answer),
       workspace: this.workspace,
       sessionId: this.sessionId,
     });
-    if (saved.rejectedEnvKeys?.includes(meta.apiKeyEnvVar)) {
-      throw new Error(`The daemon refused the ${meta.label} key.`);
-    }
-    if (meta.baseUrlEnvVar && saved.rejectedEnvKeys?.includes(meta.baseUrlEnvVar)) {
-      throw new Error(`The daemon refused the ${meta.label} endpoint.`);
-    }
+    const refused = keyEntryRefusal(saved, answer.provider);
+    if (refused) throw new Error(refused);
     const unsaved = unsavedKeyWarning(saved, answer.provider);
     if (unsaved) this.view.conversation.note('system', unsaved);
     await this.refreshCatalog();

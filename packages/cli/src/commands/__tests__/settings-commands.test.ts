@@ -535,6 +535,33 @@ describe('ordewell key', () => {
     expect(stdout).toContain('OPENROUTER_API_KEY');
     d.close();
   });
+
+  // Bug: Custom took a key alone here, and is set up by its endpoint, so `key set openai_compatible <url>` saved the URL as its key.
+  it('sets Custom up by its endpoint, its key optional, and clears an earlier key when given none', async () => {
+    vi.stubEnv('OPENAI_COMPATIBLE_BASE_URL', undefined);
+    vi.stubEnv('OPENAI_COMPATIBLE_API_KEY', 'sk-old');
+    const d = await fakeDaemon({ models: CATALOG });
+    const { handleKey } = await import('../key');
+
+    const withKey = await capture(() => handleKey(['set', 'openai_compatible', 'http://localhost:8000/v1', 'sk-local'], new ApiClient(d.port)));
+    expect(d.sent.at(-1)?.body.env).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' });
+    expect(withKey.stdout).toBe('Custom endpoint and key saved to OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY.');
+
+    const keyless = await capture(() => handleKey(['set', 'openai_compatible', 'http://localhost:11434/v1'], new ApiClient(d.port)));
+    expect(d.sent.at(-1)?.body.env).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' });
+    expect(keyless.stdout).toBe('Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: OPENAI_COMPATIBLE_API_KEY is cleared.');
+    expect(process.env).not.toHaveProperty('OPENAI_COMPATIBLE_API_KEY');
+    const { readFileSync } = await import('fs');
+    expect(readFileSync(findEnvFile(), 'utf8')).toBe('OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1\n');
+
+    // A key where the endpoint goes is refused, and nothing is sent.
+    const sent = d.sent.length;
+    const refused = await capture(() => handleKey(['set', 'openai_compatible', 'sk-local'], new ApiClient(d.port)));
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr).toContain('Usage: ordewell key set openai_compatible <base-url> [<key>]');
+    expect(d.sent).toHaveLength(sent);
+    d.close();
+  });
 });
 
 describe('ordewell runners', () => {

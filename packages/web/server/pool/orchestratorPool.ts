@@ -66,6 +66,7 @@ import {
   selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
+  removesCredential,
   forgetSignedOutRunnerAuth,
   type PlannerBackendId,
   type PlannerModelCandidate,
@@ -809,7 +810,8 @@ export class OrchestratorPool {
     if (envChanges) {
       let touched = false;
       for (const [key, value] of Object.entries(envChanges)) {
-        process.env[key] = value;
+        if (removesCredential(key, value)) delete process.env[key];
+        else process.env[key] = value;
         // Only a credential or endpoint change touches what a catalog
         // contains. A planner, model or effort pick does not, and invalidating
         // on one would wipe the very cache `plannerCatalogFor` reads

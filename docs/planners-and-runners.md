@@ -107,7 +107,10 @@ listed, so its key plans and runs no task: an OpenRouter key adds the runner
 `openrouter` ("OpenRouter"), an Anthropic key the runner `anthropic`
 ("Anthropic"), and a custom OpenAI-compatible endpoint the runner
 `openai_compatible` once `OPENAI_COMPATIBLE_BASE_URL` names it, which `/key-set`
-asks for first when you choose Custom, its key then optional. Save a key with
+asks for first when you choose Custom, its key then optional;
+`ordewell key set openai_compatible <base-url> [<key>]` sets both at once. Saving
+Custom with no key removes the key saved for it before, so it is not sent to the
+new endpoint. Save a key with
 `/key-set` or `ordewell key set <provider> <key>` (see
 [where keys live](#where-keys-live)) and the runner is listed at once, signed in; a
 provider with no key is not listed at all. Until you choose your runners, every
@@ -178,7 +181,7 @@ exactly those models, and `ORDEWELL_SMOKE_TIMEOUT_MS` sets the time per task.
 | --- | --- | --- | --- |
 | Who plans | `/planner` | `ordewell planner [<provider>]` | The planner bar, or `/planner` |
 | The planner's model and effort | `/planner` (Harness › Model › Effort) | `ordewell model`, `ordewell planner-effort` | The planner bar, or `/planner` |
-| Provider keys | `/key-set` | `ordewell key`, `ordewell key set <provider> <key>` | `/key-set`, or **Ordewell: Configure API Key** |
+| Provider keys | `/key-set` | `ordewell key`, `ordewell key set <provider> <key>`, `ordewell key set openai_compatible <base-url> [<key>]` | `/key-set`, or **Ordewell: Configure API Key** |
 | Which runners are on | `/runners` | `ordewell runners [<id> on\|off]` | **Ordewell: Toggle Runner** |
 | Sign a runner in | `/login` | The runner's own CLI | `/login` |
 | A task's runner, model and effort | `/task-runner <id>`, `/task-model <id>`, `/task-effort <id>` | `ordewell task-runner <id> [runner]`, `ordewell task-model <id> [model]`, `ordewell task-effort <id> [level]`; leave out the last value to list the choices | The task's card |
@@ -203,7 +206,9 @@ history, which `/key-set` avoids. `/key` still opens the same key entry.
 
 VS Code keeps keys in its secret storage, through `/key-set` or **Ordewell: Configure API
 Key**. Without one there, it reads its API key settings, such as
-`ordewell.openAiApiKey`, and then exported variables.
+`ordewell.openAiApiKey`, and then exported variables. Custom's endpoint goes in the
+`ordewell.openaiCompatibleBaseUrl` user setting, which a workspace cannot set, since
+the endpoint is sent your key.
 
 Each runner starts with Ordewell's environment, so a key exported in your shell, or
 saved with `/key-set` or `ordewell key set` in the terminal UI or CLI, reaches the runners

@@ -1077,7 +1077,8 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
   });
 
   // Bug: Custom's key was saved alone, and Custom is set up by its endpoint, so no Custom planner or runner appeared.
-  it('writes Custom\'s endpoint through the same settings route, with its key only when it takes one', async () => {
+  // Bug: saved with no key, Custom kept the key set before, which was then sent to the new endpoint.
+  it('writes Custom\'s endpoint through the same settings route, with its key, or an empty one that takes the old key away', async () => {
     const daemon = fakeDaemon({
       'runners.list': ok({ runners: [], orchestratorModel: '' }),
       'models.list': MODELS,
@@ -1098,7 +1099,7 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     const envs = daemon.calls('settings.update').map(([, body]) => (body as { env?: unknown }).env);
     expect(envs).toEqual([
       { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' },
-      { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1' },
+      { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' },
     ]);
   });
 

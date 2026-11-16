@@ -80,7 +80,8 @@ Planner, models and runners:
   ordewell planner [<provider>]   Choose who plans: an API provider or a coding agent (no API key)
   ordewell model [set <id>]       (headless) Show or set the planner model; /planner covers it in the TUI and VS Code
   ordewell planner-effort [lvl]   (headless) Thinking effort for a coding-agent planner; /planner covers it
-  ordewell key [set <p> <key>]    Show which providers have a key, or store one
+  ordewell key [set <p> <key>]    Show which providers have a key, or store one;
+                                  Custom takes its endpoint: set openai_compatible <base-url> [<key>]
   ordewell runners [<id> on|off]  Enable or disable runners (${runnerIdList()})
   ordewell allowlist set|clear|show       Limit which models a runner may use
   ordewell auto [full|guarded]    (headless) Autonomy level for new plans, Full or Guarded; /settings covers it

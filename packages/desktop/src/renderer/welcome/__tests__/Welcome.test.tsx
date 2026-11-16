@@ -433,6 +433,38 @@ describe('Welcome: runners', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  // Bug: the Welcome window's key entry saved Custom's key alone, never its endpoint, and an empty key as one.
+  it('saves Custom from the key line by its endpoint, with an empty key that takes the old one away', async () => {
+    const bridge = installBridge({ routes: { 'runners.list': () => ok(RUNNERS), 'settings.update': () => ok({}) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    await within(runners).findByText('Signed in');
+    fireEvent.click(within(runners).getByRole('button', { name: 'Set API key…' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Provider' }), { target: { value: 'openai_compatible' } });
+    fireEvent.change(within(dialog).getByLabelText('Endpoint URL'), { target: { value: 'http://localhost:11434/v1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(bridge.daemon.call).toHaveBeenCalledWith('settings.update', undefined, {
+      env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' },
+    }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('says the daemon refused Custom\'s endpoint, from the Welcome window too', async () => {
+    installBridge({ routes: { 'runners.list': () => ok(RUNNERS), 'settings.update': () => ok({ rejectedEnvKeys: ['OPENAI_COMPATIBLE_BASE_URL'] }) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    await within(runners).findByText('Signed in');
+    fireEvent.click(within(runners).getByRole('button', { name: 'Set API key…' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'Provider' }), { target: { value: 'openai_compatible' } });
+    fireEvent.change(within(dialog).getByLabelText('Endpoint URL'), { target: { value: 'http://localhost:11434/v1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    expect(await within(runners).findByRole('alert')).toHaveTextContent('The daemon refused the Custom endpoint.');
+  });
+
   it('lists every runner core ships when none is installed, each with its install page', async () => {
     installBridge({ routes: { 'runners.list': () => ok({ runners: [] }) } });
     render(<Welcome status={CONNECTED} />);

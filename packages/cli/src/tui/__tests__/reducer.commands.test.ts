@@ -104,6 +104,25 @@ describe('models and providers', () => {
     expect(enter(keyAsked).effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:8000/v1' }]);
   });
 
+  // Bug: the endpoint prompt always started empty, so changing Custom's key meant typing its endpoint out again.
+  it('/key-set for Custom offers the endpoint it has, and holds the one saved for the next time', () => {
+    const enter = (state: TuiState) => reduce(state, { type: 'key', key: { name: 'enter' } });
+    const asked = run('/key-set openai_compatible', { customEndpoint: 'http://localhost:11434/v1' }).state;
+    expect(asked.overlay).toMatchObject({ kind: 'prompt', action: { kind: 'api-base-url' }, value: 'http://localhost:11434/v1' });
+
+    // Chosen from the provider list too.
+    let picked = run('/key-set', { customEndpoint: 'http://localhost:11434/v1' }).state;
+    const items = picked.overlay?.kind === 'picker' ? picked.overlay.picker.items : [];
+    for (let row = 0; row < items.findIndex((item) => item.id === 'openai_compatible'); row++) picked = reduce(picked, { type: 'key', key: { name: 'down' } }).state;
+    expect(enter(picked).state.overlay).toMatchObject({ kind: 'prompt', action: { kind: 'api-base-url' }, value: 'http://localhost:11434/v1' });
+
+    const keyAsked = enter(asked).state;
+    const saved = enter(keyAsked);
+    expect(saved.effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:11434/v1' }]);
+    expect(run('/key-set openai_compatible http://localhost:8000/v1').state.customEndpoint).toBe('http://localhost:8000/v1');
+    expect(saved.state.customEndpoint).toBe('http://localhost:11434/v1');
+  });
+
   it('/key-set for Custom takes its endpoint inline before the key, and refuses a key where the endpoint goes', () => {
     expect(run('/key-set openai_compatible http://localhost:8000/v1 sk-local').effects).toEqual([
       { type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' },
@@ -251,6 +270,14 @@ describe('login', () => {
     const { state } = run('/login custom', { plannerProvider: 'claude-code', runners: [claude, custom], runnersKnown: true });
 
     expect(lastMessage(state)?.text).toBe('Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.');
+  });
+
+  // Bug: a provider runner with no key yet has no row, so its /login said no installed coding agent matched.
+  it.each([true, false])('points a provider runner with no key at its key too, the runner list known: %s', (runnersKnown) => {
+    const { state, effects } = run('/login Anthropic', { plannerProvider: 'claude-code', runners: [claude], runnersKnown });
+
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.text).toBe('Anthropic has no login: it runs on its API key, which /key-set anthropic replaces.');
   });
 
   // Before the daemon answers, an empty runner list is not evidence that the

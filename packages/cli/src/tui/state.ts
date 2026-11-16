@@ -555,6 +555,12 @@ export interface TuiState {
   /** How many AI tasks run at once, as the daemon reports it. */
   maxParallel: number;
   configuredProviders: AiProvider[];
+  /**
+   * Custom's endpoint as this terminal last set or loaded it, empty while none:
+   * what `/key-set` offers to keep when it asks for the endpoint again. The
+   * daemon reports no endpoint, so this is the TUI's own environment's.
+   */
+  customEndpoint: string;
   allowlist: Record<string, string[]>;
   autonomous: boolean;
   /** The user's run settings (ADR-0030), as the daemon last answered them. */
@@ -873,6 +879,7 @@ export const STATE_SCOPE = {
   plannerModels: 'workspace',
   maxParallel: 'workspace',
   configuredProviders: 'workspace',
+  customEndpoint: 'workspace',
   allowlist: 'workspace',
   autonomous: 'workspace',
   // The values are the file's until a session's own are read; what a session
@@ -980,6 +987,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     plannerModels: {},
     maxParallel: DEFAULT_MAX_PARALLEL,
     configuredProviders: [],
+    customEndpoint: '',
     allowlist: {},
     autonomous: false,
     runSettings: { ...RUN_SETTINGS_DEFAULTS },

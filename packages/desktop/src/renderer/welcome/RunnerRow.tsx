@@ -2,11 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CircleCheck, CircleHelp, CircleSlash, CircleX, ExternalLink, LogIn, KeyRound, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { Button, Icon, RunnerBadge, runnerName } from '@ordewell/ui/design';
 import type { AiProvider } from '@ordewell/core';
-import { VENDORS } from '@ordewell/core/plan-utils';
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
-import { askForKey, unsavedKeyWarning, type KeyEntryRequest } from '../session/KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryRequest } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
 import { LoginDialog } from './LoginDialog';
 import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, withTimeout, type RunnerTone } from './model';
@@ -114,19 +113,17 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   const setKey = useCallback(async (request: KeyEntryRequest): Promise<void> => {
     const answer = await askForKey(request);
     if (!answer) return;
-    const meta = VENDORS[answer.provider];
     setKeyWarning(undefined);
     try {
-      const saved = await window.ordewell.daemon.call('settings.update', undefined, {
-        env: { [meta.apiKeyEnvVar]: answer.key },
-      });
+      // The write a session's key entry sends, so Custom's endpoint is saved here too.
+      const saved = await window.ordewell.daemon.call('settings.update', undefined, { env: keyEntryEnv(answer) });
       if (!saved.ok) {
         setKeyError(failureMessage(saved));
         return;
       }
-      const rejected = typeof saved.data === 'object' && saved.data !== null ? Reflect.get(saved.data, 'rejectedEnvKeys') : undefined;
-      if (Array.isArray(rejected) && rejected.includes(meta.apiKeyEnvVar)) {
-        setKeyError(`The daemon refused the ${meta.label} key.`);
+      const refused = keyEntryRefusal(saved.data, answer.provider);
+      if (refused) {
+        setKeyError(refused);
         return;
       }
       setKeyError(undefined);

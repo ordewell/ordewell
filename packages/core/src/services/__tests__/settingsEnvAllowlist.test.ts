@@ -4,6 +4,7 @@ import {
   SETTINGS_ENV_ALLOWLIST,
   SETTINGS_ENV_REFUSED,
   PROVIDER_CREDENTIAL_ENV,
+  removesCredential,
 } from '../settingsEnvAllowlist';
 import { ALL_PROVIDERS } from '../ProviderRegistry';
 
@@ -102,6 +103,22 @@ describe('admitSettingsEnv', () => {
 
   it('refuses a non-string value rather than silently dropping it', () => {
     expect(admitSettingsEnv({ OPENROUTER_API_KEY: 42 }).rejected).toEqual(['OPENROUTER_API_KEY']);
+  });
+
+  it('admits an empty credential, which is how a write removes one', () => {
+    expect(admitSettingsEnv({ OPENAI_COMPATIBLE_API_KEY: '' })).toEqual({ accepted: { OPENAI_COMPATIBLE_API_KEY: '' }, rejected: [] });
+  });
+});
+
+describe('removesCredential', () => {
+  // Bug: Custom saved with no key kept the earlier key, which was then sent to the new endpoint.
+  it('reads an empty provider key or endpoint as its removal, and nothing else as one', () => {
+    expect(removesCredential('OPENAI_COMPATIBLE_API_KEY', '')).toBe(true);
+    expect(removesCredential('OPENROUTER_BASE_URL', '')).toBe(true);
+    expect(removesCredential('OPENAI_COMPATIBLE_API_KEY', 'sk-local')).toBe(false);
+    // An empty planner pick is a value the planner reads, as `ordewell planner-effort` clears one.
+    expect(removesCredential('ORDEWELL_PLANNER_EFFORT', '')).toBe(false);
+    expect(removesCredential('ORCHESTRATOR_MODEL', '')).toBe(false);
   });
 });
 

@@ -29,6 +29,15 @@ export function providerRunnerLabel(runner: string): string | undefined {
 }
 
 /**
+ * The provider runner `/login <name>` names, by its id or its provider's label
+ * in any case, whether or not its key is set: either way it has no login.
+ */
+export function providerRunnerNamed(named: string): AiProvider | undefined {
+  const wanted = named.trim().toLowerCase();
+  return PROVIDER_RUNNER_IDS.find((id) => id === wanted || VENDORS[id].label.toLowerCase() === wanted);
+}
+
+/**
  * What `/login` answers for a provider runner, on every surface: it has none,
  * since what lists it is its provider's key, or for Custom the endpoint, which
  * may take no key at all, and `/key-set` is how either changes.

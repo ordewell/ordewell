@@ -129,6 +129,23 @@ describe('a provider key set through the daemon', () => {
     expect(readFileSync(globalEnvFile(), 'utf8')).toBe('# mine\nAI_PROVIDER=claude-code\nOPENROUTER_API_KEY=new\n');
   });
 
+  // Bug: Custom saved with no key kept the key set before, which was then sent to the new endpoint.
+  it('takes an emptied key away, from this daemon and from the file, and keeps the endpoint set with it', () => {
+    writeFileSync(globalEnvFile(), '# mine\nOPENAI_COMPATIBLE_API_KEY=sk-old\nOPENAI_COMPATIBLE_BASE_URL=http://old.example/v1\n');
+    setEnv({ OPENAI_COMPATIBLE_API_KEY: 'sk-old', OPENAI_COMPATIBLE_BASE_URL: 'http://old.example/v1' });
+    const p = pool();
+    const answered = p.updateSettings({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' } });
+    p.destroyAll();
+    expect(answered).not.toHaveProperty('unsavedEnvKeys');
+    expect(process.env).not.toHaveProperty('OPENAI_COMPATIBLE_API_KEY');
+    expect(process.env.OPENAI_COMPATIBLE_BASE_URL).toBe('http://localhost:11434/v1');
+    expect(readFileSync(globalEnvFile(), 'utf8')).toBe('# mine\nOPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1\n');
+
+    const restarted: NodeJS.ProcessEnv = {};
+    loadSavedCredentials(restarted);
+    expect(restarted).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1' });
+  });
+
   // Bug: a failed write went to the daemon's log alone, and the response read as saved.
   it('names the keys it could not save, and still uses them for this daemon\'s life', () => {
     // A directory where the file should be: no write can land there.

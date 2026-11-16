@@ -44,13 +44,23 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   opens the key entry, which offers every provider Ordewell supports, and in
   the terminal says to use the new name. `/key-set <provider>` asks for that
   provider's key. The headless `ordewell key set <provider> <key>` is
-  unchanged.
+  unchanged for every provider but Custom.
 - **`/key-set` asks Custom (`openai_compatible`) for its endpoint,** which is
   what sets it up, and then for a key it may go without, in the terminal, the
-  extension and the desktop app; `/key-set openai_compatible <base-url>
-  [<key>]` sets both at once. Its `/login` names the endpoint variable. A
-  provider whose key serves only the planner (Perplexity) is marked planner
-  only in the provider list.
+  extension, and the desktop app's sessions and Welcome window. The endpoint
+  you had is offered again in the terminal and the extension. Saving it with
+  no key removes the key saved for Custom before, so that key is not sent to
+  the new endpoint. `/key-set openai_compatible <base-url> [<key>]` and
+  `ordewell key set openai_compatible <base-url> [<key>]` set both at once;
+  the extension saves the endpoint to its new `ordewell.openaiCompatibleBaseUrl`
+  user setting. `/login` with a provider's id or name says its built-in runner
+  has no login and names what it runs on, its key or Custom's endpoint
+  variable, on every surface, and in the terminal and the desktop app before
+  any key is set too. A provider whose key serves only the planner
+  (Perplexity) is marked planner only in the provider list.
+- **An empty provider key or endpoint sent to the daemon's settings route
+  removes it,** from the daemon and from `~/.ordewell/.env`, where it used to
+  be saved as an empty value.
 - **The API planner's provider calls moved onto a new provider layer.**
   Anthropic uses the native Messages API, with prompt caching, and thinking
   when an effort is set. OpenAI uses the Responses API, with reasoning

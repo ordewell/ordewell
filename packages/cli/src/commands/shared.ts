@@ -3,7 +3,7 @@ import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, deliveryOf } from '../apiClient';
 import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog, type Catalog } from '../catalog';
-import { findEnvFile, writeEnvVar } from '../utils/env';
+import { saveEnvVar } from '../utils/env';
 import { workspaceOf } from '../utils';
 import { allTasksOf } from '../utils/tasks';
 import type { TaskView } from '../tui/state';
@@ -66,13 +66,9 @@ export async function askYesNo(question: string): Promise<boolean> {
   }
 }
 
-/** Writes each key straight to `.env` and `process.env` — no daemon round-trip. */
+/** Writes each key straight to `.env` and `process.env` — no daemon round-trip; an emptied credential is taken out (`saveEnvVar`). */
 export function writeEnv(env: Record<string, string>): void {
-  const envFile = findEnvFile();
-  for (const [key, value] of Object.entries(env)) {
-    writeEnvVar(envFile, key, value);
-    process.env[key] = value;
-  }
+  for (const [key, value] of Object.entries(env)) saveEnvVar(key, value);
 }
 
 /**

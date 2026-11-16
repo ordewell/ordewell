@@ -80,6 +80,18 @@ describe('validateApiKey — the configured endpoint', () => {
     expect(urls).toEqual(['https://api.groq.com/openai/v1/models']);
   });
 
+  // Bug: a Custom endpoint that refused a request sent with no key read as "API rejected the key".
+  it('words a refusal of a request with no key as the endpoint\'s, and sends no key', async () => {
+    const asked: (RequestInit | undefined)[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      asked.push(init);
+      return { ok: false, status: 404 };
+    }) as unknown as typeof fetch;
+    expect(await validateApiKey('openai_compatible', '', { baseUrl: 'http://localhost:9/v1', fetchImpl })).toEqual({ status: 'invalid', message: 'HTTP 404' });
+    expect(asked[0]?.headers).toEqual({});
+    expect(await validateApiKey('openai_compatible', 'sk-local', { baseUrl: 'http://localhost:9/v1', fetchImpl })).toEqual({ status: 'invalid', message: 'API rejected the key (HTTP 404)' });
+  });
+
   // Bug: Perplexity has no model list, so every key it was given read as invalid.
   it('does not check a key for a provider with no model list, and asks nothing', async () => {
     const { fetchImpl, urls } = fetchRecording();

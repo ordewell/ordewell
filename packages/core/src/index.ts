@@ -158,6 +158,7 @@ export {
   PROVIDER_CREDENTIAL_ENV,
   SETTINGS_ENV_REFUSED,
   ORDEWELL_SETTABLE_ENV,
+  removesCredential,
 } from './services/settingsEnvAllowlist';
 export type { EnvAdmission } from './services/settingsEnvAllowlist';
 export { ORCHESTRATOR_SHORTCUTS, resolveModelShortcut, knownModelId } from './services/ModelShortcuts';
@@ -169,7 +170,7 @@ export type { CliAgentAiServiceDeps } from './services/harness/CliAgentAiService
 export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAdapter';
 export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskRunnerConfig, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter, runnerPlans } from './services/harness/connectors';
-export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, configuredProviderRunners } from './services/providerRunners';
+export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed, configuredProviderRunners } from './services/providerRunners';
 export { setHostCredentials, withHostCredentials, type HostCredentialReader } from './services/hostCredentials';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';

@@ -1,4 +1,4 @@
-import { SettingsService, globalEnvFile, parseAutonomyFlag, readEnvFile, writeEnvFileVars } from '@ordewell/core';
+import { SettingsService, globalEnvFile, parseAutonomyFlag, readEnvFile, removesCredential, writeEnvFileVars } from '@ordewell/core';
 
 /** `~/.ordewell/.env`, which the daemon saves a key to as well, read and written by core's one set of rules. */
 export function findEnvFile(): string {
@@ -36,11 +36,12 @@ export function shellEnvValue(key: string): string | undefined {
 }
 
 /**
- * Write one variable into `.env`, owner-only. A name that is no shell variable
- * or a value with a line break throws and writes nothing; a write the file
- * system refuses is said rather than thrown, since the daemon took the change.
+ * Write one variable into `.env`, owner-only, or take it out when `value` is
+ * undefined. A name that is no shell variable or a value with a line break
+ * throws and writes nothing; a write the file system refuses is said rather
+ * than thrown, since the daemon took the change.
  */
-export function writeEnvVar(filePath: string, key: string, value: string): void {
+export function writeEnvVar(filePath: string, key: string, value: string | undefined): void {
   try {
     writeEnvFileVars(filePath, { [key]: value });
   } catch (err) {
@@ -48,6 +49,22 @@ export function writeEnvVar(filePath: string, key: string, value: string): void 
     if (!(err instanceof Error) || !('code' in err)) throw err;
     console.error(`Could not write to ${filePath}: ${err.message}`);
   }
+}
+
+/**
+ * Persist one variable a settings write just set on the daemon, in `.env` and
+ * this process, by the daemon's own reading of it: an empty provider key or
+ * endpoint is taken out of both (`removesCredential`), as the daemon takes it
+ * out of its own.
+ */
+export function saveEnvVar(key: string, value: string): void {
+  if (removesCredential(key, value)) {
+    writeEnvVar(findEnvFile(), key, undefined);
+    delete process.env[key];
+    return;
+  }
+  writeEnvVar(findEnvFile(), key, value);
+  process.env[key] = value;
 }
 
 const AUTONOMY_KEY = 'ORDEWELL_AUTONOMOUS_MODE';

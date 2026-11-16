@@ -42,7 +42,7 @@ export interface EffectDeps {
   port: number;
   dispatch(action: Action): void;
   newSessionId(): string;
-  /** Persists to the resolved `.env` and to `process.env`. */
+  /** Persists to the resolved `.env` and to `process.env`, as the daemon read it: an empty credential is taken out of both. */
   setEnvVar(key: string, value: string): void;
   /** Saves Full or Guarded in the user's settings (ADR-0030); `overridden` when the environment decides it anyway. */
   saveAutonomy(enabled: boolean): { overridden: boolean };
@@ -572,16 +572,20 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'setApiKey': {
       const meta = isApiProvider(effect.provider) ? getProviderMeta(effect.provider) : undefined;
       if (!meta) throw new Error(`Unknown provider: ${effect.provider}`);
-      // Custom's endpoint is what sets it up, its key optional, so an empty one is left as it was.
-      const env: Record<string, string> = {
-        ...(effect.baseUrl !== undefined && meta.baseUrlEnvVar ? { [meta.baseUrlEnvVar]: effect.baseUrl } : {}),
-        ...(effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {}),
-      };
+      // Custom's endpoint is what sets it up, its key optional. None given is
+      // sent empty, which takes away the key saved before (`removesCredential`):
+      // kept, it would be sent to an endpoint that was set up as taking none.
+      const endpoint = effect.baseUrl !== undefined && meta.baseUrlEnvVar ? { name: meta.baseUrlEnvVar, url: effect.baseUrl } : undefined;
+      const env: Record<string, string> = endpoint
+        ? { [endpoint.name]: endpoint.url, [meta.apiKeyEnvVar]: effect.key }
+        : effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {};
       await api.updateSettings({ env });
       for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
-      const what = effect.baseUrl === undefined ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
-      dispatch({ type: 'notice', message: `${meta.label} ${what} saved to ${Object.keys(env).join(' and ')}.` });
+      const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
+      const saved = Object.keys(env).filter((name) => env[name] !== '');
+      const cleared = endpoint && !effect.key ? `, with no key: ${meta.apiKeyEnvVar} is cleared` : '';
+      dispatch({ type: 'notice', message: `${meta.label} ${what} saved to ${saved.join(' and ')}${cleared}.` });
       await loadModels(deps);
       // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
       await loadRunners(deps);

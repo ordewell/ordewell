@@ -30,9 +30,12 @@
 - **`/key` is now `/key-set`,** one word like the other surfaces' command.
   `/key` and `/key set <provider>` still open the key entry, and a provider
   Ordewell does not know is refused instead of opening the provider list.
-  For Custom it asks for the endpoint URL, which is what sets it up, and then
-  for a key it may go without. A provider whose key serves only the planner
-  (Perplexity) is marked planner only in its list.
+  For Custom it asks for the endpoint URL, which is what sets it up, saved to
+  the new `ordewell.openaiCompatibleBaseUrl` user setting, and then for a key
+  it may go without: left empty, the key stored for Custom before is removed,
+  so it is not sent to the new endpoint. An endpoint that refuses the check is
+  asked for again, from what you typed. A provider whose key serves only the
+  planner (Perplexity) is marked planner only in its list.
 - **Toggle Runner and `/allowlist` offer the runners the chat's pills do:**
   the coding agents installed, and the built-in runner of each provider
   configured, a workspace's own `.ordewell/env` or `.envrc` included.

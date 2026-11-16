@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resetInstalledPlanner, RunnerRegistry, type DiscoveredModel } from '@ordewell/core';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { getProviderMeta, resetInstalledPlanner, RunnerRegistry, type DiscoveredModel } from '@ordewell/core';
 import { ModelDiscovery, type ModelDiscoveryDeps } from '../ModelDiscovery';
 import type { ApiKeyValidation } from '../adapters/ApiKeyValidator';
 
@@ -28,7 +30,7 @@ function harness(options: { inputs?: (string | undefined)[]; baseUrls?: Record<s
     openaiCompatibleBaseUrl: options.customUrl ?? '',
     update: vi.fn(async () => {}),
   };
-  const secretStore = { set: vi.fn(async () => {}) };
+  const secretStore = { set: vi.fn(async () => {}), delete: vi.fn(async () => {}) };
   const onApiKeySaved = vi.fn(async () => {});
   const discovery = new ModelDiscovery(anything<ModelDiscoveryDeps>({
     vscodeApi: { window, ProgressLocation: { Notification: 15 } },
@@ -88,7 +90,8 @@ describe('the key wizard', () => {
     expect(h.window.showInformationMessage).toHaveBeenCalledWith('Endpoint and API key configured for Custom.');
   });
 
-  it('saves Custom\'s endpoint alone when it takes no key', async () => {
+  // Bug: saved with no key, Custom kept the key stored before, which was then sent to the new endpoint.
+  it('saves Custom\'s endpoint alone when it takes no key, and removes the key stored before', async () => {
     validateApiKey.mockResolvedValue({ status: 'valid' });
     const h = harness({ inputs: ['http://localhost:11434/v1', ''] });
 
@@ -97,7 +100,52 @@ describe('the key wizard', () => {
     expect(validateApiKey).toHaveBeenCalledWith('openai_compatible', '', { baseUrl: 'http://localhost:11434/v1' });
     expect(h.config.update).toHaveBeenCalledWith('openaiCompatibleBaseUrl', 'http://localhost:11434/v1');
     expect(h.secretStore.set).not.toHaveBeenCalled();
+    expect(h.secretStore.delete).toHaveBeenCalledWith('openaiCompatibleKey');
     expect(h.window.showInformationMessage).toHaveBeenCalledWith('Endpoint configured for Custom.');
+  });
+
+  // Bug: VS Code refuses to write a setting the extension does not declare, so Custom's endpoint was never saved.
+  it('writes Custom\'s endpoint to a setting the extension declares, a user one, which is the one it reads', async () => {
+    validateApiKey.mockResolvedValue({ status: 'valid' });
+    const h = harness({ inputs: ['http://localhost:11434/v1', ''] });
+
+    await h.discovery.runApiKeyWizard('openai_compatible');
+
+    const manifest = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')) as {
+      contributes: { configuration: { properties: Record<string, { type?: string; scope?: string }> } };
+    };
+    const [written] = h.config.update.mock.calls[0] as unknown as [string];
+    expect(manifest.contributes.configuration.properties[`ordewell.${written}`]).toMatchObject({ type: 'string', scope: 'application' });
+    expect(getProviderMeta('openai_compatible')?.vscodeBaseUrlKey).toBe(written);
+  });
+
+  // Bug: a refused check said "Invalid API key" with no key given, and asked for the key alone, though the endpoint was what was wrong.
+  it('asks Custom for its endpoint again when the check is refused, and words the refusal as the endpoint\'s', async () => {
+    validateApiKey.mockResolvedValueOnce({ status: 'invalid', message: 'HTTP 404' }).mockResolvedValueOnce({ status: 'valid' });
+    const h = harness({ inputs: ['http://localhost:9/v1', '', 'http://localhost:11434/v1', ''], customUrl: 'http://old.example/v1' });
+
+    await h.discovery.runApiKeyWizard('openai_compatible');
+
+    expect(h.window.showErrorMessage).toHaveBeenCalledWith('The Custom endpoint did not list its models: HTTP 404');
+    const boxes = h.window.showInputBox.mock.calls as unknown as [{ value?: string; password?: boolean }][];
+    expect(boxes.map(([box]) => [box.password ?? false, box.value])).toEqual([
+      [false, 'http://old.example/v1'], [true, undefined],
+      // What was typed, not the setting, so a near miss is fixed rather than retyped.
+      [false, 'http://localhost:9/v1'], [true, undefined],
+    ]);
+    expect(h.config.update).toHaveBeenCalledTimes(1);
+    expect(h.config.update).toHaveBeenCalledWith('openaiCompatibleBaseUrl', 'http://localhost:11434/v1');
+  });
+
+  it('words a refused check with a key as the endpoint\'s or the key\'s', async () => {
+    validateApiKey.mockResolvedValueOnce({ status: 'invalid', message: 'API rejected the key (HTTP 401)' });
+    const h = harness({ inputs: ['http://localhost:8000/v1', 'sk-bad', undefined] });
+
+    await h.discovery.runApiKeyWizard('openai_compatible');
+
+    expect(h.window.showErrorMessage).toHaveBeenCalledWith('The Custom endpoint or its key was refused: API rejected the key (HTTP 401)');
+    expect(h.secretStore.set).not.toHaveBeenCalled();
+    expect(h.secretStore.delete).not.toHaveBeenCalled();
   });
 
   it('saves nothing of Custom when the key step is cancelled', async () => {
