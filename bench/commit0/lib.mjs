@@ -346,12 +346,12 @@ export function flattenScript(lib) {
  * Reports, as JSON, every way the box could reach the implementation: the
  * repository's history and objects, and an installed copy outside the
  * repository (a site-packages directory, or a wheel or sdist on disk). An
- * editable install that resolves into the repository is the task's own stubs
- * and fine. Run from `/`, so the repository is not on the path through the
+ * editable install that resolves into the repository, or an editable wheel
+ * that holds none of the modules, is the task's own stubs and fine. Run from `/`, so the repository is not on the path through the
  * working directory. A fifth argument roots the archive search elsewhere than `/`, for a test on a host.
  */
 export const LEAK_PROBE_PY = String.raw`
-import importlib.util, json, os, site, subprocess, sys, sysconfig
+import importlib.util, json, os, site, subprocess, sys, sysconfig, zipfile
 workdir, import_name, dist_name, ref = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 scan_root = sys.argv[5] if len(sys.argv) > 5 else '/'
 workdir = os.path.realpath(workdir)
@@ -410,15 +410,29 @@ for d in sorted(x for x in dirs if x and os.path.isdir(x)):
 out['installedOutside'] = foreign
 archives = []
 want = norm(dist_name) + '_'
+top = import_name.split('.')[0]
+def carries_source(path):
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+    except Exception:
+        return True
+    return any(n.split('/')[0] == top or ('/' not in n and n.split('.')[0] == top and n.endswith(('.py', '.so', '.pyd'))) for n in names)
 for root, subdirs, files in os.walk(scan_root, topdown=True):
     subdirs[:] = [s for s in subdirs if not (root == '/' and s in ('proc', 'sys', 'dev'))]
     if inside(root) or root.startswith('/opt/ordewell') or root.startswith('/opt/node'):
         subdirs[:] = []
         continue
     for f in files:
-        # uv's editable wheel (-0.editable-) holds a finder and metadata pointing at the repository, no source.
-        if norm(f).startswith(want) and f.endswith(('.whl', '.tar.gz', '.zip', '.tar.bz2')) and '.editable-' not in f:
-            archives.append(os.path.join(root, f))
+        full = os.path.join(root, f)
+        if not (norm(f).startswith(want) and f.endswith(('.whl', '.tar.gz', '.zip', '.tar.bz2'))):
+            continue
+        # An editable wheel (uv keeps its own under sdists-v4/editable/) is a .pth, or a finder,
+        # and metadata pointing at the repository; it leaks only if it also carries the modules.
+        editable = '.editable-' in f or '/sdists-v4/editable/' in full
+        if editable and f.endswith('.whl') and not carries_source(full):
+            continue
+        archives.append(full)
 out['archives'] = archives
 print(json.dumps(out))
 `;

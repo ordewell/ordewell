@@ -115,10 +115,10 @@ what each metric means. It writes its results and its builds to
 
 ## Commit0 (`bench/commit0/`)
 
-The driver for comparing the built-in `ordewell` runner on Commit0 libraries
-two ways, on one model. Arm A is one hand-written task assigned to the
-`ordewell` runner with no planner. Arm B is `ordewell plan --goal <the same
-text> --runner ordewell --no-chat --yes`, then `ordewell run` and `merge
+The driver for comparing the built-in runner, `openrouter`, on Commit0
+libraries two ways, on one model. Arm A is one hand-written task assigned to
+that runner with no planner. Arm B is `ordewell plan --goal <the same
+text> --runner openrouter --no-chat --yes`, then `ordewell run` and `merge
 --yes`. Each library and arm runs in its own container on an internal Docker
 network. The only way out is a gateway (core's egress sidecar) that opens
 `openrouter.ai` alone. Inside, the box runs Ordewell packed from this
