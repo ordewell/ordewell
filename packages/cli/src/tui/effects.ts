@@ -584,7 +584,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // Deliberately reports the provider, never the key — this line is on screen.
       const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
       const saved = Object.keys(env).filter((name) => env[name] !== '');
-      const cleared = endpoint && !effect.key ? `, with no key: ${meta.apiKeyEnvVar} is cleared` : '';
+      const cleared = endpoint && !effect.key ? `, with no key: the ${meta.apiKeyEnvVar} Ordewell saved is cleared (one set in your shell or the workspace's env still applies)` : '';
       dispatch({ type: 'notice', message: `${meta.label} ${what} saved to ${saved.join(' and ')}${cleared}.` });
       await loadModels(deps);
       // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.

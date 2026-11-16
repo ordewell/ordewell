@@ -241,7 +241,7 @@ export class ModelDiscovery {
         password: true, placeHolder,
         prompt: endpoint === undefined
           ? `Enter your ${providerLabel} API key`
-          : `Enter your ${providerLabel} API key, or leave it empty for an endpoint that takes none (a key saved before is removed)`,
+          : `Enter your ${providerLabel} API key, or leave it empty for an endpoint that takes none (the key saved here before is removed)`,
         ignoreFocusOut: true,
       });
       if (key === undefined || (!key && endpoint === undefined)) return;

@@ -1261,7 +1261,7 @@ describe('settings', () => {
     // Empty is a removal on both sides of the write (`removesCredential`).
     expect(keyless.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' } });
     expect(keyless.env).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' });
-    expect(messageOf(keyless.actions, 'notice')).toBe('Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: OPENAI_COMPATIBLE_API_KEY is cleared.');
+    expect(messageOf(keyless.actions, 'notice')).toBe("Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: the OPENAI_COMPATIBLE_API_KEY Ordewell saved is cleared (one set in your shell or the workspace's env still applies).");
   });
 
   it('asks for the runner list again once a key is stored, since the key lists that provider\'s runner', async () => {

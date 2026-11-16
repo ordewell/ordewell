@@ -135,7 +135,7 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
         <p id={titleId} className="session-confirm-message">{custom ? 'Endpoint' : 'API key'} for {providerName(provider)}</p>
         <p id={hintId} className="session-confirm-detail">
           {custom
-            ? <>Ordewell reaches it at this URL, stored as <code>{meta.baseUrlEnvVar}</code>. A key, if it takes one, is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again.</>
+            ? <>Ordewell reaches it at this URL, stored as <code>{meta.baseUrlEnvVar}</code>. A key, if it takes one, is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again; left empty, a key saved before is removed.</>
             : request.runnerLabel
               ? <>Ordewell hands this key to {request.runnerLabel}. It is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again.</>
               : <>Ordewell uses it as <code>{meta.apiKeyEnvVar}</code>, and never shows it again.</>}

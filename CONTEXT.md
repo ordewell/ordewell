@@ -3000,7 +3000,8 @@ OpenAI, Anthropic and a custom OpenAI-compatible endpoint among them. One is
 provider is a planner (the API planner) and, under the same id and name, a
 runner (the **Built-in runner**), unless its models cannot be listed
 (Perplexity), when it is a planner only. A key is set with `/key-set` (`/key` still
-opens it), or `ordewell key set <provider> <key>` headless. Distinct from
+opens it), or `ordewell key set <provider> <key>` headless (`ordewell key set
+openai_compatible <base-url> [<key>]` for a custom endpoint). Distinct from
 *runner*, the coding agent.
 *Avoid:* "provider" for a coding agent; "backend".
 

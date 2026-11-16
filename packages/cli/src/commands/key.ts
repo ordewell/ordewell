@@ -49,7 +49,7 @@ export async function handleKey(subArgs: string[], injectedApi?: ApiClient): Pro
     await persistEnv(api, { [meta.baseUrlEnvVar]: baseUrl.trim(), [meta.apiKeyEnvVar]: key });
     console.log(key
       ? `${meta.label} endpoint and key saved to ${meta.baseUrlEnvVar} and ${meta.apiKeyEnvVar}.`
-      : `${meta.label} endpoint saved to ${meta.baseUrlEnvVar}, with no key: ${meta.apiKeyEnvVar} is cleared.`);
+      : `${meta.label} endpoint saved to ${meta.baseUrlEnvVar}, with no key: the ${meta.apiKeyEnvVar} Ordewell saved is cleared (one set in your shell or the workspace's env still applies).`);
     return;
   }
 

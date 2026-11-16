@@ -549,7 +549,7 @@ describe('ordewell key', () => {
 
     const keyless = await capture(() => handleKey(['set', 'openai_compatible', 'http://localhost:11434/v1'], new ApiClient(d.port)));
     expect(d.sent.at(-1)?.body.env).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' });
-    expect(keyless.stdout).toBe('Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: OPENAI_COMPATIBLE_API_KEY is cleared.');
+    expect(keyless.stdout).toBe("Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: the OPENAI_COMPATIBLE_API_KEY Ordewell saved is cleared (one set in your shell or the workspace's env still applies).");
     expect(process.env).not.toHaveProperty('OPENAI_COMPATIBLE_API_KEY');
     const { readFileSync } = await import('fs');
     expect(readFileSync(findEnvFile(), 'utf8')).toBe('OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1\n');
