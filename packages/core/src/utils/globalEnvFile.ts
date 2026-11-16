@@ -23,44 +23,68 @@ function unquote(value: string): string {
   return value.length >= 2 && (quote === '"' || quote === "'") && value.endsWith(quote) ? value.slice(1, -1) : value;
 }
 
-/** The file's variables as the CLI reads them: `export` and surrounding quotes dropped, comments skipped; none when it is missing. */
+/**
+ * The variable a line sets, read the one way the reader and the writer both
+ * use: a byte-order mark, surrounding space, a carriage return, an `export `
+ * and space around `=` are not part of it, and a blank line, a comment or a
+ * name no shell variable has sets none. The writer finding a line by any other
+ * rule left the reader taking a line it never replaced.
+ */
+function assignmentOf(line: string): { key: string; value: string; exported: boolean } | undefined {
+  const trimmed = line.replace(/^\uFEFF/, '').trim();
+  const exported = /^export\s/.test(trimmed);
+  const body = exported ? trimmed.replace(/^export\s+/, '') : trimmed;
+  if (!body || body.startsWith('#')) return undefined;
+  const eq = body.indexOf('=');
+  if (eq === -1) return undefined;
+  const key = body.slice(0, eq).trim();
+  return ENV_NAME.test(key) ? { key, value: unquote(body.slice(eq + 1).trim()), exported } : undefined;
+}
+
+/**
+ * The file's variables, `export` and surrounding quotes dropped, comments
+ * skipped; none when it is missing. A name set twice reads as its last line,
+ * as a shell sourcing the file reads it. The CLI and the daemon both load the
+ * file through this, and both keep a variable their environment already holds
+ * over it, so every reader agrees on which line holds a key.
+ */
 export function readEnvFile(file: string): Record<string, string> {
   if (!existsSync(file)) return {};
   const out: Record<string, string> = {};
   for (const line of readFileSync(file, 'utf8').split('\n')) {
-    const trimmed = line.trim().replace(/^export\s+/, '');
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    if (ENV_NAME.test(key)) out[key] = unquote(trimmed.slice(eq + 1).trim());
+    const assignment = assignmentOf(line);
+    if (assignment) out[assignment.key] = assignment.value;
   }
   return out;
 }
 
 /**
- * Write each variable into the file, over its own line where it has one and
- * appended where not, owner-only (it holds keys). Refuses, writing nothing, a
- * name that is no shell variable or a value with a line break, which would
- * write a second variable of the value's choosing.
+ * Write each variable into the file, owner-only (it holds keys): over the
+ * first line that sets it, any later one taken out so no stale copy outlives
+ * the write, and appended where none does. An undefined value takes every
+ * line of it out. The file's line endings and an `export ` are kept. Refuses,
+ * writing nothing, a name that is no shell variable or a value with a line
+ * break, which would write a second variable of the value's choosing.
  */
-export function writeEnvFileVars(file: string, vars: Readonly<Record<string, string>>): void {
+export function writeEnvFileVars(file: string, vars: Readonly<Record<string, string | undefined>>): void {
   for (const [key, value] of Object.entries(vars)) {
     if (!ENV_NAME.test(key)) throw new Error(`"${key}" is not a valid environment variable name.`);
-    if (/[\r\n]/.test(value)) throw new Error(`Refusing to write ${key}: the value contains a line break.`);
+    if (value !== undefined && /[\r\n]/.test(value)) throw new Error(`Refusing to write ${key}: the value contains a line break.`);
   }
-  const lines = existsSync(file) ? readFileSync(file, 'utf8').split('\n') : [];
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  if (text === '' && Object.values(vars).every((value) => value === undefined)) return;
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text === '' ? [] : text.split(/\r?\n/);
+  // The file's last newline, kept as the empty line after it.
+  const ended = lines.length > 0 && lines[lines.length - 1] === '';
+  if (ended) lines.pop();
   for (const [key, value] of Object.entries(vars)) {
-    // By line prefix, not a pattern built from the key.
-    const index = lines.findIndex((line) => line.startsWith(`${key}=`));
-    if (index !== -1) {
-      lines[index] = `${key}=${value}`;
-      continue;
-    }
-    // Before the file's trailing newline, so the file keeps ending in one.
-    if (lines.length > 0 && lines[lines.length - 1] === '') lines.splice(lines.length - 1, 0, `${key}=${value}`);
-    else lines.push(`${key}=${value}`);
+    const at = lines.flatMap((line, index) => (assignmentOf(line)?.key === key ? [index] : []));
+    const first = at[0];
+    for (const index of at.slice(value === undefined ? 0 : 1).reverse()) lines.splice(index, 1);
+    if (value === undefined) continue;
+    if (first === undefined) lines.push(`${key}=${value}`);
+    else lines[first] = `${assignmentOf(lines[first])?.exported ? 'export ' : ''}${key}=${value}`;
   }
-  const content = lines.join('\n');
-  writePrivateFile(file, content.endsWith('\n') ? content : `${content}\n`);
+  writePrivateFile(file, lines.length > 0 ? `${lines.join(eol)}${eol}` : '');
 }

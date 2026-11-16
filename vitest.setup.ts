@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, vi } from 'vitest';
 import { homeEnv, patient, removeDir, setEnv } from './packages/core/src/testEnv';
+import { PROVIDER_PRIORITY, VENDORS } from './packages/core/src/services/apiProviders';
 
 // No test reaches ordewell.ai (ADR-0048). A test of the version check passes
 // its own env, so this only silences the CLI, daemon and extension code that
@@ -18,6 +19,16 @@ process.env.ORDEWELL_NO_MODELS_DEV = '1';
 delete process.env.AI_PROVIDER;
 delete process.env.ORCHESTRATOR_MODEL;
 delete process.env.ORDEWELL_PLANNER_EFFORT;
+// Nor a provider key or endpoint the developer exported: one alone lists,
+// enables and starts that provider's runner (ADR-0070), so a keyed shell failed
+// tests CI passed. A test that needs one sets it with setEnv. A live run
+// (ORDEWELL_LIVE_AGENTS) keeps them, since it spends the host's own on purpose.
+if (!process.env.ORDEWELL_LIVE_AGENTS) {
+  for (const provider of PROVIDER_PRIORITY) {
+    const { apiKeyEnvVar, detectEnvVars, baseUrlEnvVar } = VENDORS[provider];
+    for (const name of [apiKeyEnvVar, ...detectEnvVars, ...(baseUrlEnvVar ? [baseUrlEnvVar] : [])]) delete process.env[name];
+  }
+}
 
 // Every test file runs under a home of its own, on every platform. One that
 // started a daemon or the CLI without setting a home wrote the user's real

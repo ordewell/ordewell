@@ -1,16 +1,8 @@
-import { existsSync, readFileSync } from 'fs';
-import { SettingsService, globalEnvFile, parseAutonomyFlag, readEnvFile, writeEnvFileVars, writePrivateFile } from '@ordewell/core';
+import { SettingsService, globalEnvFile, parseAutonomyFlag, readEnvFile, writeEnvFileVars } from '@ordewell/core';
 
 /** `~/.ordewell/.env`, which the daemon saves a key to as well, read and written by core's one set of rules. */
 export function findEnvFile(): string {
   return globalEnvFile();
-}
-
-// Quotes are shell syntax; taken literally they become part of an API key and
-// the provider answers 401.
-function unquote(value: string): string {
-  const quote = value[0];
-  return value.length >= 2 && (quote === '"' || quote === "'") && value.endsWith(quote) ? value.slice(1, -1) : value;
 }
 
 /**
@@ -68,18 +60,15 @@ const AUTONOMY_KEY = 'ORDEWELL_AUTONOMOUS_MODE';
  */
 export function moveAutonomyToSettings(): void {
   const filePath = findEnvFile();
-  if (!existsSync(filePath)) return;
-  const lines = readFileSync(filePath, 'utf8').split('\n');
-  const index = lines.findIndex((line) => line.trim().replace(/^export\s+/, '').startsWith(`${AUTONOMY_KEY}=`));
-  if (index === -1) return;
+  const value = readEnvFile(filePath)[AUTONOMY_KEY];
+  if (value === undefined) return;
   const settings = new SettingsService();
   if (settings.getAll().autonomousMode === undefined) {
-    const level = parseAutonomyFlag(unquote(lines[index].slice(lines[index].indexOf('=') + 1).trim()));
+    const level = parseAutonomyFlag(value);
     if (level !== undefined) settings.setAutonomousMode(level);
   }
-  lines.splice(index, 1);
   try {
-    writePrivateFile(filePath, lines.join('\n'));
+    writeEnvFileVars(filePath, { [AUTONOMY_KEY]: undefined });
   } catch (err) {
     console.error(`Could not write to ${filePath}: ${(err as Error).message}`);
   }

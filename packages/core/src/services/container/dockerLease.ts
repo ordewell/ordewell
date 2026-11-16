@@ -31,6 +31,9 @@ const MAX_BUNDLE_BYTES = 8 * 1024 ** 3;
 /** A regular file within the size a board reads: a pipe there would never end the read. By `./`, since a path may start with a dash and `find` has no `--`. */
 const BLOB_SCRIPT = `file="./$0"; [ -n "$(find -P "$file" -maxdepth 0 -type f -size -16385k 2>/dev/null)" ] && exec git hash-object --no-filters -- "$file"`;
 
+/** A launch file's copy from stdin, owner-only, its launch's folder made with it. */
+export const PLACE_FILE_SCRIPT = 'umask 077; mkdir -p "$(dirname "$0")"; cat > "$0"';
+
 export interface DockerBackendOptions {
   /** As it stands in the settings file: read again at each start, so a check there and at a surface are one check. */
   settings: unknown;
@@ -475,14 +478,21 @@ export class DockerExecutionBackend implements ExecutionBackend {
     });
   }
 
-  /** The runner by exec, so the container's one idle entry outlives each spawn; a variable goes by name, its value in the CLI's environment. */
+  /**
+   * The runner by exec, so the container's one idle entry outlives each spawn;
+   * a variable goes by name, its value in the CLI's environment. The files it
+   * names, its token's among them, are copied into a folder of this launch
+   * alone, removed when the process ends (ADR-0022 A5); its pid file stays
+   * beside the folder, so a stop that lands after the end still finds it.
+   */
   private async place(box: Box, launch: RunnerLaunch): Promise<PlacedLaunch> {
     const launchNumber = ++box.launches;
+    const folder = `/tmp/ordewell/${launchNumber}`;
     const moved = new Map<string, string>();
     for (const [index, file] of launch.files.entries()) {
       // Numbered as well as named: two of a launch's files can share a name in folders of their own.
-      const inside = `/tmp/ordewell/${launchNumber}-${index}-${basename(file)}`;
-      const wrote = await this.cli.call(['exec', '-i', box.name, 'sh', '-c', 'umask 077; mkdir -p /tmp/ordewell; cat > "$0"', inside], { input: readFileSync(file) });
+      const inside = `${folder}/${index}-${basename(file)}`;
+      const wrote = await this.cli.call(['exec', '-i', box.name, 'sh', '-c', PLACE_FILE_SCRIPT, inside], { input: readFileSync(file) });
       if (wrote.code !== 0) throw new Error(`Could not hand the runner its configuration: ${wrote.stderr.trim()}`);
       moved.set(file, inside);
     }
@@ -502,6 +512,8 @@ export class DockerExecutionBackend implements ExecutionBackend {
       ended: () => {
         box.running -= 1;
         if (box.running === 0) for (const wake of box.runnersGone.splice(0)) wake();
+        // Not awaited: a container already gone took the copies with it.
+        if (moved.size > 0) void this.cli.call(['exec', box.name, 'rm', '-rf', '--', folder]).catch(() => undefined);
       },
     };
   }

@@ -110,6 +110,35 @@ describe('daemon startup', () => {
     }
   });
 
+  // A daemon the desktop app starts inherits no key the CLI would have loaded: it reads the saved ones before anything asks for a key.
+  it('lists the runner of a provider whose key only ~/.ordewell/.env holds', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ordewell-daemon-saved-key-'));
+    mkdirSync(join(home, '.ordewell'));
+    // A base URL on a closed loopback port: whatever asks the provider's catalog is refused here, never sent out.
+    writeFileSync(join(home, '.ordewell', '.env'), 'OPENROUTER_API_KEY=sk-or-saved\nOPENROUTER_BASE_URL=http://127.0.0.1:9/api/v1\n');
+    const port = await freePort();
+    const pidFile = join(home, 'daemon.pid');
+    const child = spawn(process.execPath, [resolve(__dirname, '../../dist/server/main.js'), '--port', String(port), '--pid-file', pidFile, '--desktop-app'], {
+      env: { HOME: home, USERPROFILE: home, PATH: '', ORDEWELL_DIRENV: '0', ORDEWELL_NO_VERSION_CHECK: '1', ORDEWELL_NO_MODELS_DEV: '1' },
+      stdio: 'ignore',
+    });
+    try {
+      await waitFor(() => existsSync(pidFile));
+      const token = readFileSync(join(home, '.ordewell', `server-${port}.token`), 'utf8').trim();
+      const response = await fetch(`http://127.0.0.1:${port}/api/runners`, { headers: { Authorization: `Bearer ${token}` } });
+      expect(response.ok).toBe(true);
+      const { runners } = await response.json() as { runners: { id: string; enabled: boolean; provider?: string }[] };
+      expect(runners).toContainEqual(expect.objectContaining({ id: 'openrouter', enabled: true, provider: 'openrouter' }));
+    } finally {
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        const closed = new Promise<void>((resolveExit) => child.once('close', () => resolveExit()));
+        child.kill('SIGKILL');
+        await closed;
+      }
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it('writes its PID file only once listening', async () => {
     const { child, pidFile, close } = await daemonWithPidFile('pid');
     try {

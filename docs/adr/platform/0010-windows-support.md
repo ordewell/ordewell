@@ -93,9 +93,10 @@ honouring PATHEXT there would disable the tier on exactly the machines it exists
 for.
 
 What the tier explicitly does *not* do is rescue an overflowing `.cmd`.
-Overflow means a very large prompt, which is where `-File` argument fidelity is
-least worth betting on, and a visible held task beats a plausibly mangled one.
-So a `.ps1` sitting beside a too-long `.cmd` still raises.
+No prompt rides a runner's command line (below), so overflow now means a script
+task's own command, or a bug in Ordewell: either is where `-File` argument
+fidelity is least worth betting on, and a visible held task beats a plausibly
+mangled one. So a `.ps1` sitting beside a too-long `.cmd` still raises.
 
 **A line break is different: the batch route cannot carry one at all.** cmd.exe
 reads its command line up to the first CR/LF and discards the rest — no error,

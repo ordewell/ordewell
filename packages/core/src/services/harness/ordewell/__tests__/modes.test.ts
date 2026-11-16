@@ -85,7 +85,7 @@ async function turn(adapter: OrdewellAdapter, answers: readonly ApprovalDecision
 
 const toolResults = (events: AgentEvent[]) => eventsOf(events, 'tool_result').map(({ name, output, success }) => ({ name, output, success }));
 
-describe('Guarded mode of the Ordewell runner', () => {
+describe('Guarded mode of the built-in runner', () => {
   it('asks before a shell command and runs it once allowed, asking again the next time', async () => {
     const { adapter, cwd, options } = guarded([
       [call('a', 'shell', { command: 'node touch.mjs one' }), STOP],
@@ -188,7 +188,7 @@ function served(tools: typeof TASK_TOOLS): { calls: string[]; mcp: McpClientConf
   };
 }
 
-describe('read-only mode of the Ordewell runner (ADR-0046)', () => {
+describe('read-only mode of the built-in runner (ADR-0046)', () => {
   const readOnly = { mode: 'read-only', flags: { permissionMode: 'read-only', modeSettings: {}, readOnly: true } } as const;
 
   it('offers no edit, write or shell, only the token\'s sealed shell, patch and web reads', async () => {
@@ -231,7 +231,7 @@ describe('read-only mode of the Ordewell runner (ADR-0046)', () => {
   });
 });
 
-describe('a change task of the Ordewell runner', () => {
+describe('a change task of the built-in runner', () => {
   it('is offered checkpoint and apply_patch, which its token serves, and calls them in-process', async () => {
     const token = served(TASK_TOOLS);
     const { adapter, client, options } = guarded([[call('c', 'checkpoint', { question: 'Which?' }), call('p', 'apply_patch', { task: '#2' }), STOP], [STOP]], worktree(), { mcp: token.mcp });

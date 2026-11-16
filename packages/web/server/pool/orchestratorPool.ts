@@ -805,6 +805,7 @@ export class OrchestratorPool {
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
 
+    let unsavedEnvKeys: string[] = [];
     if (envChanges) {
       let touched = false;
       for (const [key, value] of Object.entries(envChanges)) {
@@ -818,7 +819,7 @@ export class OrchestratorPool {
       // A key a surface set outlives this daemon. An inherited write is the
       // environment the client was started under, which may hold a key the
       // shell exported for its own life only: it is never written to disk.
-      if (touched && changes.inherited !== true) saveCredentials(envChanges);
+      if (touched && changes.inherited !== true) unsavedEnvKeys = saveCredentials(envChanges);
       // The scheduler reads the limit on every tick, but a raised one would
       // only be seen at the next verdict; the runs waiting for a slot start now.
       if (envChanges.ORDEWELL_MAX_PARALLEL !== undefined) {
@@ -888,6 +889,7 @@ export class OrchestratorPool {
     const rejectedEnvKeys = admission?.rejected ?? [];
     const settings: SettingsUpdateResponse = this.getSettings(sessionId, workspace);
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
+    if (unsavedEnvKeys.length > 0) settings.unsavedEnvKeys = unsavedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
   }

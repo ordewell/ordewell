@@ -10,6 +10,7 @@ import { supportsTaskMode, type RunnerConnector } from '../../services/harness/c
 import { readUsageLimitReset } from '../../services/runnerExit';
 import { RunnerInstallation } from '../../services/RunnerInstallation';
 import { PROVIDER_PRIORITY, VENDORS } from '../../services/apiProviders';
+import { PROVIDER_RUNNER_IDS } from '../../services/providerRunners';
 import { setEnv } from '../../testEnv';
 
 // A built-in runner is declared in exactly two places: its manifest in the
@@ -69,7 +70,7 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_PRIORITY, 'acme', 'tasker', 'inhouse']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS, 'acme', 'tasker', 'inhouse']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {

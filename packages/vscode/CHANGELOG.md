@@ -6,11 +6,14 @@
 
 - **A built-in runner on every provider you have a key for.** It runs a task
   inside the extension on a provider key alone (OpenRouter, Anthropic, OpenAI,
-  Gemini and the other providers Ordewell supports), with no coding-agent CLI
+  Gemini and the other providers Ordewell supports whose models can be
+  listed, so not Perplexity, whose key still plans), with no coding-agent CLI
   to install. Each provider with a key is a runner of its own, under the
-  provider's name ("OpenRouter"), and is enabled until you choose your
-  runners; a provider with no key is not listed, so there is nothing to sign
-  in to. A key entered with `/key-set` is read from VS Code's secret storage
+  provider's name ("OpenRouter"). Until you choose your runners, one is
+  enabled when its key is in VS Code's secret storage or the extension's own
+  environment; a key only in a workspace's `.ordewell/env` or `.envrc` lists
+  the runner for you to turn on. A provider with no key is not listed, so
+  there is nothing to sign in to. A key entered with `/key-set` is read from VS Code's secret storage
   and never put in the extension host's environment, so no coding agent or
   other extension inherits it. It has three modes: Full; Guarded, which asks
   before each shell command, where "Allow for this task" grants a command

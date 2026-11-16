@@ -70,6 +70,7 @@ export default defineConfig({
         'src/taskRow/status.ts': floor(100, 100, 100),
         'src/taskRow/texts.ts': floor(100, 100, 100),
         'src/taskRow/view.ts': floor(100, 100, 100),
+        'src/utils/globalEnvFile.ts': floor(100, 100, 100),
         'src/utils/privateTempDir.ts': floor(98, 81, 100),
       },
     },

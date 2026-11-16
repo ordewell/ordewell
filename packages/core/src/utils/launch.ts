@@ -541,9 +541,10 @@ function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): Laun
  *
  * The tiers are tried in preference order and the first that *fits* wins, with
  * one deliberate exception: an overflowing batch shim does not fall through to
- * PowerShell. Overflow means a very large prompt, which is precisely where
- * `-File` argument fidelity is least worth betting on, and where a clear held
- * task beats a plausibly-mangled one. So capacity does not reorder the tiers —
+ * PowerShell. No prompt rides a runner's command line (ADR-0010 §1), so
+ * overflow means a script task's own command or a bug in Ordewell, which is
+ * precisely where `-File` argument fidelity is least worth betting on, and
+ * where a clear held task beats a plausibly-mangled one. So capacity does not reorder the tiers —
  * a `.ps1` beside a too-long `.cmd` still raises.
  *
  * A line break does reorder them: cmd.exe cannot carry one at any length, so a

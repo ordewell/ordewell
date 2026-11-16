@@ -24,10 +24,13 @@ holds for it, and is driven by `StructuredSession` like every other runner. It
 is one runner per API provider, under the provider's own id and name.**
 
 - **One runner per provider, one implementation.** Every `PROVIDER_PRIORITY`
-  entry is a runner whose id is the vendor id (`openrouter`, `anthropic`,
-  `google`, …) and whose name is the vendor's label ("OpenRouter"), declared by
-  `ordewellManifest(provider)` and a generated `CONNECTORS` entry, after the
-  coding agents in picker order. No runner is called "Ordewell". The planner
+  entry whose models can be listed (`discoversModels`) is a runner whose id is
+  the vendor id (`openrouter`, `anthropic`, `google`, …) and whose name is the
+  vendor's label ("OpenRouter"), declared by `ordewellManifest(provider)` and a
+  generated `CONNECTORS` entry, after the coding agents in picker order
+  (`PROVIDER_RUNNER_IDS`). No runner is called "Ordewell". A provider with no
+  model listing (Perplexity) has no runner: one would take a task and never
+  offer the model to start it. Its key still serves the API planner. The planner
   selector already offers each configured vendor under the same id and label,
   as the API planner on `ModelClient`, so one name means Ordewell's own loop on
   that provider in both selectors. A runner id is what the enabled set, the
@@ -57,9 +60,14 @@ is one runner per API provider, under the provider's own id and name.**
   a provider with no key has no row, so nothing offers a Log in for it. The
   daemon's runner list marks it with its `provider` and `plans: false`.
 - **Enabled by default with its key.** While the user has saved no runner choice,
-  the enabled set is the coding agents found installed, then every configured
-  provider's runner (`defaultEnabledRunners`); a saved choice is never
-  rewritten to add one.
+  the enabled set is the coding agents found installed, then the runner of every
+  provider configured in the host's own environment (`defaultEnabledRunners`):
+  the process's, which `~/.ordewell/.env` fills in the CLI and the daemon, and
+  what the host holds for the runner (`hostCredentials.ts`). A workspace's
+  variables (`.ordewell/env`, an `.envrc`,
+  [ADR-0016](../platform/0016-per-workspace-environment.md)) list the runner and
+  start it in that workspace, but enable nothing: the set is one per host. A
+  saved choice is never rewritten to add one.
 - **Models are its provider's.** Discovery method `providers` lists the
   runner's own provider's catalog, as `<provider>:<model>` (the first colon
   splits, so `openai_compatible:qwen3:8b` is a model `qwen3:8b`), so the model
@@ -69,9 +77,15 @@ is one runner per API provider, under the provider's own id and name.**
   catalog stated (`known`); what none stated takes a conservative default.
 - **The one id it had before** (`ordewell`, unreleased) is moved as it is read:
   a task on it runs on the runner its model's provider names, its session with
-  it; a plan's runner set names those runners instead; a saved enabled entry
-  becomes every configured provider's runner, and its allowlist entry is split
-  by provider.
+  it; a plan's runner set names those runners instead, and keeps the old id
+  while a task whose model names no provider is still on it, so the plan loads
+  and that task alone fails at its start. A saved enabled entry becomes the
+  runners of the configured providers, and where it had an allowlist entry only
+  of those the entry names a model of, so none comes out enabled and
+  unrestricted; the allowlist entry is split by provider. While that leaves no
+  runner, both entries are kept as they were, ignored as an unknown id is, and
+  moved at a later read once one is configured: an expansion to nothing, saved,
+  would lose them.
 - **The loop** (`OrdewellLoop`) runs a turn as steps until one ends with no tool
   call. Each step is one `ModelClient.stream` call whose request is rebuilt from
   the saved transcript; retries are `ModelClient`'s policy. A tool call starts
@@ -251,6 +265,10 @@ comes from that call.
   the host spawns would inherit them, a coding agent included, which may then
   run on that key instead of the user's own login, and so would every other
   extension running in the same host.
+- **The default read per workspace, from the variables a listing reads.**
+  Rejected: the enabled set is one per host, held by the settings file once
+  saved, while a workspace's variables differ by workspace, so the same host
+  would default differently by the project it was asked from.
 - **One runner per provider under ids of its own (`ordewell-openrouter`).**
   Rejected: it keeps the planner setting's namespace apart, but names one thing
   twice; a planner under a vendor's id is already Ordewell's own loop on that
@@ -291,3 +309,6 @@ comes from that call.
   with its key; the single `ordewell` runner is gone and what named it is moved.
 - 2026-11-16 — VS Code's keys reach the runner from its SecretStorage through a
   reader the extension registers, never through the extension host's environment.
+- 2026-11-16 — a provider with no model listing has no runner; the default reads
+  the host's own keys, not a workspace's; the old id stays where moving it would
+  lose a task or a setting.

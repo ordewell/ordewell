@@ -154,7 +154,10 @@ be. A broker holds API keys and cloud-provider credentials only, never a Claude 
   it is only ever the task's home.
   - The container's one process is an idle relay, and its stdin is its lease: when the host goes, by any death, the pipe
     closes, the relay exits and `--rm` takes the container with everything in it. Nothing needs a time limit to renew. A
-    killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. A Session that closes
+    killed `docker exec` leaves its process running, so a runner is stopped by its pid inside. The files a launch names,
+    its MCP configuration and token among them (ADR-0022 A5), are copied in owner-only, into a folder of that launch
+    alone under the container's `/tmp`, and the folder is removed when that process ends; its pid file stays beside it,
+    so a stop still finds the process. A Session that closes
     stops its run, and is `gone` once its runners have and `settle` has taken its containers, relays and gateways: what a
     close waits on, so a session adopted next finds nothing of it at work. A task's volume stays for a Continue.
   - A change task of a runner proven in a container runs there: Claude Code, Codex at Full access, and OpenCode, which
@@ -491,3 +494,4 @@ for model traffic first. The interface is kept free of anything that blocks thes
 - 2026-11-02 — L7: a broker login refuses an OpenCode task on an `openai/*` model before a worktree is made, where it had started with no way to its model.
 - 2026-11-05 — L5: a container's variables reach docker by name, their values in the CLI's environment, never on its command line.
 - 2026-11-08 — a worktree spec carries the claim's isolation decision, validated before and after the workspace is prepared; an attempt ended while its workspace opens lets go of what its own open made, once, as its end decided, and a later end's decision wins when two land in one spawn.
+- 2026-11-16 — L5: a launch's copies of its files go in a folder of its own, removed when that process ends.

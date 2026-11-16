@@ -102,15 +102,21 @@ The built-in runner is a coding-agent loop that runs inside Ordewell itself and
 calls a provider's API with the key Ordewell holds for it
 ([ADR-0070](adr/runners/0070-the-built-in-ordewell-runner-runs-in-process.md)). It
 needs no CLI installed and no sign-in. Every provider with a key is a runner of its
-own, under the provider's id and name: an OpenRouter key adds the runner
+own, under the provider's id and name, but for Perplexity, whose models cannot be
+listed, so its key plans and runs no task: an OpenRouter key adds the runner
 `openrouter` ("OpenRouter"), an Anthropic key the runner `anthropic`
 ("Anthropic"), and a custom OpenAI-compatible endpoint the runner
 `openai_compatible` once `OPENAI_COMPATIBLE_BASE_URL` names it. Save a key with
 `/key-set` or `ordewell key set <provider> <key>` (see
 [where keys live](#where-keys-live)) and the runner is listed at once, signed in; a
 provider with no key is not listed at all. Until you choose your runners, every
-keyed provider's runner is enabled beside the installed coding agents. It runs tasks
-only: the planner of the same name is the API planner on the same key.
+provider runner whose key is in Ordewell's own environment is enabled beside the
+installed coding agents: the shell Ordewell started from, `~/.ordewell/.env`, and in
+VS Code its secret storage. A key only in a project's `.ordewell/env` or `.envrc`
+lists the runner in that project, and its tasks run on that key, but you turn the
+runner on yourself: the enabled list is one per machine, and those files differ by
+project. It runs tasks only: the planner of the same name is the API planner on the
+same key.
 `ordewell runners` and `/runners` list it with the others.
 
 **Models.** A provider runner's models are its own provider's, and a task's model is

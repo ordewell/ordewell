@@ -892,7 +892,8 @@ are ignored with one notice at host startup.
 ADR-0070) — the runner that ships with Ordewell: a coding-agent loop in the
 Ordewell process (the daemon or the extension host) that calls a provider's API
 through the **ModelClient** with the key Ordewell holds for it. It is one runner
-per **Provider**, each under that provider's id and name (`openrouter`,
+per **Provider** whose models can be listed (every one but Perplexity, whose key
+only plans), each under that provider's id and name (`openrouter`,
 "OpenRouter"), so the same name in the runner and planner selectors means
 Ordewell's own loop on that provider; none is called "Ordewell". Each is a
 task-mode adapter behind a `CONNECTORS` entry, driven by `StructuredSession`
@@ -903,7 +904,9 @@ is configured (a key, or for a custom endpoint its URL); a provider with no key
 has no runner to list or sign in. The key is the host's environment's, or one
 the host holds outside it and lends the runner alone (`hostCredentials.ts`): VS
 Code's SecretStorage, which never enters the extension host's environment. With
-no saved runner choice it is enabled beside the installed coding agents. Its models are its provider's catalog, as
+no saved runner choice it is enabled beside the installed coding agents when that
+key is the host's own; a key only in a workspace's environment (`.ordewell/env`,
+`.envrc`) lists it, and the user enables it. Its models are its provider's catalog, as
 `<provider>:<model>`, split at the first colon; a model of another provider is
 refused. It has three modes: Full runs every tool unasked; Guarded asks before
 each `shell` call; read-only has no edit or shell tool and reads natively and
@@ -2992,10 +2995,11 @@ tells a user nothing about which edges they are losing.
 
 **Provider** (`VENDORS`, `PROVIDER_PRIORITY`) — an LLM vendor's API: one of
 the 26 Ordewell reaches through the **ModelClient**, OpenRouter, Google Gemini,
-OpenAI and Anthropic among them, and a custom OpenAI-compatible endpoint. One is
+OpenAI, Anthropic and a custom OpenAI-compatible endpoint among them. One is
 *configured* by its key, or the custom endpoint by its URL alone; a configured
 provider is a planner (the API planner) and, under the same id and name, a
-runner (the **Built-in runner**). A key is set with `/key-set` (`/key` still
+runner (the **Built-in runner**), unless its models cannot be listed
+(Perplexity), when it is a planner only. A key is set with `/key-set` (`/key` still
 opens it), or `ordewell key set <provider> <key>` headless. Distinct from
 *runner*, the coding agent.
 *Avoid:* "provider" for a coding agent; "backend".

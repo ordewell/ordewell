@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent, AgentProcessDeps, TaskStartOptions } from '../../AgentAdapter';
 import { SessionNotResumable } from '../../ordewellBinding';
 import { PROVIDER_PRIORITY, VENDORS } from '../../../apiProviders';
+import { PROVIDER_RUNNER_IDS } from '../../../providerRunners';
 import { HeldSecrets } from '../../../HeldSecrets';
 import { removeDir, setEnv } from '../../../../testEnv';
 import { ModelError } from '../../../model';
@@ -83,14 +84,16 @@ function adapterWith(steps: readonly ScriptedStep[], options: OrdewellAdapterOpt
 }
 
 describe('OrdewellAdapter', () => {
-  it('is every provider\'s connector, under the provider\'s id, with no planner and no sign-in route', () => {
-    for (const provider of PROVIDER_PRIORITY) {
+  it('is every provider runner\'s connector, under the provider\'s id, with no planner and no sign-in route', () => {
+    for (const provider of PROVIDER_RUNNER_IDS) {
       const connector = CONNECTORS[provider];
       expect(connector?.plans, provider).toBe(false);
       expect(connector?.signInRoute, provider).toBeUndefined();
       expect(connector?.create(deps()).agentId, provider).toBe(provider);
     }
     expect(CONNECTORS.ordewell).toBeUndefined();
+    // A provider whose models cannot be listed has no runner, so no connector (ADR-0070).
+    expect(CONNECTORS.perplexity).toBeUndefined();
   });
 
   describe('as an in-process connector', () => {

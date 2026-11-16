@@ -17,7 +17,7 @@ import {
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
-import { askForKey, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
+import { askForKey, unsavedKeyWarning, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
 import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
@@ -418,6 +418,8 @@ export class DaemonHost {
     if (saved.rejectedEnvKeys?.includes(meta.apiKeyEnvVar)) {
       throw new Error(`The daemon refused the ${meta.label} key.`);
     }
+    const unsaved = unsavedKeyWarning(saved, answer.provider);
+    if (unsaved) this.view.conversation.note('system', unsaved);
     await this.refreshCatalog();
   }
 

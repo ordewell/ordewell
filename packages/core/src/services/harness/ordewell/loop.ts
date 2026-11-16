@@ -253,7 +253,7 @@ export class OrdewellLoop {
   private async endAtLimit(step: number, signals: { hard: AbortSignal }): Promise<TurnOutcome> {
     if (!this.reported) {
       const limit = this.limit();
-      await this.endAttempt(step, `The Ordewell runner reached its step limit of ${limit} model call${limit === 1 ? '' : 's'} without a report through task_complete.`, signals);
+      await this.endAttempt(step, `The built-in runner reached its step limit of ${limit} model call${limit === 1 ? '' : 's'} without a report through task_complete.`, signals);
     }
     return { interrupted: false };
   }

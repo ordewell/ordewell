@@ -117,7 +117,12 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
  * The runners enabled while the user has never saved a choice: the agents the
  * latest probe found installed, so a Codex-only or OpenCode-only host can plan
  * and run on its first start, then the built-in runner on every provider the
- * host holds a key for (ADR-0070), so a key alone runs tasks too;
+ * host holds a key for (ADR-0070), so a key alone runs tasks too. The host's
+ * own: its environment, which `~/.ordewell/.env` fills in the CLI and the
+ * daemon, and the credentials it holds (VS Code's secret storage), never a
+ * workspace's `.ordewell/env` or `.envrc`, which differ by workspace while this
+ * list is one per host. A key only there lists its runner, and the user
+ * enables it;
  * DEFAULT_RUNNERS while neither was found or no probe has answered and no key
  * is set. Read on each call and never saved, so an agent installed or a key
  * set later joins — a runner-list refresh asks again — and a saved choice,

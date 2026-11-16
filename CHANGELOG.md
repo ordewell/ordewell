@@ -12,12 +12,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 - **A built-in runner on every provider you have a key for.** It runs a task
   inside Ordewell on a provider key alone (OpenRouter, Anthropic, OpenAI,
-  Gemini and the other providers Ordewell supports), with no coding-agent CLI
+  Gemini and the other providers Ordewell supports whose models can be
+  listed, so not Perplexity, whose key still plans), with no coding-agent CLI
   to install. Each provider with a key is a runner of its own, under the
   provider's name ("OpenRouter"), listed with the other runners in
-  `ordewell runners` and `/runners` and enabled until you choose your runners;
-  the same name in the planner picker plans on that key. A provider with no
-  key is not listed, so there is nothing to sign in to. It has
+  `ordewell runners` and `/runners`; the same name in the planner picker plans
+  on that key. Until you choose your runners, one is enabled when its key is in
+  Ordewell's own environment (your shell or `~/.ordewell/.env`); a key only in
+  a project's `.ordewell/env` or `.envrc` lists the runner for you to turn
+  on. A provider with no key is not listed, so there is nothing to sign in
+  to. It has
   three modes: Full; Guarded, which asks before each shell command, where
   "Allow for this task" grants a command prefix; and read-only. It resumes
   with continue, takes messages between steps, can be interrupted, pauses on a
@@ -65,7 +69,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **A provider key set in the desktop app survives a restart.** The daemon
   now saves a key or endpoint set through it to `~/.ordewell/.env`, as the
   terminal already did, and a daemon the app starts loads the keys saved
-  there. A key your shell exports is never written.
+  there. A key your shell exports is never written. Should the daemon fail to
+  save one, the app says the key lasts only until Ordewell restarts.
 
 ## [0.13.3] - 2026-11-15
 

@@ -1076,6 +1076,27 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     logged.forEach((spy) => spy.mockRestore());
   });
 
+  // Bug: a key the daemon could not write to ~/.ordewell/.env read as saved, and was gone after the next restart.
+  it('says so when the daemon took the key but could not save it', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'settings.update': ok({ ...SETTINGS, unsavedEnvKeys: ['GEMINI_API_KEY'] }),
+    });
+    const host = hostWithOptions({ askForKey: async () => ({ provider: 'google', key: 'g-key' }) });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    let entered = false;
+    await act(async () => { entered = await host.enterApiKey('google'); });
+
+    expect(entered).toBe(true);
+    // The note reaches the chat with the conversation's next flush.
+    await vi.waitFor(() => expect(JSON.stringify(seen)).toContain('The Google Gemini key is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.'));
+    expect(seen.some((msg) => msg.type === 'showError')).toBe(false);
+  });
+
   it('opens the key entry for /key-set, and for /key and its old `/key set` alike', async () => {
     fakeDaemon({
       'runners.list': ok({ runners: [], orchestratorModel: '' }),

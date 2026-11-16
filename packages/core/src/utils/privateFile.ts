@@ -45,7 +45,7 @@ export function writePrivateFile(filePath: string, content: string): void {
   }
 
   try {
-    renameSync(tempPath, filePath);
+    renameOver(tempPath, filePath);
   } catch (err) {
     try {
       unlinkSync(tempPath);
@@ -53,5 +53,22 @@ export function writePrivateFile(filePath: string, content: string): void {
       // Already gone; the rename error is the one worth reporting.
     }
     throw err;
+  }
+}
+
+// Windows refuses a rename over a file another process has open, which a
+// virus scanner, an indexer or a reader of the same file holds for a moment.
+const RENAME_RETRY_CODES: ReadonlySet<string> = new Set(process.platform === 'win32' ? ['EPERM', 'EACCES', 'EBUSY'] : []);
+const RENAME_RETRY_DELAYS_MS = [10, 30, 100, 300];
+
+function renameOver(from: string, to: string): void {
+  for (const delay of [...RENAME_RETRY_DELAYS_MS, undefined]) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      if (delay === undefined || !RENAME_RETRY_CODES.has((err as NodeJS.ErrnoException).code ?? '')) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
   }
 }

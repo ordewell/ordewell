@@ -101,8 +101,13 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     return this.disposed;
   }
 
+  /** The name the runner goes by, its provider's: no runner is called Ordewell (ADR-0070). */
+  private get label(): string {
+    return VENDORS[this.provider].label;
+  }
+
   async start(opts: AgentStartOptions): Promise<void> {
-    const label = VENDORS[this.provider].label;
+    const label = this.label;
     if (opts.kind !== 'task') throw new Error(`The built-in runner does not plan: the ${label} planner is the API planner, on the same key.`);
     const mode = attemptModeOf(opts);
     const parsed = opts.model ? parseModelId(opts.model) : undefined;
@@ -187,8 +192,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
 
   async send(message: string, onEvent: (event: AgentEvent) => void, signal?: AbortSignal, onActivity?: () => void): Promise<void> {
     const loop = this.loop;
-    if (!loop || this.disposed) throw new Error('The Ordewell runner is not started.');
-    if (this.turn) throw new Error('The Ordewell runner is already running a turn.');
+    if (!loop || this.disposed) throw new Error(`The ${this.label} runner is not started.`);
+    if (this.turn) throw new Error(`The ${this.label} runner is already running a turn.`);
     const turn: RunningTurn = { stop: new AbortController(), hard: new AbortController() };
     // The session aborts its own signal only once it has given up on the turn: nothing more to wait for.
     const abandon = (): void => turn.hard.abort();
@@ -314,10 +319,10 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     try {
       saved = (await store.exists()) ? await store.load() : undefined;
     } catch (err) {
-      throw new Error(`The Ordewell runner could not read saved session ${id}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`The ${this.label} runner could not read saved session ${id}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (!saved) throw new SessionNotResumable(`The Ordewell runner has no saved session ${id} to continue.`);
-    if (saved.system === undefined) throw new SessionNotResumable(`The Ordewell runner's saved session ${id} holds no start to continue from.`);
+    if (!saved) throw new SessionNotResumable(`The ${this.label} runner has no saved session ${id} to continue.`);
+    if (saved.system === undefined) throw new SessionNotResumable(`The ${this.label} runner's saved session ${id} holds no start to continue from.`);
     return saved;
   }
 

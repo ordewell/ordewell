@@ -10,12 +10,17 @@ import { PROVIDER_PRIORITY, VENDORS, vendorConfiguredIn, type VendorEnv } from '
  * agent and name it without the manifests.
  */
 
-/** Every provider runner's id, in provider priority order, which is their picker order after the coding agents. */
-export const PROVIDER_RUNNER_IDS: readonly AiProvider[] = PROVIDER_PRIORITY;
+/**
+ * Every provider runner's id, in provider priority order, which is their picker
+ * order after the coding agents. A provider whose models cannot be listed
+ * (Perplexity) has none: a runner with no model to offer could take a task and
+ * never start it. Its key still serves the API planner.
+ */
+export const PROVIDER_RUNNER_IDS: readonly AiProvider[] = PROVIDER_PRIORITY.filter((provider) => VENDORS[provider].discoversModels);
 
 /** Whether a runner id is one of the built-in runner's, one per provider. */
 export function isProviderRunner(runner: string): runner is AiProvider {
-  return Object.hasOwn(VENDORS, runner);
+  return (PROVIDER_RUNNER_IDS as readonly string[]).includes(runner);
 }
 
 /** The name a provider runner is shown under, its provider's; undefined for any other runner. */
@@ -46,10 +51,38 @@ export function providerOfBuiltinModel(modelId: string | undefined): AiProvider 
   return isProviderRunner(provider) ? provider : undefined;
 }
 
-/** `runners` with the old built-in runner's id replaced by `providers` where it stood, each runner once. */
-export function replaceLegacyBuiltinRunner(runners: readonly string[], providers: readonly AiProvider[]): string[] {
+/** `runners` with the old built-in runner's id replaced by `replacements` where it stood, each runner once. */
+export function replaceLegacyBuiltinRunner(runners: readonly string[], replacements: readonly string[]): string[] {
   if (!runners.includes(LEGACY_BUILTIN_RUNNER)) return [...runners];
-  return [...new Set(runners.flatMap((runner): string[] => (runner === LEGACY_BUILTIN_RUNNER ? [...providers] : [runner])))];
+  return [...new Set(runners.flatMap((runner): string[] => (runner === LEGACY_BUILTIN_RUNNER ? [...replacements] : [runner])))];
+}
+
+/**
+ * Move a settings file's old built-in runner entries onto the provider runners
+ * (ADR-0070), in place. Enabling the old runner meant every keyed provider, as
+ * far as its allowlist let it: so its enabled entry becomes the runners of the
+ * providers `configured` names, or, with an allowlist, of those it names too,
+ * since a provider it named no model of would otherwise be enabled and
+ * unrestricted. While that leaves none, both entries stay as they were, ignored
+ * as an unknown runner is, and each later read tries again: an expansion made
+ * then and saved would lose the entry for good.
+ */
+export function moveOffLegacyBuiltinSettings(
+  settings: { enabledRunners?: string[]; modelAllowlist?: Record<string, string[]> },
+  configured: () => readonly AiProvider[],
+): void {
+  const legacyAllowlist = settings.modelAllowlist?.[LEGACY_BUILTIN_RUNNER];
+  const enabled = settings.enabledRunners;
+  if (enabled?.includes(LEGACY_BUILTIN_RUNNER)) {
+    const named = legacyAllowlist?.length ? new Set(legacyAllowlist.map(providerOfBuiltinModel)) : undefined;
+    const providers = configured().filter((provider) => !named || named.has(provider));
+    if (providers.length === 0) return;
+    settings.enabledRunners = replaceLegacyBuiltinRunner(enabled, providers);
+  }
+  if (legacyAllowlist && settings.modelAllowlist) {
+    const split = splitLegacyBuiltinAllowlist(settings.modelAllowlist);
+    settings.modelAllowlist = Object.keys(split).length > 0 ? split : undefined;
+  }
 }
 
 /**

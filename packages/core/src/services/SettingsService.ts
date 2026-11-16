@@ -8,7 +8,7 @@ import { parseAutonomyFlag } from './ModeResolver';
 import { containersOffered, rememberDelegationBudget } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 import { readLimitSetting } from './plannerReadLimit';
-import { configuredProviderRunners, replaceLegacyBuiltinRunner, splitLegacyBuiltinAllowlist } from './providerRunners';
+import { configuredProviderRunners, moveOffLegacyBuiltinSettings } from './providerRunners';
 import { withHostCredentials } from './hostCredentials';
 
 export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings };
@@ -105,13 +105,13 @@ export interface UserSettings {
    */
   plannerReadLimit?: boolean | { calls?: number; kb?: number };
   /**
-   * The model calls one attempt of the built-in Ordewell runner may make, the
+   * The model calls one attempt of the built-in runner may make, the
    * last forced to a report (ADR-0070). Absent means the runner's default.
    * Set in the file only: no surface offers it.
    */
   ordewellStepLimit?: number;
   /**
-   * How long, in seconds, a stream of the built-in Ordewell runner may send
+   * How long, in seconds, a stream of the built-in runner may send
    * nothing before its request is abandoned and sent again (ADR-0070): before
    * its first event, and between events. Absent means the runner's defaults.
    * Set in the file only: no surface offers it.
@@ -218,9 +218,14 @@ export class SettingsService {
   // allowlist set in one surface never reached another's planner.
   getAll(): UserSettings {
     const stamp = this.fileStamp();
-    if (this.cache && stamp === this.cachedStamp) return this.cache;
-    this.cache = this.load();
-    this.cachedStamp = stamp;
+    if (!this.cache || stamp !== this.cachedStamp) {
+      this.cache = this.load();
+      this.cachedStamp = stamp;
+    }
+    // The built-in runner's old entries move once a provider runner they can
+    // move onto is configured, which a key set since the read can make so
+    // (ADR-0070); what they move to is saved with the next change.
+    moveOffLegacyBuiltinSettings(this.cache, () => configuredProviderRunners(withHostCredentials(process.env)));
     return this.cache;
   }
 
@@ -473,17 +478,14 @@ export class SettingsService {
     const settings: UserSettings = {};
     const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
     if (modelAllowlist) {
-      // The built-in runner's old single entry becomes each provider runner's own (ADR-0070).
-      settings.modelAllowlist = splitLegacyBuiltinAllowlist(modelAllowlist);
+      settings.modelAllowlist = modelAllowlist;
     }
     const plannerModels = readPlannerModels(raw.plannerModels);
     if (plannerModels) {
       settings.plannerModels = plannerModels;
     }
     if (Array.isArray(raw.enabledRunners)) {
-      // Enabling the built-in runner when it was one runner meant enabling it
-      // on whatever key was set; that is every configured provider's runner now.
-      settings.enabledRunners = replaceLegacyBuiltinRunner(raw.enabledRunners.map(String), configuredProviderRunners(withHostCredentials(process.env)));
+      settings.enabledRunners = raw.enabledRunners.map(String);
     }
     if (typeof raw.autonomousMode === 'boolean') {
       settings.autonomousMode = raw.autonomousMode;

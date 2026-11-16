@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as vscode from 'vscode';
-import { PROVIDER_PRIORITY, removedPluginNotice } from '@ordewell/core';
+import { PROVIDER_RUNNER_IDS, removedPluginNotice } from '@ordewell/core';
 import { activate, deactivate } from '../extension';
 import { createExtension } from '../ExtensionHost';
 
@@ -33,7 +33,7 @@ describe('extension startup with removed runner manifests', () => {
     const output = vi.mocked(vscode.window.createOutputChannel).mock.results.at(-1)?.value as vscode.OutputChannel;
     expect(vi.mocked(output.appendLine).mock.calls.filter(([line]) => line.includes(notice))).toHaveLength(1);
     // The coding agents, then the built-in runner once per provider (ADR-0070).
-    expect(vi.mocked(createExtension).mock.calls[0][0].runnerRegistry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_PRIORITY]);
+    expect(vi.mocked(createExtension).mock.calls[0][0].runnerRegistry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS]);
   });
 
   it('logs no removal notice without leftover manifests', async () => {

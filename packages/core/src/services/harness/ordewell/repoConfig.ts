@@ -5,7 +5,7 @@ import { NO_SERVERS, readInstruction, repoLevels, repoRoot, type InstructionFile
 const INSTRUCTION_NAMES = ['AGENTS.md', 'CLAUDE.md'];
 
 /**
- * What the Ordewell runner reads of a repository: its instruction files, from
+ * What the built-in runner reads of a repository: its instruction files, from
  * the repository root down to the workspace. It has no MCP servers of its
  * own, since its tools are Ordewell's, so a repository declares none for it.
  */

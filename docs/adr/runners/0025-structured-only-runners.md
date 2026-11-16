@@ -22,7 +22,7 @@ on PATH. Keeping the obsolete path no longer serves a supported runner.
 `claude-code`, `codex` and `opencode` connectors, the one ACP connector
 that drives `copilot-cli`
 ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), and the built-in
-`ordewell` runner's in-process connector
+runner's in-process connectors, one per API provider
 ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)). Ordewell's
 tools must be connected for every coding-agent session, both task runners and
 coding-agent planners: over MCP, or, for the in-process runner, as the token's
@@ -262,3 +262,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-11-04 — Cursor's CLI was found to connect the servers `session/new` hands it over ACP, beyond the `.cursor/mcp.json` servers it documents.
 - 2026-11-05 — a coding-agent planner on an ACP runner that attaches on its first turn sends its goal or message as the check, its turn discarded unheard and failed when the server was not contacted before it ended (ADR-0060 R5).
 - 2026-11-14 — the built-in `ordewell` runner joins the structured connectors; its tools are the token's handlers called in-process, and its completion is still a token-bound `task_complete` (ADR-0070).
+- 2026-11-16 — the built-in runner's connector is one per API provider, under the provider's id (ADR-0070).

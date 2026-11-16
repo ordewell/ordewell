@@ -273,9 +273,14 @@ export function migrateLoadedPlan(plan: LegacyPlanState, { adopting = true }: { 
     moveOffLegacyBuiltinRunner(task);
   }
   // The runner set named the built-in runner by its one old id; it names the
-  // provider runners its tasks were moved to instead (ADR-0070).
+  // provider runners its tasks were moved to instead (ADR-0070). A task whose
+  // model names no provider stays on the old id, and so does the set: dropping
+  // it would refuse the whole plan at load, where that one task now fails at
+  // its start and can be reassigned.
   if (Array.isArray(plan.runners)) {
-    const providers = flattenTasks(plan.tasks).map((task) => task.assignedRunner).filter(isProviderRunner);
+    const tasks = flattenTasks(plan.tasks);
+    const providers: string[] = tasks.map((task) => task.assignedRunner).filter(isProviderRunner);
+    if (tasks.some((task) => task.assignedRunner === LEGACY_BUILTIN_RUNNER)) providers.push(LEGACY_BUILTIN_RUNNER);
     plan.runners = replaceLegacyBuiltinRunner(plan.runners, providers);
   }
 }

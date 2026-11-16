@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { PROVIDER_PRIORITY, RunnerInstallation, getProviderMeta, globalEnvFile, isProviderRunner, resetInstalledPlanner } from '@ordewell/core';
 import { setEnv } from '@ordewell/core/testing';
 import { OrchestratorPool } from '../orchestratorPool';
@@ -30,8 +30,10 @@ beforeEach(() => {
     ORDEWELL_CLAUDE_CODE_ENABLED: undefined, ORDEWELL_CODEX_ENABLED: undefined, ORDEWELL_OPENCODE_ENABLED: undefined,
     ORDEWELL_SETTINGS_PATH: join(dir, 'settings.json'),
   });
-  // The file's home is this test file's own; each case starts without one.
-  rmSync(globalEnvFile(), { force: true });
+  // The file's home is this test file's own; each case starts without the file,
+  // in a directory that is there, whatever case ran first.
+  rmSync(globalEnvFile(), { recursive: true, force: true });
+  mkdirSync(dirname(globalEnvFile()), { recursive: true });
   // The coding agents this machine happens to have are not what this is about:
   // only the provider runners answer, by the real rule.
   vi.spyOn(RunnerInstallation.prototype, 'isInstalled').mockImplementation(function (this: RunnerInstallation, runner: string) {
@@ -103,8 +105,9 @@ describe('the daemon\'s runner list', () => {
 describe('a provider key set through the daemon', () => {
   it('is saved to the global .env, so a daemon started again loads it', () => {
     const p = pool();
-    p.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-saved', OPENROUTER_BASE_URL: 'http://127.0.0.1:1/v1', ORDEWELL_MAX_PARALLEL: '2' } });
+    const answered = p.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-saved', OPENROUTER_BASE_URL: 'http://127.0.0.1:1/v1', ORDEWELL_MAX_PARALLEL: '2' } });
     p.destroyAll();
+    expect(answered).not.toHaveProperty('unsavedEnvKeys');
 
     const saved = readFileSync(globalEnvFile(), 'utf8');
     expect(saved).toContain('OPENROUTER_API_KEY=sk-or-saved\n');
@@ -126,6 +129,19 @@ describe('a provider key set through the daemon', () => {
     expect(readFileSync(globalEnvFile(), 'utf8')).toBe('# mine\nAI_PROVIDER=claude-code\nOPENROUTER_API_KEY=new\n');
   });
 
+  // Bug: a failed write went to the daemon's log alone, and the response read as saved.
+  it('names the keys it could not save, and still uses them for this daemon\'s life', () => {
+    // A directory where the file should be: no write can land there.
+    mkdirSync(globalEnvFile());
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const p = pool();
+    const answered = p.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-unsaved', ORDEWELL_MAX_PARALLEL: '2' } });
+    p.destroyAll();
+    expect(answered.unsavedEnvKeys).toEqual(['OPENROUTER_API_KEY']);
+    expect(process.env.OPENROUTER_API_KEY).toBe('sk-or-unsaved');
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining('could not save the provider key'));
+  });
+
   it('is not saved from an inherited write: a key the client\'s shell exported stays that shell\'s', () => {
     const p = pool();
     p.updateSettings({ env: { OPENROUTER_API_KEY: 'sk-or-shell' }, inherited: true });
@@ -142,7 +158,7 @@ describe('a provider key set through the daemon', () => {
 
   it('refuses a value that would write a second line, saving nothing', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    saveCredentials({ OPENROUTER_API_KEY: 'sk-or\nAI_PROVIDER=evil' });
+    expect(saveCredentials({ OPENROUTER_API_KEY: 'sk-or\nAI_PROVIDER=evil' })).toEqual(['OPENROUTER_API_KEY']);
     expect(() => readFileSync(globalEnvFile(), 'utf8')).toThrow();
     expect(errors).toHaveBeenCalledWith(expect.stringContaining('line break'));
   });

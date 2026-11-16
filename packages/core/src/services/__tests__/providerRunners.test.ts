@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IConfig } from '../../interfaces/IConfig';
@@ -20,7 +20,8 @@ import { PROVIDER_PRIORITY, VENDORS } from '../apiProviders';
 import {
   ALL_PROVIDERS, CLI_PROVIDERS, configuredProviders, getProviderMeta, isCliProvider, plannerBackendEntries, providerForRunner, runnerForProvider,
 } from '../ProviderRegistry';
-import { configuredProviderRunners, isProviderRunner, providerRunnerLabel } from '../providerRunners';
+import { PROVIDER_RUNNER_IDS, configuredProviderRunners, isProviderRunner, providerRunnerLabel } from '../providerRunners';
+import { assertAssignedRunners } from '../PlanStore';
 
 /*
  * The built-in runner is one runner per API provider, under the provider's id
@@ -57,9 +58,9 @@ describe('the provider runners', () => {
   it('are one per provider, named as the provider, after the coding agents, and none is called Ordewell', () => {
     const registry = new RunnerRegistry();
     const names = registry.list().map((entry) => entry.manifest.name);
-    expect(names.slice(-PROVIDER_PRIORITY.length)).toEqual(PROVIDER_PRIORITY);
+    expect(names.slice(-PROVIDER_RUNNER_IDS.length)).toEqual(PROVIDER_RUNNER_IDS);
     expect(names).not.toContain('ordewell');
-    for (const provider of PROVIDER_PRIORITY) {
+    for (const provider of PROVIDER_RUNNER_IDS) {
       const manifest = registry.getManifest(provider);
       expect(manifest?.displayName, provider).toBe(VENDORS[provider].label);
       expect(manifest?.runner, provider).toEqual({ inProcess: true, provider });
@@ -69,6 +70,22 @@ describe('the provider runners', () => {
     expect(registry.list().some((entry) => entry.manifest.displayName === 'Ordewell')).toBe(false);
     expect(isProviderRunner('claude-code')).toBe(false);
     expect(isProviderRunner('toString')).toBe(false);
+  });
+
+  it('leave out a provider whose models cannot be listed: its key plans, and runs nothing', async () => {
+    const undiscoverable = PROVIDER_PRIORITY.filter((provider) => !VENDORS[provider].discoversModels);
+    expect(undiscoverable).toEqual(['perplexity']);
+    expect(PROVIDER_RUNNER_IDS).toEqual(PROVIDER_PRIORITY.filter((provider) => provider !== 'perplexity'));
+    expect(isProviderRunner('perplexity')).toBe(false);
+    expect(new RunnerRegistry().getManifest('perplexity')).toBeUndefined();
+    expect(CONNECTORS).not.toHaveProperty('perplexity');
+
+    setEnv({ PERPLEXITY_API_KEY: 'pplx-test' });
+    expect(configuredProviderRunners(process.env)).toEqual([]);
+    expect(await installation().filterInstalled([...PROVIDER_PRIORITY])).toEqual([]);
+    expect(defaultEnabledRunners()).toEqual(['claude-code']);
+    // The API planner still plans on the key.
+    expect(configuredProviders(new EnvConfig())).toEqual(['perplexity']);
   });
 
   it('leave a provider with no key out of the runner list: no row, so nothing to sign in', async () => {
@@ -176,6 +193,15 @@ describe('the default enabled runners', () => {
     expect(defaultEnabledRunners()).toEqual(['codex', 'openrouter', 'anthropic']);
   });
 
+  it('read the host\'s own keys, not a workspace\'s: a key only there lists its runner, and leaves it for the user to enable', async () => {
+    const workspaceKeyed = new RunnerInstallation(new RunnerRegistry(), vi.fn(async () => ({ stdout: '' })), Date.now, {
+      env: async () => ({ OPENROUTER_API_KEY: 'sk-or-workspace' }),
+      workspace: () => '/repo',
+    });
+    expect(await workspaceKeyed.isInstalled('openrouter')).toBe(true);
+    expect(defaultEnabledRunners()).toEqual(['claude-code']);
+  });
+
   it('never rewrite a list the user saved', () => {
     setEnv({ OPENROUTER_API_KEY: 'sk-or-test' });
     const file = join(tempDir(), 'settings.json');
@@ -213,6 +239,23 @@ describe('what still names the built-in runner by its one old id', () => {
     expect(idle.runners).toEqual(['codex']);
   });
 
+  // Bug: the set dropped the old id while a task still named it, and the plan was refused at load, every task with it.
+  it('keeps it in the runner set while a task it cannot move still names it, so the plan loads', () => {
+    const unmodelled = createTask({ id: 'unmodelled', title: 'No model', assignedRunner: 'ordewell' });
+    const unprefixed = legacyTask('gpt-4o-mini', { id: 'unprefixed', title: 'No provider' });
+    const plan = {
+      tasks: [legacyTask('anthropic:claude-haiku-test', { id: 'moved', subtasks: [unprefixed] }), unmodelled],
+      runners: ['claude-code', 'ordewell'], status: 'draft', generatedAt: '', lastUpdated: '',
+    } as unknown as LegacyPlanState;
+
+    migrateLoadedPlan(plan);
+
+    expect(plan.tasks.map((task) => task.assignedRunner)).toEqual(['anthropic', 'ordewell']);
+    expect(unprefixed.assignedRunner).toBe('ordewell');
+    expect(plan.runners).toEqual(['claude-code', 'anthropic', 'ordewell']);
+    expect(() => assertAssignedRunners(plan.tasks, plan.runners)).not.toThrow();
+  });
+
   it('reads a settings file\'s enabled entry as every keyed provider\'s runner, and splits its allowlist by provider', () => {
     setEnv({ OPENROUTER_API_KEY: 'sk-or-test', GEMINI_API_KEY: 'g-test' });
     const file = join(tempDir(), 'settings.json');
@@ -223,5 +266,51 @@ describe('what still names the built-in runner by its one old id', () => {
     const settings = new SettingsService(file);
     expect(settings.getEnabledRunners()).toEqual(['claude-code', 'openrouter', 'google']);
     expect(settings.getAll().modelAllowlist).toEqual({ codex: ['gpt-5'], openrouter: ['openrouter:openai/gpt-4o-mini'], google: ['google:gemini-2.5-flash'] });
+  });
+
+  // Bug: read with no key set, the entry became no runner at all, and the next save made that permanent.
+  it('keeps a settings file\'s enabled entry while no provider is configured, and moves it once one is', () => {
+    const file = join(tempDir(), 'settings.json');
+    writeFileSync(file, JSON.stringify({ enabledRunners: ['claude-code', 'ordewell'] }));
+    const settings = new SettingsService(file);
+    expect(settings.getEnabledRunners()).toEqual(['claude-code', 'ordewell']);
+    settings.setAutonomousMode(true);
+    expect(JSON.parse(readFileSync(file, 'utf8')).enabledRunners).toEqual(['claude-code', 'ordewell']);
+
+    setEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    expect(settings.getEnabledRunners()).toEqual(['claude-code', 'anthropic']);
+    settings.setAutonomousMode(false);
+    expect(JSON.parse(readFileSync(file, 'utf8')).enabledRunners).toEqual(['claude-code', 'anthropic']);
+    expect(new SettingsService(file).getEnabledRunners()).toEqual(['claude-code', 'anthropic']);
+  });
+
+  // Bug: a provider the old allowlist named no model of came out enabled with no allowlist, so any of its models could be assigned.
+  it('enables only the providers an old allowlist names, so none comes out enabled and unrestricted', () => {
+    setEnv({ OPENROUTER_API_KEY: 'sk-or-test', ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const file = join(tempDir(), 'settings.json');
+    writeFileSync(file, JSON.stringify({ enabledRunners: ['ordewell'], modelAllowlist: { ordewell: ['openrouter:cheap/model'] } }));
+    const settings = new SettingsService(file);
+    expect(settings.getEnabledRunners()).toEqual(['openrouter']);
+    expect(settings.getAll().modelAllowlist).toEqual({ openrouter: ['openrouter:cheap/model'] });
+  });
+
+  it('keeps both entries while the providers an old allowlist names have no key', () => {
+    setEnv({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const file = join(tempDir(), 'settings.json');
+    writeFileSync(file, JSON.stringify({ enabledRunners: ['ordewell'], modelAllowlist: { ordewell: ['openrouter:cheap/model'] } }));
+    const settings = new SettingsService(file);
+    expect(settings.getEnabledRunners()).toEqual(['ordewell']);
+    expect(settings.getAll().modelAllowlist).toEqual({ ordewell: ['openrouter:cheap/model'] });
+  });
+
+  it('splits an old allowlist whose runner was not enabled, whatever is configured', () => {
+    const file = join(tempDir(), 'settings.json');
+    writeFileSync(file, JSON.stringify({ enabledRunners: ['codex'], modelAllowlist: { ordewell: ['openrouter:cheap/model', 'no-provider'] } }));
+    const settings = new SettingsService(file);
+    expect(settings.getEnabledRunners()).toEqual(['codex']);
+    expect(settings.getAll().modelAllowlist).toEqual({ openrouter: ['openrouter:cheap/model'] });
+
+    writeFileSync(file, JSON.stringify({ modelAllowlist: { ordewell: ['no-provider'] } }));
+    expect(new SettingsService(file).getAll().modelAllowlist).toBeUndefined();
   });
 });

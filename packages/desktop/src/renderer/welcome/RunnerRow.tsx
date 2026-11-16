@@ -6,7 +6,7 @@ import { VENDORS } from '@ordewell/core/plan-utils';
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
-import { askForKey, type KeyEntryRequest } from '../session/KeyEntryDialog';
+import { askForKey, unsavedKeyWarning, type KeyEntryRequest } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
 import { LoginDialog } from './LoginDialog';
 import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, withTimeout, type RunnerTone } from './model';
@@ -94,6 +94,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   const [slow, setSlow] = useState(false);
   const [login, setLogin] = useState<{ runner: string; label: string } | null>(null);
   const [keyError, setKeyError] = useState<string | undefined>(undefined);
+  const [keyWarning, setKeyWarning] = useState<string | undefined>(undefined);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -114,6 +115,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
     const answer = await askForKey(request);
     if (!answer) return;
     const meta = VENDORS[answer.provider];
+    setKeyWarning(undefined);
     try {
       const saved = await window.ordewell.daemon.call('settings.update', undefined, {
         env: { [meta.apiKeyEnvVar]: answer.key },
@@ -128,6 +130,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
         return;
       }
       setKeyError(undefined);
+      setKeyWarning(unsavedKeyWarning(saved.data, answer.provider));
       await load();
     } catch (error) {
       setKeyError(error instanceof Error ? error.message : String(error));
@@ -166,6 +169,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
       ) : (
         <>
           {keyError && <p className="welcome-banner welcome-banner-error" role="alert">{keyError}</p>}
+          {keyWarning && <p className="welcome-banner welcome-banner-warning" role="status">{keyWarning}</p>}
           <ul className="welcome-grid welcome-runners">
             {state.kind === 'ready'
               ? state.lines.map((line) => (

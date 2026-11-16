@@ -27,6 +27,18 @@ interface DialogProps {
   answer(result: KeyEntryAnswer | null): void;
 }
 
+/**
+ * What to tell the person when the daemon took a key it could not save
+ * (`unsavedEnvKeys`): the desktop app has no file of its own, so the key
+ * lasts as long as that daemon does. Undefined when it was saved.
+ */
+export function unsavedKeyWarning(saved: unknown, provider: AiProvider): string | undefined {
+  const unsaved = typeof saved === 'object' && saved !== null ? Reflect.get(saved, 'unsavedEnvKeys') : undefined;
+  const meta = VENDORS[provider];
+  if (!Array.isArray(unsaved) || !unsaved.includes(meta.apiKeyEnvVar)) return undefined;
+  return `The ${meta.label} key is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.`;
+}
+
 /** One provider's name, as core words it. */
 function providerName(provider: AiProvider): string {
   return VENDORS[provider].label;

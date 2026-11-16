@@ -9,15 +9,21 @@ import { PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, writeEnvFileVars }
  * same line.
  */
 
-/** Save the credential variables of an accepted settings write; anything else in it is not saved here. */
-export function saveCredentials(env: Readonly<Record<string, string>>, file: string = globalEnvFile()): void {
+/**
+ * Save the credential variables of an accepted settings write; anything else
+ * in it is not saved here. Answers the ones it could not save, every one of
+ * them when the write failed: each works for this daemon's life, and only its
+ * next start would miss it, which the surface that set it says.
+ */
+export function saveCredentials(env: Readonly<Record<string, string>>, file: string = globalEnvFile()): string[] {
   const credentials = Object.fromEntries(Object.entries(env).filter(([key]) => PROVIDER_CREDENTIAL_ENV.has(key)));
-  if (Object.keys(credentials).length === 0) return;
+  if (Object.keys(credentials).length === 0) return [];
   try {
     writeEnvFileVars(file, credentials);
+    return [];
   } catch (err) {
-    // The key works for this daemon's life either way; only its next start would miss it.
     console.error(`[web] could not save the provider key to ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    return Object.keys(credentials);
   }
 }
 

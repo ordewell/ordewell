@@ -484,6 +484,12 @@ export interface SettingsUpdateResponse extends SettingsResponse {
   switchRecall?: PlannerModelRecall;
   /** Env keys the daemon refused to apply, so a client does not persist what the daemon would not. */
   rejectedEnvKeys?: string[];
+  /**
+   * Credential keys the daemon applied but could not save to `~/.ordewell/.env`:
+   * each holds for this daemon's life only, so a surface with no file of its
+   * own (the desktop app) says the next start will not have it.
+   */
+  unsavedEnvKeys?: string[];
 }
 
 export interface WorkspacesResponse {

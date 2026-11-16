@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { KeyEntryDialog } from '../KeyEntryDialog';
+import { KeyEntryDialog, unsavedKeyWarning } from '../KeyEntryDialog';
 
 function mount(request: Parameters<typeof KeyEntryDialog>[0]['request'] = {}): ReturnType<typeof vi.fn> {
   const answer = vi.fn();
@@ -42,5 +42,16 @@ describe('the key entry', () => {
     expect(answer).toHaveBeenCalledWith(null);
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(answer).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe('a key the daemon took but could not save', () => {
+  it('is named, with what to do after a restart, only when the daemon says it was not saved', () => {
+    expect(unsavedKeyWarning({ unsavedEnvKeys: ['OPENROUTER_API_KEY'] }, 'openrouter'))
+      .toBe('The OpenRouter key is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.');
+    expect(unsavedKeyWarning({ unsavedEnvKeys: ['GEMINI_API_KEY'] }, 'openrouter')).toBeUndefined();
+    expect(unsavedKeyWarning({}, 'openrouter')).toBeUndefined();
+    expect(unsavedKeyWarning(null, 'openrouter')).toBeUndefined();
+    expect(unsavedKeyWarning({ unsavedEnvKeys: 'OPENROUTER_API_KEY' }, 'openrouter')).toBeUndefined();
   });
 });
