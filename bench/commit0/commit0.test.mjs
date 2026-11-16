@@ -52,11 +52,18 @@ test('the goal is one text for both arms and names the tests and the closed netw
   assert.match(g, /tests/);
   assert.match(g, /python -m pytest tests/);
   assert.match(g, /network is closed/);
+  assert.match(g, /may not import until its stubbed functions are implemented/);
+  assert.match(g, /fails to import is not a reason to stop/);
+  assert.match(g, /tests in the repository are the specification/);
   const [, , ...a] = L.armCommands(L.ARMS.A, { workspace: '/testbed', goal: g, sessionId: 's' });
   const [plan, ...b] = L.armCommands(L.ARMS.B, { workspace: '/testbed', goal: g, sessionId: 's' });
   assert.deepEqual(plan, ['ordewell', 'plan', '--goal', g, '--runner', 'ordewell', '--no-chat', '--yes', '--workspace', '/testbed']);
   assert.deepEqual(b.at(-1), ['ordewell', 'merge', '--session-id', 's', '--yes', '--workspace', '/testbed']);
   assert.deepEqual(a, b.slice(1), 'both arms merge alike');
+  // Arm A's one task is handed the goal as an argument of ARM_A_PLAN_JS, in drive.mjs; both read goalText.
+  assert.match(fs.readFileSync(path.join(here, 'drive.mjs'), 'utf8'), /L\.ARM_A_PLAN_JS, lib\.workdir, L\.goalText\(lib\)/);
+  assert.match(plan[3], /may not import until its stubbed functions are implemented/);
+  assert.equal(plan[3], L.goalText(lib()));
 });
 
 test('the arms hold the protocol: one model, the caps, no planner in A', () => {
