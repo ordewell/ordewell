@@ -13,6 +13,14 @@ export const MODEL_ID = `${PROVIDER}:${PROVIDER_MODEL}`;
 export const MODEL_LABEL = 'DeepSeek V4.1 Flash';
 
 /**
+ * The built-in runner both arms run on: Ordewell's own loop on the protocol's
+ * provider, whose runner id is the provider's (ADR-0070, providerRunners.ts).
+ * The one id it had before, `ordewell`, is moved onto a provider's as a plan
+ * is read, so a plan still naming it no longer holds the runner fixed.
+ */
+export const RUNNER = PROVIDER;
+
+/**
  * The window the runner assumes for a model no listing states
  * (core's DEFAULT_MODEL_INFO.contextWindow). A run on it compacts a
  * million-token model at a fraction of what it holds, so meeting it is a
@@ -596,11 +604,11 @@ const task = core.createTask({
   title: 'Implement the library so its tests pass',
   description: goal,
   prompt: goal,
-  assignedRunner: 'ordewell',
+  assignedRunner: '${RUNNER}',
   assignedModel: { modelId, modelLabel },
   taskMode: '${ARM_A_MODE}',
 });
-const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approved', runners: ['ordewell'], lastUpdated: now }, goal, workspace);
+const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approved', runners: ['${RUNNER}'], lastUpdated: now }, goal, workspace);
 process.stdout.write(meta.id);
 `;
 
@@ -616,8 +624,8 @@ process.stdout.write(JSON.stringify(loaded ? loaded.plan : null));
 export function boxSettings() {
   return {
     autonomousMode: true,
-    enabledRunners: ['ordewell'],
-    modelAllowlist: { ordewell: [MODEL_ID] },
+    enabledRunners: [RUNNER],
+    modelAllowlist: { [RUNNER]: [MODEL_ID] },
     ordewellStepLimit: STEP_LIMIT,
   };
 }
@@ -628,7 +636,7 @@ export function armCommands(arm, { workspace, goal, sessionId = '<session>' }) {
   const run = ['ordewell', 'run', '--session-id', sessionId, ...ws];
   const merge = ['ordewell', 'merge', '--session-id', sessionId, '--yes', ...ws];
   if (arm.id === 'A') return [['<write the one-task session with core>'], run, merge];
-  return [['ordewell', 'plan', '--goal', goal, '--runner', 'ordewell', '--no-chat', '--yes', ...ws], run, merge];
+  return [['ordewell', 'plan', '--goal', goal, '--runner', RUNNER, '--no-chat', '--yes', ...ws], run, merge];
 }
 
 // --- Run records ------------------------------------------------------------
@@ -697,9 +705,9 @@ export function judgePlan(plan) {
   const walk = (tasks) => {
     for (const t of tasks ?? []) {
       if ((t.type ?? 'ai') === 'ai') {
-        if (t.assignedRunner !== 'ordewell') failures.push(`task "${t.title}" runs on ${t.assignedRunner}, not ordewell`);
+        if (t.assignedRunner !== RUNNER) failures.push(`task "${t.title}" runs on ${t.assignedRunner}, not ${RUNNER}`);
         if (t.assignedModel?.modelId !== MODEL_ID) failures.push(`task "${t.title}" runs ${t.assignedModel?.modelId ?? 'no model'}, not ${MODEL_ID}`);
-        if (!RUNNER_MODES.includes(t.taskMode)) failures.push(`task "${t.title}" is in mode ${t.taskMode ?? 'none'}, which the ordewell runner does not have (${RUNNER_MODES.join(', ')})`);
+        if (!RUNNER_MODES.includes(t.taskMode)) failures.push(`task "${t.title}" is in mode ${t.taskMode ?? 'none'}, which the built-in runner does not have (${RUNNER_MODES.join(', ')})`);
       }
       walk(t.subtasks);
     }
