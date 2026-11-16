@@ -30,10 +30,13 @@ export function plannerBackendsFor(
         : { usable: true, ...(entry.auth ? { auth: entry.auth } : {}) };
   }
   const backends: PlannerBackend[] = builtinPlannerBackends(usability, providers);
-  // A runner a workspace's own manifest adds is still offered: core's catalog
-  // names the shipped agents, and the daemon may know one more.
+  // An agent the daemon says can plan is still offered when core's catalog,
+  // which names the shipped agents, does not. A runner that cannot plan is no
+  // harness planner: a provider runner above all, whose id is a vendor planner's
+  // already listed above, the API planner on that same key (ADR-0009, ADR-0070).
   for (const runner of runners) {
     if (RUNNER_CATALOG.some((catalogEntry) => catalogEntry.id === runner.id)) continue;
+    if (runner.plans !== true || runner.provider !== undefined) continue;
     backends.push({
       id: runner.id,
       label: runner.name || RUNNER_LABELS[runner.id] || runner.id,

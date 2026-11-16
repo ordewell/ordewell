@@ -39,4 +39,22 @@ describe('the status bar\'s runners', () => {
     expect(screen.getByLabelText('OpenCode, sign-in not known')).toHaveTextContent(/^OpenCode$/);
     expect(screen.queryByText(/Gemini|claude-code/)).toBeNull();
   });
+
+  it('marks a provider runner signed in, though it is no planner: listed means its key is set (ADR-0070)', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [
+        { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+      ] }),
+      'models.list': ok({ models: [], providers: ['openrouter'], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '' }),
+      'settings.get': ok({}),
+    });
+    const runners = slots().get('status.runners');
+    render(<>{runners?.render()}</>);
+    await act(() => daemonHost('/work/acme').handle({ type: 'ready' }));
+
+    expect(await screen.findByLabelText('OpenRouter, signed in')).toHaveTextContent('OpenRouter ✓');
+    // The vendor planner under the same id is the only OpenRouter planner the chat offers.
+    const backends = daemonHost('/work/acme').getSnapshot().state.planner.backends.filter((b) => b.id === 'openrouter');
+    expect(backends).toEqual([expect.objectContaining({ kind: 'vendor' })]);
+  });
 });

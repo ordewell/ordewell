@@ -3,10 +3,11 @@ import { ChevronDown, ChevronRight, CircleAlert, KeyRound, LogIn, RotateCw } fro
 import { Button, EmptyState, Icon, LoadingState } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
-import { describeSignInWays, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
+import { describeSignInWays, isProviderRunner, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { THEME_CHOICES, type ThemePref } from '../../frame/themePref';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
+import { plannerRunnerFor } from '../../session/plannerBackends';
 import { useSession } from '../../session/useSession';
 import { all } from '../Stub';
 import NumberField from './NumberField';
@@ -163,8 +164,11 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
     );
   }
 
-  const runnerModels = runners.some((runner) => runner.id === settings.aiProvider)
-    ? models?.modelsByRunner[settings.aiProvider]
+  // A harness planner offers its runner's models; a vendor its own catalog, even
+  // where a provider runner shares its id and holds a runner's catalog (ADR-0070).
+  const plannerRunner = plannerRunnerFor(settings.aiProvider, backends);
+  const runnerModels = plannerRunner !== undefined && runners.some((runner) => runner.id === plannerRunner)
+    ? models?.modelsByRunner[plannerRunner]
     : (models?.orchestratorModels ?? []).map((option): DiscoveredModel => ({
       modelId: option.id,
       modelLabel: option.label,
@@ -172,6 +176,8 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
     }));
   const runnerRows = runnerRowsFor(runners, backends);
   const runnerHint = (row: RunnerRow): string => {
+    // Listed only while its key is set, so its key is all there is to say (ADR-0070).
+    if (isProviderRunner(row.id) && row.installed) return `The built-in runner, on your ${row.name} key`;
     const parts: string[] = [];
     const state = row.auth?.state;
     const signIn = signInOfVerdict(row.id, row.name, row.auth);
@@ -222,9 +228,15 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
       <section className="settings-section" aria-labelledby="settings-runners">
         <div className="settings-section-head">
           <h3 id="settings-runners">Runners</h3>
-          <Button size="sm" icon={RotateCw} busy={modelsLoading && !loading} disabled={busy} onClick={() => { void rescan(); }}>Refresh</Button>
+          <span className="settings-section-actions">
+            <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { void host.enterApiKey(); }}>Set API key…</Button>
+            <Button size="sm" icon={RotateCw} busy={modelsLoading && !loading} disabled={busy} onClick={() => { void rescan(); }}>Refresh</Button>
+          </span>
         </div>
-        <p className="settings-hint">Which coding agents a task may run on, and which models each may offer.</p>
+        <p className="settings-hint">
+          Which runners a task may run on, and which models each may offer: the coding agents, and the built-in
+          runner on each provider whose API key is set.
+        </p>
         <ul className="settings-runners">
           {runnerRows.map((row) => {
             const signIn = signInOfVerdict(row.id, row.name, row.auth);

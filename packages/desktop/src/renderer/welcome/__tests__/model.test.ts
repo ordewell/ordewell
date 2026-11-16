@@ -126,6 +126,12 @@ describe('runnerCard', () => {
       .toEqual({ id: 'claude-code', tone: 'passed', word: 'Signed in', version: '1.4.2' });
   });
 
+  it('says a provider runner is the built-in runner on its key, with nothing to do (ADR-0070)', () => {
+    expect(runnerCard({ id: 'openrouter', state: 'signed-in', provider: 'openrouter' }, 'OpenRouter'))
+      .toEqual({ id: 'openrouter', tone: 'passed', word: 'Key set', hint: 'The built-in runner, on your OpenRouter key.' });
+    expect(runnerCard({ id: 'openrouter', state: 'off', provider: 'openrouter' }, 'OpenRouter').word).toBe('Off in Settings');
+  });
+
   it("names a signed-out runner's own CLI sign-in from core's wording", () => {
     expect(runnerCard({ id: 'codex', state: 'signed-out', loginCommand: ['codex', 'login'], signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] } }, 'Codex')).toMatchObject({
       tone: 'attention', word: 'Signed out', hint: 'Sign in with /login codex, or run codex login.', command: 'codex login', action: 'login', runnerLabel: 'Codex',
@@ -134,7 +140,7 @@ describe('runnerCard', () => {
 
   it('names the key entry when the agent has no login Ordewell can run', () => {
     expect(runnerCard({ id: 'gemini-cli', state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' } } }, 'Gemini CLI')).toMatchObject({
-      tone: 'attention', word: 'Signed out', hint: 'Run /key and choose Google Gemini to hand it a key.', action: 'key', provider: 'google',
+      tone: 'attention', word: 'Signed out', hint: 'Run /key-set and choose Google Gemini to hand it a key.', action: 'key', provider: 'google',
     });
     expect(runnerCard({ id: 'cursor-agent', state: 'signed-out' }, 'Cursor').hint).toBeUndefined();
   });

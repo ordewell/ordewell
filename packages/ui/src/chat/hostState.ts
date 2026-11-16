@@ -69,6 +69,8 @@ export interface HostState {
   settingsRequest: number;
   modelOptions: ModelOption[];
   configuredProviders: AiProvider[];
+  /** Whether the host has said which providers are configured: until then an empty list means not yet told. */
+  providersKnown: boolean;
   /** Who plans (ADR-0009): the backends offered, the one in use, and its runner + effort. */
   planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
   /**
@@ -179,6 +181,7 @@ export const INITIAL_HOST_STATE: HostState = {
   settingsRequest: 0,
   modelOptions: [],
   configuredProviders: [],
+  providersKnown: false,
   planner: { backends: [], provider: '' },
   plannerKnown: false,
   plannerDetecting: false,
@@ -490,7 +493,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, modelOptions: action.modelOptions ?? [] };
 
     case 'setConfiguredProviders':
-      return { ...state, configuredProviders: action.providers ?? [], isReady: true };
+      return { ...state, configuredProviders: action.providers ?? [], providersKnown: true, isReady: true };
 
     case 'agentDetection':
       return { ...state, detectionError: action.state === 'failed' ? (action.error || 'unknown error') : null };

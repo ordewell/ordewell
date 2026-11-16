@@ -402,6 +402,14 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     - an install or sign-in hint, when needed;
     - Retry.
 
+    After them comes one card for each provider whose API key is set: the
+    built-in runner on that provider, under the provider's name ("OpenRouter")
+    on a neutral badge, reading *Key set* and "The built-in runner, on your
+    OpenRouter key." It has no Log in and nothing to do. A provider with no
+    key has no card (ADR-0070), so under the cards one line, "An API key adds
+    the built-in runner on that provider.", carries *Set API key…*, which
+    opens the key entry with every provider to choose from.
+
     A runner that is off in Settings says "Off in Settings", with a link to
     Settings.
   - *Keyboard hints:* one muted line of the four shortcuts.
@@ -1838,7 +1846,9 @@ Copilot 5.36 and 5.74, Qwen Code 6.96 and 5.38, Cline 5.55 and 5.34, Gemini
 Badge text against its tint, at its lowest of the first three (drawn on raised
 on dark, on surface on light): 4.99 on dark and 4.85 on light. A runner Ordewell does not
 know draws a neutral badge (`--ow-fg-secondary` on `--ow-bg-hover`) with its
-name.
+name. So does a provider runner, the built-in runner on one provider: its name
+is the provider's ("OpenRouter", shortened to the provider's short name such as
+"Gemini" in a narrow row), and the colours stay the coding agents'.
 
 **Diffs** (unchanged)
 
@@ -2135,6 +2145,15 @@ This app, then Advanced. Every field in a card takes the `inset` surface.
   Subplanners' fields) and shows it. A field with a ceiling commits the ceiling
   for anything above it. WebKit spin buttons are hidden for any `type=number` left in the
   renderer.
+- **Runners.** A row for each coding agent core ships, an uninstalled one
+  disabled with why, then one for each provider whose API key is set: the
+  built-in runner on that provider, under the provider's name, with the hint
+  "The built-in runner, on your OpenRouter key", its model allowlist and no Log
+  in (ADR-0070). A provider with no key has no row, so *Set API key…* sits in
+  the Runners heading beside Refresh and opens the key entry with every
+  provider to choose from. A provider runner is never a planner: "OpenRouter"
+  in the Planner select is the API planner on the same key, with that
+  planner's own models.
 - **Restore defaults.** At the right of the Run heading. It asks inline,
   "Restore Run settings to their defaults?" with Restore and Cancel, then writes
   every setting Run shows (autonomy, supervisor, retries, merge at gates,

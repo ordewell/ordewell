@@ -379,7 +379,7 @@ export class DaemonHost {
 
   /**
    * The key entry, from Settings or the command palette: one vendor's key,
-   * written through the daemon's settings route as the TUI's `/key` does.
+   * written through the daemon's settings route as the TUI's `/key-set` does.
    * True when a key was saved. The key is never kept here or logged.
    */
   async enterApiKey(provider?: AiProvider, runnerLabel?: string): Promise<boolean> {
@@ -1034,11 +1034,13 @@ export class DaemonHost {
    */
   private async slashCommand(command: string, args: readonly string[]): Promise<void> {
     switch (command) {
-      case '/key': {
-        // `/key set <provider>` is the terminal's spelling; the dialog is the desktop's.
+      case '/key-set': {
+        // `/key` arrives here as its alias, and its old `/key set <provider>`
+        // with a leading `set`. A key typed after the provider is never read:
+        // the dialog is the desktop's way in, so no secret sits in a message.
         const named = args[0] === 'set' ? args[1] : args[0];
         if (named !== undefined && !Object.hasOwn(VENDORS, named)) {
-          this.showError(new Error(`Unknown provider: ${named}. Run /key with no provider to see the list.`));
+          this.showError(new Error(`Unknown provider: ${named}. Run /key-set with no provider to see the list.`));
           return;
         }
         await this.enterApiKey(named as AiProvider | undefined);
@@ -1216,6 +1218,14 @@ export class DaemonHost {
       return;
     }
     const backend = this.backendOf(runnerId);
+    // A vendor is listed only once it is configured, and its key is its one
+    // way in, as it is for the provider runner under the same id (ADR-0070).
+    if (backend?.kind === 'vendor') {
+      const message = `${backend.label} has no login: it runs on its API key, which /key-set ${backend.id} replaces.`;
+      this.emit({ type: 'plannerLoginEnded', ...(runnerId !== undefined ? { runner: runnerId } : {}), ok: false, message });
+      this.view.conversation.note('system', message);
+      return;
+    }
     const runner = backend ? (backend.runner ?? backend.id) : undefined;
     if (!runner) {
       const message = 'The active planner is not a coding agent; there is no login to run.';

@@ -168,6 +168,9 @@ export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
   }
   switch (line.state) {
     case 'signed-in':
+      // A provider runner's sign-in is its key, the reason it is listed at all
+      // (ADR-0070), so the card says which runner it is rather than a login.
+      if (line.provider) return { id: line.id, tone: 'passed', word: 'Key set', hint: `The built-in runner, on your ${name} key.` };
       return { id: line.id, tone: 'passed', word: 'Signed in', ...version };
     case 'signed-out': {
       // The agent's own ways in, worded once by core (ADR-0052): a key-based

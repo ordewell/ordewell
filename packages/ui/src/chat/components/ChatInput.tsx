@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useId, useMemo } from 'react';
-import { aheadOfDraft, composerTip } from '@ordewell/core/plan-utils';
+import { aheadOfDraft, composerTip, type ComposerTipContext } from '@ordewell/core/plan-utils';
 import { ALL_SLASH_COMMANDS, SLASH_COMMAND_NAMES, isBuiltinSlashCommand } from '../../shared/slashCommands';
 import { QUEUE_TITLE, SendKeyHint, isSendNowKey } from './PendingMessages';
 
@@ -42,6 +42,8 @@ interface ChatInputProps {
   prefill?: string;
   /** A state cue of the host's, drawn under the composer while it is empty (#137). */
   hint?: string;
+  /** What the host has said that decides whether a tip is news, such as whether any provider key is set. */
+  tipContext?: ComposerTipContext;
   /** Queued text taken back from the host; it lands above the current draft. */
   unsent?: { text: string; seq: number } | null;
   /** Discovered skills (global ~/.ordewell/skills/ + workspace .ordewell/skills/) merged into the / suggestion dropdown. */
@@ -196,6 +198,7 @@ export default function ChatInput({
   unsent,
   skills = [],
   hint,
+  tipContext,
 }: ChatInputProps) {
   const [text, setText] = useState('');
   // The caret offset into `text` — tracked separately from `text` itself since
@@ -227,7 +230,7 @@ export default function ChatInput({
   // visually hidden description exposes the same words to assistive technology.
   const placeholderText = disabled && disabledReason
     ? disabledReason
-    : placeholder || composerTip(tipSeq, SLASH_COMMAND_NAMES) || 'Type / for commands or describe what you want to build...';
+    : placeholder || composerTip(tipSeq, SLASH_COMMAND_NAMES, tipContext) || 'Type / for commands or describe what you want to build...';
   // A hint belongs where the tip does: an empty composer. Typing is its own
   // answer, and the cue would only compete with the draft.
   const shownHint = text === '' ? hint : undefined;

@@ -61,6 +61,15 @@ describe('resetSession', () => {
   });
 });
 
+describe('the configured providers', () => {
+  it('tells an empty list the host sent from one it has not sent yet, and keeps it through a new session', () => {
+    expect(INITIAL_HOST_STATE.providersKnown).toBe(false);
+    const told = reduceHost(INITIAL_HOST_STATE, msg({ type: 'setConfiguredProviders', providers: [] }));
+    expect(told).toMatchObject({ configuredProviders: [], providersKnown: true, isReady: true });
+    expect(reduceHost(told, msg({ type: 'resetSession', kind: 'new' })).providersKnown).toBe(true);
+  });
+});
+
 describe('reduceHost gates', () => {
   it('drops planUpdated while stopped until a planner turn opens', () => {
     const stopped = reduceHost(staleSession(), { type: 'turnStopped' });

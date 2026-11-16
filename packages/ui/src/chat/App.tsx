@@ -25,7 +25,7 @@ import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, compactionText, describeRunnerSignIn, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, describeRunnerSignIn, isProviderRunner, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -137,7 +137,7 @@ export default function App({ layout = 'chat', selection, goal }: {
   const {
     conversation, plan, isExecuting, isResearchActive, error, models, modelsByRunner,
     runnerList, enabledRunnerIds, pendingRunners, pendingPlanner, modelAllowlist, held, unsent, modesByRunner, runnerNotice, modelConfig,
-    modelOptions, configuredProviders, planner, plannerKnown, plannerDetecting, runnersKnown, detectionError, isReady, modelDiscoveryErrors,
+    modelOptions, configuredProviders, providersKnown, planner, plannerKnown, plannerDetecting, runnersKnown, detectionError, isReady, modelDiscoveryErrors,
     runnerDiscoveryErrors, modelDiscovery,
     skills, taskSkills, checkpoint, taskOutput, run, activity, starting, dockExpanded, dockHeight, settingsRequest, accountLimits, plannerTurnStartedAt,
   } = host;
@@ -164,6 +164,13 @@ export default function App({ layout = 'chat', selection, goal }: {
   // plans on its own subscription, so key-less is a working setup, not a
   // first-run wall.
   const canPlan = configuredProviders.length > 0 || planner.backends.some((b) => b.usable);
+  // A provider runner is listed exactly while its provider is configured
+  // (ADR-0070), so either list can be the first to say a key is set. Saying
+  // none is waits for both: the /key-set tip is noise to someone who has one.
+  const providerKeySet = configuredProviders.length > 0 || runnerList.some((r) => isProviderRunner(r.id))
+    ? true
+    : providersKnown && runnersKnown ? false : undefined;
+  const tipContext = useMemo<ComposerTipContext>(() => (providerKeySet === undefined ? {} : { providerKeySet }), [providerKeySet]);
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
   /** The first screen is on show, with every signed-out agent's own row. */
   const emptyStateShown = !hasContent && isReady && canPlan;
@@ -407,7 +414,7 @@ export default function App({ layout = 'chat', selection, goal }: {
   }, []);
 
   const handleConfigureApiKey = useCallback(() => {
-    bridge.post({ type: 'sendMessage', text: '/key', runners });
+    bridge.post({ type: 'sendMessage', text: '/key-set', runners });
   }, [runners]);
 
   const handleLoadSession = useCallback(() => {
@@ -866,7 +873,7 @@ export default function App({ layout = 'chat', selection, goal }: {
   /**
    * What each signed-out agent's surfaces say and what their Log in does, keyed
    * by runner id. The words are the terminal UI's, since this chat takes the
-   * same `/login <runner>` and `/key` (ADR-0052).
+   * same `/login <runner>` and `/key-set` (ADR-0052).
    */
   const signInByRunner = useMemo<Record<string, RunnerSignInView>>(() => {
     const byRunner: Record<string, RunnerSignInView> = {};
@@ -883,7 +890,7 @@ export default function App({ layout = 'chat', selection, goal }: {
         hint,
         ...(action === 'login' ? { logIn: () => handleRunnerLogin(runner) } : {}),
         // A key needs no runner process, so nothing waits on it: the key entry is the whole action.
-        ...(action === 'key' && provider ? { logIn: () => bridge.post({ type: 'sendMessage', text: `/key ${provider}`, runners }) } : {}),
+        ...(action === 'key' && provider ? { logIn: () => bridge.post({ type: 'sendMessage', text: `/key-set ${provider}`, runners }) } : {}),
       };
     }
     return byRunner;
@@ -1278,7 +1285,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                 <div className="model-discovery-error" role="alert">
                   {planner.runner
                     ? (runnerDiscoveryErrors[planner.runner] ?? <>No models discovered for this agent yet: run <code>/refresh</code>.</>)
-                    : <>No models available. Add an API key with <code>/key</code>, or pick a coding agent above.</>}
+                    : <>No models available. Add an API key with <code>/key-set</code>, or pick a coding agent above.</>}
                 </div>
               )}
               {!switchingTo && modelDiscovery?.state !== 'loading' && Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
@@ -1294,7 +1301,7 @@ export default function App({ layout = 'chat', selection, goal }: {
           ) : (
             <span className="setup-block-empty">
               {plannerKnown
-                ? <>No planner available — install {orNames(agentNames, 'a coding agent')}, or add a key with <code>/key</code>.</>
+                ? <>No planner available — install {orNames(agentNames, 'a coding agent')}, or add a key with <code>/key-set</code>.</>
                 : <Detecting error={detectionError} onRetry={handleModelsRefreshNeeded} />}
             </span>
           )}
@@ -1303,7 +1310,8 @@ export default function App({ layout = 'chat', selection, goal }: {
         <section className="setup-block">
           <div className="setup-block-title">Runners</div>
           <div className="setup-block-hint">
-            Coding agents that execute the plan's tasks. The planner assigns only the ones switched on.
+            Coding agents, and the built-in runner on each provider with a key, execute the plan's tasks.
+            The planner assigns only the ones switched on.
           </div>
           <div className="runner-pills">
             {runnerList.map((r) => {
@@ -1359,6 +1367,7 @@ export default function App({ layout = 'chat', selection, goal }: {
             {runnerList.length === 0 && runnersKnown && (
               <span className="setup-block-empty">
                 No coding agent detected: install {orNames(agentNames, 'a coding agent')}, then run <code>/refresh</code>.
+                {' '}Or add an API key with <code>/key-set</code> to run tasks on the built-in runner.
               </span>
             )}
           </div>
@@ -1494,6 +1503,7 @@ export default function App({ layout = 'chat', selection, goal }: {
         disabled={false}
         placeholder={getPlaceholder()}
         hint={replyCue()}
+        tipContext={tipContext}
         isTurnRunning={plannerBusy}
         unsent={unsent}
         skills={skills}
