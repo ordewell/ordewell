@@ -6,7 +6,7 @@ import { VENDORS } from '@ordewell/core/plan-utils';
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
-import { askForKey } from '../session/KeyEntryDialog';
+import { askForKey, type KeyEntryRequest } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
 import { LoginDialog } from './LoginDialog';
 import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, withTimeout, type RunnerTone } from './model';
@@ -110,8 +110,8 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
     setState(lines ? { kind: 'ready', lines } : { kind: 'error', message: 'The daemon answered with something that is not a runner list.', status: result.status });
   }, []);
 
-  const setKey = useCallback(async (runner: string, provider: AiProvider): Promise<void> => {
-    const answer = await askForKey({ provider, runnerLabel: runnerName(runner) });
+  const setKey = useCallback(async (request: KeyEntryRequest): Promise<void> => {
+    const answer = await askForKey(request);
     if (!answer) return;
     const meta = VENDORS[answer.provider];
     try {
@@ -175,11 +175,18 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
                   busy={busy}
                   onRetry={retry}
                   onLogin={() => setLogin({ runner: line.id, label: line.name || runnerName(line.id) })}
-                  onKey={(provider) => { void setKey(line.id, provider); }}
+                  onKey={(provider) => { void setKey({ provider, runnerLabel: runnerName(line.id) }); }}
                 />
               ))
               : KNOWN_RUNNERS.map((id) => <SkeletonRunner key={id} id={id} />)}
           </ul>
+          {/* A provider with no key has no card (ADR-0070), so its way in sits under them all, open to every provider. */}
+          {state.kind === 'ready' && (
+            <p className="welcome-key-line">
+              <span>An API key adds the built-in runner on that provider.</span>
+              <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { void setKey({}); }}>Set API key…</Button>
+            </p>
+          )}
         </>
       )}
       {login && (

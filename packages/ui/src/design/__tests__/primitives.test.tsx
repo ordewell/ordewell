@@ -49,6 +49,18 @@ describe('the runner badge', () => {
     // An inherited key is not a runner.
     expect(runnerName('toString')).toBe('toString');
   });
+
+  it('names a provider runner by its provider, drawn neutral: the colours are the coding agents\' (ADR-0070)', () => {
+    const { container } = render(<><RunnerBadge runner="openrouter" /><RunnerBadge runner="google" short /></>);
+    const [openrouter, google] = container.querySelectorAll('.ow-runner-badge');
+    expect(openrouter.textContent).toBe('OpenRouter');
+    expect(openrouter.getAttribute('title')).toBe('OpenRouter');
+    expect(openrouter.className).toContain('ow-runner-other');
+    // A narrow row shortens it as the provider's own short name, never dropping it.
+    expect(google.textContent).toBe('Gemini');
+    expect(google.getAttribute('title')).toBe('Google Gemini');
+    expect(runnerName('anthropic', { short: true })).toBe('Anthropic');
+  });
 });
 
 describe('the tabs', () => {

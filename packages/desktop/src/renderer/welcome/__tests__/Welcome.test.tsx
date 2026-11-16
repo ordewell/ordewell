@@ -393,11 +393,43 @@ describe('Welcome: runners', () => {
   it('opens the key entry for an agent whose way in is a key', async () => {
     installBridge({ routes: { 'runners.list': () => ok(KEYED_RUNNERS) } });
     render(<Welcome status={CONNECTED} />);
-    const gemini = (await screen.findByText('Run /key and choose Google Gemini to hand it a key.')).closest('li') as HTMLElement;
+    const gemini = (await screen.findByText('Run /key-set and choose Google Gemini to hand it a key.')).closest('li') as HTMLElement;
     expect(gemini).toHaveTextContent('Gemini CLI');
     fireEvent.click(within(gemini).getByRole('button', { name: 'Set API key…' }));
     expect(await screen.findByRole('dialog', { name: 'API key for Google Gemini' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('draws a provider runner the daemon lists as the built-in runner on its key, with no Log in', async () => {
+    installBridge({ routes: { 'runners.list': () => ok({ runners: [
+      ...RUNNERS.runners,
+      { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+    ] }) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    const openrouter = await waitFor(() => {
+      const card = runners.querySelector<HTMLElement>('li[data-runner="openrouter"]');
+      expect(card).not.toBeNull();
+      return card as HTMLElement;
+    });
+    expect(openrouter).toHaveTextContent('OpenRouter');
+    expect(openrouter).toHaveTextContent('Key set');
+    expect(openrouter).toHaveTextContent('The built-in runner, on your OpenRouter key.');
+    expect(within(openrouter).queryByRole('button')).toBeNull();
+  });
+
+  it('offers the key entry for every provider under the cards, since a provider with no key has no card', async () => {
+    installBridge({ routes: { 'runners.list': () => ok(RUNNERS) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    await within(runners).findByText('Signed in');
+    const line = within(runners).getByText('An API key adds the built-in runner on that provider.').closest('p') as HTMLElement;
+    fireEvent.click(within(line).getByRole('button', { name: 'Set API key…' }));
+    const dialog = await screen.findByRole('dialog');
+    // No provider is chosen for the person: the entry asks which one.
+    expect(within(dialog).getByRole('combobox', { name: 'Provider' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 

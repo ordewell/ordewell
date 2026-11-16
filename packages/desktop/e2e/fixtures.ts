@@ -356,7 +356,7 @@ export const MIXED: FakedDaemon = {
     modelsByRunner: { codex: [], 'qwen-code': [], cline: [] },
     runnerErrors: {
       codex: 'Codex is not signed in. Sign in with /login codex, or run codex login. Then Refresh.',
-      'qwen-code': 'Qwen Code is not signed in. Choose OpenRouter in /key to hand it a key. Then Refresh.',
+      'qwen-code': 'Qwen Code is not signed in. Choose OpenRouter in /key-set to hand it a key. Then Refresh.',
       cline: 'Cline 1.0.0 is older than the 1.3.0 Ordewell needs. Update it, then Refresh.',
     },
   },

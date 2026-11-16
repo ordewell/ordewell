@@ -179,6 +179,13 @@ exactly those models, and `ORDEWELL_SMOKE_TIMEOUT_MS` sets the time per task.
 | A newly installed runner | `/refresh` | `ordewell refresh` | `/refresh` |
 | A runner's models, discovered again | When the daemon restarts or a provider key or base URL changes | The same | `/refresh` |
 
+The desktop app's planner chat takes the same `/key-set`, `/login` and `/refresh`, and
+its Settings tab holds the planner, the runners and each runner's models. **Set API
+key…** opens its key entry, with every provider to choose from, in Settings' Runners
+heading, under the Welcome window's runner cards and in the command palette. While no
+provider key is set, the tips the empty planner composer cycles through, in the desktop
+app and VS Code, include one to add a key with `/key-set`.
+
 ## Where keys live
 
 The terminal UI, the CLI and the desktop app save a key to `~/.ordewell/.env` and
