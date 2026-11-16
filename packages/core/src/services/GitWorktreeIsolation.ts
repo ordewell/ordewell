@@ -705,6 +705,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
           const entry = self ? record.repos[SELF_REPO] : undefined;
           if (entry) entry.linked.push(rel);
         }
+        for (const repo of run.repos) await this.excludeLinks(record.repos[repo.path], await this.prefixOf(repo));
       } catch (err) {
         record.status = 'failed';
         await this.removeTask(run, record, { dropRecord: false, preserve: false });
@@ -1918,6 +1919,39 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
   private async brings(repo: IsolationRepo, branch: string): Promise<boolean | null> {
     const ahead = await this.tryGit(repo.root, ['rev-list', '--count', `${repo.integrationBranch}..${branch}`]);
     return ahead.ok ? Number(ahead.stdout.trim()) > 0 : null;
+  }
+
+  /**
+   * A task may stage with `git add -A` itself, which {@link commitWorktree}'s
+   * excludes never see, and a rule like `.venv/` matches the directory but not
+   * the link the bootstrap put in its place, so the link would be committed and
+   * merged back. Each link whose source its own checkout ignores is ignored in
+   * the worktree too, anchored, through the `info/exclude` all of the repo's
+   * worktrees share: it names a path the main checkout already ignores, so it
+   * changes nothing the user sees there. A link to something the user leaves
+   * unignored is not hidden from them; only Ordewell's own commit leaves it out.
+   */
+  private async excludeLinks(entry: IsolationTaskRepo, prefix: string): Promise<void> {
+    const patterns: string[] = [];
+    for (const name of entry.linked) {
+      const rel = (prefix + name).replace(/\\/g, '/');
+      const at = path.join(entry.worktree, rel);
+      let source: string;
+      // A hard link or a copy is a plain file, which the rule matches as it does the source.
+      try { source = path.resolve(path.dirname(at), fs.readlinkSync(at)); } catch { continue; }
+      if (/[\r\n]/.test(rel) || (await this.tryGit(entry.worktree, ['check-ignore', '-q', '--', rel])).ok) continue;
+      if (!(await this.tryGit(path.dirname(source), ['check-ignore', '-q', '--', path.basename(source)])).ok) continue;
+      patterns.push(`/${rel.replace(/[\\*?[]/g, '\\$&').replace(/ $/, '\\ ')}`);
+    }
+    if (patterns.length === 0) return;
+    const file = path.resolve(entry.worktree, (await this.git(entry.worktree, ['rev-parse', '--git-path', 'info/exclude'])).trim());
+    const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    const have = new Set(current.split(/\r?\n/));
+    const missing = [...new Set(patterns)].filter((line) => !have.has(line));
+    if (missing.length === 0) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const separator = current === '' || current.endsWith('\n') ? '' : '\n';
+    fs.appendFileSync(file, `${separator}${missing.join('\n')}\n`);
   }
 
   private async commitWorktree(repo: IsolationRepo, entry: Pick<IsolationTaskRepo, 'worktree' | 'linked'>, message: string, opts: { rescue?: boolean } = {}): Promise<void> {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import { fakeFileSystem } from '../../testing';
@@ -100,6 +100,40 @@ describe('each provider by its dialect', () => {
 
     expect(path).toMatch(/\/responses$/);
     expect(body.reasoning).toMatchObject({ effort: 'low' });
+  });
+});
+
+describe('the planner\'s transport', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A fetch that records the request and refuses it, so nothing streams and nothing retries. */
+  function recording(): { fetch: typeof globalThis.fetch; sent: string[] } {
+    const sent: string[] = [];
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      sent.push(`${url} ${String(init?.body)}`);
+      return new Response(JSON.stringify({ error: { message: 'refused for the test' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+    };
+    return { fetch, sent };
+  }
+
+  const request = plannerRequest(conversation, { model: 'anthropic/claude-sonnet-5-5', tools: [tool], maxOutputTokens: 4000 });
+
+  it('hands a chat-completions planner request to an injected fetch', async () => {
+    const { fetch, sent } = recording();
+    const clients = new PlannerClients((options) => createModelClient({ ...options, fetch }));
+    await expect(streamReply(clients.get('openrouter', 'key', 'http://127.0.0.1:9/v1'), request, undefined)).rejects.toThrow();
+    expect(sent).toEqual([expect.stringMatching(/^http:\/\/127\.0\.0\.1:9\/v1\/chat\/completions .*add a cache/s)]);
+  });
+
+  it('reaches a chat-completions provider through the global fetch by default, so a proxy set for it applies', async () => {
+    const { fetch, sent } = recording();
+    vi.stubGlobal('fetch', fetch);
+    const clients = new PlannerClients();
+    // A closed loopback port, and a deadline: another transport is refused there and retried, offline.
+    const call = streamReply(clients.get('openrouter', 'key', 'http://127.0.0.1:9/v1'), request, AbortSignal.timeout(3000));
+    await expect(call).rejects.toThrow();
+    expect(sent).toEqual([expect.stringMatching(/^http:\/\/127\.0\.0\.1:9\/v1\/chat\/completions .*add a cache/s)]);
   });
 });
 

@@ -85,7 +85,10 @@ export function createChatCompletionsClient(options: AdapterOptions): ModelClien
     apiKey: options.apiKey || KEYLESS_PLACEHOLDER,
     baseURL: options.baseUrl,
     maxRetries: 0,
-    ...(options.fetch ? { fetch: options.fetch } : {}),
+    // Left unset, the v4 SDK falls back on its bundled node-fetch, which no
+    // proxy variable (HTTPS_PROXY, NODE_USE_ENV_PROXY) reaches: the global fetch
+    // the built-in runner uses does, and a proxied host resolves no provider without it.
+    fetch: options.fetch ?? globalThis.fetch,
   });
   // A model that refused an effort once is sent none again, for this client's life.
   const refusesEffort = new Set<string>();
