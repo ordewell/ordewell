@@ -22,12 +22,13 @@ export interface ComposerTip {
 }
 
 export const COMPOSER_TIPS: readonly ComposerTip[] = [
-  // The per-runner model allowlist (ADR-0003) is the easiest command to miss.
-  { command: 'allowlist', weight: 3, text: 'Tip: Use /allowlist to limit which models the planner assigns per runner.' },
   // A key is the way to the built-in runner (ADR-0070), so it is worth saying
   // until one is set, and noise after. Only a surface that says none is set
   // shows it: one that does not know offers nothing it might already have.
+  // First, so it is the first tip someone with no key sees.
   { command: 'key-set', weight: 3, text: 'Tip: Add an API key with /key-set to run tasks on the built-in runner.', when: (context) => context.providerKeySet === false },
+  // The per-runner model allowlist (ADR-0003) is the easiest command to miss.
+  { command: 'allowlist', weight: 3, text: 'Tip: Use /allowlist to limit which models the planner assigns per runner.' },
   { command: 'planner', weight: 1, text: "Tip: Use /planner to pick the planner's harness, model and effort." },
   { command: 'runners', weight: 1, text: 'Tip: Use /runners to turn runners on or off.' },
   { command: 'settings', weight: 1, text: 'Tip: Use /settings for autonomy, supervisor, merging, autorun and more.' },

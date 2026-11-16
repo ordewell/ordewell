@@ -63,7 +63,7 @@ describe('the first screen while the coding agents are detected', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add API key' }));
 
     expect(api.postMessage).toHaveBeenCalledTimes(1);
-    expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key' }));
+    expect(api.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key-set' }));
   });
 
   it('a configured key is enough to plan while the agents are still detected', () => {

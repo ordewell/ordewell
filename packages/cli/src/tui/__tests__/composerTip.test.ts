@@ -98,8 +98,8 @@ describe('the key tip, while no provider is configured (ADR-0070)', () => {
   const cycle = (over: Partial<TuiState>): string[] =>
     Array.from({ length: 10 }, (_, seq) => composerText(at(80, { ...over, composerTipSeq: seq })));
 
-  it('comes round once the catalog says no provider has a key', () => {
-    expect(composerText(at(80, { providersKnown: true, composerTipSeq: 1 }))).toBe(`❯   ${KEY_TIP}`);
+  it('is the first tip once the catalog says no provider has a key', () => {
+    expect(composerText(at(80, { providersKnown: true, composerTipSeq: 0 }))).toBe(`❯   ${KEY_TIP}`);
   });
 
   it('never shows once a provider is configured, nor before the catalog has said', () => {

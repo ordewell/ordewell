@@ -1,6 +1,7 @@
 import { executionSummary, type ExecutionSummary, type RunView, type SessionMessage } from '../services/SessionMessage';
 import { walkPlan } from '../services/PlanTree';
 import { isTaskRunning } from '../taskRow/status';
+import { providerRunnerLabel } from '../services/providerRunners';
 
 /**
  * The built-in runners by the names people know them by. Kept here rather than
@@ -17,7 +18,8 @@ const RUNNER_NAMES: Readonly<Record<string, string>> = {
 export function taskStartedNotice(title: string, runner?: string): string {
   if (!runner) return `Started "${title}"`;
   // A runner Ordewell does not ship keeps its id: that is the only name it has.
-  return `Started "${title}" · ${Object.hasOwn(RUNNER_NAMES, runner) ? RUNNER_NAMES[runner] : runner}`;
+  const name = Object.hasOwn(RUNNER_NAMES, runner) ? RUNNER_NAMES[runner] : providerRunnerLabel(runner) ?? runner;
+  return `Started "${title}" · ${name}`;
 }
 
 /** What a surface says differently from the others about the line a run message earns. */
