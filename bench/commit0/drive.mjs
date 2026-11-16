@@ -451,7 +451,7 @@ async function dryArm(lib, sb, arm) {
     const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
     const verdict = L.judgePlan(plan);
     check(lib.name, 'arm A session', Boolean(sessionId) && verdict.ok, sessionId
-      ? [`session ${sessionId}: ${plan?.tasks?.length ?? 0} task on ${plan?.tasks?.[0]?.assignedRunner} with ${plan?.tasks?.[0]?.assignedModel?.modelId}, plan ${plan?.status}`, ...verdict.failures]
+      ? [`session ${sessionId}: ${plan?.tasks?.length ?? 0} task on ${plan?.tasks?.[0]?.assignedRunner} with ${plan?.tasks?.[0]?.assignedModel?.modelId} in mode ${plan?.tasks?.[0]?.taskMode}, plan ${plan?.status}`, ...verdict.failures]
       : 'core could not save the session');
     if (sessionId) {
       // Starts the daemon in the box and reads the plan through it; status calls no model.
@@ -493,15 +493,17 @@ async function settledKeySpent() {
   return last;
 }
 
-async function transcriptSpend(sb) {
+async function transcriptSummary(sb) {
   const r = await inBox(sb, ['sh', '-c', `cat ${BOX_HOME}/.ordewell/runners/ordewell/sessions/*/transcript.jsonl 2>/dev/null || true`]);
-  return L.summarizeTranscript(r.stdout).spendUsd;
+  return L.summarizeTranscript(r.stdout);
 }
 
 /**
  * The arm for real, under its caps. Ordewell holds no spend cap of its own,
  * so a watchdog reads the key every poll and stops the run once either cap
  * is met; a stop lands between polls, so set the key's own limit to the cap too.
+ * It also stops a run that makes no model call for L.NO_START_MS, counting
+ * only the calls since the run began, so B's planner turn is not one.
  */
 async function realArm(lib, sb, arm, runDir) {
   must(await writeSettings(sb), 'settings');
@@ -511,18 +513,26 @@ async function realArm(lib, sb, arm, runDir) {
   let sessionId = null;
   let current = null;
   let stopped = null;
+  let run = null;
   const watchdog = setInterval(async () => {
     if (stopped) return;
     const now = await keySpent();
+    const transcripts = await transcriptSummary(sb);
     const decision = L.capDecision({
       elapsedMs: Date.now() - started,
       keySpentUsd: now !== null && before !== null ? now - before : null,
-      transcriptSpentUsd: await transcriptSpend(sb),
+      transcriptSpentUsd: transcripts.spendUsd,
       capUsd: arm.capUsd,
     });
-    if (!decision.stop) return;
-    stopped = { why: decision.why, atMs: Date.now() - started, spentUsd: decision.spentUsd };
-    log.write(`\n[commit0] cap met (${decision.why}, $${decision.spentUsd}): stopping\n`);
+    if (decision.stop) {
+      stopped = { why: decision.why, atMs: Date.now() - started, spentUsd: decision.spentUsd };
+      log.write(`\n[commit0] cap met (${decision.why}, $${decision.spentUsd}): stopping\n`);
+    } else if (run) {
+      const stuck = L.startDecision({ sinceRunMs: Date.now() - run.startedAt, usageLines: transcripts.usageLines - run.usageLines, plan: await readPlan(lib, sb, sessionId) });
+      if (!stuck.stop || stopped) return;
+      stopped = { why: stuck.why, atMs: Date.now() - started, spentUsd: decision.spentUsd, detail: stuck.detail };
+      log.write(`\n[commit0] ${stuck.detail}: stopping\n`);
+    } else return;
     if (sessionId) await inBox(sb, ['ordewell', 'stop', '--session-id', sessionId, '--workspace', lib.workdir], { timeoutMs: 60_000 });
     setTimeout(async () => {
       if (!current) return;
@@ -551,9 +561,11 @@ async function realArm(lib, sb, arm, runDir) {
     const planCheck = L.judgePlan(plan);
     steps.planCheck = planCheck;
     fs.writeFileSync(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2));
-    must(check(lib.name, `arm ${arm.id} plan`, planCheck.ok, planCheck.ok ? `${plan.tasks.length} tasks, all on ordewell with ${L.MODEL_ID}` : planCheck.failures), 'the plan breaks the protocol');
+    must(check(lib.name, `arm ${arm.id} plan`, planCheck.ok, planCheck.ok ? `${plan.tasks.length} tasks, all on ordewell with ${L.MODEL_ID}, in ${[...new Set(plan.tasks.map((t) => t.taskMode))].join(', ')}` : planCheck.failures), 'the plan breaks the protocol');
+    if (!stopped) run = { startedAt: Date.now(), usageLines: (await transcriptSummary(sb)).usageLines };
     if (!stopped) steps.run = await step(['ordewell', 'run', '--session-id', sessionId, '--workspace', lib.workdir], Math.max(1, L.WALL_CAP_MS - (Date.now() - started)));
-    steps.merge = await step(['ordewell', 'merge', '--session-id', sessionId, '--yes', '--workspace', lib.workdir], MERGE_TIMEOUT_MS);
+    // A run that never started has nothing to merge, and its result is the failure, not a score.
+    if (stopped?.why !== 'no-start') steps.merge = await step(['ordewell', 'merge', '--session-id', sessionId, '--yes', '--workspace', lib.workdir], MERGE_TIMEOUT_MS);
   } finally {
     clearInterval(watchdog);
     log.end();
@@ -625,6 +637,10 @@ async function runOne(lib, arm, ordewell, runsDir) {
       for (const a of [arm]) await dryArm(lib, sb, a);
     } else {
       record.arm = await realArm(lib, sb, arm, runDir);
+      if (record.arm.stopped?.why === 'no-start') {
+        check(lib.name, `arm ${arm.id} run started`, false, record.arm.stopped.detail);
+        throw new Abort(`the run never started: ${record.arm.stopped.detail}`);
+      }
       record.testsModified = await restoreTests(lib, sb);
       const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
       record.tests = { ...evaluated, collected: record.network.collected };

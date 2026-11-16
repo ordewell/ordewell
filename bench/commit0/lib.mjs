@@ -39,6 +39,22 @@ export const ARMS = Object.freeze({
  */
 export const STEP_LIMIT = 1000;
 
+/**
+ * The built-in runner's modes (core's ordewell.manifest.ts). A task in any
+ * other mode, such as createTask's default 'build', is held at start as one
+ * the runner cannot take, so the run spends nothing until the wall-clock cap.
+ */
+export const RUNNER_MODES = Object.freeze(['full', 'guarded', 'read-only']);
+/** Arm A's one task runs in the autonomous mode, the one ModeResolver gives B's planned tasks under autonomousMode. */
+export const ARM_A_MODE = 'full';
+
+/**
+ * How long `ordewell run` may go without one model call before the watchdog
+ * calls it stuck: a started attempt calls the model within seconds, so this
+ * is many times the slowest first reply, and far short of the wall-clock cap.
+ */
+export const NO_START_MS = 10 * 60 * 1000;
+
 /** The one host a run may reach; a CONNECT to any other is refused at the gateway. */
 export const EGRESS_ALLOW = Object.freeze(['openrouter.ai']);
 
@@ -512,6 +528,7 @@ const task = core.createTask({
   prompt: goal,
   assignedRunner: 'ordewell',
   assignedModel: { modelId, modelLabel },
+  taskMode: '${ARM_A_MODE}',
 });
 const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approved', runners: ['ordewell'], lastUpdated: now }, goal, workspace);
 process.stdout.write(meta.id);
@@ -601,8 +618,9 @@ export function combineTranscripts(summaries) {
 }
 
 /**
- * Whether the plan B's planner wrote may run: every AI task on the built-in
- * runner and the protocol's model, since the comparison holds both fixed.
+ * Whether a plan may run: every AI task on the built-in runner and the
+ * protocol's model, since the comparison holds both fixed, and in a mode that
+ * runner has, since it cannot start a task in any other.
  */
 export function judgePlan(plan) {
   const failures = [];
@@ -611,6 +629,7 @@ export function judgePlan(plan) {
       if ((t.type ?? 'ai') === 'ai') {
         if (t.assignedRunner !== 'ordewell') failures.push(`task "${t.title}" runs on ${t.assignedRunner}, not ordewell`);
         if (t.assignedModel?.modelId !== MODEL_ID) failures.push(`task "${t.title}" runs ${t.assignedModel?.modelId ?? 'no model'}, not ${MODEL_ID}`);
+        if (!RUNNER_MODES.includes(t.taskMode)) failures.push(`task "${t.title}" is in mode ${t.taskMode ?? 'none'}, which the ordewell runner does not have (${RUNNER_MODES.join(', ')})`);
       }
       walk(t.subtasks);
     }
@@ -630,6 +649,28 @@ export function capDecision({ elapsedMs, keySpentUsd, transcriptSpentUsd, capUsd
   if (spent >= capUsd) return { stop: true, why: 'spend', spentUsd: round6(spent) };
   if (elapsedMs >= wallCapMs) return { stop: true, why: 'wall-clock', spentUsd: round6(spent) };
   return { stop: false, why: null, spentUsd: round6(spent) };
+}
+
+/**
+ * Whether `ordewell run` is stuck before its first model call: NO_START_MS
+ * into the run with no usage line in any runner transcript. That is a task
+ * held at start (a mode or model the runner refuses) or never scheduled, and
+ * polling on would only reach the wall-clock cap with nothing spent.
+ */
+export function startDecision({ sinceRunMs, usageLines, plan, boundMs = NO_START_MS }) {
+  if (sinceRunMs < boundMs || usageLines > 0) return { stop: false, why: null, detail: null };
+  const waiting = [];
+  const walk = (tasks) => {
+    for (const t of tasks ?? []) {
+      if ((t.type ?? 'ai') === 'ai' && t.status !== 'completed' && t.status !== 'skipped') {
+        waiting.push(`"${t.title}" ${t.status ?? 'pending'}${t.attempted ? '' : ', no attempt'}${t.taskMode ? `, mode ${t.taskMode}` : ''}`);
+      }
+      walk(t.subtasks);
+    }
+  };
+  walk(plan?.tasks);
+  const minutes = Math.round(boundMs / 60_000);
+  return { stop: true, why: 'no-start', detail: `no model call ${minutes} min into the run; ${waiting.length ? `waiting: ${waiting.join('; ')}` : 'the plan could not be read or holds no open AI task'}` };
 }
 
 /** One library's result for one arm, with every field the comparison reports. */
