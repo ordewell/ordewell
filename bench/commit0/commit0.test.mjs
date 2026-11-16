@@ -192,6 +192,30 @@ test('flattenScript and the leak probe on a real repository', { skip: !(hasGit &
   }
 });
 
+// wentingzhao/sphinx:v0 keeps uv's editable build of the stubs at
+// /root/.cache/uv/sdists-v4/editable/<hash>/<dir>/sphinx-8.1.0-py3-none-any.whl:
+// six entries, a .pth and the dist-info, no module. dnspython:v0's has the same shape.
+test('the leak probe passes uv\'s source-free editable wheel and flags one that carries the modules', { skip: !(hasPython && process.platform !== 'win32') && 'needs python3' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+  try {
+    const editable = (name) => path.join(dir, 'root', '.cache', 'uv', 'sdists-v4', 'editable', 'a005330d8cf01d63', name, 'tinylib-1.0-py3-none-any.whl');
+    const wheel = (file, entries) => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      execFileSync('python3', ['-I', '-c', 'import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], "w") as z:\n    for n in sys.argv[2:]: z.writestr(n, "x")', file, ...entries]);
+    };
+    const metadataOnly = editable('WxPEn39bGyV-DryTz_dg9');
+    wheel(metadataOnly, ['tinylib.pth', ...['entry_points.txt', 'LICENSE.rst', 'WHEEL', 'METADATA', 'RECORD'].map((n) => `tinylib-1.0.dist-info/${n}`)]);
+    const withSource = editable('HYyzHJmJ7LCTKp_cKXSsX');
+    wheel(withSource, ['tinylib/__init__.py', 'tinylib/core.py', 'tinylib-1.0.dist-info/RECORD']);
+    const workdir = path.join(dir, 'testbed');
+    fs.mkdirSync(workdir);
+    const out = execFileSync('python3', ['-c', L.LEAK_PROBE_PY, workdir, 'tinylib', 'tinylib', '-', dir], { cwd: '/', encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(out.trim().split('\n').pop()).archives, [withSource]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Task #203: the bootstrap links the image's .venv into the task worktree, the
 // agent's own `git add -A` committed the link, and the merge turned
 // /testbed/.venv into a link to itself, so the eval could not start.
