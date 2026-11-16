@@ -257,6 +257,29 @@ describe.skipIf(!hasGit)('WorktreeIsolation bootstrap', () => {
     expect(lstatSync(join(cwd, '.env.example')).isSymbolicLink()).toBe(false);
   });
 
+  // `.venv/` matches a directory, never the link standing in for one, so a
+  // task's own `git add -A` would commit a link into the main tree.
+  it('keeps the links it made out of a commit the task makes itself', async () => {
+    const root = repoWithLocalState();
+    const before = git(root, 'status', '--porcelain');
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(root);
+    const { cwd, branch } = await iso.prepare(task(1, 'Commits on its own'), run);
+    writeFileSync(join(cwd, 'work.txt'), 'done\n');
+
+    git(cwd, 'add', '-A');
+    git(cwd, 'commit', '-q', '-m', 'work');
+
+    const committed = git(root, 'ls-tree', '-r', '--name-only', branch).split('\n');
+    expect(committed).toContain('work.txt');
+    // The ones the main checkout ignores; its untracked `.envrc` is the user's to commit or not.
+    for (const name of ['.venv', '.claude', '.env', 'node_modules']) {
+      expect(committed.filter((file) => file === name || file.startsWith(`${name}/`)), name).toEqual([]);
+    }
+    // Nothing the user had untracked is hidden from them.
+    expect(git(root, 'status', '--porcelain')).toBe(before);
+  });
+
   it('leaves what a link leads to when it removes the worktree of a workspace below the repository top', async () => {
     const root = repo({ 'sub/file.txt': 'x\n', 'sub/.gitignore': '.claude/\n' });
     const workspace = join(root, 'sub');
