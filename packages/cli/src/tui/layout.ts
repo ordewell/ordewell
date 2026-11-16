@@ -977,7 +977,7 @@ function isolationPreviewLines(state: TuiState, cols: number): string[] {
 /**
  * One red alarm per signed-out agent, the active planner first so the row under
  * the workspace names what fixes the plan at hand. Each names its runner's
- * `/login <id>` or `/key`, since a named login leaves the planner alone.
+ * `/login <id>` or `/key-set`, since a named login leaves the planner alone.
  */
 function signedOutPlannerLines(state: TuiState, cols: number): string[] {
   if (!state.plannerKnown || !state.runnersKnown) return [];
@@ -1050,7 +1050,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? []
     : [
       ...wrap(
-        style.yellow(`Install a coding agent (${plannerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key and choose your provider.`),
+        style.yellow(`Install a coding agent (${plannerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key-set and choose your provider.`),
         Math.max(1, cols - 1),
       ),
       '',

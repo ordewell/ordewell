@@ -157,7 +157,9 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     return state.runners.map((runner) => {
       const unavailable = runner.usable === false;
       const way = runnerSignInLine(runner);
-      const detail = unavailable ? runner.reason : way;
+      // A provider runner shares its name with the API planner (ADR-0070), so
+      // the row says it is the built-in runner, not a coding agent.
+      const detail = unavailable ? runner.reason : way ?? (runner.provider ? 'built-in runner, on its API key' : undefined);
       return {
         id: runner.id,
         label: runner.name,
@@ -278,7 +280,7 @@ export function plannerItems(state: TuiState): PickerItem[] {
   if (offered.length === 0) {
     return [
       ...unusable,
-      { id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key`, disabled: true },
+      { id: '', label: 'No planner available', detail: `install a coding agent (${plannerNamesOr()}) or add a key with /key-set`, disabled: true },
     ];
   }
   const items: PickerItem[] = offered.map((entry) => {
@@ -300,6 +302,6 @@ export function plannerItems(state: TuiState): PickerItem[] {
     ...unusable,
     ...(offered.some((entry) => entry.kind === 'vendor')
       ? []
-      : [{ id: '', label: 'No API providers configured', detail: 'add a key with /key', disabled: true }]),
+      : [{ id: '', label: 'No API providers configured', detail: 'add a key with /key-set', disabled: true }]),
   ];
 }

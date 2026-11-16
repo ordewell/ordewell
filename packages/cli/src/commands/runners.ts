@@ -13,7 +13,9 @@ export async function handleRunners(subArgs: string[], injectedApi?: ApiClient):
     const state = await api.getRunners();
     console.log('\nRunners\n');
     for (const r of state.runners) {
-      console.log(`  ${r.enabled ? '✓' : ' '} ${r.id.padEnd(14)} ${r.name}${r.enabled ? '' : '  (disabled)'}`);
+      // A provider runner shares its name with the API planner (ADR-0070), so the row says it is the built-in runner.
+      const kind = r.provider ? '  (built-in runner, on its API key)' : '';
+      console.log(`  ${r.enabled ? '✓' : ' '} ${r.id.padEnd(14)} ${r.name}${kind}${r.enabled ? '' : '  (disabled)'}`);
       const way = describeRunnerSignIn(r.auth, HEADLESS_CLI_SIGN_IN);
       if (way) console.log(`      ${way}`);
     }

@@ -27,7 +27,7 @@ export function fail(...lines: string[]): never {
 /**
  * A failed turn's terminal-UI guidance said in the shell's own commands. The
  * daemon cannot know which surface is asking, so it words a signed-out agent
- * with `/login` and `/key`; a shell has neither, so the hint is said again
+ * with `/login` and `/key-set`; a shell has neither, so the hint is said again
  * in the shell's own commands (ADR-0052).
  */
 export function headlessSignedOut(message: string): string {

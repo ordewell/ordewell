@@ -169,6 +169,7 @@ export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAd
 export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskRunnerConfig, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter, runnerPlans } from './services/harness/connectors';
 export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, configuredProviderRunners } from './services/providerRunners';
+export { setHostCredentials, withHostCredentials, type HostCredentialReader } from './services/hostCredentials';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';
 export { ClaudeCodeAdapter } from './services/harness/ClaudeCodeAdapter';

@@ -53,6 +53,26 @@ describe('ordewell.toggleRunner', () => {
     expect(settingsService.updateEnabledRunners.mock.results[0]!.value).toEqual(['opencode']);
   });
 
+  it('offers the coding agents and the provider runners of the providers configured, and no other', async () => {
+    registerCommand.mockClear();
+    const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
+    showQuickPick.mockReset();
+    showQuickPick.mockResolvedValue(undefined);
+    const config = { enabledRunners: ['claude-code', 'openrouter'], configuredProviders: ['openrouter'] };
+    registerCommands({ subscriptions: [] } as unknown as vscode.ExtensionContext, {
+      settingsService: { updateEnabledRunners: vi.fn() }, config, sendRunnerAndModels: vi.fn(), runnerRegistry: new RunnerRegistry(),
+    } as unknown as CommandDeps);
+    const toggle = registerCommand.mock.calls.find(([id]) => id === 'ordewell.toggleRunner')![1] as (runner?: string) => Promise<void>;
+
+    await toggle();
+
+    const labels = (showQuickPick.mock.calls[0]![0] as { label: string }[]).map((item) => item.label);
+    expect(labels).toContain('Claude Code: ON');
+    expect(labels).toContain('Codex: OFF');
+    expect(labels).toContain('OpenRouter: ON');
+    expect(labels.filter((label) => /^(Anthropic|Google Gemini|OpenAI):/.test(label))).toEqual([]);
+  });
+
   it('waits for the installed-planner probe before pinning defaults', async () => {
     let answer!: (usable: boolean) => void;
     const probe = new Promise<{ usable: boolean }>((resolve) => { answer = (usable) => resolve({ usable }); });

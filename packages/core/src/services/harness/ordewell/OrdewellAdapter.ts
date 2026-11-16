@@ -5,6 +5,7 @@ import type { AttachState } from '../ordewellBinding';
 import { SessionNotResumable } from '../ordewellBinding';
 import { HeldSecrets } from '../../HeldSecrets';
 import { VENDORS } from '../../apiProviders';
+import { withHostCredentials } from '../../hostCredentials';
 import { createModelClient, DEFAULT_STREAM_TIMEOUTS, withRetry } from '../../model';
 import type { EffortLevel, ModelClient, RetryPolicy, StreamTimeouts } from '../../model';
 import type { ApprovalDecision } from '../../../interfaces/IApproval';
@@ -113,7 +114,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     if (parsed.provider !== this.provider) {
       throw new Error(`The ${label} runner runs only ${this.provider}:<model> models, not "${opts.model}": assign the task to the ${VENDORS[parsed.provider].label} runner instead.`);
     }
-    const env: NodeJS.ProcessEnv = { ...process.env, ...(await this.deps.workspaceEnv?.(opts.cwd)) };
+    // With what the host holds for the runner over it, as its listing read it, so a runner that is listed can start.
+    const env: NodeJS.ProcessEnv = withHostCredentials({ ...process.env, ...(await this.deps.workspaceEnv?.(opts.cwd)) });
     const credentials = providerCredentials(env, this.provider);
     if (!credentials) {
       const missing = this.provider === 'openai_compatible'

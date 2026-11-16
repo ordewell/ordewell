@@ -104,6 +104,37 @@ describe('/login', () => {
   });
 });
 
+describe('/key-set', () => {
+  it('opens the key wizard on the provider named, or on the provider list', async () => {
+    const runApiKeyWizard = vi.fn(async () => {});
+    await handleSlashCommand('/key-set anthropic', makeDeps({ runApiKeyWizard }));
+    expect(runApiKeyWizard).toHaveBeenLastCalledWith('anthropic');
+    await handleSlashCommand('/key-set', makeDeps({ runApiKeyWizard }));
+    expect(runApiKeyWizard).toHaveBeenLastCalledWith(undefined);
+  });
+
+  // The table resolves the old name to this one, so its `set` arrives with it.
+  it('still answers the old /key and /key set <provider>', async () => {
+    const runApiKeyWizard = vi.fn(async () => {});
+    expect(isKnownSlashCommand('/key')).toBe(true);
+    await handleSlashCommand('/key set openrouter', makeDeps({ runApiKeyWizard }));
+    expect(runApiKeyWizard).toHaveBeenLastCalledWith('openrouter');
+    await handleSlashCommand('/key google', makeDeps({ runApiKeyWizard }));
+    expect(runApiKeyWizard).toHaveBeenLastCalledWith('google');
+    await handleSlashCommand('/key', makeDeps({ runApiKeyWizard }));
+    expect(runApiKeyWizard).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('refuses a provider it does not know, rather than asking for a key nothing reads', async () => {
+    const runApiKeyWizard = vi.fn(async () => {});
+    const warning = window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
+    warning.mockClear();
+    await handleSlashCommand('/key-set nope', makeDeps({ runApiKeyWizard }));
+    expect(runApiKeyWizard).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith('Unknown provider: nope. Run /key-set with no argument to pick one.');
+  });
+});
+
 describe('isKnownSlashCommand', () => {  it('recognizes every extension slash command regardless of case', () => {
     expect(isKnownSlashCommand('/PLANNER')).toBe(true);
     expect(isKnownSlashCommand('/refresh')).toBe(true);
@@ -174,7 +205,7 @@ describe('conversation-editing slash commands', () => {
     await handleSlashCommand('/help', makeDeps());
     const text = info.mock.calls[0][0] as string;
     const lines = text.split('\n');
-    for (const command of ['/refresh', '/planner', '/login', '/key', '/sessions', '/allowlist', '/help', '/new', '/fork', '/rewind', '/compact', '/settings']) {
+    for (const command of ['/refresh', '/planner', '/login', '/key-set', '/sessions', '/allowlist', '/help', '/new', '/fork', '/rewind', '/compact', '/settings']) {
       expect(isKnownSlashCommand(command)).toBe(true);
       expect(lines.some((line) => line.startsWith(command))).toBe(true);
     }

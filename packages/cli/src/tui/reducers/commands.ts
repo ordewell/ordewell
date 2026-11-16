@@ -69,7 +69,7 @@ function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
 
     case 'planner':
       return setPlanner(state, args);
-    case 'key':
+    case 'key-set':
       return setKey(state, args);
     case 'allowlist':
       return allowlist(state, args);
@@ -278,19 +278,20 @@ function setPlanner(state: TuiState, args: string[]): Step {
   return { ...opened, effects: [...opened.effects, { type: 'loadModels' }] };
 }
 
+/**
+ * `/key-set <provider> <key>` stores the key, `/key-set <provider>` asks for
+ * it and a bare `/key-set` lists every provider. A leading `set` is read past:
+ * the deprecated `/key` runs this too, and was spelt `/key set <provider>`.
+ */
 function setKey(state: TuiState, args: string[]): Step {
-  if (args[0] === 'set' && args[1]) {
-    const provider = args[1].toLowerCase();
+  const [named, ...key] = args[0]?.toLowerCase() === 'set' ? args.slice(1) : args;
+  if (named) {
+    const provider = named.toLowerCase();
     if (!isApiProvider(provider)) {
-      return fail(state, `Unknown provider: ${provider}. Run /key with no arguments to see the list.`);
+      return fail(state, `Unknown provider: ${provider}. Run /key-set with no arguments to see the list.`);
     }
-    if (!args[2]) {
-      return step({
-        ...state,
-        overlay: keyPrompt(provider),
-      });
-    }
-    return step(state, [{ type: 'setApiKey', provider, key: args.slice(2).join(' ') }]);
+    if (key.length === 0) return step({ ...state, overlay: keyPrompt(provider) });
+    return step(state, [{ type: 'setApiKey', provider, key: key.join(' ') }]);
   }
 
   const items: PickerItem[] = PROVIDER_PRIORITY.map((id) => ({
@@ -425,6 +426,11 @@ function login(state: TuiState, args: string[]): Step {
     // `state.runners` itself, so it always has a row.
     const label = getProviderMeta(state.plannerProvider)?.label ?? runner;
     return step(say(state, 'system', `${label} is not installed, so there is nothing to sign in. /runners lists what is.`));
+  }
+
+  // A provider runner is signed in by the key that lists it (ADR-0070), so the way to change it is the key.
+  if (row.provider) {
+    return step(say(state, 'system', `${row.name} runs on its API key and has no login: /key-set ${row.provider} replaces the key.`));
   }
 
   const command = row.auth?.loginCommand;

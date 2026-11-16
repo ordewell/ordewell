@@ -5,7 +5,7 @@ import {
   Session, LegacyPlanState, createEmptyPlan, Task, flattenTasks, flattenTasksWithParents,
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
-  SettingsService, installedPlannerDetected,
+  SettingsService, inProcessProvider, installedPlannerDetected,
   taskActionCommand, taskRowView, type ExecutionCommand, type TaskAction,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -155,7 +155,12 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       await installedPlannerDetected();
       let target = runnerArg;
       if (!target) {
-        const runners = deps.runnerRegistry.list();
+        // A provider runner exists only with its key (ADR-0070): one without has nothing to switch on.
+        const configured: readonly string[] = deps.config.configuredProviders;
+        const runners = deps.runnerRegistry.list().filter(({ manifest }) => {
+          const provider = inProcessProvider(manifest);
+          return !provider || configured.includes(provider);
+        });
         const enabled = deps.config.enabledRunners;
         const items = runners.map((r) => ({
           label: `${r.manifest.displayName}: ${enabled.includes(r.manifest.name) ? 'ON' : 'OFF'}`,

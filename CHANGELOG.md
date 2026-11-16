@@ -37,8 +37,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Changed
 
 - **`/key set` is now `/key-set`,** one word like `/task-model`. `/key` still
-  opens the key entry, which offers every provider Ordewell supports. The
-  headless `ordewell key set <provider> <key>` is unchanged.
+  opens the key entry, which offers every provider Ordewell supports, and in
+  the terminal says to use the new name. `/key-set <provider>` asks for that
+  provider's key. The headless `ordewell key set <provider> <key>` is
+  unchanged.
 - **The API planner's provider calls moved onto a new provider layer.**
   Anthropic uses the native Messages API, with prompt caching, and thinking
   when an effort is set. OpenAI uses the Responses API, with reasoning

@@ -203,7 +203,7 @@ describe('loginPlanner', () => {
 
   it.each([
     ['opencode', 'OpenCode has no login Ordewell can run. Run opencode auth login and choose a provider.'],
-    ['qwen-code', 'Qwen Code has no login Ordewell can run. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+    ['qwen-code', 'Qwen Code has no login Ordewell can run. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
   ])('names the other ways into %s where it has no login to run', async (runner, message) => {
     const h = harness({ verdict: () => ({ state: 'signed-out', signIn: runnerSignIn(runner)! }) });
 
@@ -212,6 +212,17 @@ describe('loginPlanner', () => {
     expect(h.createTerminal).not.toHaveBeenCalled();
     expect(h.deps.notifications.info).toHaveBeenCalledWith(message);
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner, ok: false, message });
+  });
+
+  it('points a provider runner at its key, the only sign-in it has, and opens no terminal', async () => {
+    const h = harness({ verdict: () => ({ state: 'signed-in' }) });
+
+    await loginPlanner(h.deps, 'openrouter');
+
+    const message = 'OpenRouter runs on its API key and has no login: /key-set openrouter replaces the key.';
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.deps.notifications.info).toHaveBeenCalledWith(message);
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'openrouter', ok: false, message });
   });
 
   it('tells a vendor planner there is no coding agent to sign in', async () => {

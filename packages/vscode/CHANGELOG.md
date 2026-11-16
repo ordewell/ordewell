@@ -4,20 +4,29 @@
 
 ### Added
 
-- **A built-in `ordewell` runner.** It runs a task inside the extension on a
-  provider key alone (OpenRouter, Anthropic, OpenAI, Gemini and the other
-  OpenAI-compatible providers), with no coding-agent CLI to install. It has
-  three modes: Full; Guarded, which asks before each shell command, where
-  "Allow for this task" grants a command prefix; and read-only. It resumes
-  with continue, takes messages between steps, can be interrupted, pauses on a
-  usage limit and compacts its context when it fills. `ordewellStreamTimeouts`
-  in the settings file sets how long a quiet stream is waited on.
+- **A built-in runner on every provider you have a key for.** It runs a task
+  inside the extension on a provider key alone (OpenRouter, Anthropic, OpenAI,
+  Gemini and the other providers Ordewell supports), with no coding-agent CLI
+  to install. Each provider with a key is a runner of its own, under the
+  provider's name ("OpenRouter"), and is enabled until you choose your
+  runners; a provider with no key is not listed, so there is nothing to sign
+  in to. A key entered with `/key-set` is read from VS Code's secret storage
+  and never put in the extension host's environment, so no coding agent or
+  other extension inherits it. It has three modes: Full; Guarded, which asks
+  before each shell command, where "Allow for this task" grants a command
+  prefix; and read-only. It resumes with continue, takes messages between
+  steps, can be interrupted, pauses on a usage limit and compacts its context
+  when it fills. `ordewellStreamTimeouts` in the settings file sets how long a
+  quiet stream is waited on.
 - **Model details from models.dev.** The context size, prices and capabilities
   of a model show for every provider, in the runner's model list and in the
   planner's model picker.
 
 ### Changed
 
+- **`/key` is now `/key-set`,** one word like the other surfaces' command.
+  `/key` and `/key set <provider>` still open the key entry, and a provider
+  Ordewell does not know is refused instead of opening the provider list.
 - **API planners call their provider differently.** Anthropic uses the native
   Messages API, with prompt caching, and thinking when an effort is set.
   OpenAI uses the Responses API, with reasoning effort. The planner effort

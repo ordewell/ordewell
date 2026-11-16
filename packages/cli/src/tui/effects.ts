@@ -577,6 +577,8 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // Deliberately reports the provider, never the key — this line is on screen.
       dispatch({ type: 'notice', message: `${meta.label} key saved to ${meta.apiKeyEnvVar}.` });
       await loadModels(deps);
+      // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
+      await loadRunners(deps);
       return;
     }
 

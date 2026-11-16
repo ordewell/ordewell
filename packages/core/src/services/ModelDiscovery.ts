@@ -8,6 +8,7 @@ import { inProcessProvider, runnerCommand, type RunnerManifest, type DiscoveryCo
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { expandRunnerHome } from '../utils/runnerHome';
+import { withHostCredentials } from './hostCredentials';
 import { discoverAppServerModels, type AppServerModel } from './harness/appServerModels';
 import { discoverAcpModels, type AcpModelsAnswer } from './harness/acpModels';
 import { discoverProviderModels } from './harness/ordewell/models';
@@ -589,12 +590,12 @@ export class ModelDiscovery {
     let signedOut: true | undefined;
     const discovery = manifest.modelDiscovery;
 
-    // An in-process runner (ADR-0070) offers its own provider's catalog. A
-    // listing that failed offers nothing this time, and is not cached behind a
-    // key that works on the next lookup.
+    // An in-process runner (ADR-0070) offers its own provider's catalog, on
+    // the key the host holds for it too. A listing that failed offers nothing
+    // this time, and is not cached behind a key that works on the next lookup.
     if (discovery.method === 'providers') {
       const provider = inProcessProvider(manifest);
-      const models = provider ? await discoverProviderModels(env, provider, this.fetchImpl) : [];
+      const models = provider ? await discoverProviderModels(withHostCredentials(env), provider, this.fetchImpl) : [];
       return { models, cacheable: models.length > 0 };
     }
 

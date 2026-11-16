@@ -319,7 +319,7 @@ describe('ordewell model', () => {
 
   it('says why a coding-agent planner lists no models, in the shell\'s own commands, instead of offering a refresh', async () => {
     // As the daemon words it, for the terminal UI.
-    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+    const reason = 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
     const d = await fakeDaemon({
       settings: { aiProvider: 'qwen-code' },
       models: { models: [], modelsByRunner: { 'qwen-code': [] }, providers: [], orchestratorModels: [], runnerErrors: { 'qwen-code': reason } },
@@ -553,6 +553,17 @@ describe('ordewell runners', () => {
     expect(stdout).toContain('claude-code    Claude Code\n');
     expect(stdout).toContain('copilot-cli    GitHub Copilot CLI\n      Run copilot login to sign in.\n');
     expect(stdout).not.toContain('Qwen Code is not signed in');
+    d.close();
+  });
+
+  it('lists a provider runner by its provider\'s name, as the built-in runner, with no way in under it', async () => {
+    const d = await fakeDaemon({ runners: { ...runners, runners: [
+      { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-in' } },
+      { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+    ] } });
+    const { handleRunners } = await import('../runners');
+    const { stdout } = await capture(() => handleRunners([], new ApiClient(d.port)));
+    expect(stdout).toContain('✓ openrouter     OpenRouter  (built-in runner, on its API key)\n');
     d.close();
   });
 

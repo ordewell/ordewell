@@ -9,6 +9,7 @@ import { containersOffered, rememberDelegationBudget } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 import { readLimitSetting } from './plannerReadLimit';
 import { configuredProviderRunners, replaceLegacyBuiltinRunner, splitLegacyBuiltinAllowlist } from './providerRunners';
+import { withHostCredentials } from './hostCredentials';
 
 export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings };
 
@@ -482,7 +483,7 @@ export class SettingsService {
     if (Array.isArray(raw.enabledRunners)) {
       // Enabling the built-in runner when it was one runner meant enabling it
       // on whatever key was set; that is every configured provider's runner now.
-      settings.enabledRunners = replaceLegacyBuiltinRunner(raw.enabledRunners.map(String), configuredProviderRunners(process.env));
+      settings.enabledRunners = replaceLegacyBuiltinRunner(raw.enabledRunners.map(String), configuredProviderRunners(withHostCredentials(process.env)));
     }
     if (typeof raw.autonomousMode === 'boolean') {
       settings.autonomousMode = raw.autonomousMode;
