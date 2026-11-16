@@ -3,7 +3,6 @@ import { execFileSync, type ChildProcess } from 'child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
-import { pathToFileURL } from 'url';
 import { createWorktreeIsolation } from '../GitWorktreeIsolation';
 import { LeaseHost } from '../sessionLease';
 import { RUN_SETTINGS_DEFAULTS } from '../SettingsService';
@@ -24,7 +23,9 @@ import { closeSessions, makeSession } from './sessionTestKit';
  * forced task_complete is what ends its attempt.
  */
 
-const START_MOCK = pathToFileURL(resolve(__dirname, '../../../../../bench/live/start-mock.mjs')).href;
+// A path, not a file URL: Vite loads a URL's `%20` literally, so a checkout
+// whose path holds a space could not find the file.
+const START_MOCK = resolve(__dirname, '../../../../../bench/live/start-mock.mjs');
 type StartMock = (extraArgs?: string[], options?: { timeoutMs?: number }) => Promise<{ port: number; child: ChildProcess }>;
 
 const env = () => {

@@ -6,7 +6,7 @@ import {
   ALL_PROVIDERS, CLI_PROVIDERS, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, isCliProvider, plannerBackendEntries, providerForRunner, runnerForProvider,
 } from '../../services/ProviderRegistry';
 import { ModelResolver } from '../../services/ModelResolver';
-import { supportsTaskMode, type RunnerConnector } from '../../services/harness/connectors';
+import { runnerPlans, supportsTaskMode, type RunnerConnector } from '../../services/harness/connectors';
 import { readUsageLimitReset } from '../../services/runnerExit';
 import { RunnerInstallation } from '../../services/RunnerInstallation';
 import { PROVIDER_PRIORITY, VENDORS } from '../../services/apiProviders';
@@ -109,6 +109,9 @@ describe('a built-in runner declared by manifest and connector only', () => {
 
   it('runs tasks without planning when its connector does not plan', () => {
     expect(supportsTaskMode('tasker')).toBe(true);
+    expect(runnerPlans('tasker')).toBe(false);
+    expect(runnerPlans('acme')).toBe(true);
+    expect(runnerPlans('no-such-runner')).toBe(false);
     expect(isCliProvider('tasker')).toBe(false);
     expect(CLI_PROVIDERS).not.toContain('tasker');
     expect(plannerBackendEntries({ tasker: { usable: true } }, []).some((e) => e.id === 'tasker')).toBe(false);
@@ -129,6 +132,8 @@ describe('a built-in runner with no command, declared by manifest and connector 
   it('is in the runner list, runs tasks and does not plan', () => {
     expect(new RunnerRegistry().list().map((entry) => entry.manifest.name)).toContain('inhouse');
     expect(supportsTaskMode('inhouse')).toBe(true);
+    expect(runnerPlans('inhouse')).toBe(false);
+    expect(runnerPlans('openrouter')).toBe(false);
     expect(isCliProvider('inhouse')).toBe(false);
     expect(plannerBackendEntries({ inhouse: { usable: true } }, []).some((e) => e.id === 'inhouse')).toBe(false);
   });
