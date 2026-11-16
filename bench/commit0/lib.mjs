@@ -98,7 +98,7 @@ export function validateLibrary(raw) {
     ...raw,
   };
   // Commit0's images install into a venv in the workdir that `docker exec` puts on no PATH: a bare `python` has no pytest.
-  if (lib.testCmd === undefined && typeof lib.workdir === 'string') lib.testCmd = `${lib.workdir.replace(/\/+$/, '')}/.venv/bin/python -m pytest`;
+  if (lib.testCmd === undefined && typeof lib.workdir === 'string') lib.testCmd = `${lib.workdir.replace(/\/+$/, '')}/${VENV_DIR}/bin/python -m pytest`;
   // The leak probe imports with the interpreter the tests run under, which a venv's PATH may decide.
   lib.python ??= lib.testCmd.trim().split(/\s+/)[0];
   const required = ['name', 'image', 'workdir', 'srcDir', 'testDir', 'testCmd', 'python', 'importName', 'distName', 'baseCommit', 'networkMarker'];
@@ -252,6 +252,54 @@ const urls = JSON.parse(process.argv[1]);
   process.stdout.write(JSON.stringify(out));
 })();
 `;
+
+// --- The venv ---------------------------------------------------------------
+
+/**
+ * The image's venv, relative to the workdir. Commit0 leaves it untracked and
+ * unignored, and core's worktree bootstrap links it into each task worktree,
+ * where an agent's own `git add -A` commits the link: merged back, it replaced
+ * the workspace's venv with a link to itself (task #203).
+ */
+export const VENV_DIR = '.venv';
+
+/**
+ * Ignores the venv in the box's workspace, through `info/exclude`, which every
+ * worktree of the repository shares: anchored and without a trailing slash, so
+ * it matches the bootstrap's link as well as the directory. The box's rule,
+ * not the product's: the repository under test is left as the dataset made it.
+ */
+export function workspaceIgnoreScript(lib) {
+  const q = shellQuote;
+  const rule = `/${VENV_DIR}`;
+  return [
+    'set -eu',
+    `cd ${q(lib.workdir)}`,
+    'exclude=$(git rev-parse --git-path info/exclude)',
+    'mkdir -p "$(dirname "$exclude")"',
+    `grep -qxF ${q(rule)} "$exclude" 2>/dev/null || printf '%s\\n' ${q(rule)} >> "$exclude"`,
+  ].join('\n');
+}
+
+/** The arm's diff from the flattened base, the venv and everything under it left out. */
+export function armPatchScript(lib) {
+  return `git diff ${shellQuote(lib.flatCommit)} -- . ${shellQuote(`:(exclude,literal)${VENV_DIR}`)}`;
+}
+
+/**
+ * Fails, saying why, unless the workspace's venv is still the image's: not a
+ * link and nothing of it tracked. Run before the eval, whose interpreter lives
+ * there; a venv the arm replaced is not a score.
+ */
+export function venvIntactScript(lib) {
+  const q = shellQuote;
+  const v = q(VENV_DIR);
+  return [
+    `cd ${q(lib.workdir)}`,
+    `if [ -L ${v} ]; then echo "${VENV_DIR} is a link to $(readlink ${v}), not the image's venv" >&2; exit 1; fi`,
+    `if [ -n "$(git ls-files -- ${v})" ]; then echo "HEAD tracks ${VENV_DIR}: the arm committed the venv" >&2; exit 1; fi`,
+  ].join('\n');
+}
 
 // --- The reference implementation -------------------------------------------
 
