@@ -153,7 +153,10 @@ OpenRouter account, since a request cannot pin it. Pass that provider as
 and arm, go to `<bench dir>/commit0/` (`dry-runs/`, `runs/`, `results.jsonl`),
 and so does the packed runtime (`runtime/<sha>`). A library's `testCmd` defaults
 to the venv Commit0's images install into, `<workdir>/.venv/bin/python -m pytest`,
-since `docker exec` puts it on no PATH. After an arm, the tests under
+since `docker exec` puts it on no PATH. The driver ignores `/.venv` in the
+workspace's `.git/info/exclude`, so an agent's own `git add -A` never commits the
+link core's worktree bootstrap makes to it; `arm.patch` leaves `.venv` out, and
+the eval refuses to run if the arm replaced or tracked it. After an arm, the tests under
 `testDir` (`test_*.py`, `conftest.py`, `tests/` and `unit_tests/`) are put back
 as the base had them, and nothing else there, since a `testDir` may lie inside
 the source. Its offline tests are

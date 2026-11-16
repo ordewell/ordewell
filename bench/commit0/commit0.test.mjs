@@ -192,6 +192,53 @@ test('flattenScript and the leak probe on a real repository', { skip: !(hasGit &
   }
 });
 
+// Task #203: the bootstrap links the image's .venv into the task worktree, the
+// agent's own `git add -A` committed the link, and the merge turned
+// /testbed/.venv into a link to itself, so the eval could not start.
+test('an arm that commits the .venv link brings it into neither the patch nor the eval', { skip: !(hasGit && process.platform !== 'win32') && 'needs git, sh and symlinks' }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-')));
+  const ws = path.join(dir, 'testbed');
+  const wt = path.join(dir, 'task');
+  try {
+    const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
+    fs.mkdirSync(path.join(ws, 'tinylib'), { recursive: true });
+    g(ws, 'init', '-q', '-b', 'commit0-base');
+    fs.writeFileSync(path.join(ws, 'tinylib', '__init__.py'), 'def f():\n    raise NotImplementedError\n');
+    g(ws, 'add', '-A'); g(ws, 'commit', '-qm', 'Commit0 base');
+    // The image's venv: untracked, and nothing in the repository ignores it.
+    fs.mkdirSync(path.join(ws, '.venv', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.venv', 'bin', 'python'), '#!/bin/sh\necho the image venv\n', { mode: 0o755 });
+    const l = lib({ workdir: ws, baseCommit: g(ws, 'rev-parse', 'HEAD') });
+    l.flatCommit = g(ws, 'rev-parse', 'HEAD');
+    execFileSync('sh', ['-c', L.workspaceIgnoreScript(l)], { encoding: 'utf8' });
+
+    g(ws, 'worktree', 'add', '-q', '-b', 'task', wt);
+    fs.symlinkSync(path.join(ws, '.venv'), path.join(wt, '.venv'));
+    fs.writeFileSync(path.join(wt, 'tinylib', '__init__.py'), 'def f():\n    return 1\n');
+    g(wt, 'add', '-A'); g(wt, 'commit', '-qm', 'the agent commits everything');
+    assert.deepEqual(g(wt, 'show', '--name-only', '--format=', 'HEAD').split('\n'), ['tinylib/__init__.py'], 'the agent\'s commit holds the link');
+    g(ws, 'merge', '-q', '--ff-only', 'task');
+
+    const patch = execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, encoding: 'utf8' });
+    assert.match(patch, /\+ {4}return 1/);
+    assert.doesNotMatch(patch, /\.venv/);
+    assert.equal(fs.lstatSync(path.join(ws, '.venv')).isSymbolicLink(), false, 'the workspace venv is the image\'s directory');
+    assert.equal(execFileSync(l.python, { encoding: 'utf8' }).trim(), 'the image venv', 'the eval command resolves the venv');
+    execFileSync('sh', ['-c', L.venvIntactScript(l)], { cwd: ws });
+
+    // One that forces the venv in anyway: out of the patch, and the eval refuses it.
+    g(ws, 'add', '-f', '.venv/bin/python'); g(ws, 'commit', '-qm', 'forced');
+    assert.doesNotMatch(execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, encoding: 'utf8' }), /\.venv/);
+    assert.throws(() => execFileSync('sh', ['-c', L.venvIntactScript(l)], { cwd: ws, stdio: 'pipe' }), /tracks \.venv/);
+    g(ws, 'rm', '-q', '--cached', '.venv/bin/python'); g(ws, 'commit', '-qm', 'unforced');
+    fs.rmSync(path.join(ws, '.venv'), { recursive: true });
+    fs.symlinkSync(path.join(ws, '.venv'), path.join(ws, '.venv'));
+    assert.throws(() => execFileSync('sh', ['-c', L.venvIntactScript(l)], { cwd: ws, stdio: 'pipe' }), /\.venv is a link/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('removeWrittenScript removes what was written after the marker, and nothing in .git', { skip: process.platform === 'win32' && 'POSIX find and sh' }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
   try {

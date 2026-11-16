@@ -369,6 +369,9 @@ async function prepareFixture(lib, sb) {
 async function flattenAndProbe(lib, sb) {
   const flat = await inBox(sb, ['sh', '-c', `${L.flattenScript(lib)}\ngit rev-parse HEAD`]);
   must(check(lib.name, 'flatten history', flat.code === 0, flat.code === 0 ? `one commit, the tree of ${lib.baseCommit.slice(0, 12)}, on commit0-base` : flat.stderr.trim()), 'flatten failed');
+  // Before any worktree exists: the rule is what keeps an agent's `git add -A` from committing the bootstrap's venv link.
+  const ignore = await inBox(sb, ['sh', '-c', L.workspaceIgnoreScript(lib)]);
+  must(check(lib.name, 'venv ignored', ignore.code === 0, ignore.code === 0 ? `/${L.VENV_DIR} in the workspace's info/exclude, so no arm commits the link to it` : ignore.stderr.trim()), 'the venv cannot be ignored');
   // `ordewell merge` lands on commit0-base, so the arm's diff and the restore are taken against this commit, not the branch.
   lib.flatCommit = flat.stdout.trim().split('\n').pop();
   const probe = await probeLeak(lib, sb);
@@ -642,10 +645,12 @@ async function runOne(lib, arm, ordewell, runsDir) {
         throw new Abort(`the run never started: ${record.arm.stopped.detail}`);
       }
       record.testsModified = await restoreTests(lib, sb);
+      await inBox(sb, ['sh', '-c', `${L.armPatchScript(lib)} > /tmp/arm.patch`], { workdir: lib.workdir });
+      await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
+      const venv = await inBox(sb, ['sh', '-c', L.venvIntactScript(lib)]);
+      must(check(lib.name, 'eval on the image\'s venv', venv.code === 0, venv.code === 0 ? `${L.VENV_DIR} is the image's directory, untracked` : venv.stderr.trim()), 'the arm replaced the venv: the eval cannot run');
       const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
       record.tests = { ...evaluated, collected: record.network.collected };
-      await inBox(sb, ['sh', '-c', `git diff ${lib.flatCommit} > /tmp/arm.patch`], { workdir: lib.workdir });
-      await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
     }
   } catch (err) {
     if (!(err instanceof Abort)) throw err;
