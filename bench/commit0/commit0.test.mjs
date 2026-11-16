@@ -312,8 +312,40 @@ test('summarizeTranscript: spend, peak context and compactions', () => {
   assert.deepEqual(both.models, [L.MODEL_ID]);
 });
 
+test('the runner modes are the built-in runner manifest\'s, and arm A takes its autonomous one', () => {
+  const manifest = fs.readFileSync(path.join(repo, 'packages', 'core', 'src', 'plugins', 'builtin', 'ordewell.manifest.ts'), 'utf8');
+  const ids = [...manifest.matchAll(/export const ORDEWELL_\w+_MODE = '([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual([...L.RUNNER_MODES].sort(), ids.sort());
+  assert.match(manifest, new RegExp(`id: ORDEWELL_FULL_MODE, [^\\n]*autonomous: true`));
+  assert.equal(L.ARM_A_MODE, 'full');
+  assert.match(L.ARM_A_PLAN_JS, /taskMode: 'full'/);
+});
+
+test('judgePlan fails a task in a mode the runner lacks, as createTask\'s default build', () => {
+  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: 'ordewell', assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
+  const build = L.judgePlan({ tasks: [t({ taskMode: 'build' })] });
+  assert.equal(build.ok, false);
+  assert.match(build.failures[0], /mode build, which the ordewell runner does not have/);
+  assert.match(L.judgePlan({ tasks: [t({ taskMode: undefined })] }).failures[0], /mode none/);
+  assert.equal(L.judgePlan({ tasks: [t({ subtasks: [t({ taskMode: 'build' })] })] }).ok, false);
+  for (const mode of L.RUNNER_MODES) assert.equal(L.judgePlan({ tasks: [t({ taskMode: mode })] }).ok, true, mode);
+});
+
+test('startDecision stops a run with no model call past the bound, and only then', () => {
+  assert.equal(L.NO_START_MS, 10 * 60 * 1000);
+  const plan = { tasks: [{ title: 'Implement', type: 'ai', status: 'pending', taskMode: 'build' }, { title: 'done', type: 'ai', status: 'completed', attempted: true }] };
+  assert.equal(L.startDecision({ sinceRunMs: L.NO_START_MS - 1, usageLines: 0, plan }).stop, false, 'inside the bound');
+  assert.equal(L.startDecision({ sinceRunMs: L.NO_START_MS * 5, usageLines: 1, plan }).stop, false, 'a model call means it started');
+  const stuck = L.startDecision({ sinceRunMs: L.NO_START_MS, usageLines: 0, plan });
+  assert.equal(stuck.stop, true);
+  assert.equal(stuck.why, 'no-start');
+  assert.match(stuck.detail, /no model call 10 min into the run; waiting: "Implement" pending, no attempt, mode build$/);
+  assert.match(L.startDecision({ sinceRunMs: L.NO_START_MS, usageLines: 0, plan: null }).detail, /could not be read/);
+  assert.equal(L.startDecision({ sinceRunMs: 60_000, usageLines: 0, plan, boundMs: 60_000 }).stop, true);
+});
+
 test('judgePlan holds every AI task, subtasks too, to the runner and the model', () => {
-  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: 'ordewell', assignedModel: { modelId: L.MODEL_ID }, ...o });
+  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: 'ordewell', assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
   assert.equal(L.judgePlan({ tasks: [t(), t({ type: 'script', assignedRunner: undefined, assignedModel: undefined })] }).ok, true);
   assert.equal(L.judgePlan({ tasks: [t({ subtasks: [t({ assignedRunner: 'claude' })] })] }).ok, false);
   assert.match(L.judgePlan({ tasks: [t({ assignedModel: { modelId: 'openrouter:x' } })] }).failures[0], /not openrouter:deepseek/);
