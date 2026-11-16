@@ -34,7 +34,7 @@ export default function GetStarted({ runnerNames, onConfigure, runSettings, isol
         No API key needed.
       </p>
       {/* Worded for every host: where a key is kept differs (VS Code's secret storage, the desktop's ~/.ordewell/.env). */}
-      <p className="get-started-alt">Or add a provider's API key instead: Ordewell plans on it, and runs tasks on its built-in runner.</p>
+      <p className="get-started-alt">Or add a provider's API key instead: Ordewell plans on it and, where the provider lists its models, runs tasks on its built-in runner.</p>
       <PlanApprovalNote runSettings={runSettings} />
       <IsolationNotice preview={isolationPreview} />
       <div className="get-started-actions">

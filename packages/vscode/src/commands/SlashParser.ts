@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { isApiProvider, listSessions, loadSession } from '@ordewell/core';
-import type { AiProvider, PlannerBackendId, RunnerRegistry, ModelResolver, SettingsService, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
+import type { AiProvider, PlannerBackendId, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
@@ -26,6 +26,8 @@ export interface SlashDeps {
   /** Hand the terminal to a runner's own login; omitted names the active planner. */
   loginPlanner(runner?: string): Promise<void>;
   runnerRegistry: { list(): { manifest: { displayName: string; name: string } }[] };
+  /** The install check the chat's runner pills offer by, which /allowlist offers by too. */
+  runnerInstallation: Pick<RunnerInstallation, 'filterInstalled'>;
   chatProvider: ChatViewProvider;
   settingsService: { getModelAllowlist(runner: string): string[] | undefined; setModelAllowlist(runner: string, ids: string[] | undefined): void; };
   sendRunnerAndModels(): Promise<void>;
@@ -147,6 +149,7 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
   if (cmd === '/allowlist') {
     await configureModelAllowlist(
       deps.runnerRegistry as unknown as RunnerRegistry,
+      deps.runnerInstallation,
       deps.modelResolver as unknown as ModelResolver,
       deps.settingsService as unknown as SettingsService,
       undefined,

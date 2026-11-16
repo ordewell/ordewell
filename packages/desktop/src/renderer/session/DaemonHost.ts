@@ -4,7 +4,8 @@ import type {
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, VENDORS, walkPlan,
+  DaemonRefusal, DELEGATION_OFFERED, isProviderRunner, loopRemovalRefusal, PROVIDER_RUNNER_IDS, providerRunnerLoginNote, ReconnectBackoff, rejoinPlanTree,
+  signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
@@ -179,6 +180,12 @@ function hasRunHistory(plan: SurfacePlan): boolean {
 
 function isFrame(value: unknown): value is DaemonFrame {
   return isRecord(value) && typeof value.type === 'string';
+}
+
+/** The provider runner `/login` names by its id or its label, in any case. */
+function providerRunnerNamed(named: string): AiProvider | undefined {
+  const wanted = named.toLowerCase();
+  return PROVIDER_RUNNER_IDS.find((id) => id === wanted || VENDORS[id].label.toLowerCase() === wanted);
 }
 
 /** The holder as a link to a gone one keeps it: the lease names who, and the version was never proved. */
@@ -410,13 +417,21 @@ export class DaemonHost {
 
   private async saveApiKey(answer: KeyEntryAnswer): Promise<void> {
     const meta = VENDORS[answer.provider];
+    // Custom's endpoint is what sets it up, and its key is optional: one left empty is left as it was.
+    const env: Record<string, string> = {
+      ...(answer.baseUrl !== undefined && meta.baseUrlEnvVar ? { [meta.baseUrlEnvVar]: answer.baseUrl } : {}),
+      ...(answer.key ? { [meta.apiKeyEnvVar]: answer.key } : {}),
+    };
     const saved = await callDaemon('settings.update', undefined, {
-      env: { [meta.apiKeyEnvVar]: answer.key },
+      env,
       workspace: this.workspace,
       sessionId: this.sessionId,
     });
     if (saved.rejectedEnvKeys?.includes(meta.apiKeyEnvVar)) {
       throw new Error(`The daemon refused the ${meta.label} key.`);
+    }
+    if (meta.baseUrlEnvVar && saved.rejectedEnvKeys?.includes(meta.baseUrlEnvVar)) {
+      throw new Error(`The daemon refused the ${meta.label} endpoint.`);
     }
     const unsaved = unsavedKeyWarning(saved, answer.provider);
     if (unsaved) this.view.conversation.note('system', unsaved);
@@ -1040,7 +1055,9 @@ export class DaemonHost {
         // `/key` arrives here as its alias, and its old `/key set <provider>`
         // with a leading `set`. A key typed after the provider is never read:
         // the dialog is the desktop's way in, so no secret sits in a message.
-        const named = args[0] === 'set' ? args[1] : args[0];
+        // Either word in any case, as the terminal UI and the extension read them.
+        const [first, second] = args;
+        const named = (first?.toLowerCase() === 'set' ? second : first)?.toLowerCase();
         if (named !== undefined && !Object.hasOwn(VENDORS, named)) {
           this.showError(new Error(`Unknown provider: ${named}. Run /key-set with no provider to see the list.`));
           return;
@@ -1051,6 +1068,10 @@ export class DaemonHost {
       case '/login': {
         const named = args.join(' ').trim();
         if (!named) { await this.loginPlanner(); return; }
+        // Asked before the planner list: a provider runner is listed with its
+        // key, while the vendor planner of its name waits on the catalog.
+        const provider = providerRunnerNamed(named);
+        if (provider) { this.noProviderLogin(provider, provider); return; }
         const backend = this.snapshot.state.planner.backends.find((b) => (
           (b.runner ?? b.id) === named || b.label.toLowerCase() === named.toLowerCase()
         ));
@@ -1210,6 +1231,10 @@ export class DaemonHost {
    * five minutes of polling ends the attempt as a failure the surface shows.
    */
   private async loginPlanner(runnerId?: string): Promise<void> {
+    if (runnerId !== undefined && isProviderRunner(runnerId)) {
+      this.noProviderLogin(runnerId, runnerId);
+      return;
+    }
     if (runnerId !== undefined && !this.backendOf(runnerId)) {
       // The daemon lists only agents it found: one it does not list has no
       // verdict to word, and a login for a missing binary would only fail.
@@ -1222,10 +1247,8 @@ export class DaemonHost {
     const backend = this.backendOf(runnerId);
     // A vendor is listed only once it is configured, and its key is its one
     // way in, as it is for the provider runner under the same id (ADR-0070).
-    if (backend?.kind === 'vendor') {
-      const message = `${backend.label} has no login: it runs on its API key, which /key-set ${backend.id} replaces.`;
-      this.emit({ type: 'plannerLoginEnded', ...(runnerId !== undefined ? { runner: runnerId } : {}), ok: false, message });
-      this.view.conversation.note('system', message);
+    if (backend?.kind === 'vendor' && Object.hasOwn(VENDORS, backend.id)) {
+      this.noProviderLogin(backend.id as AiProvider, runnerId);
       return;
     }
     const runner = backend ? (backend.runner ?? backend.id) : undefined;
@@ -1238,6 +1261,13 @@ export class DaemonHost {
     const label = backend?.label ?? runnerName(runner);
     const signIn = signInOfVerdict(runner, label, backend?.auth);
     await this.runLogin(runner, label, signIn);
+  }
+
+  /** A provider's runner or planner has no login: its key, or Custom's endpoint, is its way in (ADR-0070). */
+  private noProviderLogin(provider: AiProvider, runnerId: string | undefined): void {
+    const message = providerRunnerLoginNote(provider);
+    this.emit({ type: 'plannerLoginEnded', ...(runnerId !== undefined ? { runner: runnerId } : {}), ok: false, message });
+    this.view.conversation.note('system', message);
   }
 
   private async runLogin(runner: string, label: string, signIn: ReturnType<typeof signInOfVerdict>): Promise<void> {

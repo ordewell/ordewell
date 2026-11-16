@@ -24,6 +24,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     refreshPlannerState: async () => {},
     loginPlanner: async () => {},
     runnerRegistry: { list: () => [] },
+    runnerInstallation: { filterInstalled: async (runners: string[]) => runners },
     chatProvider: {} as SlashDeps['chatProvider'],
     settingsService: { getModelAllowlist: () => undefined, setModelAllowlist: () => {} },
     sendRunnerAndModels: async () => {},

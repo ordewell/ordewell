@@ -1,14 +1,15 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button } from '@ordewell/ui/design';
 import type { AiProvider } from '@ordewell/core';
-import { PROVIDER_PRIORITY, VENDORS } from '@ordewell/core/plan-utils';
+import { endpointUrlProblem, isProviderRunner, PROVIDER_PRIORITY, VENDORS } from '@ordewell/core/plan-utils';
 import './confirm.css';
 
 /**
  * The key entry (ADR-0052): one vendor, one secret. The key never leaves this
  * dialog's own state until it is resolved to the caller, which writes it
- * through the daemon and drops it (ADR-0061).
+ * through the daemon and drops it (ADR-0061). Custom is set up by its
+ * endpoint instead, so it asks for that URL, and its key is optional.
  */
 export interface KeyEntryRequest {
   /** The vendor a runner's key route names; absent asks which vendor. */
@@ -19,8 +20,14 @@ export interface KeyEntryRequest {
 
 export interface KeyEntryAnswer {
   provider: AiProvider;
+  /** Empty only for Custom, whose endpoint may take no key. */
   key: string;
+  /** Custom's endpoint, which is what sets it up. */
+  baseUrl?: string;
 }
+
+/** The provider whose endpoint, not a key, is what sets it up: a local server takes no key. */
+const CUSTOM: AiProvider = 'openai_compatible';
 
 interface DialogProps {
   request: KeyEntryRequest;
@@ -35,8 +42,10 @@ interface DialogProps {
 export function unsavedKeyWarning(saved: unknown, provider: AiProvider): string | undefined {
   const unsaved = typeof saved === 'object' && saved !== null ? Reflect.get(saved, 'unsavedEnvKeys') : undefined;
   const meta = VENDORS[provider];
-  if (!Array.isArray(unsaved) || !unsaved.includes(meta.apiKeyEnvVar)) return undefined;
-  return `The ${meta.label} key is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.`;
+  if (!Array.isArray(unsaved)) return undefined;
+  const what = unsaved.includes(meta.apiKeyEnvVar) ? 'key' : meta.baseUrlEnvVar && unsaved.includes(meta.baseUrlEnvVar) ? 'endpoint' : undefined;
+  if (!what) return undefined;
+  return `The ${meta.label} ${what} is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.`;
 }
 
 /** One provider's name, as core words it. */
@@ -44,15 +53,26 @@ function providerName(provider: AiProvider): string {
   return VENDORS[provider].label;
 }
 
+/** A provider in the list, marked when its key adds no built-in runner: it lists no models to run tasks on. */
+function providerChoice(provider: AiProvider): string {
+  return isProviderRunner(provider) ? providerName(provider) : `${providerName(provider)} (planner only)`;
+}
+
 export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
   const [provider, setProvider] = useState<AiProvider>(request.provider ?? PROVIDER_PRIORITY[0]);
   const [key, setKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
   const panel = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const titleId = useId();
   const hintId = useId();
   const meta = VENDORS[provider];
-  const ready = key.trim() !== '';
+  const custom = provider === CUSTOM;
+  const ready = custom ? endpointUrlProblem(baseUrl) === undefined : key.trim() !== '';
+  const answerOf = (): KeyEntryAnswer => (custom ? { provider, key: key.trim(), baseUrl: baseUrl.trim() } : { provider, key });
+  const submitOnEnter = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter' && ready) { event.preventDefault(); answer(answerOf()); }
+  };
 
   useEffect(() => {
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -80,24 +100,43 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
           controls[next]?.focus();
         }}
       >
-        <p id={titleId} className="session-confirm-message">API key for {providerName(provider)}</p>
+        <p id={titleId} className="session-confirm-message">{custom ? 'Endpoint' : 'API key'} for {providerName(provider)}</p>
         <p id={hintId} className="session-confirm-detail">
-          {request.runnerLabel
-            ? <>Ordewell hands this key to {request.runnerLabel}. It is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again.</>
-            : <>Ordewell uses it as <code>{meta.apiKeyEnvVar}</code>, and never shows it again.</>}
+          {custom
+            ? <>Ordewell reaches it at this URL, stored as <code>{meta.baseUrlEnvVar}</code>. A key, if it takes one, is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again.</>
+            : request.runnerLabel
+              ? <>Ordewell hands this key to {request.runnerLabel}. It is stored as <code>{meta.apiKeyEnvVar}</code> and never shown again.</>
+              : <>Ordewell uses it as <code>{meta.apiKeyEnvVar}</code>, and never shows it again.</>}
         </p>
         {request.provider === undefined && (
           <label className="key-entry-field">
             <span>Provider</span>
             <select className="ow-select" value={provider} onChange={(event) => setProvider(event.target.value as AiProvider)} aria-label="Provider">
-              {PROVIDER_PRIORITY.map((id) => <option key={id} value={id}>{providerName(id)}</option>)}
+              {PROVIDER_PRIORITY.map((id) => <option key={id} value={id}>{providerChoice(id)}</option>)}
             </select>
           </label>
         )}
+        {custom && (
+          <label className="key-entry-field">
+            <span>Endpoint URL</span>
+            <input
+              ref={request.provider === CUSTOM ? field : undefined}
+              type="url"
+              className="key-entry-input"
+              aria-label="Endpoint URL"
+              placeholder={meta.defaultBaseUrl}
+              autoComplete="off"
+              spellCheck={false}
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+              onKeyDown={submitOnEnter}
+            />
+          </label>
+        )}
         <label className="key-entry-field">
-          <span>API key</span>
+          <span>{custom ? 'API key (optional)' : 'API key'}</span>
           <input
-            ref={field}
+            ref={request.provider === CUSTOM ? undefined : field}
             type="password"
             className="key-entry-input"
             aria-label="API key"
@@ -105,14 +144,12 @@ export function KeyEntryDialog({ request, answer }: DialogProps): JSX.Element {
             spellCheck={false}
             value={key}
             onChange={(event) => setKey(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && ready) { event.preventDefault(); answer({ provider, key }); }
-            }}
+            onKeyDown={submitOnEnter}
           />
         </label>
         <div className="session-confirm-actions">
           <Button className="session-confirm-cancel" onClick={() => answer(null)}>Cancel</Button>
-          <Button variant="primary" disabled={!ready} onClick={() => answer({ provider, key })}>Save</Button>
+          <Button variant="primary" disabled={!ready} onClick={() => answer(answerOf())}>Save</Button>
         </div>
       </div>
     </div>

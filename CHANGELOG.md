@@ -45,6 +45,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the terminal says to use the new name. `/key-set <provider>` asks for that
   provider's key. The headless `ordewell key set <provider> <key>` is
   unchanged.
+- **`/key-set` asks Custom (`openai_compatible`) for its endpoint,** which is
+  what sets it up, and then for a key it may go without, in the terminal, the
+  extension and the desktop app; `/key-set openai_compatible <base-url>
+  [<key>]` sets both at once. Its `/login` names the endpoint variable. A
+  provider whose key serves only the planner (Perplexity) is marked planner
+  only in the provider list.
 - **The API planner's provider calls moved onto a new provider layer.**
   Anthropic uses the native Messages API, with prompt caching, and thinking
   when an effort is set. OpenAI uses the Responses API, with reasoning
@@ -71,6 +77,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   terminal already did, and a daemon the app starts loads the keys saved
   there. A key your shell exports is never written. Should the daemon fail to
   save one, the app says the key lasts only until Ordewell restarts.
+- **The extension's key entry checks a key where it will be used:** at the
+  base URL the provider is configured with, so a gateway's key is no longer
+  refused. A Perplexity key, which has no model list to check it against, is
+  saved without checking instead of being asked for again.
 
 ## [0.13.3] - 2026-11-15
 

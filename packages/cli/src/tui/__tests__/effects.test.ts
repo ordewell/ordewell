@@ -1245,6 +1245,20 @@ describe('settings', () => {
     expect(h.env.OPENROUTER_API_KEY).toBe('sk-or-1');
   });
 
+  // Bug: Custom's key was stored alone, which lists no Custom planner or runner: its endpoint is what sets it up.
+  it('stores Custom\'s endpoint with its key, and the endpoint alone when it takes none', async () => {
+    const h = harness();
+    await runEffect({ type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' }, h.deps);
+    expect(h.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' } });
+    expect(h.env).toMatchObject({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' });
+    expect(messageOf(h.actions, 'notice')).toBe('Custom endpoint and key saved to OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY.');
+
+    const keyless = harness();
+    await runEffect({ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:11434/v1' }, keyless.deps);
+    expect(keyless.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1' } });
+    expect(messageOf(keyless.actions, 'notice')).toBe('Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL.');
+  });
+
   it('asks for the runner list again once a key is stored, since the key lists that provider\'s runner', async () => {
     const h = harness();
     h.api.getRunners.mockResolvedValue({

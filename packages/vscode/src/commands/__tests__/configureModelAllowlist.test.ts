@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureModelAllowlist } from '../configureModelAllowlist';
-import { getProviderMeta, inProcessProvider, RunnerRegistry, ModelResolver, SettingsService, setHostCredentials } from '@ordewell/core';
-import { setEnv } from '@ordewell/core/testing';
+import { RunnerRegistry, ModelResolver, SettingsService } from '@ordewell/core';
 
 describe('configureModelAllowlist', () => {
   let registry: RunnerRegistry;
+  /** Every runner the registry holds, as installed: a test that is about which are narrows it. */
+  let installation: { filterInstalled: ReturnType<typeof vi.fn> };
   let modelResolver: ModelResolver;
   let settingsService: SettingsService;
   let mockWin: {
@@ -15,6 +16,7 @@ describe('configureModelAllowlist', () => {
 
   beforeEach(() => {
     registry = new RunnerRegistry();
+    installation = { filterInstalled: vi.fn(async (runners: string[]) => runners) };
     modelResolver = { modelsForRunners: vi.fn() } as unknown as ModelResolver;
     settingsService = {
       getModelAllowlist: vi.fn(),
@@ -27,29 +29,20 @@ describe('configureModelAllowlist', () => {
     };
   });
 
-  it('shows a QuickPick with every coding agent, and a provider runner only once its provider has a key', async () => {
+  // Bug: a key only the workspace env held listed the provider runner's pill, but this picker read the host's env alone and left it out.
+  it('offers exactly the runners the chat\'s pills offer: what the install check lists', async () => {
     mockWin.showQuickPick.mockResolvedValue(undefined);
-    const cohere = getProviderMeta('cohere');
-    const restoreEnv = setEnv(Object.fromEntries([cohere.apiKeyEnvVar, ...cohere.detectEnvVars].map((name) => [name, undefined])));
-    setHostCredentials(() => ({ OPENROUTER_API_KEY: 'sk-or-held' }));
+    installation.filterInstalled.mockResolvedValue(['codex', 'openrouter']);
 
-    try {
-      await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
-    } finally {
-      setHostCredentials(undefined);
-      restoreEnv();
-    }
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
+    expect(installation.filterInstalled).toHaveBeenCalledWith(registry.list().map((entry) => entry.manifest.name));
     expect(mockWin.showQuickPick).toHaveBeenCalledTimes(1);
     const [items, options] = mockWin.showQuickPick.mock.calls[0];
-    const agents = registry.list().filter((entry) => !inProcessProvider(entry.manifest));
-    const offered = (items as { runner: string }[]).map((item) => item.runner);
-    expect(offered.slice(0, agents.length)).toEqual(agents.map((entry) => entry.manifest.name));
-    expect(offered).toContain('openrouter');
-    expect(offered).not.toContain('cohere');
-    expect(items[0].label).toBe(registry.list()[0].manifest.displayName);
-    expect(items[0].runner).toBe(registry.list()[0].manifest.name);
-    expect(items[0].description).toBe(registry.list()[0].manifest.name);
+    expect(items).toEqual([
+      { label: 'Codex', description: 'codex', runner: 'codex', displayName: 'Codex' },
+      { label: 'OpenRouter', description: 'openrouter', runner: 'openrouter', displayName: 'OpenRouter' },
+    ]);
     expect(options.placeHolder).toContain('runner');
   });
 
@@ -60,7 +53,7 @@ describe('configureModelAllowlist', () => {
     mockWin.withProgress.mockImplementation(async (_opts: unknown, fn: () => Promise<unknown>) => fn());
     (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({});
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
     expect(mockWin.withProgress).toHaveBeenCalledTimes(1);
     const [progressOpts] = mockWin.withProgress.mock.calls[0];
@@ -75,7 +68,7 @@ describe('configureModelAllowlist', () => {
     mockWin.withProgress.mockImplementation(async (_opts: unknown, fn: () => Promise<unknown>) => fn());
     (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({ [runnerName]: [] });
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
     expect(mockWin.showWarningMessage).toHaveBeenCalledWith(
       `No models discovered for ${runnerDisplay}. Is it installed and configured?`,
@@ -99,7 +92,7 @@ describe('configureModelAllowlist', () => {
     (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({ [runnerName]: discoveredModels });
     (settingsService.getModelAllowlist as import('vitest').Mock).mockReturnValue(allowlist);
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
     expect(mockWin.showQuickPick).toHaveBeenCalledTimes(2);
     const [modelItems, modelOpts] = mockWin.showQuickPick.mock.calls[1];
@@ -131,7 +124,7 @@ describe('configureModelAllowlist', () => {
     mockWin.withProgress.mockImplementation(async (_opts: unknown, fn: () => Promise<unknown>) => fn());
     (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({ [runnerName]: discoveredModels });
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
     expect(settingsService.setModelAllowlist).toHaveBeenCalledWith(runnerName, ['model-a', 'model-b']);
   });
@@ -147,7 +140,7 @@ describe('configureModelAllowlist', () => {
     (settingsService as unknown as { getAll: () => unknown }).getAll = () => ({ modelAllowlist: { [runnerName]: ['model-a'] } });
     const changed = vi.fn();
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin, changed);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin, changed);
 
     expect(changed).toHaveBeenCalledWith({ [runnerName]: ['model-a'] });
   });
@@ -165,7 +158,7 @@ describe('configureModelAllowlist', () => {
     mockWin.withProgress.mockImplementation(async (_opts: unknown, fn: () => Promise<unknown>) => fn());
     (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({ [runnerName]: discoveredModels });
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
     expect(settingsService.setModelAllowlist).toHaveBeenCalledWith(runnerName, []);
   });
@@ -183,7 +176,7 @@ describe('configureModelAllowlist', () => {
     mockWin.withProgress.mockImplementation(async (_opts: unknown, fn: () => Promise<unknown>) => fn());
     (modelResolver.modelsForRunners as import('vitest').Mock).mockResolvedValue({ [runnerName]: discoveredModels });
 
-    await configureModelAllowlist(registry, modelResolver, settingsService, mockWin);
+    await configureModelAllowlist(registry, installation, modelResolver, settingsService, mockWin);
 
     expect(settingsService.setModelAllowlist).not.toHaveBeenCalled();
   });

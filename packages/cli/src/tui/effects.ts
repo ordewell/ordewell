@@ -572,10 +572,16 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'setApiKey': {
       const meta = isApiProvider(effect.provider) ? getProviderMeta(effect.provider) : undefined;
       if (!meta) throw new Error(`Unknown provider: ${effect.provider}`);
-      await api.updateSettings({ env: { [meta.apiKeyEnvVar]: effect.key } });
-      deps.setEnvVar(meta.apiKeyEnvVar, effect.key);
+      // Custom's endpoint is what sets it up, its key optional, so an empty one is left as it was.
+      const env: Record<string, string> = {
+        ...(effect.baseUrl !== undefined && meta.baseUrlEnvVar ? { [meta.baseUrlEnvVar]: effect.baseUrl } : {}),
+        ...(effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {}),
+      };
+      await api.updateSettings({ env });
+      for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
-      dispatch({ type: 'notice', message: `${meta.label} key saved to ${meta.apiKeyEnvVar}.` });
+      const what = effect.baseUrl === undefined ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
+      dispatch({ type: 'notice', message: `${meta.label} ${what} saved to ${Object.keys(env).join(' and ')}.` });
       await loadModels(deps);
       // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
       await loadRunners(deps);

@@ -53,24 +53,25 @@ describe('ordewell.toggleRunner', () => {
     expect(settingsService.updateEnabledRunners.mock.results[0]!.value).toEqual(['opencode']);
   });
 
-  it('offers the coding agents and the provider runners of the providers configured, and no other', async () => {
+  // Bug: it offered every coding agent, installed or not, and missed a provider runner whose key only the workspace env held.
+  it('offers exactly the runners the chat\'s pills offer: what the install check lists', async () => {
     registerCommand.mockClear();
     const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
     showQuickPick.mockReset();
     showQuickPick.mockResolvedValue(undefined);
-    const config = { enabledRunners: ['claude-code', 'openrouter'], configuredProviders: ['openrouter'] };
+    const config = { enabledRunners: ['claude-code', 'openrouter'] };
+    const runnerRegistry = new RunnerRegistry();
+    const filterInstalled = vi.fn(async () => ['claude-code', 'codex', 'openrouter']);
     registerCommands({ subscriptions: [] } as unknown as vscode.ExtensionContext, {
-      settingsService: { updateEnabledRunners: vi.fn() }, config, sendRunnerAndModels: vi.fn(), runnerRegistry: new RunnerRegistry(),
+      settingsService: { updateEnabledRunners: vi.fn() }, config, sendRunnerAndModels: vi.fn(), runnerRegistry, runnerInstallation: { filterInstalled },
     } as unknown as CommandDeps);
     const toggle = registerCommand.mock.calls.find(([id]) => id === 'ordewell.toggleRunner')![1] as (runner?: string) => Promise<void>;
 
     await toggle();
 
+    expect(filterInstalled).toHaveBeenCalledWith(runnerRegistry.list().map((entry) => entry.manifest.name));
     const labels = (showQuickPick.mock.calls[0]![0] as { label: string }[]).map((item) => item.label);
-    expect(labels).toContain('Claude Code: ON');
-    expect(labels).toContain('Codex: OFF');
-    expect(labels).toContain('OpenRouter: ON');
-    expect(labels.filter((label) => /^(Anthropic|Google Gemini|OpenAI):/.test(label))).toEqual([]);
+    expect(labels).toEqual(['Claude Code: ON', 'Codex: OFF', 'OpenRouter: ON']);
   });
 
   it('waits for the installed-planner probe before pinning defaults', async () => {

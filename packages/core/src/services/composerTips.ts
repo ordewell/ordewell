@@ -1,3 +1,5 @@
+import { isProviderRunner } from './providerRunners';
+
 /**
  * The tips an empty planner chat composer shows (#137), one table for every
  * surface so the TUI and the webview agree on the wording and how often each
@@ -6,8 +8,24 @@
 
 /** What a surface knows that decides whether a tip is news; a fact it leaves out is unknown. */
 export interface ComposerTipContext {
-  /** Whether any provider is configured: a key, or a custom endpoint's URL. */
+  /**
+   * Whether a provider runner is set up: a provider's key, or Custom's
+   * endpoint. A key that serves the planner alone (Perplexity's) is not one.
+   */
   providerKeySet?: boolean;
+}
+
+/**
+ * The key tip's fact, one rule for every surface. Either list can be the first
+ * to show a provider runner (ADR-0070): a configured provider that has one,
+ * or the runner itself. That none is set up waits for both to have answered.
+ */
+export function keyTipContext(
+  providers: { ids: readonly string[]; known: boolean },
+  runners: { ids: readonly string[]; known: boolean },
+): ComposerTipContext {
+  if (providers.ids.some(isProviderRunner) || runners.ids.some(isProviderRunner)) return { providerKeySet: true };
+  return providers.known && runners.known ? { providerKeySet: false } : {};
 }
 
 export interface ComposerTip {

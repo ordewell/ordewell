@@ -1,5 +1,6 @@
 import {
-  PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, getProviderMeta, isApiProvider, isPlannerBackend, runnerForProvider, type AiProvider,
+  PROVIDER_PRIORITY, TERMINAL_UI_COMMANDS, TERMINAL_UI_SIGN_IN, describeSignInWays, endpointUrlProblem, getProviderMeta, isApiProvider, isPlannerBackend, isProviderRunner, providerRunnerLoginNote,
+  runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
 import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
@@ -278,10 +279,14 @@ function setPlanner(state: TuiState, args: string[]): Step {
   return { ...opened, effects: [...opened.effects, { type: 'loadModels' }] };
 }
 
+/** The provider whose endpoint, not a key, is what sets it up: a local server takes no key. */
+const CUSTOM = 'openai_compatible' satisfies AiProvider;
+
 /**
  * `/key-set <provider> <key>` stores the key, `/key-set <provider>` asks for
  * it and a bare `/key-set` lists every provider. A leading `set` is read past:
  * the deprecated `/key` runs this too, and was spelt `/key set <provider>`.
+ * Custom is set up by its endpoint, so it takes `<base-url> [<key>]`.
  */
 function setKey(state: TuiState, args: string[]): Step {
   const [named, ...key] = args[0]?.toLowerCase() === 'set' ? args.slice(1) : args;
@@ -291,26 +296,57 @@ function setKey(state: TuiState, args: string[]): Step {
       return fail(state, `Unknown provider: ${provider}. Run /key-set with no arguments to see the list.`);
     }
     if (key.length === 0) return step({ ...state, overlay: keyPrompt(provider) });
+    if (provider === CUSTOM) {
+      const [baseUrl = '', ...customKey] = key;
+      if (endpointUrlProblem(baseUrl)) return fail(state, `Usage: /key-set ${CUSTOM} <base-url> [<key>]`);
+      return step(state, [{ type: 'setApiKey', provider, key: customKey.join(' '), baseUrl }]);
+    }
     return step(state, [{ type: 'setApiKey', provider, key: key.join(' ') }]);
   }
 
-  const items: PickerItem[] = PROVIDER_PRIORITY.map((id) => ({
-    id,
-    label: getProviderMeta(id).label,
-    detail: getProviderMeta(id).apiKeyEnvVar,
-    selected: state.configuredProviders.includes(id),
-  }));
+  // Marked where a key adds no built-in runner: that provider lists no models to run tasks on.
+  const items: PickerItem[] = PROVIDER_PRIORITY.map((id) => {
+    const meta = getProviderMeta(id);
+    return {
+      id,
+      label: isProviderRunner(id) ? meta.label : `${meta.label} (planner only)`,
+      detail: (id === CUSTOM ? meta.baseUrlEnvVar : undefined) ?? meta.apiKeyEnvVar,
+      selected: state.configuredProviders.includes(id),
+    };
+  });
   return step({ ...state, overlay: { kind: 'picker', picker: picker('API provider key', items, { kind: 'set-key' }) } });
 }
 
+/** The first prompt of a provider's key entry: its key, or for Custom the endpoint, its key asked after. */
 export function keyPrompt(provider: AiProvider): TuiState['overlay'] {
   const meta = getProviderMeta(provider);
+  if (provider === CUSTOM && meta.baseUrlEnvVar) {
+    return {
+      kind: 'prompt',
+      title: `${meta.label} endpoint URL`,
+      hint: `Stored as ${meta.baseUrlEnvVar} in your .env; its key, if it takes one, is asked next`,
+      value: '',
+      action: { kind: 'api-base-url', provider, envVar: meta.baseUrlEnvVar },
+    };
+  }
   return {
     kind: 'prompt',
     title: `${meta.label} API key`,
     hint: `Stored as ${meta.apiKeyEnvVar} in your .env`,
     value: '',
     action: { kind: 'api-key', provider, envVar: meta.apiKeyEnvVar },
+  };
+}
+
+/** Custom's key, once its endpoint is given: optional, so an empty answer saves the endpoint alone. */
+export function endpointKeyPrompt(provider: AiProvider, baseUrl: string): TuiState['overlay'] {
+  const meta = getProviderMeta(provider);
+  return {
+    kind: 'prompt',
+    title: `${meta.label} API key (optional)`,
+    hint: `Stored as ${meta.apiKeyEnvVar} in your .env; Enter with none for an endpoint that takes no key`,
+    value: '',
+    action: { kind: 'api-key', provider, envVar: meta.apiKeyEnvVar, baseUrl },
   };
 }
 
@@ -429,9 +465,7 @@ function login(state: TuiState, args: string[]): Step {
   }
 
   // A provider runner is signed in by the key that lists it (ADR-0070), so the way to change it is the key.
-  if (row.provider) {
-    return step(say(state, 'system', `${row.name} runs on its API key and has no login: /key-set ${row.provider} replaces the key.`));
-  }
+  if (row.provider) return step(say(state, 'system', providerRunnerLoginNote(row.provider)));
 
   const command = row.auth?.loginCommand;
   if (command && command.length > 0) {

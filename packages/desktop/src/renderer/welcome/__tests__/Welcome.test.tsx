@@ -424,7 +424,7 @@ describe('Welcome: runners', () => {
     render(<Welcome status={CONNECTED} />);
     const runners = section('Runners');
     await within(runners).findByText('Signed in');
-    const line = within(runners).getByText('An API key adds the built-in runner on that provider.').closest('p') as HTMLElement;
+    const line = within(runners).getByText('An API key adds the built-in runner on that provider, unless it is marked planner only.').closest('p') as HTMLElement;
     fireEvent.click(within(line).getByRole('button', { name: 'Set API key…' }));
     const dialog = await screen.findByRole('dialog');
     // No provider is chosen for the person: the entry asks which one.

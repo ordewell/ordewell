@@ -48,6 +48,14 @@ describe('the empty composer\'s /key-set tip', () => {
     expect(tipsOverACycle()).not.toContain(KEY_TIP);
   });
 
+  it('still comes round when the only key serves the planner alone, since the tip is about the built-in runner', () => {
+    // Perplexity lists no models, so its key plans and adds no runner.
+    post({ type: 'setConfiguredProviders', providers: ['perplexity'] });
+    post({ type: 'setRunners', runners: [{ id: 'claude-code', displayName: 'Claude Code', enabled: true }] });
+
+    expect(tipsOverACycle()).toContain(KEY_TIP);
+  });
+
   it('stays out when a provider runner is listed though the catalog has not named its provider yet', () => {
     // The desktop draws the planners from the runner list before the catalog answers, with no providers yet.
     post({ type: 'setConfiguredProviders', providers: [] });

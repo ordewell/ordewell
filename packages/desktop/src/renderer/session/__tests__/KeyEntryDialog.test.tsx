@@ -36,6 +36,37 @@ describe('the key entry', () => {
     expect(answer).toHaveBeenCalledWith({ provider: 'openrouter', key: 'sk-or' });
   });
 
+  // Bug: Custom asked for a key alone, and Custom is set up by its endpoint, so no Custom planner or runner appeared.
+  it('asks Custom for its endpoint, required, and a key it may go without', () => {
+    const answer = mount({ provider: 'openai_compatible' });
+    expect(screen.getByRole('dialog', { name: 'Endpoint for Custom' })).toBeInTheDocument();
+    const url = screen.getByLabelText('Endpoint URL');
+    expect(url).toHaveFocus();
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+
+    fireEvent.change(url, { target: { value: 'localhost:8000' } });
+    expect(save).toBeDisabled();
+    fireEvent.change(url, { target: { value: 'http://localhost:11434/v1' } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(answer).toHaveBeenLastCalledWith({ provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:11434/v1' });
+
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-local' } });
+    fireEvent.keyDown(screen.getByLabelText('API key'), { key: 'Enter' });
+    expect(answer).toHaveBeenLastCalledWith({ provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:11434/v1' });
+  });
+
+  it('shows the endpoint field once Custom is picked from the list, and marks a provider whose key only plans', () => {
+    mount();
+    expect(screen.queryByLabelText('Endpoint URL')).toBeNull();
+    // Perplexity lists no models, so its key adds no built-in runner.
+    expect(screen.getByRole('option', { name: 'Perplexity (planner only)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'OpenRouter' })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: 'openai_compatible' } });
+    expect(screen.getByLabelText('Endpoint URL')).toBeInTheDocument();
+  });
+
   it('answers null on Cancel or Escape, writing nothing', () => {
     const answer = mount({ provider: 'google' });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -53,5 +84,7 @@ describe('a key the daemon took but could not save', () => {
     expect(unsavedKeyWarning({}, 'openrouter')).toBeUndefined();
     expect(unsavedKeyWarning(null, 'openrouter')).toBeUndefined();
     expect(unsavedKeyWarning({ unsavedEnvKeys: 'OPENROUTER_API_KEY' }, 'openrouter')).toBeUndefined();
+    expect(unsavedKeyWarning({ unsavedEnvKeys: ['OPENAI_COMPATIBLE_BASE_URL'] }, 'openai_compatible'))
+      .toBe('The Custom endpoint is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.');
   });
 });

@@ -19,7 +19,7 @@ import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isR
 import { matchingItems, scriptTaskView, rootFrame, viewOnly, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
-import { composerTip } from '@ordewell/core/plan-utils';
+import { composerTip, keyTipContext } from '@ordewell/core/plan-utils';
 
 /**
  * The whole frame as `state.rows` lines, each at most `state.cols` columns
@@ -425,8 +425,12 @@ const PLANNER_COMMANDS: ReadonlySet<string> = new Set(SLASH_COMMANDS.map((comman
  */
 function composerTipHint(state: TuiState, room: number): string {
   if (state.taskView || !state.mouseCapture || state.editor.text !== '' || room < 12) return '';
-  // Until the catalog says which providers are configured, whether a key is set is unknown, and the key tip waits.
-  const text = composerTip(state.composerTipSeq, PLANNER_COMMANDS, state.providersKnown ? { providerKeySet: state.configuredProviders.length > 0 } : {});
+  // The webview's rule: until the catalog and the runner list have both answered, a key's absence is unknown, and the key tip waits.
+  const context = keyTipContext(
+    { ids: state.configuredProviders, known: state.providersKnown },
+    { ids: state.runners.map((r) => r.id), known: state.runnersKnown },
+  );
+  const text = composerTip(state.composerTipSeq, PLANNER_COMMANDS, context);
   return text ? style.bandGrey(` ${truncate(text, room - 1)}`) : '';
 }
 

@@ -30,12 +30,25 @@
 - **`/key` is now `/key-set`,** one word like the other surfaces' command.
   `/key` and `/key set <provider>` still open the key entry, and a provider
   Ordewell does not know is refused instead of opening the provider list.
+  For Custom it asks for the endpoint URL, which is what sets it up, and then
+  for a key it may go without. A provider whose key serves only the planner
+  (Perplexity) is marked planner only in its list.
+- **Toggle Runner and `/allowlist` offer the runners the chat's pills do:**
+  the coding agents installed, and the built-in runner of each provider
+  configured, a workspace's own `.ordewell/env` or `.envrc` included.
 - **API planners call their provider differently.** Anthropic uses the native
   Messages API, with prompt caching, and thinking when an effort is set.
   OpenAI uses the Responses API, with reasoning effort. The planner effort
   setting now applies to API planners. Retries follow a provider's
   Retry-After, and a usage limit waits until its reset time. Gemini no longer
   sends a fixed temperature or topP.
+
+### Fixed
+
+- **A key is checked where it will be used:** at the base URL the provider is
+  configured with, so a gateway's key is no longer refused. A Perplexity key,
+  which has no model list to check it against, is saved without checking
+  instead of being asked for again.
 
 ## [0.13.3] - 2026-11-15
 

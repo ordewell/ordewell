@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { COMPOSER_TIPS, composerTip, tipCycle, type ComposerTip } from '../composerTips';
+import { COMPOSER_TIPS, composerTip, keyTipContext, tipCycle, type ComposerTip } from '../composerTips';
 
 // The tips every surface may show whatever it knows; the key tip waits on a fact.
 const ALWAYS = COMPOSER_TIPS.filter((tip) => !tip.when);
@@ -132,5 +132,25 @@ describe('the /key-set tip', () => {
     expect(cycle.filter((tip) => tip.command === 'key-set')).toHaveLength(3);
     expect(cycle.filter((tip) => tip.command === 'allowlist')).toHaveLength(3);
     expect(followsItself(cycle)).toBe(false);
+  });
+});
+
+describe('the key tip\'s fact, one rule for every surface (ADR-0070)', () => {
+  const known = (ids: string[]) => ({ ids, known: true });
+  const unknown = { ids: [], known: false };
+
+  it('is set by a configured provider with a runner, or a provider runner listed, whichever answers first', () => {
+    expect(keyTipContext(known(['openrouter']), unknown)).toEqual({ providerKeySet: true });
+    expect(keyTipContext(unknown, known(['claude-code', 'anthropic']))).toEqual({ providerKeySet: true });
+  });
+
+  it('is not set by a key that serves the planner alone, once both lists have answered', () => {
+    expect(keyTipContext(known(['perplexity']), known(['claude-code']))).toEqual({ providerKeySet: false });
+  });
+
+  it('is unknown until both lists have answered', () => {
+    expect(keyTipContext(known([]), unknown)).toEqual({});
+    expect(keyTipContext(unknown, known([]))).toEqual({});
+    expect(keyTipContext(known(['perplexity']), unknown)).toEqual({});
   });
 });

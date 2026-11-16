@@ -106,7 +106,8 @@ own, under the provider's id and name, but for Perplexity, whose models cannot b
 listed, so its key plans and runs no task: an OpenRouter key adds the runner
 `openrouter` ("OpenRouter"), an Anthropic key the runner `anthropic`
 ("Anthropic"), and a custom OpenAI-compatible endpoint the runner
-`openai_compatible` once `OPENAI_COMPATIBLE_BASE_URL` names it. Save a key with
+`openai_compatible` once `OPENAI_COMPATIBLE_BASE_URL` names it, which `/key-set`
+asks for first when you choose Custom, its key then optional. Save a key with
 `/key-set` or `ordewell key set <provider> <key>` (see
 [where keys live](#where-keys-live)) and the runner is listed at once, signed in; a
 provider with no key is not listed at all. Until you choose your runners, every

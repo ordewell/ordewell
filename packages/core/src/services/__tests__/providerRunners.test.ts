@@ -16,11 +16,11 @@ import { ModelResolver } from '../ModelResolver';
 import { RunnerInstallation } from '../RunnerInstallation';
 import { SettingsService } from '../SettingsService';
 import { defaultEnabledRunners, detectInstalledPlanner, resetInstalledPlanner } from '../InstalledPlanner';
-import { PROVIDER_PRIORITY, VENDORS } from '../apiProviders';
+import { PROVIDER_PRIORITY, VENDORS, endpointUrlProblem } from '../apiProviders';
 import {
   ALL_PROVIDERS, CLI_PROVIDERS, configuredProviders, getProviderMeta, isCliProvider, plannerBackendEntries, providerForRunner, runnerForProvider,
 } from '../ProviderRegistry';
-import { PROVIDER_RUNNER_IDS, configuredProviderRunners, isProviderRunner, providerRunnerLabel } from '../providerRunners';
+import { PROVIDER_RUNNER_IDS, configuredProviderRunners, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote } from '../providerRunners';
 import { assertAssignedRunners } from '../PlanStore';
 
 /*
@@ -312,5 +312,19 @@ describe('what still names the built-in runner by its one old id', () => {
 
     writeFileSync(file, JSON.stringify({ modelAllowlist: { ordewell: ['no-provider'] } }));
     expect(new SettingsService(file).getAll().modelAllowlist).toBeUndefined();
+  });
+});
+
+describe('a provider runner\'s way in', () => {
+  it('is its key, or for Custom the endpoint, which /key-set replaces: never a login', () => {
+    expect(providerRunnerLoginNote('openrouter')).toBe('OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.');
+    expect(providerRunnerLoginNote('openai_compatible')).toBe('Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.');
+  });
+
+  it('takes Custom\'s endpoint only as an http(s) URL, so a key typed in its place is not saved as one', () => {
+    for (const url of ['http://localhost:11434/v1', ' https://gateway.example/v1 ']) expect(endpointUrlProblem(url), url).toBeUndefined();
+    for (const value of ['', 'sk-local-123', 'localhost:8000', 'ftp://host/v1']) {
+      expect(endpointUrlProblem(value), value).toBe('Enter the endpoint URL, starting with http:// or https://.');
+    }
   });
 });

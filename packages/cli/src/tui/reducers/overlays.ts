@@ -1,9 +1,9 @@
-import { isApiProvider, overrideNeedsConfirmation } from '@ordewell/core';
+import { endpointUrlProblem, isApiProvider, overrideNeedsConfirmation } from '@ordewell/core';
 import { bodyRows, helpScrollMax, recordScrollMax } from '../layout';
 import { findTask, refFor, visibleItems, type PickerItem, type PickerState, type TuiState } from '../state';
 import type { Key } from '../keys';
 import { handleApprovalKey, scrollApproval } from './approvals';
-import { keyPrompt, newSession, pickRewindTarget, updateRefusal, withIdlePlanner } from './commands';
+import { endpointKeyPrompt, keyPrompt, newSession, pickRewindTarget, updateRefusal, withIdlePlanner } from './commands';
 import { chooseBlocked, confirmedHandoff, handleHandoffKey, type BlockedChoice } from '../handoff';
 import { DEFAULT_EFFORT, pickerItemsFor } from './pickers';
 import { WHEEL_NOTCH, isWheel, pageNotch, scrollPointed } from './pointer';
@@ -141,8 +141,18 @@ function handlePromptKey(
     const closed = { ...state, overlay: null };
     // An optional note may be empty, which is an answer, not a cancel.
     if (overlay.action.kind === 'escalation-note') return noteEntered(state, overlay.action, value);
+    // So is Custom's key, after its endpoint: a local server takes none.
+    if (overlay.action.kind === 'api-key' && overlay.action.baseUrl !== undefined) {
+      return step(closed, [{ type: 'setApiKey', provider: overlay.action.provider, key: value, baseUrl: overlay.action.baseUrl }]);
+    }
     if (!value) return step(closed);
 
+    if (overlay.action.kind === 'api-base-url') {
+      // Kept open on a mistyped URL, so what was typed can be fixed rather than retyped.
+      const problem = endpointUrlProblem(value);
+      if (problem) return step({ ...state, overlay: { ...overlay, hint: problem } });
+      return isApiProvider(overlay.action.provider) ? step({ ...state, overlay: endpointKeyPrompt(overlay.action.provider, value) }) : step(closed);
+    }
     if (overlay.action.kind === 'api-key') {
       return step(closed, [{ type: 'setApiKey', provider: overlay.action.provider, key: value }]);
     }

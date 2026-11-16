@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { augmentedPath, describeSignInWays, inProcessProvider, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, describeSignInWays, inProcessProvider, providerRunnerLoginNote, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
@@ -123,7 +123,7 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
   // A provider runner is signed in by the key that lists it (ADR-0070), so the way to change it is the key.
   const provider = inProcessProvider(manifest);
   if (provider) {
-    const message = `${label} runs on its API key and has no login: /key-set ${provider} replaces the key.`;
+    const message = providerRunnerLoginNote(provider);
     deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
     deps.notifications.info(message);
     return;

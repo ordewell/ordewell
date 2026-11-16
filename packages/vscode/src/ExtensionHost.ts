@@ -295,6 +295,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   // than rebuilding their own bags over the same state.
   const commandDeps: CommandDeps = {
     ...managerDeps,
+    runnerInstallation: services.runnerInstallation,
     settingsService: services.settingsService,
     secretStore: services.secretStore,
     handleApprovePlan: () => handleApprovePlan(managerDeps),
@@ -404,6 +405,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       runnerRegistry: {
         list: () => services.runnerRegistry.list(),
       },
+      runnerInstallation: services.runnerInstallation,
       chatProvider: services.chatProvider,
       settingsService: services.settingsService,
       plannerBackends: () => planner.backends(),

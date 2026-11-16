@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { configuredProviderRunners, inProcessProvider, withHostCredentials, type RunnerRegistry, type ModelResolver, type SettingsService, type DiscoveredModel } from '@ordewell/core';
+import type { RunnerRegistry, RunnerInstallation, ModelResolver, SettingsService, DiscoveredModel } from '@ordewell/core';
 
 // Show the provider exactly as the runner CLI lists it (the prefix before
 // the first `/`) — no renaming, no title-casing.
@@ -19,14 +19,17 @@ function groupModels(models: DiscoveredModel[]): Map<string, DiscoveredModel[]> 
 
 export async function configureModelAllowlist(
   runnerRegistry: RunnerRegistry,
+  runnerInstallation: Pick<RunnerInstallation, 'filterInstalled'>,
   modelResolver: ModelResolver,
   settingsService: SettingsService,
   win: Pick<typeof vscode.window, 'showQuickPick' | 'withProgress' | 'showWarningMessage'> = vscode.window,
   changed?: (allowlist: Record<string, string[]>) => void,
 ): Promise<void> {
-  // A provider runner exists only with its key (ADR-0070): one without has no models to limit.
-  const keyed = new Set<string>(configuredProviderRunners(withHostCredentials(process.env)));
-  const runners = runnerRegistry.list().filter(({ manifest }) => !inProcessProvider(manifest) || keyed.has(manifest.name));
+  // The runners the chat's pills offer, by the same check: a coding agent this
+  // host has, and a provider runner whose provider is configured, the
+  // workspace's own env included (ADR-0070). One it lacks has no models to limit.
+  const installed = new Set(await runnerInstallation.filterInstalled(runnerRegistry.list().map(({ manifest }) => manifest.name)));
+  const runners = runnerRegistry.list().filter(({ manifest }) => installed.has(manifest.name));
   const runnerItems = runners.map((r) => ({
     label: r.manifest.displayName,
     description: r.manifest.name,

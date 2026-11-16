@@ -151,6 +151,7 @@ export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, to
 export type { ProviderModelLists, FetchAllProviderModelsOptions, AllProviderModels, OrchestratorOption, ProviderModelsResult, ProviderCredentialSource } from './services/ProviderRouting';
 export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
 export type { ProviderRegistration, PlannerUsability, PlannerBackendEntry } from './services/ProviderRegistry';
+export { endpointUrlProblem } from './services/apiProviders';
 export {
   admitSettingsEnv,
   SETTINGS_ENV_ALLOWLIST,
@@ -168,7 +169,7 @@ export type { CliAgentAiServiceDeps } from './services/harness/CliAgentAiService
 export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAdapter';
 export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskRunnerConfig, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
 export { supportsTaskMode, createTaskAdapter, runnerPlans } from './services/harness/connectors';
-export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, configuredProviderRunners } from './services/providerRunners';
+export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, configuredProviderRunners } from './services/providerRunners';
 export { setHostCredentials, withHostCredentials, type HostCredentialReader } from './services/hostCredentials';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';

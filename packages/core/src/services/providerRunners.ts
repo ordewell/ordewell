@@ -29,6 +29,17 @@ export function providerRunnerLabel(runner: string): string | undefined {
 }
 
 /**
+ * What `/login` answers for a provider runner, on every surface: it has none,
+ * since what lists it is its provider's key, or for Custom the endpoint, which
+ * may take no key at all, and `/key-set` is how either changes.
+ */
+export function providerRunnerLoginNote(provider: AiProvider): string {
+  const { label, baseUrlEnvVar } = VENDORS[provider];
+  if (provider === 'openai_compatible') return `${label} has no login: it runs on the endpoint ${baseUrlEnvVar} names, which /key-set ${provider} replaces.`;
+  return `${label} has no login: it runs on its API key, which /key-set ${provider} replaces.`;
+}
+
+/**
  * The provider runners `env` sets up, in picker order: the ones a host lists,
  * since a provider runner is installed exactly when its provider is configured.
  */

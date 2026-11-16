@@ -187,7 +187,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
           {/* A provider with no key has no card (ADR-0070), so its way in sits under them all, open to every provider. */}
           {state.kind === 'ready' && (
             <p className="welcome-key-line">
-              <span>An API key adds the built-in runner on that provider.</span>
+              <span>An API key adds the built-in runner on that provider, unless it is marked planner only.</span>
               <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { void setKey({}); }}>Set API key…</Button>
             </p>
           )}

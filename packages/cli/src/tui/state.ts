@@ -319,7 +319,10 @@ export interface ConfirmChoice {
 
 /** A free-text prompt overlay — used where a list of options makes no sense. */
 export type PromptAction =
-  | { kind: 'api-key'; provider: string; envVar: string }
+  /** `baseUrl`: Custom's endpoint, given first, which makes this key optional. */
+  | { kind: 'api-key'; provider: string; envVar: string; baseUrl?: string }
+  /** Custom's endpoint, the first of its two prompts. */
+  | { kind: 'api-base-url'; provider: string; envVar: string }
   | { kind: 'add-task' }
   /** The note an escalation's answer takes; `required` refuses an empty one. */
   | { kind: 'escalation-note'; escalationId: string; option: string; required: boolean; confirm?: string };

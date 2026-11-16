@@ -25,7 +25,7 @@ import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, compactionText, describeRunnerSignIn, isProviderRunner, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, compactionText, describeRunnerSignIn, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -164,12 +164,13 @@ export default function App({ layout = 'chat', selection, goal }: {
   // plans on its own subscription, so key-less is a working setup, not a
   // first-run wall.
   const canPlan = configuredProviders.length > 0 || planner.backends.some((b) => b.usable);
-  // A provider runner is listed exactly while its provider is configured
-  // (ADR-0070), so either list can be the first to say a key is set. Saying
-  // none is waits for both: the /key-set tip is noise to someone who has one.
-  const providerKeySet = configuredProviders.length > 0 || runnerList.some((r) => isProviderRunner(r.id))
-    ? true
-    : providersKnown && runnersKnown ? false : undefined;
+  // The /key-set tip says a key runs tasks on the built-in runner, so it is
+  // noise to someone with a provider runner, and news to someone whose only
+  // key serves the planner alone (Perplexity's). The terminal UI's rule too.
+  const { providerKeySet } = keyTipContext(
+    { ids: configuredProviders, known: providersKnown },
+    { ids: runnerList.map((r) => r.id), known: runnersKnown },
+  );
   const tipContext = useMemo<ComposerTipContext>(() => (providerKeySet === undefined ? {} : { providerKeySet }), [providerKeySet]);
   const hasContent = blocks.length > 0 || isResearchActive || isExecuting || !!error;
   /** The first screen is on show, with every signed-out agent's own row. */

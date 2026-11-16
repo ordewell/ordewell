@@ -219,10 +219,20 @@ describe('loginPlanner', () => {
 
     await loginPlanner(h.deps, 'openrouter');
 
-    const message = 'OpenRouter runs on its API key and has no login: /key-set openrouter replaces the key.';
+    const message = 'OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.';
     expect(h.createTerminal).not.toHaveBeenCalled();
     expect(h.deps.notifications.info).toHaveBeenCalledWith(message);
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'openrouter', ok: false, message });
+  });
+
+  it('points Custom at its endpoint, which may take no key at all', async () => {
+    const h = harness({ verdict: () => ({ state: 'signed-in' }) });
+
+    await loginPlanner(h.deps, 'openai_compatible');
+
+    const message = 'Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.';
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'openai_compatible', ok: false, message });
   });
 
   it('tells a vendor planner there is no coding agent to sign in', async () => {

@@ -84,9 +84,50 @@ describe('models and providers', () => {
     expect(state.overlay).toMatchObject({ kind: 'prompt', title: 'Anthropic API key', action: { kind: 'api-key', provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY' } });
   });
 
+  // Bug: Custom's key was asked for alone, and a key lists no Custom planner or runner: its endpoint does.
+  it('/key-set for Custom asks for its endpoint first, then a key it may go without', () => {
+    const asked = run('/key-set openai_compatible').state;
+    expect(asked.overlay).toMatchObject({ kind: 'prompt', title: 'Custom endpoint URL', action: { kind: 'api-base-url', provider: 'openai_compatible', envVar: 'OPENAI_COMPATIBLE_BASE_URL' } });
+
+    const typed = (state: TuiState, text: string): TuiState => [...text].reduce((s, char) => reduce(s, { type: 'key', key: { name: 'char', char } }).state, state);
+    const enter = (state: TuiState) => reduce(state, { type: 'key', key: { name: 'enter' } });
+
+    // A mistyped URL keeps the prompt open and says why.
+    const refused = enter(typed(asked, 'localhost:8000'));
+    expect(refused.effects).toEqual([]);
+    expect(refused.state.overlay).toMatchObject({ kind: 'prompt', action: { kind: 'api-base-url' }, hint: 'Enter the endpoint URL, starting with http:// or https://.' });
+
+    const keyAsked = enter(typed(asked, 'http://localhost:8000/v1')).state;
+    expect(keyAsked.overlay).toMatchObject({ kind: 'prompt', title: 'Custom API key (optional)', action: { kind: 'api-key', provider: 'openai_compatible', baseUrl: 'http://localhost:8000/v1' } });
+    expect(enter(typed(keyAsked, 'sk-local')).effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' }]);
+    // No key is an answer here, not a cancel.
+    expect(enter(keyAsked).effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:8000/v1' }]);
+  });
+
+  it('/key-set for Custom takes its endpoint inline before the key, and refuses a key where the endpoint goes', () => {
+    expect(run('/key-set openai_compatible http://localhost:8000/v1 sk-local').effects).toEqual([
+      { type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' },
+    ]);
+    expect(run('/key-set openai_compatible http://localhost:8000/v1').effects).toEqual([
+      { type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:8000/v1' },
+    ]);
+    const { state, effects } = run('/key-set openai_compatible sk-local');
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)).toMatchObject({ role: 'error', text: 'Usage: /key-set openai_compatible <base-url> [<key>]' });
+  });
+
   it('/key-set with no argument opens the provider picker', () => {
     const { state } = run('/key-set');
     expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-key' } } });
+  });
+
+  it('/key-set marks a provider whose key only plans, and names Custom by its endpoint', () => {
+    const { state } = run('/key-set');
+    const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
+    // Perplexity lists no models, so its key adds no built-in runner.
+    expect(items.find((item) => item.id === 'perplexity')).toMatchObject({ label: 'Perplexity (planner only)' });
+    expect(items.find((item) => item.id === 'openrouter')).toMatchObject({ label: 'OpenRouter', detail: 'OPENROUTER_API_KEY' });
+    expect(items.find((item) => item.id === 'openai_compatible')).toMatchObject({ label: 'Custom', detail: 'OPENAI_COMPATIBLE_BASE_URL' });
   });
 
   it('/key-set rejects a provider it does not know', () => {
@@ -202,7 +243,14 @@ describe('login', () => {
     const { state, effects } = run('/login OpenRouter', { plannerProvider: 'claude-code', runners: [claude, openrouter], runnersKnown: true });
 
     expect(effects).toEqual([]);
-    expect(lastMessage(state)?.text).toBe('OpenRouter runs on its API key and has no login: /key-set openrouter replaces the key.');
+    expect(lastMessage(state)?.text).toBe('OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.');
+  });
+
+  it('points Custom at its endpoint, which may take no key at all', () => {
+    const custom: RunnerView = { id: 'openai_compatible', name: 'Custom', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openai_compatible' };
+    const { state } = run('/login custom', { plannerProvider: 'claude-code', runners: [claude, custom], runnersKnown: true });
+
+    expect(lastMessage(state)?.text).toBe('Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.');
   });
 
   // Before the daemon answers, an empty runner list is not evidence that the
