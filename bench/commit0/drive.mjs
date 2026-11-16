@@ -35,7 +35,6 @@ const NODE_IN_BOX = '/opt/node/bin/node';
 const ORDEWELL_IN_BOX = '/opt/ordewell';
 const BOX_HOME = '/root';
 const POLL_MS = 30_000;
-const EVAL_TIMEOUT_S = 1800;
 const MERGE_TIMEOUT_MS = 15 * 60 * 1000;
 
 const opts = (() => {
@@ -424,7 +423,10 @@ async function collect(lib, sb, reference) {
 }
 
 async function evaluate(lib, sb, log) {
-  const r = await inBox(sb, ['sh', '-c', `timeout ${EVAL_TIMEOUT_S} ${pytestLine(lib, ['-q', '-rN', ...L.EVAL_PYTEST_FLAGS])}`], { workdir: lib.workdir, timeoutMs: (EVAL_TIMEOUT_S + 60) * 1000, log });
+  // Written afresh for every count, so nothing an arm did to it carries into the score.
+  const plugin = await inBox(sb, ['sh', '-c', `mkdir -p ${L.shellQuote(L.TEST_TIMEOUT_PLUGIN_DIR)} && cat > ${L.shellQuote(`${L.TEST_TIMEOUT_PLUGIN_DIR}/${L.TEST_TIMEOUT_PLUGIN}.py`)}`], { input: L.TEST_TIMEOUT_PLUGIN_PY });
+  must(check(lib.name, 'per-test timeout', plugin.code === 0, plugin.code === 0 ? `each test fails past ${L.TEST_TIMEOUT_S} s, the run past ${L.EVAL_TIMEOUT_S} s` : plugin.stderr.trim()), 'the timeout plugin cannot be written');
+  const r = await inBox(sb, ['sh', '-c', L.evalCommand(lib)], { workdir: lib.workdir, timeoutMs: (L.EVAL_TIMEOUT_S + 60) * 1000, log });
   const summary = L.parseEvaluation(r.code, r.stdout + r.stderr);
   return { exit: r.code, timedOut: r.code === 124, ...(summary ?? {}) };
 }

@@ -348,6 +348,57 @@ test('parseEvaluation counts a run whose stubs break collection as none passed, 
   assert.equal(L.parseEvaluation(124, ''), null);
 });
 
+test('the eval command bounds each test as well as the whole run', () => {
+  // tlslite-ng's stubbed Parser.atLengthCheck returns None, so test_atLengthCheck's
+  // `while not p.atLengthCheck()` spun until the run's 1800 s killed every count with it.
+  const cmd = L.evalCommand(lib({ testCmd: '/testbed/.venv/bin/python -m pytest' }));
+  assert.match(cmd, /^timeout 1800 /, 'the run keeps its overall limit');
+  assert.match(cmd, / '-p' 'commit0_test_timeout' /, 'the per-test timeout plugin is loaded');
+  assert.match(cmd, / '--commit0-test-timeout=120' /, 'each test is bounded');
+  assert.match(cmd, /PYTHONPATH='\/opt\/commit0-bench'\$\{PYTHONPATH:\+:\$PYTHONPATH\} \/testbed\/\.venv\/bin\/python -m pytest /, 'the plugin is importable, the image\'s own path kept');
+  assert.match(cmd, / '--continue-on-collection-errors' .* '-m' 'not network' '-p' 'no:cacheprovider' 'tests'$/);
+});
+
+const pytestPython = process.env.ORDEWELL_PYTEST_PYTHON ?? 'python3';
+const hasPytest = (() => { try { execFileSync(pytestPython, ['-c', 'import pytest'], { stdio: 'ignore' }); return true; } catch { return false; } })();
+
+test('the timeout plugin fails a spinning test and the run goes on', { skip: !(hasPytest && process.platform !== 'win32') && `needs ${pytestPython} with pytest (ORDEWELL_PYTEST_PYTHON names another), and SIGALRM` }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-timeout-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'plugin'));
+    fs.writeFileSync(path.join(dir, 'plugin', `${L.TEST_TIMEOUT_PLUGIN}.py`), L.TEST_TIMEOUT_PLUGIN_PY);
+    fs.mkdirSync(path.join(dir, 'tests'));
+    fs.writeFileSync(path.join(dir, 'tests', 'test_spin.py'), [
+      'def test_spins():',
+      '    while True:',
+      '        pass',
+      '',
+      'def test_swallows_exceptions():',
+      '    while True:',
+      '        try:',
+      '            pass',
+      '        except Exception:',
+      '            pass',
+      '',
+      'def test_passes():',
+      '    assert 1 + 1 == 2',
+      '',
+    ].join('\n'));
+    let out;
+    try {
+      out = execFileSync(pytestPython, ['-m', 'pytest', '-p', L.TEST_TIMEOUT_PLUGIN, '--commit0-test-timeout=1', '-q', '-rN', '-p', 'no:cacheprovider', 'tests'],
+        { cwd: dir, env: { ...process.env, PYTHONPATH: path.join(dir, 'plugin') }, encoding: 'utf8', timeout: 60_000 });
+    } catch (err) {
+      out = `${err.stdout}${err.stderr}`;
+    }
+    const summary = L.parsePytestSummary(out);
+    assert.deepEqual({ passed: summary?.passed, failed: summary?.failed, errors: summary?.errors }, { passed: 1, failed: 2, errors: 0 }, out);
+    assert.match(out, /Commit0TestTimeout: the test ran past 1s/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a file that fails to collect is an error of its own, and the other files still score', () => {
   assert.ok(L.EVAL_PYTEST_FLAGS.includes('--continue-on-collection-errors'), 'the eval must keep going past a broken file');
   const out = [

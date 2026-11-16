@@ -159,7 +159,10 @@ link core's worktree bootstrap makes to it; `arm.patch` leaves `.venv` out, and
 the eval refuses to run if the arm replaced or tracked it. After an arm, the tests under
 `testDir` (`test_*.py`, `conftest.py`, `tests/` and `unit_tests/`) are put back
 as the base had them, and nothing else there, since a `testDir` may lie inside
-the source. Its offline tests are
+the source. The baseline and the scored eval bound each test at 120 s (a pytest
+plugin the driver writes to `/opt/commit0-bench`, since the images carry no
+pytest-timeout) and the whole run at 1800 s, so a stub that spins fails its one
+test instead of losing the count. Its offline tests are
 `bench/commit0/commit0.test.mjs`.
 
 ## Execution pipeline harness (`bench/pipeline/`)

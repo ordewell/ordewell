@@ -563,6 +563,88 @@ export function parsePytestSummary(text) {
  */
 export const EVAL_PYTEST_FLAGS = Object.freeze(['--continue-on-collection-errors']);
 
+/** The whole scoring run's limit, past which `timeout` ends it with 124 and nothing is read. */
+export const EVAL_TIMEOUT_S = 1800;
+
+/**
+ * Each test phase's limit. A stub can make a test spin (tlslite-ng's
+ * test_atLengthCheck loops on a stubbed check that returns None), and one
+ * spinning test would otherwise hold the run to its limit and lose every count.
+ * tlslite-ng's slowest test at the reference takes about 3 s, so a passing test
+ * is nowhere near this.
+ */
+export const TEST_TIMEOUT_S = 120;
+
+/** Where the box holds the timeout plugin: outside the workspace, so no arm's patch carries it. */
+export const TEST_TIMEOUT_PLUGIN_DIR = '/opt/commit0-bench';
+export const TEST_TIMEOUT_PLUGIN = 'commit0_test_timeout';
+
+/**
+ * The per-test timeout, as a pytest plugin, since Commit0's images carry no
+ * pytest-timeout and the box cannot install one. An expiry raises a
+ * BaseException, not pytest.fail: hypothesis catches Failed and Exception to
+ * shrink, which would run the spinning test again unbounded, and a stub's
+ * `except Exception` would swallow it. pytest records it as that test's
+ * failure (an error in setup or teardown) and goes on to the next.
+ */
+export const TEST_TIMEOUT_PLUGIN_PY = String.raw`
+import signal
+
+import pytest
+
+
+class Commit0TestTimeout(BaseException):
+    pass
+
+
+def pytest_addoption(parser):
+    parser.addoption('--commit0-test-timeout', type=float, default=0.0,
+                     help='seconds each test phase may run before it fails')
+
+
+def _bounded(item):
+    seconds = item.config.getoption('commit0_test_timeout')
+    if not seconds:
+        yield
+        return
+
+    def expire(signum, frame):
+        raise Commit0TestTimeout('the test ran past %gs' % seconds)
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
+    yield from _bounded(item)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    yield from _bounded(item)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item):
+    yield from _bounded(item)
+`;
+
+/**
+ * The scoring run, as the box's sh runs it: the whole run bounded by
+ * EVAL_TIMEOUT_S and each test by TEST_TIMEOUT_S, with the plugin on the path
+ * ahead of whatever the image sets.
+ */
+export function evalCommand(lib) {
+  const pytest = [...EVAL_PYTEST_FLAGS, '-p', TEST_TIMEOUT_PLUGIN, `--commit0-test-timeout=${TEST_TIMEOUT_S}`, '-q', '-rN', ...pytestArgs(lib)];
+  return `timeout ${EVAL_TIMEOUT_S} env PYTHONPATH=${shellQuote(TEST_TIMEOUT_PLUGIN_DIR)}\${PYTHONPATH:+:$PYTHONPATH} ${lib.testCmd} ${pytest.map(shellQuote).join(' ')}`;
+}
+
 /** The files pytest could not collect, from its `ERROR collecting <file>` headers and `ERROR <file>` summary lines. */
 export function collectionErrorFiles(text) {
   const files = new Set();
