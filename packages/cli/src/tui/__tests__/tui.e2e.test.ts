@@ -255,7 +255,7 @@ describe('TUI end to end', () => {
     });
 
     expect(h.daemon.mocks.startConversation).toHaveBeenCalledWith(
-      'session-1', 'Build the login flow', undefined, '/ws', undefined,
+      'session-1', 'Build the login flow', undefined, '/ws',
     );
     // The research step painted while the REST call was in flight.
     expect(h.frames().some((f) => f.includes('LoginRoute.ts'))).toBe(true);
@@ -727,7 +727,7 @@ describe('TUI end to end', () => {
     h.type('Try again');
     h.type('\r');
     await vi.waitFor(() => {
-      expect(h.daemon.mocks.startConversation).toHaveBeenLastCalledWith('session-2', 'Try again', undefined, '/ws', undefined);
+      expect(h.daemon.mocks.startConversation).toHaveBeenLastCalledWith('session-2', 'Try again', undefined, '/ws');
     });
   });
 
@@ -766,7 +766,7 @@ describe('TUI end to end', () => {
     h.type('Fresh goal');
     h.type('\r');
     await vi.waitFor(() => {
-      expect(h.daemon.mocks.startConversation).toHaveBeenLastCalledWith('session-2', 'Fresh goal', undefined, '/ws', undefined);
+      expect(h.daemon.mocks.startConversation).toHaveBeenLastCalledWith('session-2', 'Fresh goal', undefined, '/ws');
     });
   });
 
