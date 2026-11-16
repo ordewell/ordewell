@@ -78,10 +78,11 @@ export function validateLibrary(raw) {
   if (typeof raw !== 'object' || raw === null) throw new Error('a library entry must be an object');
   const lib = {
     workdir: '/testbed',
-    testCmd: 'python -m pytest',
     networkMarker: NETWORK_MARKER,
     ...raw,
   };
+  // Commit0's images install into a venv in the workdir that `docker exec` puts on no PATH: a bare `python` has no pytest.
+  if (lib.testCmd === undefined && typeof lib.workdir === 'string') lib.testCmd = `${lib.workdir.replace(/\/+$/, '')}/.venv/bin/python -m pytest`;
   // The leak probe imports with the interpreter the tests run under, which a venv's PATH may decide.
   lib.python ??= lib.testCmd.trim().split(/\s+/)[0];
   const required = ['name', 'image', 'workdir', 'srcDir', 'testDir', 'testCmd', 'python', 'importName', 'distName', 'baseCommit', 'networkMarker'];
@@ -392,6 +393,78 @@ export function parseCollection(text) {
   const collected = Number(m[1] ?? m[3]);
   const deselected = Number(m[4] ?? 0);
   return { collected, total: m[2] !== undefined ? Number(m[2]) : collected + deselected, deselected };
+}
+
+const tail = (text, n = 6) => text.trim().split('\n').slice(-n).join(' | ');
+
+/**
+ * The denominator, counted at the reference commit before the history goes:
+ * there every module imports, so every test collects, and with the network
+ * closed a dependency missing from the image fails that import.
+ */
+export function judgeReferenceCollection({ code, output }) {
+  const counts = parseCollection(output);
+  const ok = code === 0 && counts !== null && counts.collected > 0;
+  return { ok, counts, failures: ok ? [] : [`collection at the reference failed (exit ${code}): ${tail(output)}`] };
+}
+
+/**
+ * Collection at the stubs, where it may fail outright: a stub that raises at
+ * import breaks every test module importing it (networkx exits 4 with none
+ * collected, tlslite-ng 2), so neither its exit nor its count says anything.
+ * Only a module the image lacks does.
+ */
+export function judgeStubCollection({ code, output }) {
+  const missing = [...new Set(output.split('\n').filter((l) => /ModuleNotFoundError|No module named/.test(l)).map((l) => l.trim()))];
+  return { ok: missing.length === 0, exit: code, counts: parseCollection(output), failures: missing.map((l) => `a module is missing from the image: ${l}`) };
+}
+
+/**
+ * Removes, and lists, every file under the working directory but .git written
+ * after the marker was touched, then the marker. (find will not combine
+ * -prune with -delete.)
+ */
+export function removeWrittenScript(mark) {
+  const q = shellQuote;
+  const list = `${mark}.list`;
+  return [
+    'set -eu',
+    `find . -path ./.git -prune -o -type f -newer ${q(mark)} -print > ${q(list)}`,
+    `while IFS= read -r f; do rm -f -- "$f"; done < ${q(list)}`,
+    `cat ${q(list)}`,
+    `rm -f ${q(mark)} ${q(list)}`,
+  ].join('\n');
+}
+
+/**
+ * Whether a path under testDir is a test the restore puts back: a test_*.py,
+ * a conftest.py, or anything in a tests/ or unit_tests/ directory. The rest is
+ * the arm's work wherever testDir lies inside srcDir, as networkx's does.
+ */
+export function isTestPath(lib, p) {
+  const dir = lib.testDir.replace(/^\.\//, '').replace(/\/+$/, '');
+  if (dir !== '' && dir !== '.' && !p.startsWith(`${dir}/`)) return false;
+  const parts = p.split('/');
+  const base = parts.pop();
+  return /^test_.*\.py$/.test(base) || base === 'conftest.py' || parts.some((d) => d === 'tests' || d === 'unit_tests');
+}
+
+/**
+ * What to put back under testDir, from `git diff --name-status -z --no-renames
+ * <base>` and `git ls-files -z --others --exclude-standard`: a changed or
+ * deleted test checked out from the base, an added one removed.
+ */
+export function testRestorePlan(lib, nameStatusZ, untrackedZ) {
+  const checkout = [];
+  const remove = [];
+  const f = nameStatusZ.split('\0');
+  for (let i = 0; i + 1 < f.length; i += 2) {
+    const [status, p] = [f[i], f[i + 1]];
+    if (!status || !isTestPath(lib, p)) continue;
+    (status === 'A' ? remove : checkout).push(p);
+  }
+  for (const p of untrackedZ.split('\0')) if (p && isTestPath(lib, p)) remove.push(p);
+  return { checkout, remove };
 }
 
 /** pytest's last summary line, as counts per outcome; null when the run printed none. */

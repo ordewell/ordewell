@@ -6,7 +6,7 @@
       "workdir": "/testbed",
       "srcDir": "<the dataset's src_dir>",
       "testDir": "<the dataset's test.test_dir>",
-      "testCmd": "python -m pytest",
+      "testCmd": "/testbed/.venv/bin/python -m pytest",
       "importName": "<the package the tests import>",
       "distName": "<its distribution name on PyPI>",
       "baseCommit": "<the dataset's base_commit>",
