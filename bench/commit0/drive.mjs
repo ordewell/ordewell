@@ -424,7 +424,7 @@ async function collect(lib, sb, reference) {
 }
 
 async function evaluate(lib, sb, log) {
-  const r = await inBox(sb, ['sh', '-c', `timeout ${EVAL_TIMEOUT_S} ${pytestLine(lib, ['-q', '-rN'])}`], { workdir: lib.workdir, timeoutMs: (EVAL_TIMEOUT_S + 60) * 1000, log });
+  const r = await inBox(sb, ['sh', '-c', `timeout ${EVAL_TIMEOUT_S} ${pytestLine(lib, ['-q', '-rN', ...L.EVAL_PYTEST_FLAGS])}`], { workdir: lib.workdir, timeoutMs: (EVAL_TIMEOUT_S + 60) * 1000, log });
   const summary = L.parseEvaluation(r.code, r.stdout + r.stderr);
   return { exit: r.code, timedOut: r.code === 124, ...(summary ?? {}) };
 }
@@ -593,6 +593,31 @@ async function restoreTests(lib, sb) {
   return plan.checkout.length + plan.remove.length > 0;
 }
 
+/**
+ * arm.patch from the workspace diff. A run that ended blocked or at its cap
+ * never merged, so its work is still in the task's worktree: when the workspace
+ * holds none, the patch is taken there, new files included, so a truncated run
+ * leaves its partial work on record instead of an empty patch.
+ */
+async function writeArmPatch(lib, sb, runDir, truncated) {
+  const patch = async (workdir, intent) => {
+    const script = intent ? `git add -N -- . ${L.shellQuote(`:(exclude,literal)${L.VENV_DIR}`)} && ${L.armPatchScript(lib)}` : L.armPatchScript(lib);
+    return inBox(sb, ['sh', '-c', `${script} > /tmp/arm.patch; test -s /tmp/arm.patch`], { workdir });
+  };
+  let landed = (await patch(lib.workdir, false)).code === 0;
+  if (!landed && truncated) {
+    const list = await inBox(sb, ['git', 'worktree', 'list', '--porcelain'], { workdir: lib.workdir });
+    for (const wt of L.otherWorktrees(list.stdout, lib.workdir)) {
+      if ((await patch(wt, true)).code !== 0) continue;
+      console.log(`  truncated run: arm.patch taken from the task worktree ${wt}`);
+      landed = true;
+      break;
+    }
+  }
+  if (!landed) await inBox(sb, ['sh', '-c', ': > /tmp/arm.patch']);
+  await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
+}
+
 async function copyOut(sb, from, to) {
   const r = await docker(['cp', `${sb.box}:${from}`, to]);
   return r.code === 0;
@@ -645,8 +670,9 @@ async function runOne(lib, arm, ordewell, runsDir) {
         throw new Abort(`the run never started: ${record.arm.stopped.detail}`);
       }
       record.testsModified = await restoreTests(lib, sb);
-      await inBox(sb, ['sh', '-c', `${L.armPatchScript(lib)} > /tmp/arm.patch`], { workdir: lib.workdir });
-      await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
+      const plan = record.arm.sessionId ? await readPlan(lib, sb, record.arm.sessionId) : null;
+      record.truncated = L.judgeLanding({ stopped: record.arm.stopped, plan, runExit: record.arm.steps?.run?.exit });
+      await writeArmPatch(lib, sb, runDir, record.truncated.truncated);
       const venv = await inBox(sb, ['sh', '-c', L.venvIntactScript(lib)]);
       must(check(lib.name, 'eval on the image\'s venv', venv.code === 0, venv.code === 0 ? `${L.VENV_DIR} is the image's directory, untracked` : venv.stderr.trim()), 'the arm replaced the venv: the eval cannot run');
       const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
@@ -669,7 +695,7 @@ async function runOne(lib, arm, ordewell, runsDir) {
     ...L.resultRecord({
       lib, arm, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,
       tests: record.tests, wallClockMs: record.arm?.wallClockMs, spend: record.arm?.billed ?? (record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
-      transcripts: record.transcripts, stopped: record.arm?.stopped, providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
+      transcripts: record.transcripts, stopped: record.arm?.stopped, truncated: record.truncated, providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
     }),
     sessionId: record.arm?.sessionId ?? null,
     steps: record.arm?.steps ?? null,
@@ -699,22 +725,6 @@ function loadLibraries() {
   return picked;
 }
 
-/**
- * Billed spend is the key's usage before and after, which counts every caller:
- * two drivers on one key would bill each other's calls, so a run holds the key.
- */
-function lockKey(dir) {
-  const lock = path.join(dir, 'key.lock');
-  try {
-    fs.writeFileSync(lock, `${process.pid}\n`, { flag: 'wx' });
-  } catch {
-    throw new Error(`${lock} is held: another run is billing this key. Remove it if no run is.`);
-  }
-  const release = () => fs.rmSync(lock, { force: true });
-  process.on('exit', release);
-  return release;
-}
-
 async function main() {
   const dataDir = checkedBenchDir('commit0');
   const runsDir = path.join(dataDir, opts.dryRun ? 'dry-runs' : 'runs');
@@ -722,7 +732,8 @@ async function main() {
   const libs = loadLibraries();
   console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; data in ${dataDir}`);
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
-  const release = opts.run ? lockKey(dataDir) : () => {};
+  const release = opts.run ? L.lockKey(dataDir) : () => {};
+  if (opts.run) process.on('exit', release);
   const results = [];
   try {
     const ordewell = await preflight();
