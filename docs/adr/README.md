@@ -297,6 +297,7 @@ What the planner may run, read and reach, and the sandbox under it.
 | [0050](planner-envelope/0050-a-read-only-task-can-hand-off-its-prototype-as-a-patch.md) | A read-only task can hand off its prototype as a patch | accepted | [0022](runners/0022-ordewell-mcp-server.md), [0046](planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md), [0047](supervision/0047-structured-task-handoffs.md) | — |
 | [0066](planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md) | OpenCode planners get Ordewell's own research agent | accepted | [0009](planner/0009-coding-agents-as-planners.md), [0026](planner-envelope/0026-one-envelope-for-every-planner.md) | — |
 | [0068](planner-envelope/0068-a-limit-on-the-planners-own-reads-per-turn.md) | A limit on the planner's own reads per turn | accepted, partly implemented | — | — |
+| [0071](planner-envelope/0071-any-folder-is-a-workspace.md) | Any folder is a workspace; git decides only how its tasks are isolated | accepted | — | — |
 
 ### routing/
 

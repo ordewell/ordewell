@@ -162,7 +162,7 @@ describe('planning', () => {
     const h = harness();
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
-    expect(h.api.startConversation).toHaveBeenCalledWith('session-new', 'ship it', undefined, '/ws', undefined);
+    expect(h.api.startConversation).toHaveBeenCalledWith('session-new', 'ship it', undefined, '/ws');
     expect(h.actions[0]).toEqual({ type: 'sessionStarted', sessionId: 'session-new', goal: 'ship it' });
   });
 

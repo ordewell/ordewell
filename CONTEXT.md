@@ -2147,6 +2147,14 @@ runs once per repo with `ORDEWELL_REPO` and `ORDEWELL_MAIN_REPO` set; a repo
 where it fails gets the default links instead, with a warning.
 *Avoid:* "workspace" for a worktree — the workspace is the user's checkout.
 
+**Workspace** — the folder the user opened, or the TUI started in, which a
+session plans in and its tasks run in. Any folder that exists is one, git or not,
+with no manifest or `.ordewell/` needed (ADR-0071); its repo group decides only
+how tasks are isolated, and with none every task runs in the workspace itself
+(ADR-0013).
+*Avoid:* "project" or "project directory" for it — no project marker is asked of
+a workspace.
+
 **Repo group** — the git repositories isolated together for one workspace
 (ADR-0014). A folder that is not itself a repository forms one from the
 repositories directly inside it, or, when `workspaceRepos` is set, from exactly

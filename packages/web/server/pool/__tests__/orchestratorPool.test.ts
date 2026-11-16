@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { existsSync } from 'fs';
-import { listSessions, saveSession, Session, WorkspaceNotFoundError, WorkspaceNotAProjectError, type LegacyPlanState } from '@ordewell/core';
+import { listSessions, saveSession, Session, WorkspaceNotFoundError, type LegacyPlanState } from '@ordewell/core';
 import { OrchestratorPool } from '../orchestratorPool';
 import { withReadyPlanner } from '../../__tests__/readyPlanner';
 
@@ -279,17 +278,16 @@ describe('OrchestratorPool workspace validation', () => {
   });
 });
 
-// A directory with no .git/.ordewell/manifest is the "starting a brand-new
-// project" case — it must still be refused by default (this is the same
-// check that stops the filesystem root becoming the confinement boundary),
-// but an explicit allowInit lets the caller bootstrap it deliberately rather
-// than being stuck with no way in.
-describe('OrchestratorPool workspace initialization', () => {
+// ADR-0071: any folder is a workspace. One with no git, manifest or .ordewell
+// opens as it is, and its state folder comes with the first save; without git,
+// its tasks run in the folder itself (ADR-0013).
+describe('OrchestratorPool on a folder with no project marker', () => {
   let workspace: string;
   let pool: OrchestratorPool;
 
   beforeEach(() => {
     workspace = mkdtempSync(join(tmpdir(), 'ordewell-pool-new-'));
+    writeFileSync(join(workspace, 'lecture.pdf'), '%PDF-1.4');
     pool = new OrchestratorPool({ accountLimitCollectors: () => [] });
   });
 
@@ -299,27 +297,18 @@ describe('OrchestratorPool workspace initialization', () => {
     vi.restoreAllMocks();
   });
 
-  it('still refuses an unmarked directory by default', async () => {
-    await expect(
-      pool.startPlanning('session-unmarked', 'Add a widget', ['claude-code'], workspace),
-    ).rejects.toThrow(WorkspaceNotAProjectError);
-    expect(pool.hasSession('session-unmarked')).toBe(false);
-    expect(existsSync(join(workspace, '.ordewell'))).toBe(false);
-  });
-
-  it('bootstraps .ordewell and proceeds when allowInit is explicitly set', async () => {
+  it('opens a planning session there, with nothing to confirm first', async () => {
     vi.spyOn(Session.prototype, 'startPlanning').mockResolvedValue(savedPlan());
 
-    await pool.startPlanning('session-init', 'Add a widget', ['claude-code'], workspace, undefined, { allowInit: true });
+    await pool.startPlanning('session-plain', 'Summarize the lectures', ['claude-code'], workspace);
 
-    expect(pool.hasSession('session-init')).toBe(true);
-    expect(existsSync(join(workspace, '.ordewell'))).toBe(true);
+    expect(pool.hasSession('session-plain')).toBe(true);
   });
 
-  it('never bootstraps for any other rejection, such as a missing directory', async () => {
+  it('still refuses a folder that does not exist', async () => {
     const missing = join(workspace, 'does-not-exist');
     await expect(
-      pool.startPlanning('session-init-missing', 'Add a widget', ['claude-code'], missing, undefined, { allowInit: true }),
+      pool.startPlanning('session-missing', 'Add a widget', ['claude-code'], missing),
     ).rejects.toThrow(WorkspaceNotFoundError);
   });
 });

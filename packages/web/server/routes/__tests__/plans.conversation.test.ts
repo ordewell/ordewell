@@ -237,7 +237,7 @@ describe('the surface a planner message states', () => {
     expect((await post(app, 'converse/message', { message: 'Postgres', surface: 'tui' })).status).toBe(200);
     expect((await post(app, 'converse/message/now', { message: 'now', surface: 'desktop' })).status).toBe(200);
 
-    expect(startPlanning).toHaveBeenCalledWith('s1', 'build it', undefined, '/repo', undefined, { allowInit: undefined, surface: 'cli' });
+    expect(startPlanning).toHaveBeenCalledWith('s1', 'build it', undefined, '/repo', undefined, { surface: 'cli' });
     expect(continuePlanning).toHaveBeenCalledWith('s1', 'Postgres', undefined, 'tui');
     expect(forceSendPrompt).toHaveBeenCalledWith('s1', 'now', undefined, 'desktop');
   });

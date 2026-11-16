@@ -343,7 +343,6 @@ export type ConfirmAction =
   /** `pastChecks` / `besideOps`: the user was asked about the checks that have not passed (ADR-0055 D9) or the ops tasks running in the checkout (ADR-0020), and said yes. */
   | ({ kind: 'merge-run' } & MergeYes)
   | { kind: 'discard-run' }
-  | { kind: 'init-workspace'; goal: string; workspace: string }
   | { kind: 'rewind'; index: number }
   /** The yes an escalation option's own question asks for; the answer carries it as `confirmed`. */
   | { kind: 'answer-escalation'; escalationId: string; option: string; note?: string };

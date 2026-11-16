@@ -843,13 +843,6 @@ describe('plain confirms', () => {
     expect(effects).toEqual([{ type: 'removeTask', sessionId: 's1', taskId: 't1' }]);
   });
 
-  it('enter runs an init-workspace confirm, retrying with the workspace allowed', () => {
-    const { state, effects } = press(asking({ kind: 'init-workspace', goal: 'g', workspace: '/w' }), 'enter');
-
-    expect(state.overlay).toBeNull();
-    expect(effects).toEqual([{ type: 'startConversation', goal: 'g', allowInit: true }]);
-  });
-
   it('enter on a new-session confirm starts over', () => {
     const { state, effects } = press(asking({ kind: 'new-session' }), 'enter');
 

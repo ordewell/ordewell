@@ -48,7 +48,6 @@ export type DaemonErrorCode =
   | 'no_plan'
   | 'already_executing'
   | 'workspace_not_found'
-  | 'workspace_not_a_project'
   | 'conversation_busy'
   /** The user stopped the planner turn: the turn ended as asked, so a client stays quiet. */
   | 'planner_turn_stopped'
@@ -99,8 +98,6 @@ export type DaemonErrorCode =
 export interface ErrorBody {
   error: string;
   code?: DaemonErrorCode;
-  /** Set with `workspace_not_a_project`: the directory the daemon refused, so a client can offer to initialize it. */
-  workspace?: string;
   /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
   plannerNotReady?: PlannerNotReady;
   /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */

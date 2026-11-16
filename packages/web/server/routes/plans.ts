@@ -61,8 +61,8 @@ export function plansRoute(pool: OrchestratorPool) {
 
   router.post('/:sessionId/generate', async (c) => {
     try {
-      const { goal, runners, workspace, model, allowInit } = await jsonObject<{
-        goal?: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean;
+      const { goal, runners, workspace, model } = await jsonObject<{
+        goal?: string; runners?: string[]; workspace?: string; model?: string;
       }>(c);
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
@@ -73,7 +73,7 @@ export function plansRoute(pool: OrchestratorPool) {
       // the session to read after its planner gate, since before the installed
       // agents are detected the enabled default is not known yet.
       const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : (queryRunners ? queryRunners.split(',').map(s => s.trim()).filter(Boolean) : undefined));
-      const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit });
+      const plan = await pool.generatePlan(c.req.param('sessionId'), goal, runnerList, ws, model);
       const { models, modelsByRunner } = await pool.getProviderModels(ws);
       const notes = (pool.session(c.req.param('sessionId'), ws).planState?.conversationHistory ?? [])
         .filter((e) => e.kind === 'system')
@@ -363,14 +363,14 @@ export function plansRoute(pool: OrchestratorPool) {
   // planner committed the plan.
   router.post('/:sessionId/converse/start', async (c) => {
     try {
-      const { goal, runners, workspace, model, allowInit, surface } = await jsonObject<{
-        goal?: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean; surface?: unknown;
+      const { goal, runners, workspace, model, surface } = await jsonObject<{
+        goal?: string; runners?: string[]; workspace?: string; model?: string; surface?: unknown;
       }>(c);
       if (!goal) return c.json({ error: 'goal is required' }, 400);
       const ws = workspace || c.req.query('workspace') || process.cwd();
       // As in generate: none requested is read by the session, after its gate.
       const runnerList: string[] | undefined = Array.isArray(runners) ? runners : (runners ? [runners] : undefined);
-      const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { allowInit, surface: clientSurface(surface) });
+      const plan = await pool.startPlanning(c.req.param('sessionId'), goal, runnerList, ws, model, { surface: clientSurface(surface) });
       return c.json({ plan: surfacePlan(plan) } satisfies PlanResponse);
     } catch (err) {
       return failure(c, err, 'converse start', { message: 'Planning failed' });
