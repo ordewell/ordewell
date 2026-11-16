@@ -139,7 +139,9 @@ model call, and the OpenRouter key never enters the box. It checks:
   (a missing window or the fallback value fails the run)
 - the reference implementation is out of reach: not in `git log --all`, not in
   site-packages, not in a pip archive (a planted leak proves the probe catches it)
-- the tests collect with the dependencies already in the image
+- the tests collect with the dependencies already in the image: the count is
+  taken at the reference commit, before the history goes, and is the
+  denominator; at the stubs, which break imports, only a missing module fails
 - the count of network-marked tests left out
 
 Each step that would call the model is reported UNVERIFIED. `--run` runs the
@@ -149,7 +151,12 @@ OpenRouter account, since a request cannot pin it. Pass that provider as
 `--provider-pin` so every result records it.
 `libraries.example.json` shows the shape of a library list. Results, per library
 and arm, go to `<bench dir>/commit0/` (`dry-runs/`, `runs/`, `results.jsonl`),
-and so does the packed runtime (`runtime/<sha>`). Its offline tests are
+and so does the packed runtime (`runtime/<sha>`). A library's `testCmd` defaults
+to the venv Commit0's images install into, `<workdir>/.venv/bin/python -m pytest`,
+since `docker exec` puts it on no PATH. After an arm, the tests under
+`testDir` (`test_*.py`, `conftest.py`, `tests/` and `unit_tests/`) are put back
+as the base had them, and nothing else there, since a `testDir` may lie inside
+the source. Its offline tests are
 `bench/commit0/commit0.test.mjs`.
 
 ## Execution pipeline harness (`bench/pipeline/`)

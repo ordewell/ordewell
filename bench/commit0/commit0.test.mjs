@@ -21,10 +21,18 @@ const lib = (over = {}) => L.validateLibrary({
 test('validateLibrary fills the defaults Commit0 images share', () => {
   const l = lib();
   assert.equal(l.workdir, '/testbed');
-  assert.equal(l.testCmd, 'python -m pytest');
-  assert.equal(l.python, 'python');
+  // Commit0's images install into /testbed/.venv, which `docker exec` puts on no PATH.
+  assert.equal(l.testCmd, '/testbed/.venv/bin/python -m pytest');
+  assert.equal(l.python, '/testbed/.venv/bin/python');
+  assert.equal(lib({ workdir: '/work/' }).python, '/work/.venv/bin/python');
   assert.equal(l.networkMarker, 'network');
   assert.equal(lib({ testCmd: '/venv/bin/python -m pytest' }).python, '/venv/bin/python');
+});
+
+test('the example runs the tests under the venv python', () => {
+  for (const raw of JSON.parse(fs.readFileSync(path.join(here, 'libraries.example.json'), 'utf8')).libraries) {
+    assert.equal(raw.testCmd, `${raw.workdir}/.venv/bin/python -m pytest`);
+  }
 });
 
 test('validateLibrary refuses a missing field, a placeholder and a bad name', () => {
@@ -177,6 +185,32 @@ test('flattenScript and the leak probe on a real repository', { skip: !(hasGit &
   }
 });
 
+test('removeWrittenScript removes what was written after the marker, and nothing in .git', { skip: process.platform === 'win32' && 'POSIX find and sh' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+  try {
+    const old = new Date(Date.now() - 60_000);
+    for (const f of ['kept.py', '.git/HEAD']) {
+      fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      fs.writeFileSync(path.join(dir, f), 'x');
+      fs.utimesSync(path.join(dir, f), old, old);
+    }
+    const mark = path.join(dir, '..', `${path.basename(dir)}.mark`);
+    fs.writeFileSync(mark, '');
+    fs.utimesSync(mark, new Date(Date.now() - 30_000), new Date(Date.now() - 30_000));
+    fs.mkdirSync(path.join(dir, 'pkg', '__pycache__'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'pkg', '__pycache__', 'impl.cpython-310.pyc'), 'compiled reference');
+    fs.writeFileSync(path.join(dir, '.git', 'index'), 'new');
+    const out = execFileSync('sh', ['-c', L.removeWrittenScript(mark)], { cwd: dir, encoding: 'utf8' });
+    assert.deepEqual(out.trim().split('\n'), ['./pkg/__pycache__/impl.cpython-310.pyc']);
+    assert.equal(fs.existsSync(path.join(dir, 'pkg', '__pycache__', 'impl.cpython-310.pyc')), false);
+    assert.equal(fs.existsSync(path.join(dir, 'kept.py')), true);
+    assert.equal(fs.existsSync(path.join(dir, '.git', 'index')), true);
+    assert.equal(fs.existsSync(mark), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('pytestArgs leaves the network-marked tests out and writes no cache', () => {
   assert.deepEqual(L.pytestArgs(lib({ networkMarker: 'online' })), ['-m', 'not online', '-p', 'no:cacheprovider', 'tests']);
 });
@@ -187,6 +221,50 @@ test('parseCollection reads the collected and deselected counts', () => {
   assert.deepEqual(L.parseCollection('1 test collected in 0.2s'), { collected: 1, total: 1, deselected: 0 });
   assert.deepEqual(L.parseCollection('no tests collected (5 deselected) in 0.1s'), { collected: 0, total: 5, deselected: 5 });
   assert.equal(L.parseCollection('ERROR collecting tests/test_x.py'), null);
+});
+
+test('the denominator is counted at the reference, where collection must succeed', () => {
+  const ok = L.judgeReferenceCollection({ code: 0, output: 'x::y\n\n5268/5270 tests collected (2 deselected) in 9.1s\n' });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.counts, { collected: 5268, total: 5270, deselected: 2 });
+  assert.equal(L.judgeReferenceCollection({ code: 2, output: 'ERROR collecting x\n1 test collected, 1 error in 0.1s' }).ok, false);
+  assert.equal(L.judgeReferenceCollection({ code: 5, output: 'no tests collected in 0.1s' }).ok, false);
+});
+
+test('at the stubs collection may fail, and only a missing module fails the check', () => {
+  // What the real images print: networkx's stubs break every import (exit 4, none collected), tlslite-ng's exit 2.
+  const networkx = L.judgeStubCollection({ code: 4, output: 'ImportError while loading conftest \'/testbed/networkx/conftest.py\'.\nnetworkx/__init__.py:19: in <module>\nE   NotImplementedError\n' });
+  assert.equal(networkx.ok, true);
+  const tlslite = L.judgeStubCollection({ code: 2, output: 'ERROR collecting unit_tests/test_tlslite_x.py\nE   ImportError: cannot import name \'x\'\n12 tests collected, 30 errors in 1.2s\n' });
+  assert.equal(tlslite.ok, true);
+  assert.equal(tlslite.counts.collected, 12);
+  const missing = L.judgeStubCollection({ code: 0, output: 'E   ModuleNotFoundError: No module named \'scipy\'\n3 tests collected in 0.1s\n' });
+  assert.equal(missing.ok, false);
+  assert.match(missing.failures[0], /No module named 'scipy'/);
+  assert.equal(L.judgeStubCollection({ code: 1, output: "ImportError: No module named ecdsa\n" }).ok, false);
+});
+
+test('only the tests are restored when testDir lies inside the source', () => {
+  const networkx = lib({ srcDir: 'networkx/', testDir: 'networkx/' });
+  assert.equal(L.isTestPath(networkx, 'networkx/algorithms/tests/test_cycles.py'), true);
+  assert.equal(L.isTestPath(networkx, 'networkx/algorithms/tests/__init__.py'), true);
+  assert.equal(L.isTestPath(networkx, 'networkx/conftest.py'), true);
+  assert.equal(L.isTestPath(networkx, 'networkx/algorithms/cycles.py'), false, 'the arm\'s work');
+  assert.equal(L.isTestPath(networkx, 'networkx/testing/__init__.py'), false);
+  assert.equal(L.isTestPath(networkx, 'docs/tests/test_x.py'), false, 'outside testDir');
+  const tlslite = lib({ srcDir: 'tlslite/', testDir: 'unit_tests/' });
+  assert.equal(L.isTestPath(tlslite, 'unit_tests/mocksock.py'), true, 'a helper in unit_tests/ is a test file');
+  assert.equal(L.isTestPath(tlslite, 'tlslite/utils/cryptomath.py'), false);
+
+  const z = (...a) => `${a.join('\0')}\0`;
+  const plan = L.testRestorePlan(networkx,
+    z('M', 'networkx/algorithms/cycles.py', 'M', 'networkx/algorithms/tests/test_cycles.py', 'D', 'networkx/tests/test_x.py', 'A', 'networkx/tests/test_new.py', 'A', 'networkx/algorithms/helper.py'),
+    z('networkx/tests/test_untracked.py', 'networkx/scratch.py'));
+  assert.deepEqual(plan, {
+    checkout: ['networkx/algorithms/tests/test_cycles.py', 'networkx/tests/test_x.py'],
+    remove: ['networkx/tests/test_new.py', 'networkx/tests/test_untracked.py'],
+  });
+  assert.deepEqual(L.testRestorePlan(networkx, '', ''), { checkout: [], remove: [] });
 });
 
 test('parsePytestSummary reads the last summary line', () => {
@@ -205,6 +283,16 @@ const transcript = [
   line({ kind: 'compaction', step: 3, head: 1, tailFrom: 3, message: { role: 'user', content: 's' }, preTokens: 600000, postTokens: 2000, usage: { inputTokens: 1, cost: { amount: 0.002 } } }),
   '{"v":1,"kind":"usage","step":4,"usa',
 ].join('\n');
+
+test('parseEvaluation counts a run whose stubs break collection as none passed, and nothing else without a summary', () => {
+  assert.equal(L.parseEvaluation(1, '== 3 passed, 2 failed in 0.4s ==').passed, 3);
+  // networkx at the stubs: the conftest import fails, exit 4, no summary line.
+  const networkx = L.parseEvaluation(4, "ImportError while loading conftest '/testbed/networkx/conftest.py'.\nnetworkx/__init__.py:19: in <module>\nE   TypeError: 'NoneType' object is not callable\n");
+  assert.equal(networkx.passed, 0);
+  assert.match(networkx.collectionError, /conftest '\/testbed\/networkx\/conftest.py'/);
+  assert.equal(L.parseEvaluation(4, 'ERROR: usage: pytest [options]\npytest: error: unrecognized arguments: --bad\n'), null, 'a driver mistake is not a score');
+  assert.equal(L.parseEvaluation(124, ''), null);
+});
 
 test('summarizeTranscript: spend, peak context and compactions', () => {
   const s = L.summarizeTranscript(transcript);

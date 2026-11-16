@@ -367,8 +367,10 @@ async function prepareFixture(lib, sb) {
 }
 
 async function flattenAndProbe(lib, sb) {
-  const flat = await inBox(sb, ['sh', '-c', L.flattenScript(lib)]);
+  const flat = await inBox(sb, ['sh', '-c', `${L.flattenScript(lib)}\ngit rev-parse HEAD`]);
   must(check(lib.name, 'flatten history', flat.code === 0, flat.code === 0 ? `one commit, the tree of ${lib.baseCommit.slice(0, 12)}, on commit0-base` : flat.stderr.trim()), 'flatten failed');
+  // `ordewell merge` lands on commit0-base, so the arm's diff and the restore are taken against this commit, not the branch.
+  lib.flatCommit = flat.stdout.trim().split('\n').pop();
   const probe = await probeLeak(lib, sb);
   const verdict = probe.error ? { ok: false, failures: [`the probe failed: ${probe.error}`] } : L.judgeLeak(probe);
   check(lib.name, 'reference implementation out of reach', verdict.ok, verdict.ok
@@ -383,20 +385,44 @@ function pytestLine(lib, extra) {
   return `${lib.testCmd} ${[...extra, ...L.pytestArgs(lib)].map(L.shellQuote).join(' ')}`;
 }
 
-/** Collection proves the dependencies are in the image: with the network closed, a missing one fails the import. */
-async function collect(lib, sb) {
+const REF_MARK = '/tmp/commit0-reference-collection';
+
+/**
+ * The denominator, counted at the reference commit before flattening drops
+ * it. No bytecode is written, and anything the collection wrote is removed, so
+ * no compiled copy of the implementation stays behind for the arm to find.
+ */
+async function collectReference(lib, sb) {
+  if (!lib.referenceCommit) {
+    must(check(lib.name, 'tests collect at the reference', false, 'no referenceCommit: the denominator is counted there'), 'no denominator');
+  }
+  const co = await inBox(sb, ['git', '-c', 'advice.detachedHead=false', 'checkout', '-q', '--detach', lib.referenceCommit], { workdir: lib.workdir });
+  must(check(lib.name, 'reference checked out', co.code === 0, co.code === 0 ? lib.referenceCommit.slice(0, 12) : co.stderr.trim()), 'the reference commit cannot be checked out');
+  const r = await inBox(sb, ['sh', '-c', `touch ${REF_MARK} && PYTHONDONTWRITEBYTECODE=1 ${pytestLine(lib, ['--collect-only', '-q'])}`], { workdir: lib.workdir, timeoutMs: 600_000 });
+  const verdict = L.judgeReferenceCollection({ code: r.code, output: r.stdout + r.stderr });
+  const written = await inBox(sb, ['sh', '-c', L.removeWrittenScript(REF_MARK)], { workdir: lib.workdir });
+  const left = written.stdout.trim() ? written.stdout.trim().split('\n') : [];
+  const back = await inBox(sb, ['git', '-c', 'advice.detachedHead=false', 'checkout', '-q', '--detach', lib.baseCommit], { workdir: lib.workdir });
+  const ok = verdict.ok && written.code === 0 && back.code === 0;
+  check(lib.name, 'tests collect at the reference', ok, ok
+    ? [`${verdict.counts.collected} tests collected with the network closed, the denominator; ${verdict.counts.deselected} marked "${lib.networkMarker}" left out`, ...(left.length ? [`removed what collection wrote: ${left.slice(0, 5).join(', ')}${left.length > 5 ? ` and ${left.length - 5} more` : ''}`] : [])]
+    : [...verdict.failures, ...(written.code !== 0 ? [`cleaning up failed: ${written.stderr.trim()}`] : []), ...(back.code !== 0 ? [`back to the base failed: ${back.stderr.trim()}`] : [])]);
+  return { ok, ...(verdict.counts ?? {}) };
+}
+
+/** At the stubs: with the network closed, a dependency the image lacks fails an import, and only that fails the check. */
+async function collect(lib, sb, reference) {
   const r = await inBox(sb, ['sh', '-c', pytestLine(lib, ['--collect-only', '-q'])], { workdir: lib.workdir, timeoutMs: 600_000 });
-  const counts = L.parseCollection(r.stdout);
-  const ok = r.code === 0 && counts !== null && counts.collected > 0;
-  check(lib.name, 'dependencies in the image', ok, ok
-    ? `${counts.collected} tests collected with the network closed; ${counts.deselected} marked "${lib.networkMarker}" left out`
-    : `collection failed (exit ${r.code}): ${(r.stdout + r.stderr).trim().split('\n').slice(-6).join(' | ')}`);
-  return { ok, ...(counts ?? {}) };
+  const verdict = L.judgeStubCollection({ code: r.code, output: r.stdout + r.stderr });
+  check(lib.name, 'dependencies in the image', verdict.ok, verdict.ok
+    ? `at the stubs: no module missing (exit ${r.code}, ${verdict.counts?.collected ?? 'no'} collected; a stub that breaks an import is the task)`
+    : verdict.failures.slice(0, 6));
+  return { ...reference, ok: reference.ok && verdict.ok, stubs: { exit: r.code, collected: verdict.counts?.collected ?? null } };
 }
 
 async function evaluate(lib, sb, log) {
   const r = await inBox(sb, ['sh', '-c', `timeout ${EVAL_TIMEOUT_S} ${pytestLine(lib, ['-q', '-rN'])}`], { workdir: lib.workdir, timeoutMs: (EVAL_TIMEOUT_S + 60) * 1000, log });
-  const summary = L.parsePytestSummary(r.stdout);
+  const summary = L.parseEvaluation(r.code, r.stdout + r.stderr);
   return { exit: r.code, timedOut: r.code === 124, ...(summary ?? {}) };
 }
 
@@ -537,13 +563,19 @@ async function realArm(lib, sb, arm, runDir) {
   return { sessionId, steps: Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, v && 'code' in v ? { exit: v.code, timedOut: v.timedOut } : v])), wallClockMs, stopped, billed: before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null };
 }
 
-/** The tests as the dataset wrote them, whatever the arm did to them, and whether it did. */
+/**
+ * The tests as the dataset wrote them, whatever the arm did to them, and
+ * whether it did. Only the tests: networkx's testDir is its srcDir, so
+ * restoring the whole directory would undo the arm's work.
+ */
 async function restoreTests(lib, sb) {
-  const diff = await inBox(sb, ['git', 'diff', '--stat', 'commit0-base', '--', lib.testDir], { workdir: lib.workdir });
-  const untracked = await inBox(sb, ['git', 'ls-files', '--others', '--exclude-standard', '--', lib.testDir], { workdir: lib.workdir });
-  const modified = diff.stdout.trim() !== '' || untracked.stdout.trim() !== '';
-  await inBox(sb, ['sh', '-c', `git checkout -q commit0-base -- ${L.shellQuote(lib.testDir)} && git clean -fdq -- ${L.shellQuote(lib.testDir)}`], { workdir: lib.workdir });
-  return modified;
+  const o = { workdir: lib.workdir };
+  const diff = await inBox(sb, ['git', 'diff', '--name-status', '-z', '--no-renames', lib.flatCommit, '--', lib.testDir], o);
+  const untracked = await inBox(sb, ['git', 'ls-files', '-z', '--others', '--exclude-standard', '--', lib.testDir], o);
+  const plan = L.testRestorePlan(lib, diff.stdout, untracked.stdout);
+  if (plan.checkout.length) await inBox(sb, ['git', 'checkout', '-q', lib.flatCommit, '--', ...plan.checkout], o);
+  if (plan.remove.length) await inBox(sb, ['rm', '-f', '--', ...plan.remove], o);
+  return plan.checkout.length + plan.remove.length > 0;
 }
 
 async function copyOut(sb, from, to) {
@@ -581,12 +613,14 @@ async function runOne(lib, arm, ordewell, runsDir) {
     if (opts.fixture) {
       await prepareFixture(lib, sb);
     }
+    const reference = await collectReference(lib, sb);
+    must(reference.ok, 'the tests do not collect offline at the reference');
     record.leak = await flattenAndProbe(lib, sb);
     must(record.leak.ok, 'the reference implementation is reachable: nothing runs');
-    record.network = await collect(lib, sb);
-    must(record.network.ok, 'the tests do not collect offline');
+    record.network = await collect(lib, sb, reference);
+    must(record.network.ok, 'a dependency is missing from the image');
     record.baseline = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
-    check(lib.name, 'baseline on the stubs', record.baseline.passed !== undefined, `${record.baseline.passed ?? '?'} passed, ${record.baseline.failed ?? '?'} failed, ${record.baseline.errors ?? 0} errors of ${record.network.collected} collected`);
+    check(lib.name, 'baseline on the stubs', record.baseline.passed !== undefined, [`${record.baseline.passed ?? '?'} passed, ${record.baseline.failed ?? '?'} failed, ${record.baseline.errors ?? 0} errors of ${record.network.collected} collected (exit ${record.baseline.exit})`, ...(record.baseline.collectionError ? [`the stubs break collection: ${record.baseline.collectionError}`] : [])]);
     if (opts.dryRun) {
       for (const a of [arm]) await dryArm(lib, sb, a);
     } else {
@@ -594,7 +628,7 @@ async function runOne(lib, arm, ordewell, runsDir) {
       record.testsModified = await restoreTests(lib, sb);
       const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
       record.tests = { ...evaluated, collected: record.network.collected };
-      await inBox(sb, ['sh', '-c', `git diff commit0-base > /tmp/arm.patch`], { workdir: lib.workdir });
+      await inBox(sb, ['sh', '-c', `git diff ${lib.flatCommit} > /tmp/arm.patch`], { workdir: lib.workdir });
       await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
     }
   } catch (err) {
