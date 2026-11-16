@@ -123,6 +123,8 @@ export function goalText(lib) {
     `Implement the ${lib.name} library in this repository.`,
     `Its source under ${lib.srcDir} has the public API as stubs: the bodies of its functions and methods are left unimplemented.`,
     `Fill them in so that the unit tests under ${lib.testDir} pass; run them with \`${lib.testCmd} ${lib.testDir}\`.`,
+    'The repository may not import until its stubbed functions are implemented: implementing them is the task, and a repository that fails to import is not a reason to stop.',
+    'The tests in the repository are the specification.',
     'Do not edit, delete or skip the tests.',
     'Every dependency is already installed and the network is closed, so do not install or download anything.',
   ].join(' ');
