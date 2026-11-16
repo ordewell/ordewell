@@ -108,10 +108,10 @@ describe('plannerNotReady — a signed-out coding agent', () => {
 describe('describePlannerNotReady', () => {
   const noKey = plannerNotReady(config({ aiProvider: 'openrouter' }))!;
 
-  it('leads a terminal user to /planner, naming the agents from the registry, and offers /key for the vendor', () => {
+  it('leads a terminal user to /planner, naming the agents from the registry, and offers /key-set for the vendor', () => {
     expect(describePlannerNotReady(noKey, TERMINAL_UI_COMMANDS)).toBe(
       'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
-      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
+      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key-set.',
     );
   });
 
@@ -144,8 +144,8 @@ describe('describePlannerNotReady', () => {
     'copilot-cli': 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login. Then try again.',
     'cursor-agent': 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login. Then try again.',
     cline: 'Cline is not signed in. Sign in with /login cline, or run cline auth. Then try again.',
-    'qwen-code': 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there. Then try again.',
-    'gemini-cli': 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in. Then try again.',
+    'qwen-code': 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there. Then try again.',
+    'gemini-cli': 'Gemini CLI is not signed in. Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in. Then try again.',
   };
 
   it.each(Object.keys(PLANNER_TERMINAL))('gives signed-out %s every way back in, in the chat\'s spelling', (runner) => {

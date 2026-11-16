@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { removedPluginNotice } from '../removedPluginNotice';
 import { RunnerRegistry } from '../RunnerRegistry';
+import { PROVIDER_PRIORITY } from '../../services/apiProviders';
 
 const directories: string[] = [];
 function dataDir(): string {
@@ -35,7 +36,7 @@ describe('removedPluginNotice', () => {
       return file;
     });
     expect(removedPluginNotice(directory)).toMatch(/^Plugin runners were removed;.*CHANGELOG\.$/);
-    expect(new RunnerRegistry().list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'ordewell']);
+    expect(new RunnerRegistry().list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_PRIORITY]);
     for (const file of files) expect(fs.readFileSync(file, 'utf8')).toBe('{invalid manifest');
   });
 

@@ -403,7 +403,7 @@ describe('gemini-cli, replayed from Gemini CLI 0.66.0', () => {
     const { mcp } = await taskToken();
     const { adapter } = gemini(replay('signed-out'));
 
-    const hint = 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
+    const hint = 'Gemini CLI is not signed in. Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
     await expect(adapter.start(taskStart(mcp))).rejects.toThrow(hint);
     const refusal = recording('signed-out').find((e) => e.dir === 'in' && e.line.error);
     expect(refusal?.dir === 'in' && refusal.line.error?.message).toMatch(GEMINI_CLI_MANIFEST.auth?.signedOut ?? /^$/);

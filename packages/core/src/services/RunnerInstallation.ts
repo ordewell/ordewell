@@ -1,14 +1,15 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import { runnerCommand, type RunnerManifest } from '../plugins/types';
+import { inProcessProvider, runnerCommand, type RunnerManifest } from '../plugins/types';
+import type { AiProvider } from '../interfaces/IConfig';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import { compareVersions } from '../utils/version';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
-import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, runnerSignIn, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
-import { PROVIDER_PRIORITY, vendorApiKeyIn } from './apiProviders';
+import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { VENDORS, vendorConfiguredIn } from './apiProviders';
 
 const execAsync = promisify(exec);
 
@@ -76,6 +77,13 @@ export function parseCliVersion(stdout: string): string | undefined {
 /** Whether an agent can be started, why not, and its login verdict beside it. */
 export interface RunnerUsability { usable: boolean; reason?: string; auth?: RunnerAuth; version?: string }
 
+/** Why an in-process runner cannot start: what configures its provider is unset. */
+function unconfiguredReason(manifest: RunnerManifest): string {
+  const provider = inProcessProvider(manifest);
+  if (provider === 'openai_compatible') return `No ${manifest.displayName} endpoint is set: set ${VENDORS.openai_compatible.baseUrlEnvVar}.`;
+  return `No ${manifest.displayName} key is set: add one with /key-set.`;
+}
+
 export class RunnerInstallation {
   private cache: Map<string, { installed: boolean; at: number; version?: string }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
@@ -104,18 +112,26 @@ export class RunnerInstallation {
     this.launch = options.launch ?? {};
   }
 
-  /** True if the runner's CLI responds to `--version`. Cached per process. */
+  /**
+   * True if the runner's CLI responds to `--version`, cached per process; for
+   * an in-process runner, whether its provider is configured.
+   */
   async isInstalled(runner: string): Promise<boolean> {
+    const manifest = this.registry.getManifest(runner);
+    // An in-process runner is code Ordewell ships: there is no binary to ask,
+    // and it is installed exactly where its provider is configured (ADR-0070),
+    // so a provider with no key has no runner to list, sign in or pick. Asked
+    // afresh each time, never cached, since `/key-set` sets a key into this
+    // very process and the next look must see it.
+    const provider = manifest && inProcessProvider(manifest);
+    if (provider) return this.providerConfigured(provider);
+
     const cached = this.cache.get(runner);
     if (cached && (cached.installed || this.now() - cached.at < NEGATIVE_TTL_MS)) return cached.installed;
 
     const existing = this.inflight.get(runner);
     if (existing) return existing;
 
-    const manifest = this.registry.getManifest(runner);
-    // An in-process runner is code Ordewell ships, so it is installed whenever
-    // Ordewell is: there is no binary to ask (ADR-0070).
-    if (manifest?.runner.inProcess) return true;
     const command = manifest && runnerCommand(manifest);
     if (!command) {
       this.cache.set(runner, { installed: false, at: this.now() });
@@ -172,6 +188,8 @@ export class RunnerInstallation {
       return { usable: false, reason: `${manifest.displayName ?? runner} has no planner transport yet.` };
     }
     if (!connector.plans) {
+      // A planner under a provider runner's id is the API planner on that provider, never the runner (ADR-0009).
+      if (inProcessProvider(manifest)) return { usable: false, reason: `The built-in runner does not plan: plan with the ${manifest.displayName} API planner instead.` };
       return { usable: false, reason: `${manifest.displayName ?? runner} can run tasks but cannot plan in Ordewell yet.` };
     }
     return this.runnerUsability(runner);
@@ -187,7 +205,10 @@ export class RunnerInstallation {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return { usable: false, reason: `No runner manifest is registered for "${runner}".` };
     const command = runnerCommand(manifest);
-    if (command === undefined) return { usable: true, auth: await this.inProcessAuth(runner, manifest) };
+    if (command === undefined) {
+      if (!(await this.isInstalled(runner))) return { usable: false, reason: unconfiguredReason(manifest) };
+      return { usable: true, auth: this.inProcessAuth(runner) };
+    }
     if (!(await this.isInstalled(runner))) {
       return { usable: false, reason: `${command} is not installed or is not on PATH.` };
     }
@@ -259,26 +280,25 @@ export class RunnerInstallation {
     return probe;
   }
 
-  /**
-   * An in-process runner's sign-in is a provider key in Ordewell (ADR-0070):
-   * signed in with one, signed out with none, `/key` the way in (ADR-0052).
-   * Asked afresh each time, never cached, since `/key` sets one into this very
-   * process and the next look must see it.
-   */
-  private async inProcessAuth(runner: string, manifest: RunnerManifest): Promise<RunnerAuth> {
-    const workspace = this.workspace();
+  /** Whether the provider is configured in the daemon's environment under the workspace's, as a start would read it. */
+  private async providerConfigured(provider: AiProvider): Promise<boolean> {
     let env: Record<string, string | undefined>;
     try {
-      env = { ...process.env, ...(await this.env(workspace)) };
+      env = { ...process.env, ...(await this.env(this.workspace())) };
     } catch {
       env = { ...process.env };
     }
-    const keyed = PROVIDER_PRIORITY.some((provider) => vendorApiKeyIn(env, provider) !== '');
-    const signIn = runnerSignIn(manifest);
-    const auth: RunnerAuth = keyed
-      ? { state: 'signed-in', signIn }
-      : { state: 'signed-out', signIn, detail: 'no provider key' };
-    recordRunnerAuth(runner, auth, workspace);
+    return vendorConfiguredIn(env, provider);
+  }
+
+  /**
+   * An in-process runner is signed in whenever it is listed: its sign-in is
+   * its provider's key, which is also what makes it installed (ADR-0070), so
+   * it never reads as signed out and offers no Log in (ADR-0052).
+   */
+  private inProcessAuth(runner: string): RunnerAuth {
+    const auth: RunnerAuth = { state: 'signed-in' };
+    recordRunnerAuth(runner, auth, this.workspace());
     return auth;
   }
 

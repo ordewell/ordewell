@@ -538,7 +538,7 @@ function failureWords(err: ModelError): string {
     case 'rate-limited':
       return `The provider is rate limiting requests (${status ?? 'HTTP 429'}) after retries: ${err.message}`;
     case 'auth':
-      return `The provider refused the key${status ? ` (${status})` : ''}: ${err.message}. Check it, or replace it with /key.`;
+      return `The provider refused the key${status ? ` (${status})` : ''}: ${err.message}. Check it, or replace it with /key-set.`;
     default:
       return status ? `${err.message} (${status})` : err.message;
   }

@@ -86,11 +86,14 @@ import {
   discardChildRuns,
   type IIsolationPreview,
   type IsolationPreview,
+  inProcessProvider,
+  runnerPlans,
 } from '@ordewell/core';
 import { ChildStreams } from './childStreams';
 import { StreamSequence } from './streamSequence';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
+import { saveCredentials } from '../utils/savedCredentials';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
 import type { ClientSurface, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
@@ -812,6 +815,10 @@ export class OrchestratorPool {
         // synchronously, right before the next call's switch needs it.
         if (PROVIDER_CREDENTIAL_ENV.has(key)) touched = true;
       }
+      // A key a surface set outlives this daemon. An inherited write is the
+      // environment the client was started under, which may hold a key the
+      // shell exported for its own life only: it is never written to disk.
+      if (touched && changes.inherited !== true) saveCredentials(envChanges);
       // The scheduler reads the limit on every tick, but a raised one would
       // only be seen at the next verdict; the runs waiting for a slot start now.
       if (envChanges.ORDEWELL_MAX_PARALLEL !== undefined) {
@@ -1027,12 +1034,14 @@ export class OrchestratorPool {
     // An installed CLI that cannot be started — a Windows `.cmd` shim, or an
     // ACP agent below its minimum version — stays in the list as unavailable
     // with its reason, so a surface can say why instead of hiding it (ADR-0009,
-    // ADR-0060).
+    // ADR-0060). A provider runner is installed only while its provider is
+    // configured, so one with no key is not here at all (ADR-0070).
     return Promise.all(
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number]> => {
           const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
+          const provider = inProcessProvider(p.manifest);
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
@@ -1040,6 +1049,8 @@ export class OrchestratorPool {
             ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
             ...(version ? { version } : {}),
+            plans: runnerPlans(p.manifest.name),
+            ...(provider ? { provider } : {}),
           };
         }),
     );

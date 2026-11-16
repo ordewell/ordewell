@@ -4,6 +4,12 @@
  * comes round. A surface offers only the tips for the commands it answers.
  */
 
+/** What a surface knows that decides whether a tip is news; a fact it leaves out is unknown. */
+export interface ComposerTipContext {
+  /** Whether any provider is configured: a key, or a custom endpoint's URL. */
+  providerKeySet?: boolean;
+}
+
 export interface ComposerTip {
   /** The built-in planner chat command the tip names, without its slash. */
   command: string;
@@ -11,11 +17,17 @@ export interface ComposerTip {
   weight: number;
   /** Short enough to fit after the prompt and caret on an 80-column terminal. */
   text: string;
+  /** Shown only while this holds of what the surface says; absent, always shown. */
+  when?: (context: ComposerTipContext) => boolean;
 }
 
 export const COMPOSER_TIPS: readonly ComposerTip[] = [
   // The per-runner model allowlist (ADR-0003) is the easiest command to miss.
   { command: 'allowlist', weight: 3, text: 'Tip: Use /allowlist to limit which models the planner assigns per runner.' },
+  // A key is the way to the built-in runner (ADR-0070), so it is worth saying
+  // until one is set, and noise after. Only a surface that says none is set
+  // shows it: one that does not know offers nothing it might already have.
+  { command: 'key-set', weight: 3, text: 'Tip: Add an API key with /key-set to run tasks on the built-in runner.', when: (context) => context.providerKeySet === false },
   { command: 'planner', weight: 1, text: "Tip: Use /planner to pick the planner's harness, model and effort." },
   { command: 'runners', weight: 1, text: 'Tip: Use /runners to turn runners on or off.' },
   { command: 'settings', weight: 1, text: 'Tip: Use /settings for autonomy, supervisor, merging, autorun and more.' },
@@ -51,12 +63,13 @@ export function tipCycle(tips: readonly ComposerTip[]): ComposerTip[] {
 
 /**
  * The tip for the `seq`-th time the composer has been empty, among those for
- * the commands the surface answers, or null when it answers none of them. The
- * same `seq` always gives the same tip, so the surface decides when a new one
- * shows by when it moves `seq` on, and its rendering stays a function of state.
+ * the commands the surface answers and whose `when` holds of `context`, or
+ * null when none is left. The same `seq` and context always give the same
+ * tip, so the surface decides when a new one shows by when it moves `seq` on,
+ * and its rendering stays a function of state.
  */
-export function composerTip(seq: number, answers: ReadonlySet<string>): string | null {
-  const cycle = tipCycle(COMPOSER_TIPS.filter((tip) => answers.has(tip.command)));
+export function composerTip(seq: number, answers: ReadonlySet<string>, context: ComposerTipContext = {}): string | null {
+  const cycle = tipCycle(COMPOSER_TIPS.filter((tip) => answers.has(tip.command) && (tip.when?.(context) ?? true)));
   if (cycle.length === 0) return null;
   return cycle[((seq % cycle.length) + cycle.length) % cycle.length].text;
 }

@@ -4,13 +4,13 @@ import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdap
 import type { AttachState } from '../ordewellBinding';
 import { SessionNotResumable } from '../ordewellBinding';
 import { HeldSecrets } from '../../HeldSecrets';
-import { vendorApiKeyIn, vendorBaseUrlIn, VENDORS } from '../../apiProviders';
+import { VENDORS } from '../../apiProviders';
 import { createModelClient, DEFAULT_STREAM_TIMEOUTS, withRetry } from '../../model';
 import type { EffortLevel, ModelClient, RetryPolicy, StreamTimeouts } from '../../model';
 import type { ApprovalDecision } from '../../../interfaces/IApproval';
 import type { AiProvider } from '../../../interfaces/IConfig';
 import { attemptModeOf, GuardedShell, toolsOf } from './modes';
-import { lookupModelInfo, parseModelId } from './models';
+import { lookupModelInfo, parseModelId, providerCredentials } from './models';
 import { buildSystemPrompt } from './prompt';
 import { taskToolsOf } from './taskTools';
 import { FileTranscriptStore, ordewellSessionsRoot, type LoadedTranscript, type TranscriptStore } from './transcript';
@@ -64,14 +64,15 @@ interface RunningTurn {
 }
 
 /**
- * The built-in runner (ADR-0070): a task-mode adapter whose agent is a loop
- * in this process, not a child. Nothing is spawned, so the spawn deps go
- * unused; its task tools are the attempt's token's own handlers, called
- * directly (ADR-0022 S2), so it is attached the moment it starts, and its
- * verdict still comes only from that token's `task_complete`.
+ * The built-in runner on one provider (ADR-0070): a task-mode adapter whose
+ * agent is a loop in this process, not a child. Nothing is spawned, so the
+ * spawn deps go unused; its task tools are the attempt's token's own handlers,
+ * called directly (ADR-0022 S2), so it is attached the moment it starts, and
+ * its verdict still comes only from that token's `task_complete`.
  */
 export class OrdewellAdapter implements TaskModeAgentAdapter {
-  readonly agentId = 'ordewell';
+  /** The runner id, which is its provider's (ADR-0070). */
+  readonly agentId: AiProvider;
   private loop: OrdewellLoop | null = null;
   private store: TranscriptStore | null = null;
   private turn: RunningTurn | null = null;
@@ -89,7 +90,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   private guard: GuardedShell | null = null;
   private readonly held: HeldSecrets;
 
-  constructor(private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
+  constructor(private readonly provider: AiProvider, private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
+    this.agentId = provider;
     // The session's own, when it passes one, so its event redaction knows the keys too (ADR-0061).
     this.held = deps.held ?? new HeldSecrets();
   }
@@ -99,19 +101,29 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   }
 
   async start(opts: AgentStartOptions): Promise<void> {
-    if (opts.kind !== 'task') throw new Error('The Ordewell runner does not plan: the API planner plans on the same keys.');
+    const label = VENDORS[this.provider].label;
+    if (opts.kind !== 'task') throw new Error(`The built-in runner does not plan: the ${label} planner is the API planner, on the same key.`);
     const mode = attemptModeOf(opts);
     const parsed = opts.model ? parseModelId(opts.model) : undefined;
     if (!opts.model || !parsed) {
-      throw new Error(`The Ordewell runner needs a model as <provider>:<model>${opts.model ? `, not "${opts.model}"` : ''}.`);
+      throw new Error(`The ${label} runner needs a model as ${this.provider}:<model>${opts.model ? `, not "${opts.model}"` : ''}.`);
+    }
+    // Refused, never rewritten: the plan names the model it runs (ADR-0001), and
+    // another provider's model belongs to that provider's runner.
+    if (parsed.provider !== this.provider) {
+      throw new Error(`The ${label} runner runs only ${this.provider}:<model> models, not "${opts.model}": assign the task to the ${VENDORS[parsed.provider].label} runner instead.`);
     }
     const env: NodeJS.ProcessEnv = { ...process.env, ...(await this.deps.workspaceEnv?.(opts.cwd)) };
-    const apiKey = vendorApiKeyIn(env, parsed.provider);
-    if (apiKey === '') {
-      throw new Error(`No ${VENDORS[parsed.provider].label} key is set for the Ordewell runner: add one with /key.`);
+    const credentials = providerCredentials(env, this.provider);
+    if (!credentials) {
+      const missing = this.provider === 'openai_compatible'
+        ? `No ${label} endpoint is set for the built-in runner: set ${VENDORS.openai_compatible.baseUrlEnvVar}.`
+        : `No ${label} key is set for the built-in runner: add one with /key-set.`;
+      throw new Error(missing);
     }
+    const { apiKey } = credentials;
     // Every key in reach, not just this provider's: a tool can print any of them (ADR-0061).
-    this.held.hold(apiKey);
+    if (apiKey) this.held.hold(apiKey);
     this.held.holdEnv(env);
 
     const root = this.options.sessionsRoot ?? ordewellSessionsRoot();
@@ -124,13 +136,13 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const timeouts = this.options.streamTimeouts ?? streamTimeoutsOf(settings.ordewellStreamTimeouts);
 
     const inProcess = opts.mcp?.inProcess;
-    const baseUrl = vendorBaseUrlIn(env, parsed.provider) || undefined;
+    const baseUrl = credentials.baseUrl || undefined;
     const emit = (event: AgentEvent): void => {
       this.onActivity?.();
       this.onEvent?.(event);
     };
     const retry = this.options.retry ?? {};
-    const client = withRetry((this.options.createClient ?? defaultClient(this.deps, timeouts))(parsed.provider, apiKey, baseUrl), {
+    const client = withRetry((this.options.createClient ?? defaultClient(this.deps, timeouts))(this.provider, apiKey, baseUrl), {
       ...retry,
       // In the task log, so a step that took minutes says why (ADR-0070).
       onRetry: ({ attempt, delayMs, error }) => emit(this.held.hideIn({ type: 'command_output', text: retryNote(error.message, delayMs, attempt) })),

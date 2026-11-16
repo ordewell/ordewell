@@ -8,6 +8,7 @@ import { parseAutonomyFlag } from './ModeResolver';
 import { containersOffered, rememberDelegationBudget } from './runSettingsText';
 import type { TaskRunnerConfig } from './harness/AgentAdapter';
 import { readLimitSetting } from './plannerReadLimit';
+import { configuredProviderRunners, replaceLegacyBuiltinRunner, splitLegacyBuiltinAllowlist } from './providerRunners';
 
 export { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings };
 
@@ -471,14 +472,17 @@ export class SettingsService {
     const settings: UserSettings = {};
     const modelAllowlist = readModelAllowlist(raw.modelAllowlist);
     if (modelAllowlist) {
-      settings.modelAllowlist = modelAllowlist;
+      // The built-in runner's old single entry becomes each provider runner's own (ADR-0070).
+      settings.modelAllowlist = splitLegacyBuiltinAllowlist(modelAllowlist);
     }
     const plannerModels = readPlannerModels(raw.plannerModels);
     if (plannerModels) {
       settings.plannerModels = plannerModels;
     }
     if (Array.isArray(raw.enabledRunners)) {
-      settings.enabledRunners = raw.enabledRunners.map(String);
+      // Enabling the built-in runner when it was one runner meant enabling it
+      // on whatever key was set; that is every configured provider's runner now.
+      settings.enabledRunners = replaceLegacyBuiltinRunner(raw.enabledRunners.map(String), configuredProviderRunners(process.env));
     }
     if (typeof raw.autonomousMode === 'boolean') {
       settings.autonomousMode = raw.autonomousMode;

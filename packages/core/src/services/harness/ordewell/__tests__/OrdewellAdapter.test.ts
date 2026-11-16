@@ -15,6 +15,7 @@ import { TASK_TOOLS } from '../../../mcp';
 import { DEFAULT_ORDEWELL_STEP_LIMIT, OrdewellAdapter, type OrdewellAdapterOptions } from '../OrdewellAdapter';
 import { call, deferred, eventsOf, MemoryTranscriptStore, scriptedClient, STOP, type ScriptedStep } from './loopKit';
 import type { McpClientConfig } from '../../../mcp/clientConfig';
+import type { AiProvider } from '../../../../interfaces/IConfig';
 
 const KEY = 'sk-or-v1-adapter-test-key-0123456789';
 
@@ -65,11 +66,11 @@ function taskOptions(overrides: Partial<TaskStartOptions> = {}): TaskStartOption
   };
 }
 
-function adapterWith(steps: readonly ScriptedStep[], options: OrdewellAdapterOptions = {}, processDeps: AgentProcessDeps = deps()) {
+function adapterWith(steps: readonly ScriptedStep[], options: OrdewellAdapterOptions = {}, processDeps: AgentProcessDeps = deps(), provider: AiProvider = 'openrouter') {
   const store = new MemoryTranscriptStore('the-session', tempDir());
   const client = scriptedClient(steps);
   const clients: { provider: string; apiKey: string; baseUrl: string | undefined }[] = [];
-  const adapter = new OrdewellAdapter(processDeps, {
+  const adapter = new OrdewellAdapter(provider, processDeps, {
     modelInfoTimeoutMs: 50,
     openStore: () => store,
     createClient: (provider, apiKey, baseUrl): ModelClient => {
@@ -82,12 +83,18 @@ function adapterWith(steps: readonly ScriptedStep[], options: OrdewellAdapterOpt
 }
 
 describe('OrdewellAdapter', () => {
-  it('is the ordewell connector, with no planner', () => {
-    expect(CONNECTORS.ordewell?.plans).toBe(false);
+  it('is every provider\'s connector, under the provider\'s id, with no planner and no sign-in route', () => {
+    for (const provider of PROVIDER_PRIORITY) {
+      const connector = CONNECTORS[provider];
+      expect(connector?.plans, provider).toBe(false);
+      expect(connector?.signInRoute, provider).toBeUndefined();
+      expect(connector?.create(deps()).agentId, provider).toBe(provider);
+    }
+    expect(CONNECTORS.ordewell).toBeUndefined();
   });
 
   describe('as an in-process connector', () => {
-    const tools = CONNECTORS.ordewell!.ordewellTools;
+    const tools = CONNECTORS.openrouter!.ordewellTools;
 
     it('names every Ordewell tool by its own name, with no MCP prefix, less what a token hides', () => {
       expect(tools.toolName('task_complete')).toBe('task_complete');
@@ -127,10 +134,29 @@ describe('OrdewellAdapter', () => {
     await expect(adapter.start(taskOptions({ mode: 'read-only' }))).rejects.toThrow(/is for a read-only task/);
   });
 
-  it('needs a <provider>:<model> id and that provider\'s key, naming /key', async () => {
+  it('needs a <provider>:<model> id of its own provider, and that provider\'s key, naming /key-set', async () => {
     const { adapter } = adapterWith([]);
-    await expect(adapter.start(taskOptions({ model: 'mock/test' }))).rejects.toThrow(/needs a model as <provider>:<model>, not "mock\/test"/);
-    await expect(adapter.start(taskOptions({ model: 'openai:gpt-test' }))).rejects.toThrow(/No OpenAI key is set for the Ordewell runner: add one with \/key/);
+    await expect(adapter.start(taskOptions({ model: 'mock/test' }))).rejects.toThrow(/needs a model as openrouter:<model>, not "mock\/test"/);
+    const keyless = adapterWith([], {}, deps({}), 'openai');
+    await expect(keyless.adapter.start(taskOptions({ model: 'openai:gpt-test' }))).rejects.toThrow(/No OpenAI key is set for the built-in runner: add one with \/key-set/);
+  });
+
+  it('refuses another provider\'s model rather than run it on its own provider, whatever keys are set', async () => {
+    const { adapter, clients } = adapterWith([], {}, deps({ OPENROUTER_API_KEY: KEY, OPENAI_API_KEY: 'sk-openai-test-key' }));
+    await expect(adapter.start(taskOptions({ model: 'openai:gpt-test' })))
+      .rejects.toThrow('The OpenRouter runner runs only openrouter:<model> models, not "openai:gpt-test": assign the task to the OpenAI runner instead.');
+    // Nothing reached a provider: the refusal is before any client is made.
+    expect(clients).toEqual([]);
+  });
+
+  it('runs a custom endpoint set by its URL alone, keyless, as the planner reaches it', async () => {
+    const { adapter, clients } = adapterWith([[STOP]], {}, deps({ OPENAI_COMPATIBLE_BASE_URL: 'http://127.0.0.1:1/v1' }), 'openai_compatible');
+    await adapter.start(taskOptions({ model: 'openai_compatible:qwen3:8b' }));
+    expect(clients).toEqual([{ provider: 'openai_compatible', apiKey: '', baseUrl: 'http://127.0.0.1:1/v1' }]);
+
+    // A key with no endpoint named is no endpoint: its default is a guess at a local server.
+    const unnamed = adapterWith([], {}, deps({ OPENAI_COMPATIBLE_API_KEY: 'local-key' }), 'openai_compatible');
+    await expect(unnamed.adapter.start(taskOptions({ model: 'openai_compatible:qwen3:8b' }))).rejects.toThrow(/No Custom endpoint is set for the built-in runner: set OPENAI_COMPATIBLE_BASE_URL/);
   });
 
   it('runs a turn in-process: no process, attached at once, the provider\'s key and base URL, and a session id', async () => {
@@ -289,7 +315,7 @@ function heldStep(events: readonly ModelEvent[]) {
 describe('OrdewellAdapter lifecycle', () => {
   it('resumes a saved session from disk in a new process, the conversation and its prompt as they were (ADR-0018 K1)', async () => {
     const root = tempDir();
-    const before = new OrdewellAdapter(deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => scriptedClient([[{ type: 'text-delta', text: 'Half way.' }, STOP]]) });
+    const before = new OrdewellAdapter('openrouter', deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => scriptedClient([[{ type: 'text-delta', text: 'Half way.' }, STOP]]) });
     await before.start(taskOptions());
     await before.send('Start.', () => {});
     const sessionId = before.nativeSessionId();
@@ -297,7 +323,7 @@ describe('OrdewellAdapter lifecycle', () => {
 
     // A daemon restarted since: nothing of the first adapter is left but its files.
     const client = scriptedClient([[STOP]]);
-    const after = new OrdewellAdapter(deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => client });
+    const after = new OrdewellAdapter('openrouter', deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => client });
     await after.start(taskOptions({ resumeSessionId: sessionId ?? undefined }));
     expect(after.nativeSessionId()).toBe(sessionId);
     await after.send('Go on.', () => {});
@@ -312,14 +338,14 @@ describe('OrdewellAdapter lifecycle', () => {
     const root = tempDir();
     await mkdir(path.join(root, 'no-start'), { recursive: true });
     await writeFile(path.join(root, 'no-start', 'transcript.jsonl'), 'not json\n');
-    const noStart = new OrdewellAdapter(deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => scriptedClient([]) });
+    const noStart = new OrdewellAdapter('openrouter', deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => scriptedClient([]) });
     await expect(noStart.start(taskOptions({ resumeSessionId: 'no-start' }))).rejects.toThrow(SessionNotResumable);
 
     const session = JSON.stringify({ v: 1, kind: 'session', at: 'then', model: 'openrouter:mock/test', system: [{ text: 'saved' }] });
     await mkdir(path.join(root, 'torn'), { recursive: true });
     await writeFile(path.join(root, 'torn', 'transcript.jsonl'), `${session}\n{"v":1,"kind":"mess`);
     const client = scriptedClient([[STOP], [STOP]]);
-    const torn = new OrdewellAdapter(deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => client });
+    const torn = new OrdewellAdapter('openrouter', deps(), { sessionsRoot: root, modelInfoTimeoutMs: 50, createClient: () => client });
     await torn.start(taskOptions({ resumeSessionId: 'torn' }));
     await torn.send('First.', () => {});
     await torn.send('Second.', () => {});
@@ -408,7 +434,7 @@ describe('OrdewellAdapter lifecycle', () => {
     expect(await adapter.stepEnded(10)).toBe(false);
   });
 
-  it('fails a bad key\'s step naming /key, as not the usage limit', async () => {
+  it('fails a bad key\'s step naming /key-set, as not the usage limit', async () => {
     const refused: ScriptedStep = async function* () {
       yield* [];
       throw new ModelError({ kind: 'auth', message: 'invalid api key', status: 401 });
@@ -417,7 +443,7 @@ describe('OrdewellAdapter lifecycle', () => {
     await adapter.start(taskOptions());
     const events: AgentEvent[] = [];
     await adapter.send('Go.', (event) => events.push(event));
-    expect(events.at(-1)).toMatchObject({ type: 'error', usageLimit: false, message: expect.stringMatching(/invalid api key.*\/key/) });
+    expect(events.at(-1)).toMatchObject({ type: 'error', usageLimit: false, message: expect.stringMatching(/invalid api key.*\/key-set/) });
   });
 
   it('takes its step limit from the settings file, the default where it names none', async () => {
@@ -470,7 +496,7 @@ describe('OrdewellAdapter lifecycle', () => {
     };
     try {
       const store = new MemoryTranscriptStore('the-session', tempDir());
-      const adapter = new OrdewellAdapter({ ...deps(), fetch }, {
+      const adapter = new OrdewellAdapter('openrouter', { ...deps(), fetch }, {
         modelInfoTimeoutMs: 50,
         openStore: () => store,
         retry: { policy: { initialDelayMs: 1, maxDelayMs: 1, jitter: 0 } },

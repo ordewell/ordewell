@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { COMPOSER_TIPS, composerTip, tipCycle, type ComposerTip } from '../composerTips';
 
+// The tips every surface may show whatever it knows; the key tip waits on a fact.
+const ALWAYS = COMPOSER_TIPS.filter((tip) => !tip.when);
+
 const TUI = new Set(['allowlist', 'planner', 'runners', 'settings', 'help']);
 const WEBVIEW = new Set(['allowlist', 'planner', 'settings', 'help']);
 
 const commandsOf = (cycle: readonly ComposerTip[]): string[] => cycle.map((tip) => tip.command);
 const counts = (cycle: readonly ComposerTip[]): Record<string, number> =>
-  Object.fromEntries(COMPOSER_TIPS.map((tip) => [tip.command, cycle.filter((t) => t.command === tip.command).length]));
+  Object.fromEntries(ALWAYS.map((tip) => [tip.command, cycle.filter((t) => t.command === tip.command).length]));
 /** A cycle laid end to end with itself, as the composer meets it seq after seq. */
 const followsItself = (cycle: readonly ComposerTip[]): boolean =>
   cycle.some((tip, i) => tip.command === cycle[(i + 1) % cycle.length].command);
@@ -27,7 +30,7 @@ const longestRun = (cycle: readonly ComposerTip[]): number => {
 
 describe('tipCycle', () => {
   it('shows each tip exactly its weight times, so /allowlist comes round more often than any other', () => {
-    const tally = counts(tipCycle(COMPOSER_TIPS));
+    const tally = counts(tipCycle(ALWAYS));
     expect(tally).toEqual({ allowlist: 3, planner: 1, runners: 1, settings: 1, help: 1 });
     for (const [command, n] of Object.entries(tally)) {
       if (command !== 'allowlist') expect(tally.allowlist).toBeGreaterThan(n);
@@ -36,14 +39,14 @@ describe('tipCycle', () => {
 
   it('spreads /allowlist out, never twice running, across the wrap included, on both surfaces', () => {
     for (const answers of [TUI, WEBVIEW]) {
-      const cycle = tipCycle(COMPOSER_TIPS.filter((tip) => answers.has(tip.command)));
+      const cycle = tipCycle(ALWAYS.filter((tip) => answers.has(tip.command)));
       expect(followsItself(cycle)).toBe(false);
     }
-    expect(commandsOf(tipCycle(COMPOSER_TIPS))).toEqual(['allowlist', 'runners', 'allowlist', 'planner', 'allowlist', 'settings', 'help']);
+    expect(commandsOf(tipCycle(ALWAYS))).toEqual(['allowlist', 'runners', 'allowlist', 'planner', 'allowlist', 'settings', 'help']);
   });
 
   it('still gives every tip its weight once a weight outgrows the rest, repeating only what it must', () => {
-    const heavy = COMPOSER_TIPS.map((tip) => (tip.command === 'allowlist' ? { ...tip, weight: 6 } : tip));
+    const heavy = ALWAYS.map((tip) => (tip.command === 'allowlist' ? { ...tip, weight: 6 } : tip));
     const cycle = tipCycle(heavy);
     expect(cycle).toHaveLength(10);
     expect(counts(cycle).allowlist).toBe(6);
@@ -55,9 +58,9 @@ describe('tipCycle', () => {
   });
 
   it('keeps the forced repetition to its minimum at every adjustable weight', () => {
-    const others = COMPOSER_TIPS.length - 1;
+    const others = ALWAYS.length - 1;
     for (let weight = 1; weight <= 10; weight++) {
-      const heavy = COMPOSER_TIPS.map((tip) => (tip.command === 'allowlist' ? { ...tip, weight } : tip));
+      const heavy = ALWAYS.map((tip) => (tip.command === 'allowlist' ? { ...tip, weight } : tip));
       const cycle = tipCycle(heavy);
       expect(counts(cycle).allowlist).toBe(weight);
       // A cycle of `weight` /allowlist tips and `others` separators has
@@ -93,5 +96,41 @@ describe('composerTip', () => {
 
   it('fits every tip after the prompt and caret of an 80-column terminal', () => {
     for (const tip of COMPOSER_TIPS) expect(tip.text.length).toBeLessThanOrEqual(73);
+  });
+});
+
+describe('the /key-set tip', () => {
+  const KEYED = new Set([...TUI, 'key-set']);
+  const KEY_TIP = 'Tip: Add an API key with /key-set to run tasks on the built-in runner.';
+  const tipsOver = (context: Parameters<typeof composerTip>[2]): Set<string | null> =>
+    new Set(Array.from({ length: 20 }, (_, seq) => composerTip(seq, KEYED, context)));
+
+  it('names the command and the built-in runner, as heavily as /allowlist', () => {
+    const tip = COMPOSER_TIPS.find((t) => t.command === 'key-set');
+    expect(tip?.text).toBe(KEY_TIP);
+    expect(tip?.weight).toBe(3);
+  });
+
+  it('shows only where the surface says no provider is configured', () => {
+    expect(tipsOver({ providerKeySet: false }).has(KEY_TIP)).toBe(true);
+    expect(tipsOver({ providerKeySet: true }).has(KEY_TIP)).toBe(false);
+    // A surface that does not say is not told about something it may have.
+    expect(tipsOver({}).has(KEY_TIP)).toBe(false);
+    expect(new Set(Array.from({ length: 20 }, (_, seq) => composerTip(seq, KEYED))).has(KEY_TIP)).toBe(false);
+  });
+
+  it('shows only where the surface answers /key-set', () => {
+    expect(new Set(Array.from({ length: 20 }, (_, seq) => composerTip(seq, TUI, { providerKeySet: false }))).has(KEY_TIP)).toBe(false);
+  });
+
+  it('leaves the cycle as it was once a key is set', () => {
+    for (let seq = 0; seq < 14; seq++) expect(composerTip(seq, KEYED, { providerKeySet: true })).toBe(composerTip(seq, TUI));
+  });
+
+  it('comes round three times a cycle beside /allowlist, neither following itself', () => {
+    const cycle = tipCycle(COMPOSER_TIPS.filter((tip) => KEYED.has(tip.command)));
+    expect(cycle.filter((tip) => tip.command === 'key-set')).toHaveLength(3);
+    expect(cycle.filter((tip) => tip.command === 'allowlist')).toHaveLength(3);
+    expect(followsItself(cycle)).toBe(false);
   });
 });

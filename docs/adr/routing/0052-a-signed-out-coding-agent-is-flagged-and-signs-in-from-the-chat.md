@@ -63,6 +63,13 @@ Only `signed-out`, and only with a way in to name, flags or blocks an agent.
 custom-provider setup Codex can use without its stored login, or an answer no
 reader can judge must not cost the user work that will succeed.
 
+The built-in runner is no signed-out agent. Each of its runners runs on one
+provider and is installed exactly while that provider is configured
+([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)),
+so a listed one is signed in and declares no sign-in route, and a provider with
+no key has no row to flag. A key is set with `/key-set` like any other, never
+through a Log in.
+
 ### Where the verdict lives
 
 `RunnerInstallation.plannerUsability` returns the verdict as `auth` beside
@@ -86,17 +93,18 @@ manifest's `signIn` clause for an agent whose login only it can run. One functio
 
 | Surface | A login | A key |
 |---|---|---|
-| TUI, VS Code chat, daemon | `Sign in with /login cursor-agent, or run cursor-agent login.` | `Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key` |
+| TUI, VS Code chat, daemon | `Sign in with /login cursor-agent, or run cursor-agent login.` | `Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key` |
 | Headless CLI | `Run cursor-agent login to sign in.` | `Run ordewell key set openrouter <key> …` |
 
 So `Cursor is not signed in. Sign in with /login cursor-agent, or run
-cursor-agent login.`, `Qwen Code is not signed in. Run /key and choose OpenRouter
+cursor-agent login.`, `Qwen Code is not signed in. Run /key-set and choose OpenRouter
 (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in
-there.`, and `Gemini CLI is not signed in. Run /key and choose Google Gemini to
+there.`, and `Gemini CLI is not signed in. Run /key-set and choose Google Gemini to
 hand it a key, or run gemini and choose how it signs in.` The daemon words for
 the terminal, since it cannot know who reads, and
 `rewordSignIn` re-spells a shipped runner's hint for the headless CLI. VS Code's
-chat takes the same `/login <runner>` and `/key`, so it uses the terminal's
+chat takes the same `/login <runner>` and `/key-set` (`/key` is its old
+spelling and still opens it), so it uses the terminal's
 words. A runner row (`describeRunnerSignIn`) carries the hint when its agent is
 signed out and only its login when the verdict is `unknown`, since a key or a
 by-hand route is no news to someone who may be signed in already.
@@ -105,7 +113,7 @@ by-hand route is no news to someone who may be signed in already.
 
 | Surface | The flag | Signing in |
 |---|---|---|
-| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the selected planner's value in the Setup block is red, and so is the confirmation notice of a pick, while its agent is signed out; the planner picker row's detail is the hint and the row stays selectable; each `/runners` row carries its agent's hint | `/login` for the active planner, `/login <runner>` by id or display label, `/key` for a key-based agent |
+| TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the selected planner's value in the Setup block is red, and so is the confirmation notice of a pick, while its agent is signed out; the planner picker row's detail is the hint and the row stays selectable; each `/runners` row carries its agent's hint | `/login` for the active planner, `/login <runner>` by id or display label, `/key-set` for a key-based agent |
 | VS Code | a red dot and a **Log in** segment on every signed-out pill, planner or runner, titled with the hint; the empty state lists one row per signed-out agent, the active planner first, each with the hint and its own action; a task that failed on a signed-out agent has **Log in** beside Retry | that pill's, row's or card's button: the agent's login, or the key entry for a key-based agent |
 | Headless CLI | `ordewell runners` prints the hint under a signed-out row, and the login under an unknown one | the agent's own command, or `ordewell key set` |
 
@@ -114,7 +122,7 @@ signed-out agent in the runner list's order, each naming its own `/login
 <runner>`. VS Code renders the login as the second segment of the pill's own
 capsule, beside the name, and as a button on the empty-state row, so one agent's
 fix never reads as a second control. Its Log in runs the agent's login when
-Ordewell can run one and opens the key entry (`/key <provider>`) for a key-based
+Ordewell can run one and opens the key entry (`/key-set <provider>`) for a key-based
 agent; one whose only way in is by hand gets the hint and no button. An agent
 with no way in at all gets no line and no button, since there is nothing to
 name.
@@ -337,3 +345,4 @@ art for the TTL and the refresh trigger.
   and cached `signed-out` verdicts, since it can sign an agent in.
 - 2026-11-05 — Gemini CLI names Ordewell's Google key route in its signed-out
   hint, beside its own sign-in, now that a saved Google key signs it in.
+- 2026-11-16 — the key entry is `/key-set` (`/key` still opens it); the built-in runner is no key-based signed-out agent: a provider runner is listed only with its key, signed in, with no sign-in route ([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)).

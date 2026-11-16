@@ -167,7 +167,8 @@ export { CliAgentAiService } from './services/harness/CliAgentAiService';
 export type { CliAgentAiServiceDeps } from './services/harness/CliAgentAiService';
 export { LineBuffer, TaskModeUnsupportedError } from './services/harness/AgentAdapter';
 export type { SpawnFn, AgentAdapter, AgentEvent, AgentStartOptions, PlannerStartOptions, TaskStartOptions, TaskRunnerFlags, TaskRunnerConfig, TaskModeAgentAdapter, AgentProcessDeps, AgentAdapterFactory } from './services/harness/AgentAdapter';
-export { supportsTaskMode, createTaskAdapter } from './services/harness/connectors';
+export { supportsTaskMode, createTaskAdapter, runnerPlans } from './services/harness/connectors';
+export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, configuredProviderRunners } from './services/providerRunners';
 export { StdioAgentAdapter } from './services/harness/StdioAgentAdapter';
 export type { SpawnSpec } from './services/harness/StdioAgentAdapter';
 export { ClaudeCodeAdapter } from './services/harness/ClaudeCodeAdapter';
@@ -232,6 +233,7 @@ export {
 } from './services/SkillsService';
 export { globalDataDir, migrateOldConfigDir } from './utils/globalDataDir';
 export { writePrivateFile, ensurePrivateDir } from './utils/privateFile';
+export { globalEnvFile, readEnvFile, writeEnvFileVars } from './utils/globalEnvFile';
 // What a surface draws of a plan's decision record: the entries no later one supersedes (ADR-0067).
 export { live as standingRecord } from './services/decisionRecord';
 export { installMethod, isSea, seaRuntimeDir, seaVersion, upgradeCommand } from './utils/seaRuntime';
@@ -358,6 +360,7 @@ export { builtinPlannerBackends } from './services/plannerBackends';
 export { CLAUDE_CODE_MANIFEST } from './plugins/builtin/claude-code.manifest';
 export { OPENCODE_MANIFEST } from './plugins/builtin/opencode.manifest';
 export type { RunnerManifest, RunnerEntry, RunnerAuthSpec, RunnerAuthStatus, RunnerFeatures, RunnerModelDiscovery, RunnerMode, DiscoveryCommand } from './plugins/types';
+export { inProcessProvider } from './plugins/types';
 export * from './utils/fsHelpers';
 export * from './utils/stateStore';
 export * from './utils/sessionStore';

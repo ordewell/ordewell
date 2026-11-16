@@ -310,6 +310,19 @@ export interface RunnerEntry {
   auth?: RunnerAuth;
   /** What the CLI's `--version` printed, as a number; absent when it printed none. */
   version?: string;
+  /**
+   * Whether the runner can also be the planner (its connector's `plans`). A
+   * surface building a planner list from runners offers only these: a runner
+   * that cannot plan, a provider runner included, is no harness planner.
+   * Absent on a row from a daemon that predates the field.
+   */
+  plans?: boolean;
+  /**
+   * The provider the built-in runner runs on here, set only on a provider
+   * runner, whose id is that provider's (ADR-0070). It is listed only while
+   * its provider is configured, and always signed in: it has no Log in.
+   */
+  provider?: AiProvider;
 }
 
 export interface RunnersResponse {

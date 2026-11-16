@@ -32,8 +32,11 @@ describe('OrchestratorPool planner readiness', () => {
     workspace = join(dir, 'ws');
     mkdirSync(workspace);
     mkdirSync(join(workspace, '.git'));
-    for (const key of ['ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', ...KEY_VARS]) savedEnv[key] = process.env[key];
+    for (const key of ['ORDEWELL_SETTINGS_PATH', 'ORDEWELL_ENABLED_RUNNERS', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', ...KEY_VARS]) savedEnv[key] = process.env[key];
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
+    // The runner these goals name, pinned: with a key and no saved choice the
+    // enabled default is that provider's own runner (ADR-0070).
+    process.env.ORDEWELL_ENABLED_RUNNERS = 'claude-code';
     for (const key of KEY_VARS) delete process.env[key];
     process.env.AI_PROVIDER = 'openrouter';
     process.env.ORCHESTRATOR_MODEL = 'openrouter/auto';
@@ -56,7 +59,7 @@ describe('OrchestratorPool planner readiness', () => {
     await expect(refusal).rejects.toBeInstanceOf(PlannerNotReadyError);
     await expect(refusal).rejects.toThrow(
       'No planner is ready. Pick one with /planner: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
-      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.',
+      'To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key-set.',
     );
     expect(transport).not.toHaveBeenCalled();
   });

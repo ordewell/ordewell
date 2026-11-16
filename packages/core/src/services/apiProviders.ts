@@ -336,3 +336,14 @@ export function vendorBaseUrlIn(env: VendorEnv, provider: AiProvider): string {
   const custom = meta.baseUrlEnvVar ? env[meta.baseUrlEnvVar]?.trim() : undefined;
   return custom || meta.defaultBaseUrl;
 }
+
+/**
+ * Whether `env` sets a vendor up: its key, or for `openai_compatible` an
+ * endpoint named explicitly, since a local server takes no key and its default
+ * URL is only a guess. The planner's own rule (`configuredProviders`), here
+ * for a reader that holds an environment rather than a config.
+ */
+export function vendorConfiguredIn(env: VendorEnv, provider: AiProvider): boolean {
+  if (provider === 'openai_compatible') return Boolean(env[VENDORS.openai_compatible.baseUrlEnvVar ?? '']?.trim());
+  return vendorApiKeyIn(env, provider) !== '';
+}

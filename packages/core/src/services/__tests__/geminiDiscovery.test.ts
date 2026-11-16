@@ -122,7 +122,7 @@ describe('gemini-cli model discovery', () => {
     expect(await resolver.modelsForRunners(['gemini-cli'])).toEqual({ 'gemini-cli': [] });
     // What the user is told when Gemini, signed out, is asked to plan.
     expect(resolver.getRunnerDiscoveryErrors()).toEqual({
-      'gemini-cli': 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.',
+      'gemini-cli': 'Gemini CLI is not signed in. Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.',
     });
 
     // As the daemon does on a saved key: the variable is set, then the catalogs are forgotten.

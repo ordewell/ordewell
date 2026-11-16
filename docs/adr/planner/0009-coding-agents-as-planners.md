@@ -252,7 +252,14 @@ them at runtime rather than by the compiler. A runner whose connector does not
 plan, such as an ACP agent whose profile claims no planner role
 ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)), runs
 tasks and never appears among the planners. Since runner ids and vendor ids
-share this one setting, a runner id must not equal a vendor's. One `isCliProvider()` guard covers key
+share this one setting, a runner that plans, or could come to, never takes a
+vendor's id: Qwen Code is `qwen-code` because `qwen` is DashScope's. The built-in
+runner's runners take their vendors' ids by design
+([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)):
+each runs Ordewell's own loop on that vendor and never plans, so a planner under
+that id is the vendor's API planner, `ALL_PROVIDERS` keeps the vendor, and the
+same name in the planner and runner selectors means Ordewell's loop on the same
+key. One `isCliProvider()` guard covers key
 resolution, provider routing and the model picker (which reads
 `ModelDiscovery` instead of `ModelCatalog`); `isApiProvider()` narrows an id to
 a vendor wherever a key or base URL is read.
@@ -403,3 +410,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-11-04 — Cursor plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-05 — Cline plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-10 — an OpenCode planner's in-turn agent is Ordewell's research agent over MCP, where its workspace names the model (ADR-0066).
+- 2026-11-16 — only a runner that plans keeps off the vendors' ids; the built-in runner's runners take their vendor's id by design and never plan ([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)).
