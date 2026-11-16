@@ -422,7 +422,7 @@ async function collect(lib, sb, reference) {
 
 async function evaluate(lib, sb, log) {
   const r = await inBox(sb, ['sh', '-c', `timeout ${EVAL_TIMEOUT_S} ${pytestLine(lib, ['-q', '-rN'])}`], { workdir: lib.workdir, timeoutMs: (EVAL_TIMEOUT_S + 60) * 1000, log });
-  const summary = L.parsePytestSummary(r.stdout);
+  const summary = L.parseEvaluation(r.code, r.stdout + r.stderr);
   return { exit: r.code, timedOut: r.code === 124, ...(summary ?? {}) };
 }
 
@@ -620,7 +620,7 @@ async function runOne(lib, arm, ordewell, runsDir) {
     record.network = await collect(lib, sb, reference);
     must(record.network.ok, 'a dependency is missing from the image');
     record.baseline = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
-    check(lib.name, 'baseline on the stubs', record.baseline.passed !== undefined, `${record.baseline.passed ?? '?'} passed, ${record.baseline.failed ?? '?'} failed, ${record.baseline.errors ?? 0} errors of ${record.network.collected} collected`);
+    check(lib.name, 'baseline on the stubs', record.baseline.passed !== undefined, [`${record.baseline.passed ?? '?'} passed, ${record.baseline.failed ?? '?'} failed, ${record.baseline.errors ?? 0} errors of ${record.network.collected} collected (exit ${record.baseline.exit})`, ...(record.baseline.collectionError ? [`the stubs break collection: ${record.baseline.collectionError}`] : [])]);
     if (opts.dryRun) {
       for (const a of [arm]) await dryArm(lib, sb, a);
     } else {

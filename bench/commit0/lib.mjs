@@ -479,6 +479,20 @@ export function parsePytestSummary(text) {
   return counts;
 }
 
+/**
+ * A test run's counts. A run whose collection broke prints no summary when a
+ * conftest fails to import (networkx's stubs, exit 4): no test ran, so it
+ * counts as none passed, the error kept. Any other run without a summary is
+ * unread, so a driver mistake never reads as a score.
+ */
+export function parseEvaluation(code, output) {
+  const summary = parsePytestSummary(output);
+  if (summary) return summary;
+  const broke = /^(ImportError while loading conftest.*|Interrupted: \d+ errors? during collection.*)$/m.exec(output);
+  if (!broke || code === 0) return null;
+  return { passed: 0, failed: 0, errors: 0, skipped: 0, xfailed: 0, xpassed: 0, deselected: 0, collectionError: broke[1].trim() };
+}
+
 // --- Sessions ---------------------------------------------------------------
 
 /**

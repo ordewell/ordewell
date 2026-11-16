@@ -284,6 +284,16 @@ const transcript = [
   '{"v":1,"kind":"usage","step":4,"usa',
 ].join('\n');
 
+test('parseEvaluation counts a run whose stubs break collection as none passed, and nothing else without a summary', () => {
+  assert.equal(L.parseEvaluation(1, '== 3 passed, 2 failed in 0.4s ==').passed, 3);
+  // networkx at the stubs: the conftest import fails, exit 4, no summary line.
+  const networkx = L.parseEvaluation(4, "ImportError while loading conftest '/testbed/networkx/conftest.py'.\nnetworkx/__init__.py:19: in <module>\nE   TypeError: 'NoneType' object is not callable\n");
+  assert.equal(networkx.passed, 0);
+  assert.match(networkx.collectionError, /conftest '\/testbed\/networkx\/conftest.py'/);
+  assert.equal(L.parseEvaluation(4, 'ERROR: usage: pytest [options]\npytest: error: unrecognized arguments: --bad\n'), null, 'a driver mistake is not a score');
+  assert.equal(L.parseEvaluation(124, ''), null);
+});
+
 test('summarizeTranscript: spend, peak context and compactions', () => {
   const s = L.summarizeTranscript(transcript);
   assert.equal(s.usageLines, 2);
