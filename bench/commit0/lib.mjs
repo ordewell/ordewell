@@ -338,7 +338,8 @@ for root, subdirs, files in os.walk(scan_root, topdown=True):
         subdirs[:] = []
         continue
     for f in files:
-        if norm(f).startswith(want) and f.endswith(('.whl', '.tar.gz', '.zip', '.tar.bz2')):
+        # uv's editable wheel (-0.editable-) holds a finder and metadata pointing at the repository, no source.
+        if norm(f).startswith(want) and f.endswith(('.whl', '.tar.gz', '.zip', '.tar.bz2')) and '.editable-' not in f:
             archives.append(os.path.join(root, f))
 out['archives'] = archives
 print(json.dumps(out))
