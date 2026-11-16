@@ -83,7 +83,9 @@ describe('ScriptRunner: commands', () => {
 
     const exit = await run.exit;
     expect(exit).toMatchObject({ outcome: 'failed', status: { code: null, signal: null } });
-    expect(exit.outcome === 'failed' && exit.status.error).toMatch(/ENOENT/);
+    // libuv's PATH search reports EACCES, not ENOENT, when any PATH entry was
+    // unreadable on the way (WSL's /mnt/c directories, say): either names why.
+    expect(exit.outcome === 'failed' && exit.status.error).toMatch(/\bE(NOENT|ACCES)\b/);
   });
 
   it('runs at the workspace root, with the workspace\'s variables over the host\'s', async () => {
