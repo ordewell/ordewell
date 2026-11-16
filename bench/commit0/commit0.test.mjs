@@ -57,7 +57,7 @@ test('the goal is one text for both arms and names the tests and the closed netw
   assert.match(g, /tests in the repository are the specification/);
   const [, , ...a] = L.armCommands(L.ARMS.A, { workspace: '/testbed', goal: g, sessionId: 's' });
   const [plan, ...b] = L.armCommands(L.ARMS.B, { workspace: '/testbed', goal: g, sessionId: 's' });
-  assert.deepEqual(plan, ['ordewell', 'plan', '--goal', g, '--runner', 'ordewell', '--no-chat', '--yes', '--workspace', '/testbed']);
+  assert.deepEqual(plan, ['ordewell', 'plan', '--goal', g, '--runner', 'openrouter', '--no-chat', '--yes', '--workspace', '/testbed']);
   assert.deepEqual(b.at(-1), ['ordewell', 'merge', '--session-id', 's', '--yes', '--workspace', '/testbed']);
   assert.deepEqual(a, b.slice(1), 'both arms merge alike');
   // Arm A's one task is handed the goal as an argument of ARM_A_PLAN_JS, in drive.mjs; both read goalText.
@@ -72,8 +72,8 @@ test('the arms hold the protocol: one model, the caps, no planner in A', () => {
   assert.equal(L.ARMS.B.capUsd, 5.5);
   assert.equal(L.WALL_CAP_MS, 3 * 3600 * 1000);
   assert.deepEqual(L.armsOf('both').map((a) => a.id), ['A', 'B']);
-  assert.deepEqual(L.boxSettings().modelAllowlist, { ordewell: [L.MODEL_ID] });
-  assert.match(L.ARM_A_PLAN_JS, /assignedRunner: 'ordewell'/);
+  assert.deepEqual(L.boxSettings().modelAllowlist, { openrouter: [L.MODEL_ID] });
+  assert.match(L.ARM_A_PLAN_JS, /assignedRunner: 'openrouter'/);
   assert.match(L.ARM_A_PLAN_JS, /status: 'approved'/);
 });
 
@@ -432,10 +432,10 @@ test('the runner modes are the built-in runner manifest\'s, and arm A takes its 
 });
 
 test('judgePlan fails a task in a mode the runner lacks, as createTask\'s default build', () => {
-  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: 'ordewell', assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
+  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: L.RUNNER, assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
   const build = L.judgePlan({ tasks: [t({ taskMode: 'build' })] });
   assert.equal(build.ok, false);
-  assert.match(build.failures[0], /mode build, which the ordewell runner does not have/);
+  assert.match(build.failures[0], /mode build, which the built-in runner does not have/);
   assert.match(L.judgePlan({ tasks: [t({ taskMode: undefined })] }).failures[0], /mode none/);
   assert.equal(L.judgePlan({ tasks: [t({ subtasks: [t({ taskMode: 'build' })] })] }).ok, false);
   for (const mode of L.RUNNER_MODES) assert.equal(L.judgePlan({ tasks: [t({ taskMode: mode })] }).ok, true, mode);
@@ -454,8 +454,38 @@ test('startDecision stops a run with no model call past the bound, and only then
   assert.equal(L.startDecision({ sinceRunMs: 60_000, usageLines: 0, plan, boundMs: 60_000 }).stop, true);
 });
 
+test('the runner is the built-in runner\'s on the protocol\'s provider, as core names it, not the legacy id', () => {
+  // ADR-0070: one built-in runner per provider, under the provider's id, for a provider whose models can be listed.
+  const runners = fs.readFileSync(path.join(repo, 'packages', 'core', 'src', 'services', 'providerRunners.ts'), 'utf8');
+  const providers = fs.readFileSync(path.join(repo, 'packages', 'core', 'src', 'services', 'apiProviders.ts'), 'utf8');
+  assert.match(runners, /PROVIDER_RUNNER_IDS: readonly AiProvider\[\] = PROVIDER_PRIORITY\.filter\(\(provider\) => VENDORS\[provider\]\.discoversModels\)/);
+  const registration = providers.match(new RegExp(`\\n  ${L.PROVIDER}: \\{\\n[\\s\\S]*?\\n  \\},`))?.[0];
+  assert.ok(registration, `apiProviders.ts registers ${L.PROVIDER}`);
+  assert.match(registration, new RegExp(`id: '${L.PROVIDER}'`));
+  assert.match(registration, /discoversModels: true/);
+  const legacy = runners.match(/export const LEGACY_BUILTIN_RUNNER = '([^']+)'/)?.[1];
+  assert.equal(legacy, 'ordewell');
+  assert.equal(L.RUNNER, 'openrouter');
+  assert.notEqual(L.RUNNER, legacy);
+
+  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: L.RUNNER, assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
+  assert.equal(L.judgePlan({ tasks: [t()] }).ok, true);
+  const old = L.judgePlan({ tasks: [t({ assignedRunner: legacy })] });
+  assert.equal(old.ok, false);
+  assert.match(old.failures[0], /runs on ordewell, not openrouter/);
+
+  assert.deepEqual(L.boxSettings().enabledRunners, [L.RUNNER]);
+  assert.deepEqual(L.boxSettings().modelAllowlist, { [L.RUNNER]: [L.MODEL_ID] });
+  assert.match(L.ARM_A_PLAN_JS, /assignedRunner: 'openrouter'/);
+  assert.match(L.ARM_A_PLAN_JS, /runners: \['openrouter'\]/);
+  assert.doesNotMatch(L.ARM_A_PLAN_JS, /'ordewell'/);
+  const [plan] = L.armCommands(L.ARMS.B, { workspace: '/testbed', goal: 'g' });
+  assert.deepEqual(plan.slice(4, 6), ['--runner', 'openrouter']);
+  assert.doesNotMatch(fs.readFileSync(path.join(here, 'drive.mjs'), 'utf8'), /'--runner', 'ordewell'/);
+});
+
 test('judgePlan holds every AI task, subtasks too, to the runner and the model', () => {
-  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: 'ordewell', assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
+  const t = (o = {}) => ({ title: 't', type: 'ai', assignedRunner: L.RUNNER, assignedModel: { modelId: L.MODEL_ID }, taskMode: 'full', ...o });
   assert.equal(L.judgePlan({ tasks: [t(), t({ type: 'script', assignedRunner: undefined, assignedModel: undefined })] }).ok, true);
   assert.equal(L.judgePlan({ tasks: [t({ subtasks: [t({ assignedRunner: 'claude' })] })] }).ok, false);
   assert.match(L.judgePlan({ tasks: [t({ assignedModel: { modelId: 'openrouter:x' } })] }).failures[0], /not openrouter:deepseek/);

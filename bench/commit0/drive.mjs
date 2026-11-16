@@ -555,7 +555,7 @@ async function realArm(lib, sb, arm, runDir) {
       sessionId = await createArmASession(lib, sb);
       must(sessionId, 'arm A session');
     } else {
-      steps.plan = await step(['ordewell', 'plan', '--goal', L.goalText(lib), '--runner', 'ordewell', '--no-chat', '--yes', '--workspace', lib.workdir], L.WALL_CAP_MS);
+      steps.plan = await step(['ordewell', 'plan', '--goal', L.goalText(lib), '--runner', L.RUNNER, '--no-chat', '--yes', '--workspace', lib.workdir], L.WALL_CAP_MS);
       const last = await inBox(sb, ['cat', path.posix.join(lib.workdir, '.ordewell', 'last-session.json')]);
       try { sessionId = JSON.parse(last.stdout).sessionId; } catch { sessionId = null; }
       must(sessionId && !stopped, `the planner left no session (exit ${steps.plan.code})`);
