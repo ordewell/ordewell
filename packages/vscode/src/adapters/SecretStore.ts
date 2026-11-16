@@ -66,6 +66,11 @@ export class SecretStore {
     await this.secrets.store(key, value);
   }
 
+  async delete(key: SecretKey): Promise<void> {
+    this.cache.delete(key);
+    await this.secrets.delete(key);
+  }
+
   configuredProviders(): ApiProvider[] {
     return SECRET_KEYS.filter((k) => !!this.cache.get(k)).map((k) => KEY_TO_PROVIDER[k]);
   }

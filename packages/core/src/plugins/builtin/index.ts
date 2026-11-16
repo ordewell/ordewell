@@ -7,13 +7,13 @@ import { QWEN_CODE_MANIFEST } from './qwen.manifest';
 import { CLINE_MANIFEST } from './cline.manifest';
 import { GEMINI_CLI_MANIFEST } from './gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from './cursor-agent.manifest';
-import { ORDEWELL_MANIFEST } from './ordewell.manifest';
+import { ORDEWELL_MANIFESTS } from './ordewell.manifest';
 
 /**
  * The built-in runners, by manifest. With a runner's entry in `CONNECTORS`,
  * this is the whole of declaring one: the runner list, the harness planners
  * and model discovery all read it. Insertion order is picker order on every
- * surface.
+ * surface: the coding agents, then the built-in runner's one per provider.
  */
 export const BUILTIN_MANIFESTS: readonly RunnerManifest[] = [
   CLAUDE_CODE_MANIFEST,
@@ -24,5 +24,5 @@ export const BUILTIN_MANIFESTS: readonly RunnerManifest[] = [
   CLINE_MANIFEST,
   GEMINI_CLI_MANIFEST,
   CURSOR_AGENT_MANIFEST,
-  ORDEWELL_MANIFEST,
+  ...ORDEWELL_MANIFESTS,
 ];

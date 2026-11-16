@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { WorkspaceNotFoundError, WorkspaceNotAProjectError, SessionNotFoundError } from '@ordewell/core';
+import { WorkspaceNotFoundError, SessionNotFoundError } from '@ordewell/core';
 
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
@@ -33,7 +33,7 @@ describe('POST /:sessionId/generate', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), 'openai/gpt-4o', { allowInit: undefined });
+    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), 'openai/gpt-4o');
   });
 
   it('omits model when not provided (backward compatible)', async () => {
@@ -44,7 +44,7 @@ describe('POST /:sessionId/generate', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), undefined, { allowInit: undefined });
+    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['opencode'], expect.any(String), undefined);
   });
 
   it('returns error when no requested runners match enabled ones', async () => {
@@ -89,27 +89,6 @@ describe('POST /:sessionId/generate', () => {
     expect(body.error).toContain('/nope');
   });
 
-  // A workspace with no project marker (e.g. the filesystem root) is a
-  // readable 400, not a 500 — same reasoning as the missing-workspace case.
-  it('reports a non-project workspace as a 400 with a readable message, not a 500', async () => {
-    const notAProjectPool = fakePool({
-      generatePlan: vi.fn().mockRejectedValue(new WorkspaceNotAProjectError('/')),
-    });
-    const { plansRoute: plansRouteForNonProject } = await import('../../routes/plans');
-    const app2 = new Hono();
-    app2.route('/api/plans', plansRouteForNonProject(notAProjectPool));
-
-    const res = await app2.request('/api/plans/s1/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goal: 'test goal', runners: ['opencode'] }),
-    });
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('/');
-  });
-
   it('accepts runners from query param ?runners= comma-separated', async () => {
     const res = await app.request('/api/plans/s1/generate?runners=claude-code,opencode', {
       method: 'POST',
@@ -118,7 +97,7 @@ describe('POST /:sessionId/generate', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['claude-code', 'opencode'], expect.any(String), undefined, { allowInit: undefined });
+    expect(pool.generatePlan).toHaveBeenCalledWith('s1', 'test goal', ['claude-code', 'opencode'], expect.any(String), undefined);
   });
 });
 

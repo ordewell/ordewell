@@ -143,9 +143,14 @@ const POWERSHELL_FLAGS = ['-NoLogo', '-NoProfile', '-NonInteractive', '-Executio
  * interpreter that can start it. Windows truncates rather than rejecting, and a
  * system prompt cut off mid-sentence makes the planner answer half a question
  * confidently — the silent success this repo refuses — so this is raised
- * instead. `TaskOrchestrator.startTask` catches it and holds the task, so the
- * message is what the user reads: it names the fix, because they cannot infer
- * it from a truncated prompt.
+ * instead. The start's one spawn-failure path holds the task, so the message
+ * is what the user reads.
+ *
+ * No prompt, instructions or settings ride a runner's command line (ADR-0010
+ * §1): its arguments are flags and short paths. So the OS ceiling names no
+ * prompt to shorten: a runner's command line that long is Ordewell's bug, and
+ * the message says so and which command it was, for a report. A script task's
+ * own command is the plan's, and ScriptRunner says so in its own words.
  */
 export class CommandLineTooLongError extends Error {
   constructor(readonly command: string, readonly length: number, readonly limit: number = CMD_EXE_MAX_COMMAND_LINE) {
@@ -156,8 +161,9 @@ export class CommandLineTooLongError extends Error {
           `Install the native executable from the coding agent's own Windows installer or release binary. ` +
           `Ordewell will launch it directly, with no buffer in the way.`
         : `Cannot start "${command}" on Windows: its arguments are ${length} characters, over the ${limit}-character limit Windows places on any command line.\n\n` +
-          `This is the OS ceiling rather than a shim's, so no reinstall avoids it. ` +
-          `Shorten the task prompt or detach some task skills to reduce the prompt the runner is started with.`,
+          `No reinstall moves that limit, and nothing you wrote is the cause: Ordewell hands a coding agent its prompts, instructions and settings in files, ` +
+          `so its command line holds only flags and short paths. A command line this long is a bug in Ordewell. ` +
+          `Please report it at https://github.com/ordewell/ordewell/issues, saying it was "${command}".`,
     );
     this.name = 'CommandLineTooLongError';
   }
@@ -535,9 +541,10 @@ function planFor(found: FoundExecutable, args: string[], deps: LaunchDeps): Laun
  *
  * The tiers are tried in preference order and the first that *fits* wins, with
  * one deliberate exception: an overflowing batch shim does not fall through to
- * PowerShell. Overflow means a very large prompt, which is precisely where
- * `-File` argument fidelity is least worth betting on, and where a clear held
- * task beats a plausibly-mangled one. So capacity does not reorder the tiers —
+ * PowerShell. No prompt rides a runner's command line (ADR-0010 §1), so
+ * overflow means a script task's own command or a bug in Ordewell, which is
+ * precisely where `-File` argument fidelity is least worth betting on, and
+ * where a clear held task beats a plausibly-mangled one. So capacity does not reorder the tiers —
  * a `.ps1` beside a too-long `.cmd` still raises.
  *
  * A line break does reorder them: cmd.exe cannot carry one at any length, so a

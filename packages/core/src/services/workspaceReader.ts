@@ -16,7 +16,7 @@ import { realPathOf } from '../utils/realPath';
 import { listSessions, loadSession } from '../utils/sessionStore';
 import { readTaskPatch } from '../utils/taskLogStore';
 import { augmentedPath, withPath } from '../utils/shellPath';
-import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn, type GitInvoker } from './gitExec';
+import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { repoRootOf, SELF_REPO } from './isolationRecord';
 import { landingsIn } from './LandingLedger';
 import { hasGitEntry, workspaceRepoGroup } from './repoGroup';
@@ -153,10 +153,11 @@ function trackOf(track: string): { ahead: number; behind: number } {
   return { ahead: Number(/ahead (\d+)/.exec(track)?.[1] ?? 0), behind: Number(/behind (\d+)/.exec(track)?.[1] ?? 0) };
 }
 
-function parseWorktrees(out: string): GitWorktreeInfo[] {
+/** `worktree list --porcelain`, its fields split by NUL (`-z`) or, from a git older than 2.36, by line. */
+function parseWorktrees(out: string, separator: '\0' | RegExp): GitWorktreeInfo[] {
   const worktrees: GitWorktreeInfo[] = [];
   let current: GitWorktreeInfo | null = null;
-  for (const field of out.split('\0')) {
+  for (const field of out.split(separator)) {
     if (field.startsWith('worktree ')) {
       current = { path: field.slice('worktree '.length), branch: null, head: null, main: worktrees.length === 0 };
       worktrees.push(current);
@@ -204,6 +205,21 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const result = await tryGit(invoker, cwd, [...await readOnlyGitArgs(invoker, cwd), ...args]);
     if (!result.ok) throw new Error(`git ${args[0]} failed: ${result.stderr.trim() || String(result.code ?? 'unknown error')}`);
     return result.stdout;
+  }
+
+  /**
+   * `-z` keeps a path holding a line break whole, but arrived in git 2.36, and
+   * older git (Ubuntu 22.04's 2.34) refuses it, which failed the whole Git
+   * view. That refusal is read from the second attempt succeeding, not from
+   * stderr, whose wording git translates.
+   */
+  async function worktreesOf(cwd: string): Promise<GitWorktreeInfo[]> {
+    try {
+      return parseWorktrees(await gitOut(cwd, ['worktree', 'list', '--porcelain', '-z']), '\0');
+    } catch (error) {
+      const lines = await gitOut(cwd, ['worktree', 'list', '--porcelain']).catch(() => { throw error; });
+      return parseWorktrees(lines, /\r?\n/);
+    }
   }
 
   /** A blob's bytes: the string seam would mangle a binary file. */
@@ -517,11 +533,21 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     if (options.text) {
       const where = scope.root !== null ? ['--untracked', '--exclude-standard'] : [];
       const object = scope.root !== null ? [] : [scope.at.commit ?? EMPTY_TREE];
-      const result = await tryGit(invoker, scope.cwd, [
+      const grep = async (cap: string[]) => tryGit(invoker, scope.cwd, [
         ...await readOnlyGitArgs(invoker, scope.cwd), 'grep', ...where, '-I', '-n', '-z', '-i', '-F', '--no-color', '--full-name',
-        `--max-count=${limit + 1}`, '-e', query, ...object, '--', '.',
+        ...cap, '-e', query, ...object, '--', '.',
       ]);
-      if (!result.ok && result.code !== 1) throw new Error(`git grep failed: ${result.stderr.trim()}`);
+      const found = (answer: GitResult): boolean => answer.ok || answer.code === 1;
+      // The cap is per file and only saves reading: the loop below stops at the
+      // limit. Git before 2.38 (Ubuntu 22.04's 2.34) refuses it, which, as with
+      // `worktree list -z`, the uncapped search succeeding says, not git's
+      // translated stderr.
+      let result = await grep([`--max-count=${limit + 1}`]);
+      if (!found(result)) {
+        const uncapped = await grep([]);
+        if (found(uncapped)) result = uncapped;
+      }
+      if (!found(result)) throw new Error(`git grep failed: ${result.stderr.trim()}`);
       for (const line of result.stdout.split('\n')) {
         const [named, number, ...rest] = line.split('\0');
         if (number === undefined) continue;
@@ -769,7 +795,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
         answer.stashes.push({ ref, sha, message });
       }
     }
-    answer.worktrees = parseWorktrees(await gitOut(cwd, ['worktree', 'list', '--porcelain', '-z']));
+    answer.worktrees = await worktreesOf(cwd);
     const owners = ownersIn(target.workspace, scope.at.repo);
     for (const branch of answer.ordewell) {
       const owner = owners.branches.get(branch.name) ?? owners.runs.get(RUN_OF_REF.exec(branch.name)?.[1] ?? '');

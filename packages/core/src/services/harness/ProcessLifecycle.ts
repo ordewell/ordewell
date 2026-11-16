@@ -112,6 +112,14 @@ export abstract class ProcessLifecycle {
     // Newest first, as a stack: a resource may rest on one claimed before it.
     const releases = [...this.owned.values()].reverse();
     this.owned.clear();
-    for (const release of releases) release();
+    for (const release of releases) {
+      // One that throws must not leave the rest, a token among them, on disk,
+      // nor keep a dispose from the kill that follows.
+      try {
+        release();
+      } catch (err) {
+        console.error(`[${this.constructor.name}] could not free what its process owned:`, err);
+      }
+    }
   }
 }

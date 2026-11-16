@@ -58,14 +58,12 @@ import {
   runnerModesFrom,
   configuredProviders,
   assertWorkspaceExists,
-  assertWorkspaceIsProject,
-  WorkspaceNotAProjectError,
-  ensureStateDirIgnored,
   runnerForProvider,
   PlannerModelMemory,
   selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
+  removesCredential,
   forgetSignedOutRunnerAuth,
   type PlannerBackendId,
   type PlannerModelCandidate,
@@ -86,11 +84,14 @@ import {
   discardChildRuns,
   type IIsolationPreview,
   type IsolationPreview,
+  inProcessProvider,
+  runnerPlans,
 } from '@ordewell/core';
 import { ChildStreams } from './childStreams';
 import { StreamSequence } from './streamSequence';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
+import { saveCredentials } from '../utils/savedCredentials';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
 import type { ClientSurface, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
@@ -531,25 +532,12 @@ export class OrchestratorPool {
     return sessionRuntimeSettings(this.settingsService.getAll());
   }
 
-  private createSessionFor(sessionId: string, workspace: string, modelOverride?: string, options: { allowInit?: boolean } = {}): Session {
+  private createSessionFor(sessionId: string, workspace: string, modelOverride?: string): Session {
     // Rejected here rather than left to the planner: a non-existent workspace
     // otherwise reaches the harness adapter's `spawn` as an ENOENT that reads
     // as a missing agent binary, not a missing directory.
     assertWorkspaceExists(workspace);
-    // Rejected here too: without a project marker, the filesystem root or an
-    // arbitrary system directory becomes the confinement boundary for every
-    // read, search and permitted command the planner runs. `allowInit` only
-    // ever arrives here on the retry of a call the user already saw and
-    // explicitly confirmed (the TUI's "initialize this as a new workspace?"
-    // prompt) — never as a default, so an unmarked directory is still never
-    // admitted silently.
-    try {
-      assertWorkspaceIsProject(workspace);
-    } catch (err) {
-      if (!(err instanceof WorkspaceNotAProjectError) || !options.allowInit) throw err;
-      ensureStateDirIgnored(workspace);
-      assertWorkspaceIsProject(workspace);
-    }
+    // Any folder that exists is a workspace, git or not, marker or not (ADR-0071).
     const config = this.plannerConfig(modelOverride, workspace);
     const fsAdapter = new PoolFileSystem(workspace);
     const broadcast = (msg: SessionMessage) => this.broadcast(sessionId, workspace, msg);
@@ -802,16 +790,22 @@ export class OrchestratorPool {
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
 
+    let unsavedEnvKeys: string[] = [];
     if (envChanges) {
       let touched = false;
       for (const [key, value] of Object.entries(envChanges)) {
-        process.env[key] = value;
+        if (removesCredential(key, value)) delete process.env[key];
+        else process.env[key] = value;
         // Only a credential or endpoint change touches what a catalog
         // contains. A planner, model or effort pick does not, and invalidating
         // on one would wipe the very cache `plannerCatalogFor` reads
         // synchronously, right before the next call's switch needs it.
         if (PROVIDER_CREDENTIAL_ENV.has(key)) touched = true;
       }
+      // A key a surface set outlives this daemon. An inherited write is the
+      // environment the client was started under, which may hold a key the
+      // shell exported for its own life only: it is never written to disk.
+      if (touched && changes.inherited !== true) unsavedEnvKeys = saveCredentials(envChanges);
       // The scheduler reads the limit on every tick, but a raised one would
       // only be seen at the next verdict; the runs waiting for a slot start now.
       if (envChanges.ORDEWELL_MAX_PARALLEL !== undefined) {
@@ -881,6 +875,7 @@ export class OrchestratorPool {
     const rejectedEnvKeys = admission?.rejected ?? [];
     const settings: SettingsUpdateResponse = this.getSettings(sessionId, workspace);
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
+    if (unsavedEnvKeys.length > 0) settings.unsavedEnvKeys = unsavedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
   }
@@ -1027,12 +1022,14 @@ export class OrchestratorPool {
     // An installed CLI that cannot be started — a Windows `.cmd` shim, or an
     // ACP agent below its minimum version — stays in the list as unavailable
     // with its reason, so a surface can say why instead of hiding it (ADR-0009,
-    // ADR-0060).
+    // ADR-0060). A provider runner is installed only while its provider is
+    // configured, so one with no key is not here at all (ADR-0070).
     return Promise.all(
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number]> => {
           const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
+          const provider = inProcessProvider(p.manifest);
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
@@ -1040,15 +1037,17 @@ export class OrchestratorPool {
             ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
             ...(version ? { version } : {}),
+            plans: runnerPlans(p.manifest.name),
+            ...(provider ? { provider } : {}),
           };
         }),
     );
   }
 
-  async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Promise<PlanState> {
+  async generatePlan(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string): Promise<PlanState> {
     const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride, workspace).aiProvider);
     if (recheck) await recheck;
-    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
+    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride);
     return migratePlanState(await this.firstTurn(sessionId, session, () => session.generatePlan(goal, runners)));
   }
 
@@ -1072,10 +1071,10 @@ export class OrchestratorPool {
    * Build the session a new planning conversation runs in and register it in
    * place of any live one, for {@link firstTurn} to run its first turn on.
    */
-  private openPlanningSession(sessionId: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean }): Session {
+  private openPlanningSession(sessionId: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string): Session {
     // The one it replaces must be this workspace's: another's is not this conversation to end.
     this.live(sessionId, workspace);
-    const session = this.createSessionFor(sessionId, workspace, modelOverride, options);
+    const session = this.createSessionFor(sessionId, workspace, modelOverride);
     // Judged on the new session's config (which carries the request's model)
     // and before the old session is destroyed, so a refusal leaves it alone.
     // Not while the installed-planner probe is out: its answer can be the
@@ -1106,10 +1105,10 @@ export class OrchestratorPool {
    * planner had enough context, otherwise the dialogue so far (last
    * assistant message lives in conversationHistory).
    */
-  async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { allowInit?: boolean; surface?: ClientSurface }): Promise<LegacyPlanState> {
+  async startPlanning(sessionId: string, goal: string, runners: RunnerId[] | undefined, workspace: string, modelOverride?: string, options?: { surface?: ClientSurface }): Promise<LegacyPlanState> {
     const recheck = this.recheckSignedOutPlanner(workspace, this.plannerConfig(modelOverride, workspace).aiProvider);
     if (recheck) await recheck;
-    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride, options);
+    const session = this.openPlanningSession(sessionId, runners, workspace, modelOverride);
     return this.firstTurn(sessionId, session, () => session.startPlanning(goal, runners, { surface: options?.surface }));
   }
 

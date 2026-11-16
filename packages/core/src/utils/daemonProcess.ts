@@ -31,8 +31,10 @@ export const DEFAULT_DAEMON_PORT = 3742;
  * daemon serves.
  * 3: the desktop's Explorer reads the workspace folder itself, as repo `.`,
  * which a contract-2 daemon refuses in a folder that is not a repository.
+ * 4: any folder is a workspace (ADR-0071); a contract-3 daemon refuses one
+ * with no project marker, which no client asks it to initialize any more.
  */
-export const DAEMON_CONTRACT = 3;
+export const DAEMON_CONTRACT = 4;
 
 // Paths are read at call time, not import time: a test (and a shell that
 // re-exports HOME) changes the home directory after this module loads.

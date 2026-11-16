@@ -5,7 +5,7 @@ import {
   type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
+import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
 import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
@@ -42,7 +42,7 @@ export interface EffectDeps {
   port: number;
   dispatch(action: Action): void;
   newSessionId(): string;
-  /** Persists to the resolved `.env` and to `process.env`. */
+  /** Persists to the resolved `.env` and to `process.env`, as the daemon read it: an empty credential is taken out of both. */
   setEnvVar(key: string, value: string): void;
   /** Saves Full or Guarded in the user's settings (ADR-0030); `overridden` when the environment decides it anyway. */
   saveAutonomy(enabled: boolean): { overridden: boolean };
@@ -144,10 +144,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
       // daemon came back. Whether this opening is still the one on screen is
       // the reducer's to say: a retry from here would take that one over.
       deps.dispatch({ type: 'daemonReconnected' });
-      deps.dispatch({
-        type: 'openingRevived', sessionId: opening.sessionId, goal: opening.goal,
-        ...(opening.allowInit ? { allowInit: opening.allowInit } : {}),
-      });
+      deps.dispatch({ type: 'openingRevived', sessionId: opening.sessionId, goal: opening.goal });
       return;
     }
 
@@ -230,7 +227,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const { sessionId } = effect;
       dispatch({ type: 'sessionStarted', sessionId, goal: effect.goal });
       try {
-        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit), true);
+        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace), true);
       } catch (err) {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
@@ -256,14 +253,6 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         dispatch({ type: 'sessionCleared', sessionId });
         // The welcome is not any session: its run settings are the file's again (ADR-0030).
         await reloadSettings(deps);
-        // Offer to initialize instead of just reporting failure — but only
-        // once: a rejection on the confirmed retry (allowInit already true)
-        // falls through to the generic error path instead of looping the
-        // prompt forever.
-        if (err instanceof WorkspaceInitNeededError && !effect.allowInit) {
-          dispatch({ type: 'workspaceNeedsInit', goal: effect.goal, workspace: err.workspace, sessionId });
-          return;
-        }
         throw err;
       }
       // Outside the block above: a settings read that fails must not take a
@@ -572,11 +561,23 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
     case 'setApiKey': {
       const meta = isApiProvider(effect.provider) ? getProviderMeta(effect.provider) : undefined;
       if (!meta) throw new Error(`Unknown provider: ${effect.provider}`);
-      await api.updateSettings({ env: { [meta.apiKeyEnvVar]: effect.key } });
-      deps.setEnvVar(meta.apiKeyEnvVar, effect.key);
+      // Custom's endpoint is what sets it up, its key optional. None given is
+      // sent empty, which takes away the key saved before (`removesCredential`):
+      // kept, it would be sent to an endpoint that was set up as taking none.
+      const endpoint = effect.baseUrl !== undefined && meta.baseUrlEnvVar ? { name: meta.baseUrlEnvVar, url: effect.baseUrl } : undefined;
+      const env: Record<string, string> = endpoint
+        ? { [endpoint.name]: endpoint.url, [meta.apiKeyEnvVar]: effect.key }
+        : effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {};
+      await api.updateSettings({ env });
+      for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
-      dispatch({ type: 'notice', message: `${meta.label} key saved to ${meta.apiKeyEnvVar}.` });
+      const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
+      const saved = Object.keys(env).filter((name) => env[name] !== '');
+      const cleared = endpoint && !effect.key ? `, with no key: the ${meta.apiKeyEnvVar} Ordewell saved is cleared (one set in your shell or the workspace's env still applies)` : '';
+      dispatch({ type: 'notice', message: `${meta.label} ${what} saved to ${saved.join(' and ')}${cleared}.` });
       await loadModels(deps);
+      // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
+      await loadRunners(deps);
       return;
     }
 

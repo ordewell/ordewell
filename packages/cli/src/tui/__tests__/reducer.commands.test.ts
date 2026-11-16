@@ -72,21 +72,95 @@ describe('models and providers', () => {
     expect(run('/planner opencode', { plannerEnvOverride: 'opencode' }).effects).toEqual([{ type: 'setPlanner', provider: 'opencode' }]);
   });
 
-  it('/key set stores a provider key', () => {
-    expect(run('/key set openrouter sk-or-123').effects).toEqual([
+  it('/key-set stores a provider key', () => {
+    expect(run('/key-set openrouter sk-or-123').effects).toEqual([
       { type: 'setApiKey', provider: 'openrouter', key: 'sk-or-123' },
     ]);
   });
 
-  it('/key with no argument opens the provider picker', () => {
-    const { state } = run('/key');
+  it('/key-set with a provider and no key asks for that provider\'s key', () => {
+    const { state, effects } = run('/key-set anthropic');
+    expect(effects).toEqual([]);
+    expect(state.overlay).toMatchObject({ kind: 'prompt', title: 'Anthropic API key', action: { kind: 'api-key', provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY' } });
+  });
+
+  // Bug: Custom's key was asked for alone, and a key lists no Custom planner or runner: its endpoint does.
+  it('/key-set for Custom asks for its endpoint first, then a key it may go without', () => {
+    const asked = run('/key-set openai_compatible').state;
+    expect(asked.overlay).toMatchObject({ kind: 'prompt', title: 'Custom endpoint URL', action: { kind: 'api-base-url', provider: 'openai_compatible', envVar: 'OPENAI_COMPATIBLE_BASE_URL' } });
+
+    const typed = (state: TuiState, text: string): TuiState => [...text].reduce((s, char) => reduce(s, { type: 'key', key: { name: 'char', char } }).state, state);
+    const enter = (state: TuiState) => reduce(state, { type: 'key', key: { name: 'enter' } });
+
+    // A mistyped URL keeps the prompt open and says why.
+    const refused = enter(typed(asked, 'localhost:8000'));
+    expect(refused.effects).toEqual([]);
+    expect(refused.state.overlay).toMatchObject({ kind: 'prompt', action: { kind: 'api-base-url' }, hint: 'Enter the endpoint URL, starting with http:// or https://.' });
+
+    const keyAsked = enter(typed(asked, 'http://localhost:8000/v1')).state;
+    expect(keyAsked.overlay).toMatchObject({ kind: 'prompt', title: 'Custom API key (optional)', action: { kind: 'api-key', provider: 'openai_compatible', baseUrl: 'http://localhost:8000/v1' } });
+    expect(enter(typed(keyAsked, 'sk-local')).effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' }]);
+    // No key is an answer here, not a cancel.
+    expect(enter(keyAsked).effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:8000/v1' }]);
+  });
+
+  // Bug: the endpoint prompt always started empty, so changing Custom's key meant typing its endpoint out again.
+  it('/key-set for Custom offers the endpoint it has, and holds the one saved for the next time', () => {
+    const enter = (state: TuiState) => reduce(state, { type: 'key', key: { name: 'enter' } });
+    const asked = run('/key-set openai_compatible', { customEndpoint: 'http://localhost:11434/v1' }).state;
+    expect(asked.overlay).toMatchObject({ kind: 'prompt', action: { kind: 'api-base-url' }, value: 'http://localhost:11434/v1' });
+
+    // Chosen from the provider list too.
+    let picked = run('/key-set', { customEndpoint: 'http://localhost:11434/v1' }).state;
+    const items = picked.overlay?.kind === 'picker' ? picked.overlay.picker.items : [];
+    for (let row = 0; row < items.findIndex((item) => item.id === 'openai_compatible'); row++) picked = reduce(picked, { type: 'key', key: { name: 'down' } }).state;
+    expect(enter(picked).state.overlay).toMatchObject({ kind: 'prompt', action: { kind: 'api-base-url' }, value: 'http://localhost:11434/v1' });
+
+    const keyAsked = enter(asked).state;
+    const saved = enter(keyAsked);
+    expect(saved.effects).toEqual([{ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:11434/v1' }]);
+    expect(run('/key-set openai_compatible http://localhost:8000/v1').state.customEndpoint).toBe('http://localhost:8000/v1');
+    expect(saved.state.customEndpoint).toBe('http://localhost:11434/v1');
+  });
+
+  it('/key-set for Custom takes its endpoint inline before the key, and refuses a key where the endpoint goes', () => {
+    expect(run('/key-set openai_compatible http://localhost:8000/v1 sk-local').effects).toEqual([
+      { type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' },
+    ]);
+    expect(run('/key-set openai_compatible http://localhost:8000/v1').effects).toEqual([
+      { type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:8000/v1' },
+    ]);
+    const { state, effects } = run('/key-set openai_compatible sk-local');
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)).toMatchObject({ role: 'error', text: 'Usage: /key-set openai_compatible <base-url> [<key>]' });
+  });
+
+  it('/key-set with no argument opens the provider picker', () => {
+    const { state } = run('/key-set');
     expect(state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-key' } } });
   });
 
-  it('/key rejects a provider it does not know', () => {
-    const { state, effects } = run('/key set notaprovider sk-1');
+  it('/key-set marks a provider whose key only plans, and names Custom by its endpoint', () => {
+    const { state } = run('/key-set');
+    const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
+    // Perplexity lists no models, so its key adds no built-in runner.
+    expect(items.find((item) => item.id === 'perplexity')).toMatchObject({ label: 'Perplexity (planner only)' });
+    expect(items.find((item) => item.id === 'openrouter')).toMatchObject({ label: 'OpenRouter', detail: 'OPENROUTER_API_KEY' });
+    expect(items.find((item) => item.id === 'openai_compatible')).toMatchObject({ label: 'Custom', detail: 'OPENAI_COMPATIBLE_BASE_URL' });
+  });
+
+  it('/key-set rejects a provider it does not know', () => {
+    const { state, effects } = run('/key-set notaprovider sk-1');
     expect(effects).toEqual([]);
-    expect(lastMessage(state)?.role).toBe('error');
+    expect(lastMessage(state)).toMatchObject({ role: 'error', text: 'Unknown provider: notaprovider. Run /key-set with no arguments to see the list.' });
+  });
+
+  it('the deprecated /key still sets a key, its old `set` read past, and says to use /key-set', () => {
+    const { state, effects } = run('/key set openrouter sk-or-123');
+    expect(effects).toEqual([{ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-123' }]);
+    expect(lastMessage(state)?.text).toBe('renamed: use /key-set');
+    expect(run('/key').state.overlay).toMatchObject({ kind: 'picker', picker: { action: { kind: 'set-key' } } });
+    expect(run('/key set google').state.overlay).toMatchObject({ kind: 'prompt', action: { provider: 'google' } });
   });
 
   it('/refresh re-discovers runners and catalogs', () => {
@@ -148,7 +222,7 @@ describe('login', () => {
     [
       'qwen-code', 'Qwen Code',
       { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter' as const, label: 'OpenRouter', others: 'any OpenAI-compatible provider' }, byHand: 'run qwen and sign in there' },
-      'Qwen Code has no login Ordewell can run. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      'Qwen Code has no login Ordewell can run. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
     ],
     [
       'opencode', 'OpenCode',
@@ -181,6 +255,29 @@ describe('login', () => {
 
     expect(effects).toEqual([]);
     expect(lastMessage(state)?.text).toContain('Claude Code is not installed');
+  });
+
+  it('points a provider runner at its key, the only sign-in it has, and runs nothing', () => {
+    const openrouter: RunnerView = { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' };
+    const { state, effects } = run('/login OpenRouter', { plannerProvider: 'claude-code', runners: [claude, openrouter], runnersKnown: true });
+
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.text).toBe('OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.');
+  });
+
+  it('points Custom at its endpoint, which may take no key at all', () => {
+    const custom: RunnerView = { id: 'openai_compatible', name: 'Custom', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openai_compatible' };
+    const { state } = run('/login custom', { plannerProvider: 'claude-code', runners: [claude, custom], runnersKnown: true });
+
+    expect(lastMessage(state)?.text).toBe('Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.');
+  });
+
+  // Bug: a provider runner with no key yet has no row, so its /login said no installed coding agent matched.
+  it.each([true, false])('points a provider runner with no key at its key too, the runner list known: %s', (runnersKnown) => {
+    const { state, effects } = run('/login Anthropic', { plannerProvider: 'claude-code', runners: [claude], runnersKnown });
+
+    expect(effects).toEqual([]);
+    expect(lastMessage(state)?.text).toBe('Anthropic has no login: it runs on its API key, which /key-set anthropic replaces.');
   });
 
   // Before the daemon answers, an empty runner list is not evidence that the
@@ -261,7 +358,7 @@ describe('runners and mouse', () => {
       { id: 'cursor-agent', label: 'Cursor', detail: 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.', warn: true },
       {
         id: 'qwen-code', label: 'Qwen Code', warn: true,
-        detail: 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+        detail: 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
       },
       { id: 'copilot-cli', label: 'GitHub Copilot CLI', detail: 'Sign in with /login copilot-cli, or run copilot login.' },
       { id: 'codex', label: 'Codex' },
@@ -281,6 +378,21 @@ describe('runners and mouse', () => {
     expect(items).toEqual([
       { id: 'claude-code', label: 'Claude Code' },
       { id: 'copilot-cli', label: 'GitHub Copilot CLI', detail: reason, disabled: true },
+    ]);
+  });
+
+  it('/runners lists a provider runner by its provider\'s name, as the built-in runner, with no way in to flag', () => {
+    const { state } = run('/runners', {
+      runners: [
+        { id: 'claude-code', name: 'Claude Code', enabled: true },
+        { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+      ],
+    });
+
+    const items = state.overlay?.kind === 'picker' ? state.overlay.picker.items : [];
+    expect(items).toEqual([
+      { id: 'claude-code', label: 'Claude Code' },
+      { id: 'openrouter', label: 'OpenRouter', detail: 'built-in runner, on its API key' },
     ]);
   });
 

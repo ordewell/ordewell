@@ -56,7 +56,7 @@ export const defaultModelClient: ModelClientFactory = (options) => withRetry(cre
 
 /**
  * One client per provider, endpoint and key: rebuilt when either changes. A
- * Session outlives `/key` and endpoint edits, so a client cached for good kept
+ * Session outlives `/key-set` and endpoint edits, so a client cached for good kept
  * sending the previous key, which the provider refused though the user had
  * already replaced it.
  */

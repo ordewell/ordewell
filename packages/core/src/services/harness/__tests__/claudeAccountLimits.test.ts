@@ -6,7 +6,7 @@ import { accountLimitsText } from '../../../models/AccountLimits';
 import { AccountLimitMonitor } from '../../AccountLimitMonitor';
 import { claudeAccountLimitCollector } from '../claudeAccountLimits';
 import type { AgentProcessDeps, SpawnFn } from '../AgentAdapter';
-import { silentSpawn, type FakeAgentProcess } from '../../__tests__/harnessTestKit';
+import { argvWithFiles, silentSpawn, type FakeAgentProcess, type FakeLaunch } from '../../__tests__/harnessTestKit';
 
 /**
  * The real collector and the real ClaudeCodeAdapter control channel against a
@@ -52,7 +52,7 @@ interface Script {
   refuse?: string;
 }
 
-const spawned: { proc: FakeAgentProcess; args: string[]; cwd: string; env: NodeJS.ProcessEnv }[] = [];
+const spawned: { proc: FakeAgentProcess; args: string[]; cwd: string; env: NodeJS.ProcessEnv; launch: FakeLaunch }[] = [];
 afterEach(() => { spawned.length = 0; });
 
 function fakeClaude(script: Script | (() => Script)) {
@@ -76,7 +76,7 @@ function fakeClaude(script: Script | (() => Script)) {
   const spawn: SpawnFn = (command, args, options) => {
     const child = fake.spawn(command, args, options);
     const proc = fake.processes.at(-1)!;
-    spawned.push({ proc, args, cwd: options.cwd, env: options.env });
+    spawned.push({ proc, args, cwd: options.cwd, env: options.env, launch: fake.lastLaunch() });
     const answers = typeof script === 'function' ? script() : script;
     current.set(proc, answers);
     if (answers.refuse) {
@@ -117,21 +117,25 @@ describe('the Claude Code account-limit collector', () => {
   it('runs a launch of its own: OAuth kept, nothing of the user, the repository, plugins, hooks, tools or MCP started, no session saved', async () => {
     await read(collector({}));
 
-    const { args, cwd } = spawned[0];
-    expect(args).toEqual([
+    const { args, cwd, launch } = spawned[0];
+    // Its settings in files, as every Claude launch's are (ADR-0010 §1): JSON on the command line holds a quote.
+    const shown = argvWithFiles(launch);
+    expect(shown.args).toEqual([
       '-p',
       '--input-format=stream-json',
       '--output-format=stream-json',
       '--verbose',
       '--safe-mode',
       '--setting-sources=',
-      '--settings={"disableAllHooks":true}',
+      '--settings', '<settings.json>',
       '--strict-mcp-config',
-      '--mcp-config={"mcpServers":{}}',
+      '--mcp-config', '<no-mcp-servers.json>',
       '--tools=',
       '--permission-mode=default',
       '--no-session-persistence',
     ]);
+    expect(shown.files).toEqual({ 'settings.json': '{"disableAllHooks":true}', 'no-mcp-servers.json': '{"mcpServers":{}}' });
+    expect([...launch.files.keys()].filter((file) => existsSync(file))).toEqual([]);
     // `--bare` never reads the OAuth login a subscription's limits belong to.
     expect(args).not.toContain('--bare');
     expect(args.some((a) => a.startsWith('--model') || a.startsWith('--resume') || a.startsWith('--append-system-prompt') || a.startsWith('--add-dir'))).toBe(false);

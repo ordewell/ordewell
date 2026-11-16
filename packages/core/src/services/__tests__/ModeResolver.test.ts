@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { carryPlannedModes, plannedMode, readOnlyMode, type RunnerModeInfo } from '../ModeResolver';
 import { createTask } from '../../models/Task';
-import { ORDEWELL_MANIFEST } from '../../plugins/builtin/ordewell.manifest';
+import { ordewellManifest } from '../../plugins/builtin/ordewell.manifest';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { attemptModeOf } from '../harness/ordewell/modes';
 
@@ -98,8 +98,10 @@ describe('carryPlannedModes', () => {
   });
 });
 
-describe('the Ordewell runner\'s modes (ADR-0070)', () => {
-  const modes = { ordewell: ORDEWELL_MANIFEST.modes ?? [] };
+describe('the built-in runner\'s modes (ADR-0070)', () => {
+  // Every provider runner has the one set; OpenRouter's stands for them.
+  const ORDEWELL_MANIFEST = ordewellManifest('openrouter');
+  const modes = { openrouter: ORDEWELL_MANIFEST.modes ?? [] };
   /** The mode a planned task's attempt runs in, through the flags a spawn resolves from its manifest. */
   const attempt = (mode: string | undefined) => {
     if (mode === undefined) throw new Error('no mode planned');
@@ -107,11 +109,11 @@ describe('the Ordewell runner\'s modes (ADR-0070)', () => {
   };
 
   it('maps Full and Guarded onto its full and guarded modes, and a read-only task onto read-only at either level', () => {
-    const full = plannedMode('ordewell', modes, {}, true);
-    const guarded = plannedMode('ordewell', modes, {}, false);
+    const full = plannedMode('openrouter', modes, {}, true);
+    const guarded = plannedMode('openrouter', modes, {}, false);
     expect([full, guarded]).toEqual([{ ok: true, mode: 'full' }, { ok: true, mode: 'guarded' }]);
-    expect(plannedMode('ordewell', modes, { readOnly: true }, true)).toEqual({ ok: true, mode: 'read-only' });
-    expect(plannedMode('ordewell', modes, { readOnly: true }, false)).toEqual({ ok: true, mode: 'read-only' });
+    expect(plannedMode('openrouter', modes, { readOnly: true }, true)).toEqual({ ok: true, mode: 'read-only' });
+    expect(plannedMode('openrouter', modes, { readOnly: true }, false)).toEqual({ ok: true, mode: 'read-only' });
   });
 
   it('starts each planned mode as itself: no mode is unavailable, and read-only reaches the runner as a read-only task', () => {

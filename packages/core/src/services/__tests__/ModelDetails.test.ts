@@ -176,7 +176,7 @@ describe('the runner list', () => {
     const plain = Object.entries(snapshot.openai).find(([, d]) => d.tools === true && d.reasoning === false)?.[0];
     expect(noTools && reasoner && plain).toBeTruthy();
 
-    const models = await discoverProviderModels({ OPENAI_API_KEY: 'k' }, listing([noTools!, reasoner!, plain!, 'zz-unknown-model']));
+    const models = await discoverProviderModels({ OPENAI_API_KEY: 'k' }, 'openai', listing([noTools!, reasoner!, plain!, 'zz-unknown-model']));
     const byId = new Map(models.map((m) => [m.modelId, m]));
     expect(byId.has(`openai:${noTools}`)).toBe(false);
     expect(byId.has('openai:zz-unknown-model')).toBe(true);

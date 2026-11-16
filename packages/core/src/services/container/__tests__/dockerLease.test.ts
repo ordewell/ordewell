@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from 'http';
 import { release, tmpdir, type as osType } from 'os';
 import { join } from 'path';
 import { CredentialBroker } from '../credentialBroker';
-import { DockerExecutionBackend, whereItRuns } from '../dockerLease';
+import { DockerExecutionBackend, PLACE_FILE_SCRIPT, whereItRuns } from '../dockerLease';
 import { LOGIN_VOLUME } from '../containerPreflight';
 import { CODEX_LOGIN_VOLUME } from '../containerRunners';
 import { parseContainerSettings } from '../containerSettings';
@@ -1065,6 +1065,68 @@ describe('a runner placed in the container', () => {
     expect(placed.args.join(' ')).not.toContain(placed.env.ANTHROPIC_API_KEY);
     expect(placed.args.join(' ')).toContain('claude -p');
     placed.ended();
+    lease.lease.release('done');
+  });
+
+  // A runner is handed its prompt and settings in files (ADR-0010 §1), each in a folder of its own.
+  it('hands it each file its arguments name at a path of its own there, though two share a name', async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend);
+    const dirs = [0, 1].map(() => mkdtempSync(join(tmpdir(), 'ordewell-placed-')));
+    const files = dirs.map((dir, n) => {
+      const file = join(dir, 'settings.json');
+      writeFileSync(file, `{"n":${n}}`);
+      return file;
+    });
+
+    const placed = await lease.placement!.place({ command: 'claude', args: ['--settings', files[0], '--mcp-config', files[1]], env: {}, files });
+
+    const inside = ['--settings', '--mcp-config'].map((flag) => placed.args[placed.args.indexOf(flag) + 1]);
+    expect(new Set(inside).size).toBe(2);
+    expect(placed.args.filter((arg) => files.includes(arg))).toEqual([]);
+    const copied = cli.calls.filter(({ args }) => args.includes(PLACE_FILE_SCRIPT));
+    expect(copied.map(({ args, opts }) => [args.at(-1), String(opts?.input)])).toEqual([[inside[0], '{"n":0}'], [inside[1], '{"n":1}']]);
+    placed.ended();
+    lease.lease.release('done');
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Bug: the copies, the MCP configuration with its token among them, stayed in the container after their process ended.
+  it('removes its copies of those files when that process ends, and leaves the next launch\'s and the pid file', async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend);
+    const dir = mkdtempSync(join(tmpdir(), 'ordewell-placed-'));
+    const file = join(dir, 'mcp.json');
+    writeFileSync(file, '{"token":"t"}');
+    const removals = () => cli.calls.filter(({ args }) => args[0] === 'exec' && args.includes('rm'));
+
+    const first = await lease.placement!.place({ command: 'claude', args: ['--mcp-config', file], env: {}, files: [file] });
+    const second = await lease.placement!.place({ command: 'claude', args: ['--mcp-config', file], env: {}, files: [file] });
+    const [firstCopy, secondCopy] = [first, second].map((placed) => placed.args[placed.args.indexOf('--mcp-config') + 1]);
+    const folder = firstCopy.slice(0, firstCopy.lastIndexOf('/'));
+    expect(secondCopy.startsWith(`${folder}/`)).toBe(false);
+    const pidFile = first.args[first.args.indexOf(first.args.find((arg) => arg.endsWith('echo $$ > "$0"; exec "$@"'))!) + 1];
+    expect(pidFile.startsWith(`${folder}/`)).toBe(false);
+    first.stop();
+    expect(removals()).toEqual([]);
+
+    first.ended();
+
+    await vi.waitFor(() => expect(removals().map(({ args }) => args)).toEqual([['exec', expect.stringMatching(/^ordewell-/), 'rm', '-rf', '--', folder]]));
+    second.ended();
+    await vi.waitFor(() => expect(removals()).toHaveLength(2));
+    lease.lease.release('done');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('removes nothing when its process was handed no file', async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend);
+    const placed = await lease.placement!.place({ command: 'claude', args: [], env: {}, files: [] });
+
+    placed.ended();
+
+    expect(cli.calls.filter(({ args }) => args[0] === 'exec' && args.includes('rm'))).toEqual([]);
     lease.lease.release('done');
   });
 

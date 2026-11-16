@@ -48,7 +48,6 @@ export type DaemonErrorCode =
   | 'no_plan'
   | 'already_executing'
   | 'workspace_not_found'
-  | 'workspace_not_a_project'
   | 'conversation_busy'
   /** The user stopped the planner turn: the turn ended as asked, so a client stays quiet. */
   | 'planner_turn_stopped'
@@ -99,8 +98,6 @@ export type DaemonErrorCode =
 export interface ErrorBody {
   error: string;
   code?: DaemonErrorCode;
-  /** Set with `workspace_not_a_project`: the directory the daemon refused, so a client can offer to initialize it. */
-  workspace?: string;
   /** Set with `planner_not_ready`: the reason as data, so a client can word it in its own commands. */
   plannerNotReady?: PlannerNotReady;
   /** Set with `session_held`: the host that holds the session, and the runners a gone one left. */
@@ -310,6 +307,19 @@ export interface RunnerEntry {
   auth?: RunnerAuth;
   /** What the CLI's `--version` printed, as a number; absent when it printed none. */
   version?: string;
+  /**
+   * Whether the runner can also be the planner (its connector's `plans`). A
+   * surface building a planner list from runners offers only these: a runner
+   * that cannot plan, a provider runner included, is no harness planner.
+   * Absent on a row from a daemon that predates the field.
+   */
+  plans?: boolean;
+  /**
+   * The provider the built-in runner runs on here, set only on a provider
+   * runner, whose id is that provider's (ADR-0070). It is listed only while
+   * its provider is configured, and always signed in: it has no Log in.
+   */
+  provider?: AiProvider;
 }
 
 export interface RunnersResponse {
@@ -471,6 +481,12 @@ export interface SettingsUpdateResponse extends SettingsResponse {
   switchRecall?: PlannerModelRecall;
   /** Env keys the daemon refused to apply, so a client does not persist what the daemon would not. */
   rejectedEnvKeys?: string[];
+  /**
+   * Credential keys the daemon applied but could not save to `~/.ordewell/.env`:
+   * each holds for this daemon's life only, so a surface with no file of its
+   * own (the desktop app) says the next start will not have it.
+   */
+  unsavedEnvKeys?: string[];
 }
 
 export interface WorkspacesResponse {

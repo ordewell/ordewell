@@ -26,7 +26,7 @@ describe('SLASH_COMMANDS', () => {
   // Feature-parity contract with the VS Code extension (issue #24). Every
   // capability the webview exposes must be reachable from the TUI.
   const REQUIRED = [
-    'help', 'planner', 'key', 'allowlist', 'refresh', 'login',
+    'help', 'planner', 'key-set', 'allowlist', 'refresh', 'login',
     'sessions', 'new', 'save', 'load', 'delete',
     'runners', 'settings',
     // No 'plan': typing the goal starts planning, so an alias would only
@@ -316,5 +316,21 @@ describe('/merge and its deprecated alias /handoff', () => {
     expect(findCommand('handoff')?.source).toBeUndefined();
     expect(findCommand('merge')?.source).toBeUndefined();
     registerSkillCommands([]);
+  });
+});
+
+describe('/key-set and its deprecated alias /key', () => {
+  it('lists /key-set, the name every surface uses, with the provider and key it takes', () => {
+    const keySet = SLASH_COMMANDS.find((c) => c.name === 'key-set');
+    expect(keySet?.usage).toBe('/key-set [<provider> [<key>]]');
+    expect(SLASH_COMMANDS.map((c) => c.name)).not.toContain('key');
+  });
+
+  it('keeps /key as an alias of /key-set that says it is deprecated', () => {
+    expect(canonicalCommandName('/key')).toBe('key-set');
+    const alias = slashCommandTable().find((c) => c.name === 'key');
+    expect(alias?.description).toMatch(/deprecated: use \/key-set/i);
+    const table = slashCommandTable().map((c) => c.name);
+    expect(table.indexOf('key')).toBe(table.indexOf('key-set') + 1);
   });
 });

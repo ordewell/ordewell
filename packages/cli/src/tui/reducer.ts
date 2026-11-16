@@ -499,22 +499,6 @@ function reduceAction(state: TuiState, action: Action): Step {
       return drainQueue(state, { ...reported, turnGate: closeTurn(reported.turnGate) });
     }
 
-    // As `failed`: an opening that let itself go asks on the welcome it left,
-    // never over a session loaded meanwhile.
-    case 'workspaceNeedsInit':
-      if (staleFailure(state, action.sessionId)) return step(state);
-      return step({
-        ...state,
-        planner: 'idle',
-        turnGate: plannerInFlight(state) ? closeTurn(state.turnGate) : state.turnGate,
-        overlay: {
-          kind: 'confirm',
-          title: 'Initialize new workspace?',
-          message: `"${action.workspace}" isn't a recognized project yet (no .git or manifest found). Start a new ordewell workspace here?`,
-          action: { kind: 'init-workspace', goal: action.goal, workspace: action.workspace },
-        },
-      });
-
     // A refused opening stays on screen while the daemon is revived; the
     // user may have moved to another session or a fresh welcome since, and
     // that view, its queue and its planner are not the opening's to take.
@@ -530,7 +514,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         const cleared = reduceAction(state, { type: 'sessionCleared', sessionId: action.sessionId, unreached: true }).state;
         return step(say({ ...cleared, planner: 'idle' }, 'system', `${restarted}. The goal was not sent again, as planning was stopped.`));
       }
-      const retry: Effect = { type: 'startConversation', goal: action.goal, sessionId: action.sessionId, ...(action.allowInit ? { allowInit: true } : {}) };
+      const retry: Effect = { type: 'startConversation', goal: action.goal, sessionId: action.sessionId };
       return step(say(state, 'system', `${restarted} and retried.`), [retry]);
     }
 

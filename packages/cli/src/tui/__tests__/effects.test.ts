@@ -162,7 +162,7 @@ describe('planning', () => {
     const h = harness();
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
-    expect(h.api.startConversation).toHaveBeenCalledWith('session-new', 'ship it', undefined, '/ws', undefined);
+    expect(h.api.startConversation).toHaveBeenCalledWith('session-new', 'ship it', undefined, '/ws');
     expect(h.actions[0]).toEqual({ type: 'sessionStarted', sessionId: 'session-new', goal: 'ship it' });
   });
 
@@ -1245,6 +1245,36 @@ describe('settings', () => {
     expect(h.env.OPENROUTER_API_KEY).toBe('sk-or-1');
   });
 
+  // Bug: Custom's key was stored alone, which lists no Custom planner or runner: its endpoint is what sets it up.
+  it('stores Custom\'s endpoint with its key, and the endpoint alone when it takes none', async () => {
+    const h = harness();
+    await runEffect({ type: 'setApiKey', provider: 'openai_compatible', key: 'sk-local', baseUrl: 'http://localhost:8000/v1' }, h.deps);
+    expect(h.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' } });
+    expect(h.env).toMatchObject({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' });
+    expect(messageOf(h.actions, 'notice')).toBe('Custom endpoint and key saved to OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY.');
+  });
+
+  // Bug: Custom saved with no key kept the key set before, which was then sent to the new endpoint while the prompt said none.
+  it('clears Custom\'s earlier key, on the daemon and in .env, when the endpoint is saved with none', async () => {
+    const keyless = harness();
+    await runEffect({ type: 'setApiKey', provider: 'openai_compatible', key: '', baseUrl: 'http://localhost:11434/v1' }, keyless.deps);
+    // Empty is a removal on both sides of the write (`removesCredential`).
+    expect(keyless.api.updateSettings).toHaveBeenLastCalledWith({ env: { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' } });
+    expect(keyless.env).toEqual({ OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' });
+    expect(messageOf(keyless.actions, 'notice')).toBe("Custom endpoint saved to OPENAI_COMPATIBLE_BASE_URL, with no key: the OPENAI_COMPATIBLE_API_KEY Ordewell saved is cleared (one set in your shell or the workspace's env still applies).");
+  });
+
+  it('asks for the runner list again once a key is stored, since the key lists that provider\'s runner', async () => {
+    const h = harness();
+    h.api.getRunners.mockResolvedValue({
+      runners: [{ id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' }],
+      orchestratorModel: '',
+    });
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+    const loaded = h.actions.find((a) => a.type === 'runnersLoaded') as Extract<Action, { type: 'runnersLoaded' }> | undefined;
+    expect(loaded?.runners.map((r) => [r.id, r.name])).toEqual([['openrouter', 'OpenRouter']]);
+  });
+
   it('never puts an api key in a message the transcript would show', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-secret' }, h.deps);
@@ -1409,7 +1439,7 @@ describe('catalogs and sessions', () => {
     expect(loaded.providerErrors).toEqual({ openai: 'boom' });
   });
 
-  it('forwards which providers are configured — the /key picker checkmarks', async () => {
+  it('forwards which providers are configured — the /key-set picker checkmarks', async () => {
     const h = harness({
       getModels: vi.fn().mockResolvedValue({ models: [], providers: ['openrouter', 'gemini'] }),
     });

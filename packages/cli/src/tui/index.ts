@@ -4,7 +4,7 @@ import { assertWorkspaceExists, augmentedPath, createSkillsService, EnvConfig, m
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
-import { findEnvFile, shellEnvValue, writeEnvVar } from '../utils/env';
+import { saveEnvVar, shellEnvValue } from '../utils/env';
 import { createApp } from './app';
 import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
@@ -157,6 +157,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
       workspace,
       autonomous: settings.autonomousMode(),
       plannerEnvOverride: shellEnvValue('AI_PROVIDER') ?? '',
+      customEndpoint: new EnvConfig().openaiCompatibleBaseUrl,
       ...(ownedAtLaunch ? { runSettings: settings.getRunSettings(), runSettingsKnown: true } : {}),
       mouseCapture,
       taskSkills,
@@ -170,10 +171,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
         port,
         dispatch: (action) => app.dispatch(action),
         newSessionId: () => mintSessionId(),
-        setEnvVar: (key, value) => {
-          writeEnvVar(findEnvFile(), key, value);
-          process.env[key] = value;
-        },
+        setEnvVar: saveEnvVar,
         saveAutonomy: (enabled) => {
           const settings = new SettingsService();
           settings.setAutonomousMode(enabled);

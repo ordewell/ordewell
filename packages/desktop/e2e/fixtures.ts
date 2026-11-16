@@ -152,6 +152,21 @@ const TEST_WINDOWS_ENV = 'ORDEWELL_DESKTOP_TEST_WINDOWS';
 /** Windows the polling loop found shown or focused, by app: the suite fails on any (see {@link closeApp}). */
 const sightings = new WeakMap<ElectronApplication, { found: string[]; timer: NodeJS.Timeout }>();
 
+/**
+ * A Linux CI runner has no setuid chrome-sandbox, and its AppArmor forbids the
+ * unprivileged user namespaces Chromium's sandbox falls back to.
+ *
+ * On a Wayland desktop Electron picks Wayland, where a hidden window never
+ * mapped gets no frame callbacks: once Playwright captures it (a screenshot, or
+ * tracing's), requestAnimationFrame stops for good, so no click ever finds its
+ * element stable and xterm draws no row. X11 keeps painting a hidden window, as
+ * CI's xvfb does, so where an X server is reachable (XWayland) the run uses it.
+ */
+function linuxSwitches(): string[] {
+  if (process.platform !== 'linux') return [];
+  return ['--no-sandbox', ...(process.env.DISPLAY ? ['--ozone-platform=x11'] : [])];
+}
+
 /** The windows of the app that are visible or focused right now, as text; empty when the run is invisible. */
 async function windowsOnShow(app: ElectronApplication): Promise<string[]> {
   return app.evaluate(({ BrowserWindow }) => {
@@ -176,9 +191,7 @@ async function windowsOnShow(app: ElectronApplication): Promise<string[]> {
  */
 export async function launchApp(sandbox: Sandbox, env: Record<string, string>, switches: readonly string[] = []): Promise<ElectronApplication> {
   const app = await electron.launch({
-    // A Linux CI runner has no setuid chrome-sandbox, and its AppArmor forbids
-    // the unprivileged user namespaces Chromium's sandbox falls back to.
-    args: [DESKTOP, `--user-data-dir=${sandbox.userData}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : []), ...switches],
+    args: [DESKTOP, `--user-data-dir=${sandbox.userData}`, ...linuxSwitches(), ...switches],
     env: { ...env, [TEST_WINDOWS_ENV]: 'hidden' },
     cwd: sandbox.tmp,
   });
@@ -356,7 +369,7 @@ export const MIXED: FakedDaemon = {
     modelsByRunner: { codex: [], 'qwen-code': [], cline: [] },
     runnerErrors: {
       codex: 'Codex is not signed in. Sign in with /login codex, or run codex login. Then Refresh.',
-      'qwen-code': 'Qwen Code is not signed in. Choose OpenRouter in /key to hand it a key. Then Refresh.',
+      'qwen-code': 'Qwen Code is not signed in. Choose OpenRouter in /key-set to hand it a key. Then Refresh.',
       cline: 'Cline 1.0.0 is older than the 1.3.0 Ordewell needs. Update it, then Refresh.',
     },
   },

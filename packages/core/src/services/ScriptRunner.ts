@@ -7,7 +7,7 @@ import type { IRunnerSession, QueuedTaskMessage, ScriptExit, ScriptFullOutput, S
 import type { RunnerCommand } from '../models/RunnerCommand';
 import { commandLine, type ScriptBody } from '../models/ScriptTask';
 import type { PlacedLaunch, RunnerPlacement } from './executionLease';
-import { planDirectLaunch, type LaunchDeps } from '../utils/launch';
+import { CommandLineTooLongError, planDirectLaunch, WINDOWS_MAX_COMMAND_LINE, type LaunchDeps } from '../utils/launch';
 import { killTree, spawnInOwnGroup } from '../utils/processTree';
 import { augmentedPath } from '../utils/shellPath';
 import { assertWorkspaceExists } from '../utils/workspace';
@@ -224,7 +224,7 @@ export class ScriptSession extends AbstractRunnerSession {
         } else status = await this.spawnStep(launch);
       }
     } catch (err) {
-      status = { code: null, signal: null, error: err instanceof Error ? err.message : String(err) };
+      status = { code: null, signal: null, error: startError(err, step) };
     }
     this.flushLogTail();
     this.emit({ type: 'script_exit', durationMs: Date.now() - started, ...(this.timedOut ? { timedOut: true } : {}), ...status });
@@ -574,5 +574,25 @@ function sealedStatus(outcome: ToolOutcome): ScriptStatus {
 
 function passed(status: ScriptStatus): boolean {
   return status.code === 0 && !status.signal && status.error === undefined;
+}
+
+/**
+ * Why a step could not start, in words that name the cause when it is its
+ * length. A body goes to its shell as one argument and a command as its own
+ * vector, so either can be more than one command line carries: Windows' 32767
+ * characters, or a single argument's size on Linux. The OS refuses it as
+ * `spawn ENAMETOOLONG` (Windows) or `E2BIG`, which says neither which nor what
+ * to do, and the launch seam's own refusal calls a runner's long line a bug,
+ * where this one is the plan's. The body stays on the command line all the
+ * same: written to a file it would be another script than the one the plan
+ * holds, with another `$0`, read by its shell as it runs (ADR-0035).
+ */
+function startError(err: unknown, step: ScriptRun): string {
+  const tooLong = err instanceof CommandLineTooLongError
+    ? err.limit === WINDOWS_MAX_COMMAND_LINE
+    : ['ENAMETOOLONG', 'E2BIG'].includes(String((err as NodeJS.ErrnoException | null)?.code));
+  if (!tooLong) return err instanceof Error ? err.message : String(err);
+  const what = 'argv' in step ? `its command is ${commandLine(step.argv).length}` : `its script is ${step.script.length}`;
+  return `${what} characters, more than one command line can carry on this system. Put the work in a script file in the repository, and run that file instead.`;
 }
 

@@ -98,18 +98,34 @@ thereby one a runner offers: pick a task's model from its runner's choices.
 
 ## The built-in runner
 
-The runner `ordewell` ("Ordewell") is a coding-agent loop that runs inside Ordewell
-itself and calls a provider's API with the keys Ordewell holds
+The built-in runner is a coding-agent loop that runs inside Ordewell itself and
+calls a provider's API with the key Ordewell holds for it
 ([ADR-0070](adr/runners/0070-the-built-in-ordewell-runner-runs-in-process.md)). It
-needs no CLI installed and no sign-in: it is available as soon as one provider has a
-key, saved with `/key` or `ordewell key set <provider> <key>` (see
-[where keys live](#where-keys-live)). With no key it is listed as signed out, and
-`/key` is its sign-in. It runs tasks only; the API planner does the planning on the
-same key. `ordewell runners` and `/runners` list it with the others.
+needs no CLI installed and no sign-in. Every provider with a key is a runner of its
+own, under the provider's id and name, but for Perplexity, whose models cannot be
+listed, so its key plans and runs no task: an OpenRouter key adds the runner
+`openrouter` ("OpenRouter"), an Anthropic key the runner `anthropic`
+("Anthropic"), and a custom OpenAI-compatible endpoint the runner
+`openai_compatible` once `OPENAI_COMPATIBLE_BASE_URL` names it, which `/key-set`
+asks for first when you choose Custom, its key then optional;
+`ordewell key set openai_compatible <base-url> [<key>]` sets both at once. Saving
+Custom with no key removes the key saved for it before, so it is not sent to the
+new endpoint. Save a key with
+`/key-set` or `ordewell key set <provider> <key>` (see
+[where keys live](#where-keys-live)) and the runner is listed at once, signed in; a
+provider with no key is not listed at all. Until you choose your runners, every
+provider runner whose key is in Ordewell's own environment is enabled beside the
+installed coding agents: the shell Ordewell started from, `~/.ordewell/.env`, and in
+VS Code its secret storage. A key only in a project's `.ordewell/env` or `.envrc`
+lists the runner in that project, and its tasks run on that key, but you turn the
+runner on yourself: the enabled list is one per machine, and those files differ by
+project. It runs tasks only: the planner of the same name is the API planner on the
+same key.
+`ordewell runners` and `/runners` list it with the others.
 
-**Models.** Its models are those of every provider that has a key, grouped by
-provider, such as `openrouter` or `anthropic`, and a task's model is written
-`<provider>:<model>`. A provider's own listing decides which models exist. Ordewell
+**Models.** A provider runner's models are its own provider's, and a task's model is
+written `<provider>:<model>`; a model of another provider belongs to that
+provider's runner. A provider's own listing decides which models exist. Ordewell
 fills in each model's context window, reply cap, prices and capabilities from the
 [models.dev](https://models.dev) catalog; a model known to take no tools is not
 offered, and thinking efforts are offered only for models known to reason. The
@@ -165,7 +181,7 @@ exactly those models, and `ORDEWELL_SMOKE_TIMEOUT_MS` sets the time per task.
 | --- | --- | --- | --- |
 | Who plans | `/planner` | `ordewell planner [<provider>]` | The planner bar, or `/planner` |
 | The planner's model and effort | `/planner` (Harness › Model › Effort) | `ordewell model`, `ordewell planner-effort` | The planner bar, or `/planner` |
-| Provider keys | `/key` | `ordewell key`, `ordewell key set <provider> <key>` | `/key`, or **Ordewell: Configure API Key** |
+| Provider keys | `/key-set` | `ordewell key`, `ordewell key set <provider> <key>`, `ordewell key set openai_compatible <base-url> [<key>]` | `/key-set`, or **Ordewell: Configure API Key** |
 | Which runners are on | `/runners` | `ordewell runners [<id> on\|off]` | **Ordewell: Toggle Runner** |
 | Sign a runner in | `/login` | The runner's own CLI | `/login` |
 | A task's runner, model and effort | `/task-runner <id>`, `/task-model <id>`, `/task-effort <id>` | `ordewell task-runner <id> [runner]`, `ordewell task-model <id> [model]`, `ordewell task-effort <id> [level]`; leave out the last value to list the choices | The task's card |
@@ -173,20 +189,32 @@ exactly those models, and `ORDEWELL_SMOKE_TIMEOUT_MS` sets the time per task.
 | A newly installed runner | `/refresh` | `ordewell refresh` | `/refresh` |
 | A runner's models, discovered again | When the daemon restarts or a provider key or base URL changes | The same | `/refresh` |
 
+The desktop app's planner chat takes the same `/key-set`, `/login` and `/refresh`, and
+its Settings tab holds the planner, the runners and each runner's models. **Set API
+key…** opens its key entry, with every provider to choose from, in Settings' Runners
+heading, under the Welcome window's runner cards and in the command palette. While no
+provider key is set, the tips the empty planner composer cycles through, in the desktop
+app and VS Code, include one to add a key with `/key-set`.
+
 ## Where keys live
 
-The terminal UI and the CLI save a key to `~/.ordewell/.env` and hand it to the
-running daemon. When Ordewell starts, a variable already exported in your shell takes
-precedence over that file. A key typed after `ordewell key set` can stay in your shell
-history, which `/key` avoids.
+The terminal UI, the CLI and the desktop app save a key to `~/.ordewell/.env` and
+hand it to the running daemon, which also loads the keys saved there when it starts.
+A variable already exported in your shell takes precedence over that file, and is
+never written to it. A key typed after `ordewell key set` can stay in your shell
+history, which `/key-set` avoids. `/key` still opens the same key entry.
 
-VS Code keeps keys in its secret storage, through `/key` or **Ordewell: Configure API
+VS Code keeps keys in its secret storage, through `/key-set` or **Ordewell: Configure API
 Key**. Without one there, it reads its API key settings, such as
-`ordewell.openAiApiKey`, and then exported variables.
+`ordewell.openAiApiKey`, and then exported variables. Custom's endpoint goes in the
+`ordewell.openaiCompatibleBaseUrl` user setting, which a workspace cannot set, since
+the endpoint is sent your key.
 
 Each runner starts with Ordewell's environment, so a key exported in your shell, or
-saved with `/key` or `ordewell key set` in the terminal UI or CLI, reaches the runners
-too; a key in VS Code's secret storage or settings does not generally reach runners. Ordewell
+saved with `/key-set` or `ordewell key set` in the terminal UI or CLI, reaches the runners
+too. A key in VS Code's secret storage or settings is never put in the extension host's
+environment: the built-in runner on its provider runs on it, and a coding agent does not
+generally get it. Ordewell
 hands applicable saved keys to Qwen Code, Cline and Gemini CLI for their starts
 and model discovery. Claude Code and Codex can
 also sign in with `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`, so such a key saved for

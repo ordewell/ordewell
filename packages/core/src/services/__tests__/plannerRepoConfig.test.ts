@@ -12,7 +12,7 @@ import type { ProjectServerApprovals } from '../harness/projectServers';
 import { instructionsBlock, workspaceRelative } from '../harness/repoConfig';
 import { CONNECTORS, createTaskAdapter } from '../harness/connectors';
 import type { AgentProcessDeps, PlannerStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
-import { fakeMcpServer, fakeSpawn, fixture, sseResponse, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
+import { argvWithFiles, fakeMcpServer, fakeSpawn, fixture, flagFile, flagJson, sseResponse, type FakeAgentProcess, type ScriptedReply } from './harnessTestKit';
 import { FAKE_RUNNERS } from './fakeRunners';
 import { OrdewellMcpServer, mcpClientConfig } from '../mcp';
 import { providerForRunner } from '../ProviderRegistry';
@@ -152,7 +152,7 @@ describe('Claude Code planner launch (ADR-0028)', () => {
 
     const args = spawned.lastArgs();
     expect(flag(args, '--setting-sources')).toBe('user');
-    const settings = JSON.parse(flag(args, '--settings') ?? '{}') as { disableAllHooks?: boolean; permissions?: { ask?: string[] } };
+    const settings = flagJson<{ disableAllHooks?: boolean; permissions?: { ask?: string[] } }>(spawned.lastLaunch(), '--settings') ?? {};
     expect(settings.disableAllHooks).toBe(true);
     expect(settings.permissions?.ask).toEqual(['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS', 'LSP']);
   });
@@ -206,7 +206,7 @@ describe('Claude Code planner instructions (ADR-0028)', () => {
     const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
     await svc.startConversation(request());
 
-    const prompt = flag(spawned.lastArgs(), '--append-system-prompt') ?? '';
+    const prompt = flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '';
     expect(prompt).toContain('Use tabs.');
     expect(prompt).toContain('Name files in kebab-case.');
     expect(prompt).toContain('Run the linter before committing.');
@@ -222,7 +222,7 @@ describe('Claude Code planner instructions (ADR-0028)', () => {
     const { svc, spawned } = service('claude-code', root, [fixture('claude-code', 'prose')]);
     await svc.startConversation(request());
 
-    const prompt = flag(spawned.lastArgs(), '--append-system-prompt') ?? '';
+    const prompt = flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '';
     expect(prompt).toContain('Prefer small commits.');
     expect(prompt).not.toContain('USER-SECRET');
   });
@@ -266,7 +266,7 @@ describe('project MCP servers, Claude Code (ADR-0028)', () => {
     const asked = approval.request.mock.calls.map(([req]) => req).filter((req) => req.kind === 'mcp_server');
     expect(asked.map((req) => req.subject)).toEqual(['probe: ./probe.sh']);
     expect(mcpConfigServers(spawned.lastArgs()).ordewell).toMatchObject({ type: 'http' });
-    expect(flag(spawned.lastArgs(), '--append-system-prompt')).toContain('.mcp.json (ordewell)');
+    expect(flagFile(spawned.lastLaunch(), '--append-system-prompt-file')).toContain('.mcp.json (ordewell)');
   });
 
   it('does not start one nobody approved', async () => {
@@ -888,10 +888,12 @@ describe('task launches (ADR-0028)', () => {
     };
     const adapter = createTaskAdapter(runner, deps);
     await adapter.start(task(root));
-    const mcpConfig = flag(spawned.lastArgs(), '--mcp-config');
+    // Each file by its name: its path differs at every launch.
+    const { args, files } = argvWithFiles(spawned.lastLaunch());
     const launched = {
-      args: spawned.lastArgs().map((arg) => (arg === mcpConfig ? '<mcp-config>' : arg)),
-      mcpConfig: mcpConfig ? readFileSync(mcpConfig, 'utf8') : undefined,
+      args,
+      files,
+      mcpConfig: flagFile(spawned.lastLaunch(), '--mcp-config'),
       env: Object.fromEntries(Object.entries(spawned.lastEnv()).filter(([key]) => key.startsWith('OPENCODE_') && key !== 'OPENCODE_SERVER_PASSWORD')),
       // The root as JSON spells it, so a Windows path's backslashes match too.
       thread: spawned.processes[0].written.map((line) => line.replaceAll(JSON.stringify(root).slice(1, -1), '<root>')).find((line) => line.includes('"thread/start"')),

@@ -503,6 +503,32 @@ describe('ScriptRunner: on Windows', () => {
     await run.exit;
     expect(spawn).toHaveBeenCalledWith('echo hi', [], expect.objectContaining({ shell: true }));
   });
+
+  // The body is its shell's one argument, and Node reports a command line past
+  // 32767 characters as a bare `spawn ENAMETOOLONG` (measured on Node 22.17).
+  it('fails a script too long for a command line saying so and what to do, not with the bare refusal', async () => {
+    const spawn = vi.fn<ScriptSpawnFn>(() => { throw Object.assign(new Error('spawn ENAMETOOLONG'), { code: 'ENAMETOOLONG', syscall: 'spawn' }); });
+    const script = `echo ${'x'.repeat(40_000)}`;
+    const run = await start({ script }, { deps: { spawn, platform: 'win32', shell: () => ({ file: 'C:\\Git\\bin\\bash.exe', args: ['-c'], dialect: 'posix' as const, utilsDir: null }) } });
+
+    const exit = await run.exit;
+    expect(exit).toMatchObject({ outcome: 'failed', status: { code: null, signal: null } });
+    expect(exit.outcome === 'failed' && exit.status.error).toBe(`its script is ${script.length} characters, more than one command line can carry on this system. Put the work in a script file in the repository, and run that file instead.`);
+  });
+
+  // The launch seam refuses it before any spawn, in words for a runner's line: there it is a bug, here the plan's.
+  it('fails a command past Windows\' ceiling as the plan\'s, not as a bug to report', async () => {
+    const spawn = vi.fn<ScriptSpawnFn>(() => exitingChild());
+    const argv = ['gh', 'issue', 'create', '--body', 'x'.repeat(40_000)];
+    const run = await start({ commands: [argv] }, {
+      deps: { spawn, platform: 'win32', resolvePath: async () => 'C:\\tools', launch: { exists: (candidate) => candidate === 'C:\\tools\\gh.exe', pathExt: () => '.COM;.EXE;.BAT;.CMD' } },
+    });
+
+    const exit = await run.exit;
+    expect(spawn).not.toHaveBeenCalled();
+    expect(exit.outcome === 'failed' && exit.status.error).toMatch(/^its command is \d+ characters, more than one command line can carry on this system\. Put the work in a script file/);
+    expect(exit.outcome === 'failed' && exit.status.error).not.toContain('bug');
+  });
 });
 
 describe('ScriptRunner: a credential of its spawn env (ADR-0061, H1)', () => {

@@ -45,7 +45,7 @@ const CLINE_PROVIDERS: Partial<Record<AiProvider, { id: string; baseUrl: string 
   stepfun: { id: 'stepfun', baseUrl: 'https://api.stepfun.com/v1' },
 };
 
-const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
 
 /**
  * The hook a Cline profile carries: `CLINE_PROVIDER`, `CLINE_API_KEY` and,

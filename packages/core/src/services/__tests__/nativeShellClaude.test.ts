@@ -7,7 +7,7 @@ import type { AgentEvent, AgentProcessDeps } from '../harness/AgentAdapter';
 import { PlannerShellSandbox, plannerShellProfile, sealedShellProfile, type SealedAvailability } from '../sandbox/plannerSandbox';
 import type { SandboxBackend, SandboxProfile } from '../sandbox/SandboxBackend';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
-import { fakeSpawn, type FakeSpawnResult } from './harnessTestKit';
+import { fakeSpawn, flagJson, type FakeSpawnResult } from './harnessTestKit';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -67,9 +67,11 @@ interface ClaudeSettings {
   env?: Record<string, string>;
 }
 
+/** The `--settings` file, as it was when the CLI started: it goes with the process. */
 function settingsOf(spawned: FakeSpawnResult): ClaudeSettings {
-  const args = spawned.lastArgs();
-  return JSON.parse(args[args.indexOf('--settings') + 1]) as ClaudeSettings;
+  const settings = flagJson<ClaudeSettings>(spawned.lastLaunch(), '--settings');
+  if (!settings) throw new Error('no --settings file');
+  return settings;
 }
 
 function disallowedOf(spawned: FakeSpawnResult): string[] {

@@ -114,8 +114,19 @@ export const SETTINGS_ENV_ALLOWLIST: ReadonlySet<string> = new Set(
   [...providerEnvKeys(), ...ORDEWELL_SETTABLE_ENV].filter((key) => !REFUSED.has(key)),
 );
 
+/**
+ * Whether a settings write's `value` takes `key` away rather than setting it:
+ * an empty provider key or endpoint. Custom's key is optional, and one saved
+ * for an earlier endpoint would otherwise be sent to the next, which a surface
+ * had said takes none; so its absence has to be something a write can say.
+ * The daemon, `~/.ordewell/.env` and the CLI's own environment all drop it.
+ */
+export function removesCredential(key: string, value: string): boolean {
+  return value === '' && PROVIDER_CREDENTIAL_ENV.has(key);
+}
+
 export interface EnvAdmission {
-  /** Keys that may be written, with their string values. */
+  /** Keys that may be written, with their string values; an empty credential is a removal (`removesCredential`). */
   accepted: Record<string, string>;
   /** Keys the caller sent that were refused, in the order they arrived. */
   rejected: string[];

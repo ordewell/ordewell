@@ -19,9 +19,9 @@ export function attemptModeOf(opts: TaskStartOptions): OrdewellMode {
   if (opts.mode === ORDEWELL_FULL_MODE) return 'full';
   if (opts.mode === ORDEWELL_GUARDED_MODE) return 'guarded';
   if (opts.mode === ORDEWELL_READ_ONLY_MODE) {
-    throw new Error(`Mode "${ORDEWELL_READ_ONLY_MODE}" of the Ordewell runner is for a read-only task: a change task runs "${ORDEWELL_FULL_MODE}" or "${ORDEWELL_GUARDED_MODE}".`);
+    throw new Error(`Mode "${ORDEWELL_READ_ONLY_MODE}" of the built-in runner is for a read-only task: a change task runs "${ORDEWELL_FULL_MODE}" or "${ORDEWELL_GUARDED_MODE}".`);
   }
-  throw new Error(`The Ordewell runner has no mode "${opts.mode}": its modes are "${ORDEWELL_FULL_MODE}", "${ORDEWELL_GUARDED_MODE}" and "${ORDEWELL_READ_ONLY_MODE}".`);
+  throw new Error(`The built-in runner has no mode "${opts.mode}": its modes are "${ORDEWELL_FULL_MODE}", "${ORDEWELL_GUARDED_MODE}" and "${ORDEWELL_READ_ONLY_MODE}".`);
 }
 
 /**

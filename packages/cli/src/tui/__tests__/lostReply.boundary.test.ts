@@ -127,9 +127,9 @@ function realApi(script: (options: http.RequestOptions) => Script) {
   const client = new ApiClient(3742, '/ws');
   const counts = { start: 0, send: 0, adopt: 0 };
   const api: Partial<OrdewellApi> = {
-    startConversation: vi.fn((id: string, goal: string, runners?: string[], workspace?: string, allowInit?: boolean) => {
+    startConversation: vi.fn((id: string, goal: string, runners?: string[], workspace?: string) => {
       counts.start++;
-      return client.startConversation(id, goal, runners, workspace, allowInit);
+      return client.startConversation(id, goal, runners, workspace);
     }),
     sendConversationMessage: vi.fn((id: string, message: string) => {
       counts.send++;

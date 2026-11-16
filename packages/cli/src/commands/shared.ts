@@ -3,7 +3,7 @@ import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, deliveryOf } from '../apiClient';
 import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog, type Catalog } from '../catalog';
-import { findEnvFile, writeEnvVar } from '../utils/env';
+import { saveEnvVar } from '../utils/env';
 import { workspaceOf } from '../utils';
 import { allTasksOf } from '../utils/tasks';
 import type { TaskView } from '../tui/state';
@@ -27,7 +27,7 @@ export function fail(...lines: string[]): never {
 /**
  * A failed turn's terminal-UI guidance said in the shell's own commands. The
  * daemon cannot know which surface is asking, so it words a signed-out agent
- * with `/login` and `/key`; a shell has neither, so the hint is said again
+ * with `/login` and `/key-set`; a shell has neither, so the hint is said again
  * in the shell's own commands (ADR-0052).
  */
 export function headlessSignedOut(message: string): string {
@@ -66,13 +66,9 @@ export async function askYesNo(question: string): Promise<boolean> {
   }
 }
 
-/** Writes each key straight to `.env` and `process.env` — no daemon round-trip. */
+/** Writes each key straight to `.env` and `process.env` — no daemon round-trip; an emptied credential is taken out (`saveEnvVar`). */
 export function writeEnv(env: Record<string, string>): void {
-  const envFile = findEnvFile();
-  for (const [key, value] of Object.entries(env)) {
-    writeEnvVar(envFile, key, value);
-    process.env[key] = value;
-  }
+  for (const [key, value] of Object.entries(env)) saveEnvVar(key, value);
 }
 
 /**

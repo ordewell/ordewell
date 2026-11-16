@@ -132,7 +132,9 @@ and completion evidence.
   first message is its own summary or a truncated copy. How a task ends — call
   `task_complete` with `done` and the full report, or `blocked`/`failed` and the
   reason — is therefore not in that message: it is the system prompt
-  (`--append-system-prompt`), the thread's `developerInstructions`, or
+  (`--append-system-prompt-file`, a file the process owns, never text on its
+  command line: [ADR-0010](../platform/0010-windows-support.md) §1), the
+  thread's `developerInstructions`, or
   OpenCode's `system` / instruction entry, applied again on every resume. ACP
   has no system-prompt field, so an ACP runner takes the contract through its
   own channel outside the worktree (an owner-only file it is pointed at, or a
@@ -650,3 +652,4 @@ transport is retained for take-over.
 - 2026-11-14 — C3: the completion contract tells a runner to commit and call `task_complete` once its brief's done criterion holds and to name work beyond it in the handoff; after a compaction of the runner's own session Ordewell queues it one message restating its brief with that instruction.
 - 2026-11-14 — W1: the running-long threshold is a multiple of a passed task's running time, waits left out, kept on its attempt as it ends; the live context and window follow the usage meter's rules across a sizeless compaction and a model change. C3: the queued nudge holds no `task_complete` back.
 - 2026-11-15 — W1: a compaction flags running long from the attempt's third, then at the 6th, 12th and so on, where Ordewell sets the window the runner compacts at, and from the first where it sets none; the flag names that window. C3's reminder after each compaction is unchanged.
+- 2026-11-16 — C2: a Claude Code task's completion contract is appended from a file the process owns (`--append-system-prompt-file`), no longer as text on its command line ([ADR-0010](../platform/0010-windows-support.md) §1).

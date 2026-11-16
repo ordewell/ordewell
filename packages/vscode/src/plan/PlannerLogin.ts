@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import { augmentedPath, describeSignInWays, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
+import { augmentedPath, describeSignInWays, inProcessProvider, providerRunnerLoginNote, runnerForProvider, TERMINAL_UI_SIGN_IN, withPath, workspaceEnvOf, type INotification, type PlannerBackendId, type RunnerInstallation, type RunnerRegistry } from '@ordewell/core';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 
 const POLL_MS = 2_000;
@@ -116,6 +116,14 @@ export async function loginPlanner(deps: PlannerLoginDeps, runnerId?: string): P
     // The CLI exists but cannot be spawned (a Windows `.cmd` shim, for one).
     // Saying it has no login would be false: the reason is the real answer.
     const message = usability.reason ?? `${label} is not usable.`;
+    deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
+    deps.notifications.info(message);
+    return;
+  }
+  // A provider runner is signed in by the key that lists it (ADR-0070), so the way to change it is the key.
+  const provider = inProcessProvider(manifest);
+  if (provider) {
+    const message = providerRunnerLoginNote(provider);
     deps.post({ type: 'plannerLoginEnded', runner, ok: false, message });
     deps.notifications.info(message);
     return;

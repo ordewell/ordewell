@@ -10,7 +10,7 @@ import type { ConversationRequest, PlannerToolsOffer } from '../AiService';
 import type { GuaranteeReport } from '../executionLease';
 import { TurnBudgets } from '../PlannerBudgets';
 import type { PlannerNativeSession, ResearchProgress, ResearchStep } from '../../models/Task';
-import { fakeMcpServer, fakeSpawn, fixture, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { fakeMcpServer, fakeSpawn, fixture, flagFile, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
@@ -229,7 +229,8 @@ describe('CliAgentAiService — Claude Code', () => {
     const disallowed = args[args.indexOf('--disallowedTools') + 1].split(',');
     expect(disallowed.includes('Agent')).toBe(withheld);
     expect(disallowed.includes('Task')).toBe(withheld);
-    const prompt = args[args.indexOf('--append-system-prompt') + 1];
+    const prompt = flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '';
+    expect(prompt).toContain('submit_plan');
     expect(prompt.includes('your Agent tool')).toBe(!withheld);
     if (withheld) expect(prompt).toContain('you have no agents of your own here and no research tasks');
     expect(prompt).not.toContain('research tasks are how you delegate');
@@ -255,10 +256,11 @@ describe('CliAgentAiService — Claude Code', () => {
     });
 
     it('keeps its subagents and what a planner must not touch', async () => {
-      const args = (await started({ runnerConfig: 'minimal' })).lastArgs();
+      const spawned = await started({ runnerConfig: 'minimal' });
+      const args = spawned.lastArgs();
       expect(flag(args, '--tools').split(',')).toContain('Agent');
       expect(flag(args, '--disallowedTools').split(',')).toEqual(expect.arrayContaining(['Edit', 'Write', 'Bash']));
-      expect(flag(args, '--settings')).toContain('disableAllHooks');
+      expect(flagFile(spawned.lastLaunch(), '--settings')).toContain('disableAllHooks');
     });
 
     it('never narrows the tools with the user\'s setup left in: every connector would ride along', async () => {
@@ -671,7 +673,10 @@ describe('CliAgentAiService — Claude Code', () => {
     const sent = writes(spawned.processes[0]);
     expect(sent[0]).toContain('Add a cache layer\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 3.');
     expect(sent[1]).toContain('Redis, please.\\n\\nCONTEXT AND BUDGETS (this turn):\\n- Task reads left for this message: 2.');
-    expect(spawned.lastArgs().join(' ')).not.toContain('CONTEXT AND BUDGETS (this turn):');
+    const systemPrompt = flagFile(spawned.lastLaunch(), '--append-system-prompt-file');
+    // The system prompt was there to look in, so its lacking the block says something.
+    expect(systemPrompt).toContain('submit_plan');
+    expect(systemPrompt).not.toContain('CONTEXT AND BUDGETS (this turn):');
   });
 
   it('replays a persisted transcript instead of re-running research', async () => {
@@ -2303,7 +2308,8 @@ describe('CliAgentAiService — one-shot plan generation', () => {
 
     await expect(svc.generatePlanDirect('Plan the thing', ['claude-code'])).rejects.toThrow(/claude-code planner produced no plan: no submit_plan call was accepted/);
     expect(spawned.processes).toHaveLength(2);
-    expect(spawned.lastArgs().join('\n')).toContain('the agent ended its turn without calling submit_plan. Call submit_plan with the COMPLETE corrected plan');
+    // Read as the corrective session started: its file went with its process.
+    expect(flagFile(spawned.lastLaunch(), '--append-system-prompt-file')).toContain('the agent ended its turn without calling submit_plan. Call submit_plan with the COMPLETE corrected plan');
     expect(spawned.processes.every((p) => p.killed)).toBe(true);
   });
 
@@ -2319,7 +2325,7 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     const tasks = await svc.generatePlanDirect('Plan the thing', ['claude-code']);
 
     expect(answers.map((a) => a.isError ?? false)).toEqual([true, false]);
-    const corrective = spawned.lastArgs().join('\n');
+    const corrective = flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '';
     expect(corrective).toContain('invalid assignedRunner');
     expect(corrective).toContain('A plan written in your reply is not read');
     expect(tasks[0].assignedRunner).toBe('claude-code');
@@ -3418,7 +3424,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
   it.each([
     ['cursor-agent', 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.'],
     ['copilot-cli', 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login.'],
-    ['qwen-code', 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+    ['qwen-code', 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
   ])('names the way into a signed-out %s planner once', async (runner, hint) => {
     const turn = await failing(hint, runner).startConversation(request({ runners: [runner] }));
 

@@ -62,7 +62,7 @@ function answer(proc: FakeAgentProcess, text = 'Which database?'): void {
 // Only the process, model discovery and runner boundaries are replaced: the
 // CLI, HTTP contract, Session, planner transport and Claude adapter all run.
 describe('keyless first-run entry points at the process boundary', () => {
-  const keys = ['PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT'];
+  const keys = ['PATH', 'ORDEWELL_SETTINGS_PATH', 'AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'ORDEWELL_ENABLED_RUNNERS'];
   const saved: Record<string, string | undefined> = {};
   let restoreHome: () => void;
   let dir: string;
@@ -92,6 +92,9 @@ describe('keyless first-run entry points at the process boundary', () => {
     }
     restoreHome = setEnv(homeEnv(dir));
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
+    // The runner these goals name, pinned: with a key and no saved choice the
+    // enabled default is that provider's own runner (ADR-0070).
+    process.env.ORDEWELL_ENABLED_RUNNERS = 'claude-code';
     delete process.env.AI_PROVIDER;
     delete process.env.ORDEWELL_PLANNER_EFFORT;
     process.env.ORCHESTRATOR_MODEL = 'openai/gpt-4o';

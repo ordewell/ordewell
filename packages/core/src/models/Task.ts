@@ -17,6 +17,7 @@ import { walkPlan } from '../services/PlanTree';
 import { remove } from '../services/PlanGraph';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import { interruptedVerdict } from '../services/VerdictEngine';
+import { isProviderRunner, LEGACY_BUILTIN_RUNNER, providerOfBuiltinModel, replaceLegacyBuiltinRunner } from '../services/providerRunners';
 
 export interface UserStep {
   order: number;
@@ -132,8 +133,23 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
     // A loop's own skip was told from a person's by its text; it now says so itself (ADR-0045 L7).
     const origin = legacySkipOrigin(task);
     if (origin) task.skipOrigin = origin;
+    moveOffLegacyBuiltinRunner(task);
     migrateLoadedTasks(task.subtasks ?? []);
   }
+}
+
+/**
+ * A task on the built-in runner when it was one runner, `ordewell`, runs on
+ * the provider runner its `<provider>:<model>` names (ADR-0070), in place. Its
+ * session goes with it: every provider runner keeps its transcripts in the one
+ * root, so a Continue still finds it. The model id is left as it was.
+ */
+function moveOffLegacyBuiltinRunner(task: Task): void {
+  if (task.assignedRunner !== LEGACY_BUILTIN_RUNNER) return;
+  const provider = providerOfBuiltinModel(task.assignedModel?.modelId);
+  if (!provider) return;
+  task.assignedRunner = provider;
+  if (task.runnerSessionOwner === LEGACY_BUILTIN_RUNNER) task.runnerSessionOwner = provider;
 }
 
 /**
@@ -254,6 +270,18 @@ export function migrateLoadedPlan(plan: LegacyPlanState, { adopting = true }: { 
   // the planner writes that no kind owns does.
   for (const task of flattenTasks(plan.tasks)) {
     if (!isTaskType(task.type)) task.type = 'ai';
+    moveOffLegacyBuiltinRunner(task);
+  }
+  // The runner set named the built-in runner by its one old id; it names the
+  // provider runners its tasks were moved to instead (ADR-0070). A task whose
+  // model names no provider stays on the old id, and so does the set: dropping
+  // it would refuse the whole plan at load, where that one task now fails at
+  // its start and can be reassigned.
+  if (Array.isArray(plan.runners)) {
+    const tasks = flattenTasks(plan.tasks);
+    const providers: string[] = tasks.map((task) => task.assignedRunner).filter(isProviderRunner);
+    if (tasks.some((task) => task.assignedRunner === LEGACY_BUILTIN_RUNNER)) providers.push(LEGACY_BUILTIN_RUNNER);
+    plan.runners = replaceLegacyBuiltinRunner(plan.runners, providers);
   }
 }
 

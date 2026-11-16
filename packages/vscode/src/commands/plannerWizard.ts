@@ -55,7 +55,7 @@ export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
   // still hears why through the `/planner <id>` command.
   const backends = (await deps.plannerBackends()).filter((b) => b.usable);
   if (backends.length === 0) {
-    vscode.window.showWarningMessage('No planner available: install a coding agent, or add an API key with /key.');
+    vscode.window.showWarningMessage('No planner available: install a coding agent, or add an API key with /key-set.');
     return;
   }
   const current = deps.current();

@@ -1,8 +1,32 @@
+import { isProviderRunner } from './providerRunners';
+
 /**
  * The tips an empty planner chat composer shows (#137), one table for every
  * surface so the TUI and the webview agree on the wording and how often each
  * comes round. A surface offers only the tips for the commands it answers.
  */
+
+/** What a surface knows that decides whether a tip is news; a fact it leaves out is unknown. */
+export interface ComposerTipContext {
+  /**
+   * Whether a provider runner is set up: a provider's key, or Custom's
+   * endpoint. A key that serves the planner alone (Perplexity's) is not one.
+   */
+  providerKeySet?: boolean;
+}
+
+/**
+ * The key tip's fact, one rule for every surface. Either list can be the first
+ * to show a provider runner (ADR-0070): a configured provider that has one,
+ * or the runner itself. That none is set up waits for both to have answered.
+ */
+export function keyTipContext(
+  providers: { ids: readonly string[]; known: boolean },
+  runners: { ids: readonly string[]; known: boolean },
+): ComposerTipContext {
+  if (providers.ids.some(isProviderRunner) || runners.ids.some(isProviderRunner)) return { providerKeySet: true };
+  return providers.known && runners.known ? { providerKeySet: false } : {};
+}
 
 export interface ComposerTip {
   /** The built-in planner chat command the tip names, without its slash. */
@@ -11,9 +35,16 @@ export interface ComposerTip {
   weight: number;
   /** Short enough to fit after the prompt and caret on an 80-column terminal. */
   text: string;
+  /** Shown only while this holds of what the surface says; absent, always shown. */
+  when?: (context: ComposerTipContext) => boolean;
 }
 
 export const COMPOSER_TIPS: readonly ComposerTip[] = [
+  // A key is the way to the built-in runner (ADR-0070), so it is worth saying
+  // until one is set, and noise after. Only a surface that says none is set
+  // shows it: one that does not know offers nothing it might already have.
+  // First, so it is the first tip someone with no key sees.
+  { command: 'key-set', weight: 3, text: 'Tip: Add an API key with /key-set to run tasks on the built-in runner.', when: (context) => context.providerKeySet === false },
   // The per-runner model allowlist (ADR-0003) is the easiest command to miss.
   { command: 'allowlist', weight: 3, text: 'Tip: Use /allowlist to limit which models the planner assigns per runner.' },
   { command: 'planner', weight: 1, text: "Tip: Use /planner to pick the planner's harness, model and effort." },
@@ -51,12 +82,13 @@ export function tipCycle(tips: readonly ComposerTip[]): ComposerTip[] {
 
 /**
  * The tip for the `seq`-th time the composer has been empty, among those for
- * the commands the surface answers, or null when it answers none of them. The
- * same `seq` always gives the same tip, so the surface decides when a new one
- * shows by when it moves `seq` on, and its rendering stays a function of state.
+ * the commands the surface answers and whose `when` holds of `context`, or
+ * null when none is left. The same `seq` and context always give the same
+ * tip, so the surface decides when a new one shows by when it moves `seq` on,
+ * and its rendering stays a function of state.
  */
-export function composerTip(seq: number, answers: ReadonlySet<string>): string | null {
-  const cycle = tipCycle(COMPOSER_TIPS.filter((tip) => answers.has(tip.command)));
+export function composerTip(seq: number, answers: ReadonlySet<string>, context: ComposerTipContext = {}): string | null {
+  const cycle = tipCycle(COMPOSER_TIPS.filter((tip) => answers.has(tip.command) && (tip.when?.(context) ?? true)));
   if (cycle.length === 0) return null;
   return cycle[((seq % cycle.length) + cycle.length) % cycle.length].text;
 }

@@ -8,6 +8,7 @@
 .settings-section h3 { margin: 0; font: var(--ow-type-heading); }
 /* Run's Restore defaults sits at the right of its heading and wraps under it when the tab is too narrow for both. */
 .settings-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ow-space-2); }
+.settings-section-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); }
 .settings-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-2); }
 .settings-confirm-text { font: var(--ow-type-small); color: var(--ow-fg); }
 /* Advanced is a disclosure: the whole heading is the button, so the hit area is the row, not the chevron. */

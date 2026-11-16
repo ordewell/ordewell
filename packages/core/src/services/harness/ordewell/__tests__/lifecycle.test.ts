@@ -149,10 +149,10 @@ describe('a failed step, as E1 and U1 read it', () => {
     }
   });
 
-  it('fails the rest, a bad key naming /key', () => {
+  it('fails the rest, a bad key naming /key-set', () => {
     const auth = stepFailure(new ModelError({ kind: 'auth', message: 'invalid api key', status: 401 }));
     expect(auth.message).toMatch(/invalid api key/);
-    expect(auth.message).toMatch(/\/key/);
+    expect(auth.message).toMatch(/\/key-set/);
     expect(classifyRunnerStop(auth)).toBe('stopped');
     for (const kind of ['bad-request', 'context-overflow', 'fatal'] as const) {
       const event = stepFailure(new ModelError({ kind, message: 'no', status: 400 }));

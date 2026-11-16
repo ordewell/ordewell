@@ -16,7 +16,7 @@ function after(...actions: Action[]): TuiState {
 
 const rows = (state: TuiState): string[] => render(state).map(stripAnsi);
 const row = (state: TuiState, name: string): string => rows(state).find((l) => l.trimStart().startsWith(name)) ?? '';
-const NOTICE = /Install a coding agent|add an API key with \/key/;
+const NOTICE = /Install a coding agent|add an API key with \/key-set/;
 
 const settings = (aiProvider: PlannerBackendId): Action => ({
   type: 'settingsLoaded',

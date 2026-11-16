@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, statSync } from 'fs';
+import { basename, isAbsolute, join } from 'path';
 import type { ChildProcess } from 'child_process';
 import type { AgentAdapterFactory, AgentEvent, AgentProcessDeps, SpawnFn, TaskModeAgentAdapter } from '../harness/AgentAdapter';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
@@ -54,10 +54,67 @@ export interface FakeAgentProcess extends ChildProcess {
  */
 export type ScriptedReply = string | ((written: string, proc: FakeAgentProcess) => void);
 
+/** One spawn as the runner saw it, with the files its arguments named read as it started. */
+export interface FakeLaunch {
+  command: string;
+  args: string[];
+  /**
+   * The text of each file an argument names by an absolute path, by that
+   * path, read at spawn: the adapter removes them with the process, and a
+   * real CLI reads them as it starts (ADR-0010 §1).
+   */
+  files: ReadonlyMap<string, string>;
+}
+
+/** The text of the file the argument after `flag` named, as it was at spawn; undefined when the launch has no such flag or file. */
+export function flagFile(launch: FakeLaunch, flag: string): string | undefined {
+  const at = launch.args.indexOf(flag);
+  return at < 0 ? undefined : launch.files.get(launch.args[at + 1]);
+}
+
+/** {@link flagFile}, parsed as the JSON a settings or MCP file holds. */
+export function flagJson<T>(launch: FakeLaunch, flag: string): T | undefined {
+  const text = flagFile(launch, flag);
+  return text === undefined ? undefined : JSON.parse(text) as T;
+}
+
+/**
+ * A launch's argv with each file it names shown as `<file name>`, and each
+ * file's text by that name: what an exact argv is asserted on, since a file's
+ * path differs at every spawn.
+ */
+export function argvWithFiles(launch: FakeLaunch): { args: string[]; files: Record<string, string> } {
+  const files: Record<string, string> = {};
+  const args = launch.args.map((arg) => {
+    const text = launch.files.get(arg);
+    if (text === undefined) return arg;
+    files[basename(arg)] = text;
+    return `<${basename(arg)}>`;
+  });
+  return { args, files };
+}
+
+function filesNamed(args: readonly string[]): Map<string, string> {
+  const files = new Map<string, string>();
+  for (const arg of args) {
+    if (!isAbsolute(arg)) continue;
+    try {
+      if (statSync(arg).isFile()) files.set(arg, readFileSync(arg, 'utf8'));
+    } catch {
+      // No file of this host's: a path the runner reads elsewhere, or no path at all.
+    }
+  }
+  return files;
+}
+
 export interface FakeSpawnResult {
   spawn: SpawnFn;
   /** Every process the code under test spawned, in order. Probes excluded. */
   readonly processes: FakeAgentProcess[];
+  /** Every spawn, in order, with the files its arguments named. Probes excluded. */
+  launches(): FakeLaunch[];
+  /** The most recent of {@link launches}. */
+  lastLaunch(): FakeLaunch;
   /** The argv of the most recent spawn — how the read-only flags are asserted. */
   lastArgs(): string[];
   lastCommand(): string;
@@ -159,6 +216,7 @@ function makeProcess(): FakeAgentProcess {
  */
 function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string[]) => void, options: FakeSpawnOptions): FakeSpawnResult {
   const processes: FakeAgentProcess[] = [];
+  const launches: FakeLaunch[] = [];
   const probes: string[][] = [];
   let command = '';
   let args: string[] = [];
@@ -184,6 +242,7 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
     args = argv;
     env = spawnOptions?.env ?? {};
     cwd = spawnOptions?.cwd?.toString();
+    launches.push({ command: cmd, args: argv, files: filesNamed(argv) });
     const proc = makeProcess();
     processes.push(proc);
     if (options.exitOnSpawn) {
@@ -198,6 +257,8 @@ function spawner(onWrite: (written: string, proc: FakeAgentProcess, args: string
   return {
     spawn,
     processes,
+    launches: () => launches,
+    lastLaunch: () => launches[launches.length - 1] ?? { command: '', args: [], files: new Map() },
     lastArgs: () => args,
     lastCommand: () => command,
     lastEnv: () => env,

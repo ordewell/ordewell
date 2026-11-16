@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { RunnerRegistry } from '../RunnerRegistry';
+import { PROVIDER_RUNNER_IDS } from '../../services/providerRunners';
 import type { IConfig } from '../../interfaces/IConfig';
 
 const config = (enabledRunners: string[]) => ({ enabledRunners }) as IConfig;
@@ -7,7 +8,7 @@ const config = (enabledRunners: string[]) => ({ enabledRunners }) as IConfig;
 describe('RunnerRegistry', () => {
   it('lists only built-ins in picker order', () => {
     const registry = new RunnerRegistry();
-    expect(registry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'ordewell']);
+    expect(registry.list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS]);
     expect(registry.getManifest('claude-code')?.runner.command).toBe('claude');
     expect(registry.get('codex')?.manifest).toBe(registry.getManifest('codex'));
   });

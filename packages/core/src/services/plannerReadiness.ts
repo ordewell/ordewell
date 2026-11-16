@@ -103,7 +103,7 @@ export interface PlannerCommandSyntax extends SignInSyntax {
 
 export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
   pickPlanner: '/planner',
-  setKey: () => '/key',
+  setKey: () => '/key-set',
   // `/planner` walks harness, model and effort in one flow; there is no
   // separate `/model` (or `/planner-effort`) to point at.
   setModel: '/planner',

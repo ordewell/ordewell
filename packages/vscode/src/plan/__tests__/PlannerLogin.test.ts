@@ -203,7 +203,7 @@ describe('loginPlanner', () => {
 
   it.each([
     ['opencode', 'OpenCode has no login Ordewell can run. Run opencode auth login and choose a provider.'],
-    ['qwen-code', 'Qwen Code has no login Ordewell can run. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+    ['qwen-code', 'Qwen Code has no login Ordewell can run. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
   ])('names the other ways into %s where it has no login to run', async (runner, message) => {
     const h = harness({ verdict: () => ({ state: 'signed-out', signIn: runnerSignIn(runner)! }) });
 
@@ -212,6 +212,27 @@ describe('loginPlanner', () => {
     expect(h.createTerminal).not.toHaveBeenCalled();
     expect(h.deps.notifications.info).toHaveBeenCalledWith(message);
     expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner, ok: false, message });
+  });
+
+  it('points a provider runner at its key, the only sign-in it has, and opens no terminal', async () => {
+    const h = harness({ verdict: () => ({ state: 'signed-in' }) });
+
+    await loginPlanner(h.deps, 'openrouter');
+
+    const message = 'OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.';
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.deps.notifications.info).toHaveBeenCalledWith(message);
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'openrouter', ok: false, message });
+  });
+
+  it('points Custom at its endpoint, which may take no key at all', async () => {
+    const h = harness({ verdict: () => ({ state: 'signed-in' }) });
+
+    await loginPlanner(h.deps, 'openai_compatible');
+
+    const message = 'Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.';
+    expect(h.createTerminal).not.toHaveBeenCalled();
+    expect(h.ended()).toEqual({ type: 'plannerLoginEnded', runner: 'openai_compatible', ok: false, message });
   });
 
   it('tells a vendor planner there is no coding agent to sign in', async () => {

@@ -103,7 +103,7 @@ describe('/planner', () => {
       }],
     });
     expect(stepperOf(state).items.find((i) => i.id === 'qwen-code')).toMatchObject({
-      warn: true, detail: 'Qwen Code is not signed in. Run /key and choose OpenRouter to hand it a key.',
+      warn: true, detail: 'Qwen Code is not signed in. Run /key-set and choose OpenRouter to hand it a key.',
     });
   });
 
@@ -324,7 +324,7 @@ describe('/planner', () => {
   });
 
   it('says why a coding agent lists no models, as the daemon words it, instead of offering a refresh', () => {
-    const reason = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+    const reason = 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
     const runners = [...(installedAll.runners ?? []), { id: 'qwen-code', name: 'Qwen Code', enabled: true }];
     const opened = choose(run('/planner', { ...ready, runners, models: [] }).state, 'qwen-code').state;
 

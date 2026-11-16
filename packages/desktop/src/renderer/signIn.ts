@@ -47,6 +47,6 @@ export function signedOutByRunner(backends: readonly PlannerBackend[]): Record<s
 /** The one host message a Sign in or Set API key control posts. */
 export function signInMessage(view: SignInView): WebviewToHost {
   return view.action === 'key' && view.provider
-    ? { type: 'sendMessage', text: `/key ${view.provider}` }
+    ? { type: 'sendMessage', text: `/key-set ${view.provider}` }
     : { type: 'loginPlanner', runner: view.runner };
 }

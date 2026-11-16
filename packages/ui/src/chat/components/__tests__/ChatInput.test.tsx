@@ -354,6 +354,33 @@ describe('the empty composer tip (#137)', () => {
     expect([...seen].every((tip) => tip.startsWith('Tip: '))).toBe(true);
     expect([...seen].some((tip) => tip.includes('/runners'))).toBe(false);
   });
+
+  describe('the /key-set tip, for whoever has no provider key yet', () => {
+    const KEY_TIP = 'Tip: Add an API key with /key-set to run tasks on the built-in runner.';
+    /** Every tip one cycle shows, the composer emptied between each. */
+    const cycle = (): Set<string> => {
+      const seen = new Set<string>([placeholder()]);
+      for (let i = 0; i < 9; i++) {
+        type('x');
+        type('');
+        seen.add(placeholder());
+      }
+      return seen;
+    };
+
+    it('comes round while the host says no key is set', () => {
+      renderInput({ tipContext: { providerKeySet: false } });
+      expect(cycle()).toContain(KEY_TIP);
+    });
+
+    it('never shows once a key is set, nor while the host has not said', () => {
+      const { unmount } = renderInput({ tipContext: { providerKeySet: true } });
+      expect(cycle()).not.toContain(KEY_TIP);
+      unmount();
+      renderInput({ tipContext: {} });
+      expect(cycle()).not.toContain(KEY_TIP);
+    });
+  });
 });
 
 // jsdom draws nothing, so the wrapping these tests measure is simulated: the

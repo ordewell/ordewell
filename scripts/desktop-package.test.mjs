@@ -23,7 +23,7 @@ import {
   withoutSigning,
 } from '../packages/desktop/scripts/package.mjs';
 import { codeSignTool, failed, redact, sign, signArgs } from '../packages/desktop/scripts/esigner-sign.mjs';
-import { DESKTOP_WORKSPACES, buildArgs, buildWorkspaces } from '../packages/desktop/scripts/workspace-builds.mjs';
+import { DESKTOP_WORKSPACES, buildArgs, buildWorkspaces, installDrift } from '../packages/desktop/scripts/workspace-builds.mjs';
 
 const MAC_CERT = { CSC_LINK: 'base64p12', CSC_KEY_PASSWORD: 'p12pass' };
 const API_KEY = { APPLE_API_KEY: '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n', APPLE_API_KEY_ID: 'KEYID123', APPLE_API_ISSUER: 'issuer-uuid' };
@@ -582,6 +582,57 @@ describe('the workspaces desktop:dev and desktop:package rebuild', () => {
       assert.doesNotMatch(source, /existsSync\([^)]*dist/, `${script} does not settle for a dist/ that exists`);
     });
   }
+
+  // A checkout that added lucide-react to ui failed ui's build with "Cannot find
+  // module", reported as a build to fix, when `npm install` was the answer.
+  describe('refuse an install that package-lock.json has moved past', () => {
+    const write = (file, value) => {
+      mkdirSync(join(file, '..'), { recursive: true });
+      writeFileSync(file, JSON.stringify(value));
+    };
+    const fixture = (installed) => {
+      const root = mkdtempSync(join(tmpdir(), 'ordewell-drift-'));
+      const workspaces = [...DESKTOP_WORKSPACES, 'desktop'].map((name) => `packages/${name}`);
+      write(join(root, 'package.json'), { devDependencies: { tsup: '^8.0.0' } });
+      for (const dir of workspaces) write(join(root, dir, 'package.json'), {});
+      write(join(root, 'packages/ui/package.json'), { dependencies: { icons: '^1.0.0', '@ordewell/core': '*', 'native-x64': '*' } });
+      write(join(root, 'packages/web/package.json'), { dependencies: { hono: '^4.0.0' } });
+      write(join(root, 'package-lock.json'), {
+        packages: {
+          'node_modules/tsup': { version: '8.5.1' },
+          'node_modules/icons': { version: '1.69.0' },
+          'node_modules/@ordewell/core': { resolved: 'packages/core', link: true },
+          'node_modules/native-x64': { version: '1.0.0', optional: true },
+          'node_modules/hono': { version: '4.0.0' },
+          'packages/web/node_modules/hono': { version: '4.2.0' },
+        },
+      });
+      for (const [key, version] of Object.entries(installed)) write(join(root, ...key.split('/'), 'package.json'), { version });
+      return root;
+    };
+    const current = { 'node_modules/tsup': '8.5.1', 'node_modules/icons': '1.69.0', 'packages/web/node_modules/hono': '4.2.0' };
+
+    it('passes an install that matches, skipping workspace links and optional packages', () => {
+      assert.deepEqual(installDrift(fixture(current)), []);
+    });
+
+    it('names a dependency that is missing, or installed at another version', () => {
+      const root = fixture({ ...current, 'node_modules/icons': undefined, 'packages/web/node_modules/hono': '4.1.0' });
+      assert.deepEqual(installDrift(root).sort(), ['hono (wants 4.2.0, has 4.1.0)', 'icons (wants 1.69.0, has none)']);
+    });
+
+    it('stops before any build and says to run npm install', () => {
+      const calls = [];
+      const failed = buildWorkspaces((args) => { calls.push(args); return 0; }, {}, fixture({ 'node_modules/tsup': '8.5.1' }));
+      assert.deepEqual(calls, []);
+      assert.match(failed, /icons \(wants 1\.69\.0, has none\).*Run `npm install` from the repository root/);
+    });
+
+    it('says the same when nothing is installed at all', () => {
+      const root = mkdtempSync(join(tmpdir(), 'ordewell-drift-'));
+      assert.match(buildWorkspaces(() => 0, {}, root), /node_modules \(none installed\).*npm install/);
+    });
+  });
 
   it('see no signing secret when packaging', () => {
     assert.match(desktopScript('package.mjs'), /buildWorkspaces\(undefined, Object\.fromEntries\(SIGNING_VARIABLES\.map\(\(name\) => \[name, undefined\]\)\)\)/);
