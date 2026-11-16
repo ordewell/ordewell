@@ -10,7 +10,7 @@ import { createWorkspaceReader } from '../workspaceReader';
  * four repositories and many ordinary folders. The desktop Explorer asks for
  * repo "." there; the reader must list the folder, and must never answer
  * `No repository "." in this workspace`, as a contract-2 daemon's reader did
- * (the reason `DAEMON_CONTRACT` is 3).
+ * (why `DAEMON_CONTRACT` reached 3).
  */
 
 const hasGit = (() => { try { execFileSync('git', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } })();

@@ -11,11 +11,10 @@ describe('refusalOf', () => {
     expect(refusal.confirmStale).toBeUndefined();
   });
 
-  it('keeps plannerNotReady, confirmStale, landingBranchHeld, workspace and payload', () => {
+  it('keeps plannerNotReady, confirmStale, landingBranchHeld and payload', () => {
     const body = {
       error: 'no',
       code: 'refused',
-      workspace: '/w',
       plannerNotReady: { reason: 'no_key' },
       confirmStale: { shown: 'a', now: 'b' },
       landingBranchHeld: { branch: 'x' },
@@ -25,7 +24,6 @@ describe('refusalOf', () => {
     expect(refusal.plannerNotReady).toEqual(body.plannerNotReady);
     expect(refusal.confirmStale).toEqual(body.confirmStale);
     expect(refusal.landingBranchHeld).toEqual(body.landingBranchHeld);
-    expect(refusal.workspace).toBe('/w');
     expect(refusal.payload).toEqual(body.payload);
   });
 

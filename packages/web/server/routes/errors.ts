@@ -13,7 +13,6 @@ import {
   SessionNotFoundError,
   TaskControlError,
   UserGitError,
-  WorkspaceNotAProjectError,
   WorkspaceNotFoundError,
   WorkspaceReadError,
   type DaemonErrorCode,
@@ -79,7 +78,6 @@ function classify(err: unknown): Classified | undefined {
   if (err instanceof SessionOpenElsewhereError) return { status: 409, code: 'refused' };
   if (err instanceof NoPlanError) return { status: 400, code: 'no_plan' };
   if (err instanceof AlreadyExecutingError) return { status: 409, code: 'already_executing' };
-  if (err instanceof WorkspaceNotAProjectError) return { status: 400, code: 'workspace_not_a_project' };
   if (err instanceof WorkspaceNotFoundError) return { status: 400, code: 'workspace_not_found' };
   // 409: the request is fine; the machine is not set up to serve it yet.
   if (err instanceof PlannerNotReadyError) return { status: 409, code: 'planner_not_ready' };
@@ -135,7 +133,6 @@ export function failure(
   const body: ErrorBody = {
     error: (err instanceof Error && err.message) || message,
     ...(classified ? { code: classified.code } : {}),
-    ...(err instanceof WorkspaceNotAProjectError ? { workspace: err.workspace } : {}),
     ...(err instanceof PlannerNotReadyError ? { plannerNotReady: err.reason } : {}),
     ...(err instanceof SessionHeldError ? { sessionHeld: err.held } : {}),
     ...(err instanceof UserGitError && err.detail.held ? { landingBranchHeld: err.detail.held } : {}),

@@ -22,7 +22,6 @@ export class DaemonRefusal extends Error {
   }
 
   get code(): DaemonErrorCode | undefined { return this.fields.code; }
-  get workspace(): string | undefined { return this.fields.workspace; }
   get plannerNotReady(): PlannerNotReady | undefined { return this.fields.plannerNotReady; }
   /** With `session_held`: the host that runs the session (ADR-0049). */
   get sessionHeld(): SessionHeld | undefined { return this.fields.sessionHeld; }

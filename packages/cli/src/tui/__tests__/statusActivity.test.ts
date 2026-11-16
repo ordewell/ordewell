@@ -195,12 +195,6 @@ describe('the elapsed time on the activity line (#81)', () => {
       expect(effects.map((e) => e.type)).toEqual(['sendMessage']);
     });
 
-    it('does not outlive an opening the workspace check refused', () => {
-      const refused = reduce(planning(), { type: 'workspaceNeedsInit', workspace: '/ws', goal: 'g' } as Action).state;
-      expect(refused.planner).toBe('idle');
-      expect(refused.turnGate).toEqual({ open: null, stopped: null });
-    });
-
     it('keeps a stop standing while closing the turn', () => {
       const stopped = { ...planning(), turnGate: { ...open, stopped: 't-0' } };
       expect(reduce(stopped, { type: 'failed', turn: true, message: 'boom' } as Action).state.turnGate).toEqual({ open: null, stopped: 't-0' });

@@ -12,7 +12,6 @@ import {
   SessionNotFoundError,
   TaskControlError,
   UserGitError,
-  WorkspaceNotAProjectError,
   WorkspaceNotFoundError,
 } from '@ordewell/core';
 import { failure } from '../errors';
@@ -58,13 +57,6 @@ describe('failure', () => {
 
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: err.message, code: 'planner_not_ready', plannerNotReady: reason });
-  });
-
-  it('carries the refused directory with workspace_not_a_project', async () => {
-    const res = await answer(new WorkspaceNotAProjectError('/bare'));
-
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'workspace_not_a_project', workspace: '/bare' });
   });
 
   it('does not log a stack for a stopped or discarded planner turn', async () => {

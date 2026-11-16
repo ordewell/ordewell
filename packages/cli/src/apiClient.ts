@@ -155,16 +155,6 @@ function planOf<T extends { plan: unknown }>(data: unknown, route: string): T {
   return data as T;
 }
 
-/** A workspace the daemon rejected for lacking a project marker, distinguished from other 400s so the TUI can offer to initialize it instead of just reporting failure. */
-export class WorkspaceInitNeededError extends DaemonRefusal {
-  constructor(message: string, workspace: string) {
-    super(message, 400, { code: 'workspace_not_a_project', workspace });
-    this.name = 'WorkspaceInitNeededError';
-  }
-
-  override get workspace(): string { return super.workspace ?? ''; }
-}
-
 /**
  * A plan as a planner or session endpoint answers with it: the phase-tagged
  * state a saved session is read back in, or the session's plan itself. Which
@@ -219,9 +209,7 @@ export interface ChildCheckpointAnswer {
 
 /** A non-200 answer as an error. The body is not trusted to be JSON: an HTML error page arrives as a string. */
 function daemonError(status: number, data: unknown, fallback: string): DaemonRefusal {
-  const refusal = refusalOf(status, data, fallback);
-  if (refusal.code === 'workspace_not_a_project') return new WorkspaceInitNeededError(refusalOf(status, data, 'Not a project directory').message, refusal.workspace ?? '');
-  return refusal;
+  return refusalOf(status, data, fallback);
 }
 
 /** A read's target (ADR-0064), its workspace the client's own unless named. */
@@ -379,11 +367,10 @@ export class ApiClient {
     goal: string,
     runners?: string[],
     workspace?: string,
-    allowInit?: boolean,
   ): Promise<PlanResponse['plan']> {
     return this.planOf('plans.converseStart', 'Planning failed', {
       params: { sessionId },
-      body: { goal, runners: runners || undefined, workspace, allowInit, surface: this.surface },
+      body: { goal, runners: runners || undefined, workspace, surface: this.surface },
     });
   }
 

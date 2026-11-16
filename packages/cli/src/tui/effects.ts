@@ -5,7 +5,7 @@ import {
   type RunnersResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
-import { RequestTimeoutError, UnreadableResponseError, WorkspaceInitNeededError, deliveryOf, type ApiClient } from '../apiClient';
+import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
 import { DaemonRefusal } from '@ordewell/core';
 import { normalizeCatalog } from '../catalog';
 import { plannerSwitchRecall, uninstalledPlannerRefusal } from '../plannerModelSwitch';
@@ -144,10 +144,7 @@ export async function runEffect(effect: Effect, deps: EffectDeps): Promise<void>
       // daemon came back. Whether this opening is still the one on screen is
       // the reducer's to say: a retry from here would take that one over.
       deps.dispatch({ type: 'daemonReconnected' });
-      deps.dispatch({
-        type: 'openingRevived', sessionId: opening.sessionId, goal: opening.goal,
-        ...(opening.allowInit ? { allowInit: opening.allowInit } : {}),
-      });
+      deps.dispatch({ type: 'openingRevived', sessionId: opening.sessionId, goal: opening.goal });
       return;
     }
 
@@ -230,7 +227,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const { sessionId } = effect;
       dispatch({ type: 'sessionStarted', sessionId, goal: effect.goal });
       try {
-        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace, effect.allowInit), true);
+        await converse(deps, sessionId, () => api.startConversation(sessionId, effect.goal, undefined, workspace), true);
       } catch (err) {
         // The daemon registers a session before the opening turn runs, so a
         // stopped one — by a force send, whose forced turn carries on — leaves
@@ -256,14 +253,6 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         dispatch({ type: 'sessionCleared', sessionId });
         // The welcome is not any session: its run settings are the file's again (ADR-0030).
         await reloadSettings(deps);
-        // Offer to initialize instead of just reporting failure — but only
-        // once: a rejection on the confirmed retry (allowInit already true)
-        // falls through to the generic error path instead of looping the
-        // prompt forever.
-        if (err instanceof WorkspaceInitNeededError && !effect.allowInit) {
-          dispatch({ type: 'workspaceNeedsInit', goal: effect.goal, workspace: err.workspace, sessionId });
-          return;
-        }
         throw err;
       }
       // Outside the block above: a settings read that fails must not take a

@@ -22,11 +22,8 @@ export type RunMessage = Extract<SessionMessage, {
 export type MergeYes = { pastChecks?: true; besideOps?: true };
 
 export type Effect =
-  /**
-   * `allowInit` is only ever set on the retry after the user confirms the "initialize this as a new workspace?" prompt — see `workspaceNeedsInit`.
-   * `sessionId` is only ever set on the retry after a revived daemon (`openingRevived`): the session the refused attempt minted, not revived for again.
-   */
-  | { type: 'startConversation'; goal: string; allowInit?: boolean; sessionId?: string }
+  /** `sessionId` is only ever set on the retry after a revived daemon (`openingRevived`): the session the refused attempt minted, not revived for again. */
+  | { type: 'startConversation'; goal: string; sessionId?: string }
   | { type: 'sendMessage'; sessionId: string; message: string }
   /** Read the session back from the daemon after a planner turn's reply was lost, and settle the turn if the daemon is done with it. */
   | { type: 'reconcileTurn'; sessionId: string }
@@ -257,10 +254,8 @@ export type Action =
    * so does an approval answer's: once that session is off screen it is dropped.
    */
   | { type: 'failed'; message: string; code?: DaemonErrorCode; turn?: true; sessionId?: string }
-  /** The workspace has no project marker — offer to initialize it rather than just failing. */
-  | { type: 'workspaceNeedsInit'; goal: string; workspace: string; sessionId: string }
   /** The daemon refused an opening and has been revived: the reducer decides whether the opening is still the one on screen to retry. */
-  | { type: 'openingRevived'; sessionId: string; goal: string; allowInit?: boolean }
+  | { type: 'openingRevived'; sessionId: string; goal: string }
   /**
    * `holdPlace` is for a notice that reports on text already on screen rather
    * than moving the conversation on: it must not take a scrolled-back reader

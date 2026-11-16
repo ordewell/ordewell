@@ -124,7 +124,7 @@ const WS = ['workspace'] as const;
 const AT = ['workspace', 'repo', 'scope', 'sessionId', 'taskId'] as const;
 
 /** `surface`: the client the user typed in, so the planner names its controls (ADR-0030); an older client sends none. */
-interface GoalRequest { goal: string; runners?: string[]; workspace?: string; model?: string; allowInit?: boolean; surface?: ClientSurface }
+interface GoalRequest { goal: string; runners?: string[]; workspace?: string; model?: string; surface?: ClientSurface }
 interface MessageRequest { message: string }
 interface PlannerMessageRequest { message: string; surface?: ClientSurface }
 interface ChildCheckpointRequest { question: string; reason?: string }

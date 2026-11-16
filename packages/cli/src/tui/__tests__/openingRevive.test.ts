@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GlobalRunSettings, SettingsResponse, SurfacePlan } from '@ordewell/core';
-import { WorkspaceInitNeededError, type SessionSocket } from '../../apiClient';
+import type { SessionSocket } from '../../apiClient';
 import { DaemonRefusal } from '@ordewell/core';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { initialState, reduce, type Action, type Effect } from '../reducer';
@@ -423,40 +423,6 @@ describe('an opening retried after a revived daemon', () => {
     expect(h.state.queuedPrompts).toEqual([]);
     expect(h.state.editor.text).toBe('typed while down');
     expect(h.api.sendConversationMessage).not.toHaveBeenCalled();
-  });
-
-  it('does not ask to initialize the workspace over a session loaded while the opening was refused', async () => {
-    const answer = deferred<void>();
-    const h = tui({
-      startConversation: vi.fn(async () => {
-        await answer.promise;
-        throw new WorkspaceInitNeededError('not a project', '/ws');
-      }),
-    });
-
-    h.type('Opening goal');
-    await vi.waitFor(() => expect(h.api.startConversation).toHaveBeenCalled());
-    h.fire({ type: 'loadSession', sessionId: 'B' });
-    await vi.waitFor(() => expect(h.state.sessionId).toBe('B'));
-    h.type("B's next prompt");
-
-    answer.resolve();
-    await h.settle();
-
-    expect(h.state.sessionId).toBe('B');
-    expect(h.state.overlay).toBeNull();
-    expect(h.state.planner).toBe('joined');
-    expect(h.state.queuedPrompts).toEqual(["B's next prompt"]);
-  });
-
-  it('still asks on the welcome when the opening is the one on screen', async () => {
-    const h = tui({ startConversation: vi.fn().mockRejectedValue(new WorkspaceInitNeededError('not a project', '/ws')) });
-
-    h.type('Opening goal');
-    await h.settle();
-
-    expect(h.state.sessionId).toBeNull();
-    expect(h.state.overlay).toMatchObject({ kind: 'confirm', action: { kind: 'init-workspace', goal: 'Opening goal' } });
   });
 
   it("keeps the opening's read-back, after a lost reply, off a session loaded meanwhile", async () => {

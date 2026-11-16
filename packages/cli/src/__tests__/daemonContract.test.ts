@@ -21,7 +21,7 @@ import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
 import { createApp } from '../../../web/server/app';
 import { createRequestListener } from '../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../web/server/pool/orchestratorPool';
-import { ApiClient, WorkspaceInitNeededError } from '../apiClient';
+import { ApiClient } from '../apiClient';
 import { DaemonRefusal } from '@ordewell/core';
 import { handleCheckpoint, handleCancel, handleForceStart } from '../commands/task-control';
 import { handleSkip, handleMarkComplete, handleUncomplete } from '../commands/mark-complete';
@@ -284,15 +284,12 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       expect(log).not.toHaveBeenCalled();
     });
 
-    it('asks to initialize a directory with no project marker, carrying the directory', async () => {
+    // ADR-0071: a folder with no git, manifest or .ordewell is a workspace like any other.
+    it('plans in a directory with no project marker, with nothing to confirm first', async () => {
       const bare = join(dir, 'bare');
       mkdirSync(bare);
 
-      const err = await refusal(client.startConversation('session-bare', 'Add a limiter', ['claude-code'], bare));
-
-      expect(err).toBeInstanceOf(WorkspaceInitNeededError);
-      expect(err.code).toBe('workspace_not_a_project');
-      expect((err as WorkspaceInitNeededError).workspace).toBe(bare);
+      await expect(client.startConversation('session-bare', 'Add a limiter', ['claude-code'], bare)).resolves.toBeDefined();
     });
 
     it('says workspace_not_found for a directory that does not exist', async () => {
