@@ -3,6 +3,9 @@
 // run's record is read back. Everything here is pure, so its tests need no
 // engine, no key and no network.
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 /** The model both arms run, in Ordewell's `<provider>:<model>` form. */
 export const PROVIDER = 'openrouter';
 export const PROVIDER_MODEL = 'deepseek/deepseek-v4.1-flash';
@@ -546,17 +549,34 @@ export function parsePytestSummary(text) {
 }
 
 /**
- * A test run's counts. A run whose collection broke prints no summary when a
- * conftest fails to import (networkx's stubs, exit 4): no test ran, so it
- * counts as none passed, the error kept. Any other run without a summary is
- * unread, so a driver mistake never reads as a score.
+ * Flags the scoring run adds: a test file that fails to import is one error,
+ * and pytest would otherwise stop at the first and run nothing, zeroing the
+ * whole library for one file.
+ */
+export const EVAL_PYTEST_FLAGS = Object.freeze(['--continue-on-collection-errors']);
+
+/** The files pytest could not collect, from its `ERROR collecting <file>` headers and `ERROR <file>` summary lines. */
+export function collectionErrorFiles(text) {
+  const files = new Set();
+  for (const m of text.matchAll(/^_+ ERROR collecting (\S+) _+$/gm)) files.add(m[1]);
+  for (const m of text.matchAll(/^ERROR ([^\s:]+\.py)(?:::\S+)?(?: - .*)?$/gm)) files.add(m[1]);
+  return [...files];
+}
+
+/**
+ * A test run's counts. A file that failed to collect is an error of its own
+ * (`collectionErrors` names it) and the rest still score. A run whose
+ * collection broke before any test could run prints no summary when a conftest
+ * fails to import (networkx's stubs, exit 4): no test ran, so it counts as
+ * none passed, the error kept. Any other run without a summary is unread, so a
+ * driver mistake never reads as a score.
  */
 export function parseEvaluation(code, output) {
   const summary = parsePytestSummary(output);
-  if (summary) return summary;
+  if (summary) return { ...summary, collectionErrors: collectionErrorFiles(output) };
   const broke = /^(ImportError while loading conftest.*|Interrupted: \d+ errors? during collection.*)$/m.exec(output);
   if (!broke || code === 0) return null;
-  return { passed: 0, failed: 0, errors: 0, skipped: 0, xfailed: 0, xpassed: 0, deselected: 0, collectionError: broke[1].trim() };
+  return { passed: 0, failed: 0, errors: 0, skipped: 0, xfailed: 0, xpassed: 0, deselected: 0, collectionErrors: [], collectionError: broke[1].trim() };
 }
 
 // --- Sessions ---------------------------------------------------------------
@@ -723,8 +743,26 @@ export function startDecision({ sinceRunMs, usageLines, plan, boundMs = NO_START
   return { stop: true, why: 'no-start', detail: `no model call ${minutes} min into the run; ${waiting.length ? `waiting: ${waiting.join('; ')}` : 'the plan could not be read or holds no open AI task'}` };
 }
 
+/** Worktree paths in `git worktree list --porcelain` other than the workspace's own: where a task's work lives until it merges. */
+export function otherWorktrees(porcelain, workdir) {
+  return porcelain.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length)).filter((p) => path.posix.normalize(p) !== path.posix.normalize(workdir));
+}
+
+/**
+ * Whether a run's work is partial. A run stopped at a cap, or leaving a task
+ * not completed (blocked, failed, awaiting the user), never merged, so its
+ * patch comes from the task worktree and its score reads as a truncated one.
+ */
+export function judgeLanding({ stopped, plan, runExit }) {
+  if (stopped) return { truncated: true, why: `cap: ${stopped.why}` };
+  const open = (plan?.tasks ?? []).filter((t) => t.status !== 'completed' && t.status !== 'skipped').length;
+  if (open > 0) return { truncated: true, why: `blocked: ${open} task${open === 1 ? '' : 's'} not completed` };
+  if (!plan && runExit) return { truncated: true, why: `blocked: run exit ${runExit}, no plan to read` };
+  return { truncated: false, why: null };
+}
+
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, window, ordewell, egress, leak, network, tests, wallClockMs, spend, transcripts, stopped, providerPin, dryRun, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, window, ordewell, egress, leak, network, tests, wallClockMs, spend, transcripts, stopped, truncated, providerPin, dryRun, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
@@ -739,7 +777,7 @@ export function resultRecord({ lib, arm, window, ordewell, egress, leak, network
     egress,
     leak,
     networkDeselected: network?.deselected ?? null,
-    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped } : null,
+    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, collectionErrors: tests.collectionErrors ?? [] } : null,
     wallClockMs: wallClockMs ?? null,
     capUsd: arm.capUsd,
     billedUsd: spend?.billedUsd ?? null,
@@ -749,6 +787,7 @@ export function resultRecord({ lib, arm, window, ordewell, egress, leak, network
     compactions: transcripts?.compactions ?? null,
     windowFallbackSuspected: transcripts && window.window ? windowFallbackSuspected(transcripts.compactionPreTokens, window.window) : null,
     stopped: stopped ?? null,
+    truncated: truncated ?? { truncated: false, why: null },
     stepLimit: STEP_LIMIT,
     startedAt,
     endedAt,
@@ -795,6 +834,39 @@ export const armsOf = (arm) => (arm === 'both' ? [ARMS.A, ARMS.B] : [ARMS[arm]])
 
 export function shellQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Billed spend is the key's usage before and after, which counts every caller:
+ * two drivers on one key would bill each other's calls, so a run holds the key.
+ * A lock whose pid is dead (a run that was killed) is removed and logged; one
+ * that names no pid is left, since nothing says it is stale.
+ */
+export function lockKey(dir, { log = console.log, isAlive = pidAlive } = {}) {
+  const lock = path.join(dir, 'key.lock');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.writeFileSync(lock, `${process.pid}\n`, { flag: 'wx' });
+      break;
+    } catch (err) {
+      const held = Number.parseInt(fs.existsSync(lock) ? fs.readFileSync(lock, 'utf8') : '', 10);
+      if (attempt > 0 || !Number.isInteger(held) || held <= 0 || isAlive(held)) {
+        throw new Error(`${lock} is held: another run is billing this key. Remove it if no run is.`, { cause: err });
+      }
+      log(`[commit0] removing stale ${lock}: pid ${held} is not running`);
+      fs.rmSync(lock, { force: true });
+    }
+  }
+  return () => fs.rmSync(lock, { force: true });
+}
+
+export function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
 }
 
 export const round6 = (x) => Math.round(x * 1e6) / 1e6;

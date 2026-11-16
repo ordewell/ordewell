@@ -348,6 +348,62 @@ test('parseEvaluation counts a run whose stubs break collection as none passed, 
   assert.equal(L.parseEvaluation(124, ''), null);
 });
 
+test('a file that fails to collect is an error of its own, and the other files still score', () => {
+  assert.ok(L.EVAL_PYTEST_FLAGS.includes('--continue-on-collection-errors'), 'the eval must keep going past a broken file');
+  const out = [
+    '=================================== ERRORS ====================================',
+    '____________________ ERROR collecting tests/test_bad.py ______________________',
+    "ImportError while importing test module '/testbed/tests/test_bad.py'.",
+    'E   ModuleNotFoundError: No module named "nope"',
+    '=========================== short test summary info ============================',
+    'ERROR tests/test_bad.py',
+    '!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!',
+    '========================= 7 passed, 1 error in 0.40s ==========================',
+  ].join('\n');
+  const r = L.parseEvaluation(1, out);
+  assert.equal(r.passed, 7, 'the library is not zeroed for one file');
+  assert.equal(r.errors, 1);
+  assert.deepEqual(r.collectionErrors, ['tests/test_bad.py']);
+  assert.deepEqual(L.parseEvaluation(1, '== 3 passed, 2 failed in 0.4s ==').collectionErrors, []);
+});
+
+test('lockKey removes a lock whose pid is dead, logs it, and keeps one whose pid is alive', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-lock-'));
+  const lines = [];
+  try {
+    const dead = execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(dir, 'key.lock'), `${dead}\n`);
+    const release = L.lockKey(dir, { log: (m) => lines.push(m) });
+    assert.equal(fs.readFileSync(path.join(dir, 'key.lock'), 'utf8').trim(), String(process.pid), 'the lock is ours now');
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], new RegExp(`stale.*${dead}`));
+    assert.throws(() => L.lockKey(dir, { log: () => {} }), /held/, 'our own live pid holds it');
+    release();
+    assert.equal(fs.existsSync(path.join(dir, 'key.lock')), false);
+    fs.writeFileSync(path.join(dir, 'key.lock'), 'not a pid\n');
+    assert.throws(() => L.lockKey(dir, { log: () => {} }), /held/, 'a lock that names no pid is not removed on a guess');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a run that ends blocked or at its cap is landed from the task worktree and marked truncated', () => {
+  const porcelain = ['worktree /testbed', 'HEAD aaa', 'branch refs/heads/main', '', 'worktree /testbed/.ordewell/worktrees/s1/t1', 'HEAD bbb', 'branch refs/heads/ordewell/s1/t1', ''].join('\n');
+  assert.deepEqual(L.otherWorktrees(porcelain, '/testbed'), ['/testbed/.ordewell/worktrees/s1/t1']);
+  const done = { tasks: [{ status: 'completed' }] };
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: done, runExit: 0 }), { truncated: false, why: null });
+  assert.deepEqual(L.judgeLanding({ stopped: { why: 'spend' }, plan: done, runExit: 0 }), { truncated: true, why: 'cap: spend' });
+  assert.deepEqual(L.judgeLanding({ stopped: { why: 'wall-clock' }, plan: null, runExit: 1 }), { truncated: true, why: 'cap: wall-clock' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'failed' }] }, runExit: 1 }), { truncated: true, why: 'blocked: 1 task not completed' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'awaiting_user' }] }, runExit: 0 }), { truncated: true, why: 'blocked: 1 task not completed' });
+  const rec = L.resultRecord({
+    lib: lib(), arm: L.ARMS.A, window: L.judgeWindow({ listed: 1048576, snapshot: 1048576 }), ordewell: { sha: 'abc', containsPr177: true },
+    egress: { ok: true }, leak: { ok: true }, network: { collected: 9, deselected: 2 }, tests: null, truncated: { truncated: true, why: 'cap: spend' },
+    dryRun: false, startedAt: 'a', endedAt: 'b',
+  });
+  assert.deepEqual(rec.truncated, { truncated: true, why: 'cap: spend' });
+});
+
 test('summarizeTranscript: spend, peak context and compactions', () => {
   const s = L.summarizeTranscript(transcript);
   assert.equal(s.usageLines, 2);
@@ -425,7 +481,7 @@ test('resultRecord carries every field the comparison reports', () => {
   assert.equal(r.contextWindow, 1048576);
   assert.equal(r.pr177Merge, L.PR177_MERGE);
   assert.equal(r.ordewellSha, 'abc');
-  assert.deepEqual(r.tests, { passed: 7, collected: 9, failed: 2, errors: 0, skipped: 0 });
+  assert.deepEqual(r.tests, { passed: 7, collected: 9, failed: 2, errors: 0, skipped: 0, collectionErrors: [] });
   assert.equal(r.networkDeselected, 2);
   assert.equal(r.billedUsd, 1.5);
   assert.equal(r.capUsd, 5.5);
