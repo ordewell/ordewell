@@ -473,7 +473,8 @@ describe('a runner a lease placed elsewhere (ADR-0059 L5)', () => {
     await adapter.start(taskWithMcp);
 
     const { args, files, env } = placed.place.mock.calls[0][0];
-    expect(files).toEqual([args[args.indexOf('--mcp-config') + 1]]);
+    // The completion contract goes in a file as well (ADR-0010 §1).
+    expect(files).toEqual(['--append-system-prompt-file', '--mcp-config'].map((flag) => args[args.indexOf(flag) + 1]));
     expect(JSON.stringify(env)).not.toContain('secret-token');
     adapter.dispose();
   });

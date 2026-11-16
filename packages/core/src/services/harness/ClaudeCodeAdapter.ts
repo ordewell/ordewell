@@ -9,6 +9,7 @@ import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import { claudeConfigDir } from '../../plugins/builtin/claudeModels';
 import type { RunnerEnv } from '../../plugins/types';
 import { expandRunnerHome } from '../../utils/runnerHome';
+import { privateTempDir } from '../../utils/privateTempDir';
 import type { AgentEvent, AgentStartOptions, PlannerAsk, PlannerStartOptions, TaskModeAgentAdapter, TaskStartOptions } from './AgentAdapter';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { markedLines, structuredPatchText } from './fileDiff';
@@ -99,10 +100,34 @@ const NO_AUTO_MEMORY = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
  * drops the user's source from it, or for a task that writes keeps the
  * repository's alone. The empty value is the form the account query uses.
  */
-function settingSources(readOnly: boolean, minimal: boolean): string[] {
-  if (readOnly) return [...(minimal ? ['--setting-sources='] : ['--setting-sources', 'user']), '--settings', PLANNER_SETTINGS];
+function settingSources(readOnly: boolean, minimal: boolean, handed: LaunchFiles): string[] {
+  if (readOnly) return [...(minimal ? ['--setting-sources='] : ['--setting-sources', 'user']), '--settings', handed.write(SETTINGS_FILE, PLANNER_SETTINGS)];
   return minimal ? ['--setting-sources', 'project,local'] : [];
 }
+
+/**
+ * What one launch hands the CLI as files, which its arguments name by path
+ * (ADR-0010 §1). A system prompt on the command line went past Windows'
+ * 32767-character ceiling, and a line break or a `"` in an argument shut out
+ * a `claude.cmd` npm did not write, which only cmd.exe starts. The CLI reads
+ * each file as it starts, so a resume or a respawn writes its own.
+ */
+interface LaunchFiles {
+  /** `contents` as `fileName`, readable by its owner alone; its path. */
+  write(fileName: string, contents: string): string;
+  /** A file written elsewhere that an argument names. */
+  name(file: string): void;
+  /** Every path the arguments name, for a placement to copy (ADR-0059 L5). */
+  readonly paths: string[];
+}
+
+/**
+ * The names the files go by. A placement copies them into one folder by
+ * name, so none is the `mcp.json` the Ordewell server's file is.
+ */
+const SETTINGS_FILE = 'settings.json';
+const SYSTEM_PROMPT_FILE = 'system-prompt.md';
+const NO_MCP_SERVERS_FILE = 'no-mcp-servers.json';
 
 /**
  * Where a task's own context compacts. The 1M window of the large models
@@ -250,21 +275,26 @@ const FOLLOW_ON_TURN_GRACE_MS = 5000;
  * never read OAuth, whose plan the limits belong to — while it, the empty
  * setting sources and the hooks switch stop any user, repository or plugin
  * setup from running; no tools, no MCP server, and no session written to disk.
+ * The settings and the empty server list go in files, as every launch's do
+ * ({@link LaunchFiles}): JSON on the command line holds a `"`.
  */
-const ACCOUNT_QUERY_ARGS = [
-  '-p',
-  '--input-format=stream-json',
-  '--output-format=stream-json',
-  '--verbose',
-  '--safe-mode',
-  '--setting-sources=',
-  '--settings={"disableAllHooks":true}',
-  '--strict-mcp-config',
-  '--mcp-config={"mcpServers":{}}',
-  '--tools=',
-  '--permission-mode=default',
-  '--no-session-persistence',
-];
+function accountQueryArgs(handed: LaunchFiles): string[] {
+  return [
+    '-p',
+    '--input-format=stream-json',
+    '--output-format=stream-json',
+    '--verbose',
+    '--safe-mode',
+    '--setting-sources=',
+    '--settings', handed.write(SETTINGS_FILE, JSON.stringify({ disableAllHooks: true })),
+    '--strict-mcp-config',
+    // The flag takes several values; the flag after it ends them.
+    '--mcp-config', handed.write(NO_MCP_SERVERS_FILE, JSON.stringify({ mcpServers: {} })),
+    '--tools=',
+    '--permission-mode=default',
+    '--no-session-persistence',
+  ];
+}
 
 const INITIALIZE_TIMEOUT_MS = 10_000;
 const MCP_STATUS_POLL_MS = 100;
@@ -611,8 +641,6 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   private mainModel: string | undefined;
   /** What the plan should say the task runs: its spawn's model, then each switch followed. */
   private followedModel: string | undefined;
-  /** The MCP configuration this process reads, on this host. */
-  private configFile: string | null = null;
   /**
    * Model commands sent through the chat whose switch has not been seen yet,
    * oldest first, each with the turns still to end before its own has. Several
@@ -636,7 +664,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   protected spawnSpec(opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
-    if (opts.kind === 'task') return this.taskSpawnSpec(opts);
+    return this.handing((handed) => (opts.kind === 'task' ? this.taskSpawnSpec(opts, handed) : this.plannerSpawnSpec(opts, workspace, handed)));
+  }
+
+  private plannerSpawnSpec(opts: PlannerStartOptions, workspace: Record<string, string>, handed: LaunchFiles): SpawnSpec {
     const nativeShell = this.nativeShell;
     const allowedShell = nativeShell ? DISALLOWED_TOOLS.filter((tool) => !NATIVE_SHELL_TOOLS.has(tool)) : DISALLOWED_TOOLS;
     // Both names: 2.1.314 lists `Task`, and the flag takes it out of the session's tools (ADR-0056 M6).
@@ -652,10 +683,11 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       // In `-p` a repository's settings apply trusted or not: their hooks,
       // `env` and helper commands run before the first turn (ADR-0028).
       ...(minimal ? ['--setting-sources=', '--strict-mcp-config', '--tools', nativeTools.join(',')] : ['--setting-sources', 'user']),
-      '--settings', nativeShell ? nativeShellSettings(nativeShell) : PLANNER_SETTINGS,
-      '--append-system-prompt', opts.systemPrompt,
+      '--settings', handed.write(SETTINGS_FILE, nativeShell ? nativeShellSettings(nativeShell) : PLANNER_SETTINGS),
+      // Appended to the CLI's own prompt, never in its place (ADR-0009 T5).
+      '--append-system-prompt-file', handed.write(SYSTEM_PROMPT_FILE, opts.systemPrompt),
     ];
-    if (opts.mcp) args.push(...this.ordewellServerArgs(opts.mcp, 'planner', minimal ? undefined : this.plannerServers(opts, { ...process.env, ...workspace })));
+    if (opts.mcp) args.push(...this.ordewellServerArgs(handed, opts.mcp, 'planner', minimal ? undefined : this.plannerServers(opts, { ...process.env, ...workspace })));
     if (opts.model) args.push('--model', opts.model);
     // `adaptive` is a thinking *type*, not an effort rung: `--effort adaptive`
     // is warned about and ignored, and adaptive is the default for every model
@@ -680,7 +712,34 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       args,
       env: nativeShell ? { ...memoryOff, ...nativeShell.env } : memoryOff,
       ...(nativeShell ? { envDrop: isCredentialVariable } : {}),
+      files: handed.paths,
     };
+  }
+
+  /**
+   * The launch `build` describes, with the files it hands the CLI
+   * ({@link LaunchFiles}) in one owner-only directory the process owns: it
+   * goes when the process ends or its start fails, a start refused for its
+   * command line included. Claimed once they are written, whatever `build`
+   * did: a claim after a Stop frees at once, and the start then ends as
+   * stopped rather than on a file it could not write.
+   */
+  private handing(build: (handed: LaunchFiles) => SpawnSpec): SpawnSpec {
+    const dir = privateTempDir('claude');
+    const paths: string[] = [];
+    try {
+      return build({
+        write: (fileName, contents) => {
+          const file = dir.write(fileName, contents);
+          paths.push(file);
+          return file;
+        },
+        name: (file) => { paths.push(file); },
+        paths,
+      });
+    } finally {
+      this.own('launch-files', () => dir.remove());
+    }
   }
 
   sessionCost(): RunnerSessionCost | null {
@@ -720,7 +779,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * leaves open to the control channel, where the adapter must answer them;
    * without it `-p` refuses them silently and nothing can ever surface one.
    */
-  private taskSpawnSpec(opts: TaskStartOptions): SpawnSpec {
+  private taskSpawnSpec(opts: TaskStartOptions, handed: LaunchFiles): SpawnSpec {
     const readOnly = readOnlyTask(opts);
     const minimal = opts.runnerConfig === 'minimal';
     if (!readOnly) assertNoClaudeTaskCollision(opts.cwd);
@@ -732,7 +791,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', this.requestedMode,
       '--disallowedTools', [...TASK_DISALLOWED_TOOLS, ...(readOnly ? DISALLOWED_TOOLS : [])].join(','),
-      ...settingSources(readOnly, minimal),
+      ...settingSources(readOnly, minimal, handed),
       ...(minimal && readOnly ? MINIMAL_READ_ONLY_ARGS : []),
       ...(opts.flags.effort ? claudeThinkingArgs(opts.flags.effort) : []),
     ];
@@ -742,8 +801,13 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
       this.countFrom(opts.resumeSessionId, opts.resumeCost);
       this.pendingResume = opts.resumeSessionId;
     }
-    if (opts.mcp) args.push('--append-system-prompt', taskCompletionContract(opts), ...this.ordewellServerArgs(opts.mcp, readOnly ? 'readOnlyTask' : 'task'));
-    return { command: 'claude', args, env: minimal ? MINIMAL_TASK_ENV : TASK_ENV, files: this.configFile ? [this.configFile] : [] };
+    if (opts.mcp) {
+      args.push(
+        '--append-system-prompt-file', handed.write(SYSTEM_PROMPT_FILE, taskCompletionContract(opts)),
+        ...this.ordewellServerArgs(handed, opts.mcp, readOnly ? 'readOnlyTask' : 'task'),
+      );
+    }
+    return { command: 'claude', args, env: minimal ? MINIMAL_TASK_ENV : TASK_ENV, files: handed.paths };
   }
 
   /**
@@ -760,10 +824,10 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
   }
 
   /** The file holding the token lives exactly as long as the process that reads it. */
-  private ordewellServerArgs(mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): string[] {
+  private ordewellServerArgs(handed: LaunchFiles, mcp: McpClientConfig, role: OrdewellToolRole, servers?: Record<string, unknown>): string[] {
     const { args, config } = CLAUDE_ORDEWELL.launch(mcp, role, servers);
     this.own('mcp-config', () => config.remove());
-    this.configFile = config.path;
+    handed.name(config.path);
     this.givenOrdewell = true;
     return args;
   }
@@ -873,7 +937,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * called and no turn opens. The caller ends input and disposes.
    */
   async openAccountQuery(cwd: string, timeoutMs: number): Promise<ClaudeControlAnswer> {
-    await this.launch(cwd, () => ({ command: 'claude', args: ACCOUNT_QUERY_ARGS }), async () => {});
+    await this.launch(cwd, () => this.handing((handed) => ({ command: 'claude', args: accountQueryArgs(handed), files: handed.paths })), async () => {});
     return this.controlAnswer(await this.control({ subtype: 'initialize' }, timeoutMs));
   }
 

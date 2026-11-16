@@ -84,13 +84,34 @@ const mcpConfigPath = flag('--mcp-config');
 const cwd = process.cwd();
 
 /**
+ * What a file flag names, read as the real CLI reads it: once, as it starts,
+ * so the file may be gone by the first turn. A missing one fails the start in
+ * the CLI's own words, which a host must never cause.
+ */
+function startupFile(name, missing) {
+  const file = flag(name);
+  if (file === undefined) return undefined;
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    process.stderr.write(`Error: ${missing}: ${file}\n`);
+    process.exit(1);
+  }
+}
+
+// Ordewell hands its planner and task prompts over as a file (ADR-0010); the fake has no model to read them.
+startupFile('--append-system-prompt-file', 'Append system prompt file not found');
+
+/**
  * The tools the `--settings` ask rules name whole, as the real CLI reads
- * `permissions.ask`. On Windows a multi-line prompt starts this fake through
- * `claude.ps1`, and Windows PowerShell drops every `"` on its way to `node`
+ * `permissions.ask`. `--settings` names a file, as Ordewell passes it, or holds
+ * the JSON itself. That JSON once reached this fake through `claude.ps1` on
+ * Windows, where Windows PowerShell drops every `"` on its way to `node`
  * (ADR-0010), so the list is read from that unquoted form when it is not JSON.
  */
 const askedTools = (() => {
-  const settings = flag('--settings') ?? '{}';
+  const given = flag('--settings') ?? '{}';
+  const settings = given.trimStart().startsWith('{') ? given : startupFile('--settings', 'Settings file not found');
   let rules;
   try {
     rules = JSON.parse(settings)?.permissions?.ask;

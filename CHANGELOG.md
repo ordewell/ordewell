@@ -38,6 +38,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   time. Gemini moved to `@google/genai` and no longer sends a fixed
   temperature or topP.
 
+### Fixed
+
+- **Claude Code plans on Windows again.** Its planner was handed the whole
+  system prompt on its command line, which is past the 32767 characters
+  Windows allows, so every start failed with "its arguments are … over the
+  32767-character limit". Claude Code now reads its system prompt, a task's
+  completion contract and its settings from files Ordewell writes for that
+  process and removes with it, so no prompt is on any runner's command line,
+  and a `claude.cmd` that npm did not write starts too. Should a
+  runner's command line ever pass that limit, the message says it is a bug to
+  report, no longer to shorten the task prompt. A script task's script too long
+  for a command line fails saying so, and to run it from a file in the
+  repository.
+
 ## [0.13.3] - 2026-11-15
 
 ### Added

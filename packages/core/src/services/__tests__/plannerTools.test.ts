@@ -24,7 +24,7 @@ import type { IRunner } from '../../interfaces/IRunner';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { CODEX_SANDBOX_MODE_REASON } from '../harness/codexSandbox';
 import { fakeConfig, fakeFileSystem } from '../../testing';
-import { respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
+import { flagFile, respondingSpawn, planJson, type FakeAgentProcess, type FakeSpawnResult } from './harnessTestKit';
 import { plannerToolHandler, PLANNER_TURN_ENDED, type PlannerToolsHost } from '../plannerTools';
 import { EMPTY_CONVERSATION, fromTranscript, reduceConversation, type ConversationView } from '../../conversation';
 import type { SubmitPlanArgs } from '../mcp/tools';
@@ -294,8 +294,7 @@ describe('load_skill', () => {
     const claude = fakeClaude();
     const { session } = plannerSession(claude, {}, { skillsService: skillCatalog(files) });
     await session.startPlanning('goal', ['claude-code']);
-    const args = claude.lastArgs();
-    const prompt = args[args.indexOf('--append-system-prompt') + 1];
+    const prompt = flagFile(claude.lastLaunch(), '--append-system-prompt-file');
     expect(prompt).toContain('ORDEWELL PLANNER SKILLS:');
     expect(prompt).toContain('- review-plan: Use review-plan to plan');
     expect(prompt).toContain('load_skill');
@@ -312,8 +311,7 @@ describe('load_skill', () => {
 
     expect(loaded?.isError).toBe(true);
     expect(loaded?.text).toContain(`"huge" is ${SKILL_WORD_CAP + 1} words, over the ${SKILL_WORD_CAP}-word cap`);
-    const args = claude.lastArgs();
-    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain(`- huge (too large to load: ${SKILL_WORD_CAP + 1} words, cap ${SKILL_WORD_CAP}):`);
+    expect(flagFile(claude.lastLaunch(), '--append-system-prompt-file')).toContain(`- huge (too large to load: ${SKILL_WORD_CAP + 1} words, cap ${SKILL_WORD_CAP}):`);
     expect(session.planState!.conversationHistory!.some((e) => e.kind === 'skill_load')).toBe(false);
   });
 
@@ -359,8 +357,7 @@ describe('load_skill', () => {
 
     await session.startPlanning('/review-plan the cache', ['claude-code']);
 
-    const args = claude.lastArgs();
-    const prompt = args[args.indexOf('--append-system-prompt') + 1];
+    const prompt = flagFile(claude.lastLaunch(), '--append-system-prompt-file');
     expect(prompt).toContain('USER GOAL: /review-plan the cache');
     expect(prompt).not.toContain(skill.content);
     expect(messages).toHaveLength(1);
@@ -854,10 +851,7 @@ describe('what the planner is told', () => {
     expect(TASK_READ_TOOLS_PROTOCOL.join('\n')).toMatch(/whole handoff, its findings and report/);
   });
 
-  const systemPrompt = (spawned: FakeSpawnResult) => {
-    const args = spawned.lastArgs();
-    return args[args.indexOf('--append-system-prompt') + 1];
-  };
+  const systemPrompt = (spawned: FakeSpawnResult) => flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '';
 
   async function twoTurns() {
     const messages: string[] = [];

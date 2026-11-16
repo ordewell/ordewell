@@ -161,7 +161,10 @@ model's behalf, which is precisely what a coding agent replaces.
   `toolLabel`. Nothing is relabelled as something it is not, which is the point
   ADR-0008 spent effort establishing.
   The planner prompt is *appended* to the agent's own instructions, never
-  substituted for them: `--append-system-prompt` for Claude Code,
+  substituted for them: `--append-system-prompt-file` for Claude Code, a file
+  the process owns rather than the text on its command line, which past
+  Windows' ceiling could not start
+  ([ADR-0010](../platform/0010-windows-support.md) §1),
   `developerInstructions` for Codex, `system` for OpenCode 1.x (an instruction entry on 2.x). Codex's
   `baseInstructions` replaces its base prompt, which takes its description of
   its own tools with it — a planner that has forgotten it can read the workspace
@@ -401,5 +404,6 @@ this backend should understand they are trading speed for not holding a key.
   profile, or not directly spawnable) is listed disabled with its reason in the
   planner picker; a missing CLI is still left off and named in the install hint.
 - 2026-11-04 — Cursor plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
+- 2026-11-16 — T5: Claude Code's planner prompt is appended from a file the process owns (`--append-system-prompt-file`), no longer as text on its command line ([ADR-0010](../platform/0010-windows-support.md) §1).
 - 2026-11-05 — Cline plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-10 — an OpenCode planner's in-turn agent is Ordewell's research agent over MCP, where its workspace names the model (ADR-0066).

@@ -10,7 +10,7 @@ import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
 import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import { mcpClientConfig } from '../mcp';
 import { classifyRunnerStop, readUsageLimitReset } from '../runnerExit';
-import { modeIds, fakeSpawn, fixture, claudeSteerRecording, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { argvWithFiles, modeIds, fakeSpawn, fixture, flagJson, claudeSteerRecording, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 
 /**
  * The adapter's task mode (ADR-0018, C1), against transcripts recorded from
@@ -65,7 +65,8 @@ describe('ClaudeCodeAdapter start switch', () => {
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: 'sonnet', effort: 'high', resumeSessionId: 'sess-1' });
     expect(spawned.lastCommand()).toBe('claude');
-    expect(spawned.lastArgs()).toEqual([
+    const { args, files } = argvWithFiles(spawned.lastLaunch());
+    expect(args).toEqual([
       '-p',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
@@ -75,12 +76,16 @@ describe('ClaudeCodeAdapter start switch', () => {
       '--permission-mode', 'default',
       '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode',
       '--setting-sources', 'user',
-      '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS","LSP"]}}',
-      '--append-system-prompt', 'PLAN',
+      '--settings', '<settings.json>',
+      '--append-system-prompt-file', '<system-prompt.md>',
       '--model', 'sonnet',
       '--effort', 'high',
       '--resume', 'sess-1',
     ]);
+    expect(files).toEqual({
+      'settings.json': '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS","LSP"]}}',
+      'system-prompt.md': 'PLAN',
+    });
     adapter.dispose();
   });
 
@@ -101,7 +106,7 @@ describe('ClaudeCodeAdapter start switch', () => {
     expect(args.flatMap((arg, i) => (arg === '--permission-mode' ? [args[i + 1]] : []))).toEqual(['default']);
     expect(args[args.indexOf('--disallowedTools') + 1].split(',')).toEqual(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'KillShell', 'Bash', 'Monitor', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode']);
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
-    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual({
+    expect(flagJson(spawned.lastLaunch(), '--settings')).toEqual({
       disableAllHooks: true,
       permissions: { ask: ['WebFetch', 'WebFetch(domain:*)', 'WebSearch', 'mcp__*', 'Read', 'Grep', 'Glob', 'LS', 'LSP'] },
     });
@@ -166,16 +171,17 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
     { mode, permissionMode, effort: 'max', model: undefined, thinkingArgs: [] },
   ]);
 
-  async function taskArgs(mode: string, model: string | undefined, effort: string): Promise<string[]> {
+  async function taskArgs(mode: string, model: string | undefined, effort: string): Promise<ReturnType<typeof argvWithFiles>> {
     const { spawned, processDeps } = deps([]);
     const adapter = new ClaudeCodeAdapter(processDeps);
     await adapter.start(taskStart({ mode, model, flags: resolveTaskRunnerFlags(CLAUDE_CODE_MANIFEST, { mode, model, thinkingEffort: effort }) }));
     adapter.dispose();
-    return spawned.lastArgs();
+    return argvWithFiles(spawned.lastLaunch());
   }
 
   it.each(cases)('mode $mode, effort $effort, model $model', async ({ mode, permissionMode, effort, model, thinkingArgs }) => {
-    expect(await taskArgs(mode, model, effort)).toEqual([
+    const { args, files } = await taskArgs(mode, model, effort);
+    expect(args).toEqual([
       '-p',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
@@ -185,10 +191,11 @@ describe('ClaudeCodeAdapter task argv for every effort and mode', () => {
       '--permission-prompt-tool', 'stdio',
       '--permission-mode', permissionMode,
       '--disallowedTools', mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion',
-      ...(mode === 'plan' ? ['--setting-sources', 'user', '--settings', '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS","LSP"]}}'] : []),
+      ...(mode === 'plan' ? ['--setting-sources', 'user', '--settings', '<settings.json>'] : []),
       ...thinkingArgs,
       ...(model ? ['--model', model] : []),
     ]);
+    expect(files).toEqual(mode === 'plan' ? { 'settings.json': '{"disableAllHooks":true,"permissions":{"ask":["WebFetch","WebFetch(domain:*)","WebSearch","mcp__*","Read","Grep","Glob","LS","LSP"]}}' } : {});
   });
 
 

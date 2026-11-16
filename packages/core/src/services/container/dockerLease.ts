@@ -479,8 +479,9 @@ export class DockerExecutionBackend implements ExecutionBackend {
   private async place(box: Box, launch: RunnerLaunch): Promise<PlacedLaunch> {
     const launchNumber = ++box.launches;
     const moved = new Map<string, string>();
-    for (const file of launch.files) {
-      const inside = `/tmp/ordewell/${launchNumber}-${basename(file)}`;
+    for (const [index, file] of launch.files.entries()) {
+      // Numbered as well as named: two of a launch's files can share a name in folders of their own.
+      const inside = `/tmp/ordewell/${launchNumber}-${index}-${basename(file)}`;
       const wrote = await this.cli.call(['exec', '-i', box.name, 'sh', '-c', 'umask 077; mkdir -p /tmp/ordewell; cat > "$0"', inside], { input: readFileSync(file) });
       if (wrote.code !== 0) throw new Error(`Could not hand the runner its configuration: ${wrote.stderr.trim()}`);
       moved.set(file, inside);

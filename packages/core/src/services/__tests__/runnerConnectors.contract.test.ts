@@ -341,12 +341,16 @@ describe.each(runners)('the %s connector and what its process owns', (runner) =>
     const turn = adapter.send('go', () => {}, signal);
     await fake.turnOpen();
     const config = fake.commandLine().match(/--mcp-config (\S+)/)?.[1];
+    // Every file the launch named: a token, a system prompt, settings (ADR-0010 §1).
+    const files = [...(fake.launched().at(-1)?.files.keys() ?? [])];
     // After the turn is open, which waits on timers of its own: the forced
     // follow-up kill is a timer, and faked it fires under the spy rather than
     // against a real group after the test.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    return { adapter, turn, released, config };
+    return { adapter, turn, released, config, files };
   }
+
+  const present = (files: string[]) => files.filter((file) => existsSync(file));
 
   const stops = [
     ['disposed', (adapter: { dispose(): void }) => adapter.dispose(), false],
@@ -355,8 +359,9 @@ describe.each(runners)('the %s connector and what its process owns', (runner) =>
 
   it.each(stops)('frees every resource it owns and kills the process group when %s', async (_how, stop, aborts) => {
     const controller = new AbortController();
-    const { adapter, turn, released, config } = await inTurn(controller.signal);
+    const { adapter, turn, released, config, files } = await inTurn(controller.signal);
     if (config) expect(existsSync(config)).toBe(true);
+    expect(present(files)).toEqual(files);
     expect(released).not.toHaveBeenCalled();
     expect(groupSignals(launched[0])).toEqual([]);
 
@@ -369,6 +374,7 @@ describe.each(runners)('the %s connector and what its process owns', (runner) =>
 
     expect(released).toHaveBeenCalledTimes(1);
     if (config) expect(existsSync(config)).toBe(false);
+    expect(present(files)).toEqual([]);
     expect(groupSignals(launched[0])).toEqual(['SIGTERM']);
     vi.advanceTimersByTime(5_000);
     expect(groupSignals(launched[0])).toEqual(['SIGTERM', 'SIGKILL']);
@@ -377,14 +383,34 @@ describe.each(runners)('the %s connector and what its process owns', (runner) =>
   });
 
   it('frees what the process owns when it ends on its own, before anything disposes it', async () => {
-    const { adapter, turn, released, config } = await inTurn();
+    const { adapter, turn, released, config, files } = await inTurn();
 
     launched[0].exit(1);
     await turn;
 
     expect(released).toHaveBeenCalledTimes(1);
     if (config) expect(existsSync(config)).toBe(false);
+    expect(present(files)).toEqual([]);
     adapter.dispose();
     expect(released).toHaveBeenCalledTimes(1);
+  });
+
+  // What Windows does to a file a live process holds: the removal throws, and
+  // the dispose that frees it before the kill must go on to the rest and the kill.
+  it('frees the rest of what it owns and kills the process group when freeing one of them throws', async () => {
+    const { adapter, released, files } = await inTurn();
+    (adapter as unknown as { own(name: string, release: () => void): void }).own('refused', () => {
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    });
+    const reported = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect(() => adapter.dispose()).not.toThrow();
+      expect(released).toHaveBeenCalledTimes(1);
+      expect(present(files)).toEqual([]);
+      expect(groupSignals(launched[0])).toEqual(['SIGTERM']);
+      expect(reported).toHaveBeenCalledWith(expect.stringContaining('could not free what its process owned'), expect.objectContaining({ code: 'EBUSY' }));
+    } finally {
+      reported.mockRestore();
+    }
   });
 });

@@ -227,14 +227,18 @@ describe('planDirectLaunch on Windows', () => {
   });
 
   // The OS ceiling is not a shim's, so the message must not send the user off
-  // to reinstall something that would not help.
-  it('refuses at the OS ceiling too, without advising a pointless reinstall', async () => {
+  // to reinstall something that would not help. Nor at a prompt to shorten:
+  // no prompt rides a runner's command line (ADR-0010), so it is a bug to report.
+  it('refuses at the OS ceiling too, calling it a bug to report rather than advising a pointless reinstall', async () => {
     const huge = 'x'.repeat(WINDOWS_MAX_COMMAND_LINE + 1);
     const err = await planDirectLaunch('claude', [huge], win(['C:\\tools\\claude.exe'])).catch((e) => e);
     expect(err).toBeInstanceOf(CommandLineTooLongError);
+    expect(err.message).toContain(`its arguments are ${windowsCommandLine('C:\\tools\\claude.exe', [huge]).length} characters, over the ${WINDOWS_MAX_COMMAND_LINE}-character limit`);
     expect(err.message).not.toContain('native executable');
-    expect(err.message).toContain('Shorten the task prompt');
-    expect(err.message).toContain('detach some task skills');
+    expect(err.message).not.toMatch(/shorten|detach/i);
+    expect(err.message).toContain('a bug in Ordewell');
+    expect(err.message).toContain('https://github.com/ordewell/ordewell/issues');
+    expect(err.message).toContain('"claude"');
   });
 });
 

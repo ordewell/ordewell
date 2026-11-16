@@ -1,7 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { bearerHeaderValue } from '../../utils/daemonToken';
+import { privateTempDir } from '../../utils/privateTempDir';
 import type { InProcessTools, McpContact, McpCredential } from './OrdewellMcpServer';
 
 /** The server's name in every runner's MCP configuration, and so in its tool names (`mcp__ordewell__*`). */
@@ -50,7 +48,7 @@ export function mcpClientConfig(credential: McpCredential): McpClientConfig {
 /** A runner's MCP configuration on disk, and the way to take it back off. */
 export interface OwnerOnlyFile {
   path: string;
-  /** Delete the file. Idempotent. */
+  /** Delete the file. Idempotent, and never throws: a dispose goes on to the kill after it. */
   remove(): void;
 }
 
@@ -60,8 +58,6 @@ export interface OwnerOnlyFile {
  * directory is private too, so the name cannot be raced before the mode lands.
  */
 export function ownerOnlyConfigFile(fileName: string, contents: string): OwnerOnlyFile {
-  const dir = mkdtempSync(join(tmpdir(), 'ordewell-mcp-'));
-  const path = join(dir, fileName);
-  writeFileSync(path, contents, { mode: 0o600 });
-  return { path, remove: () => rmSync(dir, { recursive: true, force: true }) };
+  const dir = privateTempDir('mcp');
+  return { path: dir.write(fileName, contents), remove: () => dir.remove() };
 }

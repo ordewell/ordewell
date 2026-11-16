@@ -1068,6 +1068,29 @@ describe('a runner placed in the container', () => {
     lease.lease.release('done');
   });
 
+  // A runner is handed its prompt and settings in files (ADR-0010 §1), each in a folder of its own.
+  it('hands it each file its arguments name at a path of its own there, though two share a name', async () => {
+    const { backend, cli } = backendWith();
+    const lease = await opened(backend);
+    const dirs = [0, 1].map(() => mkdtempSync(join(tmpdir(), 'ordewell-placed-')));
+    const files = dirs.map((dir, n) => {
+      const file = join(dir, 'settings.json');
+      writeFileSync(file, `{"n":${n}}`);
+      return file;
+    });
+
+    const placed = await lease.placement!.place({ command: 'claude', args: ['--settings', files[0], '--mcp-config', files[1]], env: {}, files });
+
+    const inside = ['--settings', '--mcp-config'].map((flag) => placed.args[placed.args.indexOf(flag) + 1]);
+    expect(new Set(inside).size).toBe(2);
+    expect(placed.args.filter((arg) => files.includes(arg))).toEqual([]);
+    const copied = cli.calls.filter(({ args }) => args.includes('umask 077; mkdir -p /tmp/ordewell; cat > "$0"'));
+    expect(copied.map(({ args, opts }) => [args.at(-1), String(opts?.input)])).toEqual([[inside[0], '{"n":0}'], [inside[1], '{"n":1}']]);
+    placed.ended();
+    lease.lease.release('done');
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
   it('leaves this host\'s HOME and PATH here', async () => {
     const { backend } = backendWith();
     const lease = await opened(backend);
