@@ -10,10 +10,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
-- **A built-in `ordewell` runner.** It runs a task inside Ordewell on a
-  provider key alone (OpenRouter, Anthropic, OpenAI, Gemini and the other
-  OpenAI-compatible providers), with no coding-agent CLI to install, and is
-  listed with the other runners in `ordewell runners` and `/runners`. It has
+- **A built-in runner on every provider you have a key for.** It runs a task
+  inside Ordewell on a provider key alone (OpenRouter, Anthropic, OpenAI,
+  Gemini and the other providers Ordewell supports), with no coding-agent CLI
+  to install. Each provider with a key is a runner of its own, under the
+  provider's name ("OpenRouter"), listed with the other runners in
+  `ordewell runners` and `/runners` and enabled until you choose your runners;
+  the same name in the planner picker plans on that key. A provider with no
+  key is not listed, so there is nothing to sign in to. It has
   three modes: Full; Guarded, which asks before each shell command, where
   "Allow for this task" grants a command prefix; and read-only. It resumes
   with continue, takes messages between steps, can be interrupted, pauses on a
@@ -27,9 +31,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   runner's model list and in the planner's model picker.
 - **Contributors:** `bench/live/runner-smoke.mjs` drives the built-in runner
   against a live provider, and says why a run failed.
+- **An empty planner composer suggests `/key-set`** while no provider key is
+  set, on surfaces that tell it so.
 
 ### Changed
 
+- **`/key set` is now `/key-set`,** one word like `/task-model`. `/key` still
+  opens the key entry, which offers every provider Ordewell supports. The
+  headless `ordewell key set <provider> <key>` is unchanged.
 - **The API planner's provider calls moved onto a new provider layer.**
   Anthropic uses the native Messages API, with prompt caching, and thinking
   when an effort is set. OpenAI uses the Responses API, with reasoning
@@ -51,6 +60,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   report, no longer to shorten the task prompt. A script task's script too long
   for a command line fails saying so, and to run it from a file in the
   repository.
+- **A provider key set in the desktop app survives a restart.** The daemon
+  now saves a key or endpoint set through it to `~/.ordewell/.env`, as the
+  terminal already did, and a daemon the app starts loads the keys saved
+  there. A key your shell exports is never written.
 
 ## [0.13.3] - 2026-11-15
 

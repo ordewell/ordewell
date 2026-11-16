@@ -33,6 +33,9 @@ describe('OrchestratorPool routing after a credential change', () => {
     workspace = join(dir, 'ws');
     mkdirSync(join(workspace, '.git'), { recursive: true });
     process.env.ORDEWELL_SETTINGS_PATH = join(dir, 'settings.json');
+    // The runner these goals name, pinned: with a key and no saved choice the
+    // enabled default is that provider's own runner (ADR-0070).
+    process.env.ORDEWELL_ENABLED_RUNNERS = 'claude-code';
     delete process.env.AI_PROVIDER;
     delete process.env.ORCHESTRATOR_MODEL;
     for (const provider of PROVIDER_DETECT_PRIORITY) {

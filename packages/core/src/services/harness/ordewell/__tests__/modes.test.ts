@@ -60,7 +60,7 @@ function worktree(): string {
 
 function guarded(steps: readonly ScriptedStep[], cwd = worktree(), overrides: Partial<TaskStartOptions> = {}) {
   const client = scriptedClient(steps);
-  const adapter = new OrdewellAdapter(deps, {
+  const adapter = new OrdewellAdapter('openrouter', deps, {
     modelInfoTimeoutMs: 50,
     openStore: () => new MemoryTranscriptStore('modes-session', tempDir()),
     createClient: (): ModelClient => client,

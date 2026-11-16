@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import * as fsSync from 'fs';
 import { DiscoveredModel } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
-import { runnerCommand, type RunnerManifest, type DiscoveryCommand, type ApiDiscoveryConfig, type ApiAuthMethod, type ModelDiscoveryParser, type RunnerEnv, type RunnerSettingsFiles } from '../plugins/types';
+import { inProcessProvider, runnerCommand, type RunnerManifest, type DiscoveryCommand, type ApiDiscoveryConfig, type ApiAuthMethod, type ModelDiscoveryParser, type RunnerEnv, type RunnerSettingsFiles } from '../plugins/types';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { globalDataDir } from '../utils/globalDataDir';
 import { expandRunnerHome } from '../utils/runnerHome';
@@ -589,11 +589,12 @@ export class ModelDiscovery {
     let signedOut: true | undefined;
     const discovery = manifest.modelDiscovery;
 
-    // The in-process runner (ADR-0070) offers every keyed provider's catalog.
-    // A provider whose listing failed offers nothing this time, so a partial
-    // answer is not cached behind a key that works on the next lookup.
+    // An in-process runner (ADR-0070) offers its own provider's catalog. A
+    // listing that failed offers nothing this time, and is not cached behind a
+    // key that works on the next lookup.
     if (discovery.method === 'providers') {
-      const models = await discoverProviderModels(env, this.fetchImpl);
+      const provider = inProcessProvider(manifest);
+      const models = provider ? await discoverProviderModels(env, provider, this.fetchImpl) : [];
       return { models, cacheable: models.length > 0 };
     }
 

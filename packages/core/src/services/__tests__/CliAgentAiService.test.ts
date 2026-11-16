@@ -3424,7 +3424,7 @@ describe('CliAgentAiService — a turn that says the agent is signed out', () =>
   it.each([
     ['cursor-agent', 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.'],
     ['copilot-cli', 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login.'],
-    ['qwen-code', 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
+    ['qwen-code', 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.'],
   ])('names the way into a signed-out %s planner once', async (runner, hint) => {
     const turn = await failing(hint, runner).startConversation(request({ runners: [runner] }));
 

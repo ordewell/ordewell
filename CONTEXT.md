@@ -888,20 +888,26 @@ built-in runner), model discovery and mode settings. External plugin manifests
 are ignored with one notice at host startup.
 *Avoid:* "backend", "provider" (provider means the LLM vendor, below).
 
-**Built-in runner** (`ordewell`, "Ordewell"; `OrdewellAdapter`, `OrdewellLoop`,
+**Built-in runner** (`OrdewellAdapter`, `OrdewellLoop`, `providerRunners.ts`,
 ADR-0070) — the runner that ships with Ordewell: a coding-agent loop in the
 Ordewell process (the daemon or the extension host) that calls a provider's API
-through the **ModelClient** with the keys Ordewell holds. It is a task-mode
-adapter behind a `CONNECTORS` entry, driven by `StructuredSession` like any other
-runner, and completes a task only by the token-bound `task_complete`. Its
-manifest's `runner` is `{ inProcess: true }`: no command to probe, so it is
-installed wherever Ordewell is and signed in once any provider has a key. Its
-models are every keyed provider's, as `<provider>:<model>`, split at the first
-colon. It has three modes: Full runs every tool unasked; Guarded asks before each
-`shell` call; read-only has no edit or shell tool and reads natively and runs
-sealed (ADR-0046). It never plans: the API planner plans on the same key.
-*Avoid:* "native runner", "Ordewell agent", "default runner" (`DEFAULT_RUNNERS`
-is a different product choice), "API runner".
+through the **ModelClient** with the key Ordewell holds for it. It is one runner
+per **Provider**, each under that provider's id and name (`openrouter`,
+"OpenRouter"), so the same name in the runner and planner selectors means
+Ordewell's own loop on that provider; none is called "Ordewell". Each is a
+task-mode adapter behind a `CONNECTORS` entry, driven by `StructuredSession`
+like any other runner, and completes a task only by the token-bound
+`task_complete`. Its manifest's `runner` is `{ inProcess: true, provider }`: no
+command to probe, so it is installed, and signed in, exactly while its provider
+is configured (a key, or for a custom endpoint its URL); a provider with no key
+has no runner to list or sign in. With no saved runner choice it is enabled
+beside the installed coding agents. Its models are its provider's catalog, as
+`<provider>:<model>`, split at the first colon; a model of another provider is
+refused. It has three modes: Full runs every tool unasked; Guarded asks before
+each `shell` call; read-only has no edit or shell tool and reads natively and
+runs sealed (ADR-0046). It never plans: the API planner plans on the same key.
+*Avoid:* "native runner", "native harness", "Ordewell agent", "Ordewell runner",
+"default runner" (`DEFAULT_RUNNERS` is a different product choice), "API runner".
 
 **ModelClient** (`services/model/`) — the one provider-neutral interface the
 built-in runner and the API planner call models through:
@@ -980,10 +986,13 @@ task's runner (ADR-0018), its *Ordewell tool binding*, and optionally how it
 words a usage-limit reset. Its `plans` says whether the runner can also be the
 planner: a runner may be task-only, as an ACP agent whose profile claims no
 planner role is. The registry is
-keyed by runner id; a runner without a connector cannot run, and a runner id
-shares the planner setting's namespace with the API vendors' ids, so it never
-equals one. Adding a runner to it is the one place a runner's planner, task
-connector and Ordewell tools are declared, so none of the three can drift apart.
+keyed by runner id; a runner without a connector cannot run. A runner id shares
+the planner setting's namespace with the API vendors' ids, so a runner that plans
+never equals one; the **Built-in runner**'s connectors, one per provider, take
+their vendor's id by design and never plan, so a planner under that id is the
+vendor's API planner (ADR-0009). Adding a runner to it is the one place a
+runner's planner, task connector and Ordewell tools are declared, so none of the
+three can drift apart.
 *Avoid:* conflating it with `RunnerRegistry`, which holds *manifests* (identity
 and mode/discovery settings for the built-in runners); "adapter table".
 
@@ -2979,8 +2988,15 @@ the side that can name what the removal will change — `removalPrompt` lists th
 dependents that `removeTaskFromPlan` is about to detach, because counting them
 tells a user nothing about which edges they are losing.
 
-**Provider** — an LLM vendor/API (OpenAI-compatible via OpenRouter, or Google
-Gemini). Distinct from *runner*.
+**Provider** (`VENDORS`, `PROVIDER_PRIORITY`) — an LLM vendor's API: one of
+the 26 Ordewell reaches through the **ModelClient**, OpenRouter, Google Gemini,
+OpenAI and Anthropic among them, and a custom OpenAI-compatible endpoint. One is
+*configured* by its key, or the custom endpoint by its URL alone; a configured
+provider is a planner (the API planner) and, under the same id and name, a
+runner (the **Built-in runner**). A key is set with `/key-set` (`/key` still
+opens it), or `ordewell key set <provider> <key>` headless. Distinct from
+*runner*, the coding agent.
+*Avoid:* "provider" for a coding agent; "backend".
 
 ---
 
@@ -4306,8 +4322,10 @@ PowerShell shims are considered even when PATHEXT omits `.ps1`.
 **Runner install probe** (`RunnerInstallation`, `isInstalled`) — how a host
 decides which runners are on this machine before any surface offers one: the
 runner's `<command> --version` over the augmented PATH, a clean exit meaning
-installed and a throw meaning not. A runner with no command (`inProcess`) is
-installed without a probe. The verdict is shallow on purpose — it says
+installed and a throw meaning not. A runner with no command (`inProcess`, the
+**Built-in runner** on one provider) is installed without a probe, exactly while
+its provider is configured, read afresh on every look and never cached, so a key
+set mid-session lists it at once. The verdict is shallow on purpose — it says
 the binary answers, never that its login works; that is the **Runner auth**
 verdict beside it. An *installed* verdict is trusted between refreshes; a
 *missing* one also expires on its own, and `refresh()` forgets every verdict, so
@@ -4340,7 +4358,10 @@ in a real terminal and then ask again, and naming another agent signs it in
 without moving the planner (ADR-0052). The verdict is recorded per runner and
 workspace for the synchronous planner gate and cached 30 seconds; a runner-list
 refresh asks again (ADR-0038). A failed turn's own words are read through the
-same spec, so a stale signed-in verdict is corrected rather than repeated.
+same spec, so a stale signed-in verdict is corrected rather than repeated. A
+**Built-in runner** has no status command and no login: listed only while its
+provider is configured, it is always `signed-in`, so it is never flagged and
+never offers a Log in (ADR-0070).
 
 **Well-known bin dirs** (`utils/shellPath.ts`, `wellKnownBinDirs`) — where a
 runner might be, when PATH does not say. On Windows there is no login shell to

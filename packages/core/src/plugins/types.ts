@@ -1,3 +1,4 @@
+import type { AiProvider } from '../interfaces/IConfig';
 import type { DiscoveredModel } from '../models/Task';
 
 export interface RunnerManifest {
@@ -19,16 +20,24 @@ export interface RunnerManifest {
 }
 
 /**
- * How a runner is started: a command on PATH, or `inProcess` for the built-in
- * Ordewell runner, whose loop is code shipped with Ordewell itself (ADR-0070).
- * An in-process runner is installed whenever Ordewell is: there is nothing to
- * probe with `--version` and no login of its own to run.
+ * How a runner is started: a command on PATH, or `inProcess` for one of the
+ * built-in runner's, whose loop is code shipped with Ordewell itself, on the
+ * one `provider` it names (ADR-0070). An in-process runner has nothing to
+ * probe with `--version` and no login of its own to run: it is installed
+ * wherever its provider is configured.
  */
-export type RunnerLaunch = { command: string; inProcess?: never } | { inProcess: true; command?: never };
+export type RunnerLaunch =
+  | { command: string; inProcess?: never; provider?: never }
+  | { inProcess: true; provider: AiProvider; command?: never };
 
 /** The command a runner starts with, or undefined for an in-process runner. */
 export function runnerCommand(manifest: Pick<RunnerManifest, 'runner'>): string | undefined {
   return manifest.runner.inProcess ? undefined : manifest.runner.command;
+}
+
+/** The provider an in-process runner runs on, or undefined for a runner with a command. */
+export function inProcessProvider(manifest: Pick<RunnerManifest, 'runner'>): AiProvider | undefined {
+  return manifest.runner.inProcess ? manifest.runner.provider : undefined;
 }
 
 /** The command a spawned runner starts with; asking it of an in-process one is a wiring mistake. */
@@ -150,8 +159,8 @@ export interface RunnerModelDiscovery {
   /**
    * `acp` asks the running agent over the Agent Client Protocol first; the
    * manifest's `discoveryCommands` and aliases are what it falls back to, so a
-   * runner using it still declares them. `providers` lists the models of every
-   * API provider with a key in Ordewell, as `<provider>:<model>` (ADR-0070).
+   * runner using it still declares them. `providers` lists the catalog of the
+   * provider an in-process runner runs on, as `<provider>:<model>` (ADR-0070).
    */
   method: 'command' | 'hardcoded' | 'acp' | 'providers';
   command?: string;

@@ -22,6 +22,8 @@ import { CURSOR_AGENT_PROFILE } from './cursorProfile';
 import { OrdewellAdapter } from './ordewell/OrdewellAdapter';
 import { ORDEWELL_REPO_CONFIG } from './ordewell/repoConfig';
 import { prefixedToolNames } from './ordewellBinding';
+import type { AiProvider } from '../../interfaces/IConfig';
+import { PROVIDER_RUNNER_IDS } from '../providerRunners';
 
 /**
  * One runner's connector: the adapter that drives it over its programmatic
@@ -73,6 +75,29 @@ export interface RunnerConnector {
 /** Claude's default, and what an API login gets; a subscription's runs recorded here write the hour-long kind. OpenAI's, which Codex uses, is 5 to 10 minutes idle. */
 const FIVE_MINUTES = 5 * 60_000;
 
+// In-process (ADR-0070): no MCP client, so its tools carry their own names,
+// nothing it asks is an Ordewell tool's request, and it is attached once started.
+const IN_PROCESS_TOOLS: OrdewellToolBinding = {
+  ...prefixedToolNames(''),
+  plannerHidden: () => [],
+  isOrdewellAsk: () => false,
+  attachState: (status) => (status === 'connected' ? 'connected' : 'failed'),
+};
+
+/**
+ * The built-in runner on one provider (ADR-0070). It never plans: a planner on
+ * that provider is the API planner, under the same id. It has no sign-in route
+ * either: a provider with no key has no runner to sign in.
+ */
+function providerRunnerConnector(provider: AiProvider): RunnerConnector {
+  return {
+    create: (deps) => new OrdewellAdapter(provider, deps),
+    plans: false,
+    ordewellTools: IN_PROCESS_TOOLS,
+    repoConfig: ORDEWELL_REPO_CONFIG,
+  };
+}
+
 /**
  * The runners Ordewell drives over their own protocols, by runner id. Being
  * here is what gives a runner a task-mode connector, and with `plans` a
@@ -88,15 +113,7 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   cline: acpConnector(CLINE_PROFILE),
   'gemini-cli': acpConnector(GEMINI_CLI_PROFILE),
   'cursor-agent': acpConnector(CURSOR_AGENT_PROFILE),
-  // In-process (ADR-0070): no MCP client, so its tools carry their own names,
-  // nothing it asks is an Ordewell tool's request, and it is attached once started.
-  ordewell: {
-    create: (deps) => new OrdewellAdapter(deps),
-    plans: false,
-    ordewellTools: { ...prefixedToolNames(''), plannerHidden: () => [], isOrdewellAsk: () => false, attachState: (status) => (status === 'connected' ? 'connected' : 'failed') },
-    repoConfig: ORDEWELL_REPO_CONFIG,
-    signInRoute: { provider: 'openrouter', others: 'any other provider key in Ordewell' },
-  },
+  ...Object.fromEntries(PROVIDER_RUNNER_IDS.map((provider) => [provider, providerRunnerConnector(provider)])),
 };
 
 /** The connector for a runner id; undefined for an unknown id (including `toString`). */
@@ -108,6 +125,11 @@ export function connectorFor(runner: string): RunnerConnector | undefined {
 export function createPlannerAdapter(runner: string, deps: AgentProcessDeps): AgentAdapter | null {
   const connector = connectorFor(runner);
   return connector?.plans ? connector.create(deps) : null;
+}
+
+/** Whether a runner can also be the planner (ADR-0009): its connector plans. */
+export function runnerPlans(runner: string): boolean {
+  return connectorFor(runner)?.plans === true;
 }
 
 /** Whether Ordewell can run a runner's tasks (ADR-0018, S3). */

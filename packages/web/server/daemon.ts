@@ -5,6 +5,7 @@ import { createServer } from 'http';
 import { mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { clearDaemonToken, mintDaemonToken, processLeaseHost, StructuredRunner, type LeaseHostKind } from '@ordewell/core';
+import { loadSavedCredentials } from './utils/savedCredentials';
 
 /**
  * What another host's refusal names this one as, and the surface its planner
@@ -53,6 +54,10 @@ export function runDaemon(args: string[]): void {
   let ownsPidFile = false;
 
   processLeaseHost().describe(daemonHostKind(args, port));
+
+  // Before anything reads a key: a daemon the desktop app started inherited
+  // none of the keys saved since, which the CLI would have loaded for it.
+  loadSavedCredentials();
 
   // Tasks run on the structured transport (ADR-0018) as plain child processes,
   // so one runner serves every plan whatever the host has.

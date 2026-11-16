@@ -39,9 +39,10 @@ export interface SignInSyntax {
 
 // `/login` hands the terminal to the runner's own login (ADR-0009). Named
 // with its runner, since the hint may be about an agent that is not the planner.
+// `/key-set` opens the key entry, which offers every provider (ADR-0052).
 export const TERMINAL_UI_SIGN_IN: SignInSyntax = {
   login: (runner) => `/login ${runner}`,
-  chooseKey: (_provider, label) => `/key and choose ${label}`,
+  chooseKey: (_provider, label) => `/key-set and choose ${label}`,
 };
 
 export const HEADLESS_CLI_SIGN_IN: SignInSyntax = {

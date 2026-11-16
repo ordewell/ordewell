@@ -3,6 +3,8 @@ import { BUILTIN_MANIFESTS } from '../builtin';
 import { CLI_PROVIDERS, PROVIDER_LABEL } from '../../services/ProviderRegistry';
 import { RUNNER_CATALOG, RUNNER_INSTALL_DOCS, RUNNER_LABELS } from '../../services/runnerCatalog';
 import { builtinPlannerBackends } from '../../services/plannerBackends';
+import { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel } from '../../plan-utils';
+import { inProcessProvider } from '../types';
 
 // The catalog a renderer can read (the manifests carry Node-only readers) must
 // say what every built-in manifest says, or a surface would offer a runner the
@@ -32,6 +34,20 @@ describe('the built-in runner catalog', () => {
       const entry = RUNNER_CATALOG.find((runner) => runner.id === manifest.name);
       expect(entry?.label, manifest.name).toBe(manifest.displayName);
       expect(entry?.installDocs, manifest.name).toMatch(/^https:\/\//);
+      expect(isProviderRunner(manifest.name), manifest.name).toBe(false);
     }
+  });
+
+  it('tells a renderer every provider runner by id and name, as their manifests declare them', () => {
+    const inProcess = BUILTIN_MANIFESTS.filter((m) => m.runner.inProcess);
+    expect(inProcess.map((m) => m.name)).toEqual([...PROVIDER_RUNNER_IDS]);
+    for (const manifest of inProcess) {
+      expect(isProviderRunner(manifest.name), manifest.name).toBe(true);
+      expect(providerRunnerLabel(manifest.name), manifest.name).toBe(manifest.displayName);
+      expect(inProcessProvider(manifest), manifest.name).toBe(manifest.name);
+      expect(RUNNER_LABELS[manifest.name], manifest.name).toBeUndefined();
+    }
+    expect(providerRunnerLabel('claude-code')).toBeUndefined();
+    expect(providerRunnerLabel('ordewell')).toBeUndefined();
   });
 });

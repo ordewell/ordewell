@@ -37,12 +37,12 @@ const TASKER = vi.hoisted((): RunnerManifest => ({
   modes: [{ id: 'build', label: 'Build', description: 'Edits files', safe: true, autonomous: true }],
 }));
 
-// One with no command at all: its agent runs in Ordewell's own process on a
-// provider key, as the built-in Ordewell runner does (ADR-0070).
+// One with no command at all: its agent runs in Ordewell's own process on one
+// provider's key, as each of the built-in runner's does (ADR-0070).
 const INHOUSE = vi.hoisted((): RunnerManifest => ({
   name: 'inhouse',
   displayName: 'In House',
-  runner: { inProcess: true },
+  runner: { inProcess: true, provider: 'google' },
   features: {},
   modelDiscovery: { method: 'providers' },
   modes: [{ id: 'full', label: 'Full', description: 'Edits files', autonomous: true }],
@@ -61,7 +61,7 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
     usageLimitReset: (tail) => (tail.includes('acme quota, back at noon') ? new Date('2026-10-14T12:00:00Z') : null),
   };
   const tasker: RunnerConnector = { ...borrowed, plans: false };
-  const inhouse: RunnerConnector = { ...actual.CONNECTORS.ordewell };
+  const inhouse: RunnerConnector = { ...actual.CONNECTORS.google };
   Object.assign(actual.CONNECTORS, { acme, tasker, inhouse });
   return actual;
 });
@@ -69,7 +69,7 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'ordewell', 'acme', 'tasker', 'inhouse']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_PRIORITY, 'acme', 'tasker', 'inhouse']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
@@ -132,32 +132,42 @@ describe('a built-in runner with no command, declared by manifest and connector 
     expect(plannerBackendEntries({ inhouse: { usable: true } }, []).some((e) => e.id === 'inhouse')).toBe(false);
   });
 
-  it('is installed with Ordewell: no binary is asked', async () => {
-    const exec = vi.fn(async () => ({ stdout: 'ok' }));
-    const installation = new RunnerInstallation(new RunnerRegistry(), exec);
-    expect(await installation.isInstalled('inhouse')).toBe(true);
-    expect(exec).not.toHaveBeenCalled();
-  });
-
-  it('reads as signed out with no provider key, with /key as the way in', async () => {
+  it('is installed exactly while its provider has a key, asked afresh and of no binary', async () => {
     const restore = noKeys();
     try {
-      const usability = await new RunnerInstallation(new RunnerRegistry(), vi.fn(async () => ({ stdout: '' }))).runnerUsability('inhouse');
-      expect(usability.usable).toBe(true);
-      expect(usability.auth?.state).toBe('signed-out');
-      expect(usability.auth?.signIn?.key?.provider).toBe('openrouter');
-      expect(usability.auth?.signIn?.login).toBeUndefined();
+      const exec = vi.fn(async () => ({ stdout: 'ok' }));
+      const installation = new RunnerInstallation(new RunnerRegistry(), exec);
+      expect(await installation.isInstalled('inhouse')).toBe(false);
+      // Another provider's key is not its provider's.
+      const other = setEnv({ [VENDORS.openrouter.apiKeyEnvVar]: 'test-key' });
+      expect(await installation.isInstalled('inhouse')).toBe(false);
+      other();
+      const own = setEnv({ [VENDORS.google.apiKeyEnvVar]: 'test-key' });
+      expect(await installation.isInstalled('inhouse')).toBe(true);
+      own();
+      expect(await installation.isInstalled('inhouse')).toBe(false);
+      expect(exec).not.toHaveBeenCalled();
     } finally {
       restore();
     }
   });
 
-  it('reads as signed in once any provider key is set', async () => {
+  it('never reads as signed out: with no key it is unusable and says how to set one, with no way in to offer', async () => {
+    const restore = noKeys();
+    try {
+      const usability = await new RunnerInstallation(new RunnerRegistry(), vi.fn(async () => ({ stdout: '' }))).runnerUsability('inhouse');
+      expect(usability).toEqual({ usable: false, reason: 'No In House key is set: add one with /key-set.' });
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads as signed in once its provider has a key, with no login or key route attached', async () => {
     const restore = noKeys();
     const restoreKey = setEnv({ [VENDORS.google.apiKeyEnvVar]: 'test-key' });
     try {
       const usability = await new RunnerInstallation(new RunnerRegistry(), vi.fn(async () => ({ stdout: '' }))).runnerUsability('inhouse');
-      expect(usability.auth?.state).toBe('signed-in');
+      expect(usability).toEqual({ usable: true, auth: { state: 'signed-in' } });
     } finally {
       restoreKey();
       restore();

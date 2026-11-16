@@ -242,8 +242,8 @@ describe('AcpAdapter start', () => {
     const both = setup(signedOutSteps(), { ...PROFILE, signInRoute });
     const alone = setup(signedOutSteps(), { ...PROFILE, signInRoute, manifest: { ...MANIFEST, auth: undefined } });
 
-    await expect(both.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Sign in with \/login fake-acp, or run fake-agent login, or run \/key and choose OpenRouter \(or any OpenAI-compatible provider\) to hand it a key\.$/);
-    await expect(alone.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Run \/key and choose OpenRouter \(or any OpenAI-compatible provider\) to hand it a key\.$/);
+    await expect(both.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Sign in with \/login fake-acp, or run fake-agent login, or run \/key-set and choose OpenRouter \(or any OpenAI-compatible provider\) to hand it a key\.$/);
+    await expect(alone.adapter.start(taskStart())).rejects.toThrow(/^Fake Agent is not signed in\. Run \/key-set and choose OpenRouter \(or any OpenAI-compatible provider\) to hand it a key\.$/);
   });
 
   it('reports the agent\'s own refusal of session/new', async () => {
@@ -1416,7 +1416,7 @@ describe('AcpAdapter provider credential', () => {
 
       const refused = await adapter.start(taskStart()).then(() => null, (e: unknown) => e as Error);
 
-      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and \`${providers()}\` names no provider it last used. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key\`, or sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
+      expect(refused?.message).toBe(`Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and \`${providers()}\` names no provider it last used. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key-set\`, or sign in with \`cline auth\` (a Cline or ClinePass account, or a provider's key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's environment.`);
       expect(refused?.message).not.toContain('fake-agent login');
       expect(spawned.processes).toHaveLength(0);
     });
@@ -1425,7 +1425,7 @@ describe('AcpAdapter provider credential', () => {
       writeFileSync(providers(), '{ not json', { mode: 0o600 });
       const { adapter } = setup(handshake(), cline());
 
-      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key\`, or sign in with \`cline auth\``);
+      await expect(adapter.start(taskStart())).rejects.toThrow(`\`${providers()}\` could not be read. Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with \`/key-set\`, or sign in with \`cline auth\``);
     });
   });
 });

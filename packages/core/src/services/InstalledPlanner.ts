@@ -1,6 +1,7 @@
 import type { PlannerBackendId } from '../interfaces/IConfig';
 import { DEFAULT_RUNNERS, type RunnerId } from '../models/Task';
 import { CLI_PROVIDERS, runnerForProvider } from './ProviderRegistry';
+import { configuredProviderRunners } from './providerRunners';
 import type { RunnerInstallation } from './RunnerInstallation';
 
 /**
@@ -114,14 +115,17 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
 /**
  * The runners enabled while the user has never saved a choice: the agents the
  * latest probe found installed, so a Codex-only or OpenCode-only host can plan
- * and run on its first start; DEFAULT_RUNNERS while none was found or no probe
- * has answered. Read on each call and never saved, so an agent installed later
- * joins on the next probe — a runner-list refresh asks again — and a saved
- * choice, even an empty one, still wins.
+ * and run on its first start, then the built-in runner on every provider the
+ * process holds a key for (ADR-0070), so a key alone runs tasks too;
+ * DEFAULT_RUNNERS while neither was found or no probe has answered and no key
+ * is set. Read on each call and never saved, so an agent installed or a key
+ * set later joins — a runner-list refresh asks again — and a saved choice,
+ * even an empty one, still wins.
  * Every host's config reads it here, so the daemon, CLI, TUI and VS Code agree.
  */
 export function defaultEnabledRunners(): RunnerId[] {
-  return installedAgents.length > 0 ? [...installedAgents] : [...DEFAULT_RUNNERS];
+  const enabled = [...installedAgents, ...configuredProviderRunners(process.env)];
+  return enabled.length > 0 ? enabled : [...DEFAULT_RUNNERS];
 }
 
 /** For tests: the recorded default is process-wide, so one case's must not decide the next's. */

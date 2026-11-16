@@ -72,7 +72,7 @@ async function fixAdd(root: string, persona: string, taskMode: string) {
   const tasks: Task[] = [
     createTask({
       id: 't', order: 1, title: 'Fix add', prompt: 'add() in src/add.mjs subtracts; make `node test.mjs` pass.',
-      assignedRunner: 'ordewell', assignedModel: { modelId: `openrouter:mock/${persona}`, modelLabel: 'mock' }, taskMode,
+      assignedRunner: 'openrouter', assignedModel: { modelId: `openrouter:mock/${persona}`, modelLabel: 'mock' }, taskMode,
     }),
   ];
   const session = makeSession({
@@ -82,11 +82,11 @@ async function fixAdd(root: string, persona: string, taskMode: string) {
     config: fakeConfig({ aiProvider: 'openrouter' }),
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off' } }),
   });
-  session.loadPlan({ tasks, runners: ['ordewell'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'fix add', root, { sessionId: 'session-ordewell' });
+  session.loadPlan({ tasks, runners: ['openrouter'], status: 'approved', generatedAt: '2026-11-01T10:00:00.000Z' } as unknown as LegacyPlanState, 'fix add', root, { sessionId: 'session-ordewell' });
   return session;
 }
 
-describe('the built-in Ordewell runner, offline', () => {
+describe('the built-in runner on OpenRouter, offline', () => {
   it('reads, edits, runs the test and completes a real task in a real worktree, the verdict from task_complete', async () => {
     const root = repo();
     const main = git(root, 'rev-parse', 'main');
