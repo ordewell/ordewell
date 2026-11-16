@@ -17,9 +17,16 @@ function plannerManifests() {
 
 const or = (names: string[]) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`);
 
-/** Runner ids in picker order, as a comma-separated list. */
+/**
+ * Runner ids in picker order, as a comma-separated list: the coding agents one
+ * by one, then the built-in runner's, which are one per API provider and listed
+ * only with a key (ADR-0070), so they are named as such rather than by every
+ * provider id.
+ */
 export function runnerIdList(): string {
-  return manifests().map((m) => m.name).join(', ');
+  const all = manifests();
+  const agents = all.filter((m) => !m.runner.inProcess).map((m) => m.name);
+  return all.some((m) => m.runner.inProcess) ? [...agents, 'and each API provider with a key'].join(', ') : agents.join(', ');
 }
 
 /** The ids of the runners that can plan, as a comma-separated list. */

@@ -1,5 +1,5 @@
 import type { RunnerAuth } from '@ordewell/core';
-import { accountLimitsText } from '@ordewell/core/plan-utils';
+import { accountLimitsText, isProviderRunner } from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { holderShort } from '../../session/holder';
@@ -42,8 +42,13 @@ function Runners({ host }: { host: DaemonHost }): JSX.Element {
   return (
     <span className="frame-status-text frame-status-runners" data-runners="known">
       {ids.map((id) => {
-        const name = state.runnerList.find((runner) => runner.id === id)?.displayName ?? id;
-        const auth = state.planner.backends.find((backend) => backend.runner === id && backend.auth)?.auth?.state ?? 'unknown';
+        const listed = state.runnerList.find((runner) => runner.id === id);
+        const name = listed?.displayName ?? id;
+        // A provider runner is no planner, so no backend carries its auth: it is
+        // listed exactly while its key is set, which is its sign-in (ADR-0070).
+        const auth = listed && isProviderRunner(id)
+          ? 'signed-in'
+          : state.planner.backends.find((backend) => backend.runner === id && backend.auth)?.auth?.state ?? 'unknown';
         const label = `${name}, ${SIGN_IN[auth].words}`;
         return <span key={id} data-auth={auth} aria-label={label} title={label}>{name}{SIGN_IN[auth].mark}</span>;
       })}

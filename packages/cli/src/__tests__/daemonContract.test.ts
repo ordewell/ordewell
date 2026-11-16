@@ -94,6 +94,9 @@ describe('the daemon contract: ApiClient against the real daemon', () => {
       // Kept as it is, only so it is put back: the daemon writes it on a planner pick.
       ORDEWELL_PLANNER_EFFORT: process.env.ORDEWELL_PLANNER_EFFORT,
       OPENROUTER_API_KEY: 'sk-or-test',
+      // The runner these goals name, pinned: with a key and no saved choice the
+      // enabled default is that provider's own runner (ADR-0070).
+      ORDEWELL_ENABLED_RUNNERS: 'claude-code',
     });
     vi.spyOn(OpenAiService.prototype, 'startConversation').mockResolvedValue(TEXT);
     vi.spyOn(GeminiService.prototype, 'startConversation').mockResolvedValue(TEXT);

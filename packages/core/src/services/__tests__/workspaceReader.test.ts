@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -48,6 +48,24 @@ function repo(root: string, files: Record<string, string | Buffer>): void {
 }
 
 const reader = createWorkspaceReader({ config: { workspaceRepos: [] } });
+
+/**
+ * A reader on real git that fails what an older git would, the way git does:
+ * `refuses` names the stderr for the arguments it rejects. Ubuntu 22.04 ships
+ * git 2.34, before `worktree list -z` (2.36) and `grep --max-count` (2.38).
+ */
+function olderGit(refuses: (args: string[]) => string | undefined) {
+  return createWorkspaceReader({
+    config: { workspaceRepos: [] },
+    exec: async (file, args, opts) => {
+      const stderr = refuses(args);
+      if (stderr !== undefined) throw Object.assign(new Error('exit 129'), { code: 129, stdout: '', stderr });
+      return new Promise((resolve, reject) => {
+        execFile(file, args, { ...opts, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => (error ? reject(error) : resolve({ stdout, stderr })));
+      });
+    },
+  });
+}
 
 describe.skipIf(!hasGit)('workspace reader confinement (ADR-0064 R3)', () => {
   let tmp: string;
@@ -211,6 +229,17 @@ describe.skipIf(!hasGit)('workspace reader on the checkout (ADR-0064 R5)', () =>
     expect((await reader.find({ workspace }, { query: 'export', text: true, limit: 1 })).truncated).toBe(true);
   });
 
+  it('finds the same text on a git that refuses `grep --max-count`, and still reports a grep that fails for another reason', async () => {
+    write(workspace, { 'notes/todo.md': 'one\nexport const b is mentioned\n' });
+    const capped = (args: string[]) => args.includes('grep') && args.some((arg) => arg.startsWith('--max-count='));
+    const older = olderGit((args) => (capped(args) ? "error: unknown option `max-count=201'" : undefined));
+    for (const options of [{ query: 'EXPORT CONST B', text: true }, { query: 'export', text: true, limit: 1 }, { query: 'built', text: true }]) {
+      expect(await older.find({ workspace }, options)).toEqual(await reader.find({ workspace }, options));
+    }
+    const broken = olderGit((args) => (args.includes('grep') ? (capped(args) ? "error: unknown option `max-count=201'" : 'fatal: broken') : undefined));
+    await expect(broken.find({ workspace }, { query: 'export', text: true })).rejects.toThrow("git grep failed: error: unknown option `max-count=201'");
+  });
+
   it('answers the checkout\'s status as git porcelain names it', async () => {
     git(workspace, 'mv', 'README.md', 'READ.md');
     const status = await reader.status({ workspace });
@@ -335,6 +364,30 @@ describe.skipIf(!hasGit)('workspace reader history and branches', () => {
       { path: fs.realpathSync.native(workspace), branch: 'main', head: git(workspace, 'rev-parse', 'HEAD').trim(), main: true },
       { path: fs.realpathSync.native(linked), branch: 'feature', head: shas[1], main: false },
     ]);
+  });
+
+  // Refusing `worktree list -z` failed the whole Git view.
+  describe('on a git that refuses `worktree list -z`', () => {
+    const refusingZ = (lines: 'work' | 'fail') => olderGit((args) => {
+      const at = args.indexOf('worktree');
+      if (at < 0 || args[at + 1] !== 'list') return undefined;
+      if (args.includes('-z')) return "error: unknown switch `z'";
+      return lines === 'fail' ? 'fatal: not this time' : undefined;
+    });
+
+    it('lists the worktrees from the line-separated form instead', async () => {
+      const linked = path.join(tmp, 'linked');
+      git(workspace, 'worktree', 'add', '-q', linked, 'feature');
+      const branches = await refusingZ('work').branches({ workspace });
+      expect(branches.worktrees.map((w) => ({ ...w, path: fs.realpathSync.native(w.path) }))).toEqual([
+        { path: fs.realpathSync.native(workspace), branch: 'main', head: git(workspace, 'rev-parse', 'HEAD').trim(), main: true },
+        { path: fs.realpathSync.native(linked), branch: 'feature', head: shas[1], main: false },
+      ]);
+    });
+
+    it('reports git\'s refusal of `-z` when the line-separated form fails too', async () => {
+      await expect(refusingZ('fail').branches({ workspace })).rejects.toThrow("git worktree failed: error: unknown switch `z'");
+    });
   });
 
   it('gives each branch its tip\'s committer date and subject, whatever characters the subject holds', async () => {

@@ -684,7 +684,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         web_search: CODEX_ORDEWELL.plannerWebSearch(nativeSearch),
       },
       // `developerInstructions` layers on top of Codex's own base prompt, the
-      // way Claude Code's `--append-system-prompt` does. `baseInstructions`
+      // way Claude Code's `--append-system-prompt-file` does. `baseInstructions`
       // replaces it — which takes Codex's description of its own tools with
       // it, and a planner that has forgotten it can read the workspace
       // answers from a web search instead.

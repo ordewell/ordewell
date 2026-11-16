@@ -17,31 +17,75 @@ each runner's own.
 
 ## Decision
 
-**Ordewell ships its own runner, `ordewell` ("Ordewell"): a coding-agent loop
-that runs inside the Ordewell process (the daemon or the VS Code extension
-host), calls the provider's API through `ModelClient` with the keys Ordewell
-already holds, and is driven by `StructuredSession` like every other runner.**
+**Ordewell ships its own runner, the built-in runner: a coding-agent loop that
+runs inside the Ordewell process (the daemon or the VS Code extension host),
+calls a provider's API through `ModelClient` with the key Ordewell already
+holds for it, and is driven by `StructuredSession` like every other runner. It
+is one runner per API provider, under the provider's own id and name.**
 
+- **One runner per provider, one implementation.** Every `PROVIDER_PRIORITY`
+  entry whose models can be listed (`discoversModels`) is a runner whose id is
+  the vendor id (`openrouter`, `anthropic`, `google`, …) and whose name is the
+  vendor's label ("OpenRouter"), declared by `ordewellManifest(provider)` and a
+  generated `CONNECTORS` entry, after the coding agents in picker order
+  (`PROVIDER_RUNNER_IDS`). No runner is called "Ordewell". A provider with no
+  model listing (Perplexity) has no runner: one would take a task and never
+  offer the model to start it. Its key still serves the API planner. The planner
+  selector already offers each configured vendor under the same id and label,
+  as the API planner on `ModelClient`, so one name means Ordewell's own loop on
+  that provider in both selectors. A runner id is what the enabled set, the
+  per-runner allowlist, modes, the model catalog and `list_runners` are keyed
+  by, so each provider gets every one of them without a flag of its own.
+  `providerRunners.ts` (browser-safe, also in `plan-utils`) says which ids are
+  provider runners and names them, for a surface.
 - **A task-mode adapter, not a runner of its own.** `OrdewellAdapter` is a
-  `TaskModeAgentAdapter` behind the `ordewell` entry of `CONNECTORS`, so the
-  message queue, `PermissionLedger`, task log, usage and context fill, resume,
-  the usage-limit pause and the `task_complete` path are `StructuredSession`'s,
-  unchanged. It spawns nothing: it ignores the process deps, reports its tools
-  attached at once, and calls the attempt's task tools in this process
+  `TaskModeAgentAdapter` built for its provider, so the message queue,
+  `PermissionLedger`, task log, usage and context fill, resume, the usage-limit
+  pause and the `task_complete` path are `StructuredSession`'s, unchanged. It
+  spawns nothing: it ignores the process deps, reports its tools attached at
+  once, and calls the attempt's task tools in this process
   (`inProcessTaskTools`), the same handlers, validation and token scope the MCP
-  server serves. It does not plan; the API planner plans on the same key.
-- **A runner with no command.** Its manifest's `runner` is `{ inProcess: true }`
-  (`RunnerLaunch`), so it is installed wherever Ordewell is, with no
-  `--version` probe. It reads as signed in once any provider has a key, and
-  otherwise as signed out with `/key` as its sign-in route
-  ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)).
-  It is listed with the other runners in `ordewell runners` and `/runners`.
-- **Models are every keyed provider's.** Discovery method `providers` lists each
-  keyed provider's own catalog, grouped by provider, as `<provider>:<model>`
-  (the first colon splits, so `openai_compatible:qwen3:8b` is a model `qwen3:8b`).
-  One `ModelInfo` shape carries the context window, the reply cap, prices per
-  million tokens, tool and reasoning support, and which of those a catalog
-  stated (`known`); what none stated takes a conservative default.
+  server serves. It refuses, never rewrites, a model of another provider
+  ([ADR-0001](../routing/0001-autonomous-mode-resolution.md)). It does not plan;
+  the API planner plans on the same key.
+- **A runner with no command, installed where its provider is configured.** Its
+  manifest's `runner` is `{ inProcess: true, provider }` (`RunnerLaunch`), so
+  there is no `--version` probe: it is installed exactly while its provider is
+  configured, by a key, or for `openai_compatible` by an explicit
+  `OPENAI_COMPATIBLE_BASE_URL` alone, the planner's own rule
+  (`vendorConfiguredIn`). That is read afresh on every look, never cached, so a
+  key set with `/key-set` lists the runner at once. A listed runner is signed in;
+  it never reads as signed out and has no sign-in route
+  ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md)):
+  a provider with no key has no row, so nothing offers a Log in for it. The
+  daemon's runner list marks it with its `provider` and `plans: false`.
+- **Enabled by default with its key.** While the user has saved no runner choice,
+  the enabled set is the coding agents found installed, then the runner of every
+  provider configured in the host's own environment (`defaultEnabledRunners`):
+  the process's, which `~/.ordewell/.env` fills in the CLI and the daemon, and
+  what the host holds for the runner (`hostCredentials.ts`). A workspace's
+  variables (`.ordewell/env`, an `.envrc`,
+  [ADR-0016](../platform/0016-per-workspace-environment.md)) list the runner and
+  start it in that workspace, but enable nothing: the set is one per host. A
+  saved choice is never rewritten to add one.
+- **Models are its provider's.** Discovery method `providers` lists the
+  runner's own provider's catalog, as `<provider>:<model>` (the first colon
+  splits, so `openai_compatible:qwen3:8b` is a model `qwen3:8b`), so the model
+  ids a plan, a transcript and the model catalog hold mean the same on every
+  runner. One `ModelInfo` shape carries the context window, the reply cap,
+  prices per million tokens, tool and reasoning support, and which of those a
+  catalog stated (`known`); what none stated takes a conservative default.
+- **The one id it had before** (`ordewell`, unreleased) is moved as it is read:
+  a task on it runs on the runner its model's provider names, its session with
+  it; a plan's runner set names those runners instead, and keeps the old id
+  while a task whose model names no provider is still on it, so the plan loads
+  and that task alone fails at its start. A saved enabled entry becomes the
+  runners of the configured providers, and where it had an allowlist entry only
+  of those the entry names a model of, so none comes out enabled and
+  unrestricted; the allowlist entry is split by provider. While that leaves no
+  runner, both entries are kept as they were, ignored as an unknown id is, and
+  moved at a later read once one is configured: an expansion to nothing, saved,
+  would lose them.
 - **The loop** (`OrdewellLoop`) runs a turn as steps until one ends with no tool
   call. Each step is one `ModelClient.stream` call whose request is rebuilt from
   the saved transcript; retries are `ModelClient`'s policy. A tool call starts
@@ -117,6 +161,13 @@ already holds, and is driven by `StructuredSession` like every other runner.**
   line passes its redaction
   ([ADR-0061](../platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md)).
   No key reaches a shell child's environment, in any mode.
+- **A host's own keys are lent to the runner alone.** The VS Code extension
+  keeps the keys a user enters in its SecretStorage, and registers a reader
+  for them (`hostCredentials.ts`); the runner's listing, its default, its
+  catalog and its start read the provider through it, over the environment.
+  The extension host's environment never holds them, so neither a coding agent
+  it spawns nor another extension beside it inherits one. The daemon, whose
+  keys are its environment, registers none.
 - **A mode is never widened.** The runner declares its three modes with
   the autonomous, safe and read-only tags `ModeResolver` reads. An attempt runs
   in the mode it was planned at, and an unknown mode refuses to start rather than
@@ -202,13 +253,39 @@ comes from that call.
   Rejected: `ModelClient` sits on the providers' official SDKs, which track
   each API's changes, rather than a second abstraction over them or a hand-kept
   copy of each wire format.
+- **One runner, `ordewell` ("Ordewell"), with every keyed provider's models.**
+  Chosen first. It read as signed out, with a Log in that offered one
+  provider's key, until any key was set, and showed as a planner option on a
+  surface that took every non-agent runner for one, though it never plans. The
+  same provider then had two names, "Ordewell" as a runner and "OpenRouter" as
+  a planner, and one runner's 100-model line in the planner's catalog was
+  filled by its first provider. Dropped for one runner per provider.
+- **The VS Code extension putting its keys into the extension host's
+  environment**, where the runner already reads a key. Rejected: every process
+  the host spawns would inherit them, a coding agent included, which may then
+  run on that key instead of the user's own login, and so would every other
+  extension running in the same host.
+- **The default read per workspace, from the variables a listing reads.**
+  Rejected: the enabled set is one per host, held by the settings file once
+  saved, while a workspace's variables differ by workspace, so the same host
+  would default differently by the project it was asked from.
+- **One runner per provider under ids of its own (`ordewell-openrouter`).**
+  Rejected: it keeps the planner setting's namespace apart, but names one thing
+  twice; a planner under a vendor's id is already Ordewell's own loop on that
+  vendor, and these runners never plan, so sharing the id costs nothing
+  ([ADR-0009](../planner/0009-coding-agents-as-planners.md#a-runner-in-the-provider-axis)).
 
 ## Consequences
 
-- A provider key is enough to plan and to run a task. The API planner reaches
-  each provider through the same `ModelClient`, by its dialect
+- A provider key is enough to plan and to run a task: setting one lists, signs
+  in and, with no saved choice, enables that provider's runner, beside its API
+  planner of the same name. The API planner reaches each provider through the
+  same `ModelClient`, by its dialect
   ([ADR-0002](../planner/0002-planner-as-conversation-loop.md),
   [ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
+- The runner list grows by one per provider in code, though a host lists only
+  the configured ones; a surface that lists every manifest (the CLI's help)
+  names them as provider runners rather than one by one.
 - Ordewell owns the runner's prompt, tools and modes, and so their defects.
 - The runner runs in the host's process: a tool that hangs or a loop that leaks
   costs the host, not a child it can kill.
@@ -227,3 +304,11 @@ comes from that call.
   Bedrock, so its cache is read from the second step on.
 - 2026-11-15 — stream timeouts implemented: a stream quiet past them is cut and
   its step retried, keeping any tool call that already ran.
+- 2026-11-16 — one runner per provider under the provider's id and name, installed
+  and signed in exactly while that provider is configured, enabled by default
+  with its key; the single `ordewell` runner is gone and what named it is moved.
+- 2026-11-16 — VS Code's keys reach the runner from its SecretStorage through a
+  reader the extension registers, never through the extension host's environment.
+- 2026-11-16 — a provider with no model listing has no runner; the default reads
+  the host's own keys, not a workspace's; the old id stays where moving it would
+  lose a task or a setting.

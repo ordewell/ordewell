@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import type { AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
-import { fakeSpawn } from './harnessTestKit';
+import { fakeSpawn, flagJson } from './harnessTestKit';
 
 /**
  * What a Claude task runner carries into its context beyond Ordewell's own
@@ -37,7 +37,7 @@ async function started(start: Parameters<ClaudeCodeAdapter['start']>[0]) {
   const adapter = new ClaudeCodeAdapter(processDeps);
   await adapter.start(start);
   adapter.dispose();
-  return { args: spawned.lastArgs(), env: spawned.lastEnv() };
+  return { args: spawned.lastArgs(), env: spawned.lastEnv(), launch: spawned.lastLaunch() };
 }
 
 /** Each drops what a repository ships too, so only a task that loads none of it may carry them (ADR-0028). */
@@ -95,11 +95,11 @@ describe('what a Claude task runner loads of the user\'s setup', () => {
   });
 
   it('leaves the read-only profile\'s own settings in place when minimal, and drops the user\'s source', async () => {
-    const { args } = await started(taskStart({ flags: readOnlyFlags, runnerConfig: 'minimal' }));
+    const { args, launch } = await started(taskStart({ flags: readOnlyFlags, runnerConfig: 'minimal' }));
     expect(args).toEqual(expect.arrayContaining(REPOSITORY_TOO));
     expect(args).toContain('--setting-sources=');
     expect(args).not.toContain('user');
-    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({ disableAllHooks: true });
+    expect(flagJson(launch, '--settings')).toMatchObject({ disableAllHooks: true });
   });
 
   it('keeps a read-only task on the user\'s settings, as before, unless minimal', async () => {

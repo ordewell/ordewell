@@ -11,7 +11,7 @@ import type { TaskToolHandler } from '../mcp/tools';
 import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { McpAttachTimeout } from '../harness/ordewellBinding';
-import { claudeTurnEndQueue, claudeSteerRecording, fakeSpawn, fixture, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
+import { argvWithFiles, claudeTurnEndQueue, claudeSteerRecording, fakeSpawn, fixture, flagFile, type FakeSpawnResult, type ScriptedReply } from './harnessTestKit';
 
 /**
  * The structured transport (ADR-0018) driven through the real Claude Code
@@ -170,7 +170,7 @@ describe('StructuredRunner spawn', () => {
     // Only the question tool: a task keeps every other tool its mode allows.
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe(mode === 'plan' ? 'AskUserQuestion,Edit,Write,MultiEdit,NotebookEdit,KillShell,Bash,Monitor,PowerShell,EnterPlanMode,ExitPlanMode' : 'AskUserQuestion');
     // The one system prompt a task has: how it ends, which the CLI's compaction cannot summarise away.
-    expect(args[args.indexOf('--append-system-prompt') + 1]).toContain('call the `task_complete` tool with status `done`');
+    expect(flagFile(spawned.lastLaunch(), '--append-system-prompt-file')).toContain('call the `task_complete` tool with status `done`');
     expect(args).not.toContain('--dangerously-skip-permissions');
     session.kill();
   });
@@ -189,8 +189,7 @@ describe('StructuredRunner spawn', () => {
     const prompts: string[] = [];
     for (const commits of [undefined, true] as const) {
       const session = await runner.spawn(options(commits ? { commits } : {}));
-      const args = spawned.lastArgs();
-      prompts.push(args[args.indexOf('--append-system-prompt') + 1]);
+      prompts.push(flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '');
       session.kill();
     }
 
@@ -200,7 +199,8 @@ describe('StructuredRunner spawn', () => {
   it('builds the full command line: protocol, mode, effort from the manifest, model, resume and the Ordewell server', async () => {
     const { runner, spawned } = harness([]);
     const session = await runner.spawn(options({ thinkingEffort: 'high', resumeSessionId: 'sess-prev' }));
-    expect(spawned.lastArgs()).toEqual([
+    const { args, files } = argvWithFiles(spawned.lastLaunch());
+    expect(args).toEqual([
       '-p',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
@@ -213,10 +213,11 @@ describe('StructuredRunner spawn', () => {
       '--thinking', 'enabled', '--effort', 'high',
       '--model', 'sonnet',
       '--resume', 'sess-prev',
-      '--append-system-prompt', TASK_COMPLETION_CONTRACT,
-      '--mcp-config', expect.stringMatching(/mcp\.json$/),
+      '--append-system-prompt-file', '<system-prompt.md>',
+      '--mcp-config', '<mcp.json>',
       '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch',
     ]);
+    expect(files['system-prompt.md']).toBe(TASK_COMPLETION_CONTRACT);
     session.kill();
   });
 
@@ -230,7 +231,7 @@ describe('StructuredRunner spawn', () => {
     const session = await runner.spawn(options({ thinkingEffort, modelId }));
     const args = spawned.lastArgs();
     const from = args.indexOf('--disallowedTools') + 2;
-    const to = args.indexOf(modelId ? '--model' : '--append-system-prompt');
+    const to = args.indexOf(modelId ? '--model' : '--append-system-prompt-file');
     expect(args.slice(from, to)).toEqual(expected);
     session.kill();
   });

@@ -25,7 +25,7 @@ function ownRoute(env: RunnerEnv): boolean {
 
 /**
  * The hook a Gemini CLI profile carries: the Google key configured in
- * Ordewell (`/key set google`, or `GEMINI_API_KEY` in its environment), as the
+ * Ordewell (`/key-set google`, or `GEMINI_API_KEY` in its environment), as the
  * `GEMINI_API_KEY` Gemini 0.66's API-key auth reads (ADR-0060, R9). It is the
  * only key Ordewell holds for this agent, so there is no vendor to choose.
  */

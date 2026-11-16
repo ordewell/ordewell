@@ -10,10 +10,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
-- **A built-in `ordewell` runner.** It runs a task inside Ordewell on a
-  provider key alone (OpenRouter, Anthropic, OpenAI, Gemini and the other
-  OpenAI-compatible providers), with no coding-agent CLI to install, and is
-  listed with the other runners in `ordewell runners` and `/runners`. It has
+- **A built-in runner on every provider you have a key for.** It runs a task
+  inside Ordewell on a provider key alone (OpenRouter, Anthropic, OpenAI,
+  Gemini and the other providers Ordewell supports whose models can be
+  listed, so not Perplexity, whose key still plans), with no coding-agent CLI
+  to install. Each provider with a key is a runner of its own, under the
+  provider's name ("OpenRouter"), listed with the other runners in
+  `ordewell runners` and `/runners`; the same name in the planner picker plans
+  on that key. Until you choose your runners, one is enabled when its key is in
+  Ordewell's own environment (your shell or `~/.ordewell/.env`); a key only in
+  a project's `.ordewell/env` or `.envrc` lists the runner for you to turn
+  on. A provider with no key is not listed, so there is nothing to sign in
+  to. It has
   three modes: Full; Guarded, which asks before each shell command, where
   "Allow for this task" grants a command prefix; and read-only. It resumes
   with continue, takes messages between steps, can be interrupted, pauses on a
@@ -27,9 +35,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   runner's model list and in the planner's model picker.
 - **Contributors:** `bench/live/runner-smoke.mjs` drives the built-in runner
   against a live provider, and says why a run failed.
+- **An empty planner composer suggests `/key-set`** while no provider key is
+  set, on surfaces that tell it so.
 
 ### Changed
 
+- **`/key set` is now `/key-set`,** one word like `/task-model`. `/key` still
+  opens the key entry, which offers every provider Ordewell supports, and in
+  the terminal says to use the new name. `/key-set <provider>` asks for that
+  provider's key. The headless `ordewell key set <provider> <key>` is
+  unchanged for every provider but Custom.
+- **`/key-set` asks Custom (`openai_compatible`) for its endpoint,** which is
+  what sets it up, and then for a key it may go without, in the terminal, the
+  extension, and the desktop app's sessions and Welcome window. The endpoint
+  you had is offered again in the terminal and the extension. Saving it with
+  no key removes the key saved for Custom before, so that key is not sent to
+  the new endpoint. `/key-set openai_compatible <base-url> [<key>]` and
+  `ordewell key set openai_compatible <base-url> [<key>]` set both at once;
+  the extension saves the endpoint to its new `ordewell.openaiCompatibleBaseUrl`
+  user setting. `/login` with a provider's id or name says its built-in runner
+  has no login and names what it runs on, its key or Custom's endpoint
+  variable, on every surface, and in the terminal and the desktop app before
+  any key is set too. A provider whose key serves only the planner
+  (Perplexity) is marked planner only in the provider list.
+- **An empty provider key or endpoint sent to the daemon's settings route
+  removes it,** from the daemon and from `~/.ordewell/.env`, where it used to
+  be saved as an empty value.
 - **The API planner's provider calls moved onto a new provider layer.**
   Anthropic uses the native Messages API, with prompt caching, and thinking
   when an effort is set. OpenAI uses the Responses API, with reasoning
@@ -37,6 +68,29 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   follow a provider's Retry-After, and a usage limit waits until its reset
   time. Gemini moved to `@google/genai` and no longer sends a fixed
   temperature or topP.
+
+### Fixed
+
+- **Claude Code plans on Windows again.** Its planner was handed the whole
+  system prompt on its command line, which is past the 32767 characters
+  Windows allows, so every start failed with "its arguments are … over the
+  32767-character limit". Claude Code now reads its system prompt, a task's
+  completion contract and its settings from files Ordewell writes for that
+  process and removes with it, so no prompt is on any runner's command line,
+  and a `claude.cmd` that npm did not write starts too. Should a
+  runner's command line ever pass that limit, the message says it is a bug to
+  report, no longer to shorten the task prompt. A script task's script too long
+  for a command line fails saying so, and to run it from a file in the
+  repository.
+- **A provider key set in the desktop app survives a restart.** The daemon
+  now saves a key or endpoint set through it to `~/.ordewell/.env`, as the
+  terminal already did, and a daemon the app starts loads the keys saved
+  there. A key your shell exports is never written. Should the daemon fail to
+  save one, the app says the key lasts only until Ordewell restarts.
+- **The extension's key entry checks a key where it will be used:** at the
+  base URL the provider is configured with, so a gateway's key is no longer
+  refused. A Perplexity key, which has no model list to check it against, is
+  saved without checking instead of being asked for again.
 
 ## [0.13.3] - 2026-11-15
 

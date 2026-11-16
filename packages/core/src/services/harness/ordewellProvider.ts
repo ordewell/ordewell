@@ -2,10 +2,10 @@ import type { AiProvider } from '../../interfaces/IConfig';
 import { PROVIDER_PRIORITY, VENDORS, vendorApiKeyIn, vendorBaseUrlIn, type VendorEnv } from '../apiProviders';
 
 /*
- * The provider key a person configured once in Ordewell (`/key`, or the
+ * The provider key a person configured once in Ordewell (`/key-set`, or the
  * variable it writes), handed to an ACP agent's spawn so the agent needs no
  * login of its own (ADR-0060, R9). It is read from the spawn's own variables,
- * where `/key` put it, afresh for each spawn, and is returned to the hook that
+ * where `/key-set` put it, afresh for each spawn, and is returned to the hook that
  * asked and to nothing else: never logged, kept, written or put in an error
  * (ADR-0051).
  */

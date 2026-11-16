@@ -107,7 +107,7 @@ describe('handlePlan — a turn that fails signed out', () => {
     ],
     [
       'qwen-code',
-      'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
       'Qwen Code is not signed in. Run ordewell key set openrouter <key> (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
     ],
   ];

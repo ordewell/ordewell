@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import {
-  codexSandboxNotice, detectInstalledPlanner, getProviderMeta, ModelResolver, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
+  codexSandboxNotice, detectInstalledPlanner, endpointUrlProblem, getProviderMeta, inProcessProvider, isProviderRunner, ModelResolver, PROVIDER_PRIORITY, PROVIDER_SHORT_LABEL, runnerForProvider,
   type AiProvider, type PlannerBackendId, type CodexSandboxAvailability, type DiscoveredModel, type RunnerInstallation, type RunnerRegistry,
 } from '@ordewell/core';
 import type { ChatViewProvider } from './providers/ChatViewProvider';
@@ -114,7 +114,9 @@ export class ModelDiscovery {
     }
     d.chatProvider.setModels(allModels);
     d.chatProvider.setModelsByRunner(byRunner);
-    this.warnDegradedDiscovery(degraded);
+    // A provider runner has no CLI to be cold: what failed is its catalog, read with its key.
+    const inProcess = new Map(allRunners.flatMap((p) => (inProcessProvider(p.manifest) ? [[p.manifest.name, p.manifest.displayName] as const] : [])));
+    this.warnDegradedDiscovery(degraded.filter((r) => !inProcess.has(r)), degraded.flatMap((r) => inProcess.get(r) ?? []));
 
     const installedRunners = allRunners.filter((p) => installedIds.has(p.manifest.name));
     const runnerList = installedRunners.map((p) => ({
@@ -151,17 +153,23 @@ export class ModelDiscovery {
     }).catch((err) => d.log(`Model options discovery error: ${err}`));
   }
 
-  private warnDegradedDiscovery(degradedRunners: string[]): void {
+  /** `cliRunners` by id; `providerRunners` by name, the built-in runner on each provider whose catalog came back empty. */
+  private warnDegradedDiscovery(cliRunners: string[], providerRunners: string[]): void {
     const { vscodeApi } = this.deps;
-    if (degradedRunners.length === 0) return;
+    if (cliRunners.length === 0 && providerRunners.length === 0) return;
     if (Date.now() - this.lastDegradedWarnAt < DEGRADED_WARN_COOLDOWN_MS) return;
     this.lastDegradedWarnAt = Date.now();
-    const names = degradedRunners.join(', ');
-    vscodeApi.window.showWarningMessage(
-      `Ordewell discovered no models for installed runner${degradedRunners.length > 1 ? 's' : ''}: ${names}. ` +
-      `The CLI may be cold (try again in a moment) or the core build may be stale (run "npm run build:core"). ` +
-      `The model picker will be incomplete until discovery succeeds.`,
-    );
+    const said: string[] = [];
+    if (cliRunners.length > 0) {
+      said.push(
+        `Ordewell discovered no models for installed runner${cliRunners.length > 1 ? 's' : ''}: ${cliRunners.join(', ')}. ` +
+        `The CLI may be cold (try again in a moment) or the core build may be stale (run "npm run build:core").`,
+      );
+    }
+    if (providerRunners.length > 0) {
+      said.push(`Ordewell could not list the models of the built-in runner on ${providerRunners.join(', ')}: check the API key and base URL.`);
+    }
+    vscodeApi.window.showWarningMessage(`${said.join(' ')} The model picker will be incomplete until discovery succeeds.`);
   }
 
   private warnProviderDiscoveryErrors(errors: Record<string, string>): void {
@@ -194,48 +202,82 @@ export class ModelDiscovery {
     const { validateApiKey } = await import('./adapters/ApiKeyValidator');
     let provider = preselected;
     if (!provider) {
+      // Marked where a key adds no built-in runner: that provider lists no models to run tasks on.
       const items = PROVIDER_PRIORITY.map((p) => {
         const meta = getProviderMeta(p);
-        return { label: meta?.shortLabel ?? p, value: p as ApiProvider, detail: meta?.label ?? p };
+        return { label: meta?.shortLabel ?? p, value: p as ApiProvider, detail: meta?.label ?? p, ...(isProviderRunner(p) ? {} : { description: 'planner only' }) };
       });
       const picked = await vscodeApi.window.showQuickPick(items, { placeHolder: 'Which AI provider are you configuring?' });
       if (!picked) return;
       provider = picked.value;
     }
 
+    const { config } = this.deps;
     const meta = getProviderMeta(provider);
     const providerLabel = meta?.shortLabel ?? 'OpenRouter';
     const secretKey: SecretKey = (meta?.secretStoreKey as SecretKey) || 'openrouterKey';
     const placeHolder = provider === 'google' ? 'AIza…' : 'sk-…';
 
+    // Custom is set up by its endpoint, so that comes first, and its key is
+    // optional: a local server takes none (ADR-0070). The setting is a
+    // declared one: VS Code refuses to write any other.
+    const endpointSetting = provider === 'openai_compatible' ? meta?.vscodeBaseUrlKey : undefined;
+    let endpoint: string | undefined;
+
     for (;;) {
+      if (endpointSetting) {
+        // Asked again after a refusal, from what was typed: the endpoint may be what was wrong.
+        endpoint = (await vscodeApi.window.showInputBox({
+          prompt: `Enter the ${providerLabel} endpoint URL`,
+          placeHolder: meta?.defaultBaseUrl,
+          value: endpoint ?? config.openaiCompatibleBaseUrl,
+          ignoreFocusOut: true,
+          validateInput: (value) => endpointUrlProblem(value),
+        }))?.trim();
+        if (!endpoint) return;
+      }
+
       const key = await vscodeApi.window.showInputBox({
         password: true, placeHolder,
-        prompt: `Enter your ${providerLabel} API key`,
+        prompt: endpoint === undefined
+          ? `Enter your ${providerLabel} API key`
+          : `Enter your ${providerLabel} API key, or leave it empty for an endpoint that takes none (the key saved here before is removed)`,
         ignoreFocusOut: true,
       });
-      if (!key) return;
+      if (key === undefined || (!key && endpoint === undefined)) return;
 
+      // Checked where it will be used: a gateway's key is refused at the provider's public host.
       const validation = await vscodeApi.window.withProgress(
-        { location: vscodeApi.ProgressLocation.Notification, title: `Validating ${providerLabel} key…` },
-        () => validateApiKey(provider!, key, {
-          openrouterBaseUrl: this.deps.config.openAiBaseUrl,
-          openaiCompatibleBaseUrl: this.deps.config.openaiCompatibleBaseUrl,
-        }),
+        { location: vscodeApi.ProgressLocation.Notification, title: endpoint !== undefined && !key ? `Checking the ${providerLabel} endpoint…` : `Validating ${providerLabel} key…` },
+        () => validateApiKey(provider!, key, { baseUrl: endpoint ?? config.getProviderBaseUrl(provider!) }),
       );
 
       if (validation.status === 'invalid') {
-        await vscodeApi.window.showErrorMessage(`Invalid API key: ${validation.message}`);
+        // Custom's refusal may be its endpoint's, and with no key given it is.
+        await vscodeApi.window.showErrorMessage(endpoint === undefined
+          ? `Invalid API key: ${validation.message}`
+          : key
+            ? `The ${providerLabel} endpoint or its key was refused: ${validation.message}`
+            : `The ${providerLabel} endpoint did not list its models: ${validation.message}`);
         continue;
       }
       if (validation.status === 'network') {
-        vscodeApi.window.showWarningMessage('Could not reach the API: saved the key anyway.');
+        const saved = endpoint === undefined ? 'the key' : key ? 'the endpoint and key' : 'the endpoint';
+        vscodeApi.window.showWarningMessage(`Could not reach the API: saved ${saved} anyway.`);
+      }
+      if (validation.status === 'unchecked') {
+        vscodeApi.window.showWarningMessage(`${providerLabel} lists no models to check a key against: saved the key without checking it.`);
       }
 
-      await this.deps.secretStore.set(secretKey, key);
+      if (endpointSetting && endpoint !== undefined) await config.update(endpointSetting, endpoint);
+      if (key) await this.deps.secretStore.set(secretKey, key);
+      // No key for an endpoint: the one saved before must not be sent to it.
+      else if (endpoint !== undefined) await this.deps.secretStore.delete(secretKey);
       await this.deps.onApiKeySaved();
       await this.refresh();
-      vscodeApi.window.showInformationMessage(`API key configured for ${providerLabel}.`);
+      vscodeApi.window.showInformationMessage(endpoint === undefined
+        ? `API key configured for ${providerLabel}.`
+        : `${key ? 'Endpoint and API key' : 'Endpoint'} configured for ${providerLabel}.`);
       return;
     }
   }

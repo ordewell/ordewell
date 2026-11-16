@@ -58,6 +58,18 @@ describe('parseRunners', () => {
     expect(lines.find((line) => line.id === 'cursor-agent')?.unavailable).toBeUndefined();
   });
 
+  it('keeps the provider of a provider runner, after the coding agents, and no other provider claim', () => {
+    const data = { runners: [
+      { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+      { id: 'aider', name: 'Aider', enabled: true, provider: 'not-a-vendor' },
+    ] };
+    const lines = parseRunners(data) ?? [];
+    expect(lines.slice(8)).toEqual([
+      { id: 'openrouter', name: 'OpenRouter', state: 'signed-in', provider: 'openrouter' },
+      { id: 'aider', name: 'Aider', state: 'unknown' },
+    ]);
+  });
+
   it('answers undefined for anything but the runners response', () => {
     expect(parseRunners(undefined)).toBeUndefined();
     expect(parseRunners([])).toBeUndefined();

@@ -13,8 +13,8 @@ const TERMINAL: Record<string, string> = {
   'copilot-cli': 'GitHub Copilot CLI is not signed in. Sign in with /login copilot-cli, or run copilot login.',
   'cursor-agent': 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.',
   cline: 'Cline is not signed in. Sign in with /login cline, or run cline auth.',
-  'qwen-code': 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
-  'gemini-cli': 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.',
+  'qwen-code': 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+  'gemini-cli': 'Gemini CLI is not signed in. Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.',
 };
 
 const HEADLESS: Record<string, string> = {
@@ -61,7 +61,7 @@ describe('the sign-in hint', () => {
 
   it('names only the ways in where the agent may be signed in already', () => {
     expect(describeSignInWays(runnerSignIn('cursor-agent')!, TERMINAL_UI_COMMANDS)).toBe('Sign in with /login cursor-agent, or run cursor-agent login.');
-    expect(describeSignInWays(runnerSignIn('gemini-cli')!, TERMINAL_UI_COMMANDS)).toBe('Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.');
+    expect(describeSignInWays(runnerSignIn('gemini-cli')!, TERMINAL_UI_COMMANDS)).toBe('Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.');
     expect(describeSignInWays({ runner: 'x', label: 'X' }, TERMINAL_UI_COMMANDS)).toBe('');
   });
 

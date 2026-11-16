@@ -1,3 +1,5 @@
+import { isProviderRunner, VENDORS } from '@ordewell/core/plan-utils';
+
 /**
  * The runners Ordewell knows by name, and the badge that names one. A runner's
  * colour appears on this badge and nowhere else, and always beside its name
@@ -17,10 +19,14 @@ export const RUNNER_NAMES: Readonly<Record<string, string>> = {
 /** The shortest a name may get in a narrow row: shortened, never dropped. */
 const SHORT_NAMES: Readonly<Record<string, string>> = { 'claude-code': 'Claude' };
 
-/** A runner's name for people; one Ordewell does not know keeps its id. */
+/**
+ * A runner's name for people: a coding agent's own, the built-in runner on a
+ * provider under that provider's (ADR-0070); one Ordewell does not know keeps its id.
+ */
 export function runnerName(id: string, options: { short?: boolean } = {}): string {
-  if (!Object.hasOwn(RUNNER_NAMES, id)) return id;
-  return (options.short ? SHORT_NAMES[id] : undefined) ?? RUNNER_NAMES[id];
+  if (Object.hasOwn(RUNNER_NAMES, id)) return (options.short ? SHORT_NAMES[id] : undefined) ?? RUNNER_NAMES[id];
+  if (isProviderRunner(id)) return options.short ? VENDORS[id].shortLabel : VENDORS[id].label;
+  return id;
 }
 
 export interface RunnerBadgeProps {
@@ -32,8 +38,8 @@ export interface RunnerBadgeProps {
 
 /**
  * The runner's colour as text on its own tint, with its name. A runner with no
- * colour of its own (one a later release adds) is drawn neutral rather than
- * borrowing another's.
+ * colour of its own (a provider runner, or one a later release adds) is drawn
+ * neutral rather than borrowing another's.
  */
 export function RunnerBadge({ runner, short, className }: RunnerBadgeProps): JSX.Element {
   const known = Object.hasOwn(RUNNER_NAMES, runner);

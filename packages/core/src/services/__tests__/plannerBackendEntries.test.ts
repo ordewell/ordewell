@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { plannerBackendEntries, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, type PlannerUsability } from '../ProviderRegistry';
+import { ALL_PROVIDERS, plannerBackendEntries, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, type PlannerUsability } from '../ProviderRegistry';
 import { VENDORS } from '../apiProviders';
 import { CONNECTORS } from '../harness/connectors';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
@@ -82,11 +82,18 @@ describe('plannerBackendEntries', () => {
 describe('the planner backend id space', () => {
   // A runner that can plan is a backend under its runner id, beside the
   // vendors: one sharing a vendor's id would replace it in ALL_PROVIDERS, and a
-  // runner that cannot plan yet would on the day it can.
-  it('gives no runner a vendor\'s id', () => {
+  // runner that cannot plan yet would on the day it can. So only the built-in
+  // runner's, which never plan, take a vendor's id, each its own provider's (ADR-0009).
+  it('gives a vendor\'s id to no runner but the built-in runner on that vendor', () => {
     const runners = new Set([...BUILTIN_MANIFESTS.map((manifest) => manifest.name), ...Object.keys(CONNECTORS)]);
+    const byName = new Map(BUILTIN_MANIFESTS.map((manifest) => [manifest.name, manifest]));
 
     expect(runners).toContain('copilot-cli');
-    expect(Object.keys(VENDORS).filter((vendor) => runners.has(vendor))).toEqual([]);
+    for (const vendor of Object.keys(VENDORS).filter((id) => runners.has(id))) {
+      expect(byName.get(vendor)?.runner, vendor).toEqual({ inProcess: true, provider: vendor });
+      expect(CONNECTORS[vendor]?.plans, vendor).toBe(false);
+      expect(ALL_PROVIDERS[vendor as keyof typeof VENDORS], vendor).toBe(VENDORS[vendor as keyof typeof VENDORS]);
+    }
+    for (const manifest of BUILTIN_MANIFESTS.filter((m) => !m.runner.inProcess)) expect(Object.keys(VENDORS), manifest.name).not.toContain(manifest.name);
   });
 });

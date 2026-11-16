@@ -403,8 +403,8 @@ const signedOutGemini: PlannerBackend = {
   auth: { state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' }, byHand: 'run gemini and choose how it signs in' } },
 };
 const CURSOR = 'Cursor is not signed in. Sign in with /login cursor-agent, or run cursor-agent login.';
-const QWEN = 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
-const GEMINI = 'Gemini CLI is not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
+const QWEN = 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.';
+const GEMINI = 'Gemini CLI is not signed in. Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.';
 
 /** Every signed-out agent names its way in, and its Log in runs whichever one Ordewell can (ADR-0052). */
 describe('the way into a signed-out agent', () => {
@@ -445,7 +445,7 @@ describe('the way into a signed-out agent', () => {
     for (const press of [() => rowLogin('qwen-code')!, () => plannerLogin('Qwen Code')!, () => runnerLogin('Qwen Code')!]) {
       api.post.mockClear();
       fireEvent.click(press());
-      expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key openrouter' }));
+      expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key-set openrouter' }));
       expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'loginPlanner' }));
       // A key entry reports no end, so the button must not spin for one.
       expect(press()).not.toBeDisabled();
@@ -453,7 +453,7 @@ describe('the way into a signed-out agent', () => {
     for (const press of [() => rowLogin('gemini-cli')!, () => runnerLogin('Gemini CLI')!]) {
       api.post.mockClear();
       fireEvent.click(press());
-      expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key google' }));
+      expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key-set google' }));
       expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'loginPlanner' }));
       expect(press()).not.toBeDisabled();
     }

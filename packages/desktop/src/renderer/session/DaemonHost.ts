@@ -4,7 +4,8 @@ import type {
   SurfacePlanState, Task,
 } from '@ordewell/core';
 import {
-  DaemonRefusal, DELEGATION_OFFERED, loopRemovalRefusal, ReconnectBackoff, rejoinPlanTree, signInAction, signInOfVerdict, VENDORS, walkPlan,
+  DaemonRefusal, DELEGATION_OFFERED, isProviderRunner, loopRemovalRefusal, providerRunnerLoginNote, providerRunnerNamed, ReconnectBackoff, rejoinPlanTree,
+  signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
@@ -17,7 +18,7 @@ import {
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
-import { askForKey, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
 import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
@@ -379,7 +380,7 @@ export class DaemonHost {
 
   /**
    * The key entry, from Settings or the command palette: one vendor's key,
-   * written through the daemon's settings route as the TUI's `/key` does.
+   * written through the daemon's settings route as the TUI's `/key-set` does.
    * True when a key was saved. The key is never kept here or logged.
    */
   async enterApiKey(provider?: AiProvider, runnerLabel?: string): Promise<boolean> {
@@ -409,15 +410,15 @@ export class DaemonHost {
   }
 
   private async saveApiKey(answer: KeyEntryAnswer): Promise<void> {
-    const meta = VENDORS[answer.provider];
     const saved = await callDaemon('settings.update', undefined, {
-      env: { [meta.apiKeyEnvVar]: answer.key },
+      env: keyEntryEnv(answer),
       workspace: this.workspace,
       sessionId: this.sessionId,
     });
-    if (saved.rejectedEnvKeys?.includes(meta.apiKeyEnvVar)) {
-      throw new Error(`The daemon refused the ${meta.label} key.`);
-    }
+    const refused = keyEntryRefusal(saved, answer.provider);
+    if (refused) throw new Error(refused);
+    const unsaved = unsavedKeyWarning(saved, answer.provider);
+    if (unsaved) this.view.conversation.note('system', unsaved);
     await this.refreshCatalog();
   }
 
@@ -1034,11 +1035,15 @@ export class DaemonHost {
    */
   private async slashCommand(command: string, args: readonly string[]): Promise<void> {
     switch (command) {
-      case '/key': {
-        // `/key set <provider>` is the terminal's spelling; the dialog is the desktop's.
-        const named = args[0] === 'set' ? args[1] : args[0];
+      case '/key-set': {
+        // `/key` arrives here as its alias, and its old `/key set <provider>`
+        // with a leading `set`. A key typed after the provider is never read:
+        // the dialog is the desktop's way in, so no secret sits in a message.
+        // Either word in any case, as the terminal UI and the extension read them.
+        const [first, second] = args;
+        const named = (first?.toLowerCase() === 'set' ? second : first)?.toLowerCase();
         if (named !== undefined && !Object.hasOwn(VENDORS, named)) {
-          this.showError(new Error(`Unknown provider: ${named}. Run /key with no provider to see the list.`));
+          this.showError(new Error(`Unknown provider: ${named}. Run /key-set with no provider to see the list.`));
           return;
         }
         await this.enterApiKey(named as AiProvider | undefined);
@@ -1047,6 +1052,10 @@ export class DaemonHost {
       case '/login': {
         const named = args.join(' ').trim();
         if (!named) { await this.loginPlanner(); return; }
+        // Asked before the planner list: a provider runner is listed with its
+        // key, while the vendor planner of its name waits on the catalog.
+        const provider = providerRunnerNamed(named);
+        if (provider) { this.noProviderLogin(provider, provider); return; }
         const backend = this.snapshot.state.planner.backends.find((b) => (
           (b.runner ?? b.id) === named || b.label.toLowerCase() === named.toLowerCase()
         ));
@@ -1206,6 +1215,10 @@ export class DaemonHost {
    * five minutes of polling ends the attempt as a failure the surface shows.
    */
   private async loginPlanner(runnerId?: string): Promise<void> {
+    if (runnerId !== undefined && isProviderRunner(runnerId)) {
+      this.noProviderLogin(runnerId, runnerId);
+      return;
+    }
     if (runnerId !== undefined && !this.backendOf(runnerId)) {
       // The daemon lists only agents it found: one it does not list has no
       // verdict to word, and a login for a missing binary would only fail.
@@ -1216,6 +1229,12 @@ export class DaemonHost {
       return;
     }
     const backend = this.backendOf(runnerId);
+    // A vendor is listed only once it is configured, and its key is its one
+    // way in, as it is for the provider runner under the same id (ADR-0070).
+    if (backend?.kind === 'vendor' && Object.hasOwn(VENDORS, backend.id)) {
+      this.noProviderLogin(backend.id as AiProvider, runnerId);
+      return;
+    }
     const runner = backend ? (backend.runner ?? backend.id) : undefined;
     if (!runner) {
       const message = 'The active planner is not a coding agent; there is no login to run.';
@@ -1226,6 +1245,13 @@ export class DaemonHost {
     const label = backend?.label ?? runnerName(runner);
     const signIn = signInOfVerdict(runner, label, backend?.auth);
     await this.runLogin(runner, label, signIn);
+  }
+
+  /** A provider's runner or planner has no login: its key, or Custom's endpoint, is its way in (ADR-0070). */
+  private noProviderLogin(provider: AiProvider, runnerId: string | undefined): void {
+    const message = providerRunnerLoginNote(provider);
+    this.emit({ type: 'plannerLoginEnded', ...(runnerId !== undefined ? { runner: runnerId } : {}), ok: false, message });
+    this.view.conversation.note('system', message);
   }
 
   private async runLogin(runner: string, label: string, signIn: ReturnType<typeof signInOfVerdict>): Promise<void> {

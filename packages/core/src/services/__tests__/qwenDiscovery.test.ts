@@ -10,6 +10,7 @@ import { VENDORS } from '../apiProviders';
 import { BUILTIN_MANIFESTS } from '../../plugins/builtin';
 import { QWEN_ACP_ARGS, QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { QWEN_CODE_PROFILE } from '../harness/qwenProfile';
+import { connectorFor } from '../harness/connectors';
 import type { DiscoveredModel } from '../../models/Task';
 import type { RunnerRegistry } from '../../plugins/RunnerRegistry';
 
@@ -154,7 +155,7 @@ describe('qwen-code model discovery', () => {
     expect(await resolver.modelsForRunners(['qwen-code'])).toEqual({ 'qwen-code': [] });
     // What the user was told when Qwen, signed out, was asked to plan.
     expect(resolver.getRunnerDiscoveryErrors()).toEqual({
-      'qwen-code': 'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      'qwen-code': 'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
     });
 
     // As the daemon does on a saved key: the variable is set, then the catalogs are forgotten.
@@ -170,11 +171,20 @@ describe('qwen-code model discovery', () => {
 });
 
 describe('runner ids and API vendor ids', () => {
-  it('never share an id: Qwen Code is `qwen-code` because `qwen` is the DashScope vendor', () => {
+  it('never share an id with a coding agent: Qwen Code is `qwen-code` because `qwen` is the DashScope vendor', () => {
     const vendors = Object.keys(VENDORS);
     expect(vendors).toContain('qwen');
     expect(QWEN_CODE_MANIFEST.name).toBe('qwen-code');
-    for (const manifest of BUILTIN_MANIFESTS) expect(vendors).not.toContain(manifest.name);
+    // A runner with a command may plan, and a planner id is either a vendor's or a runner's (ADR-0009).
+    for (const manifest of BUILTIN_MANIFESTS.filter((m) => !m.runner.inProcess)) expect(vendors).not.toContain(manifest.name);
+  });
+
+  it('share an id only by design: the built-in runner on a provider is that provider\'s id, and never plans', () => {
+    const vendors = Object.keys(VENDORS);
+    for (const manifest of BUILTIN_MANIFESTS.filter((m) => m.runner.inProcess)) {
+      expect(vendors).toContain(manifest.name);
+      expect(connectorFor(manifest.name)?.plans, manifest.name).toBe(false);
+    }
   });
 
   it('gives every built-in runner a distinct id', () => {

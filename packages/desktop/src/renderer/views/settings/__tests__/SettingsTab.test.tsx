@@ -42,16 +42,21 @@ const RUNNERS = {
   orchestratorModel: 'claude-sonnet',
 };
 
+type Model = { modelId: string; modelLabel: string; variants: Array<{ id: string; label: string }> };
+
+/** Keyed by any runner id, so a case may add one runner's catalog. */
+const MODELS_BY_RUNNER: Record<string, Model[]> = {
+  'claude-code': [
+    { modelId: 'claude-sonnet', modelLabel: 'Claude Sonnet', variants: [{ id: 'high', label: 'High' }] },
+    { modelId: 'claude-opus', modelLabel: 'Claude Opus', variants: [] },
+    { modelId: 'claude-haiku', modelLabel: 'Claude Haiku', variants: [] },
+  ],
+  codex: [{ modelId: 'o4-mini', modelLabel: 'o4-mini', variants: [] }, { modelId: 'o3', modelLabel: 'o3', variants: [] }],
+};
+
 const MODELS = {
   models: [],
-  modelsByRunner: {
-    'claude-code': [
-      { modelId: 'claude-sonnet', modelLabel: 'Claude Sonnet', variants: [{ id: 'high', label: 'High' }] },
-      { modelId: 'claude-opus', modelLabel: 'Claude Opus', variants: [] },
-      { modelId: 'claude-haiku', modelLabel: 'Claude Haiku', variants: [] },
-    ],
-    codex: [{ modelId: 'o4-mini', modelLabel: 'o4-mini', variants: [] }, { modelId: 'o3', modelLabel: 'o3', variants: [] }],
-  },
+  modelsByRunner: MODELS_BY_RUNNER,
   modesByRunner: {},
   orchestratorModel: 'claude-sonnet',
   providers: ['openrouter'],
@@ -303,11 +308,57 @@ describe('the Settings view', () => {
     await mount();
     await screen.findByRole('heading', { name: 'Planner' });
     const row = screen.getByRole('checkbox', { name: /Gemini CLI/ }).closest('li') as HTMLElement;
-    expect(row).toHaveTextContent('Run /key and choose Google Gemini to hand it a key.');
+    expect(row).toHaveTextContent('Run /key-set and choose Google Gemini to hand it a key.');
 
     const key = vi.spyOn(daemonHost(WORKSPACE), 'enterApiKey').mockResolvedValue(false);
     fireEvent.click(within(row).getByRole('button', { name: 'Set API key…' }));
     await waitFor(() => expect(key).toHaveBeenCalledWith('google', 'Gemini CLI'));
+  });
+
+  it('opens the key entry for any provider from the Runners header, since a provider with no key has no row', async () => {
+    await mount();
+    const heading = await screen.findByRole('heading', { name: 'Runners' });
+    const key = vi.spyOn(daemonHost(WORKSPACE), 'enterApiKey').mockResolvedValue(false);
+    const head = heading.closest('.settings-section-head') as HTMLElement;
+    fireEvent.click(within(head).getByRole('button', { name: 'Set API key…' }));
+    await waitFor(() => expect(key).toHaveBeenCalledWith());
+  });
+
+  describe('a provider runner (ADR-0070)', () => {
+    const OPENROUTER_MODELS = [{ modelId: 'openrouter:google/gemini-flash', modelLabel: 'Gemini Flash', variants: [] }];
+    const withProviderRunner = {
+      runners: [...RUNNERS.runners, { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' }],
+      orchestratorModel: 'claude-sonnet',
+    };
+
+    it('has a row of its own as the built-in runner on its key, with its models and no Log in', async () => {
+      await mount('dark', { runners: withProviderRunner, models: { modelsByRunner: { ...MODELS.modelsByRunner, openrouter: OPENROUTER_MODELS } } });
+      await screen.findByRole('heading', { name: 'Runners' });
+      const row = (await screen.findByRole('checkbox', { name: /OpenRouter/ })).closest('li') as HTMLElement;
+      expect(row).toHaveTextContent('The built-in runner, on your OpenRouter key');
+      expect(row).not.toHaveTextContent('Signed');
+      expect(within(row).queryByRole('button', { name: 'Log in' })).toBeNull();
+      expect(within(row).queryByRole('button', { name: 'Set API key…' })).toBeNull();
+      expect(within(row).getByRole('button', { name: 'Edit OpenRouter models' })).toBeInTheDocument();
+    });
+
+    it('is never offered as a planner of its own: the one OpenRouter planner is the API planner', async () => {
+      await mount('dark', { runners: withProviderRunner });
+      const planner = await screen.findByRole('combobox', { name: 'Planner' });
+      const values = within(planner).getAllByRole('option').map((option) => option.getAttribute('value'));
+      expect(values.filter((value) => value === 'openrouter')).toHaveLength(1);
+      expect(values).toHaveLength(9);
+    });
+
+    it('leaves the OpenRouter API planner its own catalog, not the runner\'s under the same id', async () => {
+      await mount('dark', {
+        runners: withProviderRunner,
+        settings: { aiProvider: 'openrouter', orchestratorModel: 'openai/gpt-5' },
+        models: { modelsByRunner: { ...MODELS.modelsByRunner, openrouter: OPENROUTER_MODELS } },
+      });
+      const model = await screen.findByRole('combobox', { name: 'Planner model' });
+      await waitFor(() => expect(within(model).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual(['openai/gpt-5']));
+    });
   });
 
   it('re-reads its runners and settings when a sign-in or a planner change says the catalog moved', async () => {

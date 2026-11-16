@@ -4,6 +4,7 @@ import SubTaskCard from './SubTaskCard';
 import { TaskAssignmentReadout } from './TaskAssignment';
 import TaskSummary, { TaskSummaryBadges } from './TaskSummary';
 import type { StatusLook } from '../../design/status';
+import { runnerName } from '../../design/runners';
 import ModelSelector from './ModelSelector';
 import DependencyPicker from './DependencyPicker';
 import SkillChips from './SkillChips';
@@ -427,7 +428,8 @@ function TaskFold({ label, preview, className, children }: {
 export function runnerOptionsFor(runners: RunnerOption[] | undefined, assignedRunner: string): RunnerOption[] {
   if (!runners || runners.length === 0) return [];
   if (runners.some((r) => r.id === assignedRunner)) return runners;
-  return [...runners, { id: assignedRunner, displayName: assignedRunner }];
+  // Named as the rest of the card names it: a provider runner whose key is gone keeps its vendor's label.
+  return [...runners, { id: assignedRunner, displayName: runnerName(assignedRunner) }];
 }
 
 /**

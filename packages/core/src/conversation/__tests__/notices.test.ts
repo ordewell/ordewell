@@ -9,6 +9,10 @@ describe('task notices', () => {
     expect(taskStartedNotice('Add a parser', 'opencode')).toBe('Started "Add a parser" · OpenCode');
   });
 
+  it('names a built-in runner by its provider', () => {
+    expect(taskStartedNotice('Add a parser', 'openrouter')).toBe('Started "Add a parser" · OpenRouter');
+  });
+
   it('keeps the id of a runner it has no name for', () => {
     expect(taskStartedNotice('Add a parser', 'my-runner')).toBe('Started "Add a parser" · my-runner');
   });

@@ -8,7 +8,7 @@ const KEY = 'sk-or-v1-cline-key-never-shown';
 const OTHER_KEY = 'sk-ant-other-provider-key';
 const ORDEWELL_KEY = 'sk-or-v1-ordewell-own-key-never-shown';
 
-const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const ROUTES = 'Set the key of a provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or sign in with `cline auth` (a Cline or ClinePass account, or a provider\'s key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
 const NONE = 'Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and ';
 
 let home: string;

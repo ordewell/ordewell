@@ -1,5 +1,5 @@
 import type { AiProvider } from '@ordewell/core';
-import { RUNNER_IDS, RUNNER_LABELS, VENDORS, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { isProviderRunner, RUNNER_IDS, RUNNER_LABELS, VENDORS, type RunnerSignIn } from '@ordewell/core/plan-utils';
 
 /** The runners the welcome window checks for, in the order core declares them. */
 export const KNOWN_RUNNERS: readonly string[] = RUNNER_IDS;
@@ -22,6 +22,8 @@ export interface RunnerLine {
   loginCommand?: string[];
   /** Every way into the agent, so a key-based one names the key entry (ADR-0052). */
   signIn?: RunnerSignIn;
+  /** The provider a provider runner runs the built-in runner on (ADR-0070); listed only while its key is set. */
+  provider?: AiProvider;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,6 +77,7 @@ export function parseRunners(data: unknown): RunnerLine[] | undefined {
       ...(typeof entry.version === 'string' && entry.version !== '' ? { version: entry.version } : {}),
       ...(loginCommand ? { loginCommand } : {}),
       ...(signIn ? { signIn } : {}),
+      ...(typeof entry.provider === 'string' && isProviderRunner(entry.provider) ? { provider: entry.provider } : {}),
     });
   }
   return [

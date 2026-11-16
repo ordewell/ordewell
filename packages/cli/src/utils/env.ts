@@ -1,16 +1,8 @@
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
-import { SettingsService, globalDataDir, parseAutonomyFlag, writePrivateFile } from '@ordewell/core';
+import { SettingsService, globalEnvFile, parseAutonomyFlag, readEnvFile, removesCredential, writeEnvFileVars } from '@ordewell/core';
 
+/** `~/.ordewell/.env`, which the daemon saves a key to as well, read and written by core's one set of rules. */
 export function findEnvFile(): string {
-  return join(globalDataDir(), '.env');
-}
-
-// Quotes are shell syntax; taken literally they become part of an API key and
-// the provider answers 401.
-function unquote(value: string): string {
-  const quote = value[0];
-  return value.length >= 2 && (quote === '"' || quote === "'") && value.endsWith(quote) ? value.slice(1, -1) : value;
+  return globalEnvFile();
 }
 
 /**
@@ -28,19 +20,8 @@ let shellEnv: NodeJS.ProcessEnv | null = null;
  */
 export function loadEnvFile(): void {
   shellEnv = { ...process.env };
-  const filePath = findEnvFile();
-  if (!existsSync(filePath)) return;
-  const content = readFileSync(filePath, 'utf8');
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim().replace(/^export\s+/, '');
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const value = unquote(trimmed.slice(eq + 1).trim());
-    if (key && process.env[key] === undefined) {
-      process.env[key] = value;
-    }
+  for (const [key, value] of Object.entries(readEnvFile(findEnvFile()))) {
+    if (process.env[key] === undefined) process.env[key] = value;
   }
 }
 
@@ -54,45 +35,36 @@ export function shellEnvValue(key: string): string | undefined {
   return shellEnv?.[key];
 }
 
-// A shell variable name, which is all `.env` can hold. Rejecting anything else
-// keeps a key from being read as a pattern or written as an injected line.
-const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-function assertValidEnvKey(key: string): void {
-  if (!ENV_KEY_PATTERN.test(key)) {
-    throw new Error(`"${key}" is not a valid environment variable name.`);
+/**
+ * Write one variable into `.env`, owner-only, or take it out when `value` is
+ * undefined. A name that is no shell variable or a value with a line break
+ * throws and writes nothing; a write the file system refuses is said rather
+ * than thrown, since the daemon took the change.
+ */
+export function writeEnvVar(filePath: string, key: string, value: string | undefined): void {
+  try {
+    writeEnvFileVars(filePath, { [key]: value });
+  } catch (err) {
+    // Only a file-system error carries a code; a refused name or value is the caller's mistake.
+    if (!(err instanceof Error) || !('code' in err)) throw err;
+    console.error(`Could not write to ${filePath}: ${err.message}`);
   }
 }
 
-export function writeEnvVar(filePath: string, key: string, value: string): void {
-  assertValidEnvKey(key);
-  if (/[\r\n]/.test(value)) {
-    throw new Error(`Refusing to write ${key}: the value contains a newline.`);
+/**
+ * Persist one variable a settings write just set on the daemon, in `.env` and
+ * this process, by the daemon's own reading of it: an empty provider key or
+ * endpoint is taken out of both (`removesCredential`), as the daemon takes it
+ * out of its own.
+ */
+export function saveEnvVar(key: string, value: string): void {
+  if (removesCredential(key, value)) {
+    writeEnvVar(findEnvFile(), key, undefined);
+    delete process.env[key];
+    return;
   }
-
-  let content = '';
-  if (existsSync(filePath)) {
-    content = readFileSync(filePath, 'utf8');
-    const lines = content.split('\n');
-    // Match by line prefix rather than interpolating the key into a RegExp: an
-    // unescaped key could otherwise be read as a pattern.
-    const index = lines.findIndex((line) => line.startsWith(`${key}=`));
-    if (index === -1) {
-      if (content.length > 0 && !content.endsWith('\n')) content += '\n';
-      content += `${key}=${value}\n`;
-    } else {
-      lines[index] = `${key}=${value}`;
-      content = lines.join('\n');
-    }
-  } else {
-    content = `${key}=${value}\n`;
-  }
-
-  try {
-    writePrivateFile(filePath, content);
-  } catch (err) {
-    console.error(`Could not write to ${filePath}: ${(err as Error).message}`);
-  }
+  writeEnvVar(findEnvFile(), key, value);
+  process.env[key] = value;
 }
 
 const AUTONOMY_KEY = 'ORDEWELL_AUTONOMOUS_MODE';
@@ -105,18 +77,15 @@ const AUTONOMY_KEY = 'ORDEWELL_AUTONOMOUS_MODE';
  */
 export function moveAutonomyToSettings(): void {
   const filePath = findEnvFile();
-  if (!existsSync(filePath)) return;
-  const lines = readFileSync(filePath, 'utf8').split('\n');
-  const index = lines.findIndex((line) => line.trim().replace(/^export\s+/, '').startsWith(`${AUTONOMY_KEY}=`));
-  if (index === -1) return;
+  const value = readEnvFile(filePath)[AUTONOMY_KEY];
+  if (value === undefined) return;
   const settings = new SettingsService();
   if (settings.getAll().autonomousMode === undefined) {
-    const level = parseAutonomyFlag(unquote(lines[index].slice(lines[index].indexOf('=') + 1).trim()));
+    const level = parseAutonomyFlag(value);
     if (level !== undefined) settings.setAutonomousMode(level);
   }
-  lines.splice(index, 1);
   try {
-    writePrivateFile(filePath, lines.join('\n'));
+    writeEnvFileVars(filePath, { [AUTONOMY_KEY]: undefined });
   } catch (err) {
     console.error(`Could not write to ${filePath}: ${(err as Error).message}`);
   }

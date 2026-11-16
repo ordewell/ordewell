@@ -1076,6 +1076,165 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     logged.forEach((spy) => spy.mockRestore());
   });
 
+  // Bug: Custom's key was saved alone, and Custom is set up by its endpoint, so no Custom planner or runner appeared.
+  // Bug: saved with no key, Custom kept the key set before, which was then sent to the new endpoint.
+  it('writes Custom\'s endpoint through the same settings route, with its key, or an empty one that takes the old key away', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'settings.update': ok({ ...SETTINGS }),
+    });
+    const answers = [
+      { provider: 'openai_compatible' as const, key: 'sk-local', baseUrl: 'http://localhost:8000/v1' },
+      { provider: 'openai_compatible' as const, key: '', baseUrl: 'http://localhost:11434/v1' },
+    ];
+    const host = hostWithOptions({ askForKey: async () => answers.shift() ?? null });
+    watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(async () => { await host.enterApiKey('openai_compatible'); });
+    await act(async () => { await host.enterApiKey('openai_compatible'); });
+
+    const envs = daemon.calls('settings.update').map(([, body]) => (body as { env?: unknown }).env);
+    expect(envs).toEqual([
+      { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:8000/v1', OPENAI_COMPATIBLE_API_KEY: 'sk-local' },
+      { OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1', OPENAI_COMPATIBLE_API_KEY: '' },
+    ]);
+  });
+
+  // Bug: a key the daemon could not write to ~/.ordewell/.env read as saved, and was gone after the next restart.
+  it('says so when the daemon took the key but could not save it', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'settings.update': ok({ ...SETTINGS, unsavedEnvKeys: ['GEMINI_API_KEY'] }),
+    });
+    const host = hostWithOptions({ askForKey: async () => ({ provider: 'google', key: 'g-key' }) });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    let entered = false;
+    await act(async () => { entered = await host.enterApiKey('google'); });
+
+    expect(entered).toBe(true);
+    // The note reaches the chat with the conversation's next flush.
+    await vi.waitFor(() => expect(JSON.stringify(seen)).toContain('The Google Gemini key is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.'));
+    expect(seen.some((msg) => msg.type === 'showError')).toBe(false);
+  });
+
+  it('opens the key entry for /key-set, and for /key and its old `/key set` alike', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const askForKey = vi.fn(async () => null);
+    const host = hostWithOptions({ askForKey });
+    await act(() => host.handle({ type: 'ready' }));
+
+    // In any case, as the terminal UI and the extension read either word.
+    for (const text of ['/key-set openrouter', '/key openrouter', '/key set openrouter', '/key-set set openrouter', '/key-set OpenRouter', '/key SET openrouter']) {
+      askForKey.mockClear();
+      await act(() => host.handle({ type: 'sendMessage', text, typed: true }));
+      expect(askForKey, text).toHaveBeenCalledWith({ provider: 'openrouter' });
+    }
+    askForKey.mockClear();
+    await act(() => host.handle({ type: 'sendMessage', text: '/key-set', typed: true }));
+    // No provider named: the entry asks which one, every provider offered.
+    expect(askForKey).toHaveBeenCalledWith({});
+  });
+
+  it('names /key-set when the provider asked for is not one', async () => {
+    fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const askForKey = vi.fn(async () => null);
+    const host = hostWithOptions({ askForKey });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/key-set nobody', typed: true }));
+
+    expect(askForKey).not.toHaveBeenCalled();
+    expect(JSON.stringify(seen)).toContain('Unknown provider: nobody. Run /key-set with no provider to see the list.');
+  });
+
+  it('offers a provider runner as a runner only: the planner of that name is the vendor\'s, with no login (ADR-0070)', async () => {
+    fakeDaemon({
+      'runners.list': ok({
+        runners: [
+          { id: 'claude-code', name: 'Claude Code', enabled: true, auth: { state: 'signed-in' }, plans: true },
+          { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+          // A runner the daemon says cannot plan (one a workspace manifest adds) is no harness planner either.
+          { id: 'acme', name: 'Acme', enabled: true, plans: false },
+          { id: 'later-agent', name: 'Later Agent', enabled: true, plans: true },
+        ],
+        orchestratorModel: '',
+      }),
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: ['openrouter'], orchestratorModels: [], providerErrors: {} }),
+      'settings.get': ok({ ...SETTINGS, aiProvider: 'openrouter' }),
+    });
+    const askForKey = vi.fn(async () => null);
+    const openLogin = vi.fn();
+    const host = hostWithOptions({ askForKey, openLogin });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    const { backends } = host.getSnapshot().state.planner;
+    expect(backends.filter((b) => b.id === 'openrouter')).toEqual([expect.objectContaining({ kind: 'vendor', label: 'OpenRouter' })]);
+    expect(backends.some((b) => b.id === 'acme')).toBe(false);
+    expect(backends.find((b) => b.id === 'later-agent')).toMatchObject({ kind: 'harness', runner: 'later-agent' });
+    expect(host.getSnapshot().state.runnerList.map((r) => r.displayName)).toContain('OpenRouter');
+
+    await act(() => host.handle({ type: 'sendMessage', text: '/login openrouter', typed: true }));
+    expect(openLogin).not.toHaveBeenCalled();
+    expect(askForKey).not.toHaveBeenCalled();
+    expect(seen).toContainEqual({
+      type: 'plannerLoginEnded', runner: 'openrouter', ok: false,
+      message: 'OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.',
+    });
+  });
+
+  // Bug: with no vendor planner listed yet (the catalog unsettled, or failed), /login on a listed provider runner said it was an unknown coding agent.
+  it('answers /login on a provider runner by its key even while no vendor planner is listed', async () => {
+    fakeDaemon({
+      'runners.list': ok({
+        runners: [{ id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' }],
+        orchestratorModel: '',
+      }),
+      'models.list': ok({ models: [], modelsByRunner: {}, modesByRunner: {}, orchestratorModel: '', providers: [], orchestratorModels: [], providerErrors: {} }),
+      'settings.get': ok(SETTINGS),
+    });
+    const openLogin = vi.fn();
+    const host = hostWithOptions({ openLogin });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+    expect(host.getSnapshot().state.planner.backends.some((b) => b.kind === 'vendor')).toBe(false);
+
+    const message = 'OpenRouter has no login: it runs on its API key, which /key-set openrouter replaces.';
+    for (const text of ['/login openrouter', '/login OpenRouter']) {
+      seen.length = 0;
+      await act(() => host.handle({ type: 'sendMessage', text, typed: true }));
+      expect(seen, text).toContainEqual({ type: 'plannerLoginEnded', runner: 'openrouter', ok: false, message });
+    }
+    // The pill's Log in names the runner by id, through the message path.
+    seen.length = 0;
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'openrouter' }));
+    expect(seen).toContainEqual({ type: 'plannerLoginEnded', runner: 'openrouter', ok: false, message });
+    // Custom is reached at its endpoint, which may take no key at all.
+    seen.length = 0;
+    await act(() => host.handle({ type: 'sendMessage', text: '/login custom', typed: true }));
+    expect(seen).toContainEqual({
+      type: 'plannerLoginEnded', runner: 'openai_compatible', ok: false,
+      message: 'Custom has no login: it runs on the endpoint OPENAI_COMPATIBLE_BASE_URL names, which /key-set openai_compatible replaces.',
+    });
+    expect(openLogin).not.toHaveBeenCalled();
+  });
+
   it('never sends a button\'s unknown slash command to the planner as a goal', async () => {
     const daemon = fakeDaemon();
     const host = hostWithOptions({});

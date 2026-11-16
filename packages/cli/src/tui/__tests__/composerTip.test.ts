@@ -7,6 +7,7 @@ import { initialState, type TaskLogState, type TaskView, type TuiState } from '.
 
 const ALLOWLIST_TIP = 'Tip: Use /allowlist to limit which models the planner assigns per runner.';
 const RUNNERS_TIP = 'Tip: Use /runners to turn runners on or off.';
+const KEY_TIP = 'Tip: Add an API key with /key-set to run tasks on the built-in runner.';
 
 let wasEnabled: boolean;
 beforeEach(() => { wasEnabled = style.enabled; style.enabled = true; });
@@ -90,5 +91,33 @@ describe('which tip shows (#137)', () => {
     expect(composerText(emptied)).toContain(RUNNERS_TIP);
     // A key that leaves the empty composer empty picks no new tip.
     expect(key(emptied, 'left').composerTipSeq).toBe(1);
+  });
+});
+
+describe('the key tip, while no provider is configured (ADR-0070)', () => {
+  const cycle = (over: Partial<TuiState>): string[] =>
+    Array.from({ length: 10 }, (_, seq) => composerText(at(80, { ...over, composerTipSeq: seq })));
+
+  const known: Partial<TuiState> = { providersKnown: true, runnersKnown: true };
+
+  it('is the first tip once the catalog and the runner list both say no provider runner is set up', () => {
+    expect(composerText(at(80, { ...known, composerTipSeq: 0 }))).toBe(`❯   ${KEY_TIP}`);
+  });
+
+  it('never shows once a provider is configured, nor before the catalog and the runner list have both said', () => {
+    const configured: Partial<TuiState> = { ...known, configuredProviders: ['openrouter'] };
+    for (const over of [configured, { providersKnown: false, runnersKnown: true }, { providersKnown: true, runnersKnown: false }]) {
+      expect(cycle(over).some((row) => row.includes('/key-set'))).toBe(false);
+    }
+  });
+
+  // Bug: a key only the workspace env held listed the provider runner while the catalog named no provider, and the tip still said to add one.
+  it('never shows while the runner list holds a provider runner the catalog has not named', () => {
+    const runners: TuiState['runners'] = [{ id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' }];
+    expect(cycle({ ...known, runners }).some((row) => row.includes('/key-set'))).toBe(false);
+  });
+
+  it('still shows when the only key serves the planner alone, since the tip is about the built-in runner', () => {
+    expect(composerText(at(80, { ...known, configuredProviders: ['perplexity'], composerTipSeq: 0 }))).toBe(`❯   ${KEY_TIP}`);
   });
 });

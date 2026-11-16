@@ -36,7 +36,7 @@ export function repeatNudge(call: ModelToolCall): string {
 export function repeatFailure(call: ModelToolCall): string {
   const args = canonical(call.arguments);
   const quoted = args.length > QUOTED_ARGS ? `${args.slice(0, QUOTED_ARGS)}…` : args;
-  return `The model called ${call.name} with identical arguments ${REPEAT_FAIL_AT} times in a row (${quoted}), so the Ordewell runner stopped the attempt.`;
+  return `The model called ${call.name} with identical arguments ${REPEAT_FAIL_AT} times in a row (${quoted}), so the built-in runner stopped the attempt.`;
 }
 
 function canonical(value: unknown): string {

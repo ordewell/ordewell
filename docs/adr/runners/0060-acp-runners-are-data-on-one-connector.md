@@ -297,7 +297,7 @@ the judge.
   at the cancel are answered `cancelled`. Only the `session/prompt` response
   ends a turn: no streamed update and no timer does.
 - **An agent's provider key comes from Ordewell, else from its own store, for
-  one spawn (R9).** A key configured once in Ordewell, with `/key` or the
+  one spawn (R9).** A key configured once in Ordewell, with `/key-set` or the
   variable it writes, serves the agents as it serves the planner, so no agent
   needs a login of its own. And an agent can ignore over ACP the login its own
   CLI stored: Cline 3.0.74 answers `session/new` with `-32000` though `cline
@@ -347,7 +347,7 @@ the judge.
      the runners, so the model Qwen lists is one the account is served.
      This route comes before the agent's own store: the key the person gave
      Ordewell is their choice for every agent. Gemini CLI's key is its own
-     vendor's rather than an OpenAI-compatible one: `/key set google` writes
+     vendor's rather than an OpenAI-compatible one: `/key-set google` writes
      `GEMINI_API_KEY`, the variable its API-key auth reads, and the hook hands
      it back unchanged on the next start and the next discovery. Gemini 0.66
      resolves its settings file's `security.auth.selectedType` first, then
@@ -367,20 +367,20 @@ the judge.
      itself, so its hook answers nothing here.
   4. **A refusal naming both routes.** Cline's hook refuses the start before
      anything is spawned, naming the store and the routes: "Set the key of a
-     provider Cline offers, such as OpenRouter, in Ordewell with `/key`, or
+     provider Cline offers, such as OpenRouter, in Ordewell with `/key-set`, or
      sign in with `cline auth` (a Cline or ClinePass account, or a provider's
      key), or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell's
      environment." Qwen learns it is signed out from its own `-32000`, and its
      profile's `signInRoute` adds Ordewell's route to the one its manifest
-     names, as the terminal words it: "Qwen Code is not signed in. Run /key and
-     choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or
+     names, as the terminal words it: "Qwen Code is not signed in. Run /key-set
+     and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or
      run qwen and sign in there."
 
   A model the user's environment chooses for the agent stays theirs. What the
   hook answers holds a secret and goes into that spawn's environment, the
   only place the key goes, under ADR-0051's rules:
   - read afresh at each spawn and held by nothing after it, so two attempts
-    running at once each have their own, and a sign-in or `/key` between two
+    running at once each have their own, and a sign-in or `/key-set` between two
     spawns is the second's. A provider key saved through the daemon forgets
     every signed-out verdict recorded or cached before it
     ([ADR-0052](../routing/0052-a-signed-out-coding-agent-is-flagged-and-signs-in-from-the-chat.md))
@@ -699,7 +699,7 @@ signed-out `session/new` fails with `-32000` "Gemini API key is missing or not
 configured." (`signed-out.jsonl`), which is how a signed-out Gemini is learned.
 A Google key saved in Ordewell signs it in without that dialog, handed as
 `GEMINI_API_KEY`, so the signed-out hint names both routes (R9): "Gemini CLI is
-not signed in. Run /key and choose Google Gemini to hand it a key, or run gemini
+not signed in. Run /key-set and choose Google Gemini to hand it a key, or run gemini
 and choose how it signs in." Its models come from ACP discovery alone, started
 bare (`--acp`) and so untrusted, since discovery hands it no server: `session/new`
 lists `auto` and five Gemini models (`discovery.jsonl`), and there is no command
@@ -980,7 +980,7 @@ the private directory:
   surviving the moved home of configuration on macOS only. Where Cursor keeps
   it inside that home, a planner or read-only start fails as signed out.
 - **A key kept outside the environment.** The hook reads the host's and the
-  workspace's variables, where the CLI's `/key` writes; a key VS Code keeps in
+  workspace's variables, where the CLI's `/key-set` writes; a key VS Code keeps in
   its secret store, and its `aiProvider` setting, reach no agent until the
   extension hands them to the runner's environment.
 - **Cline signed in to a Cline or ClinePass account.** The recordings use a
@@ -1334,3 +1334,4 @@ the private directory:
   policy, Copilot's `--excluded-tools`, Cursor's hooks), refused by name too;
   a background subagent, or a Cursor `cursor/task` notice, fails the start.
 - 2026-11-10 — R3: the live subagent probe passed for Qwen Code 0.27.1 and Cline 3.0.74 (OpenRouter `deepseek/deepseek-v4.1-flash`); Cline's `spawn_agent` was absent from the model's tools, so the refusal by name was not exercised live.
+- 2026-11-16 — R9: the routes and hints name `/key-set`, the key command's name now; `/key` stays an alias.

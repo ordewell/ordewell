@@ -38,8 +38,8 @@ describe('taskTabActions', () => {
       { ...ai, status: 'failed' },
       { actions: [], revertible: false, status: 'failed' },
       false,
-      { runner: 'gemini-cli', label: 'Gemini CLI', hint: 'Run /key.', action: 'key', provider: 'google' },
+      { runner: 'gemini-cli', label: 'Gemini CLI', hint: 'Run /key-set.', action: 'key', provider: 'google' },
     );
-    expect(key[0]).toEqual({ label: 'Set API key…', message: { type: 'sendMessage', text: '/key google' } });
+    expect(key[0]).toEqual({ label: 'Set API key…', message: { type: 'sendMessage', text: '/key-set google' } });
   });
 });

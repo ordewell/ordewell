@@ -336,3 +336,29 @@ export function vendorBaseUrlIn(env: VendorEnv, provider: AiProvider): string {
   const custom = meta.baseUrlEnvVar ? env[meta.baseUrlEnvVar]?.trim() : undefined;
   return custom || meta.defaultBaseUrl;
 }
+
+/**
+ * Why `value` cannot be the endpoint a key entry stores for `openai_compatible`,
+ * or undefined when it can: the planner and the runner request it as an
+ * http(s) URL, and a key typed where the URL goes must not be saved as one.
+ */
+export function endpointUrlProblem(value: string): string | undefined {
+  let protocol = '';
+  try {
+    protocol = new URL(value.trim()).protocol;
+  } catch {
+    // Not a URL at all: the same answer as a URL of the wrong kind.
+  }
+  return protocol === 'http:' || protocol === 'https:' ? undefined : 'Enter the endpoint URL, starting with http:// or https://.';
+}
+
+/**
+ * Whether `env` sets a vendor up: its key, or for `openai_compatible` an
+ * endpoint named explicitly, since a local server takes no key and its default
+ * URL is only a guess. The planner's own rule (`configuredProviders`), here
+ * for a reader that holds an environment rather than a config.
+ */
+export function vendorConfiguredIn(env: VendorEnv, provider: AiProvider): boolean {
+  if (provider === 'openai_compatible') return Boolean(env[VENDORS.openai_compatible.baseUrlEnvVar ?? '']?.trim());
+  return vendorApiKeyIn(env, provider) !== '';
+}

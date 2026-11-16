@@ -303,13 +303,15 @@ not an edit to that surface.
    - `npm run ci`.
 
 A runner that is a coding-agent CLI is declared as above. A runner that is not
-a command — the built-in `ordewell` runner is the one example — differs in two
-places:
+a command — the built-in runner, one per provider, is the one example — differs
+in two places:
 
-- **The manifest** sets `runner: { inProcess: true }` (`RunnerLaunch`) instead
-  of a command. No `--version` probe runs, the runner counts as installed
-  wherever Ordewell is. Its models come from `modelDiscovery` with the
-  method `providers`.
+- **The manifest** sets `runner: { inProcess: true, provider }` (`RunnerLaunch`)
+  instead of a command. No `--version` probe runs: the runner counts as
+  installed exactly while that provider is configured. Its models come from
+  `modelDiscovery` with the method `providers`, that provider's catalog. The
+  built-in runner's manifests and connectors are generated per provider
+  (`ordewellManifest`, `providerRunnerConnector`), under the provider's id.
 - **The connector's adapter** is a `TaskModeAgentAdapter` that spawns nothing:
   it ignores the process deps, reports its tools attached at once and calls the
   attempt's task tools in process (`inProcessTaskTools`). `StructuredSession`

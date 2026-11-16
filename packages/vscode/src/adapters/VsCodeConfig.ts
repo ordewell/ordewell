@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf, PROVIDER_PRIORITY } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
 
@@ -149,6 +149,27 @@ export class VsCodeConfig extends BaseConfig {
    */
   get configuredProviders(): ApiProvider[] {
     return configuredProviders(this) as ApiProvider[];
+  }
+
+  /**
+   * The provider keys and endpoints this window holds outside the extension
+   * host's environment, by the variable each is read under: SecretStorage,
+   * then the VS Code setting, as `getProviderApiKey` reads a key. Lent to the
+   * built-in runner alone (ADR-0070), so it lists, discovers and starts on the
+   * key the planner uses; a key the environment holds it reads there already.
+   */
+  heldProviderEnv(): Record<string, string> {
+    const config = this.config;
+    const setting = (key: string | undefined) => (key ? config.get<string>(key, '').trim() : '');
+    const env: Record<string, string> = {};
+    for (const provider of PROVIDER_PRIORITY) {
+      const meta = getProviderMeta(provider);
+      const key = this.secretForKey(provider) || setting(meta.vscodeApiKeyKey);
+      if (key) env[meta.apiKeyEnvVar] = key;
+      const url = setting(meta.vscodeBaseUrlKey);
+      if (url && meta.baseUrlEnvVar) env[meta.baseUrlEnvVar] = url;
+    }
+    return env;
   }
 
   setProviderModelLists(lists: ProviderModelLists): void {

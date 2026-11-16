@@ -111,7 +111,7 @@ A runner-facing tool joins the task side on the same mechanism.
   later start runs it again; a runner that reports the server `failed` — a
   configuration problem — still fails the task. A coding-agent planner turn
   fails on either outcome, since a turn has no task to hold. There is no
-  marker fallback. The built-in Ordewell runner, which runs inside Ordewell
+  marker fallback. The built-in runner, which runs inside Ordewell
   ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)), has no MCP
   client: its tools are the same token's handlers called in this process
   (`inProcessTaskTools`), with the same validation and scope, so it is attached

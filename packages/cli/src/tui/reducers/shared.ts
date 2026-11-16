@@ -37,7 +37,8 @@ export type Effect =
   | { type: 'setPlanner'; provider: string; /** The shell's AI_PROVIDER overrides this choice; said once the daemon accepts it. */ overrideNotice?: string }
   /** `/planner`'s three answers at once, so the daemon never holds a provider with the old backend's model. `noticeLevel` reddens the confirmation while that agent's own login is missing (ADR-0052). */
   | { type: 'setPlannerChoice'; provider: string; modelId: string; effort: string; notice: string; noticeLevel?: 'error' }
-  | { type: 'setApiKey'; provider: string; key: string }
+  /** `baseUrl` is Custom's endpoint, saved with the key, which may then be empty: no key, the one saved before cleared. */
+  | { type: 'setApiKey'; provider: string; key: string; baseUrl?: string }
   | { type: 'setAllowlist'; runner: string; modelIds: string[] }
   | { type: 'setRunnerEnabled'; runner: string; enabled: boolean }
   /** Hands the terminal to the login command a runner's manifest declared; `label` names it in the notice. */

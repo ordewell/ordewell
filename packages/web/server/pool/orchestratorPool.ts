@@ -66,6 +66,7 @@ import {
   selectPlanner,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
+  removesCredential,
   forgetSignedOutRunnerAuth,
   type PlannerBackendId,
   type PlannerModelCandidate,
@@ -86,11 +87,14 @@ import {
   discardChildRuns,
   type IIsolationPreview,
   type IsolationPreview,
+  inProcessProvider,
+  runnerPlans,
 } from '@ordewell/core';
 import { ChildStreams } from './childStreams';
 import { StreamSequence } from './streamSequence';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
+import { saveCredentials } from '../utils/savedCredentials';
 import { PoolFileSystem } from '../adapters/PoolFileSystem';
 import { PoolAwareRunner } from '../adapters/PoolAwareRunner';
 import type { ClientSurface, RunnerRegistry as CoreRunnerRegistry, IRunner } from '@ordewell/core';
@@ -802,16 +806,22 @@ export class OrchestratorPool {
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
 
+    let unsavedEnvKeys: string[] = [];
     if (envChanges) {
       let touched = false;
       for (const [key, value] of Object.entries(envChanges)) {
-        process.env[key] = value;
+        if (removesCredential(key, value)) delete process.env[key];
+        else process.env[key] = value;
         // Only a credential or endpoint change touches what a catalog
         // contains. A planner, model or effort pick does not, and invalidating
         // on one would wipe the very cache `plannerCatalogFor` reads
         // synchronously, right before the next call's switch needs it.
         if (PROVIDER_CREDENTIAL_ENV.has(key)) touched = true;
       }
+      // A key a surface set outlives this daemon. An inherited write is the
+      // environment the client was started under, which may hold a key the
+      // shell exported for its own life only: it is never written to disk.
+      if (touched && changes.inherited !== true) unsavedEnvKeys = saveCredentials(envChanges);
       // The scheduler reads the limit on every tick, but a raised one would
       // only be seen at the next verdict; the runs waiting for a slot start now.
       if (envChanges.ORDEWELL_MAX_PARALLEL !== undefined) {
@@ -881,6 +891,7 @@ export class OrchestratorPool {
     const rejectedEnvKeys = admission?.rejected ?? [];
     const settings: SettingsUpdateResponse = this.getSettings(sessionId, workspace);
     if (rejectedEnvKeys.length > 0) settings.rejectedEnvKeys = rejectedEnvKeys;
+    if (unsavedEnvKeys.length > 0) settings.unsavedEnvKeys = unsavedEnvKeys;
     if (selection?.recall) settings.switchRecall = selection.recall;
     return settings;
   }
@@ -1027,12 +1038,14 @@ export class OrchestratorPool {
     // An installed CLI that cannot be started — a Windows `.cmd` shim, or an
     // ACP agent below its minimum version — stays in the list as unavailable
     // with its reason, so a surface can say why instead of hiding it (ADR-0009,
-    // ADR-0060).
+    // ADR-0060). A provider runner is installed only while its provider is
+    // configured, so one with no key is not here at all (ADR-0070).
     return Promise.all(
       runners
         .filter((p) => installedIds.has(p.manifest.name))
         .map(async (p): Promise<RunnersResponse['runners'][number]> => {
           const { usable, reason, auth, version } = await installation.runnerUsability(p.manifest.name);
+          const provider = inProcessProvider(p.manifest);
           return {
             id: p.manifest.name,
             name: p.manifest.displayName,
@@ -1040,6 +1053,8 @@ export class OrchestratorPool {
             ...(usable ? {} : { usable: false, ...(reason ? { reason } : {}) }),
             ...(auth ? { auth } : {}),
             ...(version ? { version } : {}),
+            plans: runnerPlans(p.manifest.name),
+            ...(provider ? { provider } : {}),
           };
         }),
     );

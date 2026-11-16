@@ -28,7 +28,7 @@ export { DEFAULT_AUTONOMOUS_MODE, DEFAULT_SUPERVISOR_RETRY_LIMIT, DEFAULT_WAKE_U
 export { DEFAULT_MAX_PARALLEL } from './utils/maxParallel';
 export { ACT_RISK, AUTORUN_RISK, DELEGATION_OFFERED, DELEGATION_NETWORK_RISK, DELEGATION_RISK, containersOffered, PLANNED_WITH_LABEL, SUBPLANNER_ACCOUNTING, SUBPLANNER_CHILD, SUBPLANNER_SCOPE, SUPERVISOR_LEVEL_LABEL, keptDelegationBudget, parseCount, rememberDelegationBudget } from './services/runSettingsText';
 // The empty planner composer's tips (#137), one table for both planner chats.
-export { COMPOSER_TIPS, composerTip, type ComposerTip } from './services/composerTips';
+export { COMPOSER_TIPS, composerTip, keyTipContext, type ComposerTip, type ComposerTipContext } from './services/composerTips';
 // The shared conversation view (#51) is pure too, so every surface — a webview
 // included — draws from the same reducer.
 export * from './conversation';
@@ -57,7 +57,10 @@ export { scriptTaskText } from './models/ScriptTask';
 // The VS Code webview words a signed-out agent from the verdict it is handed (ADR-0052).
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from './services/signInHint';
 // The vendors' labels and key variables, pure data a webview may hold: the key entry names the vendor it is for.
-export { VENDORS, PROVIDER_PRIORITY, type ProviderRegistration } from './services/apiProviders';
+export { VENDORS, PROVIDER_PRIORITY, endpointUrlProblem, type ProviderRegistration } from './services/apiProviders';
+// The built-in runner is one runner per provider, under the provider's id and name (ADR-0070): a surface
+// tells such a runner from a coding agent here, and never offers it as a harness planner or a Log in.
+export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed, configuredProviderRunners } from './services/providerRunners';
 // The run view is pure too: a surface seeds its state from the one empty run
 // rather than re-declaring the shape, and a host in a renderer folds it the same way.
 export { EMPTY_RUN, reduceRun } from './services/runView';

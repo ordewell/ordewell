@@ -162,6 +162,40 @@ describe('the Runners block', () => {
     expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
   });
 
+  it('lists a provider runner under its provider\'s name and never offers it a Log in: listed means keyed (ADR-0070)', () => {
+    post({ type: 'setConfiguredProviders', providers: ['openrouter'] });
+    post({
+      type: 'setRunners',
+      runners: [
+        { id: 'claude-code', displayName: 'Claude Code', enabled: true },
+        { id: 'openrouter', displayName: 'OpenRouter', enabled: true },
+      ],
+    });
+    // The vendor planner shares the provider's id: it is the API planner, not this runner, and carries no auth.
+    post({
+      type: 'setPlannerBackends',
+      backends: [
+        { id: 'claude-code', label: 'Claude Code', kind: 'harness', runner: 'claude-code', usable: true, auth: { state: 'signed-in' } },
+        { id: 'openrouter', label: 'OpenRouter', kind: 'vendor', usable: true, reason: 'OPENROUTER_API_KEY' },
+      ],
+      provider: 'claude-code',
+      runner: 'claude-code',
+    });
+
+    const openrouter = pill('OpenRouter')!;
+    expect(openrouter.className).toContain('on');
+    expect(openrouter.className).not.toContain('signed-out');
+    expect(openrouter.closest('.runner-pill-group')!.querySelectorAll('button')).toHaveLength(1);
+    expect(runnersBlock()?.textContent).not.toContain('Log in');
+  });
+
+  it('names the key as the other way to a runner when no coding agent is found', () => {
+    post({ type: 'setRunners', runners: [] });
+
+    expect(runnersBlock()?.textContent).toContain('No coding agent detected');
+    expect(runnersBlock()?.textContent).toContain('Or add an API key with /key-set to run tasks on the built-in runner.');
+  });
+
   it('offers every installed runner when none is enabled, rather than claiming none is installed', () => {
     post({
       type: 'setRunners',

@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { homeEnv, setEnv } from '@ordewell/core/testing';
-import { findEnvFile, writeEnvVar, loadEnvFile, shellEnvValue } from '../env';
+import { findEnvFile, writeEnvVar, loadEnvFile, saveEnvVar, shellEnvValue } from '../env';
 
 let home: string;
 let restoreHome: () => void;
@@ -64,9 +64,42 @@ describe('writeEnvVar', () => {
     expect(() => writeEnvVar(file, 'KEY.*', 'value')).toThrow(/valid environment variable/);
   });
 
-  it('rejects a value containing a newline', () => {
+  it('rejects a value containing a newline, writing nothing', () => {
     const file = path.join(home, '.ordewell', '.env');
-    expect(() => writeEnvVar(file, 'KEY', 'one\ntwo')).toThrow(/newline/);
+    expect(() => writeEnvVar(file, 'KEY', 'one\ntwo')).toThrow(/line break/);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('says a write the file system refuses rather than throwing, since the daemon already took the change', () => {
+    // A directory where the file should be: no write can land there.
+    const file = path.join(home, '.ordewell', '.env');
+    fs.mkdirSync(file, { recursive: true });
+    const said = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => writeEnvVar(file, 'KEY', 'value')).not.toThrow();
+    expect(said).toHaveBeenCalledWith(expect.stringContaining(`Could not write to ${file}`));
+    said.mockRestore();
+  });
+});
+
+describe('saveEnvVar', () => {
+  // Bug: Custom saved with no key kept the earlier key in .env, and the next start sent it to the new endpoint.
+  it('takes an emptied provider key out of .env and this process, as the daemon does, and keeps any other empty value', () => {
+    const restore = setEnv({ OPENAI_COMPATIBLE_API_KEY: 'sk-old', OPENAI_COMPATIBLE_BASE_URL: undefined, ORDEWELL_PLANNER_EFFORT: undefined });
+    try {
+      const file = findEnvFile();
+      writeEnvVar(file, 'OPENAI_COMPATIBLE_API_KEY', 'sk-old');
+
+      saveEnvVar('OPENAI_COMPATIBLE_BASE_URL', 'http://localhost:11434/v1');
+      saveEnvVar('OPENAI_COMPATIBLE_API_KEY', '');
+      saveEnvVar('ORDEWELL_PLANNER_EFFORT', '');
+
+      expect(fs.readFileSync(file, 'utf8')).toBe('OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1\nORDEWELL_PLANNER_EFFORT=\n');
+      expect(process.env).not.toHaveProperty('OPENAI_COMPATIBLE_API_KEY');
+      expect(process.env.OPENAI_COMPATIBLE_BASE_URL).toBe('http://localhost:11434/v1');
+      expect(process.env.ORDEWELL_PLANNER_EFFORT).toBe('');
+    } finally {
+      restore();
+    }
   });
 });
 

@@ -2,11 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CircleCheck, CircleHelp, CircleSlash, CircleX, ExternalLink, LogIn, KeyRound, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { Button, Icon, RunnerBadge, runnerName } from '@ordewell/ui/design';
 import type { AiProvider } from '@ordewell/core';
-import { VENDORS } from '@ordewell/core/plan-utils';
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
-import { askForKey } from '../session/KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryRequest } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
 import { LoginDialog } from './LoginDialog';
 import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, withTimeout, type RunnerTone } from './model';
@@ -94,6 +93,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   const [slow, setSlow] = useState(false);
   const [login, setLogin] = useState<{ runner: string; label: string } | null>(null);
   const [keyError, setKeyError] = useState<string | undefined>(undefined);
+  const [keyWarning, setKeyWarning] = useState<string | undefined>(undefined);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -110,24 +110,24 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
     setState(lines ? { kind: 'ready', lines } : { kind: 'error', message: 'The daemon answered with something that is not a runner list.', status: result.status });
   }, []);
 
-  const setKey = useCallback(async (runner: string, provider: AiProvider): Promise<void> => {
-    const answer = await askForKey({ provider, runnerLabel: runnerName(runner) });
+  const setKey = useCallback(async (request: KeyEntryRequest): Promise<void> => {
+    const answer = await askForKey(request);
     if (!answer) return;
-    const meta = VENDORS[answer.provider];
+    setKeyWarning(undefined);
     try {
-      const saved = await window.ordewell.daemon.call('settings.update', undefined, {
-        env: { [meta.apiKeyEnvVar]: answer.key },
-      });
+      // The write a session's key entry sends, so Custom's endpoint is saved here too.
+      const saved = await window.ordewell.daemon.call('settings.update', undefined, { env: keyEntryEnv(answer) });
       if (!saved.ok) {
         setKeyError(failureMessage(saved));
         return;
       }
-      const rejected = typeof saved.data === 'object' && saved.data !== null ? Reflect.get(saved.data, 'rejectedEnvKeys') : undefined;
-      if (Array.isArray(rejected) && rejected.includes(meta.apiKeyEnvVar)) {
-        setKeyError(`The daemon refused the ${meta.label} key.`);
+      const refused = keyEntryRefusal(saved.data, answer.provider);
+      if (refused) {
+        setKeyError(refused);
         return;
       }
       setKeyError(undefined);
+      setKeyWarning(unsavedKeyWarning(saved.data, answer.provider));
       await load();
     } catch (error) {
       setKeyError(error instanceof Error ? error.message : String(error));
@@ -166,6 +166,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
       ) : (
         <>
           {keyError && <p className="welcome-banner welcome-banner-error" role="alert">{keyError}</p>}
+          {keyWarning && <p className="welcome-banner welcome-banner-warning" role="status">{keyWarning}</p>}
           <ul className="welcome-grid welcome-runners">
             {state.kind === 'ready'
               ? state.lines.map((line) => (
@@ -175,11 +176,18 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
                   busy={busy}
                   onRetry={retry}
                   onLogin={() => setLogin({ runner: line.id, label: line.name || runnerName(line.id) })}
-                  onKey={(provider) => { void setKey(line.id, provider); }}
+                  onKey={(provider) => { void setKey({ provider, runnerLabel: runnerName(line.id) }); }}
                 />
               ))
               : KNOWN_RUNNERS.map((id) => <SkeletonRunner key={id} id={id} />)}
           </ul>
+          {/* A provider with no key has no card (ADR-0070), so its way in sits under them all, open to every provider. */}
+          {state.kind === 'ready' && (
+            <p className="welcome-key-line">
+              <span>An API key adds the built-in runner on that provider, unless it is marked planner only.</span>
+              <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { void setKey({}); }}>Set API key…</Button>
+            </p>
+          )}
         </>
       )}
       {login && (

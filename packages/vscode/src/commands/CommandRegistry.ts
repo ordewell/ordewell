@@ -6,7 +6,7 @@ import {
   DEFAULT_RUNNERS, ModelResolver, RunnerRegistry, saveState, clearState,
   listSessions, loadSession,
   SettingsService, installedPlannerDetected,
-  taskActionCommand, taskRowView, type ExecutionCommand, type TaskAction,
+  taskActionCommand, taskRowView, type ExecutionCommand, type RunnerInstallation, type TaskAction,
 } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { forkConversation, rewindConversation, compactConversation } from '../plan/conversation';
@@ -16,7 +16,7 @@ import { SecretStore, type ApiProvider } from '../adapters/SecretStore';
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { registerContainers, type ContainersDeps } from './containers';
 import { toggleRunner } from './enabledRunners';
-import { executeUserCommand, forceStartPastGate, handleNewSession, markTaskByHand, type PlanManagerDeps } from '../plan/PlanManager';
+import { executeUserCommand, forceStartPastGate, handleNewSession, markTaskByHand } from '../plan/PlanManager';
 
 export interface CommandDeps {
   session: Session;
@@ -25,8 +25,8 @@ export interface CommandDeps {
   modelResolver: ModelResolver;
   config: VsCodeConfig;
   fsAdapter: VsCodeFileSystem;
-  /** The login probe a signed-out compaction asks again before the session gate judges. */
-  runnerInstallation?: PlanManagerDeps['runnerInstallation'];
+  /** The login probe a signed-out compaction asks again before the session gate judges, and the install check the runner pickers offer by. */
+  runnerInstallation: Pick<RunnerInstallation, 'refresh' | 'plannerUsability' | 'filterInstalled'>;
   settingsService: SettingsService;
   dockerCli?: ContainersDeps['dockerCli'];
   secretStore: SecretStore;
@@ -155,7 +155,12 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       await installedPlannerDetected();
       let target = runnerArg;
       if (!target) {
-        const runners = deps.runnerRegistry.list();
+        // What the chat's pills offer, by the same check: a coding agent this host
+        // has, and a provider runner whose provider is configured, the
+        // workspace's own env included (ADR-0070). One it lacks has nothing to switch on.
+        const all = deps.runnerRegistry.list();
+        const installed = new Set(await deps.runnerInstallation.filterInstalled(all.map(({ manifest }) => manifest.name)));
+        const runners = all.filter(({ manifest }) => installed.has(manifest.name));
         const enabled = deps.config.enabledRunners;
         const items = runners.map((r) => ({
           label: `${r.manifest.displayName}: ${enabled.includes(r.manifest.name) ? 'ON' : 'OFF'}`,
@@ -528,7 +533,7 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
   );
   context.subscriptions.push(
     vscode.commands.registerCommand('ordewell.configureModelAllowlist', async () => {
-      await configureModelAllowlist(deps.runnerRegistry, deps.modelResolver, deps.settingsService, undefined, (allowlist) => deps.chatProvider.setModelAllowlist(allowlist));
+      await configureModelAllowlist(deps.runnerRegistry, deps.runnerInstallation, deps.modelResolver, deps.settingsService, undefined, (allowlist) => deps.chatProvider.setModelAllowlist(allowlist));
     }),
   );
 }

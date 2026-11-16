@@ -5,7 +5,7 @@ import * as path from 'path';
 import { __setConfig, __setWorkspaceConfig, __resetConfig, configUpdates } from '../../test/vscode.mock';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from '../VsCodeConfig';
 import { SecretStore } from '../SecretStore';
-import { DEFAULT_WEB_READ_BUDGET, getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner, SettingsService } from '@ordewell/core';
+import { DEFAULT_WEB_READ_BUDGET, getProviderMeta, PROVIDER_DETECT_PRIORITY, PROVIDER_PRIORITY, recordInstalledPlanner, resetInstalledPlanner, RunnerInstallation, RunnerRegistry, setHostCredentials, SettingsService } from '@ordewell/core';
 
 /** Build a loaded SecretStore backed by an in-memory map. */
 async function makeStore(initial: Record<string, string> = {}) {
@@ -386,6 +386,64 @@ describe('VsCodeConfig.configuredProviders', () => {
     __setConfig({ openaiCompatibleBaseUrl: 'http://localhost:11434/v1' });
     expect(new VsCodeConfig(await makeStore({})).configuredProviders).toEqual(['openai_compatible']);
     __setConfig({});
+  });
+});
+
+describe('VsCodeConfig.heldProviderEnv: the keys lent to the built-in runner (ADR-0070)', () => {
+  const credentialVars = PROVIDER_PRIORITY.flatMap((provider) => {
+    const meta = getProviderMeta(provider);
+    return [meta.apiKeyEnvVar, ...meta.detectEnvVars, ...(meta.baseUrlEnvVar ? [meta.baseUrlEnvVar] : [])];
+  });
+  const savedPath = process.env.ORDEWELL_SETTINGS_PATH;
+  let saved: Record<string, string | undefined>;
+  let dir: string;
+  beforeEach(() => {
+    saved = Object.fromEntries(credentialVars.map((name) => [name, process.env[name]]));
+    for (const name of credentialVars) delete process.env[name];
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-vscode-held-'));
+    process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
+    resetInstalledPlanner();
+  });
+  afterEach(() => {
+    setHostCredentials(undefined);
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    if (savedPath === undefined) delete process.env.ORDEWELL_SETTINGS_PATH;
+    else process.env.ORDEWELL_SETTINGS_PATH = savedPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('names each key and endpoint by the variable the runner reads it under, SecretStorage over the setting', async () => {
+    __setConfig({ openAiApiKey: 'setting-key', xaiApiKey: 'xai-setting', openaiCompatibleBaseUrl: ' http://localhost:11434/v1 ' });
+    const config = new VsCodeConfig(await makeStore({ openrouterKey: 'sk-or-stored', anthropicKey: 'sk-ant-stored' }));
+
+    expect(config.heldProviderEnv()).toEqual({
+      [getProviderMeta('openrouter').apiKeyEnvVar]: 'sk-or-stored',
+      [getProviderMeta('anthropic').apiKeyEnvVar]: 'sk-ant-stored',
+      [getProviderMeta('xai').apiKeyEnvVar]: 'xai-setting',
+      OPENAI_COMPATIBLE_BASE_URL: 'http://localhost:11434/v1',
+    });
+  });
+
+  it('holds nothing the environment holds already', async () => {
+    process.env.OPENROUTER_API_KEY = 'sk-or-from-env';
+    expect(new VsCodeConfig(await makeStore({})).heldProviderEnv()).toEqual({});
+  });
+
+  it('lists and enables a provider keyed only in SecretStorage, with the environment left without it', async () => {
+    const store = await makeStore({});
+    const config = new VsCodeConfig(store);
+    setHostCredentials(() => config.heldProviderEnv());
+    const probe = new RunnerInstallation(new RunnerRegistry(), async () => ({ stdout: '' }));
+    expect(await probe.isInstalled('anthropic')).toBe(false);
+
+    await store.set('anthropicKey', 'sk-ant-stored');
+
+    expect(await probe.isInstalled('anthropic')).toBe(true);
+    expect(config.enabledRunners).toEqual(['anthropic']);
+    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 });
 

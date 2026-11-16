@@ -50,3 +50,52 @@ describe('validateApiKey — Gemini', () => {
     expect(result.status).toBe('invalid');
   });
 });
+
+/** A fetch that answers 200 and keeps each URL it was asked for. */
+function fetchRecording(): { fetchImpl: typeof fetch; urls: string[] } {
+  const urls: string[] = [];
+  const fetchImpl = (async (url: string) => {
+    urls.push(url);
+    return { ok: true, status: 200 };
+  }) as unknown as typeof fetch;
+  return { fetchImpl, urls };
+}
+
+describe('validateApiKey — the configured endpoint', () => {
+  // Bug: a key for a gateway was checked at the provider's public host, refused, and never saved.
+  it.each([
+    ['openai', 'https://gateway.example/v1/', 'https://gateway.example/v1/models'],
+    ['anthropic', 'https://proxy.example/v1', 'https://proxy.example/v1/models'],
+    ['openai_compatible', 'http://localhost:8000/v1', 'http://localhost:8000/v1/models'],
+    ['openrouter', 'https://or-gateway.example/api/v1', 'https://or-gateway.example/api/v1/key'],
+  ] as const)('checks a %s key at its configured base URL', async (provider, baseUrl, asked) => {
+    const { fetchImpl, urls } = fetchRecording();
+    expect((await validateApiKey(provider, 'k', { baseUrl, fetchImpl })).status).toBe('valid');
+    expect(urls).toEqual([asked]);
+  });
+
+  it('falls back to the provider\'s default endpoint when none is configured', async () => {
+    const { fetchImpl, urls } = fetchRecording();
+    await validateApiKey('groq', 'k', { fetchImpl });
+    expect(urls).toEqual(['https://api.groq.com/openai/v1/models']);
+  });
+
+  // Bug: a Custom endpoint that refused a request sent with no key read as "API rejected the key".
+  it('words a refusal of a request with no key as the endpoint\'s, and sends no key', async () => {
+    const asked: (RequestInit | undefined)[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      asked.push(init);
+      return { ok: false, status: 404 };
+    }) as unknown as typeof fetch;
+    expect(await validateApiKey('openai_compatible', '', { baseUrl: 'http://localhost:9/v1', fetchImpl })).toEqual({ status: 'invalid', message: 'HTTP 404' });
+    expect(asked[0]?.headers).toEqual({});
+    expect(await validateApiKey('openai_compatible', 'sk-local', { baseUrl: 'http://localhost:9/v1', fetchImpl })).toEqual({ status: 'invalid', message: 'API rejected the key (HTTP 404)' });
+  });
+
+  // Bug: Perplexity has no model list, so every key it was given read as invalid.
+  it('does not check a key for a provider with no model list, and asks nothing', async () => {
+    const { fetchImpl, urls } = fetchRecording();
+    expect(await validateApiKey('perplexity', 'pplx-1', { fetchImpl })).toEqual({ status: 'unchecked' });
+    expect(urls).toEqual([]);
+  });
+});

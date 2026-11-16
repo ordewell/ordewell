@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Live smoke check of the built-in `ordewell` runner (ADR-0070), one task per
- * dialect. Run by hand, or as a script task:
+ * Live smoke check of the built-in runner (ADR-0070), one task per dialect, each
+ * on the runner of the provider that stands for it. Run by hand, or as a script task:
  *
  *   npm run build -w packages/core && node bench/live/runner-smoke.mjs
  *
@@ -174,7 +174,7 @@ async function runOne(core, testing, { provider, model }, scratch, timeoutMs) {
     core.createTask({
       id: 't', order: 1, title: 'Fix add',
       prompt: 'add() in src/add.mjs subtracts instead of adding. Make `node test.mjs` pass by fixing it, run the test to confirm, then call task_complete.',
-      assignedRunner: 'ordewell', assignedModel: { modelId: ordewellId, modelLabel: model }, taskMode: 'full',
+      assignedRunner: provider, assignedModel: { modelId: ordewellId, modelLabel: model }, taskMode: 'full',
     }),
   ];
   const config = testing.fakeConfig({ aiProvider: provider, worktreeIsolation: true });
@@ -187,7 +187,7 @@ async function runOne(core, testing, { provider, model }, scratch, timeoutMs) {
     sessionId: 'runner-smoke', saveSession: core.saveSession, openTaskLog: core.openTaskLog, leaseHost: new core.LeaseHost(),
     isolation: core.createWorktreeIsolation({ resolvePath: async () => process.env.PATH ?? '', config }),
   });
-  session.loadPlan({ tasks, runners: ['ordewell'], status: 'approved', generatedAt: new Date().toISOString() }, 'fix add', root, { sessionId: 'runner-smoke' });
+  session.loadPlan({ tasks, runners: [provider], status: 'approved', generatedAt: new Date().toISOString() }, 'fix add', root, { sessionId: 'runner-smoke' });
   try {
     await session.execute({ command: 'run_plan' }, { kind: 'user' });
     const deadline = Date.now() + timeoutMs;

@@ -285,7 +285,7 @@ describe('signed-out planners', () => {
     };
     const lines = welcome({ ...DETECTED, plannerProvider: 'claude-code', runners: [qwen] });
     expect(warnings(lines)).toEqual([
-      'Qwen Code is not signed in. Run /key and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
+      'Qwen Code is not signed in. Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key, or run qwen and sign in there.',
     ]);
   });
 
@@ -514,7 +514,7 @@ describe('transcript', () => {
   it('says what is missing when nothing can plan yet', () => {
     const out = text(DETECTED);
     // Same order as the not-ready error: the no-key way in first, the vendor key second.
-    expect(out).toMatch(/Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen\s+Code, Cline, Gemini CLI or Cursor.*\/planner.*No API key.*\/key/s);
+    expect(out).toMatch(/Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen\s+Code, Cline, Gemini CLI or Cursor.*\/planner.*No API key.*\/key-set/s);
   });
 
   it('treats a configured API provider as enough to plan', () => {
@@ -528,7 +528,7 @@ describe('transcript', () => {
   });
 
   it('shows the planner-not-ready refusal whole on the ✗ line, wrapped but unaltered', () => {
-    const message = 'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key.';
+    const message = 'No planner is ready. Pick one with /planner — Claude Code, Codex and OpenCode plan with no API key. To plan with OpenRouter instead, add OPENROUTER_API_KEY with /key-set.';
     const rows = screen({ conversation: chatOf(['error', message]), cols: 80 }).map(stripAnsi);
 
     expect(rows.find((l) => l.includes('✗'))).toContain('✗ No planner is ready.');
@@ -945,7 +945,7 @@ describe('overlays', () => {
 
   it('scrolls the help sheet to reach the commands below the fold', () => {
     const top = text({ overlay: { kind: 'help', scroll: 0 }, rows: 24 });
-    const down = text({ overlay: { kind: 'help', scroll: 18 }, rows: 24 });
+    const down = text({ overlay: { kind: 'help', scroll: 19 }, rows: 24 });
     expect(top).not.toContain('/allowlist');
     expect(down).toContain('/allowlist');
   });
@@ -972,7 +972,7 @@ describe('overlays', () => {
 
   it('lists every command in the help sheet', () => {
     const out = text({ overlay: { kind: 'help' }, rows: 60 });
-    for (const name of ['/allowlist', '/key', '/settings']) {
+    for (const name of ['/allowlist', '/key-set', '/settings']) {
       expect(out).toContain(name);
     }
   });

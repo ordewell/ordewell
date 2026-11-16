@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { AgentProcessDeps, AgentStartOptions, SpawnFn } from '../harness/AgentAdapter';
 import { FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
-import { fakeSpawn, fixture, respondingSpawn, sseResponse, type FakeAgentProcess, type FakeEventStream, type FakeSpawnResult } from './harnessTestKit';
+import { fakeSpawn, fixture, flagFile, respondingSpawn, sseResponse, type FakeAgentProcess, type FakeEventStream, type FakeLaunch, type FakeSpawnResult } from './harnessTestKit';
 
 /**
  * One fake per built-in runner, each speaking that runner's own protocol, so a
@@ -30,6 +30,14 @@ export interface FakeRunner {
   injectedUrl(n?: number): string | null;
   /** The argv of the latest launch, as one string — which every local user can list, so a token must never be in it (ADR-0022, A5). */
   commandLine(): string;
+  /** Every launch, oldest first, with the files its arguments named as they were at spawn. */
+  launched(): FakeLaunch[];
+  /**
+   * Every string the adapter handed the runner once it was running, decoded
+   * as the runner decodes it: each value of its stdin's JSON lines, or of its
+   * HTTP request bodies. Where a prompt arrives when no file carries it.
+   */
+  received(): string[];
   /**
    * Whether the latest launch lets the tool the runner calls `name` run with
    * nobody asked: read from what it was launched with, or for a runner that
@@ -70,6 +78,21 @@ async function answered<T>(read: () => T | undefined): Promise<T | undefined> {
 }
 
 const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+
+/** Every string in a decoded JSON value, however deep. */
+function strings(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(strings);
+  if (value !== null && typeof value === 'object') return Object.values(value).flatMap(strings);
+  return [];
+}
+
+/** Every string in the JSON lines written to these processes' stdin. */
+function writtenStrings(processes: readonly FakeAgentProcess[]): string[] {
+  return processes.flatMap((proc) => proc.written.join('').split('\n').flatMap((text) => {
+    try { return strings(JSON.parse(text)); } catch { return []; }
+  }));
+}
 
 function baseDeps(spawn: SpawnFn, fetch: typeof globalThis.fetch): AgentProcessDeps {
   return {
@@ -135,15 +158,14 @@ function claudeCode(script: FakeRunnerScript): FakeRunner {
     launches: () => argvs.length,
     injectedUrl: (n = argvs.length - 1) => urls[n] ?? null,
     commandLine: () => spawned.lastArgs().join(' '),
+    launched: () => spawned.launches(),
+    received: () => writtenStrings(spawned.processes),
     preAllows: (name) => {
       const args = spawned.lastArgs();
       const at = args.indexOf('--allowedTools');
       return at >= 0 && args[at + 1].split(',').includes(name);
     },
-    instructions: () => {
-      const args = spawned.lastArgs();
-      return args[args.indexOf('--append-system-prompt') + 1] ?? '';
-    },
+    instructions: () => flagFile(spawned.lastLaunch(), '--append-system-prompt-file') ?? '',
     turnOpen: async () => { await answered(() => (proc().written.some((w) => w.includes('"type":"user"')) ? true : undefined)); },
     callOrdewellTool: (tool) => {
       proc().emitStdout(line({ type: 'assistant', session_id: 'sess-1', message: { id: `m-${tool}`, content: [{ type: 'tool_use', id: `tu-${tool}`, name: `mcp__ordewell__${tool}`, input: {} }] } }));
@@ -215,6 +237,8 @@ function codex(script: FakeRunnerScript): FakeRunner {
     launches: () => spawned.processes.length,
     injectedUrl: (n) => thread(n)?.config?.mcp_servers?.ordewell?.url ?? null,
     commandLine: () => spawned.lastArgs().join(' '),
+    launched: () => spawned.launches(),
+    received: () => writtenStrings(spawned.processes),
     // Codex grants by server, and calls that server's tools `mcp__<server>__<tool>`.
     preAllows: (name) => name.startsWith('mcp__ordewell__') && thread()?.config?.mcp_servers?.ordewell?.default_tools_approval_mode === 'approve',
     instructions: () => thread()?.developerInstructions ?? '',
@@ -263,6 +287,7 @@ function openCode(script: FakeRunnerScript): FakeRunner {
   let turns = 0;
   let system = '';
   let prompted = false;
+  const bodies: Record<string, unknown>[] = [];
   const spawn: SpawnFn = (cmd, argv, options) => {
     envs.push(options.env ?? {});
     const proc = spawned.spawn(cmd, argv, options);
@@ -273,6 +298,7 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     const path = String(input).replace(OPENCODE_BASE, '');
     const method = init?.method ?? 'GET';
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+    if (body) bodies.push(body);
     if (path === '/event') {
       const { response, stream } = sseResponse(init);
       streams.push(stream);
@@ -322,6 +348,8 @@ function openCode(script: FakeRunnerScript): FakeRunner {
     launches: () => envs.length,
     injectedUrl: (n) => configOf(n)?.mcp?.ordewell?.url ?? null,
     commandLine: () => spawned.lastArgs().join(' '),
+    launched: () => spawned.launches(),
+    received: () => bodies.flatMap(strings),
     // OpenCode's permission rules, as it matches them: a trailing `*` is a prefix.
     preAllows: (name) => Object.entries(configOf()?.permission ?? {}).some(([rule, action]) =>
       action === 'allow' && (rule === name || (rule.endsWith('*') && name.startsWith(rule.slice(0, -1))))),
@@ -406,6 +434,8 @@ function copilotCli(script: FakeRunnerScript): FakeRunner {
     launches: () => agents.length,
     injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
     commandLine: () => kit.lastArgs().join(' '),
+    launched: () => kit.launches(),
+    received: () => writtenStrings(kit.processes),
     preAllows: async (name) => allowsAll() || (await ask({ title: name, kind: 'other' }, { title: bare(name), kind: 'other' })) === 'allow',
     instructions: () => instructions[instructions.length - 1] ?? '',
     turnOpen: async () => { await answered(() => (agent().requests('session/prompt').length > 0 ? true : undefined)); },
@@ -493,6 +523,8 @@ function qwenCode(script: FakeRunnerScript): FakeRunner {
     launches: () => agents.length,
     injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
     commandLine: () => kit.lastArgs().join(' '),
+    launched: () => kit.launches(),
+    received: () => writtenStrings(kit.processes),
     preAllows: async (name) => (await ask(name, 'other', JSON.stringify({ from: 'fake' }))) === 'allow',
     // The contract rides in the first prompt: Qwen has no channel apart from it.
     instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
@@ -576,6 +608,8 @@ function cline(script: FakeRunnerScript): FakeRunner {
     launches: () => agents.length,
     injectedUrl: (n = agents.length - 1) => settingsOf(n).find((server) => server.name === 'ordewell')?.url ?? null,
     commandLine: () => kit.lastArgs().join(' '),
+    launched: () => kit.launches(),
+    received: () => writtenStrings(kit.processes),
     preAllows: async (name) => allowsAll() || (await ask(`${name}: {}`, 'other')) === 'allow',
     // The contract rides in the first prompt: Cline has no channel apart from it.
     instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
@@ -656,6 +690,8 @@ function geminiCli(script: FakeRunnerScript): FakeRunner {
     launches: () => agents.length,
     injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
     commandLine: () => kit.lastArgs().join(' '),
+    launched: () => kit.launches(),
+    received: () => writtenStrings(kit.processes),
     preAllows: async (name) => allowsAll() || (await ask(name, 'other', `${name}(from: fake)`)) === 'allow',
     // The contract rides in the first prompt: Gemini has no channel apart from it.
     instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),
@@ -738,6 +774,8 @@ function cursorAgent(script: FakeRunnerScript): FakeRunner {
     launches: () => agents.length,
     injectedUrl: (n = agents.length - 1) => agents[n]?.mcpServers.find((server) => server.name === 'ordewell')?.url ?? null,
     commandLine: () => kit.lastArgs().join(' '),
+    launched: () => kit.launches(),
+    received: () => writtenStrings(kit.processes),
     preAllows: async (name) => allowsAll() || (await askTool(name)) === 'allow',
     // The contract rides in the first prompt: Cursor has no channel apart from it.
     instructions: () => ((agent().requests('session/prompt')[0]?.params as { prompt?: Array<{ text?: string }> } | undefined)?.prompt ?? []).map((part) => part.text ?? '').join('\n'),

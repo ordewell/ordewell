@@ -100,4 +100,13 @@ describe('TaskCard — runner selector', () => {
     expect(select.value).toBe('aider');
     expect([...select.options].map((o) => o.value)).toContain('aider');
   });
+
+  it('names an unlisted provider runner by its vendor, as the rest of the card does', () => {
+    // Its key removed, or the plan opened on another host: the runner list no longer has it.
+    render(<TaskCard task={makeTask({ assignedRunner: 'anthropic' })} models={emptyModels} runners={RUNNERS} onRunnerChange={vi.fn()} />);
+    expand();
+
+    const select = screen.getByLabelText('Runner') as HTMLSelectElement;
+    expect([...select.options].find((o) => o.value === 'anthropic')?.textContent).toBe('Anthropic');
+  });
 });

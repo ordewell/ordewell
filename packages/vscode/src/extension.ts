@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
-import { createIsolationPreview, AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, workspaceEnvOf } from '@ordewell/core';
+import { createIsolationPreview, AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, setHostCredentials, workspaceEnvOf } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
@@ -39,6 +39,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const runner = runnerForProvider(provider);
       return runner && modelResolver ? modelResolver.getCachedRunnerModels(runner).map((model) => model.modelId) : [];
     });
+    // The keys stay out of this process's environment, which every child and
+    // every other extension here inherits: the built-in runner is lent them (ADR-0070).
+    setHostCredentials(() => config.heldProviderEnv());
     const runnerRegistry = new RunnerRegistry();
     const fsAdapter = new VsCodeFileSystem();
     // Read from the account the runners use, as the login probe below is: a
@@ -122,4 +125,5 @@ export function deactivate(): void {
   versionCheck?.dispose();
   versionCheck = undefined;
   activeHost?.dispose();
+  setHostCredentials(undefined);
 }

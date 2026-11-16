@@ -24,6 +24,8 @@
 .welcome-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--ow-space-3); margin: 0; padding: 0; list-style: none; }
 .welcome-show-all { align-self: flex-start; }
 .welcome-empty-line { margin: 0; color: var(--ow-fg-secondary); }
+/* The key entry under the runner cards: the line wraps above its button rather than squeezing it. */
+.welcome-key-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ow-space-2) var(--ow-space-3); margin: 0; color: var(--ow-fg-secondary); }
 
 /* Cards: one column of lines, each a single row that ends in an ellipsis rather than wrapping under its icon. */
 .welcome-card {

@@ -68,10 +68,11 @@ beside the shim, or else the `node` on PATH, and one starts a program in the
 package itself, as OpenCode's does its `.exe`. Either only finds a file and
 hands it `%*`, so `planDirectLaunch` reads the shim and starts that file
 directly, which is what the shim does without cmd.exe's 8191-character buffer,
-its cut at a line break, its `%VAR%` expansion and a `"` it cannot carry. That
-matters most for Claude Code installed by npm: its system prompt spans lines
-and its `--settings` and `--mcp-config` are JSON, so on either shim route it
-started with a prompt or a setting it could not read. Only a shim that is
+its cut at a line break, its `%VAR%` expansion and a `"` it cannot carry. No
+runner's prompt or settings ride its command line (below), so that matters
+most for what still does: a script task's commands, whose arguments are the
+plan's, and a runner installed by npm that a `.cmd` route would otherwise
+put behind an interpreter for nothing. Only a shim that is
 npm's template byte for byte, but for a target holding no quote, `%` or line
 break, is read so. A `.cmd` with a line of its own may set a variable or do
 more than find a file, which only cmd.exe would do, so it keeps the batch
@@ -92,17 +93,18 @@ honouring PATHEXT there would disable the tier on exactly the machines it exists
 for.
 
 What the tier explicitly does *not* do is rescue an overflowing `.cmd`.
-Overflow means a very large prompt, which is where `-File` argument fidelity is
-least worth betting on, and a visible held task beats a plausibly mangled one.
-So a `.ps1` sitting beside a too-long `.cmd` still raises.
+No prompt rides a runner's command line (below), so overflow now means a script
+task's own command, or a bug in Ordewell: either is where `-File` argument
+fidelity is least worth betting on, and a visible held task beats a plausibly
+mangled one. So a `.ps1` sitting beside a too-long `.cmd` still raises.
 
 **A line break is different: the batch route cannot carry one at all.** cmd.exe
 reads its command line up to the first CR/LF and discards the rest — no error,
-exit code 0 — and quoting does not help. Every prompt Ordewell builds spans
-lines (`composeAugmentedPrompt` appends the `task_complete` instruction after
-a blank line, and the harness planners' system prompts share the seam), so a
-task would start with its opening paragraph only and no instruction to call
-`task_complete`. So `planFor` disqualifies the batch route for a
+exit code 0 — and quoting does not help. A prompt spans lines, and handed over
+on that route a task would start with its opening paragraph only and no
+instruction to call `task_complete`. No runner is handed one on its command
+line any more (below), but the seam serves every caller, a script task's
+commands among them, so `planFor` disqualifies the batch route for a
 multi-line argument, and — unlike overflow, a capacity judgement about a line
 cmd.exe would at least read — that disqualification **falls through to the next
 route**: a `.ps1` beside a `.cmd` is taken when the arguments span lines, and a
@@ -123,22 +125,52 @@ Windows paths are built with `path.win32` explicitly, not the host-flavoured
 `path`. On a Windows host they are the same object, so production is unaffected;
 off-platform it is what makes the behavior testable at all.
 
-**The cmd.exe buffer is a refusal, not a truncation.** A 12 KB
-`--append-system-prompt` (the planner prompt plus collected
-context) does not fit, and Windows truncates
-rather than rejecting. A truncated system prompt makes the planner answer half a
-question confidently, which is exactly the silent success this repo refuses — so
-`CommandLineTooLongError` names the fix instead. A spawn throw already holds
-the task, so it degrades to a visible held task with an actionable message.
+**No prompt rides a runner's command line.** Every harness takes its system
+prompt, its instructions and its settings through a file or its own protocol,
+never as an argument. Claude Code's planner prompt (every conversation,
+subplanner, one-shot plan, respawn and resume), a task's completion contract
+and its JSON settings are written per launch to an owner-only directory in the
+temp directory that the process owns, and named by path:
+`--append-system-prompt-file`, `--settings`, `--mcp-config`, each flag and its
+path two arguments, so a placement copies each file in and names its copy
+([ADR-0059](../isolation/0059-an-execution-lease-reserves-in-the-claim-and-opens-after-it.md)
+L5). The CLI reads each as it starts, and the directory goes when the process
+ends or its start fails. Codex takes its instructions over JSON-RPC, OpenCode
+over HTTP, an ACP runner from its profile's file or its first prompt
+([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)). So
+every argument is a flag or a short path: one line, no `"`, and short enough
+that even a `.cmd` of another make starts through cmd.exe's buffer. The
+alternative was a cap on what goes in: the fixed part of a Claude planner's
+prompt alone came near Windows' 32767-character ceiling, and a repository's
+own instructions took it past, so every Claude planner start on Windows was
+refused, with nothing the user could shorten. Claude Code's `initialize`
+request also takes an `appendSystemPrompt` over stdin, but undocumented, and
+it replaces an argument's prompt rather than adding to it; the file flag is
+the CLI's own and was checked live with a prompt past 58,000 characters. A
+contract test starts every connector that spawns a process, as a planner and
+as a task in each of its modes, with a 200,000-character prompt holding every
+character a command line mangles, and holds each argv to the batch route.
+
+**The cmd.exe buffer is a refusal, not a truncation.** Windows truncates rather
+than rejecting, and a system prompt cut off mid-sentence makes the planner
+answer half a question confidently, which is exactly the silent success this
+repo refuses — so `CommandLineTooLongError` is raised instead. A spawn throw
+already holds the task, so it degrades to a visible held task with an
+actionable message.
 
 The native and PowerShell routes are bounded by CreateProcess's own 32767-character
 ceiling rather than cmd.exe's, which is four times further away but truncates
 the same way — so it raises the same error, with a different message. The shim
 version says "install the native executable"; the OS-ceiling version says so
-explicitly *not*, because no reinstall moves that limit, and points at the task
-prompt and the task skills, whose text is added to the prompt
-([ADR-0024](../planner/0024-unified-skills.md)), instead. Advice
-that cannot work is worse than none.
+explicitly *not*, because no reinstall moves that limit. Nor does it name a
+prompt to shorten, as it once did: none rides there, so a runner's command line
+that long is Ordewell's bug, and the message says so and which command it was,
+for a report. Advice that cannot work is worse than none. A script task's
+command and body are the plan's own and do ride its command line
+([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)): a body
+written to a file would be another script, with another `$0`, read by its
+shell as it runs. Past what one command line carries, its step fails saying
+so, and to run the work from a file in the repository.
 
 ### 2. `services/researchShell.ts` — which interpreter runs the planner's `bash`
 
@@ -342,12 +374,12 @@ Three things are **explicitly not claimed**:
    argument by its own reckoning and escapes nothing: a `"` inside one is lost
    or splits it, an empty argument is dropped, and a trailing `\` in one with
    whitespace escapes the quote it is closed with. Escaping the arguments for
-   the program behind the shim was tried and taken back. A subplanner's system
-   prompt, near Windows' command-line ceiling already, went over it once its
-   quotes were escaped, and 5.1's quoting decisions are not ones an escape can
-   always satisfy: a space between two quotes still splits. npm writes a `.cmd`
-   beside every `.ps1`, and its shim's file is started directly, so the route
-   is left to installs that wrote a script alone.
+   the program behind the shim was tried and taken back: 5.1's quoting
+   decisions are not ones an escape can always satisfy, and a space between
+   two quotes still splits. No runner's argument holds a `"` (§1), so what the
+   route can lose is a script task's own. npm writes a `.cmd` beside every
+   `.ps1`, and its shim's file is started directly, so the route is left to
+   installs that wrote a script alone.
 
 **Argument fidelity through an npm shim is measured** on every Windows CI run:
 a shim as npm writes it hands its script a `"`, a line break, `%PATH%`, an
@@ -390,3 +422,4 @@ lower-case drive letter.
 - 2026-11-04 — path confinement reads a path through Git Bash's mount table, as the shell running the command does.
 - 2026-11-04 — a Codex planner's own shell is off on Windows, a harness planner is told which shell runs its commands, and a change task asks whether Codex's sandbox is set up and says what Codex granted it.
 - 2026-11-04 — the TUI changes the mouse modes only in raw mode, and says at start when Node cannot pass the mouse or a paste; both were measured in a Windows pseudo console.
+- 2026-11-16 — no prompt rides a runner's command line: Claude Code's system prompt, task contract and settings go in files the process owns, so a Claude planner starts on Windows again, and the OS-ceiling message calls a runner's long command line a bug to report.

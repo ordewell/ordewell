@@ -53,7 +53,9 @@ npm run desktop:dev                           # Vite + Electron, renderer hot re
 `desktop:dev` and `desktop:package` first rebuild `@ordewell/core`, `ui` and
 `web` ([`scripts/workspace-builds.mjs`](scripts/workspace-builds.mjs)): the
 daemon and the UI come from their `dist/`, and one left from an older checkout
-would run under a current app with nothing to tell them apart.
+would run under a current app with nothing to tell them apart. Before that they
+compare `node_modules` with `package-lock.json`, and stop with `npm install` as
+the answer when a pull or a branch switch added or bumped a dependency.
 
 A change to `src/main` or `src/preload` needs `desktop:dev` restarted; a change
 to `src/renderer` reloads in place. To run the built app instead:

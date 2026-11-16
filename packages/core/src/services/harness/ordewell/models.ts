@@ -1,7 +1,7 @@
 import type { AiProvider } from '../../../interfaces/IConfig';
 import type { DiscoveredModel } from '../../../models/Task';
 import type { RunnerEnv } from '../../../plugins/types';
-import { PROVIDER_PRIORITY, VENDORS, vendorApiKeyIn, vendorBaseUrlIn } from '../../apiProviders';
+import { VENDORS, vendorApiKeyIn, vendorBaseUrlIn, vendorConfiguredIn } from '../../apiProviders';
 import type { CatalogModel } from '../../ModelCatalog';
 import type { EffortLevel } from '../../model';
 
@@ -118,41 +118,35 @@ export function modelInfoFromCatalog(provider: AiProvider, entry: CatalogModel):
 }
 
 /**
- * The providers this environment holds a key for, with their endpoints. The
- * same gate the runner's availability uses (RunnerInstallation): a keyless
- * local endpoint is not a key, so it neither signs the runner in nor lists.
+ * How the runner reaches `provider` under `env`, or undefined where `env` does
+ * not set it up: the same rule its listing uses (RunnerInstallation), so a
+ * runner that is listed can start. The key is empty only for a local
+ * `openai_compatible` endpoint, which is set up by its URL and takes none.
  */
-export function keyedProviders(env: RunnerEnv): { apiKeys: Record<string, string>; baseUrls: Record<string, string> } {
-  const apiKeys: Record<string, string> = {};
-  const baseUrls: Record<string, string> = {};
-  for (const provider of PROVIDER_PRIORITY) {
-    const key = vendorApiKeyIn(env, provider);
-    if (key === '') continue;
-    apiKeys[provider] = key;
-    const url = vendorBaseUrlIn(env, provider);
-    if (url) baseUrls[provider] = url;
-  }
-  return { apiKeys, baseUrls };
+export function providerCredentials(env: RunnerEnv, provider: AiProvider): { apiKey: string; baseUrl: string } | undefined {
+  if (!vendorConfiguredIn(env, provider)) return undefined;
+  return { apiKey: vendorApiKeyIn(env, provider), baseUrl: vendorBaseUrlIn(env, provider) };
 }
 
-/** Every keyed provider's catalog as model infos, in provider priority order. */
-export async function listProviderModels(env: RunnerEnv, fetchImpl?: typeof fetch): Promise<ModelInfo[]> {
-  const credentials = keyedProviders(env);
-  if (Object.keys(credentials.apiKeys).length === 0) return [];
+/** One provider's catalog as model infos; empty where `env` does not set the provider up. */
+export async function listProviderModels(env: RunnerEnv, provider: AiProvider, fetchImpl?: typeof fetch): Promise<ModelInfo[]> {
+  const credentials = providerCredentials(env, provider);
+  if (!credentials) return [];
   // Imported here: ProviderRouting reaches back into ModelDiscovery, which
   // imports this module for the runner's discovery branch.
   const { fetchAllProviderModels } = await import('../../ProviderRouting');
-  const { models } = await fetchAllProviderModels({ ...credentials, ...(fetchImpl ? { fetchImpl } : {}) });
-  const infos: ModelInfo[] = [];
-  for (const provider of PROVIDER_PRIORITY) {
-    for (const entry of models[provider] ?? []) infos.push(modelInfoFromCatalog(provider, entry));
-  }
-  return infos;
+  // Only this provider's credentials go in, so no other catalog is fetched.
+  const { models } = await fetchAllProviderModels({
+    apiKeys: credentials.apiKey ? { [provider]: credentials.apiKey } : {},
+    baseUrls: credentials.baseUrl ? { [provider]: credentials.baseUrl } : {},
+    ...(fetchImpl ? { fetchImpl } : {}),
+  });
+  return (models[provider] ?? []).map((entry) => modelInfoFromCatalog(provider, entry));
 }
 
-/** The runner's model list, grouped by provider through `runnerProvider`. */
-export async function discoverProviderModels(env: RunnerEnv, fetchImpl?: typeof fetch): Promise<DiscoveredModel[]> {
-  const infos = await listProviderModels(env, fetchImpl);
+/** The model list of the runner on `provider`, each model marked with it through `runnerProvider`. */
+export async function discoverProviderModels(env: RunnerEnv, provider: AiProvider, fetchImpl?: typeof fetch): Promise<DiscoveredModel[]> {
+  const infos = await listProviderModels(env, provider, fetchImpl);
   // A model the catalog knows takes no tools cannot run this runner at all, so
   // it is not offered; one the catalog is silent on stays (the default assumes tools).
   return infos.filter((info) => !(info.known.supportsTools && !info.supportsTools)).map((info) => ({
@@ -177,13 +171,12 @@ export async function lookupModelInfo(
   options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<ModelInfo> {
   const parsed = parseModelId(id);
-  if (!parsed) throw new Error(`"${id}" is not an Ordewell runner model: assign one as <provider>:<model>.`);
+  if (!parsed) throw new Error(`"${id}" is not a built-in runner model: assign one as <provider>:<model>.`);
   const fallback = defaultModelInfo(parsed.provider, parsed.model);
-  const key = vendorApiKeyIn(env, parsed.provider);
-  if (key === '') return fallback;
+  if (!providerCredentials(env, parsed.provider)) return fallback;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const listed = listProviderModels(narrowedTo(env, parsed.provider), options.fetchImpl);
+    const listed = listProviderModels(env, parsed.provider, options.fetchImpl);
     const timeout = new Promise<ModelInfo[]>((resolve) => {
       timer = setTimeout(() => resolve([]), options.timeoutMs ?? 5_000);
       timer.unref?.();
@@ -195,15 +188,4 @@ export async function lookupModelInfo(
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-/** The environment with every other provider's key removed, so a lookup lists one catalog. */
-function narrowedTo(env: RunnerEnv, provider: AiProvider): RunnerEnv {
-  const out: Record<string, string | undefined> = { ...env };
-  const own = new Set([VENDORS[provider].apiKeyEnvVar, ...VENDORS[provider].detectEnvVars]);
-  for (const other of PROVIDER_PRIORITY) {
-    const meta = VENDORS[other];
-    for (const name of [meta.apiKeyEnvVar, ...meta.detectEnvVars]) if (!own.has(name)) delete out[name];
-  }
-  return out;
 }
