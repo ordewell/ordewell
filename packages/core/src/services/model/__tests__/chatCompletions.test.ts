@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createChatCompletionsClient, requestBody } from '../adapters/chatCompletions';
 import { ModelError } from '../ModelError';
 import type { AiProvider } from '../../../interfaces/IConfig';
@@ -19,6 +19,20 @@ const TOOLS: ModelRequest['tools'] = [
 function ofType<T extends ModelEvent['type']>(events: ModelEvent[], type: T): Array<Extract<ModelEvent, { type: T }>> {
   return events.filter((e): e is Extract<ModelEvent, { type: T }> => e.type === type);
 }
+
+describe('chat-completions adapter: transport', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends through the global fetch when given none, as the built-in runner does', async () => {
+    const transport = replay(sse(fixture('chat-completions', 'text.sse')));
+    vi.stubGlobal('fetch', transport.fetch);
+    // A closed loopback port: a transport other than the global fetch fails here, offline.
+    const client = createChatCompletionsClient({ provider: 'openrouter', apiKey: 'sk-test', baseUrl: 'http://127.0.0.1:9/v1' });
+    const events = await collect(client, BASE_REQUEST);
+    expect(transport.sent.map((e) => e.url)).toEqual(['http://127.0.0.1:9/v1/chat/completions']);
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'stop' });
+  });
+});
 
 describe('chat-completions adapter: streams', () => {
   it('streams text, then usage, then a stop', async () => {
