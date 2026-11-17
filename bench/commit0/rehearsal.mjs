@@ -63,6 +63,40 @@ export const longStep = (sec) => shell(`sleep ${sec} && echo slept ${sec}s`, { t
 const done = (subject) => ({ tool: 'task_complete', args: { status: 'done', summary: `${subject}.`, commit: { subject } } });
 const failed = (why) => ({ tool: 'task_complete', args: { status: 'failed', summary: why, reason: why } });
 
+const checkpoint = (question) => ({ tool: 'checkpoint', args: { question } });
+/** A file outside the library and its tests: work that lands without moving the score. */
+const note = (file) => ({ tool: 'write', args: { path: file, content: 'Written by the rehearsal.\n' } });
+
+/** Deterministic task ids, so a plan and its dependencies read back the same on every run. */
+const taskId = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+/**
+ * Arm B's plan, as the planner emits it: one task per entry of `tasks`
+ * ({ key, title, after? }), each on the bench's runner and model in full mode,
+ * its prompt carrying the `[rehearsal:<key>]` the fake routes its attempts by.
+ */
+export function rehearsalPlan(tasks) {
+  const order = new Map(tasks.map((t, i) => [t.key, i + 1]));
+  return {
+    tasks: tasks.map((t, i) => ({
+      id: taskId(i + 1), order: i + 1, title: t.title, description: t.title, type: 'ai',
+      dependencies: (t.after ?? []).map((k) => taskId(order.get(k))),
+      prompt: `${t.title}. [rehearsal:${t.key}]`,
+      assignedRunner: 'openrouter',
+      assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
+      taskMode: 'full', autonomy: 'AFK', sliceType: 'AFK', subtasks: [],
+    })),
+  };
+}
+
+const RETRY = { tool: 'retry_task', args: { task: '#1', from: 'session', message: 'The rehearsal retries this once: make the edits again and report done.' } };
+const APPROVE = { tool: 'answer_checkpoint', args: { task: '#2', answer: 'approve', reason: 'Follow the tests.' } };
+const FAILS_ON_PURPOSE = 'The rehearsal fails this task on purpose.';
+const LEFT_PLAN = [
+  { key: 'edit', title: 'Implement the library' },
+  { key: 'after', title: 'Note the rehearsal', after: ['edit'] },
+];
+
 /**
  * Each scenario: the arm it runs, its scripted attempts per task (by the key
  * a task's prompt carries, or `A` for arm A's one task), and what its
@@ -85,6 +119,44 @@ export const SCENARIOS = Object.freeze({
       stoppedWhy: null, passedAboveBaseline: true, testExcluded: true, tasks: { failed: 1 },
     },
     playedOut: ['A'],
+  },
+  'b-retry': {
+    arm: 'B',
+    about: 'arm B: task 1 fails while task 2 waits on it; the supervisor at Act retries it, answers task 2\'s checkpoint, and the run completes; scored from merged work',
+    plan: () => rehearsalPlan(LEFT_PLAN),
+    attempts: (ctx) => ({
+      edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)], [...editSteps(ctx), done('Implement the library')]],
+      after: [[checkpoint('Two docstrings disagree with the tests: may I follow the tests?'), note('commit0-rehearsal-note.md'), done('Note the rehearsal')]],
+    }),
+    // In order, each played once: the checkpoint comes after the retry, but a wake that holds both answers it first.
+    supervisor: [{ when: /checkpoint/i, step: APPROVE }, { when: /fail/i, step: RETRY }],
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
+    playedOut: ['edit', 'after'],
+    supervised: ['retry_task', 'answer_checkpoint'],
+  },
+  'b-leave': {
+    arm: 'B',
+    about: 'arm B: task 1 fails while task 2 waits on it; the supervisor at Act leaves it, so the run is held and ends by the stall rule, never complete',
+    plan: () => rehearsalPlan(LEFT_PLAN),
+    attempts: (ctx) => ({ edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)]], after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]] }),
+    supervisor: [],
+    expect: { truncated: true, truncatedWhy: /^settled with 2 tasks open/, stoppedWhy: null, stalled: true, notComplete: true, tasks: { failed: 1, completed: 0 } },
+    playedOut: ['edit'],
+  },
+  'b-cap': {
+    arm: 'B',
+    about: 'arm B: task 1 lands its edits, then task 2 reports usage past the spend cap mid-attempt: the stop, the merge and the scoring all happen',
+    capUsd: 0.5,
+    plan: () => rehearsalPlan([{ key: 'edit', title: 'Implement the library' }, { key: 'spend', title: 'Spend past the cap', after: ['edit'] }]),
+    attempts: (ctx) => ({
+      edit: [[...editSteps(ctx), done('Implement the library')]],
+      spend: [[{ ...shell('echo spending'), costUsd: 1 }, longStep(ctx.longSec), done('Spend past the cap')]],
+    }),
+    expect: {
+      valid: true, scoredFrom: 'merged', truncated: true, truncatedWhy: /^cap: spend/, stoppedWhy: 'spend', runStopped: true, mergeExit: 0,
+      passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 },
+    },
+    playedOut: ['edit'],
   },
 });
 
@@ -121,12 +193,29 @@ export function scenario(name) {
 const toolNames = (request) => (request.tools ?? []).map((t) => t.function?.name ?? t.name).filter(Boolean);
 const text = (m) => (typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? ''));
 
-/** Who is asking: the built-in runner, the supervisor or the planner (anything else answers in prose). */
-export function roleOf(request) {
-  const tools = toolNames(request);
-  if (tools.includes('task_complete')) return 'runner';
-  if (tools.some((t) => /retry_task|answer_checkpoint|skip_task/.test(t))) return 'supervisor';
-  return 'planner';
+/**
+ * Who is asking: the built-in runner, or the planner's conversation, which is
+ * the supervisor once it has played the plan (a wake-up turn reaches the
+ * same conversation). `planned` is whether the fake has played the plan.
+ */
+export function roleOf(request, planned = false) {
+  if (toolNames(request).includes('task_complete')) return 'runner';
+  return planned ? 'supervisor' : 'planner';
+}
+
+/**
+ * The supervisor's turn: after a tool's result it closes in prose; otherwise
+ * the first rule not yet played whose `when` matches the newest user message
+ * plays its step, once. Anything else is left alone, as `b-leave` needs.
+ */
+export function supervisorTurn(rules, messages, state) {
+  const last = messages.at(-1);
+  if (!last || last.role === 'tool') return { content: 'Done.' };
+  const said = text([...messages].reverse().find((m) => m.role === 'user'));
+  const i = (rules ?? []).findIndex((r, n) => !state.supervised.includes(n) && r.when.test(said));
+  if (i === -1) return { content: 'Nothing to do: the run goes on.' };
+  state.supervised.push(i);
+  return { toolCall: { name: rules[i].step.tool, args: rules[i].step.args }, rule: i };
 }
 
 /** Which task an attempt is for: the `[rehearsal:<key>]` its prompt carries, or arm A's one task. */
@@ -146,7 +235,7 @@ export const roundsOf = (messages) => (messages ?? []).filter((m) => m.role === 
  * A request with no tool round yet opens a new attempt.
  */
 export function createState() {
-  return { attempts: {} };
+  return { attempts: {}, planned: false, supervised: [] };
 }
 
 /**
@@ -158,7 +247,7 @@ export function createState() {
 export function turnFor(name, request, state, ctx) {
   const s = scenario(name);
   const messages = request.messages ?? [];
-  const role = roleOf(request);
+  const role = roleOf(request, state.planned);
   if (role === 'runner') {
     const key = taskKeyOf(messages);
     const round = roundsOf(messages);
@@ -170,8 +259,11 @@ export function turnFor(name, request, state, ctx) {
     if (!step) return { content: 'Done.', costUsd: TURN_COST_USD, role, key, attempt, round };
     return { toolCall: { name: step.tool, args: step.args }, costUsd: step.costUsd ?? TURN_COST_USD, role, key, attempt, round };
   }
-  if (role === 'supervisor' && s.supervisor) return { ...s.supervisor(request, state, ctx), role };
-  if (role === 'planner' && s.plan) return { content: fencedPlan(s.plan(ctx)), costUsd: TURN_COST_USD, role };
+  if (role === 'supervisor') return { ...supervisorTurn(s.supervisor, messages, state), costUsd: TURN_COST_USD, role };
+  if (role === 'planner' && s.plan) {
+    state.planned = true;
+    return { content: fencedPlan(s.plan(ctx)), costUsd: TURN_COST_USD, role };
+  }
   return { content: 'Understood.', costUsd: TURN_COST_USD, role };
 }
 
@@ -233,6 +325,9 @@ export function judgePlayed(name, turns, ctx) {
       const reached = turns.some((t) => t.role === 'runner' && t.key === key && t.attempt === i + 1 && t.round === last && t.toolCall?.name === steps[last].tool);
       if (!reached) f.push(`task ${key}, attempt ${i + 1}: its last scripted step (${steps[last].tool}) was never played`);
     });
+  }
+  for (const tool of s.supervised ?? []) {
+    if (!turns.some((t) => t.role === 'supervisor' && t.toolCall?.name === tool)) f.push(`the supervisor never played ${tool}`);
   }
   return f;
 }
