@@ -3,6 +3,7 @@
   "title": "Coupled rename of a persisted field, with migration",
   "kind": "coupled rename across core, the MCP schema and saved sessions",
   "goal": "Rename the task field `userStoriesCovered` to `coveredStories` everywhere it appears. That includes the Task model and its copies in packages/core (Task.ts, PlannedTask.ts, TaskQuery.ts, TaskOps.ts, TaskExecution.ts, SessionMessage.ts, runView.ts), the planner prompts (PlanPrompts.ts), the planner's MCP tool schema (`planTask` in packages/core/src/services/mcp/tools.ts, which submit_plan uses), and every reader in packages/cli, packages/vscode and packages/ui. Sessions saved before the rename persist the old name in .ordewell/sessions/*.json and must load with their values under the new name: add the migration where every plan-shape migration lives (`migrateLoadedPlan` in packages/core/src/models/Task.ts) and a test in packages/core/src/models/__tests__/migrateLoadedPlan.test.ts. When this is done no code reads or writes `userStoriesCovered` except that migration, and the MCP schema accepts only the new name. The build, typecheck and tests of every package must pass.",
+  "guards": "over-flattening: the rename, its schema change and its migration stay one task or a serial chain, so a plan that splits them into parallel slices by package fails its key",
   "key": {
     "taskCount": { "min": 1, "max": 3 },
     "parallelAllowed": false,

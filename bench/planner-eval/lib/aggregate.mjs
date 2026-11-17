@@ -1,8 +1,8 @@
 /**
  * From run records to the report: medians and spread per backend, variant and
  * goal, every violation listed with the run it came from, and a verdict per
- * backend for each comparison (V1 against V0, and V2 against V1 where V2
- * ran). Pure, so
+ * backend for each comparison (V1 against V0, V2 against V1 where V2 ran, and
+ * V1 against V3 where V3 ran, with a row per goal). Pure, so
  * `planner-eval.test.mjs` proves every verdict on hand-written records.
  *
  * A run record is what run.mjs writes per run:
@@ -12,10 +12,16 @@
  * counts toward the completion rate and nowhere else.
  */
 
-/** An `optional` comparison is judged only on a backend whose candidate ran, as its variant runs only when named. */
+/**
+ * A comparison with `when` is judged only on a backend that ran that variant,
+ * as the variant runs only when named. One with `perGoal` also gets a row per
+ * goal and backend (`goalRows`): V1 against V3 is a change to the planner
+ * judged goal by goal, the guards among them.
+ */
 export const COMPARISONS = [
   { baseline: 'V0', candidate: 'V1' },
-  { baseline: 'V1', candidate: 'V2', optional: true },
+  { baseline: 'V1', candidate: 'V2', when: 'V2' },
+  { baseline: 'V3', candidate: 'V1', when: 'V3', perGoal: true },
 ];
 
 /** The per-run numbers the report summarises, in its column order. */
@@ -23,6 +29,7 @@ export const NUMERIC = [
   ['taskCount', 'tasks'],
   ['width', 'width'],
   ['criticalPath', 'path'],
+  ['changePath', 'change path'],
   ['researchTasks', 'research'],
   ['readOnlyTasks', 'read-only'],
   ['loopTasks', 'loops'],
@@ -207,13 +214,56 @@ export function verdict(records, goals, { cell, baseline, candidate }) {
   };
 }
 
+/**
+ * One row per goal for a backend: each side's key violations, width, critical
+ * path, change path and task count (median and spread over its complete
+ * runs), how many of its plans end in an integration check, and whether the
+ * candidate's key violations on this goal hold by the verdict's rule. A guard
+ * goal (`guards`) is one a flatter plan can break, so a change that widens
+ * plans must hold there.
+ */
+export function goalRows(records, goals, { cell, baseline, candidate }) {
+  const ids = [...new Set(records.filter((r) => r.cell === cell && [baseline, candidate].includes(r.variant)).map((r) => r.goal))].sort();
+  return ids.map((id) => {
+    const runs = (variant) => records.filter((r) => r.cell === cell && r.goal === id && r.variant === variant);
+    const side = (variant) => {
+      const all = runs(variant);
+      const complete = all.filter(isComplete);
+      const numbers = complete.map(runNumbers);
+      const stat = (k) => ({ median: median(numbers.map((n) => n[k])), spread: spread(numbers.map((n) => n[k])) });
+      const plans = complete.filter((r) => r.metrics.submitted && typeof r.metrics.endsInCheck === 'boolean');
+      return {
+        runs: all.length,
+        complete: complete.length,
+        keyViolations: stat('keyViolations'),
+        width: stat('width'),
+        criticalPath: stat('criticalPath'),
+        changePath: stat('changePath'),
+        taskCount: stat('taskCount'),
+        endsInCheck: plans.length ? { yes: plans.filter((r) => r.metrics.endsInCheck).length, of: plans.length } : null,
+      };
+    };
+    const b = perRepeat(runs(baseline).filter(isComplete), (n) => n.keyViolations);
+    const c = perRepeat(runs(candidate).filter(isComplete), (n) => n.keyViolations);
+    const allowance = b && c ? Math.max(b.range, c.range) / 2 : null;
+    const g = goals.find((x) => x.id === id);
+    return {
+      cell, goal: id, baseline, candidate,
+      guard: g?.guards ?? null,
+      sides: { [baseline]: side(baseline), [candidate]: side(candidate) },
+      keyViolationsHold: !b || !c ? null : c.mean <= b.mean + allowance,
+      allowance,
+    };
+  });
+}
+
 export function aggregate(records, goals) {
   const cells = [...new Set(records.map((r) => r.cell))];
+  const judged = (cell) => COMPARISONS.filter((c) => !c.when || records.some((r) => r.cell === cell && r.variant === c.when));
   return {
     summaries: summarize(records, goals),
-    verdicts: cells.flatMap((cell) => COMPARISONS
-      .filter((c) => !c.optional || records.some((r) => r.cell === cell && r.variant === c.candidate))
-      .map(({ baseline, candidate }) => verdict(records, goals, { cell, baseline, candidate }))),
+    verdicts: cells.flatMap((cell) => judged(cell).map(({ baseline, candidate }) => verdict(records, goals, { cell, baseline, candidate }))),
+    goalRows: cells.flatMap((cell) => judged(cell).filter((c) => c.perGoal).flatMap(({ baseline, candidate }) => goalRows(records, goals, { cell, baseline, candidate }))),
   };
 }
 
@@ -230,7 +280,7 @@ function stat(s) {
 
 const cellText = (s) => String(s).replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-export function markdown({ summaries, verdicts }, { title = 'Planner eval', meta = {} } = {}) {
+export function markdown({ summaries, verdicts, goalRows: rows = [] }, { title = 'Planner eval', meta = {} } = {}) {
   const out = [`# ${title}`, ''];
   for (const [k, v] of Object.entries(meta)) out.push(`- ${k}: ${cellText(v)}`);
   if (Object.keys(meta).length) out.push('');
@@ -257,6 +307,25 @@ export function markdown({ summaries, verdicts }, { title = 'Planner eval', meta
     for (const s of summaries.filter((x) => x.goal === goal).sort((a, b) => `${a.cell}${a.variant}`.localeCompare(`${b.cell}${b.variant}`))) {
       const range = s.widthInRange ? `${s.widthInRange.inRange}/${s.widthInRange.of}` : '–';
       out.push(`| ${cellText(s.cell)} | ${s.variant} | ${s.runs} | ${s.complete} | ${s.submitted} | ${range} | ${NUMERIC.map(([k]) => stat(s.stats[k])).join(' | ')} |`);
+    }
+    out.push('');
+  }
+  const comparisons = [...new Map(rows.map((r) => [`${r.baseline}\u0000${r.candidate}`, r])).values()];
+  for (const { baseline, candidate } of comparisons) {
+    out.push(`## ${candidate} against ${baseline}, per goal`, '');
+    out.push(`Each pair of columns is ${baseline} then ${candidate}. Holds: ${candidate}'s key violations on the goal are no more than ${baseline}'s plus the allowance, as in the verdicts. A guard goal is one a flatter plan breaks: a change must hold there.`, '');
+    const columns = ['key viol.', 'width', 'path', 'change path', 'tasks', 'ends in a check'];
+    out.push(`| goal | backend | guard | complete | ${columns.map((p) => `${p} ${baseline} | ${p} ${candidate}`).join(' | ')} | key viol. holds |`);
+    out.push(`|${' --- |'.repeat(columns.length * 2 + 5)}`);
+    for (const r of rows.filter((x) => x.baseline === baseline && x.candidate === candidate).sort((a, b) => `${a.goal}${a.cell}`.localeCompare(`${b.goal}${b.cell}`))) {
+      const [b, c] = [r.sides[baseline], r.sides[candidate]];
+      const check = (s) => (s.endsInCheck ? `${s.endsInCheck.yes}/${s.endsInCheck.of}` : '–');
+      const cols = [
+        stat(b.keyViolations), stat(c.keyViolations), stat(b.width), stat(c.width), stat(b.criticalPath), stat(c.criticalPath),
+        stat(b.changePath), stat(c.changePath), stat(b.taskCount), stat(c.taskCount), check(b), check(c),
+      ];
+      const holds = r.keyViolationsHold === null ? 'no data' : r.keyViolationsHold ? 'yes' : 'no';
+      out.push(`| ${r.goal} | ${cellText(r.cell)} | ${r.guard ? 'yes' : ''} | ${b.complete}/${b.runs}, ${c.complete}/${c.runs} | ${cols.join(' | ')} | ${holds} |`);
     }
     out.push('');
   }

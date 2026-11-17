@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { CONTROL_REF_ENV } from './config.mjs';
 import { must } from './proc.mjs';
 
 const MARKER = '.planner-eval-built';
@@ -20,6 +21,21 @@ const npm = (args, opts) => (npmCli
 
 export async function resolveRef(repo, ref) {
   return (await must('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repo })).trim();
+}
+
+/**
+ * The commit V3 builds: `ref` when one is named, else where the candidate's
+ * change started, its merge-base with `upstream`. `git` is the runner, so a
+ * test can answer for it.
+ */
+export async function controlSha({ repo, ref, candidateSha, upstream, git = (args) => must('git', args, { cwd: repo }) }) {
+  if (ref) return (await git(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
+  try {
+    return (await git(['merge-base', candidateSha, upstream])).trim();
+  } catch (error) {
+    throw new Error(`V3 has no control ref: ${candidateSha.slice(0, 12)} has no merge-base with ${upstream} (${String(error?.message ?? error).split('\n')[0]}). `
+      + `Name one with --control-ref or ${CONTROL_REF_ENV}.`);
+  }
 }
 
 /** The checkout's root, which `ref`s are resolved in and worktrees added to. */

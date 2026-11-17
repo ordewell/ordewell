@@ -19,9 +19,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { aggregate, isComplete, markdown } from './lib/aggregate.mjs';
-import { ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
+import { controlSha, ensureBuild, repoRoot, resolveRef, cliMain } from './lib/builds.mjs';
 import {
-  CELLS, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, outputDirs, parseArgs, quotaOf,
+  CELLS, CONTROL_REF_ENV, CONTROL_UPSTREAM, HERE, MAX_DRIVER_TURNS, VARIANTS, goalText, loadGoals, missingFor, mockCell, outputDirs, parseArgs, quotaOf,
   approvalPolicy, runEnv, runSettings, selectRuns, substituteFor, timeoutFor,
 } from './lib/config.mjs';
 import { guardFiles } from './lib/guard.mjs';
@@ -31,7 +31,7 @@ import { classifyTurn, daemonClient, newestSession, plannerApprovals, readToken,
 import { freePort, onPath, run, sleep, until } from './lib/proc.mjs';
 import { redactJson, redactor } from './lib/redact.mjs';
 import { reviewPlan } from './lib/rubric.mjs';
-import { cloneTarget, ensureTemplate, workParent } from './lib/target.mjs';
+import { cloneTarget, ensureTemplate, fixtureOf, workParent } from './lib/target.mjs';
 import { startTui } from './lib/tui.mjs';
 import { startMock as start } from '../live/start-mock.mjs';
 import { outsideRepo } from '../lib/data-dir.mjs';
@@ -48,13 +48,16 @@ const USAGE = `usage: node bench/planner-eval/run.mjs (--smoke | --full | --mock
   --backend a,b           cells by id or prefix (claude-code, opencode/glm-5.3-flash, openrouter, cline ...)
   --goal g1,g4            goals by id
   --variant V0,V1         variants (V0 baseline + nudges, V1 candidate; V2 candidate
-                          with the planner read limit, only when named)
+                          with the planner read limit and V3 the control ref, only when named)
   --repeats N             repeats per (goal, backend, variant)
   --concurrency N         runs at once (default 2)
   --timeout S             seconds a run may take before it is stopped (default 900); a stopped run is a failed run
   --api-timeout S         the same for an API (openrouter) planner (default twice --timeout)
   --candidate-ref REF     the build V1 uses (default HEAD)
-  --baseline-ref REF      the build V0 uses and every target is cut from (default 0ecc6412)
+  --baseline-ref REF      the build V0 uses and every target is cut from (default 0ecc6412); G6 plans
+                          against its own fixture instead
+  --control-ref REF       the build V3 uses, as it is (default $${CONTROL_REF_ENV}, else the merge-base
+                          of --candidate-ref and ${CONTROL_UPSTREAM})
   --runners a,b           ORDEWELL_ENABLED_RUNNERS for every run (default: the cell's planner runner)
   --max-parallel N        ORDEWELL_MAX_PARALLEL for every run (default 4)
   --no-review             skip the rubric review
@@ -235,7 +238,8 @@ async function record({ spec, builds, templates, opts, dir, workRoot }) {
   for (;;) {
     try {
       const { outcome, screen, token } = await planOnce({
-        spec, cell, build, template: templates[spec.goal.id], modulesFrom: builds.baseline.mock ? null : builds.baseline.dir, opts, dir, workRoot,
+        // A fixture needs none of Ordewell's node_modules.
+        spec, cell, build, template: templates[spec.goal.id], modulesFrom: builds.baseline.mock || fixtureOf(spec.goal) ? null : builds.baseline.dir, opts, dir, workRoot,
       });
       const quota = quotaOf({ ...outcome, screen });
       const fallback = quota && !substitution ? substituteFor(cell) : null;
@@ -496,11 +500,16 @@ async function main() {
       const here = { dir: repo, main: cliMain(repo), sha: await resolveRef(repo, 'HEAD'), mock: true };
       builds.baseline = here;
       builds.candidate = here;
+      builds.control = here;
     } else {
       const wanted = new Set(todo.map((r) => r.variant.build));
       const shas = { baseline: await resolveRef(repo, opts.baselineRef), candidate: await resolveRef(repo, opts.candidateRef) };
+      if (wanted.has('control')) {
+        shas.control = await controlSha({ repo, ref: opts.controlRef, candidateSha: shas.candidate, upstream: CONTROL_UPSTREAM });
+        if (shas.control === shas.candidate) say(`V3 builds ${shas.control.slice(0, 12)}, the candidate itself: V1 against V3 compares a build with itself`);
+      }
       // The baseline build also lends the target clones its node_modules, so it is built even when only V1 runs.
-      for (const which of ['baseline', ...(wanted.has('candidate') ? ['candidate'] : [])]) {
+      for (const which of ['baseline', ...['candidate', 'control'].filter((w) => wanted.has(w))]) {
         builds[which] = await ensureBuild({ repo, buildsDir, sha: shas[which], say });
       }
     }
@@ -514,7 +523,9 @@ async function main() {
       started: new Date().toISOString(),
       baseline: `${opts.baselineRef} (${builds.baseline.sha.slice(0, 12)})`,
       candidate: builds.candidate ? `${opts.candidateRef} (${builds.candidate.sha.slice(0, 12)})` : 'not built',
-      target: `${opts.baselineRef} (${targetSha.slice(0, 12)})`,
+      control: builds.control ? `${opts.controlRef ?? `merge-base of ${opts.candidateRef} and ${CONTROL_UPSTREAM}`} (${builds.control.sha.slice(0, 12)})` : 'not built',
+      target: `${opts.baselineRef} (${targetSha.slice(0, 12)})`
+        + goals.filter((g) => fixtureOf(g) && templates[g.id]).map((g) => `; ${g.id}: ${g.setup.fixture}`).join(''),
       variants: Object.values(VARIANTS).map((v) => `${v.id}: ${v.about}`).join('; '),
       surface: 'ordewell tui under script(1)',
       review: opts.review ? `claude -p --model ${opts.reviewModel}` : 'off',
