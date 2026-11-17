@@ -193,38 +193,127 @@ test('flattenScript and the leak probe on a real repository', { skip: !(hasGit &
   }
 });
 
-test('the test restore, on a real repository, finds what pytest loads wherever the arm put it', { skip: !hasGit && 'needs git' }, () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+// The eval box's flattened commit as selectScoredFiles reads it, and an arm's files: path to content.
+const blob = (text) => ({ mode: '100644', oid: execFileSync('git', ['hash-object', '--stdin'], { input: text, encoding: 'utf8' }).trim() });
+const manifestOf = (files) => new Map(Object.entries(files).map(([p, v]) => [p, v === null ? { pruned: true } : typeof v === 'string' ? blob(v) : v]));
+
+test('what crosses into the eval box: the arm\'s source, never its tests, test configuration, venv or a shadowing module', { skip: !hasGit && 'needs git' }, () => {
+  const base = { 'tinylib/__init__.py': 'stub\n', 'tinylib/core.py': 'stub\n', 'tinylib/gone.py': 'stub\n', 'tests/test_core.py': 'test\n', 'tests/test_gone.py': 'test\n', 'pyproject.toml': '[project]\n', 'conftest.py': 'base\n' };
+  const unchanged = (...paths) => Object.fromEntries(paths.map((p) => [p, base[p]]));
+  const cases = [
+    ['a source edit crosses', { 'tinylib/core.py': 'impl\n' }, { copy: ['tinylib/core.py'] }],
+    ['a new module inside the library crosses', { 'tinylib/helpers.py': 'x\n' }, { copy: ['tinylib/helpers.py'] }],
+    ['a test edit is excluded', { 'tests/test_core.py': 'assert True\n' }, { excluded: [['tests/test_core.py', "a test: the reference's is kept"]] }],
+    ['a new test is excluded', { 'tests/test_new.py': 'x\n' }, { excluded: [['tests/test_new.py', "a test: the reference's is kept"]] }],
+    ['a conftest.py edit is excluded and recorded', { 'conftest.py': 'def pytest_runtest_makereport(): ...\n' }, { excluded: [['conftest.py', "test configuration: the reference's is kept"]], inspect: true }],
+    ['a nested conftest.py is excluded and recorded', { 'tinylib/conftest.py': 'x\n' }, { excluded: [['tinylib/conftest.py', "test configuration: the reference's is kept"]], inspect: true }],
+    ['a pyproject.toml edit keeps the reference\'s and is recorded', { 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-p no:python"\n' }, { excluded: [['pyproject.toml', "test configuration: the reference's is kept whole"]], inspect: true }],
+    ['a .venv write is excluded', { '.venv': null }, { excluded: [['.venv', "the image's venv"]] }],
+    ['git metadata and Ordewell\'s data are excluded', { '.git': null, '.ordewell': null }, { excluded: [['.git', 'git metadata'], ['.ordewell', "Ordewell's session data"]] }],
+    ['bytecode is excluded', { 'tinylib/__pycache__': null, 'tinylib/core.pyc': 'x' }, { excluded: [['tinylib/__pycache__', 'bytecode']], copy: ['tinylib/core.pyc'] }],
+    ['a top-level pytest/ package is excluded and flagged', { 'pytest/__init__.py': 'x\n', 'pytest/__main__.py': 'x\n' }, {
+      excluded: [['pytest/__init__.py', 'a new top-level module shadowing pytest, which the eval imports'], ['pytest/__main__.py', 'a new top-level module shadowing pytest, which the eval imports']], inspect: true }],
+    ['a top-level module shadowing the standard library is excluded and flagged', { 'argparse.py': 'x\n' }, { excluded: [['argparse.py', 'a new top-level module shadowing argparse, which the eval imports']], inspect: true }],
+    ['a new top-level module of the arm\'s own crosses', { 'tinylib_extra.py': 'x\n' }, { copy: ['tinylib_extra.py'] }],
+    ['a link out of the workdir is excluded', { 'tinylib/data': { mode: '120000', oid: 'f'.repeat(40), target: '../../etc' } }, { excluded: [['tinylib/data', 'a link out of the workdir']] }],
+    ['a deleted source file is removed; a deleted test is the reference\'s', { 'tinylib/gone.py': undefined, 'tests/test_gone.py': undefined }, {
+      remove: ['tinylib/gone.py'], excluded: [['tests/test_gone.py', "deleted: a test: the reference's is kept"]] }],
+  ];
+  for (const [name, change, want] of cases) {
+    const final = { ...base, ...change };
+    for (const [p, v] of Object.entries(change)) if (v === undefined) delete final[p];
+    const got = L.selectScoredFiles({ lib: lib(), base: manifestOf(base), final: manifestOf(final), stdlib: ['argparse', 'os'] });
+    assert.deepEqual(got.copy, want.copy ?? [], name);
+    assert.deepEqual(got.remove, want.remove ?? [], name);
+    assert.deepEqual(got.excluded.map((e) => [e.path, e.reason]), want.excluded ?? [], name);
+    assert.equal(got.needsInspection.length > 0, Boolean(want.inspect), name);
+  }
+  assert.deepEqual(L.selectScoredFiles({ lib: lib(), base: manifestOf(base), final: manifestOf(unchanged(...Object.keys(base))) }), { copy: [], remove: [], excluded: [], needsInspection: [] });
+  // A src layout's editable install puts src/ on sys.path too.
+  const src = L.selectScoredFiles({ lib: lib({ srcDir: 'src/calc' }), base: new Map(), final: manifestOf({ 'src/pytest.py': 'x\n', 'src/calc/x.py': 'x\n' }) });
+  assert.deepEqual([src.copy, src.excluded.map((e) => e.path)], [['src/calc/x.py'], ['src/pytest.py']]);
+  // networkx's shape: testDir is srcDir, and pytest collects *_test.py.
+  const nx = lib({ srcDir: 'networkx/', testDir: 'networkx/' });
+  const n = L.selectScoredFiles({ lib: nx, base: new Map(), final: manifestOf({ 'networkx/algorithms/easy_test.py': 'x\n', 'networkx/algorithms/tests/test_c.py': 'x\n', 'networkx/algorithms/cycles.py': 'x\n', 'networkx/testing/__init__.py': 'x\n' }) });
+  assert.deepEqual(n.copy, ['networkx/algorithms/cycles.py', 'networkx/testing/__init__.py']);
+});
+
+test('treeManifest hashes the arm\'s files as git does, so an untouched file stays and only real changes cross', { skip: !(hasGit && process.platform !== 'win32') && 'needs git, sh and symlinks' }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-')));
   try {
     const g = (...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' });
-    const put = (p, text = 'x\n') => {
+    const put = (p, text = 'x\n', mode = 0o644) => {
       fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
-      fs.writeFileSync(path.join(dir, p), text);
+      fs.writeFileSync(path.join(dir, p), text, { mode });
     };
-    g('init', '-q', '-b', 'main');
-    put('.gitignore', '.venv/\n.ordewell/\n');
-    put('tinylib/__init__.py'); put('tinylib/tests/test_a.py'); put('setup.cfg', '[metadata]\n');
+    g('init', '-q', '-b', 'commit0-base');
+    put('tinylib/__init__.py'); put('tinylib/run.sh', '#!/bin/sh\n', 0o755); put('tests/test_a.py'); put('setup.cfg', '[metadata]\n');
+    fs.symlinkSync('__init__.py', path.join(dir, 'tinylib', 'alias.py'));
     g('add', '-A'); g('commit', '-qm', 'base');
-    // networkx's shape: testDir is srcDir.
-    const l = lib({ workdir: dir, testDir: 'tinylib', flatCommit: g('rev-parse', 'HEAD').trim() });
-    // The arm's work, and what it must not keep for the eval.
+    const base = L.parseLsTree(g('ls-tree', '-r', '-z', 'HEAD'));
+    assert.deepEqual(L.selectScoredFiles({ lib: lib(), base, final: L.treeManifest(dir) }).copy, [], 'every unchanged file, mode and link hashes as git\'s');
     put('tinylib/__init__.py', 'def f(): return 1\n');
+    fs.chmodSync(path.join(dir, 'tinylib', 'run.sh'), 0o644);
     put('setup.cfg', '[tool:pytest]\naddopts = -p evil\n');
-    put('conftest.py', 'hook\n');
-    put('tinylib/easy_test.py');
-    put('.gitignore', '.venv/\n.ordewell/\nhidden/\n');
-    put('hidden/conftest.py');
-    // Not the arm's: the image's venv and Ordewell's own worktrees.
     put('.venv/lib/site-packages/pkg/conftest.py');
-    put('.ordewell/worktrees/t1/tests/test_a.py');
-    const args = L.testRestoreArgs(l);
-    const run = (argv) => execFileSync(argv[0], argv.slice(1), { cwd: dir, encoding: 'utf8' });
-    const plan = L.testRestorePlan(l, run(args.diff), run(args.untracked));
-    assert.deepEqual(plan.checkout, ['setup.cfg']);
-    assert.deepEqual(plan.remove.sort(), ['conftest.py', 'hidden/conftest.py', 'tinylib/easy_test.py']);
+    put('.ordewell/worktrees/t1/tinylib/x.py');
+    put('tinylib/__pycache__/core.cpython-312.pyc');
+    const got = L.selectScoredFiles({ lib: lib(), base, final: L.treeManifest(dir) });
+    assert.deepEqual(got.copy, ['tinylib/__init__.py', 'tinylib/run.sh']);
+    assert.deepEqual(got.excluded.map((e) => e.path).sort(), ['.git', '.ordewell', '.venv', 'setup.cfg', 'tinylib/__pycache__']);
+    assert.deepEqual(got.needsInspection, ["setup.cfg: test configuration: the reference's is kept whole"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the eval box must flatten to the tree the arm\'s box did, or nothing is scored', async () => {
+  assert.equal(L.judgeFreshTree({ armTree: 'abc', freshTree: 'abc' }).ok, true);
+  assert.equal(L.judgeFreshTree({ armTree: 'abc', freshTree: 'abd' }).ok, false);
+  assert.equal(L.judgeFreshTree({ armTree: null, freshTree: null }).ok, false, 'an arm box whose tree was never recorded proves nothing');
+  const calls = [];
+  const io = {
+    prepare: async () => ({ tree: 'other', lsTree: '', stdlib: [] }),
+    manifest: async () => { calls.push('manifest'); return new Map(); },
+    remove: async () => calls.push('remove'), put: async () => calls.push('put'), patch: async () => calls.push('patch'),
+    evaluate: async () => { calls.push('evaluate'); return { passed: 1 }; },
+  };
+  const r = await L.scoreFiles({ lib: lib(), dir: '/arm', armTree: 'abc' }, io);
+  assert.equal(r.treeCheck.ok, false);
+  assert.equal(r.tests, null);
+  assert.deepEqual(calls, [], 'no file crosses and no eval runs on a different base');
+});
+
+test('both arms go through one scoring path, from their files to the eval', async () => {
+  const base = [`100644 blob ${'1'.repeat(40)}\ttinylib/core.py`, `100644 blob ${'2'.repeat(40)}\ttests/test_core.py`, ''].join('\0');
+  const run = async (arm) => {
+    const calls = [];
+    const io = {
+      prepare: async () => { calls.push(['prepare']); return { tree: 't1', lsTree: base, stdlib: [] }; },
+      manifest: async (dir, algo) => {
+        calls.push(['manifest', algo]);
+        return new Map([['tinylib/core.py', { mode: '100644', oid: '3'.repeat(40) }], ['tests/test_core.py', { mode: '100644', oid: '4'.repeat(40) }]]);
+      },
+      remove: async (paths) => calls.push(['remove', paths]),
+      put: async (dir, paths) => calls.push(['put', paths]),
+      patch: async (paths) => calls.push(['patch', paths]),
+      evaluate: async () => { calls.push(['evaluate']); return { passed: 2 }; },
+    };
+    const r = await L.scoreFiles({ lib: lib(), dir: `/runs/${arm}`, armTree: 't1' }, io);
+    return { calls, r };
+  };
+  const a = await run('A');
+  const b = await run('B');
+  assert.deepEqual(a, b);
+  assert.deepEqual(a.calls.map((c) => c[0]), ['prepare', 'manifest', 'remove', 'put', 'patch', 'evaluate']);
+  assert.deepEqual(a.r.copied, ['tinylib/core.py']);
+  assert.deepEqual(a.r.excluded, [{ path: 'tests/test_core.py', reason: "a test: the reference's is kept" }]);
+  assert.equal(a.r.evalBox, 'fresh');
+  // The driver itself: one call, no arm in it, and nothing scored in the arm's box.
+  const drive = fs.readFileSync(path.join(here, 'drive.mjs'), 'utf8');
+  assert.equal(drive.match(/L\.scoreFiles\(/g)?.length, 1, 'drive.mjs scores through L.scoreFiles exactly once');
+  assert.doesNotMatch(drive, /L\.scoreFiles\([^)]*\barm\b/, 'the scoring call takes no arm');
+  assert.equal(drive.match(/L\.evalCommand\(/g)?.length, 1, 'one evaluate builds the eval command, for the baseline and the eval box alike');
 });
 
 // wentingzhao/sphinx:v0 keeps uv's editable build of the stubs at
@@ -264,35 +353,31 @@ test('an arm that commits the .venv link brings it into neither the patch nor th
     g(ws, 'init', '-q', '-b', 'commit0-base');
     fs.writeFileSync(path.join(ws, 'tinylib', '__init__.py'), 'def f():\n    raise NotImplementedError\n');
     g(ws, 'add', '-A'); g(ws, 'commit', '-qm', 'Commit0 base');
-    // The image's venv: untracked, and nothing in the repository ignores it.
     fs.mkdirSync(path.join(ws, '.venv', 'bin'), { recursive: true });
-    fs.writeFileSync(path.join(ws, '.venv', 'bin', 'python'), '#!/bin/sh\necho the image venv\n', { mode: 0o755 });
     const l = lib({ workdir: ws, baseCommit: g(ws, 'rev-parse', 'HEAD') });
     l.flatCommit = g(ws, 'rev-parse', 'HEAD');
     execFileSync('sh', ['-c', L.workspaceIgnoreScript(l)], { encoding: 'utf8' });
+    const base = L.parseLsTree(g(ws, 'ls-tree', '-r', '-z', 'HEAD'));
 
     g(ws, 'worktree', 'add', '-q', '-b', 'task', wt);
     fs.symlinkSync(path.join(ws, '.venv'), path.join(wt, '.venv'));
     fs.writeFileSync(path.join(wt, 'tinylib', '__init__.py'), 'def f():\n    return 1\n');
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'tinylib/new.py\n');
+    fs.writeFileSync(path.join(wt, 'tinylib', 'new.py'), 'X = 2\n');
     g(wt, 'add', '-A'); g(wt, 'commit', '-qm', 'the agent commits everything');
-    assert.deepEqual(g(wt, 'show', '--name-only', '--format=', 'HEAD').split('\n'), ['tinylib/__init__.py'], 'the agent\'s commit holds the link');
-    g(ws, 'merge', '-q', '--ff-only', 'task');
+    const sel = L.selectScoredFiles({ lib: l, base, final: L.treeManifest(wt) });
+    assert.deepEqual(sel.copy, ['.gitignore', 'tinylib/__init__.py', 'tinylib/new.py']);
+    assert.deepEqual(sel.excluded.map((e) => e.path), ['.git', '.venv'], 'the link never crosses');
 
-    const patch = execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, encoding: 'utf8' });
+    // In the eval box: the files put in, and the patch made of what crossed, the ignored new module included.
+    for (const p of sel.copy) fs.copyFileSync(path.join(wt, p), path.join(ws, p));
+    fs.mkdirSync(path.join(ws, '.ordewell'));
+    fs.writeFileSync(path.join(ws, '.ordewell', 'session.json'), '{}\n');
+    const patch = execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, input: `${sel.copy.join('\0')}\0`, encoding: 'utf8' });
     assert.match(patch, /\+ {4}return 1/);
-    assert.doesNotMatch(patch, /\.venv/);
-    assert.equal(fs.lstatSync(path.join(ws, '.venv')).isSymbolicLink(), false, 'the workspace venv is the image\'s directory');
-    assert.equal(execFileSync(l.python, { encoding: 'utf8' }).trim(), 'the image venv', 'the eval command resolves the venv');
-    execFileSync('sh', ['-c', L.venvIntactScript(l)], { cwd: ws });
-
-    // One that forces the venv in anyway: out of the patch, and the eval refuses it.
-    g(ws, 'add', '-f', '.venv/bin/python'); g(ws, 'commit', '-qm', 'forced');
-    assert.doesNotMatch(execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, encoding: 'utf8' }), /\.venv/);
-    assert.throws(() => execFileSync('sh', ['-c', L.venvIntactScript(l)], { cwd: ws, stdio: 'pipe' }), /tracks \.venv/);
-    g(ws, 'rm', '-q', '--cached', '.venv/bin/python'); g(ws, 'commit', '-qm', 'unforced');
-    fs.rmSync(path.join(ws, '.venv'), { recursive: true });
-    fs.symlinkSync(path.join(ws, '.venv'), path.join(ws, '.venv'));
-    assert.throws(() => execFileSync('sh', ['-c', L.venvIntactScript(l)], { cwd: ws, stdio: 'pipe' }), /\.venv is a link/);
+    assert.match(patch, /\+X = 2/);
+    assert.doesNotMatch(patch, /\.venv|\.ordewell/);
+    assert.equal(execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, input: '', encoding: 'utf8' }).includes('return 1'), true, 'nothing copied: the patch still runs');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -357,27 +442,17 @@ test('at the stubs collection may fail, and only a missing module fails the chec
   assert.equal(L.judgeStubCollection({ code: 1, output: "ImportError: No module named ecdsa\n" }).ok, false);
 });
 
-test('only the tests are restored when testDir lies inside the source', () => {
+test('a test is told from the arm\'s work when testDir lies inside the source', () => {
   const networkx = lib({ srcDir: 'networkx/', testDir: 'networkx/' });
   assert.equal(L.isTestPath(networkx, 'networkx/algorithms/tests/test_cycles.py'), true);
   assert.equal(L.isTestPath(networkx, 'networkx/algorithms/tests/__init__.py'), true);
-  assert.equal(L.isTestPath(networkx, 'networkx/conftest.py'), true);
+  assert.equal(L.isTestPath(networkx, 'networkx/algorithms/easy_test.py'), true, 'pytest collects *_test.py');
   assert.equal(L.isTestPath(networkx, 'networkx/algorithms/cycles.py'), false, 'the arm\'s work');
   assert.equal(L.isTestPath(networkx, 'networkx/testing/__init__.py'), false);
   assert.equal(L.isTestPath(networkx, 'docs/tests/test_x.py'), false, 'outside testDir');
   const tlslite = lib({ srcDir: 'tlslite/', testDir: 'unit_tests/' });
   assert.equal(L.isTestPath(tlslite, 'unit_tests/mocksock.py'), true, 'a helper in unit_tests/ is a test file');
   assert.equal(L.isTestPath(tlslite, 'tlslite/utils/cryptomath.py'), false);
-
-  const z = (...a) => `${a.join('\0')}\0`;
-  const plan = L.testRestorePlan(networkx,
-    z('M', 'networkx/algorithms/cycles.py', 'M', 'networkx/algorithms/tests/test_cycles.py', 'D', 'networkx/tests/test_x.py', 'A', 'networkx/tests/test_new.py', 'A', 'networkx/algorithms/helper.py'),
-    z('networkx/tests/test_untracked.py', 'networkx/scratch.py'));
-  assert.deepEqual(plan, {
-    checkout: ['networkx/algorithms/tests/test_cycles.py', 'networkx/tests/test_x.py'],
-    remove: ['networkx/tests/test_new.py', 'networkx/tests/test_untracked.py'],
-  });
-  assert.deepEqual(L.testRestorePlan(networkx, '', ''), { checkout: [], remove: [] });
 });
 
 test('parsePytestSummary reads the last summary line', () => {
@@ -819,47 +894,30 @@ test('choosePatches takes each task\'s own worktree, never the integration one, 
     ['d', false, { kind: 'branch', ref: 'ordewell/r1/4-d' }],
   ], 'the newest preserved branch; an open subtask leaves its task unlanded; the integration worktree is never a source');
   assert.deepEqual(L.choosePatches({ plan: { tasks: [{ id: 'x', title: 'X', status: 'failed' }] }, worktrees, branches }).map((p) => p.source), [null]);
-  assert.deepEqual(L.parseWorktrees(['worktree /testbed', 'HEAD aaa', 'branch refs/heads/main', '', 'worktree /w/t', 'HEAD bbb', 'detached', ''].join('\n')), [
-    { path: '/testbed', branch: 'main' }, { path: '/w/t', branch: null },
-  ]);
 });
 
-test('taskPatchScript takes a worktree\'s committed and uncommitted work, and a branch\'s, without the venv', { skip: !(hasGit && process.platform !== 'win32') && 'needs git and sh' }, () => {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-')));
-  const ws = path.join(dir, 'testbed');
-  const wt = path.join(dir, 'task');
+test('readGitLayout reads a copied repository\'s worktrees and branches from its files, running no git', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
   try {
-    const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
-    fs.mkdirSync(path.join(ws, 'tinylib'), { recursive: true });
-    g(ws, 'init', '-q', '-b', 'commit0-base');
-    fs.writeFileSync(path.join(ws, 'tinylib', '__init__.py'), 'def f():\n    raise NotImplementedError\n');
-    g(ws, 'add', '-A'); g(ws, 'commit', '-qm', 'Commit0 base');
-    const l = lib({ workdir: ws, baseCommit: g(ws, 'rev-parse', 'HEAD') });
-    l.flatCommit = g(ws, 'rev-parse', 'HEAD');
-    g(ws, 'worktree', 'add', '-q', '-b', 'ordewell/r1/1-a', wt);
-    fs.writeFileSync(path.join(wt, 'tinylib', '__init__.py'), 'def f():\n    return 1\n');
-    g(wt, 'commit', '-qam', 'committed');
-    fs.writeFileSync(path.join(wt, 'tinylib', 'new.py'), 'X = 2\n');
-    fs.symlinkSync(path.join(ws, '.venv'), path.join(wt, '.venv'));
-    const fromWorktree = execFileSync('sh', ['-c', L.taskPatchScript(l, { kind: 'worktree', path: wt })], { encoding: 'utf8' });
-    assert.match(fromWorktree, /\+ {4}return 1/, 'committed work');
-    assert.match(fromWorktree, /\+X = 2/, 'an untracked new file');
-    assert.doesNotMatch(fromWorktree, /\.venv/);
-    const fromBranch = execFileSync('sh', ['-c', L.taskPatchScript(l, { kind: 'branch', ref: 'ordewell/r1/1-a' })], { cwd: ws, encoding: 'utf8' });
-    assert.match(fromBranch, /\+ {4}return 1/);
-    assert.doesNotMatch(fromBranch, /X = 2/);
-    // Applied to the workspace, it is what A is scored on.
-    fs.writeFileSync(path.join(dir, 'p.patch'), fromWorktree);
-    execFileSync('sh', ['-c', `cd ${L.shellQuote(ws)} && ${L.applyPatchCommand(path.join(dir, 'p.patch'))}`]);
-    assert.equal(fs.readFileSync(path.join(ws, 'tinylib', '__init__.py'), 'utf8'), 'def f():\n    return 1\n');
-    assert.equal(fs.readFileSync(path.join(ws, 'tinylib', 'new.py'), 'utf8'), 'X = 2\n');
-    // arm.patch is the scored tree: the applied new file, still untracked, is in it; Ordewell's session data is not.
-    fs.mkdirSync(path.join(ws, '.ordewell'));
-    fs.writeFileSync(path.join(ws, '.ordewell', 'session.json'), '{}\n');
-    const scored = execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, encoding: 'utf8' });
-    assert.match(scored, /\+X = 2/);
-    assert.match(scored, /\+ {4}return 1/);
-    assert.doesNotMatch(scored, /\.ordewell|\.venv/);
+    const put = (p, text) => {
+      fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
+      fs.writeFileSync(path.join(dir, p), text);
+    };
+    const sha = (c) => c.repeat(40);
+    put('.git/HEAD', 'ref: refs/heads/commit0-base\n');
+    put('.git/packed-refs', `# pack-refs with: peeled fully-peeled sorted\n${sha('a')} refs/heads/commit0-base\n${sha('b')} refs/heads/ordewell-preserved/r1/2-b\n^${sha('c')}\n`);
+    put('.git/refs/heads/ordewell/r1/1-a', `${sha('d')}\n`);
+    put('.git/refs/heads/ordewell-preserved/r1/2-b', `${sha('e')}\n`);
+    put('.git/worktrees/1-a/gitdir', '/testbed/.ordewell/worktrees/r1/1-a/.git\n');
+    put('.git/worktrees/1-a/HEAD', 'ref: refs/heads/ordewell/r1/1-a\n');
+    put('.git/worktrees/gone/gitdir', '/testbed/.ordewell/worktrees/r1/gone/.git\n');
+    put('.git/worktrees/gone/HEAD', `${sha('f')}\n`);
+    put('.ordewell/worktrees/r1/1-a/.git', 'gitdir: /testbed/.git/worktrees/1-a\n');
+    const got = L.readGitLayout(dir, '/testbed');
+    assert.deepEqual(got.worktrees, [{ path: '/testbed', branch: 'commit0-base' }, { path: '/testbed/.ordewell/worktrees/r1/1-a', branch: 'ordewell/r1/1-a' }], 'a worktree gone from the copy is not listed');
+    assert.deepEqual(Object.fromEntries(got.branches), { 'commit0-base': sha('a'), 'ordewell-preserved/r1/2-b': sha('e'), 'ordewell/r1/1-a': sha('d') }, 'a loose ref wins over its packed one');
+    assert.equal(L.hostPathOf(dir, '/testbed', '/testbed/.ordewell/worktrees/r1/1-a'), path.join(dir, '.ordewell', 'worktrees', 'r1', '1-a'));
+    assert.equal(L.hostPathOf(dir, '/testbed', '/etc'), null);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1125,11 +1183,10 @@ test('the goal puts the original implementation off limits, in the one text both
   assert.match(L.goalText(lib()), /The original implementation is off limits: do not look for it in caches, compiled files, installed packages or on the network; write it from the docstrings and the tests\./);
 });
 
-test('every patch the driver writes leaves out __pycache__ and .pyc', () => {
-  for (const script of [L.taskPatchScript(lib(), { worktree: '/w' }), L.armPatchScript(lib())]) {
-    assert.match(script, /:\(exclude,glob\)\*\*\/__pycache__\/\*\*/);
-    assert.match(script, /:\(exclude,glob\)\*\*\/\*\.pyc/);
-  }
+test('the patch the driver writes leaves out __pycache__ and .pyc', () => {
+  const script = L.armPatchScript(lib());
+  assert.match(script, /:\(exclude,glob\)\*\*\/__pycache__\/\*\*/);
+  assert.match(script, /:\(exclude,glob\)\*\*\/\*\.pyc/);
 });
 
 test('judgeLeak fails an untracked or ignored file that carries the implementation', () => {
@@ -1269,20 +1326,6 @@ test('ADV F-a: a run cut short by the batch budget is not a valid comparison', (
   assert.equal(v.valid, false, 'a batch-budget stop gave this arm a cap the other arm did not get');
 });
 
-test('ADV F-b1: an added *_test.py under a testDir that is the srcDir is removed before the eval', () => {
-  // pytest collects *_test.py by default; networkx's testDir is its srcDir.
-  const nx = lib({ name: 'networkx', srcDir: 'networkx', testDir: 'networkx' });
-  const plan = L.testRestorePlan(nx, '', 'networkx/algorithms/easy_test.py\0');
-  assert.deepEqual(plan.remove, ['networkx/algorithms/easy_test.py']);
-});
-
-test('ADV F-b2: a conftest.py the arm adds at the repository root is removed before the eval', () => {
-  // restoreTests (drive.mjs:994) lists changes with `-- lib.testDir` only, and
-  // isTestPath refuses any path outside testDir, yet pytest loads /testbed/conftest.py
-  // for `pytest tests`: a root conftest can rewrite every report to passed.
-  assert.equal(L.isTestPath(lib(), 'conftest.py'), true);
-});
-
 test('ADV F-b3: more passed than the reference collected is not a valid score', () => {
   const v = L.judgeValidity({ aborted: null, checks: [], tests: { passed: 12, failed: 0, errors: 0, skipped: 0, collected: 10 }, freshness: { stale: false } });
   assert.equal(v.valid, false, '12 of 10 passed was reported valid');
@@ -1315,103 +1358,17 @@ test('ADV F-d: a paid batch whose key cannot be read when it begins is refused, 
   assert.equal(reads, 4);
 });
 
-test('ADV2 F-a: a pytest package the arm adds at the workdir root, which `python -m pytest` imports instead of the real one, is removed before the eval', () => {
-  // The default testCmd is `/testbed/.venv/bin/python -m pytest`, and `python -m`
-  // puts the working directory first on sys.path: /testbed/pytest/__main__.py runs
-  // in place of pytest and prints whatever summary it likes. isTestPath does not
-  // match it, so restoreTests leaves it, and a summary of `<collected> passed`
-  // passes the outcomes <= collected check.
+test('ADV2 F-a: a forged summary within the reference count is valid, so a pytest package at the workdir root must never cross', () => {
+  // `python -m` puts the working directory first on sys.path: /testbed/pytest/__main__.py
+  // would run in place of pytest and print whatever summary it likes.
   const l = lib();
   assert.equal(l.testCmd, '/testbed/.venv/bin/python -m pytest');
   const forged = L.parseEvaluation(0, 'tests/test_a.py .....\n============ 5 passed in 0.01s ============\n');
   const v = L.judgeValidity({ aborted: null, checks: [], tests: { ...forged, collected: 5 }, freshness: { stale: false } });
   assert.equal(v.valid, true, 'precondition: a forged summary within the reference count is valid');
-  const plan = L.testRestorePlan(l, '', 'pytest/__init__.py\0pytest/__main__.py\0_pytest/runner.py\0pluggy/__init__.py\0');
-  assert.deepEqual(plan.remove.sort(), ['_pytest/runner.py', 'pluggy/__init__.py', 'pytest/__init__.py', 'pytest/__main__.py'],
-    'a module at the workdir root that shadows the eval\'s own pytest is left in place');
-});
-
-test('ADV2 F-a: an added root module that shadows a stdlib module pytest imports is found by the probe and removed', { skip: process.platform === 'win32' }, () => {
-  // pytest imports argparse at start; under `python -m` an argparse.py at the
-  // workdir root runs instead, and no fixed list names every such module.
-  let python;
-  try { python = execFileSync('sh', ['-c', 'command -v python3'], { encoding: 'utf8' }).trim(); } catch { return; }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-shadow-'));
-  try {
-    fs.mkdirSync(path.join(dir, '.venv', 'bin'), { recursive: true });
-    fs.symlinkSync(python, path.join(dir, '.venv', 'bin', 'python'));
-    fs.writeFileSync(path.join(dir, 'argparse.py'), 'raise SystemExit("forged")\n');
-    const l = { ...lib(), workdir: dir };
-    const untracked = 'argparse.py\0commit0_new_module/__init__.py\0notes.txt\0';
-    assert.deepEqual(L.addedRootModules('', untracked), ['argparse', 'commit0_new_module']);
-    const argv = L.shadowProbeArgs(l, L.addedRootModules('', untracked));
-    const printed = execFileSync(argv[0], argv.slice(1), { cwd: dir, encoding: 'utf8' }).split('\n').filter(Boolean);
-    assert.deepEqual(printed, ['argparse']);
-    assert.deepEqual(L.testRestorePlan(l, '', untracked, printed).remove, ['argparse.py']);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('ADV2 F-b: a file the arm writes into the image\'s .venv or its interpreter, or above the workdir, is tampering; bytecode anywhere is deleted', () => {
-  // The box runs as root (drive.mjs openSandbox --user 0:0) and testRestoreArgs
-  // excludes .venv: a .pth or a pytest11 entry point planted in site-packages
-  // loads into the eval. `docker diff` lists, from outside the box, every path
-  // the box changed against the image. tlslite-ng's venv links its python
-  // into /root/.local/share/uv, so the home is the arm's but that is not.
-  const prefix = '/root/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu';
-  const diff = [
-    'C /root',
-    'A /root/.ordewell',
-    'A /root/.ordewell/settings.json',
-    'C /testbed',
-    'A /testbed/tlslite/new.py',
-    'C /testbed/.venv',
-    'C /testbed/.venv/lib/python3.12/site-packages',
-    'A /testbed/.venv/lib/python3.12/site-packages/zz_hook.pth',
-    'C /testbed/.venv/lib/python3.12/site-packages/_pytest',
-    'A /testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__',
-    'A /testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__/runner.cpython-312.pyc',
-    'D /testbed/.venv/lib/python3.12/site-packages/pluggy/_hooks.py',
-    `C ${prefix}/lib/python3.12`,
-    `A ${prefix}/lib/python3.12/sitecustomize.py`,
-    `A ${prefix}/lib/python3.12/zoneinfo/__pycache__/_common.cpython-312.pyc`,
-    'A /pytest.ini',
-    'A /testbed/pytest.pyc',
-    'C /tmp',
-    'A /tmp/arm.patch',
-    'C /etc',
-    'C /etc/gitconfig',
-    'C /usr/local/bin',
-    'A /usr/local/bin/ordewell',
-    'C /opt',
-    'A /opt/commit0-bench',
-    'A /opt/commit0-bench/commit0_test_timeout.py',
-    '',
-  ].join('\n');
-  const r = L.boxChanges(diff, { workdir: '/testbed', home: '/root', basePrefix: prefix });
-  assert.deepEqual(r.tampered.sort(), [
-    '/pytest.ini',
-    `${prefix}/lib/python3.12/sitecustomize.py`,
-    '/testbed/.venv/lib/python3.12/site-packages/pluggy/_hooks.py',
-    '/testbed/.venv/lib/python3.12/site-packages/zz_hook.pth',
-  ]);
-  assert.deepEqual(r.bytecode.sort(), [
-    `${prefix}/lib/python3.12/zoneinfo/__pycache__/_common.cpython-312.pyc`,
-    '/testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__',
-    '/testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__/runner.cpython-312.pyc',
-    '/testbed/pytest.pyc',
-  ]);
-  assert.deepEqual(L.boxChanges('C /root\nA /root/.cache\nA /root/.cache/x\n', { workdir: '/testbed', home: '/root', basePrefix: prefix }), { tampered: [], bytecode: [] });
-  // What the dry run on wentingzhao/tlslite-ng:v0 showed: docker lists each mount point it made.
-  const mounts = 'C /usr\nC /usr/sbin\nA /usr/sbin/docker-init\nA /opt/node\nA /opt/node/bin\nA /opt/node/bin/node\nA /opt/ordewell\n';
-  assert.deepEqual(L.boxChanges(mounts, { workdir: '/testbed', home: '/root', basePrefix: prefix }).tampered.length, 3);
-  assert.deepEqual(L.boxChanges(mounts, { workdir: '/testbed', home: '/root', basePrefix: prefix, mounts: ['/usr/sbin/docker-init', '/opt/node/bin/node', '/opt/ordewell'] }), { tampered: [], bytecode: [] });
-});
-
-test('the interpreter prefix a venv runs on is read from its pyvenv.cfg', () => {
-  assert.equal(L.venvBasePrefix('home = /root/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu/bin\nimplementation = CPython\n'),
-    '/root/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu');
-  assert.equal(L.venvBasePrefix('home=/usr/bin\n'), '/usr');
-  assert.equal(L.venvBasePrefix('implementation = CPython\n'), null);
+  const blobOf = { mode: '100644', oid: '0'.repeat(40) };
+  const final = new Map(['pytest/__main__.py', '_pytest/runner.py', 'pluggy/__init__.py', 'sitecustomize.py'].map((p) => [p, blobOf]));
+  const sel = L.selectScoredFiles({ lib: l, base: new Map(), final });
+  assert.deepEqual(sel.copy, []);
+  assert.equal(sel.needsInspection.length, 4);
 });

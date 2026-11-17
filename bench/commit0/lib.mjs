@@ -3,6 +3,7 @@
 // run's record is read back. Everything here is pure, so its tests need no
 // engine, no key and no network.
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -295,8 +296,6 @@ const UNSCORED = () => [
   ':(exclude,glob)**/__pycache__/**',
   ':(exclude,glob)**/*.pyc',
 ].map(shellQuote).join(' ');
-/** Marks every untracked, unignored file but those as intent-to-add, so `git diff` shows it; `git add -N .` would fail on an ignored venv link. */
-const INTENT_TO_ADD = () => `git ls-files -z --others --exclude-standard -- . ${UNSCORED()} | xargs -0 -r git add -N --`;
 
 /**
  * The image's venv, relative to the workdir. Commit0 leaves it untracked and
@@ -325,70 +324,13 @@ export function workspaceIgnoreScript(lib) {
 }
 
 /**
- * The arm's diff from the flattened base: what the eval scores, so a file left
- * untracked (one a task patch applied, an agent's uncommitted new module) is
- * in it through an intent-to-add. The venv and Ordewell's own directory are not.
+ * The scored work's diff from the flattened base, run in the eval box once the
+ * arm's files are in: the paths that crossed, NUL-separated on stdin, are
+ * added with an intent-to-add, so a new module is in it even where the arm's
+ * own .gitignore would hide it.
  */
 export function armPatchScript(lib) {
-  return `${INTENT_TO_ADD()} && git diff --binary ${shellQuote(lib.flatCommit)} -- . ${UNSCORED()}`;
-}
-
-/**
- * Fails, saying why, unless the workspace's venv is still the image's: not a
- * link and nothing of it tracked. Run before the eval, whose interpreter lives
- * there; a venv the arm replaced is not a score.
- */
-export function venvIntactScript(lib) {
-  const q = shellQuote;
-  const v = q(VENV_DIR);
-  return [
-    `cd ${q(lib.workdir)}`,
-    `if [ -L ${v} ]; then echo "${VENV_DIR} is a link to $(readlink ${v}), not the image's venv" >&2; exit 1; fi`,
-    `if [ -n "$(git ls-files -- ${v})" ]; then echo "HEAD tracks ${VENV_DIR}: the arm committed the venv" >&2; exit 1; fi`,
-  ].join('\n');
-}
-
-/** The prefix of the interpreter a venv runs on, from its pyvenv.cfg's `home` (that prefix's bin); null without one. */
-export function venvBasePrefix(cfg) {
-  const home = /^home\s*=\s*(.+?)\s*$/m.exec(cfg)?.[1];
-  return home ? path.posix.dirname(home.replace(/\/+$/, '')) : null;
-}
-
-/** Where the box may write outside the workdir and its home: what the driver itself puts there, and scratch. */
-const BOX_WRITABLE = () => ['/tmp', '/var/tmp', TEST_TIMEOUT_PLUGIN_DIR];
-const BOX_WRITTEN = ['/usr/local/bin/ordewell', '/etc/gitconfig'];
-
-/**
- * What the box changed that the eval could load, from `docker diff` against
- * the image, which nothing in the box can rewrite: `tampered`, every path the
- * box added, changed or deleted in the image's venv, in the interpreter it
- * runs on (basePrefix, which may lie under the home) or anywhere else outside
- * the workdir, the home and scratch, the box's read-only mount points
- * (`mounts`, which docker lists as added) aside; and `bytecode`, every .pyc or
- * __pycache__ the box wrote anywhere, deleted before the eval since Python
- * loads one whose header matches its source without reading the source. The
- * arm's own work, tests included, is the workdir's and testRestorePlan's.
- */
-export function boxChanges(diffText, { workdir, home, basePrefix, mounts = [] }) {
-  const under = (p, dir) => p === dir || p.startsWith(`${dir.replace(/\/+$/, '')}/`);
-  const entries = diffText.split('\n').map((l) => /^([ACD]) (\/.*)$/.exec(l)).filter(Boolean).map(([, kind, p]) => ({ kind, p }));
-  const paths = entries.map((e) => e.p);
-  const isBytecode = (p) => p.endsWith('.pyc') || p.split('/').includes('__pycache__');
-  const venv = path.posix.join(workdir, VENV_DIR);
-  const tampered = [];
-  const bytecode = [];
-  for (const { kind, p } of entries) {
-    if (isBytecode(p)) {
-      if (kind !== 'D') bytecode.push(p);
-      continue;
-    }
-    // A directory is listed because something under it is; that entry is judged instead.
-    if (paths.some((q) => q.startsWith(`${p}/`))) continue;
-    const protectedPath = under(p, venv) || (basePrefix && under(p, basePrefix));
-    const allowed = under(p, workdir) || under(p, home) || BOX_WRITABLE().some((d) => under(p, d)) || BOX_WRITTEN.includes(p) || mounts.includes(p);
-    if (protectedPath || !allowed) tampered.push(p);
-  }
-  return { tampered, bytecode };
+  return `xargs -0 -r env GIT_LITERAL_PATHSPECS=1 git add -f -N -- && git diff --binary ${shellQuote(lib.flatCommit)} -- . ${UNSCORED()}`;
 }
 
 // --- The reference implementation -------------------------------------------
@@ -617,6 +559,11 @@ export function leftoverCleanupScript(lib) {
   return `set -eu\ncd ${shellQuote(lib.workdir)}\ngit clean -ffdx -e /${VENV_DIR} -e '*.egg-info'`;
 }
 
+/**
+ * Removes, and lists, every file under the working directory but .git written
+ * after the marker was touched, then the marker. (find will not combine
+ * -prune with -delete.)
+ */
 export function removeWrittenScript(mark) {
   const q = shellQuote;
   const list = `${mark}.list`;
@@ -629,15 +576,21 @@ export function removeWrittenScript(mark) {
   ].join('\n');
 }
 
-/** What pytest reads wherever it lies on the way to the tests: a hook, or options that load one. */
-const PYTEST_CONFIG = new Set(['conftest.py', 'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini']);
+// --- What crosses into the eval box -------------------------------------------
+
+/**
+ * Configuration pytest reads wherever it lies on the way to the tests: a hook,
+ * or options that load one. The two packaging files also hold the library's
+ * build metadata, so they are kept whole, never merged.
+ */
+const PYTEST_CONFIG = new Set(['conftest.py', 'pytest.ini', 'tox.ini']);
+const PACKAGING_CONFIG = new Set(['pyproject.toml', 'setup.cfg']);
 
 /** Directories in the workdir that are not the arm's: the image's venv and Ordewell's own state. */
 const NOT_THE_ARMS = [VENV_DIR, '.ordewell'];
 
 /**
- * Whether a path is one the restore puts back: a pytest config or conftest.py
- * anywhere, since one at the root rewrites what `pytest tests` reports; under
+ * Whether a path is a test the reference's version of stays for: under
  * testDir, a test_*.py or *_test.py, or anything in a tests/ or unit_tests/
  * directory. The rest is the arm's work wherever testDir lies inside srcDir,
  * as networkx's does.
@@ -646,23 +599,22 @@ export function isTestPath(lib, p) {
   const parts = p.split('/');
   const base = parts.pop();
   if (NOT_THE_ARMS.includes(parts[0])) return false;
-  if (PYTEST_CONFIG.has(base)) return true;
   const dir = lib.testDir.replace(/^\.\//, '').replace(/\/+$/, '');
   if (dir !== '' && dir !== '.' && !p.startsWith(`${dir}/`)) return false;
   return /^test_.*\.py$/.test(base) || /_test\.py$/.test(base) || parts.some((d) => d === 'tests' || d === 'unit_tests');
 }
 
-/**
- * The commands whose output testRestorePlan reads, run in the workdir: the
- * whole tree, not only testDir, and untracked files the arm's .gitignore
- * hides as well as the rest.
- */
-export function testRestoreArgs(lib) {
-  const outside = NOT_THE_ARMS.map((d) => `:(exclude)${d}`);
-  return {
-    diff: ['git', 'diff', '--name-status', '-z', '--no-renames', lib.flatCommit, '--', '.', ...outside],
-    untracked: ['git', 'ls-files', '-z', '--others', '--', '.', ...outside],
-  };
+/** Why no file under this workdir path is the arm's work, for a path that is one of those directories; null otherwise. */
+function prunedReason(p) {
+  const parts = p.split('/');
+  const name = parts.at(-1);
+  if (parts.length === 1 && name === '.git') return 'git metadata';
+  if (parts.length === 1 && name === VENV_DIR) return "the image's venv";
+  if (parts.length === 1 && name === '.ordewell') return "Ordewell's session data";
+  if (name === '__pycache__') return 'bytecode';
+  if (name === '.pytest_cache' || name === '.hypothesis') return "a test tool's cache";
+  if (/\.(egg|dist)-info$/.test(name)) return "the image's install metadata";
+  return null;
 }
 
 /** The top-level module a workdir path would be imported as from the workdir root; null for none. */
@@ -674,50 +626,129 @@ function rootModuleName(p) {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : null;
 }
 
-/** The arm's additions, from testRestoreArgs' output: diff status A, or untracked. */
-function addedPaths(nameStatusZ, untrackedZ) {
-  const added = [];
-  const f = nameStatusZ.split('\0');
-  for (let i = 0; i + 1 < f.length; i += 2) if (f[i] === 'A') added.push(f[i + 1]);
-  for (const p of untrackedZ.split('\0')) if (p) added.push(p);
-  return added;
-}
-
-/** The names of the top-level modules and packages the arm added at the workdir root, for shadowProbeArgs. */
-export function addedRootModules(nameStatusZ, untrackedZ) {
-  return [...new Set(addedPaths(nameStatusZ, untrackedZ).map(rootModuleName).filter(Boolean))].sort();
-}
+const blobOid = (buf, algo) => createHash(algo).update(`blob ${buf.length}\0`).update(buf).digest('hex');
 
 /**
- * The venv's interpreter, isolated (-I: no workdir, no PYTHONPATH, no user
- * site) and writing no bytecode, printing each name it can import without the
- * workdir: an added root module that would shadow it under `python -m`.
+ * Every file under a directory on the host, as git would hash it: path to
+ * `{mode, oid}`, a link's target kept. A directory prunedReason names is one
+ * `{pruned: true}` entry, never walked. Read on the host from files copied out
+ * of the arm's box, so nothing the arm configured runs.
  */
-export const SHADOW_PROBE_PY = 'import importlib.util as u, sys\nfor n in sys.argv[1:]:\n    if u.find_spec(n) is not None: print(n)\n';
-export function shadowProbeArgs(lib, names) {
-  return [`${lib.workdir.replace(/\/+$/, '')}/${VENV_DIR}/bin/python`, '-I', '-B', '-c', SHADOW_PROBE_PY, ...names];
+export function treeManifest(root, algo = 'sha1') {
+  const out = new Map();
+  const walk = (rel) => {
+    for (const e of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+      const p = rel ? `${rel}/${e.name}` : e.name;
+      const full = path.join(root, p);
+      if (prunedReason(p)) out.set(p, { pruned: true });
+      else if (e.isSymbolicLink()) {
+        const target = fs.readlinkSync(full);
+        out.set(p, { mode: '120000', oid: blobOid(Buffer.from(target), algo), target });
+      } else if (e.isDirectory()) walk(p);
+      else if (e.isFile()) out.set(p, { mode: fs.statSync(full).mode & 0o100 ? '100755' : '100644', oid: blobOid(fs.readFileSync(full), algo) });
+    }
+  };
+  walk('');
+  return out;
 }
 
-/**
- * What to put back, from testRestoreArgs' output: a changed or deleted test
- * checked out from the base, an added one removed, and so is everything the
- * arm added at the workdir root under the name of one of the eval's modules
- * (EVAL_TOOL_MODULES, and `shadowing`, the names shadowProbeArgs printed).
- */
-export function testRestorePlan(lib, nameStatusZ, untrackedZ, shadowing = []) {
-  const checkout = [];
-  const remove = [];
-  const f = nameStatusZ.split('\0');
-  for (let i = 0; i + 1 < f.length; i += 2) {
-    const [status, p] = [f[i], f[i + 1]];
-    if (!status || !isTestPath(lib, p)) continue;
-    (status === 'A' ? remove : checkout).push(p);
+/** `git ls-tree -r -z` as path to `{mode, oid}`, blobs only. */
+export function parseLsTree(z) {
+  const out = new Map();
+  for (const rec of z.split('\0')) {
+    const m = /^(\d+) blob ([0-9a-f]+)\t(.+)$/s.exec(rec);
+    if (m) out.set(m[3], { mode: m[1], oid: m[2] });
   }
-  for (const p of untrackedZ.split('\0')) if (p && isTestPath(lib, p)) remove.push(p);
-  const shadows = new Set([...EVAL_TOOL_MODULES, ...shadowing]);
-  for (const p of addedPaths(nameStatusZ, untrackedZ)) if (shadows.has(rootModuleName(p)) && !remove.includes(p)) remove.push(p);
-  return { checkout, remove };
+  return out;
 }
+
+/**
+ * What of the arm's files crosses into the eval box: each file under the
+ * workdir that differs from the flattened commit (`base`, its ls-tree) is
+ * copied, and each base file the arm deleted is removed, except what is not
+ * the arm's to change, each recorded in `excluded` with why. Tests and test
+ * configuration stay the reference's; an edit to the configuration, or a new
+ * top-level module named like one the eval imports (EVAL_TOOL_MODULES, or
+ * `stdlib`, the eval interpreter's own list), is scored without it but sets
+ * `needsInspection`. A module counts as top-level at the workdir root, which
+ * `python -m` puts first on sys.path, and beside srcDir, which a src layout's
+ * editable install puts there.
+ */
+export function selectScoredFiles({ lib, base, final, stdlib = [] }) {
+  const shadows = new Set([...EVAL_TOOL_MODULES, ...stdlib]);
+  const srcParent = path.posix.dirname(lib.srcDir.replace(/^\.\//, '').replace(/\/+$/, ''));
+  const roots = srcParent === '.' ? [''] : ['', `${srcParent}/`];
+  const notScored = (p, f, inBase) => {
+    const name = path.posix.basename(p);
+    if (PYTEST_CONFIG.has(name)) return { reason: "test configuration: the reference's is kept", inspect: true };
+    if (PACKAGING_CONFIG.has(name)) return { reason: "test configuration: the reference's is kept whole", inspect: true };
+    if (isTestPath(lib, p)) return { reason: "a test: the reference's is kept" };
+    if (f?.mode === '120000' && (path.posix.isAbsolute(f.target) || path.posix.normalize(path.posix.join(path.posix.dirname(p), f.target)).startsWith('..'))) {
+      return { reason: 'a link out of the workdir' };
+    }
+    if (f && !inBase) {
+      for (const r of roots) {
+        const mod = p.startsWith(r) ? rootModuleName(p.slice(r.length)) : null;
+        if (mod && shadows.has(mod)) return { reason: `a new top-level module shadowing ${mod}, which the eval imports`, inspect: true };
+      }
+    }
+    return null;
+  };
+  const copy = [];
+  const remove = [];
+  const excluded = [];
+  const needsInspection = [];
+  const exclude = (p, { reason, inspect }) => {
+    excluded.push({ path: p, reason });
+    if (inspect) needsInspection.push(`${p}: ${reason}`);
+  };
+  for (const [p, f] of final) {
+    if (f.pruned) { exclude(p, { reason: prunedReason(p) }); continue; }
+    const b = base.get(p);
+    if (b && b.mode === f.mode && b.oid === f.oid) continue;
+    const why = notScored(p, f, Boolean(b));
+    if (why) exclude(p, why);
+    else copy.push(p);
+  }
+  for (const p of base.keys()) {
+    if (final.has(p) || p.split('/').some((_, i, a) => prunedReason(a.slice(0, i + 1).join('/')))) continue;
+    const why = notScored(p, null, true);
+    if (why) exclude(p, { ...why, reason: `deleted: ${why.reason}` });
+    else remove.push(p);
+  }
+  return { copy: copy.sort(), remove: remove.sort(), excluded, needsInspection };
+}
+
+/** Whether the eval box flattened to the tree the arm's box did, so the files that crossed land on the base the arm worked from. */
+export function judgeFreshTree({ armTree, freshTree }) {
+  const ok = Boolean(armTree) && armTree === freshTree;
+  return { ok, detail: ok ? `both boxes flatten to tree ${armTree}` : `the arm's box flattened to ${armTree ?? 'no recorded tree'}, the eval box to ${freshTree ?? 'none'}` };
+}
+
+/**
+ * Scores an arm's files in the fresh eval box: the one path both arms take
+ * from their files onward (D2, D3). `dir` holds the files on the host;
+ * `armTree` is the tree the arm's box flattened to. `io` reaches the eval box:
+ * prepare() flattens it and returns `{tree, lsTree, stdlib}`; manifest(dir,
+ * algo) reads the files; remove(paths) and put(dir, paths) change its
+ * workspace; patch(paths) records the diff; evaluate() runs the eval.
+ */
+export async function scoreFiles({ lib, dir, armTree }, io) {
+  const fresh = await io.prepare();
+  const treeCheck = judgeFreshTree({ armTree, freshTree: fresh.tree });
+  const out = { evalBox: 'fresh', treeCheck, copied: [], removed: [], excluded: [], needsInspection: [], tests: null };
+  if (!treeCheck.ok) return out;
+  const base = parseLsTree(fresh.lsTree);
+  const algo = [...base.values()][0]?.oid.length === 64 ? 'sha256' : 'sha1';
+  const sel = selectScoredFiles({ lib, base, final: await io.manifest(dir, algo), stdlib: fresh.stdlib });
+  await io.remove(sel.remove);
+  await io.put(dir, sel.copy);
+  await io.patch(sel.copy);
+  return { ...out, copied: sel.copy, removed: sel.remove, excluded: sel.excluded, needsInspection: sel.needsInspection, tests: await io.evaluate() };
+}
+
+/** The eval interpreter's standard-library module names, one per line, for selectScoredFiles. */
+export const STDLIB_NAMES_PY = 'import sys\nprint("\\n".join(sorted(set(sys.stdlib_module_names) | set(sys.builtin_module_names))))\n';
 
 /** pytest's last summary line, as counts per outcome; null when the run printed none. */
 export function parsePytestSummary(text) {
@@ -758,8 +789,8 @@ export const TEST_TIMEOUT_PLUGIN = 'commit0_test_timeout';
  * The eval's own modules: pytest and what it imports, the timeout plugin, and
  * what `site` runs at start. testCmd's `python -m` puts the workdir first on
  * sys.path, so one of these the arm adds at the workdir root runs in place of
- * the eval's and prints whatever summary it likes. Any other name is
- * shadowProbeArgs' to judge in the box, stdlib included.
+ * the eval's and prints whatever summary it likes. selectScoredFiles keeps
+ * one out, with the standard library's names.
  */
 export const EVAL_TOOL_MODULES = Object.freeze(['pytest', '_pytest', 'pluggy', 'iniconfig', 'packaging', 'py', TEST_TIMEOUT_PLUGIN, 'sitecustomize', 'usercustomize']);
 
@@ -1201,16 +1232,37 @@ export function settleDecision({ plan, fingerprint, nowMs, state, settleMs = SET
 
 // --- Choosing what is scored --------------------------------------------------
 
-/** `git worktree list --porcelain` as `{path, branch}`; a detached one's branch is null. */
-export function parseWorktrees(porcelain) {
-  const out = [];
-  for (const block of porcelain.split(/\n\s*\n/)) {
-    const wt = /^worktree (.+)$/m.exec(block);
-    if (!wt) continue;
-    const br = /^branch refs\/heads\/(.+)$/m.exec(block);
-    out.push({ path: wt[1], branch: br ? br[1] : null });
+/**
+ * The worktrees and branches of a repository copied out of the arm's box,
+ * read from its files on the host so that no git the arm configured runs:
+ * `worktrees` as `{path, branch}` in the box's paths, each still on disk in
+ * the copy (`root`, the box's `workdir`), and `branches` as name to sha.
+ */
+export function readGitLayout(root, workdir) {
+  const gitDir = path.join(root, '.git');
+  const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
+  const headBranch = (dir) => /^ref: refs\/heads\/(.+)$/m.exec(read(path.join(dir, 'HEAD')))?.[1] ?? null;
+  const branches = new Map();
+  for (const m of read(path.join(gitDir, 'packed-refs')).matchAll(/^([0-9a-f]{40,64}) refs\/heads\/(.+)$/gm)) branches.set(m[2], m[1]);
+  const heads = path.join(gitDir, 'refs', 'heads');
+  for (const e of fs.existsSync(heads) ? fs.readdirSync(heads, { recursive: true, withFileTypes: true }) : []) {
+    if (!e.isFile()) continue;
+    const sha = read(path.join(e.parentPath, e.name)).trim();
+    if (/^[0-9a-f]{40,64}$/.test(sha)) branches.set(path.relative(heads, path.join(e.parentPath, e.name)).split(path.sep).join('/'), sha);
   }
-  return out;
+  const worktrees = [{ path: workdir, branch: headBranch(gitDir) }];
+  const admin = path.join(gitDir, 'worktrees');
+  for (const id of fs.existsSync(admin) ? fs.readdirSync(admin) : []) {
+    const wt = path.posix.dirname(read(path.join(admin, id, 'gitdir')).trim());
+    if (wt !== '.' && fs.existsSync(hostPathOf(root, workdir, wt) ?? '')) worktrees.push({ path: wt, branch: headBranch(path.join(admin, id)) });
+  }
+  return { worktrees, branches };
+}
+
+/** Where a box path under the workdir lies in its host copy; null for one outside. */
+export function hostPathOf(root, workdir, boxPath) {
+  const rel = path.posix.relative(workdir, boxPath);
+  return rel.startsWith('..') || path.posix.isAbsolute(rel) ? null : path.join(root, ...rel.split('/').filter(Boolean));
 }
 
 /**
@@ -1258,24 +1310,10 @@ export function choosePatches({ plan, worktrees, branches }) {
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
- * A task's work as a binary diff from the flattened commit. From a worktree,
- * its committed and uncommitted work, new files included through an
- * intent-to-add; from a branch, the branch's tip. The venv is never in it.
- */
-export function taskPatchScript(lib, source) {
-  const flat = shellQuote(lib.flatCommit);
-  if (source.kind === 'worktree') {
-    return `cd ${shellQuote(source.path)} && ${INTENT_TO_ADD()} && git diff --binary ${flat} -- . ${UNSCORED()}`;
-  }
-  return `git diff --binary ${flat} ${shellQuote(source.ref)} -- . ${UNSCORED()}`;
-}
-
-export const applyPatchCommand = (file) => `git apply --binary --whitespace=nowarn ${shellQuote(file)}`;
-
-/**
  * What an arm is scored on. A (D2) on its working tree's final state: an
- * unlanded task's work is applied to the workspace first. B (D3) only on
- * what Ordewell merged; its unlanded work is kept for diagnosis, never scored.
+ * unlanded task's files, from its worktree or branch, in place of the
+ * workspace's. B (D3) only on what Ordewell merged, its workspace; its
+ * unlanded work is kept for diagnosis, never scored.
  */
 export function scoringPlan(arm, chosen) {
   if (arm.id === 'A') {
@@ -1355,7 +1393,7 @@ export function baselineRecord(evaluation) {
 }
 
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, patches, validity, providerPin, dryRun, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, dryRun, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
@@ -1387,6 +1425,9 @@ export function resultRecord({ lib, arm, settings = armSettings(arm), window, or
     stalled: stalled ?? null,
     truncated: truncated ?? { truncated: false, why: null },
     scoredFrom: scoredFrom ?? null,
+    evalBox: scoring?.evalBox ?? null,
+    excluded: scoring?.excluded ?? [],
+    needsInspection: scoring?.needsInspection ?? [],
     patches: patches ?? [],
     stepLimit: STEP_LIMIT,
     startedAt,
