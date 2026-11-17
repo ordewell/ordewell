@@ -104,8 +104,8 @@ and completion evidence.
   compaction of the task's own runner session flags it, whatever the time; a
   manual one and a subagent's context do not. Ordewell sets the window a
   Claude Code task compacts at (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, never for a
-  planner) from the `taskCompactWindow` setting, which
-  `ORDEWELL_TASK_COMPACT_WINDOW` overrides. `auto`, the default, sets none,
+  planner) from the `taskCompactAt` setting, which
+  `ORDEWELL_TASK_COMPACT_AT` overrides. `auto`, the default, sets none,
   so the CLI compacts near the model's own window: a summary loses detail and
   the prompt cache, and a task re-reads what it had read, so compaction is a
   guard on capacity, and a task outgrowing its brief is the supervisor's to
@@ -113,9 +113,12 @@ and completion evidence.
   over a 100k-token prompt, so its window is set for compaction to start just
   under that step. The CLI starts compacting a fixed buffer below the window,
   not a share of it (about 32k, inferred from recorded sessions), and the
-  Haiku window is chosen from that. A number from 100k to 1M is used as it
-  is, whatever the model; `off` sets nothing, Haiku's included. Any other
-  value refuses the task's start, naming the bounds. A model whose own window
+  Haiku window is chosen from that. A number is the size at which compaction
+  starts, whatever the model: the window is that plus the buffer, held to the CLI's
+  100k to 1M with a log line when it moves; `off` sets nothing, Haiku's included. A
+  value that is none of these refuses the task's start, saying what is accepted.
+  The setting is one for every runner, so a number means a context size, not a
+  Claude window. A model whose own window
   is smaller than the one set is no reason to set less: the CLI compacts at
   the smaller of the two. Under a window below 200k tokens a compaction is
   routine: it flags from the attempt's third, then at the 6th, 12th and so on,
@@ -669,4 +672,4 @@ transport is retained for take-over.
 - 2026-11-15 — W1: a compaction flags running long from the attempt's third, then at the 6th, 12th and so on, where Ordewell sets the window the runner compacts at, and from the first where it sets none; the flag names that window. C3's reminder after each compaction is unchanged.
 - 2026-11-16 — C2: a Claude Code task's completion contract is appended from a file the process owns (`--append-system-prompt-file`), no longer as text on its command line ([ADR-0010](../platform/0010-windows-support.md) §1).
 - 2026-11-17 — C2: the built-in runner carries the contract in its system prompt too ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)).
-- 2026-11-17 — W1: a Claude Code task's compaction window is the `taskCompactWindow` setting (`auto`: none, except Haiku's, set to compact just under its price step; a number; `off`), no longer a fixed 150k; a compaction is routine only under a window below 200k.
+- 2026-11-17 — W1: a Claude Code task's compaction window is the `taskCompactAt` setting (`auto`: none, except Haiku's, set to compact just under its price step; a number, where compaction starts; `off`), no longer a fixed 150k; a compaction is routine only under a window below 200k.

@@ -174,7 +174,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 
   A `running_long` event raised by a compaction is rationed by where the window comes from
   ([ADR-0018](../runners/0018-structured-runner-transport.md) W1). Where Ordewell sets a window below
-  200k tokens for a task to compact at (Claude Code's on Haiku, or a `taskCompactWindow` set that
+  200k tokens for a task to compact at (Claude Code's on Haiku, or a `taskCompactAt` set that
   low), a compaction is routine, and the event comes from the attempt's third, then its 6th, 12th and
   so on. At a larger window an ordinarily sized task never compacts, and where Ordewell sets none, as
   `auto` does for every model but Haiku, the runner compacts near its model's own window: both are rare
