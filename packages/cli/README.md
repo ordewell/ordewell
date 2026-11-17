@@ -32,6 +32,10 @@ to print the command without running it. An npx run or a source checkout is told
 how to update instead. The terminal UI names a newer release on every start, and
 `/update` updates from there once no run is live.
 
+Ordewell also runs as a [desktop app](https://github.com/ordewell/ordewell/blob/main/docs/desktop/README.md) for macOS, Windows and Linux, and as
+a [VS Code extension](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell).
+Both are clients of the same local daemon as this terminal UI.
+
 **Requirements:** a supported coding agent such as Claude Code or Codex,
 installed and signed in. git is optional: without it, tasks run directly in the
 folder, and git 2.38 or newer is recommended for isolated worktrees, delegated

@@ -371,9 +371,7 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
     it('prints its help and rejects what it does not know', () => {
       const help = run(['--help']);
       assert.equal(help.status, 0);
-      for (const text of [/--version X\.Y\.Z/, /--uninstall/, /--dry-run/, /ORDEWELL_CLI_FROM/, /ORDEWELL_INSTALL_DIR/]) assert.match(help.stdout, text);
-      // Hidden until a release carries the desktop app (ADR-0065 C10); the option itself still works.
-      assert.doesNotMatch(help.stdout, /desktop/i);
+      for (const text of [/--version X\.Y\.Z/, /--uninstall/, /--dry-run/, /--desktop/, /ORDEWELL_CLI_FROM/, /ORDEWELL_INSTALL_DIR/, /ORDEWELL_DESKTOP_SCRIPT_FROM/, /ORDEWELL_DESKTOP_INSTALL_DIR/]) assert.match(help.stdout, text);
       const bad = run(['--frobnicate']);
       assert.notEqual(bad.status, 0);
       assert.match(bad.stderr, /unknown option/);
