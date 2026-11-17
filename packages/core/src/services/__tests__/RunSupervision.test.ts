@@ -494,3 +494,29 @@ describe('a task that failed before its runner started', () => {
     expect(text).toContain(why);
   });
 });
+
+describe('a turn that leaves a loop\'s check between rounds (ADR-0057 R4, ADR-0045 L3)', () => {
+  it('does not wake the supervisor to it as a failure: its loop goes on', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'act' };
+    tasks[0] = task('c', 1, { status: 'awaiting_user', awaitingReason: 'input', loop: { body: ['b1'], maxRounds: 3 }, loopRound: 1 });
+    tasks.push(task('b1', 2, { status: 'completed' }), task('d', 3, { dependencies: ['c'] }), task('x', 4, { status: 'in_progress' }));
+    supervision.runStarted('user');
+    host.deliver.mockImplementationOnce(async () => {
+      // Answered during the turn, the check fails its first round with rounds left, and its body runs again.
+      tasks[0] = { ...tasks[0], status: 'failed', awaitingReason: undefined, verdict: { outcome: 'fail', reason: 'two tests fail', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' } };
+      tasks[1] = { ...tasks[1], status: 'in_progress' };
+      supervision.taskSettled(tasks[0]);
+      return undefined;
+    });
+
+    supervision.observe({ kind: 'waiting_input', taskId: 'c' });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const later = host.deliver.mock.calls.slice(1).map(([text]) => String(text));
+    expect(later.filter((text) => text.includes('Task #1 "Task c" is still failed'))).toEqual([]);
+  });
+});

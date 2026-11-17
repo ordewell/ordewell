@@ -329,7 +329,7 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
 function renderRetryNote(note: RetryNote): string {
   const who = note.by === 'supervisor' ? 'supervisor' : 'planner';
-  return `## The ${who}'s note for this attempt\n\nThe last attempt at this task failed, and the ${who} retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\n${note.text}`;
+  return `## The ${who}'s note for this attempt\n\nThe last attempt at this task ended without passing, and the ${who} retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\n${note.text}`;
 }
 
 /**

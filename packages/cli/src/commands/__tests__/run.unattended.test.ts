@@ -98,14 +98,14 @@ describe('ordewell run when a task on hold holds the run', () => {
     await follower.done;
   });
 
-  it('says at Act that the supervisor is woken to it once nothing else can run', async () => {
+  it('says at Act that the supervisor is woken to it when its turn leaves it held, or once nothing else can run', async () => {
     const { api, send, close } = daemon('act');
     const follower = await run(api);
 
     send(waits(held));
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(written.join('')).toContain('releases it and what needs it. The supervisor is woken to it once nothing else can run.\n');
+    expect(written.join('')).toContain('releases it and what needs it. The supervisor is woken to it when a turn of its ends with it still held, or once nothing else can run.\n');
     close();
     await follower.done;
   });
