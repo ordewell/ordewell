@@ -452,6 +452,32 @@ turn automatic compaction off, set `"plannerAutoCompaction": false` in the
 global `settings.json` (`~/.ordewell/settings.json`). A harness planner (Claude
 Code, Codex, OpenCode) compacts its own context, and is not affected.
 
+## A Claude Code task compacts its context
+
+A Claude Code task's log shows its context compacted, or the supervisor says a
+task is running long after a compaction.
+
+Claude Code compacts a task's context on its own: it replaces the conversation
+with a summary, after which the task may read again what it had read. Ordewell
+chooses where from `taskCompactWindow` in the global `settings.json`
+(`~/.ordewell/settings.json`), or `ORDEWELL_TASK_COMPACT_WINDOW`, which wins
+when set:
+
+- `"auto"`, the default, sets no window, so Claude Code compacts near the
+  model's own context window. A Haiku task is the exception: it gets a window
+  that starts compaction just under the prompt size above which Haiku's prices
+  rise.
+- A number of tokens from 100000 to 1000000 is the window for every Claude Code
+  task, whatever its model. Claude Code starts compacting somewhat below it,
+  and a model whose own window is smaller compacts at that.
+- `"off"` sets no window for any task, Haiku's included.
+
+Any other value stops a Claude Code task from starting, with a message naming
+the values it takes. The setting does not touch a planner, the built-in
+runner, Codex or OpenCode, which compact on their own terms. Under a window
+below 200000 tokens a task compacts a few times in ordinary work, so the
+supervisor hears of it from the third compaction; otherwise from the first.
+
 ## A task waits for your approval
 
 A row reads **waits for your approval** and the scheduler skips it.
