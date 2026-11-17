@@ -5,7 +5,7 @@ import { isCredentialVariable } from './credentialEnv';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 import { ProcessLifecycle } from './ProcessLifecycle';
 import { OpenCodeV2 } from './OpenCodeV2';
-import { openCodeCompaction } from './openCodeCompaction';
+import { openCodeCompaction, openCodeInputLimited } from './openCodeCompaction';
 import { taskCompactAtOf } from '../taskCompactWindow';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION, leaseGateway } from './openCodeOrdewell';
 import { envValue } from '../../utils/shellPath';
@@ -307,6 +307,31 @@ function withCompaction(content: string | undefined, reserved: number): string |
   return JSON.stringify({ ...config, compaction: { ...compaction, reserved } });
 }
 
+/**
+ * A task's inline config without the compaction room it inherited, for a task
+ * Ordewell sets no start for (`auto`, `off`, or a model it cannot size): that
+ * room is a parent Ordewell's, handed down through the environment, and left
+ * there it would decide where this task compacts (ADR-0018 C4). Undefined when
+ * there is none to take out, so the content passes as it came.
+ */
+function withoutCompactionRoom(content: string | undefined): string | undefined {
+  if (content === undefined) return undefined;
+  let config: unknown;
+  try {
+    config = JSON.parse(content) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return undefined;
+  const own = (config as { compaction?: unknown }).compaction;
+  if (typeof own !== 'object' || own === null || Array.isArray(own)) return undefined;
+  const { reserved, buffer, ...rest } = own as Record<string, unknown>;
+  if (reserved === undefined && buffer === undefined) return undefined;
+  const others: Record<string, unknown> = { ...config };
+  delete others.compaction;
+  return JSON.stringify(Object.keys(rest).length > 0 ? { ...others, compaction: rest } : others);
+}
+
 export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAdapter {
   readonly agentId = 'opencode';
   private nativeCommands: RunnerCommand[] = [];
@@ -404,7 +429,12 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
         }
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
-        const config = compaction ? withCompaction(ordewellConfig ?? existing, compaction.reserved) ?? ordewellConfig : ordewellConfig;
+        let config = compaction ? withCompaction(ordewellConfig ?? existing, compaction.reserved) : opts.kind === 'task' ? withoutCompactionRoom(ordewellConfig ?? existing) ?? ordewellConfig : ordewellConfig;
+        if (config === null && compaction) {
+          // Not applied, so nothing compacts at the number: the meter and running long read OpenCode's own start.
+          this.compactWindowTokens = undefined;
+          config = ordewellConfig;
+        }
         return {
           PWD: opts.cwd,
           ...(opts.kind === 'planner' || readOnly ? OPENCODE_PLANNER_ENV : {}),
@@ -466,6 +496,11 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
 
     const version = await this.v2Version();
     this.serverVersion = version;
+    if (version === null && opts.kind === 'task' && this.compactWindowTokens !== undefined && !openCodeInputLimited(opts.model)) {
+      // The config was written before the version was known; 1.x ignores it here, so the meter must not read a start that is not in force.
+      console.warn(`[opencode] OpenCode 1.x applies compaction.reserved only to a model with an input limit, which ${opts.model ?? 'the default model'} has none of: taskCompactAt ${this.compactWindowTokens} is not applied, so OpenCode compacts at its own start.`);
+      this.compactWindowTokens = undefined;
+    }
     if (version !== null) {
       this.v2 = new OpenCodeV2({
         version,

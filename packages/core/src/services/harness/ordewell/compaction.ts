@@ -363,6 +363,8 @@ export interface CompactorOptions {
 export class Compactor {
   /** Messages a failed or fruitless attempt must wait for before the next proactive one. */
   private retryAt = 0;
+  /** The step whose compaction was last announced: another in the same step only moves the meter. */
+  private announcedStep: number | undefined;
   /**
    * The window this attempt runs under: the model's, until the provider
    * refuses a request as too long. A shrink that let the request through
@@ -378,6 +380,16 @@ export class Compactor {
   /** The window the meter and the next compaction measure against. */
   get contextWindow(): number {
     return this.effectiveWindow;
+  }
+
+  /**
+   * Where a set start now has compaction begin: the start, or the guard of a
+   * window an overflow left smaller, whichever is lower. Undefined with no
+   * start set, where the guard alone decides (ADR-0018 C4).
+   */
+  get startTokens(): number | undefined {
+    const { startAt } = this.options;
+    return startAt === undefined ? undefined : Math.min(startAt, compactionThreshold(this.effectiveWindow));
   }
 
   /** The window in force is the assumed one: no setting, catalog or listing stated it and no overflow has measured it. */
@@ -468,14 +480,21 @@ export class Compactor {
       ...(usage ? { usage } : {}),
     });
     if (plan.fraction !== undefined) this.effectiveWindow = Math.floor(window * plan.fraction);
-    this.announce(plan.preTokens, postTokens, usage);
+    this.announce(step, plan.preTokens, postTokens, usage);
     return store.load();
   }
 
-  /** The task log's compaction line, the meter's reset to the new size, and the summary call's own spend. */
-  private announce(preTokens: number, postTokens: number, usage: ModelUsage | undefined): void {
+  /**
+   * The task log's compaction line, the meter's reset to the new size, and
+   * the summary call's own spend. A step compacted again before its request
+   * went through (a second refusal) is one compaction to the task: the line
+   * is what reminds it of its brief and what running long counts, so only the
+   * meter and the spend follow the later ones.
+   */
+  private announce(step: number, preTokens: number, postTokens: number, usage: ModelUsage | undefined): void {
     const { model, emit } = this.options;
-    emit({ type: 'compaction', trigger: 'auto', preTokens, postTokens });
+    if (this.announcedStep !== step) emit({ type: 'compaction', trigger: 'auto', preTokens, postTokens });
+    this.announcedStep = step;
     if (usage) emit({ type: 'usage', record: compactionUsageRecord(model, usage) });
     const reset: UsageRecord = { source: 'ordewell', model: model.id, compacted: true, contextTokens: postTokens, contextWindow: this.effectiveWindow, ...(this.windowAssumed ? { contextWindowAssumed: true } : {}) };
     emit({ type: 'usage', record: reset });

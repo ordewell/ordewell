@@ -653,7 +653,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     this.ordewellCalls = new Set();
     this.outcome.open();
     this.noteModelCommand(message);
-    this.commandTurn = message.startsWith('/');
+    this.commandTurn = this.isCommand(message);
     this.turnAnswered = new Promise<boolean>((resolve) => { this.answerTurn = resolve; });
     const text = this.preamble ? `${this.preamble}\n\n${message}` : message;
     this.preamble = null;
@@ -782,6 +782,18 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     this.failure = `${what}, so this ${this.started?.kind === 'planner' ? 'planner session' : 'read-only task'} cannot go on.`;
     this.announce({ type: 'error', message: this.failure });
     this.dispose();
+  }
+
+  /**
+   * Whether a message is one of the agent's own commands (a `/clear` that
+   * empties the context is no compaction). Once the agent has listed them,
+   * only a listed name is; before, any slash and a name, but not a path such
+   * as `/tmp/build.log`, which an ordinary message may start with.
+   */
+  private isCommand(message: string): boolean {
+    const name = /^\/([^\s/]+)(?=\s|$)/.exec(message)?.[1];
+    if (name === undefined) return false;
+    return this.commandList.length === 0 || this.commandList.some((command) => command.name === name);
   }
 
   private noteCommands(listed: ReadonlyArray<{ name: string; description: string; input?: { hint: string } | null }>): void {

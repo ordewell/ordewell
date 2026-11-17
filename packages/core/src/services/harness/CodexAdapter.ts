@@ -354,9 +354,21 @@ const NO_IMAGE_VIEWER = { view_image: false };
  * what follows a carried prefix) reaches N tokens (codex-cli 0.167.0). Codex
  * itself holds a limit to 90% of the window, so a larger one compacts there.
  */
-function codexCompactLimit(at: TaskCompactAt): { model_auto_compact_token_limit: number; model_auto_compact_token_limit_scope: 'total' } | undefined {
-  return typeof at === 'number' ? { model_auto_compact_token_limit: at, model_auto_compact_token_limit_scope: 'total' } : undefined;
+function codexCompactLimit(at: TaskCompactAt, log: (line: string) => void = (line) => console.warn(line)): { model_auto_compact_token_limit: number; model_auto_compact_token_limit_scope: 'total' } | undefined {
+  if (typeof at !== 'number') return undefined;
+  if (at < CODEX_COMPACT_FLOOR) log(`Codex: taskCompactAt ${at} is below the ${CODEX_COMPACT_FLOOR} tokens it can compact at; using ${CODEX_COMPACT_FLOOR}.`);
+  return { model_auto_compact_token_limit: Math.max(at, CODEX_COMPACT_FLOOR), model_auto_compact_token_limit_scope: 'total' };
 }
+
+/**
+ * The least start a task's Codex is given: Codex takes any limit, and one
+ * under a turn's own prompt and reply would compact on every turn. The room
+ * OpenCode keeps for a summary, for the same reason.
+ */
+const CODEX_COMPACT_FLOOR = 16_000;
+
+/** Codex holds its compaction limit to this share of the window it reports, so a larger one starts there (codex-cli 0.167.0). */
+const CODEX_LIMIT_SHARE = 0.9;
 
 /** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
 function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
@@ -459,6 +471,22 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
   get compactStartTokens(): number | undefined {
     return this.compactWindowTokens;
+  }
+
+  /**
+   * The start in force once Codex names its window: a number above its share
+   * of it compacts at that share, so the meter and running long read that,
+   * said once (ADR-0018 C4).
+   */
+  private holdToWindow(window: number): void {
+    const set = this.compactLimit?.model_auto_compact_token_limit;
+    if (set === undefined || this.compactWindowTokens === undefined) return;
+    const held = Math.min(set, Math.floor(window * CODEX_LIMIT_SHARE));
+    if (held === this.compactWindowTokens) return;
+    if (held < set && this.compactWindowTokens === set) {
+      console.warn(`Codex: taskCompactAt ${set} is above the ${held} tokens Codex compacts at in its ${window}-token window; it compacts at ${held}.`);
+    }
+    this.compactWindowTokens = held;
   }
 
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
@@ -1114,6 +1142,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const inContext = last.totalTokens !== undefined && last.totalTokens > 0
       ? last.totalTokens
       : (last.inputTokens !== undefined ? last.inputTokens + (last.outputTokens ?? 0) : undefined);
+    if (!subagentId && typeof window === 'number') this.holdToWindow(window);
     const record = this.usage.call({
       ...(model ? { model } : {}),
       ...(last.inputTokens !== undefined ? { inputTokens: last.inputTokens } : {}),

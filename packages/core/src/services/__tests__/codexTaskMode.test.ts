@@ -243,8 +243,42 @@ describe('CodexAdapter task compaction point (taskCompactAt)', () => {
     spawned.processes[0].emitStdout(turnStarted('auto-turn') + line({ method: 'item/completed', params: { threadId: 'thr-task-1', item: { id: 'auto-item', type: 'contextCompaction' } } }) + turnCompleted('auto-turn'));
     await turn;
     expect(adapter.compactWindowTokens).toBe(150_000);
-    await expectCompactionChain(events, adapter.compactWindowTokens);
+    await expectCompactionChain(events, adapter.compactWindowTokens, adapter.compactStartTokens, { at: 3, window: 182_000 });
     adapter.dispose();
+  });
+
+  it('holds a number too small to leave room for a turn at the floor, with a line, and passes the point it holds', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { params, adapter } = await threadStartWith('5000');
+      expect(params?.config).toEqual({ model_auto_compact_token_limit: 16_000, model_auto_compact_token_limit_scope: 'total' });
+      expect(adapter.compactStartTokens).toBe(16_000);
+      expect(warn.mock.calls.map(([l]) => String(l))).toContainEqual(expect.stringMatching(/Codex: taskCompactAt 5000 is below the 16000 tokens it can compact at; using 16000\./));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('reads the start in force as 90% of the window Codex reports, where the number set is above it, and says so once', async () => {
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', '190000');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { processDeps, spawned } = deps(handshake());
+      const adapter = new CodexAdapter(processDeps);
+      await adapter.start(taskStart('agent', { model: 'gpt-5.5' }));
+      expect(adapter.compactStartTokens).toBe(190_000);
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('go on', (e) => events.push(e));
+      const usage = line({ method: 'thread/tokenUsage/updated', params: { threadId: 'thr-task-1', tokenUsage: { last: { inputTokens: 1000, outputTokens: 10, totalTokens: 1010 }, total: { inputTokens: 1000, outputTokens: 10, totalTokens: 1010 }, modelContextWindow: 200_000 } } });
+      spawned.processes[0].emitStdout(turnStarted('t') + usage + usage + turnCompleted('t'));
+      await turn;
+      expect(adapter.compactStartTokens).toBe(180_000);
+      expect(adapter.compactWindowTokens).toBe(180_000);
+      expect(warn.mock.calls.map(([l]) => String(l)).filter((l) => l.includes('taskCompactAt'))).toEqual([expect.stringMatching(/Codex: taskCompactAt 190000 is above the 180000 tokens .*200000.*; it compacts at 180000\./)]);
+      adapter.dispose();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

@@ -145,6 +145,16 @@ const NO_CONNECTORS = { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
  * is the toolchain a task was started to use (ADR-0028), so a task must not
  * lose them to save tokens.
  */
+/**
+ * The CLI's compaction variable, which a task never inherits: under `auto` or
+ * `off` the host's own (a parent Ordewell's, say) would otherwise decide where
+ * the task compacts, and under a number the launch sets it in any case
+ * (ADR-0018 C4). This is the launch's environment, not the user's settings.
+ */
+function isCompactWindowVariable(name: string): boolean {
+  return name.toUpperCase() === 'CLAUDE_CODE_AUTO_COMPACT_WINDOW';
+}
+
 function taskEnv(window: number | undefined, minimal: boolean): Record<string, string> {
   return {
     ...NO_AUTO_MEMORY,
@@ -805,7 +815,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         ...this.ordewellServerArgs(handed, opts.mcp, readOnly ? 'readOnlyTask' : 'task'),
       );
     }
-    return { command: 'claude', args, env: taskEnv(this.compactWindowTokens, minimal), files: handed.paths };
+    return { command: 'claude', args, env: taskEnv(this.compactWindowTokens, minimal), envDrop: isCompactWindowVariable, files: handed.paths };
   }
 
   /**
