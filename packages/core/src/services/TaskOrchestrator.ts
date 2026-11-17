@@ -1545,6 +1545,8 @@ export class TaskOrchestrator {
       else if (left.status === 'failed') this.store.markFailed(taskId);
       else if (left.status === 'pending') {
         this.store.markPending(taskId);
+        // A note was for the attempt this ends (ADR-0029): whatever starts the task next, a retry, a run or a reload, starts without it.
+        this.store.setRetryNote(taskId, undefined);
         if (left.hold) this.starts.hold(taskId, left.hold, 'chosen');
       }
     }

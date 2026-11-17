@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WAKE_UP_RATE } from '../LoopGuards';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { PLANNER_EXECUTION_TOOLS } from '../mcp/tools';
+import type { ExecutionActor } from '../../models/Execution';
 import { ctx, NOW, prose, settled, supervised, task, until, waitForInput, type Env, type Options } from './supervisorTestKit';
 
 /**
@@ -235,6 +236,82 @@ describe('a task the supervisor stopped, left standing at Act', () => {
     await until(() => env.run.spawnedIds().filter((id) => id === 't1').length === 2);
     const spawns = env.run.runner.spawn.mock.calls.filter(([options]) => options.taskId === 't1');
     expect(spawns[1][0].prompt).toContain('## The supervisor\'s note for this attempt\n\nThe last attempt at this task ended without passing, and the supervisor retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\nUse ./lib.');
+  });
+
+  const SUPERVISOR = { kind: 'supervisor', level: 'act' } as const;
+
+  /** The supervisor retries task 1 with a note, and `by` stops that attempt. */
+  async function notedThenStopped(by: ExecutionActor = { kind: 'user' }): Promise<Env> {
+    const env = await noted();
+    const stop = await env.session.execute({ command: 'stop_task', task: 't1' }, by);
+    expect(stop.ok, stop.message).toBe(true);
+    await settled();
+    return env;
+  }
+
+  const t1Prompts = (env: Env): string[] =>
+    env.run.runner.spawn.mock.calls.filter(([options]) => options.taskId === 't1').map(([options]) => options.prompt);
+
+  it('drops the note with the attempt it was for, so a stopped attempt\'s note never briefs the next one', async () => {
+    const env = await notedThenStopped();
+
+    await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+    expect(t1Prompts(env)[2]).not.toContain('The supervisor\'s note for this attempt');
+  });
+
+  /** The supervisor retries task 1 with a note, and that attempt is still running. */
+  async function noted(): Promise<Env> {
+    const env = await stoppedWhileOthersRun();
+    expect((await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Use ./lib.' }, ctx)).isError).toBeFalsy();
+    env.planner.calls[1].finish(prose('Retried task 1 with a note.'));
+    await until(() => t1Prompts(env).length === 2);
+    return env;
+  }
+
+  /** Ends each supervisor turn the run opens, until it settles: a turn already ended ignores a second end. */
+  async function quiet(env: Env): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+      for (const call of env.planner.calls.slice(2)) call.finish(prose('Leaving it.'));
+    }
+  }
+
+  it('drops the note of an attempt that failed when the user runs the plan again', async () => {
+    const env = await noted();
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    env.run.of('t4').reportComplete({ status: 'done', summary: 'done' });
+    await quiet(env);
+
+    expect((await env.session.execute({ command: 'run_plan' }, { kind: 'user' })).ok).toBe(true);
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+  });
+
+  it('drops the note of an attempt the run\'s Stop ended when the user runs the plan again', async () => {
+    const env = await noted();
+    expect((await env.session.execute({ command: 'stop_run' }, { kind: 'user' })).ok).toBe(true);
+    await quiet(env);
+
+    expect((await env.session.execute({ command: 'run_plan' }, { kind: 'user' })).ok).toBe(true);
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+  });
+
+  it('briefs the attempt after a stop with the new note a retry of it gives, not the old one', async () => {
+    const env = await notedThenStopped(SUPERVISOR);
+
+    const retry = await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh', message: 'Use ./vendor.' }, SUPERVISOR);
+    expect(retry.ok, retry.message).toBe(true);
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).toContain('Use ./vendor.');
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
   });
 });
 

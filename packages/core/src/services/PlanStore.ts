@@ -263,12 +263,14 @@ export class PlanStore {
    * which its caller decides (ADR-0045 L5, L7), a revert's hold, which is the
    * user's to release by a retry or a force start and which the load after a
    * reset holds again (ADR-0054), a carry-over, which the attempt it
-   * readies is (ADR-0018 U1), and a retry's note, which is that attempt's (ADR-0029).
+   * readies is (ADR-0018 U1), and a retry's note, which is that attempt's
+   * (ADR-0029) while it has not run: a task that failed with it has had it.
    */
   private ready(t: Task): void {
     this._revision++;
     const fields = t as unknown as Record<string, unknown>;
-    for (const field of ATTEMPT_FIELDS) if (!READY_KEEPS.includes(field)) delete fields[field];
+    const ran = t.status !== 'pending' && t.status !== 'approved';
+    for (const field of ATTEMPT_FIELDS) if (!READY_KEEPS.includes(field) || (field === 'retryNote' && ran)) delete fields[field];
     t.status = 'approved';
   }
 
@@ -455,9 +457,11 @@ export class PlanStore {
     if (task) task.carriedFrom = runner;
   }
 
-  setRetryNote(id: string, note: RetryNote): void {
+  setRetryNote(id: string, note: RetryNote | undefined): void {
     const task = this.edit(id);
-    if (task) task.retryNote = note;
+    if (!task) return;
+    if (note) task.retryNote = note;
+    else delete task.retryNote;
   }
 
   clearCarriedFrom(id: string): void {
