@@ -3850,8 +3850,10 @@ module owning one plan's run supervision (ADR-0029, ADR-0030): the run's own
 **Run settings** (`runSettings`), whether a run starts afresh or continues the
 last (by its **Run origin**), the user's change applied to the run at once
 (`apply`), the lowerings — a tripped wake-up-rate guard to Watch, a failed
-supervisor to unsupervised — the **Loop guards**' memory, and the end-of-run
-handoff an Act supervisor has first. It owns the `Supervisor`, which decides
+supervisor to unsupervised — the **Loop guards**' memory, the end-of-run
+handoff an Act supervisor has first, and when that end stands for a follower
+that cannot answer it (`run_concluded`: below Act at once, at Act once the
+closing turn can no longer continue the run). It owns the `Supervisor`, which decides
 when the planner wakes. The Session forwards run events to it and reads back
 only the level; the scheduler reads the run's settings through one
 `runSettings()` callback as it decides, and nothing is pushed to it.

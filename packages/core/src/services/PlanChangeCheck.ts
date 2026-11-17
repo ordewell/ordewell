@@ -5,7 +5,7 @@ import { checkPlanInvariants, newBreaches, type IntakeCatalog, type PlanTaskErro
 import { applyTaskOps, opRefusalText, type ApplyTaskOpsResult, type OpRef, type TaskOp } from './TaskOps';
 import * as PlanGraph from './PlanGraph';
 import { resolveAssignments, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
-import { checkOpSkills, checkPlanSkills, type SkillCheck, type SkillLookup } from './taskSkills';
+import { checkOpSkills, checkPlanSkills, unprovidedSkills, type SkillCheck, type SkillLookup } from './taskSkills';
 import { SCRIPT_PAST_THE_RULES, delegatedRequest, mandateRefusalText, missingGrant, narrow, type Grant, type Mandate, type NodeAuthority } from './Mandate';
 import { planSize, scopeOverlaps } from '../models/Delegation';
 import { scriptBodyOf } from '../models/ScriptTask';
@@ -167,7 +167,7 @@ export class PlanChangeCheck {
         probed = true;
         continue;
       }
-      const checked = this.rules(change, phase, skills, read, normal, sealable);
+      const checked = this.rules(change, phase, skills, read, normal, sealable, lookup);
       if (checked.ok) then?.(checked);
       return checked;
     }
@@ -220,9 +220,11 @@ export class PlanChangeCheck {
     return { ...base, kind: 'plan', tasks: keepExecutionState(before, carryPlannedModes(before, resolved.tasks, modes)), adjustments: resolved.adjustments };
   }
 
-  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined, normal: Normalized, canSeal?: boolean): CheckedChange {
+  private rules<P extends CheckPhase>(change: PlannerChange<P>, phase: P, skills: SkillCheck, read: PlanTasksResult | undefined, normal: Normalized, canSeal?: boolean, lookup?: SkillLookup): CheckedChange {
     const { before, runners, catalog } = normal;
     const skillErrors: PlanChangeError[] = skills.errors.map((e) => ({ ...e, field: 'skills' }));
+    // A skill nothing installed or upstream provides would fail its task at start, its dependents with it (ADR-0024).
+    const unprovided = (after: readonly Task[]): PlanChangeError[] => (lookup ? unprovidedSkills(before, after, lookup).map((e) => ({ ...e, field: 'skills' })) : []);
 
     if (normal.kind === 'plan') {
       const { tasks } = normal;
@@ -231,6 +233,7 @@ export class PlanChangeCheck {
       // A landing plan waited out the rest of its reply, so the runners it was accepted against may be gone (ADR-0003 V1).
       const sealing = canSeal === false ? { canSeal } : {};
       const broken = phase === 'land' || canSeal === false ? rewriteBreaches(before, tasks, runners, catalog.runnerModes, sealing) : [];
+      skillErrors.push(...unprovided(tasks));
       if (broken.length > 0 || skillErrors.length > 0) return this.refused(change, [...broken, ...skillErrors]);
       const warnings = [...(read?.ok ? read.warnings ?? [] : []), ...skills.warnings];
       if (phase !== 'land') return { ok: true, tasks, adjustments: normal.adjustments, warnings, summary: [], handles: new Map() };
@@ -243,6 +246,8 @@ export class PlanChangeCheck {
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
     const { applied } = normal;
     if (!applied.ok) return this.refused(change, applied.refusals);
+    const unprovidedErrors = unprovided(applied.tasks);
+    if (unprovidedErrors.length > 0) return this.refused(change, unprovidedErrors);
     const ungranted = [...this.ungranted(before, applied.tasks), ...this.pastMandate(before, applied.tasks)];
     if (ungranted.length > 0) return this.refused(change, ungranted);
     if (canSeal === false) {

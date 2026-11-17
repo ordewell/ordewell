@@ -360,10 +360,22 @@ describe('attempt kinds, as the orchestrator runs them', () => {
       expect(env.spawned('c1')).toHaveLength(0);
       expect(env.spawned('c2')).toHaveLength(0);
       const reason = env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason;
-      expect(reason).toContain('"deploy-checklist" not found in /g or ');
+      expect(reason).toContain('skill "deploy-checklist" not found: create .ordewell/skills/deploy-checklist/SKILL.md, or remove "deploy-checklist" from the task\'s skills with edit_plan, then retry the task (searched /g or ');
       expect(reason).toContain('/.ordewell/skills');
       expect(reason).not.toContain('"tdd"');
       expect(env.notices.some((n) => n.includes('deploy-checklist'))).toBe(true);
+    });
+
+    it('a retried task whose skill is missing drops the verdict of its earlier attempt, which no longer says why it failed', async () => {
+      const env = setup();
+      const earlier = { outcome: 'fail' as const, reason: 'two tests fail', checks: [], decidedAt: '2026-10-13T00:00:00Z', reported: 'failed' as const };
+      env.orchestrator.loadPlan([change('c1', 1, { skills: ['deploy-checklist'], status: 'failed', verdict: earlier })]);
+
+      await env.orchestrator.forceStartTask('c1');
+
+      await vi.waitFor(() => expect(env.status('c1')).toBe('failed'));
+      expect(env.orchestrator.storeInstance.get('c1')!.verdict).toBeUndefined();
+      expect(env.orchestrator.storeInstance.get('c1')!.outputSummary!.reviewReason).toContain('skill "deploy-checklist" not found');
     });
 
     it('a task attaching a planner skill fails before any runner starts', async () => {

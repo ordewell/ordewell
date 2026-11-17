@@ -120,10 +120,11 @@ describe('ApiClient.streamExecution and a blocked run', () => {
     await firstDone;
     for (const ws of sockets) ws.send(JSON.stringify({ type: 'notice', level: 'info', message: 'after' }));
     sockets[1].send(JSON.stringify({ type: 'execution_complete', summary: { total: 0, completed: 0, failed: 0 } }));
+    sockets[1].send(JSON.stringify({ type: 'run_concluded', summary: { total: 0, completed: 0, failed: 0 } }));
     await secondDone;
 
     expect(first).toEqual([]);
-    expect(second).toEqual(['notice', 'execution_complete']);
+    expect(second).toEqual(['notice', 'execution_complete', 'run_concluded']);
     wss.close();
   });
 

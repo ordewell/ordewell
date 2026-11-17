@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { removeDir } from '../../../../testEnv';
 import { defaultModelInfo, modelInfoFromCatalog, ordewellModelId, parseModelId } from '../models';
+import { taskCompletionContract } from '../../../mcp';
 import { buildSystemPrompt } from '../prompt';
 import { FileTranscriptStore } from '../transcript';
 
@@ -78,24 +79,50 @@ describe('buildSystemPrompt', () => {
   it('states the task, the environment, and the commit only when the task commits', () => {
     const cwd = tempDir();
     mkdirSync(path.join(cwd, '.git'));
-    const text = buildSystemPrompt({ cwd, commits: false, platform: 'linux', now }).map((part) => part.text).join('\n');
+    const text = buildSystemPrompt({ cwd, commits: false, stepLimit: 200, platform: 'linux', now }).map((part) => part.text).join('\n');
     expect(text).toContain('task_complete');
     expect(text).toContain(`Working directory: ${cwd}`);
     expect(text).toContain('Platform: linux');
     expect(text).toContain('Date: 2026-03-04');
     expect(text).toContain('Git repository: yes');
     expect(text).not.toContain('`commit`');
-    const committing = buildSystemPrompt({ cwd, commits: true, now }).map((part) => part.text).join('\n');
+    const committing = buildSystemPrompt({ cwd, commits: true, stepLimit: 200, now }).map((part) => part.text).join('\n');
     expect(committing).toContain('`commit`');
+  });
+
+  it('carries every runner\'s completion contract, the commit part only when the task commits', () => {
+    const cwd = tempDir();
+    const text = (commits: boolean) => buildSystemPrompt({ cwd, commits, stepLimit: 200, now }).map((part) => part.text).join('\n');
+    expect(text(false)).toContain(taskCompletionContract({}));
+    expect(text(false)).not.toContain(taskCompletionContract({ commits: true }));
+    expect(text(true)).toContain(taskCompletionContract({ commits: true }));
+  });
+
+  it('says how a long task is worked through, with the attempt\'s own step budget', () => {
+    const cwd = tempDir();
+    const text = (commits: boolean) => buildSystemPrompt({ cwd, commits, stepLimit: 137, now })[0]?.text ?? '';
+    const committing = text(true);
+    expect(committing).toMatch(/how much (of the brief )?(work )?remains is never a reason to stop or to report `blocked`/i);
+    expect(committing).toMatch(/compacted for you as it fills/);
+    expect(committing).toContain('a budget of 137 model calls for this attempt');
+    expect(committing).toMatch(/work through the brief in order/i);
+    expect(committing).toMatch(/commit each coherent part as it works.*an attempt can end at any time.*not committed is not its result/is);
+    expect(committing).toMatch(/`blocked` is for an obstacle outside your control.*missing credential.*contradiction in the brief.*environment you cannot repair.*exactly what is missing/is);
+    expect(committing).toMatch(/budget is nearly spent.*commit that part.*what is done and what remains.*never report `done`.*done criterion does not hold/is);
+    // One line, the limit and where the rest goes, since a refused report costs a model call.
+    expect(committing).toMatch(/`summary`.{0,40}at most 1500 characters.*refused.*`findings`.*`report`/i);
+    // A task that writes no commit is not told to make one.
+    expect(text(false)).not.toMatch(/commit each coherent part/i);
+    expect(text(false)).toContain('a budget of 137 model calls for this attempt');
   });
 
   it('appends AGENTS.md, else CLAUDE.md, with the cache breakpoint on the last part', () => {
     const cwd = tempDir();
-    expect(buildSystemPrompt({ cwd, commits: false, now }).at(-1)?.text).toContain('Git repository: no');
+    expect(buildSystemPrompt({ cwd, commits: false, stepLimit: 200, now }).at(-1)?.text).toContain('Git repository: no');
     writeFileSync(path.join(cwd, 'CLAUDE.md'), 'Claude rules here.');
-    expect(buildSystemPrompt({ cwd, commits: false, now }).at(-1)?.text).toContain('Claude rules here.');
+    expect(buildSystemPrompt({ cwd, commits: false, stepLimit: 200, now }).at(-1)?.text).toContain('Claude rules here.');
     writeFileSync(path.join(cwd, 'AGENTS.md'), 'Agents rules here.');
-    const parts = buildSystemPrompt({ cwd, commits: false, now });
+    const parts = buildSystemPrompt({ cwd, commits: false, stepLimit: 200, now });
     expect(parts.at(-1)?.text).toContain('Agents rules here.');
     expect(parts.map((part) => part.text).join('\n')).not.toContain('Claude rules here.');
     expect(parts.at(-1)?.cacheBreakpoint).toBe(true);

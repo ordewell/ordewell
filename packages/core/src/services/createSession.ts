@@ -1027,6 +1027,7 @@ export class Session {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
+      runConcluded: () => this.events.runConcluded(),
       // Async so a failed save rejects, as a turn's failure does: the input already waits on the plan, and a Stop that took must not throw.
       deliver: async (digest, report, idle, tasks) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}), ...(idle ? { idle } : {}), ...(tasks ? { tasks } : {}) }),
       pump: () => this.turns.pump(),

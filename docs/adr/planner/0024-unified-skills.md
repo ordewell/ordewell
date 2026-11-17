@@ -117,14 +117,25 @@ shadowed rather than dropped silently.
   them and their paths, so history shows what that attempt was given. A retry resolves again; a conflict
   repair and a continue add no snapshot, since they resume work that already
   holds the skills.
-- Names are checked **leniently at submit, hard at spawn**. An unresolved name
-  in a submitted plan or edit is a warning, because a task it depends on may
-  create the skill in its worktree. A planner skill on a task is refused. At
-  spawn the name is resolved in the task's worktree plus global (in a repo group
-  also the group root's folder, read from the main checkout; without worktrees,
-  the workspace instead of the worktree); if any does
-  not resolve, the task fails before the runner starts and says which names
-  and which directories were searched.
+- Names are checked **against a provider at submit, hard at spawn**. A name
+  in a submitted plan or edit that resolves to no installed task skill is
+  accepted, with a warning, only when a task it depends on, directly or
+  transitively, names `.ordewell/skills/<name>` in its prompt, since that task
+  may create the skill in its worktree. Otherwise the change is refused with an
+  error naming the task, the skill and the two ways out: remove the skill, or
+  add a task that writes `.ordewell/skills/<name>/SKILL.md` and depend on it.
+  A planner left free to invent a name would otherwise attach it everywhere and
+  fail the run at its first task. Only new submissions and edits are checked:
+  a saved plan that already names such a skill still loads, and an edit leaves
+  a skill already standing on a task alone. A planner skill on a task is
+  refused. At spawn the name is resolved in the task's worktree plus global (in
+  a repo group also the group root's folder, read from the main checkout;
+  without worktrees, the workspace instead of the worktree); if any does not
+  resolve, the task fails before the runner starts, with no verdict, saying
+  which names, what to do (create the skill, or remove it with `edit_plan` and
+  retry) and which directories were searched. The supervisor's wake carries
+  that text, and a retry with the skill removed counts as a changed attempt
+  under the loop guards.
 - `/tdd` on a task skill is a **directive to the planner**: the entry carries
   no body, and the planner is told to attach the skill to the tasks it fits.
 - Skills show as **editable chips** on task and subtask cards in VS Code,
@@ -212,3 +223,4 @@ server).
 - 2026-10-17 — ADR-0021 folded in (*Built-in seeds refresh*).
 - 2026-10-21 — amended: the `diagnose` and `explore` built-ins are model-invocable planner skills.
 - 2026-11-10 — amended: skill bodies are capped at 2,000 words.
+- 2026-11-17 — amended: a missing skill name is refused at submit unless a task it depends on writes it; the spawn failure says how to fix it.

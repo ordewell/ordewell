@@ -66,9 +66,9 @@ const handoffCommit = z.object({
 
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
-    .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
+    .describe("'done' only when the task is fully complete; 'blocked' for an obstacle outside your control, never for how much work remains. 'blocked' or 'failed' end the attempt without passing."),
   summary: z.string().max(HANDOFF_LIMITS.summary, 'Put the long form in report.')
-    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
+    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters, or the call is refused: what to act on goes in findings, the long form in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
     .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, the body at most ${HANDOFF_LIMITS.commitBody}.`),

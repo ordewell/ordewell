@@ -135,7 +135,9 @@ and completion evidence.
   (`--append-system-prompt-file`, a file the process owns, never text on its
   command line: [ADR-0010](../platform/0010-windows-support.md) §1), the
   thread's `developerInstructions`, or
-  OpenCode's `system` / instruction entry, applied again on every resume. ACP
+  OpenCode's `system` / instruction entry, or the built-in runner's system
+  prompt ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)),
+  applied again on every resume. ACP
   has no system-prompt field, so an ACP runner takes the contract through its
   own channel outside the worktree (an owner-only file it is pointed at, or a
   documented `session/new` field), or else as a preamble on the first prompt
@@ -653,3 +655,4 @@ transport is retained for take-over.
 - 2026-11-14 — W1: the running-long threshold is a multiple of a passed task's running time, waits left out, kept on its attempt as it ends; the live context and window follow the usage meter's rules across a sizeless compaction and a model change. C3: the queued nudge holds no `task_complete` back.
 - 2026-11-15 — W1: a compaction flags running long from the attempt's third, then at the 6th, 12th and so on, where Ordewell sets the window the runner compacts at, and from the first where it sets none; the flag names that window. C3's reminder after each compaction is unchanged.
 - 2026-11-16 — C2: a Claude Code task's completion contract is appended from a file the process owns (`--append-system-prompt-file`), no longer as text on its command line ([ADR-0010](../platform/0010-windows-support.md) §1).
+- 2026-11-17 — C2: the built-in runner carries the contract in its system prompt too ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)).

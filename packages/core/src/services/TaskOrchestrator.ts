@@ -1563,6 +1563,8 @@ export class TaskOrchestrator {
     } else {
       if (failure.leaves === 'failed') {
         this.store.markFailed(task.id);
+        // No verdict was reached: an earlier attempt's would be read as why this one failed.
+        this.store.setTaskVerdict(task.id, undefined);
         this.store.setTaskOutputSummary(task.id, failure.summary);
       } else {
         this.store.markPending(task.id);

@@ -146,13 +146,14 @@ describe('Planner', () => {
 
     it('returns names not found, or no skill could have, as warnings beside the plan', async () => {
       const aiService = fakeAiService();
-      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue(parsePlanJson(JSON.stringify({ tasks: [{
-        id: 't1', order: 1, title: 'a', description: 'd', prompt: 'p', autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code', skills: ['later', '-bad'],
-      }] }), ['claude-code']));
+      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue(parsePlanJson(JSON.stringify({ tasks: [
+        { id: 't0', order: 1, title: 'w', description: 'd', prompt: 'Write .ordewell/skills/later/SKILL.md', autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code' },
+        { id: 't1', order: 2, title: 'a', description: 'd', prompt: 'p', dependencies: ['t0'], autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code', skills: ['later', '-bad'] },
+      ] }), ['claude-code']));
 
       const plan = await generate(aiService);
 
-      expect(plan.tasks[0].skills).toEqual(['later']);
+      expect(plan.tasks[1].skills).toEqual(['later']);
       expect(plan.skillWarnings).toEqual([
         expect.stringContaining('Task "a": "-bad" is not a valid skill name'),
         expect.stringContaining('Task "a": skill "later" not found'),
