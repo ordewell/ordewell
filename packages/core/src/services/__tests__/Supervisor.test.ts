@@ -108,6 +108,23 @@ describe('wakeUpDigest', () => {
       expect(line).not.toContain('compacting');
     });
 
+    it('names a context that reached its threshold, against the model\'s window, then what the supervisor can do', () => {
+      const event = runningLong('t4', { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 400_000, contextTokens: 412_000, contextWindow: 1_000_000, peakContextTokens: 412_000 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')).toEqual([
+        'Run update:',
+        '- task #4 "Task t4"\'s context reached its threshold: context 412k of a 1000k window, past 400k (40% of the window, 150k at least), after 40m 00s running',
+        ADVICE,
+      ]);
+    });
+
+    it('names a context threshold doubled by an earlier flag, the compaction window it was measured against, and the compactions so far', () => {
+      const event = runningLong('t4', { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 320_000, contextTokens: 330_000, contextWindow: 1_000_000, compactionWindow: 400_000, compactions: 1 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4"\'s context reached its threshold: context 330k of a 400k compaction window (model window 1000k), past 320k (40% of the window, 150k at least, doubled after each earlier flag), after 40m 00s running; compacted once');
+    });
+
     it('says what the supervisor can do once however many tasks run long, and not at all when none does', () => {
       const digest = wakeUpDigest({ attention: [runningLong('t4'), { kind: 'task_idle', taskId: 't5', at: 0 }, runningLong('t6')], sinceLast: [] }, describeTask);
 

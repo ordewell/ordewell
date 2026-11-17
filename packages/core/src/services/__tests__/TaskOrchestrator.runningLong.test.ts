@@ -11,11 +11,12 @@ import { runningLongThreshold } from '../RunningLong';
 
 const MINUTE = 60_000;
 
-function setup() {
+function setup(compactWindowTokens?: number) {
   const sessions: FakeRunnerSession[] = [];
   const runner = {
     spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
       const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId, `native-${o.taskId}`);
+      session.compactWindowTokens = compactWindowTokens;
       sessions.push(session);
       return session;
     }),
@@ -64,5 +65,21 @@ describe('a passed attempt\'s running time (ADR-0018 W1)', () => {
     expect(usage.runningMs).toBeGreaterThanOrEqual(5 * MINUTE);
     expect(usage.runningMs).toBeLessThan(6 * MINUTE);
     expect(runningLongThreshold([h.task('t1')])).toEqual({ ms: 30 * MINUTE });
+  });
+});
+
+describe('an attempt\'s compaction window (ADR-0018 W1)', () => {
+  it('is kept on its usage with where its runner starts compacting, for the context meter', async () => {
+    const h = setup(150_000);
+    h.orchestrator.loadPlan([plan()]);
+    await h.orchestrator.forceStartTask('t1');
+    expect(h.task('t1').attemptUsage!.at(-1)!.compaction).toEqual({ windowTokens: 150_000, startsAtTokens: 118_000 });
+  });
+
+  it('is absent where Ordewell set none', async () => {
+    const h = setup();
+    h.orchestrator.loadPlan([plan()]);
+    await h.orchestrator.forceStartTask('t1');
+    expect(h.task('t1').attemptUsage!.at(-1)!).not.toHaveProperty('compaction');
   });
 });

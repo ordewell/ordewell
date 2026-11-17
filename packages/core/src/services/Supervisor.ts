@@ -4,7 +4,7 @@ import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_AL
 import { classifyRunnerStop } from './runnerExit';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 import { LAND_KEPT_HINT } from './taskReport';
-import { RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, type RunningLongEvent } from './RunningLong';
+import { CONTEXT_FLOOR_TOKENS, CONTEXT_SHARE, RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, contextThresholdOf, type RunningLongEvent } from './RunningLong';
 import { formatElapsed } from '../conversation/elapsed';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
@@ -856,6 +856,8 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
     // Only a compaction names a cause: a /clear or a model switch clears the live size as well.
     : facts.peakContextTokens !== undefined ? `; context unknown${facts.compactions > 0 ? ' since compacting' : ''}, peak ${tokens(facts.peakContextTokens)}${window}${unit}` : '';
   const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
+  const compacted = facts.compactions > 0 ? `; compacted ${times(facts.compactions)}` : '';
+  if (facts.reason === 'context') return `${task}'s context reached its threshold: ${contextLine(facts)}, after ${formatElapsed(facts.elapsedMs)} running${compacted}`;
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
   }
@@ -864,8 +866,19 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
     ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(facts.basis.runningMs)} task ${describe(facts.basis.taskId)} passed in`
     : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
   const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
-  const compacted = facts.compactions > 0 ? `; compacted ${times(facts.compactions)}` : '';
   return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${from}${doubled})${context}${compacted}`;
+}
+
+/** A context flag's size against the window it was measured by: a compaction window in force where it is the smaller, else the model's. */
+function contextLine(facts: RunningLongEvent): string {
+  const model = facts.contextWindow;
+  const threshold = contextThresholdOf(model, facts.compactionWindow);
+  const window = !threshold || model === undefined ? ''
+    : threshold.window < model ? ` of a ${tokens(threshold.window)} compaction window (model window ${tokens(model)})` : ` of a ${tokens(threshold.window)} window`;
+  const due = facts.contextThreshold ?? threshold?.tokens;
+  const doubled = threshold && due !== undefined && due > threshold.tokens ? ', doubled after each earlier flag' : '';
+  const past = due === undefined ? '' : `, past ${tokens(due)} (${Math.round(CONTEXT_SHARE * 100)}% of the window, ${tokens(CONTEXT_FLOOR_TOKENS)} at least${doubled})`;
+  return `context ${facts.contextTokens === undefined ? 'unknown' : tokens(facts.contextTokens)}${window}${past}`;
 }
 
 /** A token count to the nearest thousand: the supervisor weighs it against the window, not to the token. */

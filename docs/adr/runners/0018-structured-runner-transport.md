@@ -121,7 +121,21 @@ and completion evidence.
   routine: it flags from the attempt's third, then at the 6th, 12th and so on,
   since a task compacts a few times in ordinary work there. At 200k or more,
   or where Ordewell sets none and the runner compacts near its model's own
-  window, every compaction flags. The flag carries the
+  window, every compaction flags. A large context flags too, before any
+  compaction: once the task's context first reaches 40% of its effective
+  window, the smaller of the model's window and a compaction window Ordewell
+  set, and never below 150k tokens, then again at each doubling of that size
+  while it stays below the effective window, once per size and never after the
+  attempt ends. Quality falls with a context's length well before its window
+  is full, though no measurement gives a point, so both numbers are a
+  judgement (`CONTEXT_SHARE`, `CONTEXT_FLOOR_TOKENS`); and the remedy is a
+  fresh session with a handoff, which is the supervisor's to start, not a
+  summary. The runner is told nothing. It reads the context as the flag's own
+  facts do, so it applies to every runner that reports its context and its
+  model's window, and stays silent while either is unknown: Claude Code states
+  its window on a turn's last line, so a first long turn on a model the
+  session has no window for flags only on time and compaction. The flag says
+  which of time, compaction and context raised it, and carries the
   running time, the threshold and the task it was computed from, the live
   context and the model's window, the window Ordewell set the runner to
   compact at when it did (the context line names it, the model's beside it),
@@ -130,7 +144,12 @@ and completion evidence.
   the usage meter's rules: a compaction that states no size, or a change of
   model or source, leaves the context unknown until the next call measures it,
   never the old size, and a new model is not measured against the old one's
-  window. A script task has its `timeoutMs` and
+  window. The task's context meter reads the same way, and where a compaction
+  window below the model's is in force it reads against where compaction
+  starts under it, the window less the CLI's buffer (`ctx 61k (52% · compacts
+  at 118k)`), so a compaction there does not come as a surprise; with none in
+  force it reads against the model's window as before (`ctx 61k (6%)`). A
+  script task has its `timeoutMs` and
   a delegated task its `budget.wallClockMs`, so neither has this clock; a
   delegated task's children do. Nothing is re-flagged after a restart: a plan
   load ends every interrupted attempt, and the flag is the attempt's. The
@@ -670,3 +689,4 @@ transport is retained for take-over.
 - 2026-11-16 — C2: a Claude Code task's completion contract is appended from a file the process owns (`--append-system-prompt-file`), no longer as text on its command line ([ADR-0010](../platform/0010-windows-support.md) §1).
 - 2026-11-17 — C2: the built-in runner carries the contract in its system prompt too ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)).
 - 2026-11-17 — W1: a Claude Code task's compaction window is the `taskCompactWindow` setting (`auto`: none, except Haiku's, set to compact just under its price step; a number; `off`), no longer a fixed 150k; a compaction is routine only under a window below 200k.
+- 2026-11-17 — W1: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, flags running long; the context meter reads against where compaction starts under a compaction window in force.
