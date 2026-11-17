@@ -586,23 +586,45 @@ export function removeWrittenScript(mark) {
   ].join('\n');
 }
 
+/** What pytest reads wherever it lies on the way to the tests: a hook, or options that load one. */
+const PYTEST_CONFIG = new Set(['conftest.py', 'pytest.ini', 'pyproject.toml', 'setup.cfg', 'tox.ini']);
+
+/** Directories in the workdir that are not the arm's: the image's venv and Ordewell's own state. */
+const NOT_THE_ARMS = [VENV_DIR, '.ordewell'];
+
 /**
- * Whether a path under testDir is a test the restore puts back: a test_*.py,
- * a conftest.py, or anything in a tests/ or unit_tests/ directory. The rest is
- * the arm's work wherever testDir lies inside srcDir, as networkx's does.
+ * Whether a path is one the restore puts back: a pytest config or conftest.py
+ * anywhere, since one at the root rewrites what `pytest tests` reports; under
+ * testDir, a test_*.py or *_test.py, or anything in a tests/ or unit_tests/
+ * directory. The rest is the arm's work wherever testDir lies inside srcDir,
+ * as networkx's does.
  */
 export function isTestPath(lib, p) {
-  const dir = lib.testDir.replace(/^\.\//, '').replace(/\/+$/, '');
-  if (dir !== '' && dir !== '.' && !p.startsWith(`${dir}/`)) return false;
   const parts = p.split('/');
   const base = parts.pop();
-  return /^test_.*\.py$/.test(base) || base === 'conftest.py' || parts.some((d) => d === 'tests' || d === 'unit_tests');
+  if (NOT_THE_ARMS.includes(parts[0])) return false;
+  if (PYTEST_CONFIG.has(base)) return true;
+  const dir = lib.testDir.replace(/^\.\//, '').replace(/\/+$/, '');
+  if (dir !== '' && dir !== '.' && !p.startsWith(`${dir}/`)) return false;
+  return /^test_.*\.py$/.test(base) || /_test\.py$/.test(base) || parts.some((d) => d === 'tests' || d === 'unit_tests');
 }
 
 /**
- * What to put back under testDir, from `git diff --name-status -z --no-renames
- * <base>` and `git ls-files -z --others --exclude-standard`: a changed or
- * deleted test checked out from the base, an added one removed.
+ * The commands whose output testRestorePlan reads, run in the workdir: the
+ * whole tree, not only testDir, and untracked files the arm's .gitignore
+ * hides as well as the rest.
+ */
+export function testRestoreArgs(lib) {
+  const outside = NOT_THE_ARMS.map((d) => `:(exclude)${d}`);
+  return {
+    diff: ['git', 'diff', '--name-status', '-z', '--no-renames', lib.flatCommit, '--', '.', ...outside],
+    untracked: ['git', 'ls-files', '-z', '--others', '--', '.', ...outside],
+  };
+}
+
+/**
+ * What to put back, from testRestoreArgs' output: a changed or deleted test
+ * checked out from the base, an added one removed.
  */
 export function testRestorePlan(lib, nameStatusZ, untrackedZ) {
   const checkout = [];
@@ -1036,7 +1058,7 @@ const isClosed = (t) => !isOpen(t) && (t.subtasks ?? []).every(isClosed);
 
 /**
  * The task a person must answer before the run can go on: one parked on a
- * checkpoint or an input, or one core's waitsForApproval (Task.ts) leaves
+ * checkpoint or an input, an open user task, or one core's waitsForApproval (Task.ts) leaves
  * for the user. None while any attempt runs, since that attempt may still
  * finish the run; a usage limit waits on the clock, not a person.
  */
@@ -1048,6 +1070,8 @@ export function waitingOnPerson(plan) {
   for (const t of tasks) {
     let waiting = null;
     if (t.status === 'awaiting_user' && (t.awaitingReason === 'checkpoint' || t.awaitingReason === 'input')) waiting = t.awaitingReason;
+    // A user task is a person's to do: nobody in the bench does it, so the run waits on it.
+    else if (approved && t.type === 'user' && (t.status === 'pending' || t.status === 'approved')) waiting = 'user-task';
     else if (approved && t.type !== 'user' && (t.status === 'pending' || t.status === 'approved') && !record.includes(t.id)) waiting = 'approval';
     if (waiting) return { task: { id: t.id, title: t.title }, waiting, question: t.parkedQuestion ?? null };
   }
@@ -1209,13 +1233,21 @@ export function distFreshness({ dists, sources, allowStale = false }) {
 export const failedCheck = (c) => !c.ok && !c.unverified && !c.expectedFailure;
 
 /** Every reason a result is not one to compare. */
-export function judgeValidity({ aborted, checks, tests, freshness, dryRun = false }) {
+export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false }) {
   const reasons = [];
   if (aborted) reasons.push(`aborted: ${aborted}`);
   for (const c of checks ?? []) if (failedCheck(c)) reasons.push(`failed check: ${c.scope}: ${c.name}`);
+  // The batch stops every run at one instant, so this arm got less time and spend than its pair (D1).
+  if (stopped?.why === 'batch-budget') reasons.push('stopped by the batch budget');
   if (dryRun) reasons.push('dry run: no arm ran');
   else if (tests?.timedOut) reasons.push('eval timed out');
   else if (!tests || tests.passed === undefined) reasons.push('eval gave no summary');
+  else if (typeof tests.collected === 'number') {
+    // Each test has at most one call outcome; errors are left out, since a test
+    // that passes and then errors in teardown is counted under both.
+    const outcomes = ['passed', 'failed', 'skipped', 'xfailed', 'xpassed'].reduce((n, k) => n + (tests[k] ?? 0), 0);
+    if (outcomes > tests.collected) reasons.push(`more outcomes than the reference collected: ${outcomes} > ${tests.collected}`);
+  }
   if (freshness?.stale && freshness.allowed) reasons.push('stale dist allowed');
   return { valid: reasons.length === 0, invalidReasons: reasons };
 }
@@ -1508,6 +1540,19 @@ export async function keyUsage(key, fetchImpl = fetch) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The key's usage when a paid batch begins, retried; an error when it never
+ * reads, since the batch budget measures from it and could stop nothing.
+ */
+export async function startingKeyUsage({ read, tries = 5, waitMs = 10_000 }) {
+  for (let i = 0; i < tries; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, waitMs));
+    const usd = await read();
+    if (usd !== null) return usd;
+  }
+  throw new Error(`the key's usage could not be read in ${tries} tries: the batch budget would have nothing to measure from, so the batch does not start`);
 }
 
 /** The key's usage once it stops moving: OpenRouter books a call some seconds after it returns. */

@@ -50,12 +50,18 @@ if (opts.help) {
 }
 
 const children = new Set();
+/** The signal that cancelled the batch: no queued run starts after it. */
+let cancelledBy = null;
 const forward = (signal) => {
   for (const c of children) c.kill(signal);
 };
-// A run's drive.mjs removes its own box on a signal; the batch only passes it on and waits for them.
-process.on('SIGINT', () => forward('SIGINT'));
-process.on('SIGTERM', () => forward('SIGTERM'));
+// A run's drive.mjs removes its own box on a signal; the batch passes it on, waits for them and starts no other.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    cancelledBy ??= signal;
+    forward(signal);
+  });
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -129,8 +135,15 @@ async function main() {
   const release = opts.run ? L.lockKey(dataDir) : () => {};
   process.on('exit', release);
   const startedAt = new Date().toISOString();
-  const keyBeforeUsd = opts.run ? await L.keyUsage(key) : null;
-  if (opts.run && keyBeforeUsd === null) console.log('  the key\'s usage could not be read: the batch budget cannot stop anything until it can');
+  let keyBeforeUsd = null;
+  if (opts.run) {
+    try {
+      keyBeforeUsd = await L.startingKeyUsage({ read: () => L.keyUsage(key) });
+    } catch (err) {
+      fs.rmdirSync(batchDir);
+      throw err;
+    }
+  }
   let stoppedByBudget = null;
   const stopFile = path.join(batchDir, L.BATCH_STOP_FILE);
   let running = true;
@@ -152,6 +165,10 @@ async function main() {
   const queue = [...runs];
   const worker = async () => {
     for (let r = queue.shift(); r; r = queue.shift()) {
+      if (cancelledBy) {
+        outcomes.push({ ...r, exit: null, skipped: `the batch was cancelled by ${cancelledBy} before it started` });
+        continue;
+      }
       if (fs.existsSync(stopFile)) {
         outcomes.push({ ...r, exit: null, skipped: 'the batch budget was spent before it started' });
         continue;
