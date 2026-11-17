@@ -102,8 +102,8 @@ const OVERFLOW_CODES = new Set(['context_length_exceeded', 'context_window_excee
 
 // Only for a refusal with no code at all: many compatible servers answer an
 // overflow with a bare 400 whose message alone says so: OpenAI's wording echoed,
-// and xAI's, LM Studio's and llama.cpp's own.
-const OVERFLOW_WORDING = /maximum context length|context length exceeded|context window|prompt is too long|maximum prompt length|greater than the context length|exceeds the available context size/i;
+// and xAI's, LM Studio's and llama.cpp's own, and Google's as an aggregator relays it.
+const OVERFLOW_WORDING = /maximum context length|context length exceeded|context window|prompt is too long|maximum prompt length|greater than the context length|exceeds the available context size|input token count.*exceeds/i;
 
 /**
  * Classify a failed exchange from its status, its provider code and its
@@ -241,11 +241,12 @@ const UPSTREAM_SERVER_TYPES = new Set([...SERVER_TYPES, 'UNAVAILABLE', 'INTERNAL
  */
 function upstreamReading(upstream: Upstream, wrapperStatus: number | undefined): Reading | undefined {
   const message = upstream.message ?? '';
-  const named = upstream.type ?? upstream.code;
+  // Either may name the class: OpenAI's rate limit puts it in the code, beside a type of "requests" or "tokens".
+  const named = [upstream.type, upstream.code].filter((n): n is string => n !== undefined);
   const status = upstream.status
     ?? (upstream.errorType !== undefined ? ERROR_TYPE_STATUS[upstream.errorType] : undefined)
-    ?? (named !== undefined && UPSTREAM_SERVER_TYPES.has(named) ? 503 : undefined)
-    ?? (named !== undefined && RATE_TYPES.has(named) ? 429 : undefined);
+    ?? (named.some((n) => UPSTREAM_SERVER_TYPES.has(n)) ? 503 : undefined)
+    ?? (named.some((n) => RATE_TYPES.has(n)) ? 429 : undefined);
   const code = upstream.errorType === 'context_length_exceeded' ? upstream.errorType : upstream.code;
   const reading: Reading = { status: status ?? wrapperStatus, message, ...(code !== undefined ? { code } : {}), ...(upstream.type !== undefined ? { type: upstream.type } : {}) };
   const explained = status !== undefined || code !== undefined || upstream.type !== undefined || readsAsOverflow({ ...reading, status: 400 });

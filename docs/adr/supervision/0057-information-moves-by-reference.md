@@ -181,9 +181,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   many tasks not yet done it holds back, and says that a task on hold starts again only once it is
   retried, force started or skipped. Any wake delivered while the run is idle records the set it
   stood behind, so a turn that leaves that set in place is not woken for it again; a different set,
-  or a run the user starts, wakes afresh. It is counted against the rate guard as any wake is. A
-  supervisor that stopped a task waiting for input and ended its turn, the stop alone moving nothing,
-  had left a run idle with no wake to come.
+  or a start the user asks for, a join of the open run included, wakes afresh. It is counted
+  against the rate guard as any wake is. A supervisor that stopped a task waiting for input and
+  ended its turn, the stop alone moving nothing, had left a run idle with no wake to come.
 
   A `running_long` event is raised by a task's running time, by an automatic compaction of its own
   runner session, or by its context growing large; which compactions count as routine, and where a

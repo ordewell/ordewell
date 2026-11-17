@@ -127,7 +127,9 @@ is one runner per API provider, under the provider's own id and name.**
   turn goes on with a note to the model: "[Ordewell] Your last reply was cut off
   at the output limit of N tokens before it made a tool call. Go on with the
   task: act through tool calls, and keep your text and thinking short." The
-  task log says why the step ended either way. Three in a row with no tool call
+  task log says why the step ended either way. Once the attempt's report
+  stands, a cut-off reply with no tool call ends the turn, as a finished one
+  would, and costs no further call. Three in a row with no tool call
   end the attempt as failed through the runner's own `task_complete`, with a
   reason naming the output limit, and the turn ends as an `error`, never as a
   completed turn the session would nudge and then wait on. A model that spent

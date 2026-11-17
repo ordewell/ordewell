@@ -63,6 +63,28 @@ describe('a run left idle behind a task the supervisor stopped, at Act', () => {
     expect(env.planner.calls).toHaveLength(2);
   });
 
+  // A second `ordewell run --unattended` joins the open run: its follower, at Act, waits for a supervisor turn to end.
+  it('wakes it once more when the user executes the plan again on the same hold', async () => {
+    const env = await waitingChain();
+    await stopsWithoutRetry(env);
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Task 1 stays stopped; it needs the user.'));
+    await settled();
+
+    const joined = await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    expect(joined.ok, joined.message).toBe(true);
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toContain('the run is idle: nothing is running and nothing can start. Task #1 "Task t1" is on hold');
+
+    env.planner.calls[2].finish(prose('Still stopped.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(env.planner.calls).toHaveLength(3);
+  });
+
   it('counts the wake against the wake-up rate guard, as any other', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { settings: { supervisorLevel: 'act' } });
     for (let i = 0; i < WAKE_UP_RATE.max; i++) {

@@ -121,6 +121,16 @@ describe('a reply cut off at the output limit (ADR-0070)', () => {
     expect(taskTools.calls).toEqual([]);
   });
 
+  it('with no tool call after the report stands ends the turn, as a finished reply would, with no note', async () => {
+    const after: ScriptedStep = [{ type: 'text-delta', text: 'Summary of the work: I changed the parser and ' }, LENGTH];
+    const { loop, client, taskTools, events } = loopWith([[call('done', 'task_complete', { status: 'done', summary: 'ok' }), STOP], after, after, after, [STOP]]);
+    const outcome = await loop.runTurn('Work.', signals());
+    expect(outcome).toEqual({ interrupted: false });
+    expect(client.requests).toHaveLength(2);
+    expect(taskTools.calls.map((c) => c.name)).toEqual(['task_complete']);
+    expect(eventsOf(events, 'command_output')).toEqual([]);
+  });
+
   it('counts each continuation as a step against the step limit, the last one forced to report', async () => {
     const { loop, client, taskTools } = loopWith([thoughtOnly, [call('done', 'task_complete', { status: 'blocked', summary: 'cut off' }), STOP]], { stepLimit: 2 });
     await loop.runTurn('Work.', signals());
