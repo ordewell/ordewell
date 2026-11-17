@@ -37,6 +37,12 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --ordewell-root <dir>  the built Ordewell tree to pack into the box (default: the tree this driver is in)
   --allow-stale-dist     run a dist older than that tree's sources; the result says so and is not valid
   --keep                 leave the box and its network up after a dry run, for a look inside
+  --seed <label>         a label for repeated runs, kept in result.json and the run directory's name
+  --batch-dir <dir>      set by batch.mjs: write the run here, stop when the batch's stop file appears,
+                         and leave the key lock and results.jsonl to the batch
+  --batch-shared         set by batch.mjs when runs overlap: the key's delta is not this run's
+
+Several runs at once on one key: node bench/commit0/batch.mjs --help.
 
 Both arms share one wall-clock cap of ${L.WALL_CAP_MS / 3_600_000} h and the spend cap.
 Run data goes under ${'$'}ORDEWELL_BENCH_DIR or ~/.local/share/ordewell-bench/commit0, never the repository.`;
@@ -264,7 +270,8 @@ async function prepareRuntime(sha, distStamp) {
     check('preflight', 'runtime', true, `${dir} (packed earlier from ${sha.slice(0, 12)})`);
     return dir;
   }
-  const tmp = `${dir}.tmp`;
+  // A batch's runs prepare at once: each packs into a directory of its own, and the first to finish is the one kept.
+  const tmp = `${dir}.tmp-${process.pid}`;
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(path.join(tmp, 'tarballs'), { recursive: true });
   const packed = await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', path.join(tmp, 'tarballs'),
@@ -289,8 +296,18 @@ async function prepareRuntime(sha, distStamp) {
   fs.writeFileSync(path.join(tmp, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   const installed = await exec('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: tmp, timeoutMs: 600_000 });
   must(check('preflight', 'runtime installed', installed.code === 0, installed.code === 0 ? `${Object.keys(overrides).length} dependencies at the lockfile's versions` : installed.stderr.trim().split('\n').slice(-4)), 'npm install failed');
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.renameSync(tmp, dir);
+  if (fs.existsSync(coreEntry) && (await loads())) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  } else {
+    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      fs.renameSync(tmp, dir);
+    } catch (err) {
+      // Another run renamed its own into place between the check and the rename.
+      if (!fs.existsSync(coreEntry)) throw err;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
   must(check('preflight', 'runtime', await loads(), `${dir}: core loads and exports fetchAllProviderModels`), 'the packed core does not load');
   return dir;
 }
@@ -485,6 +502,8 @@ git show "$REF:src/calc/__init__.py" > "$SP/calc/__init__.py"
 printf 'calc/__init__.py,,\ncalc-1.0.dist-info/RECORD,,\n' > "$SP/calc-1.0.dist-info/RECORD"
 printf 'Metadata-Version: 2.1\nName: calc\nVersion: 1.0\n' > "$SP/calc-1.0.dist-info/METADATA"
 : > /tmp/calc-1.0-py3-none-any.whl
+mkdir -p src/calc/__pycache__
+: > src/calc/__pycache__/__init__.cpython-3.pyc
 echo "$REF $BASE $SP"
 `;
 
@@ -496,14 +515,14 @@ async function probeLeak(lib, sb) {
 /** Builds the fixture's repository and plant, and proves the probe finds each. */
 async function prepareFixture(lib, sb) {
   const r = await inBox(sb, ['sh', '-c', FIXTURE_SH]);
-  must(check(lib.name, 'fixture', r.code === 0, r.code === 0 ? 'a repository with its implementation in history, a tag and a remote ref; a copy in site-packages; a wheel in /tmp' : r.stderr.trim()), 'fixture');
+  must(check(lib.name, 'fixture', r.code === 0, r.code === 0 ? 'a repository with its implementation in history, a tag and a remote ref; a copy in site-packages; a wheel in /tmp; bytecode in __pycache__' : r.stderr.trim()), 'fixture');
   const [ref, base, sitePackages] = r.stdout.trim().split(/\s+/);
   lib.referenceCommit = ref;
   lib.baseCommit = base;
   const before = await probeLeak(lib, sb);
   const verdict = L.judgeLeak(before);
   const seen = L.leakKinds(before);
-  const all = ['history', 'reference', 'import', 'installed', 'archive'];
+  const all = ['history', 'reference', 'import', 'installed', 'archive', 'untracked'];
   const caught = all.every((k) => seen.includes(k));
   check(lib.name, 'leak probe sees a planted leak', !verdict.ok && caught, [`caught: ${seen.join(', ')}${caught ? '' : `; missed: ${all.filter((k) => !seen.includes(k)).join(', ')}`}`, ...verdict.failures], { expectedFailure: true });
   await inBox(sb, ['sh', '-c', `rm -rf "${sitePackages}/calc" "${sitePackages}/calc-1.0.dist-info" /tmp/calc-1.0-py3-none-any.whl`]);
@@ -517,10 +536,16 @@ async function flattenAndProbe(lib, sb) {
   must(check(lib.name, 'venv ignored', ignore.code === 0, ignore.code === 0 ? `/${L.VENV_DIR} in the workspace's info/exclude, so no arm commits the link to it` : ignore.stderr.trim()), 'the venv cannot be ignored');
   // `ordewell merge` lands on commit0-base, so the arm's diff and the restore are taken against this commit, not the branch.
   lib.flatCommit = flat.stdout.trim().split('\n').pop();
+  // The image's build and the reference collection can leave bytecode of the implementation, which a supervisor once pointed a task at.
+  const cleaned = await inBox(sb, ['sh', '-c', L.leftoverCleanupScript(lib)]);
+  const removed = cleaned.stdout.split('\n').map((l) => l.replace(/^Removing /, '').trim()).filter(Boolean);
+  must(check(lib.name, 'leftovers removed', cleaned.code === 0, cleaned.code === 0
+    ? (removed.length ? `untracked and ignored, the venv kept: ${removed.slice(0, 5).join(', ')}${removed.length > 5 ? ` and ${removed.length - 5} more` : ''}` : 'nothing untracked or ignored but the venv')
+    : cleaned.stderr.trim()), 'the leftovers cannot be removed');
   const probe = await probeLeak(lib, sb);
   const verdict = probe.error ? { ok: false, failures: [`the probe failed: ${probe.error}`] } : L.judgeLeak(probe);
   check(lib.name, 'reference implementation out of reach', verdict.ok, verdict.ok
-    ? [`git log --all: ${probe.commits} commit; ${probe.objectCommits} commit object; reference ${probe.reference ?? 'not named'}; ${lib.importName} imports from ${probe.resolves.length ? probe.resolves.join(', ') : 'nowhere'} outside a test run; no installed copy, no archive`]
+    ? [`git log --all: ${probe.commits} commit; ${probe.objectCommits} commit object; reference ${probe.reference ?? 'not named'}; ${lib.importName} imports from ${probe.resolves.length ? probe.resolves.join(', ') : 'nowhere'} outside a test run; no installed copy, no archive, nothing untracked or ignored`]
     : verdict.failures);
   const clean = await inBox(sb, ['git', 'status', '--porcelain', '--untracked-files=no'], { workdir: lib.workdir });
   check(lib.name, 'workspace clean', clean.stdout.trim() === '', clean.stdout.trim() === '' ? 'no tracked change, so `ordewell run` isolates without a stash' : clean.stdout.trim());
@@ -817,29 +842,8 @@ async function checkChooser(lib, sb) {
   ]);
 }
 
-async function keySpent() {
-  if (!process.env.OPENROUTER_API_KEY) return null;
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` }, signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) return null;
-    const body = await res.json();
-    return typeof body?.data?.usage === 'number' ? body.data.usage : null;
-  } catch {
-    return null;
-  }
-}
-
-/** The key's usage once it stops moving: OpenRouter books a call some seconds after it returns. */
-async function settledKeySpent() {
-  let last = await keySpent();
-  for (let i = 0; i < 8; i++) {
-    await sleep(15_000);
-    const now = await keySpent();
-    if (now !== null && now === last) return now;
-    last = now;
-  }
-  return last;
-}
+const keySpent = () => L.keyUsage(process.env.OPENROUTER_API_KEY);
+const settledKeySpent = () => L.settledKeyUsage(process.env.OPENROUTER_API_KEY);
 
 async function transcriptSummary(sb) {
   const r = await inBox(sb, ['sh', '-c', `cat ${BOX_HOME}/.ordewell/runners/ordewell/sessions/*/transcript.jsonl 2>/dev/null || true`]);
@@ -859,7 +863,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
   must(await writeSettings(sb, arm, settings), 'settings');
   const log = fs.createWriteStream(path.join(runDir, 'ordewell.log'));
   const started = Date.now();
-  const before = await keySpent();
+  const before = opts.batchShared ? null : await keySpent();
   const stallMs = opts.stallMin * 60_000;
   const steps = {};
   const followers = [];
@@ -875,10 +879,14 @@ async function realArm(lib, sb, arm, settings, runDir) {
   /** One look at the run; returns why it is over, or null. */
   const poll = async () => {
     const nowMs = Date.now();
-    const key = await keySpent();
+    // Under a batch whose runs overlap, the key's delta is every run's: only the batch reads it.
+    const key = opts.batchShared ? null : await keySpent();
     const transcripts = await transcriptSummary(sb);
+    if (!sessionId && arm.id === 'B') sessionId = await lastSessionId(lib, sb);
+    const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
     const cap = L.capDecision({
       elapsedMs: nowMs - started,
+      recordedSpentUsd: plan ? L.recordedSpend(plan).usd : null,
       keySpentUsd: key !== null && before !== null ? key - before : null,
       transcriptSpentUsd: transcripts.spendUsd,
       capUsd: settings.capUsd,
@@ -888,9 +896,11 @@ async function realArm(lib, sb, arm, settings, runDir) {
       stopped = { why: cap.why, atMs: nowMs - started, spentUsd: cap.spentUsd };
       return `capped by ${cap.why} at $${cap.spentUsd}`;
     }
-    if (!sessionId && arm.id === 'B') sessionId = await lastSessionId(lib, sb);
-    if (!runStart || !sessionId) return null;
-    const plan = await readPlan(lib, sb, sessionId);
+    if (opts.batchDir && fs.existsSync(path.join(opts.batchDir, L.BATCH_STOP_FILE))) {
+      stopped = { why: 'batch-budget', atMs: nowMs - started, spentUsd: cap.spentUsd };
+      return 'the batch budget is spent';
+    }
+    if (!runStart || !plan) return null;
     const start = L.startDecision({ sinceRunMs: nowMs - runStart.atMs, usageLines: transcripts.usageLines - runStart.usageLines, plan });
     if (start.stop) {
       stopped = { why: start.why, atMs: nowMs - started, spentUsd: cap.spentUsd, detail: start.detail };
@@ -961,6 +971,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
     log.end();
   }
   const after = before === null ? null : await settledKeySpent();
+  const finalPlan = sessionId ? await readPlan(lib, sb, sessionId) : null;
   return {
     sessionId,
     steps,
@@ -968,7 +979,10 @@ async function realArm(lib, sb, arm, settings, runDir) {
     wallClockMs: (stopped ? started + stopped.atMs : endMs) - started,
     stopped,
     stalled,
-    billed: before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null,
+    billed: opts.batchShared
+      ? { billedUsd: null, source: 'not available: runs overlapped on the key; see the batch\'s batch.json' }
+      : before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null,
+    finalPlan,
   };
 }
 
@@ -1047,7 +1061,7 @@ function readTranscripts(home) {
 async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const settings = L.armSettings(arm, opts);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const runId = `${stamp.slice(0, 19)}-${lib.name}-${arm.id}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const runId = L.runIdFor({ stamp, lib: lib.name, arm: arm.id, seed: opts.seed });
   const runDir = path.join(runsDir, runId);
   fs.mkdirSync(runDir, { recursive: true });
   console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
@@ -1108,6 +1122,10 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     }
   }
   const armChecks = checks.slice(first);
+  const plan = record.scoring?.plan ?? record.arm?.finalPlan ?? null;
+  const recorded = plan ? L.recordedSpend(plan) : null;
+  const sessionId = record.arm?.sessionId ?? null;
+  const metrics = plan && sessionId ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
   const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, dryRun: opts.dryRun });
   const result = {
     ...L.resultRecord({
@@ -1118,9 +1136,15 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       scoredFrom: record.scoring?.scoredFrom, patches: record.scoring?.patches, validity,
       providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
     }),
+    seed: opts.seed,
+    batchDir: opts.batchDir,
+    // What Ordewell recorded for the session: the planner's turns, the supervisor's and every attempt's, as the providers priced them.
+    recordedUsd: recorded?.usd ?? null,
+    recorded,
+    metrics,
     ordewellRoot: ordewell.root,
     distFreshness: { stale: ordewell.freshness.stale, allowed: ordewell.freshness.allowed, detail: ordewell.freshness.detail },
-    sessionId: record.arm?.sessionId ?? null,
+    sessionId,
     steps: record.arm?.steps ?? null,
     closing: record.arm?.closing ?? null,
     tasks: record.scoring?.chosen ?? null,
@@ -1130,7 +1154,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     checks: armChecks,
   };
   fs.writeFileSync(path.join(runDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
-  if (!opts.dryRun) fs.appendFileSync(path.join(path.dirname(runsDir), 'results.jsonl'), `${JSON.stringify(result)}\n`);
+  // A batch appends its runs' results itself, one at a time, once they have all ended.
+  if (!opts.dryRun && !opts.batchDir) fs.appendFileSync(path.join(path.dirname(runsDir), 'results.jsonl'), `${JSON.stringify(result)}\n`);
   return result;
 }
 
@@ -1157,12 +1182,13 @@ async function main() {
     if (!opts.dryRun && !opts.run) return;
   }
   const dataDir = checkedBenchDir('commit0');
-  const runsDir = path.join(dataDir, opts.dryRun ? 'dry-runs' : 'runs');
+  const runsDir = opts.batchDir ?? path.join(dataDir, opts.dryRun ? 'dry-runs' : 'runs');
   fs.mkdirSync(runsDir, { recursive: true });
   const libs = loadLibraries();
   console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
-  const release = opts.run ? L.lockKey(dataDir) : () => {};
+  // A batch holds the key's lock for all its runs.
+  const release = opts.run && !opts.batchDir ? L.lockKey(dataDir) : () => {};
   if (opts.run) process.on('exit', release);
   const results = [];
   try {
