@@ -12,6 +12,7 @@ export const DELIVERY_FILES = new Set([
   'scripts/release-source.test.mjs',
   'scripts/desktop-release.test.mjs',
   'scripts/cli-release.test.mjs',
+  'scripts/homebrew-publish.test.mjs',
 ]);
 
 export function verifyReleaseSource(tag, { recovery = false, ref = '', cwd = process.cwd() } = {}) {

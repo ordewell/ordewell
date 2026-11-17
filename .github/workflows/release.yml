@@ -50,8 +50,8 @@ jobs:
   # ci.yml then skips every job but its scope and `Required checks`, both of
   # which still pass, so this job's result is still success.
   ci:
-    needs: release-source
     uses: ./.github/workflows/ci.yml
+    needs: release-source
     # The lookup of main's runs reads Actions; checkout reads contents. A
     # called workflow's token cannot exceed this grant, and ci.yml writes nothing.
     permissions:
