@@ -166,12 +166,28 @@ describe('anthropic-messages adapter: streams', () => {
     expect(known.messages[1].content).toEqual([{ type: 'thinking', thinking: 'x', signature: 'y' }, { type: 'text', text: 'Hi.' }]);
   });
 
-  it('finishes with length on max_tokens and leaves an unfinished tool call unparsed', async () => {
+  it('finishes with length on max_tokens and never completes a tool call the limit cut short', async () => {
     const events = await collect(clientFor(replay(recorded('max-tokens.sse'))), { ...BASE_REQUEST, tools: TOOLS });
-    const [complete] = ofType(events, 'tool-call-complete');
-    expect(complete.call.arguments).toEqual({});
-    expect(complete.call.argumentsError).toBeTruthy();
-    expect(complete.call.rawArguments).toBe('{"path":"a.ts","content":"unfini');
+    expect(ofType(events, 'tool-call-start').map((e) => e.id)).toEqual(['toolu_cut']);
+    expect(ofType(events, 'tool-call-complete')).toEqual([]);
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' });
+  });
+
+  it('completes the whole tool calls of a reply cut off at max_tokens, and not the one cut short', async () => {
+    const event = (type: string, data: object) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+    const body = [
+      event('message_start', { message: { id: 'msg_02', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 1 } } }),
+      event('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_whole', name: 'grep', input: {} } }),
+      event('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{"pattern":"TODO"}' } }),
+      event('content_block_stop', { index: 0 }),
+      event('content_block_start', { index: 1, content_block: { type: 'tool_use', id: 'toolu_cut', name: 'write_file', input: {} } }),
+      event('content_block_delta', { index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"a.ts","content":"unfini' } }),
+      event('content_block_stop', { index: 1 }),
+      event('message_delta', { delta: { stop_reason: 'max_tokens', stop_sequence: null }, usage: { output_tokens: 32000 } }),
+      event('message_stop', {}),
+    ].join('');
+    const events = await collect(clientFor(replay(sse(body))), { ...BASE_REQUEST, tools: TOOLS });
+    expect(ofType(events, 'tool-call-complete').map((e) => [e.call.id, e.call.arguments])).toEqual([['toolu_whole', { pattern: 'TODO' }]]);
     expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' });
   });
 

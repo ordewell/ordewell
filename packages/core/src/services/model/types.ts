@@ -116,7 +116,8 @@ export type FinishReason = 'stop' | 'tool-calls' | 'length' | 'content-filter';
  * A request's stream. Tool calls start, stream their arguments and complete by
  * id; `usage` and `provider-state` come at most once each, after every tool
  * call completes; `finish` is always last, exactly once. A stream that ends
- * without one throws a `ModelError` instead.
+ * without one throws a `ModelError` instead. On `length`, a call the limit cut
+ * short never completes: only one whose arguments came through whole does.
  */
 export type ModelEvent =
   | { type: 'text-delta'; text: string }

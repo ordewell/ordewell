@@ -200,6 +200,13 @@ describe('gemini adapter: streams', () => {
     const blocked = await collect(clientFor(replay(recorded('blocked.sse'))), BASE_REQUEST);
     expect(blocked.at(-1)).toEqual({ type: 'finish', reason: 'content-filter' });
   });
+
+  it('completes a function call that arrived before MAX_TOKENS, since Gemini sends each call whole', async () => {
+    const body = `data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'grep', args: { pattern: 'TODO' } } }] }, finishReason: 'MAX_TOKENS', index: 0 }] })}\n\n`;
+    const events = await collect(clientFor(replay(sse(body))), { ...BASE_REQUEST, tools: TOOLS });
+    expect(ofType(events, 'tool-call-complete').map((e) => e.call.arguments)).toEqual([{ pattern: 'TODO' }]);
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' });
+  });
 });
 
 describe('gemini adapter: tool choice', () => {

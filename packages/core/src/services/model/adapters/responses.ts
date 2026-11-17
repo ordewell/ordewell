@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { classifyHttpFailure, ModelError } from '../ModelError';
+import { cameThroughWhole } from './cutShort';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -305,8 +306,9 @@ async function* readStream(events: AsyncIterable<StreamEvent>, signal?: AbortSig
     throw new ModelError({ kind: 'transient', message: 'The stream ended before the model finished its reply.' });
   }
 
-  const completed = order.map((key) => calls.get(key) as PendingCall);
-  for (const call of completed) yield { type: 'tool-call-complete', call: toolCall(call) };
+  const streamed = order.map((key) => toolCall(calls.get(key) as PendingCall));
+  const completed = finish(ended, false) === 'length' ? streamed.filter(cameThroughWhole) : streamed;
+  for (const call of completed) yield { type: 'tool-call-complete', call };
   const reported = usage && modelUsage(usage);
   if (reported) yield { type: 'usage', usage: reported };
   if (reasoning.length > 0) {
