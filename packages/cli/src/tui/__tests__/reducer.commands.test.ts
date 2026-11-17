@@ -38,7 +38,7 @@ describe('retired run-setting and planner-step commands', () => {
   // CLI keeps the one-value commands for scripts.
   it.each([
     '/auto full', '/supervisor act', '/automerge on', '/autorun on', '/parallel 8',
-    '/model', '/model set sonnet', '/planner-effort high',
+    '/planner-effort high',
   ])('%s is no longer a command and goes to the planner as typed', (line) => {
     expect(run(line).effects).toEqual([{ type: 'startConversation', goal: line }]);
   });
@@ -48,6 +48,17 @@ describe('models and providers', () => {
   it('/planner with no argument opens the planner stepper', () => {
     const { state } = run('/planner');
     expect(state.overlay).toMatchObject({ kind: 'stepper' });
+  });
+
+  it('/model opens the planner stepper, as /planner does', () => {
+    expect(run('/model').state.overlay).toMatchObject({ kind: 'stepper' });
+  });
+
+  it('/model <provider> sets the planner with the same arguments as /planner', () => {
+    expect(run('/model opencode').effects).toEqual(run('/planner opencode').effects);
+    expect(run('/model opencode', { plannerEnvOverride: 'claude-code' }).effects).toEqual(
+      run('/planner opencode', { plannerEnvOverride: 'claude-code' }).effects,
+    );
   });
 
   it('/planner names a runner that runs tasks but cannot plan, rather than calling it unknown', () => {

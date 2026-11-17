@@ -9,8 +9,8 @@ get their models and credentials in different ways, described below.
 
 ## Who plans
 
-`ordewell planner` lists the two kinds of planner. `/planner` in the terminal UI or in
-VS Code, or the planner bar in VS Code, picks one.
+`ordewell planner` lists the two kinds of planner. `/planner` (or `/model`, its alias) in the terminal UI or in
+VS Code, or the planner bar in VS Code, picks one. `/task-model` is a different command: it sets one task's model.
 
 A **harness planner** is a coding agent planning: pick a runner such as `claude-code`,
 `codex` or `opencode`, and the planner conversation runs through that agent

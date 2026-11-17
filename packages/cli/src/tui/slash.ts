@@ -100,6 +100,8 @@ export const COMMAND_ALIASES: CommandAlias[] = [
   // Editors call reopening a saved session "resume"; here it must open the same
   // saved-session picker as /sessions, not restart a task or a runner.
   { name: 'resume', target: 'sessions', description: 'Alias for /sessions: open a saved session, not restart a task' },
+  // Other coding agents change their model with /model; here that changes the planner (/task-model is one task's).
+  { name: 'model', target: 'planner', description: 'Alias for /planner: pick the planner (harness, model and effort in one go)' },
   // The command that lands a run's work was /handoff until it took the verb the other surfaces use ("Merge all").
   { name: 'handoff', target: 'merge', description: 'Deprecated: use /merge', deprecated: true },
   // The key command was /key until it took the one word the other surfaces use; `/key set <provider>` still runs.
