@@ -50,7 +50,7 @@ import type { BudgetHold, NodeBudget } from './TreeLedger';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import { recordRunnerAuth, signedOutFromFailure } from './runnerAuth';
 import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
-import { compactionStartOf } from './taskCompactWindow';
+import { compactionStartOf } from './compactionStart';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {

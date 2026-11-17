@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
-import { compactionStartOf } from '../taskCompactWindow';
+import { compactionStartOf } from '../compactionStart';
 import type { AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeSpawn, flagJson } from './harnessTestKit';
 

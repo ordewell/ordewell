@@ -253,8 +253,9 @@ and completion evidence.
   the remedy is a fresh session with a handoff, which is the supervisor's to
   start (ADR-0057 R4), not a summary. The flag applies to every runner that
   reports its context and its model's window and stays silent on that count
-  while either is unknown. `RunningLong.ts` and `taskCompactWindow.ts` hold it;
-  the pinning test is `compactionPerHarness.test.ts`.
+  while either is unknown. `RunningLong.ts`, `compactionStart.ts` and
+  `taskCompactWindow.ts` hold it; the pinning test is
+  `compactionPerHarness.test.ts`.
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
