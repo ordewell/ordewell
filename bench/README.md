@@ -247,6 +247,43 @@ baseline that collects nothing (networkx's and sphinx's stubs do not import)
 is recorded as `baseline: {collected: 0, reason}`, not failed. Its offline
 tests are `bench/commit0/commit0.test.mjs`.
 
+The original implementation is off limits to both arms, and their shared
+goal text says so: the agents must not look for it in caches, compiled files,
+installed packages or on the network, and write it from the docstrings and the
+tests. The driver backs that up: after the flatten it removes every untracked
+and ignored file but `.venv`, the leak probe fails the run on any that is
+left, and every patch leaves out `__pycache__` and `*.pyc`.
+
+### Batches
+
+`batch.mjs` runs a list of libraries and arms with up to `--jobs` runs at
+once, each a `drive.mjs` process with its own box at the fixed quotas, on one
+key whose lock the batch takes once:
+
+```bash
+node bench/commit0/batch.mjs --dry-run --libs <libraries.json> --jobs 2
+node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <provider> --batch-budget-usd <usd>
+```
+
+| Option | Default | |
+| --- | --- | --- |
+| `--jobs <n>` | 2 | runs at once |
+| `--batch-budget-usd <usd>` | required with `--run` | stop every run when the key's usage since the batch began reaches it |
+| `--only`, `--arm` | every library, both arms | which runs |
+| `--seed <label>` | none | kept in each `result.json` and run directory's name |
+| `--sweep` | | sweep before the batch |
+
+The other `drive.mjs` options are passed to every run. A batch refuses to
+start when `--jobs` times `--cpus` exceeds the host's CPUs or `--jobs` times
+`--memory` exceeds 80% of its memory. A run that fails leaves the others
+running. Each run's spend cap acts on what Ordewell recorded for its session
+(`recordedUsd`: the planner's turns, the supervisor's and every attempt's).
+When the batch budget is met, every run stops through its own stop path. The
+runs and `batch.json` go in `runs/batch-<time>[-<seed>]/`. `batch.json` holds
+the key's usage before and after, the recorded sum and the gap. When runs
+overlapped, a run's `billedUsd` is null and `billedSource` says why; a run
+alone keeps its key delta.
+
 ## Execution pipeline harness (`bench/pipeline/`)
 
 - `fake-claude/` — a deterministic stand-in for the `claude` CLI: no LLM, no
