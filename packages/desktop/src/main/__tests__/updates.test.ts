@@ -172,6 +172,79 @@ describe('UpdateService: the version check', () => {
     expect(updates.state().latest).toBe('1.3.0');
   });
 
+  it('tells every listener, within the hour and with no ping of its own, a version another process wrote to the shared file', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      remember({ lastCheckAt: at(NOW - HOUR) });
+      const fetch = server('9.9.9');
+      const updates = service({ fetch });
+      const seen: (string | undefined)[] = [];
+      updates.onChange((state) => seen.push(state.latest));
+      updates.start();
+      expect(updates.state().latest).toBeUndefined();
+
+      // The TUI in a terminal pinged and wrote the answer.
+      remember({ lastCheckAt: at(NOW - HOUR), latest: '1.3.0', latestAt: at(NOW - HOUR) });
+      await vi.advanceTimersByTimeAsync(HOUR);
+
+      expect(seen).toEqual(['1.3.0']);
+      expect(updates.state().latest).toBe('1.3.0');
+      expect(fetch.urls).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('names a version a newer copy on the machine learned by its own ping, though that answer was no news to it', async () => {
+    remember({ lastCheckAt: at(NOW - 2 * DAY) });
+    const newer = new UpdateService({
+      version: '1.4.0',
+      updater: new UpdateController({ enabled: false, packaged: true, load: () => updaterPort(null), log: () => {} }),
+      versionCheck: true,
+      env: {},
+      stateDir: dir,
+      fetch: server('1.4.0'),
+      now: () => NOW - HOUR,
+    });
+    services.push(newer);
+    newer.start();
+    await expect(newer.check()).resolves.toEqual({ kind: 'up-to-date' });
+
+    const updates = service();
+    updates.start();
+    expect(updates.state().latest).toBe('1.4.0');
+  });
+
+  it('keeps the remembered version through an answer that names nothing, and Check for updates… still names it', async () => {
+    remember({ lastCheckAt: at(NOW - 2 * DAY), latest: '1.3.0', latestAt: at(NOW - 2 * DAY) });
+    const fetch = server(null);
+    const updates = service({ fetch });
+    updates.start();
+    await expect(updates.check()).resolves.toEqual({ kind: 'available', latest: '1.3.0' });
+    expect(fetch.urls).toHaveLength(1);
+    expect(JSON.parse(readFileSync(stateFile(), 'utf8'))).toMatchObject({ latest: '1.3.0' });
+  });
+
+  it('names nothing from an answer that arrives after the toggle was turned off', async () => {
+    remember({ lastCheckAt: at(NOW - 2 * DAY) });
+    let answer!: () => void;
+    const fetch: PingFetch = () => new Promise((resolve) => {
+      answer = () => resolve({ status: 200, text: async () => JSON.stringify({ latest: '1.4.0' }) });
+    });
+    const updates = service({ fetch });
+    const seen: (string | undefined)[] = [];
+    updates.start();
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    updates.setVersionCheck(false);
+    updates.onChange((state) => seen.push(state.latest));
+
+    answer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(updates.state().latest).toBeUndefined();
+    expect(seen).toEqual([]);
+  });
+
   it.each([
     ['ORDEWELL_NO_VERSION_CHECK', '1'],
     ['DO_NOT_TRACK', 'true'],

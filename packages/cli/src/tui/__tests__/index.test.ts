@@ -64,7 +64,7 @@ vi.mock('../terminal', async (importOriginal) => ({
 
 import { handleTui, type LoginSpawn } from '../index';
 import type { SelfUpdateDeps } from '../../selfUpdate';
-import { augmentedPath, clearAugmentedPathCache } from '@ordewell/core';
+import { augmentedPath, clearAugmentedPathCache, startVersionCheck } from '@ordewell/core';
 import { fakeSea } from '@ordewell/core/testing';
 
 type SignalName = 'SIGINT' | 'SIGTERM' | 'SIGHUP' | 'SIGCONT' | 'uncaughtException';
@@ -615,6 +615,62 @@ describe('handleTui', () => {
         answer({ status: 200, text: async () => JSON.stringify({ latest: '999.0.0' }) });
 
         await vi.waitFor(() => expect(statusRow()).toContain('↑ 999.0.0 available · /update'));
+      });
+
+      it('shows, within the hour and with no ping of its own, a version another process wrote to the shared file', async () => {
+        const fetch = vi.fn();
+        vi.stubGlobal('fetch', fetch);
+        // A ping within the day: this TUI sends nothing, and only the file can tell it.
+        remember({ lastCheckAt: new Date().toISOString() });
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+        try {
+          void handleTui([], { selfUpdate: installed().deps });
+          await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+          expect(frame()).not.toContain('available · /update');
+
+          // A headless `ordewell status` in another terminal pinged and wrote the answer.
+          const now = new Date().toISOString();
+          remember({ lastCheckAt: now, latest: '999.0.0', latestAt: now });
+          await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+          await vi.waitFor(() => expect(statusRow()).toContain('↑ 999.0.0 available · /update'));
+          expect(frame()).toContain('Ordewell 999.0.0 is out (you have 0.12.6) — type /update');
+          expect(fetch).not.toHaveBeenCalled();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('shows a version that a newer copy on the machine learned by its own ping', async () => {
+        remember({ lastCheckAt: longAgo });
+        // That copy is already on 999.0.0, so the answer names nothing newer for it; it is still news for this one.
+        const newer = startVersionCheck({
+          version: '999.0.0',
+          onNotice: () => {},
+          env: {},
+          stateDir: path.dirname(file),
+          fetch: async () => ({ status: 200, text: async () => JSON.stringify({ latest: '999.0.0' }) }),
+        });
+        await newer.settled();
+        newer.stop();
+
+        void handleTui([], { selfUpdate: installed().deps });
+
+        await vi.waitFor(() => expect(statusRow()).toContain('↑ 999.0.0 available · /update'));
+      });
+
+      it.each([
+        ['ORDEWELL_NO_VERSION_CHECK', '1'],
+        ['DO_NOT_TRACK', '1'],
+        ['DO_NOT_TRACK', 'true'],
+      ])('shows nothing with %s=%s', async (name, value) => {
+        vi.stubEnv(name, value);
+        const now = new Date().toISOString();
+        remember({ lastCheckAt: now, latest: '999.0.0', latestAt: now });
+        void handleTui([], { selfUpdate: installed().deps });
+
+        await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+        expect(frame()).not.toContain('999.0.0');
       });
     });
 

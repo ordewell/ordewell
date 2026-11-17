@@ -21,7 +21,7 @@ export default defineConfig({
   timeout: 5 * 60_000,
   expect: { timeout: 30_000 },
   projects: [
-    { name: 'acceptance', testMatch: ['acceptance.spec.ts', 'joined.spec.ts', 'switch.spec.ts', 'clipboard.spec.ts', 'terminalSize.spec.ts', 'wordChord.spec.ts', 'startup.spec.ts', 'loading.spec.ts'] },
+    { name: 'acceptance', testMatch: ['acceptance.spec.ts', 'joined.spec.ts', 'switch.spec.ts', 'clipboard.spec.ts', 'terminalSize.spec.ts', 'wordChord.spec.ts', 'startup.spec.ts', 'loading.spec.ts', 'updateNotice.spec.ts'] },
     // Every state in two themes and three sizes is one long walk; a retry would repeat it all.
     { name: 'tour', testMatch: 'tour.spec.ts', retries: 0, timeout: 30 * 60_000 },
   ],

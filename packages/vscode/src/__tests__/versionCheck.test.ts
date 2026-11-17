@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { startVersionCheck } from '@ordewell/core';
 import { startExtensionVersionCheck } from '../versionCheck';
 
 function fakeHost(isTelemetryEnabled: boolean, choose?: string) {
@@ -226,6 +227,69 @@ describe('startExtensionVersionCheck', () => {
       expect(fake.items[0].hide).toHaveBeenCalled();
       check.dispose();
       expect(fake.items[0].dispose).toHaveBeenCalled();
+    });
+
+    it('shows, within the hour and with no ping of its own, a version another process wrote to the shared file', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      try {
+        const now = new Date().toISOString();
+        remember({ lastCheckAt: now });
+        const fetch = vi.fn();
+        const fake = fakeHost(true);
+        startExtensionVersionCheck(fake.host, '1.0.0', { env, stateDir, fetch, ...ext });
+        expect(fake.items).toHaveLength(0);
+
+        // The TUI in a terminal beside it pinged and wrote the answer.
+        remember({ lastCheckAt: now, latest: '9.9.9', latestAt: now });
+        await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+        expect(fake.items[0].text).toBe('$(arrow-circle-up) Ordewell 9.9.9');
+        expect(fake.items[0].show).toHaveBeenCalled();
+        expect(messageArgs(fake)).toEqual([['Ordewell 9.9.9 is out (you have 1.0.0) — update it from the Extensions view', 'Update', "What's new"]]);
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shows a version a newer copy on the machine learned by its own ping, though that answer was no news to it', async () => {
+      remember({ lastCheckAt: '2020-01-01T00:00:00.000Z' });
+      // A source build on 9.9.9 pings first; the server names the version it is already on.
+      const newer = startVersionCheck({ version: '9.9.9', onNotice: () => {}, env, stateDir, fetch: async () => ({ status: 200, text: async () => '{"latest":"9.9.9"}' }) });
+      await newer.settled();
+      newer.stop();
+
+      const fake = fakeHost(true);
+      startExtensionVersionCheck(fake.host, '1.0.0', { env, stateDir, fetch: vi.fn(), ...ext });
+      expect(fake.items[0].text).toBe('$(arrow-circle-up) Ordewell 9.9.9');
+      expect(messageArgs(fake)).toHaveLength(1);
+    });
+
+    it('keeps the remembered version through an answer that names nothing', async () => {
+      remember({ lastCheckAt: '2020-01-01T00:00:00.000Z', latest: '9.9.9', latestAt: '2020-01-01T00:00:00.000Z' });
+      const fetch = vi.fn(async () => ({ status: 204, text: async () => '' }));
+      const first = fakeHost(true);
+      const check = startExtensionVersionCheck(first.host, '1.0.0', { env, stateDir, fetch, ...ext });
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      check.dispose();
+
+      const next = fakeHost(true);
+      startExtensionVersionCheck(next.host, '1.0.0', { env, stateDir, fetch, ...ext });
+      expect(next.items[0].text).toBe('$(arrow-circle-up) Ordewell 9.9.9');
+    });
+
+    it.each([
+      ['ORDEWELL_NO_VERSION_CHECK', '1'],
+      ['DO_NOT_TRACK', '1'],
+      ['DO_NOT_TRACK', 'true'],
+    ])('shows nothing and sends nothing with %s=%s', (name, value) => {
+      remember({ lastCheckAt: '2020-01-01T00:00:00.000Z', latest: '9.9.9', latestAt: '2020-01-01T00:00:00.000Z' });
+      const fetch = vi.fn();
+      const fake = fakeHost(true);
+      startExtensionVersionCheck(fake.host, '1.0.0', { env: { [name]: value }, stateDir, fetch, ...ext });
+      expect(fake.items).toHaveLength(0);
+      expect(messageArgs(fake)).toHaveLength(0);
+      expect(fetch).not.toHaveBeenCalled();
     });
 
     it('shows no item with telemetry off', () => {
