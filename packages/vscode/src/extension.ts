@@ -7,6 +7,8 @@ import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
 import { startExtensionVersionCheck } from './versionCheck';
+
+const UPDATE_POPUP_KEY = 'ordewell.updatePopupShownAt';
 import { createExtension, type ExtensionHost } from './ExtensionHost';
 
 let activeHost: ExtensionHost | undefined;
@@ -113,7 +115,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await activeHost.start();
     // After start, and not awaited: the check reads one small file and never
     // waits on the network, so it cannot hold the extension back.
-    versionCheck = startExtensionVersionCheck(vscode, String(context.extension?.packageJSON?.version ?? 'unknown'));
+    versionCheck = startExtensionVersionCheck(vscode, String(context.extension?.packageJSON?.version ?? 'unknown'), {
+      extensionId: context.extension?.id,
+      // globalState is one for every window, so the popup comes once a day, not once a window.
+      popupStore: {
+        get: () => context.globalState.get<number>(UPDATE_POPUP_KEY),
+        set: (at) => { void context.globalState.update(UPDATE_POPUP_KEY, at); },
+      },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logTo(outputChannel, `ACTIVATION ERROR: ${message}`);
