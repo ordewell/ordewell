@@ -4,12 +4,45 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Rebuild an existing release tag with repaired delivery workflows (main only; application sources must match)
+        type: string
+        required: true
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 # A release tag moves the version on every package from local to the registry —
 # no cancel-in-progress here: a second push is a different release.
 
 # Each job names its image, as ci.yml's do, so a move of the -latest labels is a change here.
 jobs:
+  # A repaired workflow can recover a release without moving its public tag.
+  # CI proves main; this guard proves the tag has identical application sources.
+  release-source:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.x
+      - name: Verify the tag retains the tested release sources
+        env:
+          RECOVERY: ${{ github.event_name == 'workflow_dispatch' }}
+          RELEASE_REF: ${{ github.ref }}
+        run: node scripts/release-source.mjs "$RELEASE_TAG"
+
   # Coverage floors, the integration test, the artifact checks and the real
   # engine are what main's CI proves, and a tag is not always a commit main
   # proved. Nothing publishes until the tagged commit has passed all of them:
@@ -17,6 +50,7 @@ jobs:
   # ci.yml then skips every job but its scope and `Required checks`, both of
   # which still pass, so this job's result is still success.
   ci:
+    needs: release-source
     uses: ./.github/workflows/ci.yml
     # The lookup of main's runs reads Actions; checkout reads contents. A
     # called workflow's token cannot exceed this grant, and ci.yml writes nothing.
@@ -32,6 +66,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Use Node.js 22.x
         uses: actions/setup-node@v7
@@ -41,7 +77,7 @@ jobs:
           cache: 'npm'
 
       - name: Verify tag matches package versions
-        run: node .github/workflows/verify-release-tag.mjs "${{ github.ref_name }}"
+        run: node .github/workflows/verify-release-tag.mjs "${{ inputs.tag || github.ref_name }}"
 
       - name: Install dependencies
         run: npm ci
@@ -58,7 +94,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${RELEASE_TAG#v}"
           publish() {
             if npm view "$1@$v" version >/dev/null 2>&1; then
               echo "$1@$v is already published; skipping"
@@ -81,6 +117,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Use Node.js 22.x
         uses: actions/setup-node@v7
@@ -89,7 +127,7 @@ jobs:
           cache: 'npm'
 
       - name: Verify tag matches package versions
-        run: node .github/workflows/verify-release-tag.mjs "${{ github.ref_name }}"
+        run: node .github/workflows/verify-release-tag.mjs "${{ inputs.tag || github.ref_name }}"
 
       - name: Install dependencies
         run: npm ci
@@ -127,6 +165,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       # Idempotent: a re-pushed tag (e.g. after retriggering a stuck run) must not fail this step.
@@ -137,7 +176,7 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists, skipping"
@@ -165,7 +204,7 @@ jobs:
       contents: write
     with:
       attach: true
-      tag: ${{ github.ref_name }}
+      tag: ${{ inputs.tag || github.ref_name }}
     secrets:
       CSC_LINK: ${{ secrets.CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -199,7 +238,7 @@ jobs:
       contents: write
     with:
       attach: true
-      tag: ${{ github.ref_name }}
+      tag: ${{ inputs.tag || github.ref_name }}
     secrets:
       CSC_LINK: ${{ secrets.CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -237,6 +276,7 @@ jobs:
       # nothing is built here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Use Node.js 22.x
@@ -249,7 +289,7 @@ jobs:
       - name: Download the installers and the CLI archives from the Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         # The installers' patterns only when the desktop job attached them.
         run: |
@@ -277,7 +317,7 @@ jobs:
       - name: Attach the fixed-name copies and install.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           cd release
@@ -295,7 +335,7 @@ jobs:
       - name: Attach SHA256SUMS, last
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: gh release upload "$TAG" release/SHA256SUMS --clobber --repo "$REPO"
 
@@ -308,7 +348,7 @@ jobs:
       - name: Mark the Release latest, if it is the highest version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           set -o pipefail
@@ -370,6 +410,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Use Node.js 22.x
@@ -380,7 +421,7 @@ jobs:
       - name: Download SHA256SUMS from the Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: gh release download "$TAG" --pattern SHA256SUMS --dir sums --repo "$REPO"
 
@@ -395,13 +436,13 @@ jobs:
       # Rendered apart, so neither depends on the other's lines in SHA256SUMS.
       - name: Render the formula
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only formula --out rendered
 
       - name: Render the cask
         if: env.DESKTOP_RELEASED == 'true'
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: node scripts/render-package-manifests.mjs --version "${TAG#v}" --sums sums/SHA256SUMS --only cask --out rendered
 
       # The formula always, the cask only from a notarized build of a release
@@ -415,7 +456,7 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           # Only when it is the credential this run uses.
           HOMEBREW_TAP_DEPLOY_KEY: ${{ env.HOMEBREW_TAP_TOKEN_SET != 'true' && secrets.HOMEBREW_TAP_DEPLOY_KEY || '' }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           set -- rendered "${TAG#v}"
@@ -452,11 +493,12 @@ jobs:
     permissions:
       contents: read
     env:
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ inputs.tag || github.ref_name }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Install ordewell with brew and test it
@@ -474,6 +516,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Use Node.js 22.x
@@ -485,14 +528,14 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: gh release download $env:TAG --pattern SHA256SUMS --dir sums --repo $env:REPO
 
       - name: Render the winget manifests
         shell: pwsh
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           $tag = $env:TAG
           node scripts/render-package-manifests.mjs --version $tag.TrimStart('v') --sums sums/SHA256SUMS --only winget --out rendered
@@ -519,7 +562,7 @@ jobs:
         shell: pwsh
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           $tag = $env:TAG
           $version = $tag.TrimStart('v')
