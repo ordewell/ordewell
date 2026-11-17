@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <strong>The best agent orchestrator.</strong><br>
+  <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
   One goal, many agents, working in parallel. Review every step, or let it run.
 </p>
 
@@ -46,9 +46,6 @@ line. Every one drives the same plans, runners and settings.
 
 This README describes 0.13.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
-
-Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
-[changelog](CHANGELOG.md) before you upgrade.
 
 ## Why Ordewell
 
@@ -243,14 +240,6 @@ If Codex's sandbox cannot start on your machine, see
 [troubleshooting](docs/troubleshooting.md). For the experimental container mode,
 off in published versions, see [running tasks in containers](docs/containers.md).
 
-## Where it's going
-
-- **Next:** bounded, standing consent for running on its own ([#23](https://github.com/ordewell/ordewell/issues/23)), an escalation inbox across surfaces ([#30](https://github.com/ordewell/ordewell/issues/30)) and a daemon that resumes plans after a restart ([#31](https://github.com/ordewell/ordewell/issues/31)).
-- **Now:** the desktop app, a client of the same local daemon as the terminal UI and the VS Code extension, and a built-in runner on every provider you have a key for.
-- **Already shipped:** check-and-fix loops ([#118](https://github.com/ordewell/ordewell/issues/118)), a planner that can start consented script tasks ([#107](https://github.com/ordewell/ordewell/issues/107)) and the supervisor, which watches a run and, if you let it, acts within limits you set.
-
-The full roadmap, and where to help, is in [#21](https://github.com/ordewell/ordewell/issues/21).
-
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the
@@ -290,6 +279,9 @@ To show each model's context size, prices and capabilities, Ordewell fetches the
 public model catalog from [models.dev](https://models.dev), a plain request
 that carries no data about you or your work. Set `ORDEWELL_NO_MODELS_DEV=1` to
 turn it off; a snapshot bundled with Ordewell is used instead.
+
+Ordewell is pre-1.0, so minor releases can include breaking changes. Read the
+[changelog](CHANGELOG.md) before you upgrade.
 
 ## License
 
