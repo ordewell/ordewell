@@ -44,8 +44,8 @@ const TASK_NAME_CHARS = 60;
 /** How many tasks a digest names in a list before it counts them (ADR-0057 R5). */
 const NAMED_TASKS = 3;
 
-/** A run event as the host reports it; the supervisor stamps it. */
-export type RunEventInput = Omit<RunEvent, 'at' | 'taskIds'>;
+/** A run event as the host reports it; the supervisor stamps it. A run held names its holds in `taskIds`. */
+export type RunEventInput = Omit<RunEvent, 'at'>;
 
 /** What the run started with, as saved on the plan. */
 export interface SupervisedRun {
@@ -684,6 +684,7 @@ function actBrief(readBudget: number, retryLimit: number): WakeBrief {
       'A task waiting at a checkpoint is answered with answer_checkpoint: approve and it goes on, or reject with a reason, which the runner reads and acts on. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect (a deletion, a push, a payment, a message to someone) is theirs: escalate it to the user rather than approving it. Leave it waiting and tell them what it asks and why you did not answer. When you reject, give the reason the runner should act on.',
       readsLine(readBudget),
       'To change a task and run it again, call edit_plan and then retry_task in the same reply: the edit is in the plan as edit_plan answers, so the retry runs it as edited.',
+      'A task you stop stays on hold, and every task that depends on it waits, until it is retried or skipped: a stop alone moves nothing on. To change a stopped task\'s prompt and run it again, call edit_plan and then retry it in the same reply.',
       'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
       `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
       'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
@@ -769,6 +770,7 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   auto_merge_stopped: 'with a merge stopped',
   start_refused: 'refused a start',
   run_finished: 'ended',
+  run_held: 'holding the run',
   task_report: 'reported',
 };
 
@@ -863,6 +865,8 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
       : `automatic Merge all at the merge gate of ${task} stopped${colon}; the gate waits for the user`;
     case 'start_refused': return `work could not start${colon}. Ask the plan above for more with checkpoint, or end this with task_complete`;
     case 'run_finished': return `the run finished${colon}`;
+    // Each hold whole, with what it holds back and who put it there: what the supervisor decides on (ADR-0057 R4).
+    case 'run_held': return event.detail ?? 'the run is idle: nothing is running and nothing can start';
     // Its result whole, not a digest line: the planner asked for it, and reads it here (ADR-0037, R2).
     case 'task_report': return `${task}${REPORT_LEAD} ${(event.report?.text ?? '').split('\n').join('\n  ')}`;
     case 'task_passed': return `${task} passed`;

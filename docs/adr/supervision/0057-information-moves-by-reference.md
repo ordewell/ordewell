@@ -150,7 +150,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   | wakes at once | events |
   |---|---|
   | a child plan ended | a delegated task's verdict, or its Stop |
-  | a person is needed | `waiting_input`, `waiting_approval`, `landing_conflict` left waiting, `auto_merge_stopped`, `usage_limit` |
+  | a person is needed | `waiting_input`, `waiting_approval`, `landing_conflict` left waiting, `auto_merge_stopped`, `usage_limit`, `run_held` |
   | something is open | a question from a child, or a report with `open` |
   | a report arrived | `task_report` ([ADR-0037](0037-research-tasks-wake-the-planner.md)) |
   | the run ended | `run_finished`, with no merge window |
@@ -171,6 +171,19 @@ is no sibling chat, lock tool, wait tool or broadcast.**
     can count on, an unknown one reads as five minutes, and time is counted as the provider counts
     it, from the start of the request: the turn's opening stands for that, which can only make a
     wake early. A prefix already cold has nothing to save, so the age then runs from the event.
+
+  `run_held` is the run idle behind its holds: nothing is running, nothing can start, tasks remain,
+  and what holds them is a task on hold or a task waiting on a person (a usage limit apart, which
+  its reset lifts). `RunSupervision` raises it on the orchestrator's idle tick and when a wake's turn
+  ends, once for each distinct set of holds, keyed by each holding task with how it is held and why;
+  a later `run_held` replaces an earlier one still queued. Its line names each holding task, why it
+  is held, who put a task on hold (the last stop, revert or mark-not-done recorded for it), and how
+  many tasks not yet done it holds back, and says that a task on hold starts again only once it is
+  retried, force started or skipped. Any wake delivered while the run is idle records the set it
+  stood behind, so a turn that leaves that set in place is not woken for it again; a different set,
+  or a run the user starts, wakes afresh. It is counted against the rate guard as any wake is. A
+  supervisor that stopped a task waiting for input and ended its turn, the stop alone moving nothing,
+  had left a run idle with no wake to come.
 
   A `running_long` event is raised by a task's running time, by an automatic compaction of its own
   runner session, or by its context growing large; which compactions count as routine, and where a
@@ -464,3 +477,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-15 — R4, R5: where Ordewell sets the window a task compacts at, a compaction raises `running_long` from the attempt's third, then at the 6th, 12th and so on, and its line names that window beside the model's; with no window set it still fires from the first.
 - 2026-11-17 — R4, R5: a compaction is routine only under a window below 200k tokens; with none set, as `auto` sets none but Haiku's, or any window from 200k, `running_long` fires from the first, and R5's example names a 400k window.
 - 2026-11-17 — R4, R5: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, raises `running_long`, held as the others are; its line names the size it passed against the window.
+- 2026-11-17 — R4: `run_held`, the run idle behind a task on hold or one waiting on a person, wakes as a person needed does, once per distinct set of holds, naming each hold, who put it there and what it holds back.

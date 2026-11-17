@@ -126,6 +126,8 @@ export interface OrchestratorObserver {
   onTick?(): void;
   onUsageChanged?(): void;
   onExecutionComplete?(): void;
+  /** Nothing is at work and nothing can start, and the run waits on the user: told on every tick that finds it so, the run going on (ADR-0057 R4). */
+  onWaitingOnUser?(): void;
   /**
    * A task paused on its runner's usage limit, or its resume changed:
    * `resumeAt` is when it resumes on its own (ISO time), null when it waits
@@ -2963,6 +2965,7 @@ export class TaskOrchestrator {
     this.sayUnapprovedInLoop();
     this.emit('onTaskChanged');
     this.emit('onTick');
+    this.emit('onWaitingOnUser');
   }
 
   /**
