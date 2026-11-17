@@ -323,3 +323,70 @@ describe('a user\'s planner turn in flight as the run ends at Act', () => {
     expect(concluded(env)).toHaveLength(1);
   });
 });
+
+describe('a user\'s Stop earlier in the run, behind which a wake-up waits, at Act', () => {
+  /**
+   * Tasks 1 and 2 run together, and task 3 needs task 1; task 1 fails during a
+   * user's turn, and the user stops that turn, so task 1's wake-up waits for
+   * their next message.
+   */
+  async function stoppedMidRun(): Promise<Env> {
+    const env = await supervised([task('t1', 1), task('t2', 2), task('t3', 3, { dependencies: ['t1'] })], { settings: { supervisorLevel: 'act' }, config: { maxParallelSessions: 2 } });
+    await until(() => env.run.spawnedIds().length === 2);
+    const answered = env.session.continueConversation('how is it going?').catch(() => {});
+    await until(() => env.planner.calls.length === 1);
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 10);
+    expect(env.session.planState!.pendingTurns!.some((t) => t.source === 'supervisor')).toBe(true);
+
+    env.session.abortPlannerTurn();
+    await answered;
+    await settled();
+    expect(env.planner.calls).toHaveLength(1);
+    return env;
+  }
+
+  it('waits for the closing turn the run\'s end owes, which carries the wake-up the Stop left waiting', async () => {
+    const env = await stoppedMidRun();
+
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+    await settled();
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 10);
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).toContain('the import is wrong');
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.planner.calls[1].finish(prose('Task 1 needs you: the import is wrong.'));
+    await until(() => concluded(env).length > 0);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].supervisorHeld).toBeUndefined();
+  });
+
+  it('concludes, saying why, when nothing is owed at the run\'s end: the wake-ups the user\'s Stop left go with their next message', async () => {
+    const env = await stoppedMidRun();
+    // The user's next message takes task 1's wake-up; the run ends during it, and the user stops that turn too.
+    const asked = env.session.continueConversation('and now?').catch(() => {});
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).toContain('the import is wrong');
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await vi.advanceTimersByTimeAsync(START_HOLD_TIMEOUT_MS + 10);
+    await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 10);
+    expect(env.session.planState!.pendingTurns!.some((t) => t.source === 'supervisor')).toBe(true);
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.session.abortPlannerTurn();
+    await asked;
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].supervisorHeld).toMatch(/stopped.*next message/);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(env.planner.calls).toHaveLength(2);
+    expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);
+  });
+});
