@@ -178,9 +178,12 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
     await win.getByRole('dialog', { name: 'Needs you' }).getByRole('button', { name: 'Approve: #2 Add a farewell module' }).click();
     await editor.getByRole('tab', { name: /Plan graph/ }).click();
     await expect(graph.getByRole('button', { name: /^#2 Add a farewell module, waiting for merge/ })).toBeVisible({ timeout: 60_000 });
-    // The landed run is the next thing that needs you: its Merge all row.
-    await expect(needsYou).toBeVisible({ timeout: 60_000 });
-    await needsYou.click();
+    // The landed run is the next thing that needs you: its Merge all row. Below Act the
+    // planner's reply to the run's end waits on you too (ADR-0029), so the count is 1 or 2
+    // depending on whether that reply has come yet.
+    const needsYouAtEnd = win.getByRole('button', { name: /^Needs you, [12]$/ });
+    await expect(needsYouAtEnd).toBeVisible({ timeout: 60_000 });
+    await needsYouAtEnd.click();
     await expect(win.getByRole('dialog', { name: 'Needs you' }).getByRole('button', { name: /Merge all: / })).toBeVisible({ timeout: 60_000 });
     await win.keyboard.press('Escape');
   });
