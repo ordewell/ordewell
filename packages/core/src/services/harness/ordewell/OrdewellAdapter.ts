@@ -137,9 +137,9 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const sessionId = opts.resumeSessionId ?? randomUUID();
     const store = (this.options.openStore ?? ((id, dir) => new FileTranscriptStore(id, dir)))(sessionId, root);
     const saved = opts.resumeSessionId ? await this.savedSession(store, opts.resumeSessionId) : undefined;
-    const system = saved?.system ?? buildSystemPrompt({ cwd: opts.cwd, commits: opts.commits === true });
     const settings = new SettingsService().getAll();
     const stepLimit = this.options.stepLimit ?? settings.ordewellStepLimit ?? DEFAULT_ORDEWELL_STEP_LIMIT;
+    const system = saved?.system ?? buildSystemPrompt({ cwd: opts.cwd, commits: opts.commits === true, stepLimit });
     const timeouts = this.options.streamTimeouts ?? streamTimeoutsOf(settings.ordewellStreamTimeouts);
 
     const inProcess = opts.mcp?.inProcess;

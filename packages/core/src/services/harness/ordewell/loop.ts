@@ -148,6 +148,8 @@ export class OrdewellLoop {
   private reported = false;
   private streaming: Promise<void> = Promise.resolve();
   private stops = 0;
+  /** The budget notices this attempt has spent, each at most once (ADR-0070). */
+  private readonly noticed = new Set<number>();
   /** Steps in a row whose stream failed part way, and when the first of them failed: the retry policy's attempt and window. */
   private cutStreams = { count: 0, since: 0 };
   private readonly neutral: readonly OrdewellTool[];
@@ -217,13 +219,17 @@ export class OrdewellLoop {
         for (const text of plan.inject) await this.recordMessage(step, { role: 'user', text });
       }
       let toolChoice = plan.toolChoice;
+      const notice = this.budgetNotice();
       if (this.isLastCall() && this.options.taskTools.has('task_complete')) {
         // Every tool stays offered, so the cached prefix holds; only the choice narrows.
         toolChoice = { name: 'task_complete' };
         await this.recordMessage(step, { role: 'user', text: lastCallInstruction(this.limit()) });
+      } else if (notice) {
+        // Appended, never written into the system prompt, so the cached prefix holds.
+        await this.recordMessage(step, { role: 'user', text: notice });
       }
-      if (plan.inject?.length || toolChoice !== plan.toolChoice) transcript = await store.load();
-      // After the boundary hook, its injections and the last-call words, so the estimate counts what the request carries.
+      if (plan.inject?.length || toolChoice !== plan.toolChoice || notice) transcript = await store.load();
+      // After the boundary hook, its injections, the last-call words and a notice, so the estimate counts what the request carries.
       transcript = await this.compactor.beforeRequest(transcript, step, signals.hard);
       // One step is one call against the limit, however many overflow retries it takes.
       this.modelCalls += 1;
@@ -247,6 +253,23 @@ export class OrdewellLoop {
 
   private isLastCall(): boolean {
     return this.modelCalls === this.limit() - 1;
+  }
+
+  /**
+   * The note due at this boundary, if any: once at about 80% of the step
+   * budget and once at about 95%, so the model brings its work to a committed,
+   * reportable state before the forced last call (ADR-0070). Each is spent once
+   * sent; none goes out while a report stands, or on the last call, whose own
+   * instruction says more. Two falling due together send only the later.
+   */
+  private budgetNotice(): string | undefined {
+    const limit = this.limit();
+    if (this.reported || !Number.isFinite(limit) || this.modelCalls >= limit - 1 || !this.options.taskTools.has('task_complete')) return undefined;
+    const due = BUDGET_NOTICES.filter((share) => !this.noticed.has(share) && this.modelCalls >= Math.max(1, Math.floor(limit * share)));
+    for (const share of due) this.noticed.add(share);
+    const latest = due.at(-1);
+    if (latest === undefined) return undefined;
+    return latest === BUDGET_NOTICES[0] ? midBudgetNotice(this.modelCalls, limit) : endBudgetNotice(limit - this.modelCalls, limit);
   }
 
   /** The limit is spent: a report stands, or the runner makes the failed one itself. */
@@ -507,6 +530,17 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
     const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
     signal.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/** The shares of the step budget used at which the model is told so, in order. */
+const BUDGET_NOTICES = [0.8, 0.95] as const;
+
+function midBudgetNotice(used: number, limit: number): string {
+  return `[Ordewell] You have used ${used} of the ${limit} model calls this attempt may make. Bring the part you are on to a working state and commit it, if your task lands as a commit, so it stands whenever the attempt ends; then go on with the brief in order.`;
+}
+
+function endBudgetNotice(left: number, limit: number): string {
+  return `[Ordewell] ${left} model calls are left of the ${limit} this attempt may make, and the last is kept for task_complete. Start nothing new: commit what works, if your task lands as a commit, and call task_complete reporting what is done and what remains. Report done only if the brief's done criterion holds.`;
 }
 
 function lastCallInstruction(limit: number): string {
