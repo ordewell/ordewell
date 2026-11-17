@@ -383,6 +383,14 @@ function opsTaskSection(conversation: boolean): string[] {
 }
 
 /**
+ * A slice whose check cannot run yet passes unproven, and its errors surface
+ * only once every slice has landed: a plan whose tasks each passed delivered
+ * nothing, since no task made the project build and no test could be collected.
+ */
+const VERIFIABLE_SLICE_RULE =
+  '- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven. If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.';
+
+/**
  * When slices run in parallel, for the conversation and the one-shot planner
  * alike: split only along decisions nobody else relies on, since a slice built
  * on a guess at another's interface is redone when the guess is wrong. A
@@ -396,6 +404,7 @@ export const PARALLELISM_RULE: readonly string[] = [
   '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
   '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs. This never justifies chaining layers a contract task can decouple.',
   '- Build shared verification once: where several tasks need the same kind of check (a test harness, fixtures, golden files), one early task builds it and each runs it on its own slice. Each such brief asks for the tests that prove its slice, not a suite of its own.',
+  VERIFIABLE_SLICE_RULE,
 ];
 
 /** The one-shot planner has no DEFAULTS block to say this. */
@@ -543,7 +552,8 @@ function subplannerSection({ protectedPaths, readOnly }: SubplannerBrief): strin
   ];
 }
 
-function planJsonExample(runnerChoices: string, includeScripts = true): string[] {
+/** `skills` shows the field only beside a catalog: an example name with none listed is read as one to attach. */
+function planJsonExample(runnerChoices: string, includeScripts: boolean, skills: boolean): string[] {
   return [
     '{',
     '  "tasks": [',
@@ -563,9 +573,9 @@ function planJsonExample(runnerChoices: string, includeScripts = true): string[]
     '      "autonomy": "AFK|HITL",',
     '      "sliceType": "AFK|HITL",',
     '      "ops": true,',
-    '      "skills": ["task-skill-name"],',
+    ...(skills ? ['      "skills": ["task-skill-name"],'] : []),
     '      "userStoriesCovered": ["user story text"],',
-    '      "subtasks": [{ "id": "sub-id-string", "order": 1, "title": "Sub-step title", "description": "What it accomplishes", "type": "ai", "dependencies": [], "prompt": "Detailed instructions", "autonomy": "AFK|HITL", "sliceType": "AFK|HITL", "subtasks": [] }]',
+    '      "subtasks": []',
     '    }',
     '  ]',
     '}',
@@ -686,7 +696,7 @@ function buildConversationBody(
     'PLAN FORMAT:',
     tools ? 'submit_plan takes {"tasks": [...]}, every task in this shape:' : 'Generate a task plan using this JSON format:',
     '',
-    ...planJsonExample(tools ? 'a runner id from list_runners' : runners.join('|')),
+    ...planJsonExample(tools ? 'a runner id from list_runners' : runners.join('|'), true, modelInvocableTaskSkills(variant.skills ?? []).length > 0),
     '',
     'A script task runs its body with no model, and takes this shape instead:',
     '{ "id": "push-1", "order": 3, "title": "Push the release branch", "description": "What it does", "type": "script", "dependencies": ["task-2"], "commands": [["git", "push", "origin", "release"]], "sliceType": "AFK" }',
@@ -792,16 +802,16 @@ function plannerSkillsBlock(skills: readonly SkillInfo[]): string[] {
 /**
  * The "skills" field is documented for every planner: a user can name a task
  * skill with `/name` whether or not any is advertised. The catalog is the
- * model-invocable ones only; with none, the planner attaches on request alone.
+ * model-invocable ones only, and a name outside it is refused unless a
+ * dependency creates that skill: a planner shown none invented names, and the
+ * first task failed at start. A one-shot planner is shown no catalog.
  */
 function taskSkillsSection(skills: readonly SkillInfo[]): string[] {
   const attachable = modelInvocableTaskSkills(skills);
   return [
     'TASK SKILLS:',
-    '- "skills" optionally lists task skills by name; their instructions go into that task\'s prompt when it runs.',
-    '- A name that does not exist yet is accepted with a warning, so a task may name a skill that a task it depends on creates (.ordewell/skills/<name>/SKILL.md). Only skills with applies-to: task can be attached.',
-    '- When the user asks to use a task skill, attach it to the tasks it fits.',
-    ...(attachable.length === 0 ? [] : [
+    '- "skills" lists task skills, whose instructions join that task\'s prompt. Attach one the user asks for where it fits; otherwise only one listed here, or one a task it depends on creates at .ordewell/skills/<name>/SKILL.md and names in its prompt. Any other name is refused: the task would fail as it starts.',
+    ...(attachable.length === 0 ? ['- No task skill is listed here.'] : [
       'Task skills you may attach:',
       ...attachable.map((skill) => `- ${skill.name}${sizeMark(skill)}: ${skill.description}`),
       'Attach one of these to a task only where its description says it applies. Never attach a skill to every task by default.',
@@ -825,7 +835,7 @@ const RESEARCH_SECTION = [
 
 const ONE_SHOT_INSTRUCTIONS = [
   '',
-  'This is a ONE-SHOT run: there is no user to ask questions to. Where the request is ambiguous, make the most reasonable assumption grounded in your research and record it in the relevant task description.',
+  'This is a ONE-SHOT run: there is no user to ask questions to. Where the request is ambiguous, make the most reasonable assumption grounded in your research and record it in the prompt of each task it bears on.',
   '',
 ].join('\n');
 
@@ -847,7 +857,7 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '',
   tools ? 'submit_plan takes a plan using this schema:' : 'Generate a task plan using this JSON format:',
   '',
-  ...planJsonExample('{{RUNNER_CHOICES}}', false),
+  ...planJsonExample('{{RUNNER_CHOICES}}', false, false),
   '',
   'VERTICAL SLICE PLANNING:',
   'Design each task as a VERTICAL TRACER-BULLET SLICE — a narrow but complete, independently demoable path that cuts through all layers (schema → backend logic → API/route → UI/consumer → tests). Do not create horizontal layer-by-layer tasks (e.g. "build all models", then "build all routes", then "build all tests"). Each slice should stand alone as a working end-to-end increment.',
@@ -857,12 +867,13 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   '',
   'SLICE CLASSIFICATION:',
   '- "autonomy": Classify each AI task as AFK (Away From Keyboard — the agent works autonomously with no user interaction needed) or HITL (Human In The Loop — the agent needs user confirmation, review, or input partway through).',
-  '- "sliceType": Same vocabulary as autonomy. Use HITL for tasks that contain user-facing touchpoints (manual verification, approval gates, UI decisions a human must make). Use AFK for fully autonomous slices.',
+  '- "sliceType": Same vocabulary as autonomy. Use HITL only as RULES allow, and AFK otherwise.',
   '- "userStoriesCovered": Link each task to the specific user story/stories from the PRD that it delivers. Copy the exact user story text.',
   '- AFK tasks have no "userSteps", since they are fully autonomous. HITL tasks may hold userSteps for the human touchpoints.',
   '- User tasks (type "user") always have sliceType "HITL" and must include "userSteps".',
   '- "sliceType" is required on every task, and "autonomy" on every "ai" task, at every depth — a "subtasks" entry is a full task object with all the same required fields, not a bare label.',
   '',
+  ...taskSkillsSection([]),
   'DEPENDENCY & PARALLELISM RULES:',
   ONE_SHOT_PARALLEL_DEFAULT,
   ...PARALLELISM_RULE,
@@ -873,8 +884,8 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   ...opsTaskSection(false),
   '',
   'RULES:',
-  '- Mark as type "ai" any task the coding assistant can do autonomously.',
-  '- Mark as type "user" any task requiring manual action outside the codebase.',
+  '- Nobody answers while you plan, and nobody may be there while the plan runs, so a task that waits on a person stalls it. Whatever an agent can do (edit, run commands, check its own work) is an AFK "ai" task. Use type "user" or HITL only where the goal itself requires a person\'s act.',
+  '- A brief leaves open no question only a person could answer: decide it from your research and write the assumption into the prompt.',
   '- Each AI task must have a detailed "prompt" field with clear, specific instructions. Include the exact files to create/modify.',
   '- Each user task must have "userSteps" with an ordered array of step-by-step instructions.',
   '- Tasks can have "subtasks" for finer-grained sub-steps.',
