@@ -19,13 +19,13 @@
 #                     ~/.ordewell/runtime (kept while another ordewell is on
 #                     PATH, which uses them too); sessions and other data stay
 #   --dry-run         say what would be downloaded and installed, and do nothing
+#   --desktop         also install the desktop app (desktop.sh), passing
+#                     --version, --uninstall and --dry-run on. When the
+#                     release's SHA256SUMS lists no desktop installer (a
+#                     release made with the app left out, ADR-0065 C10), the CLI
+#                     is installed, the script says the desktop app is not
+#                     released yet and exits 1
 #   -h, --help        this text
-#
-# --desktop (left out of --help and of this list until a release carries the
-# desktop app, ADR-0065 C10) also runs the desktop app installer (desktop.sh),
-# passing --version, --uninstall and --dry-run on. When the release's
-# SHA256SUMS lists no desktop installer, the CLI is installed, the script says
-# the desktop app is not released yet and exits 1.
 #
 # Environment:
 #   ORDEWELL_VERSION       the same as --version
@@ -86,13 +86,16 @@ usage() {
 Installs the Ordewell command-line app for the current user (macOS and Linux).
 It is one self-contained binary; Node.js is not needed.
 
-Usage: install.sh [--version X.Y.Z] [--uninstall] [--dry-run]
+Usage: install.sh [--version X.Y.Z] [--uninstall] [--dry-run] [--desktop]
 
   --version X.Y.Z  install that release instead of the latest (or ORDEWELL_VERSION)
   --uninstall      remove the binary and ~/.ordewell/runtime (the runtime stays
                    while another ordewell is on PATH, which uses it too);
                    sessions and other data in ~/.ordewell stay
   --dry-run        say what would be downloaded and installed, and do nothing
+  --desktop        also install the desktop app, passing --version, --uninstall
+                   and --dry-run on to its installer. A release without the app
+                   installs the CLI, says so and exits 1
   -h, --help       this text
 
 Environment:
@@ -101,6 +104,13 @@ Environment:
                          ordewell-<os>-<arch>.tar.gz (and the versioned name)
                          and SHA256SUMS, used instead of the GitHub Release
   ORDEWELL_INSTALL_DIR   the folder the binary goes in (default ~/.local/bin)
+  ORDEWELL_DESKTOP_SCRIPT_FROM
+                         with --desktop, a file or an https:// URL to take
+                         desktop.sh from, instead of the copy on GitHub
+  ORDEWELL_DESKTOP_INSTALL_DIR
+                         with --desktop, the folder the desktop app goes in
+                         (Ordewell.app on macOS, the prefix replacing ~/.local
+                         on Linux); ORDEWELL_INSTALL_DIR is never passed on
 
 On Windows and on musl Linux (Alpine), install with: npm install -g ordewell
 EOF

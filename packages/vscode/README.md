@@ -9,6 +9,10 @@ start during planning.
 This README describes 0.13.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
+Ordewell is also a [terminal UI and command line](https://www.npmjs.com/package/@ordewell/cli)
+and a [desktop app](https://github.com/ordewell/ordewell/blob/main/docs/desktop/README.md) for macOS, Windows and Linux. They all
+drive the same local daemon, so a run started in one shows up in the others.
+
 ## Features
 
 - **An editable plan.** Every agent task carries a runner, model, thinking effort
