@@ -1,7 +1,7 @@
 import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { findLiveRuns, type DaemonGet } from '../daemon/liveRuns';
-import { closePrompt, guardClose, onLastWindowClosed, quitPrompt, runsQuitStops } from '../lifecycle';
+import { closePrompt, guardClose, onLastWindowClosed, quitPrompt, restartPrompt, runsQuitStops } from '../lifecycle';
 import { isInside } from '../paths';
 
 const run = { sessionId: 's1', goal: 'Ship it', workspace: '/w' };
@@ -90,6 +90,44 @@ describe('onLastWindowClosed (ADR-0063 H5)', () => {
     expect(onLastWindowClosed([], 'win32', true)).toBe('tray');
     expect(onLastWindowClosed([], 'darwin', true)).toBe('stay');
     expect(onLastWindowClosed([run], 'linux', false)).toBe('tray');
+  });
+});
+
+describe('restartPrompt (ADR-0063 H9)', () => {
+  it('restarts without asking when nothing is live', () => {
+    expect(restartPrompt([], true)).toBeUndefined();
+    expect(restartPrompt([], false)).toBeUndefined();
+  });
+
+  it('names the runs that stop with the daemon this app started, and that their running tasks stop', () => {
+    const prompt = restartPrompt([run], true);
+    expect(prompt?.message).toBe('A run is in progress. Stop it and restart to update?');
+    expect(prompt?.detail).toContain('• Ship it (/w)');
+    expect(prompt?.detail).toContain('its running tasks stop');
+    expect(prompt?.confirmLabel).toBe('Stop and restart');
+  });
+
+  it('asks as for a run when the runs could not be checked', () => {
+    const prompt = restartPrompt(undefined, true);
+    expect(prompt?.message).toBe('A run may be in progress. Stop it and restart to update?');
+    expect(prompt?.detail).toContain('could not check the daemon');
+  });
+
+  it('says the runs of a daemon it attached to go on', () => {
+    const prompt = restartPrompt([run, { ...run, sessionId: 's2' }], false);
+    expect(prompt?.message).toBe('2 runs are in progress. Restart to update?');
+    expect(prompt?.detail).toContain('keeps running and the runs go on');
+    expect(prompt?.detail).not.toContain('running tasks stop');
+    expect(prompt?.confirmLabel).toBe('Restart');
+  });
+
+  it('asks about a busy terminal too, since restarting ends it', () => {
+    expect(restartPrompt([], true, 1)).toEqual({
+      message: 'A terminal is running a process. Restart to update?',
+      detail: 'A terminal is running a process, and restarting ends it.',
+      confirmLabel: 'Restart',
+    });
+    expect(restartPrompt([run], true, 2)?.detail).toContain('2 terminals are running a process, and restarting ends them.');
   });
 });
 

@@ -34,11 +34,14 @@ export function menuTemplate({ platform, dev, appName, recents, actions }: MenuO
   const mac = platform === 'darwin';
   const command = actions.command;
   const separator: MenuItemConstructorOptions = { type: 'separator' };
+  // Where each platform keeps it: the app menu on macOS, Help elsewhere. The
+  // window that runs it shows the outcome (ADR-0063 H9).
+  const checkForUpdates: MenuItemConstructorOptions = { label: 'Check for Updates…', click: () => command('update.check') };
   const app: MenuItemConstructorOptions[] = mac
     ? [{
         label: appName,
         submenu: [
-          { role: 'about' }, separator,
+          { role: 'about' }, checkForUpdates, separator,
           { role: 'services' }, separator,
           { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, separator,
           { role: 'quit' },
@@ -80,6 +83,7 @@ export function menuTemplate({ platform, dev, appName, recents, actions }: MenuO
       label: 'Window',
       submenu: [{ role: 'minimize' }, { role: 'zoom' }, ...(mac ? [separator, { role: 'front' } as const] : [])],
     },
+    ...(mac ? [] : [{ label: 'Help', submenu: [checkForUpdates] }]),
   ];
 }
 

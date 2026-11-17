@@ -1753,7 +1753,7 @@ trailer and names a person or model).
 
 **Install ID** (`installId`; ADR-0048) — the random UUID that stands for one
 machine's Ordewell installs, kept in `version-check.json` in `globalDataDir()`
-and shared by the CLI and the VS Code extension. It is created only after the
+and shared by the CLI, the VS Code extension and the desktop app. It is created only after the
 *Version check* notice has been shown, is sent with the running version and
 nothing else, is replaced every 30 days (`installIdAt` dates it), and does not
 exist when an off switch is set.
@@ -1763,11 +1763,14 @@ the machine and identifies no person).
 **Version check** (`startVersionCheck`; ADR-0048) — the one request Ordewell
 makes on its own: once a day, `GET https://ordewell.ai/api/v1/ping` with the
 version and the *Install ID*, answered by the latest version, which a surface
-shows as one line when it is newer. The first start on a machine shows a notice,
-naming the version and install ID it sends and the IP address the request
-reveals, and sends nothing. `ORDEWELL_NO_VERSION_CHECK`, `DO_NOT_TRACK` or
-VS Code's telemetry setting turn it off entirely. It runs in the process the
-user started, never in the daemon, and never holds up a start.
+shows when it is newer: a line with how to update, and in the TUI, VS Code and
+the desktop app also an indicator that stays while that version is known. The
+first start on a machine shows a notice, naming the version and install ID it
+sends and the IP address the request reveals, and sends nothing.
+`ORDEWELL_NO_VERSION_CHECK`, `DO_NOT_TRACK`, VS Code's telemetry setting or
+the desktop's "Check for new versions" turn it off entirely; otherwise it is
+on. It runs in the process the user started (the CLI, the extension host, the
+desktop's main process), never in the daemon, and never holds up a start.
 *Avoid:* "telemetry" or "analytics" (nothing about use is sent), "auto-update"
 (it only tells; it installs nothing), "phone home".
 

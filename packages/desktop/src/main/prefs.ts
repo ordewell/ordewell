@@ -12,6 +12,8 @@ export const DEFAULT_PREFS: Prefs = {
   openProjects: [],
   settingsAdvancedOpen: false,
   editorCommand: '',
+  /** On by default (ADR-0048): a desktop that never hears of a release keeps the person on an old one. */
+  versionCheck: true,
 };
 
 const THEMES: ReadonlySet<string> = new Set(['system', 'light', 'dark']);
@@ -94,6 +96,7 @@ export function validPref(key: unknown, value: unknown): Partial<Prefs> | undefi
   if (key === 'keepRunningInTray' && typeof value === 'boolean') return { keepRunningInTray: value };
   if (key === 'reopenProjects' && typeof value === 'boolean') return { reopenProjects: value };
   if (key === 'settingsAdvancedOpen' && typeof value === 'boolean') return { settingsAdvancedOpen: value };
+  if (key === 'versionCheck' && typeof value === 'boolean') return { versionCheck: value };
   if (key === 'layouts') {
     const valid = layouts(value);
     return valid ? { layouts: valid } : undefined;

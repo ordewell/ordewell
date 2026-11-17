@@ -37,7 +37,10 @@ the update line, and decides only where they appear.
   to update depends on the surface and on how this copy was installed
   ([ADR-0065](../surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md)
   C9): "run `ordewell update`" for a headless command, "type /update" in the
-  TUI, "update it from the Extensions view" in VS Code; a copy no command
+  TUI, "update it from the Extensions view" in VS Code, and in the desktop app
+  an Update or a Download button
+  ([ADR-0063](../surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
+  H9); a copy no command
   updates in place is told what would instead: "`npx ordewell@latest` runs it"
   for an npx run, "pull and rebuild this checkout" for a source checkout or a
   development build. A 204, or a 200 whose JSON object names nothing newer, is
@@ -55,8 +58,8 @@ the update line, and decides only where they appear.
 - **One install per machine.** The state is `version-check.json` in
   `globalDataDir()` (`~/.ordewell/`), next to the global `settings.json`:
   `installId`, `installIdAt`, `noticeShownAt`, `lastCheckAt`, `latest`,
-  `latestAt` and `updateShownAt`. The CLI and the VS Code extension read and
-  write the same file. It is written atomically and owner only. A field of the
+  `latestAt` and `updateShownAt`. The CLI, the VS Code extension and the
+  desktop app read and write the same file. It is written atomically and owner only. A field of the
   wrong type counts as absent, as does a `latest` that is not a version, so a
   file an earlier release wrote loads as it is; an earlier release that
   rewrites the file drops the fields it does not know, which only costs the
@@ -84,30 +87,53 @@ the update line, and decides only where they appear.
   30 days. Like any server, ordewell.ai sees your IP address. Set
   ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details:
   https://ordewell.ai/docs#version-check". It names the IP address because that
-  request is the only thing a user is not already choosing to send.
+  request is the only thing a user is not already choosing to send. The
+  desktop app adds its own switch to it, "In this app: Settings → Check for
+  new versions."
+
 - **Off switches.** `ORDEWELL_NO_VERSION_CHECK` or `DO_NOT_TRACK` set to `1`,
-  `true` or `yes`, or a caller passing `telemetryEnabled: false` (the VS Code
-  extension, from VS Code's telemetry setting). Any one turns everything off:
-  no notice, no install ID, no file written, no request, and no update line,
-  even from a version a file written earlier remembers.
+  `true` or `yes`, or a caller passing `telemetryEnabled: false`: the VS Code
+  extension from VS Code's telemetry setting, and the desktop app from its
+  Settings toggle "Check for new versions" (`versionCheck` in the app's
+  preferences), which is on unless the person turns it off, so a preferences
+  file without it checks. Any one turns everything off: no notice, no install
+  ID, no file written, no request, and no update line, even from a version a
+  file written earlier remembers. Nothing else does: the check is on by
+  default on every surface.
 
 ## Where it runs
 
-In the CLI process the user started, never in the daemon. Each surface shows
-the line where its user looks, as often as they can bear it:
+In the process the user started, never in the daemon: the CLI, the VS Code
+extension host, or the desktop app's main process. Each surface shows the line
+where its user looks, as often as they can bear it, and the TUI, VS Code and
+the desktop also keep an indicator in view while a newer version is known,
+which no dismissal and no other surface's once-a-day line hides:
 
 - **The TUI** shows the notice in its welcome and the update line as a notice
   in its transcript, on every start while the remembered version is newer,
   since a write to the terminal would tear its frame and a TUI start is a
-  person at the keyboard.
+  person at the keyboard. Its status row reads `↑ <latest> available ·
+  /update` for as long as that version is known.
 - **A headless command** writes the notice to stderr, so stdout stays its own,
   and the update line to stderr only when stderr is a terminal, at most once a
   day across the machine (`updateShownAt`): a script's log is no place for it,
   and a command run many times a day would repeat it.
 - **The VS Code extension** shows the line as an information message pointing
-  at the Extensions view, since the Marketplace updates the extension, at most
-  once a day, since every window starts an extension host and a message
-  interrupts each one.
+  at the Extensions view, since the Marketplace updates the extension, with
+  Update and What's new buttons, at most once a day, since every window starts
+  an extension host and a message interrupts each one. A status bar item names
+  the version for as long as it is known.
+- **The desktop app** runs the check in main and shows the notice as a banner
+  with OK and Turn off. It names a newer version on every launch (`every-start`),
+  in a banner, "Ordewell <latest> is available. You have <version>.", with What's
+  new (the GitHub Release tagged `v<latest>`), Later, and the way this build
+  updates: Update then Restart to update on a signed build, Download, which
+  opens ordewell.ai/download, on any other (ADR-0063 H9). Later hides the
+  banner for that version only; a status bar item, `↑ <latest> available`,
+  stays and brings it back. A launch is a person at the app, as a TUI start
+  is, and a banner interrupts nothing. Check for updates…, in the app menu and the
+  `⋯` menu, asks now: a signed build its release feed, any other build the
+  version check, which still pings only once the machine's day is up.
 
 A once-a-day line that cannot record `updateShownAt` is not shown, as a notice
 that cannot be recorded is not. `main` starts the check for every command but
@@ -173,7 +199,12 @@ next request names the token file.
 `startVersionCheck` is the seam. Its tests inject the clock, `fetch`, the
 environment and the state directory, so they need no network and no real home
 directory, and assert on the URL and `init` handed to the fake `fetch`, the
-callbacks and the state file. The hourly re-check runs under fake timers.
+callbacks and the state file. The hourly re-check runs under fake timers. The
+desktop's `UpdateService` runs the real check against a temporary state
+directory and a fake `fetch`, so a remembered version, one another surface
+already showed today, the toggle and each variable are asserted on what the
+service names, and its renderer tests drive the real frame from a fake main,
+from that state to the banner, its actions and the status bar item.
 `vitest.setup.ts`, `scripts/ci.mjs` and the CI job set
 `ORDEWELL_NO_VERSION_CHECK=1`, so code that starts a check as a side effect
 never reaches ordewell.ai from a test or a CI run. The TUI's notice is asserted
@@ -236,6 +267,11 @@ still running afterwards, and one with the same contract is driven.
 - **Drive an older daemon until it stops on its own.** Rejected: a CLI that
   sends requests in a contract the daemon does not speak fails in ways that
   describe the wrong problem, or acts on a misread answer.
+- **The desktop leaves the check to the CLI and VS Code.** First chosen, then
+  dropped: a person who uses only the app would never hear that a newer one is
+  out, and an unsigned build, which cannot update itself, has no other way to
+  learn it. The app sends the same ping from the same file, so it costs the
+  machine nothing extra.
 - **Ping from the daemon.** One long-lived process, which would check daily on
   its own. Rejected for the reasons under Where it runs: it cannot show the
   notice or the update line where the user sees them.
@@ -266,3 +302,4 @@ still running afterwards, and one with the same contract is driven.
 - 2026-10-25: the install ID is replaced every 30 days, and the notice names the IP address.
 - 2026-11-06 — the update line names the install method: Homebrew, the installer for another binary install, or npm.
 - 2026-11-06 — the newer version is remembered and named on every TUI start, a terminal's stderr once a day and VS Code once a day; `ordewell update` and `/update`; an idle daemon a CLI cannot drive is replaced, a live one left running.
+- 2026-11-17 — the desktop app runs the check, on by default, with its Settings toggle as an off switch; the TUI, VS Code and the desktop keep an indicator in view while a newer version is known.

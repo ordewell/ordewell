@@ -679,10 +679,16 @@ describe('the Settings view', () => {
       expect(within(advancedHeading().closest('section') as HTMLElement).queryByRole('button', { name: 'Restore defaults' })).toBeNull();
     });
 
-    it('has no daily version-check toggle, because the desktop never runs that check', async () => {
-      await mount('dark', { advancedOpen: true });
-      await screen.findByRole('heading', { name: 'Experimental', level: 4 });
-      expect(screen.queryByText(/version check|check for updates/i)).toBeNull();
+    it('checks for new versions unless the person turns it off in This app, where an unset preference reads as on (ADR-0048)', async () => {
+      // The world's prefs hold no versionCheck at all, as a prefs.json from before the toggle does.
+      const { w } = await mount('dark', { advancedOpen: true });
+      const toggle = await screen.findByRole('checkbox', { name: /Check for new versions/ });
+      expect(toggle).toBeChecked();
+      expect(toggle.closest('section')).toContainElement(screen.getByRole('heading', { name: 'This app' }));
+      expect(toggle.closest('label')).toHaveTextContent("Once a day, ask ordewell.ai whether a newer version is out, sending this app's version and a random install ID.");
+      fireEvent.click(toggle);
+      await waitFor(() => expect(w.prefs.set).toHaveBeenCalledWith('versionCheck', false));
+      await waitFor(() => expect(toggle).not.toBeChecked());
     });
   });
 
