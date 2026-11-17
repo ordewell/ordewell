@@ -287,16 +287,16 @@ describe('SettingsService', () => {
   });
 
   // Config-file control only, like plannerAutoCompaction. Kept as written: one a task cannot use refuses its start.
-  it('reads taskCompactWindow from the file and keeps it, as written, through other writes', () => {
+  it('reads taskCompactAt from the file and keeps it, as written, through other writes', () => {
     for (const value of ['off', 'auto', 400_000, 5]) {
-      fs.writeFileSync(tempFile, JSON.stringify({ taskCompactWindow: value }));
-      expect(service.getAll().taskCompactWindow).toBe(value);
+      fs.writeFileSync(tempFile, JSON.stringify({ taskCompactAt: value }));
+      expect(service.getAll().taskCompactAt).toBe(value);
 
       service.setEnabledRunners(['codex']);
-      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ taskCompactWindow: value, enabledRunners: ['codex'] });
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ taskCompactAt: value, enabledRunners: ['codex'] });
     }
 
-    fs.writeFileSync(tempFile, JSON.stringify({ taskCompactWindow: { tokens: 400_000 } }));
+    fs.writeFileSync(tempFile, JSON.stringify({ taskCompactAt: { tokens: 400_000 } }));
     expect(service.getAll()).toEqual({});
   });
 

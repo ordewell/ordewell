@@ -124,13 +124,14 @@ export interface UserSettings {
    */
   taskRunnerConfig?: TaskRunnerConfig;
   /**
-   * Where a Claude Code task's context compacts: `auto`, `off` or a number
-   * of tokens (`taskCompactWindowOf`). Absent means `auto`, unless
-   * `ORDEWELL_TASK_COMPACT_WINDOW` says otherwise. Kept as written, since a
-   * value it cannot use must refuse a task, not fall back to another window.
+   * Where a task's context compacts, on any harness: `auto`, `off` or the
+   * context size in tokens at which compaction starts (`taskCompactAtOf`).
+   * Absent means `auto`, unless `ORDEWELL_TASK_COMPACT_AT` says otherwise.
+   * Kept as written, since a value no harness can use must refuse a task, not
+   * fall back to another point.
    * Set in the file only: no surface offers it.
    */
-  taskCompactWindow?: string | number;
+  taskCompactAt?: string | number;
   /**
    * Run tasks in containers (ADR-0059 L5), as `containerSettings` reads it:
    * absent means local worktrees. Kept as written, since one it cannot use must
@@ -516,8 +517,8 @@ export class SettingsService {
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
     }
-    if (typeof raw.taskCompactWindow === 'string' || typeof raw.taskCompactWindow === 'number') {
-      settings.taskCompactWindow = raw.taskCompactWindow;
+    if (typeof raw.taskCompactAt === 'string' || typeof raw.taskCompactAt === 'number') {
+      settings.taskCompactAt = raw.taskCompactAt;
     }
     if (raw.containers !== undefined) {
       // Ignored, not refused, in a published build (ADR-0059 L5): the user hears it once, so nobody thinks tasks are isolated when they run on the host.
