@@ -1365,6 +1365,7 @@ export function settledStall({ plan, run, quietMs }) {
  * the copy (`root`, the box's `workdir`), and `branches` as name to sha.
  */
 export function readGitLayout(root, workdir) {
+  workdir = slashed(workdir);
   const gitDir = path.join(root, '.git');
   const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
   const headBranch = (dir) => /^ref: refs\/heads\/(.+)$/m.exec(read(path.join(dir, 'HEAD')))?.[1] ?? null;
@@ -1387,7 +1388,7 @@ export function readGitLayout(root, workdir) {
 
 /** Where a box path under the workdir lies in its host copy; null for one outside. */
 export function hostPathOf(root, workdir, boxPath) {
-  const rel = path.posix.relative(workdir, boxPath);
+  const rel = path.posix.relative(slashed(workdir), slashed(boxPath));
   return rel.startsWith('..') || path.posix.isAbsolute(rel) ? null : path.join(root, ...rel.split('/').filter(Boolean));
 }
 
@@ -1405,11 +1406,11 @@ export function choosePatches({ plan, worktrees, branches, tips = null }) {
   const iso = plan?.isolation;
   const runId = iso?.run?.id ?? null;
   const integrationBranches = new Set((iso?.run?.repos ?? []).map((r) => r.integrationBranch).filter(Boolean));
-  const listed = new Map(worktrees.map((w) => [path.posix.normalize(w.path), w]));
+  const listed = new Map(worktrees.map((w) => [posixPath(w.path), w]));
   const branchSet = new Set(branches);
-  const integrationRoot = runId && iso.run.workspaceRoot ? path.posix.join(iso.run.workspaceRoot, '.ordewell', 'worktrees', runId, 'integration') : null;
+  const integrationRoot = runId && iso.run.workspaceRoot ? path.posix.join(slashed(iso.run.workspaceRoot), '.ordewell', 'worktrees', runId, 'integration') : null;
   const isIntegration = (p) => {
-    const n = path.posix.normalize(p);
+    const n = posixPath(p);
     return Boolean(integrationRoot && (n === integrationRoot || n.startsWith(`${integrationRoot}/`))) || integrationBranches.has(listed.get(n)?.branch);
   };
   const out = [];
@@ -1421,9 +1422,9 @@ export function choosePatches({ plan, worktrees, branches, tips = null }) {
     let source = null;
     if (!landed) {
       const wt = rec?.repos?.['.']?.worktree ?? rec?.workspace;
-      if (wt && listed.has(path.posix.normalize(wt)) && !isIntegration(wt)) source = { kind: 'worktree', path: wt };
+      if (wt && listed.has(posixPath(wt)) && !isIntegration(wt)) source = { kind: 'worktree', path: wt };
       else {
-        const preserved = runId ? newestPreserved(branches, runId, rec?.workspace ? path.posix.basename(rec.workspace) : null, t.order) : null;
+        const preserved = runId ? newestPreserved(branches, runId, rec?.workspace ? path.posix.basename(slashed(rec.workspace)) : null, t.order) : null;
         if (preserved) source = { kind: 'branch', ref: preserved };
         // A task branch still at the base its worktree was cut from holds none of the task's work: its edits were never committed.
         else if (rec?.branch && branchSet.has(rec.branch) && !integrationBranches.has(rec.branch) && !(tips && tips.get(rec.branch) === rec.repos?.['.']?.baseRef)) source = { kind: 'branch', ref: rec.branch };
@@ -1433,6 +1434,11 @@ export function choosePatches({ plan, worktrees, branches, tips = null }) {
   }
   return out;
 }
+
+// A box path is POSIX, but a run core made on Windows records `C:\…` where
+// git writes `C:/…` into a worktree's gitdir: compare them in git's spelling.
+const slashed = (p) => p.replaceAll('\\', '/');
+const posixPath = (p) => path.posix.normalize(slashed(p));
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

@@ -911,7 +911,7 @@ const hasCore = fs.existsSync(fileURLToPath(coreUrl));
 /** A git repository whose isolation run core started: one task kept, one preserved twice, one merged, one never started. */
 async function coreIsolationFixture() {
   const core = await import(coreUrl);
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-iso-')));
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-iso-')));
   const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' });
   git('init', '-q', '-b', 'commit0-base');
   git('config', 'user.email', 'bench@example.invalid');
@@ -987,6 +987,33 @@ test('readGitLayout reads a copied repository\'s worktrees and branches from its
     assert.deepEqual(Object.fromEntries(got.branches), { 'commit0-base': sha('a'), 'ordewell-preserved/r1/2-b': sha('e'), 'ordewell/r1/1-a': sha('d') }, 'a loose ref wins over its packed one');
     assert.equal(L.hostPathOf(dir, '/testbed', '/testbed/.ordewell/worktrees/r1/1-a'), path.join(dir, '.ordewell', 'worktrees', 'r1', '1-a'));
     assert.equal(L.hostPathOf(dir, '/testbed', '/etc'), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A run core made on Windows records `C:\…` while git writes `C:/…` into a
+// worktree's gitdir: the same worktree, which a kept task's work is found in.
+test('readGitLayout and choosePatches match a Windows record\'s backslashes with git\'s forward slashes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+  try {
+    const put = (p, text) => {
+      fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
+      fs.writeFileSync(path.join(dir, p), text);
+    };
+    put('.git/HEAD', 'ref: refs/heads/commit0-base\n');
+    put('.git/worktrees/1-a/gitdir', 'C:/w/.ordewell/worktrees/r1/1-a/.git\n');
+    put('.git/worktrees/1-a/HEAD', 'ref: refs/heads/ordewell/r1/1-a\n');
+    put('.git/worktrees/integration/gitdir', 'C:/w/.ordewell/worktrees/r1/integration/.git\n');
+    put('.git/worktrees/integration/HEAD', 'ref: refs/heads/ordewell/r1/integration\n');
+    put('.ordewell/worktrees/r1/1-a/.git', 'gitdir: C:/w/.git/worktrees/1-a\n');
+    put('.ordewell/worktrees/r1/integration/.git', 'gitdir: C:/w/.git/worktrees/integration\n');
+    const { worktrees } = L.readGitLayout(dir, 'C:\\w');
+    assert.deepEqual(worktrees.map((w) => w.branch), ['commit0-base', 'ordewell/r1/1-a', 'ordewell/r1/integration']);
+    const workspace = 'C:\\w\\.ordewell\\worktrees\\r1\\1-a';
+    const run = { id: 'r1', workspaceRoot: 'C:\\w', tasks: { a: { status: 'kept', workspace, branch: 'ordewell/r1/1-a' }, b: { status: 'kept', workspace: 'C:\\w\\.ordewell\\worktrees\\r1\\integration' } } };
+    const plan = { tasks: [{ id: 'a', order: 1, title: 'A', status: 'failed' }, { id: 'b', order: 2, title: 'B', status: 'failed' }], isolation: { run } };
+    assert.deepEqual(L.choosePatches({ plan, worktrees, branches: [] }).map((p) => p.source), [{ kind: 'worktree', path: workspace }, null], 'never the integration worktree, however it is spelled');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
