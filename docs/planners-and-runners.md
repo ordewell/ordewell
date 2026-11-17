@@ -122,16 +122,18 @@ a message saying what is accepted.
 
 | Harness | Default start (`auto`) | A number N | `off` | What you see |
 | --- | --- | --- | --- | --- |
-| Claude Code | The CLI's own, near the model's window; Haiku just under 100,000 tokens (window 125,000, start 93,000) | Sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to N + 32,000, N held to 68,000–968,000 (a log line if it moves) | Sets none, Haiku's included | Meter `compacts at` the window less 32,000; a `compaction` line in the task log; the running-long badge |
-| Codex | Its own | Sets `model_auto_compact_token_limit` to N (scope total) when the thread starts | Sets nothing | Meter `compacts at N`; the log line; the badge |
-| OpenCode 1.x and 2.x | Its own | Sets `compaction.reserved` to the window less N, N held to 16,000 up to the window less 16,000; nothing, with a warning, when the model's window is unknown; 1.x applies it only to models with an input limit | Sets nothing | Meter `compacts at N`; the log line; the badge |
-| ACP runners | The agent's own | Nothing to set: one warning that it cannot be honoured | Nothing | No `compacts at` (no window known); a compaction is inferred from a sharp fall in the reported context and logged; the badge |
-| Built-in runner | The model's window less the runner's reserve (108,800 under the assumed 128,000) | Start N, held to between 32,000 (or the default, if lower) and the default (a log line if it moves) | Not honoured: compacts as `auto` does, with a line in the task log | Meter `compacts at N` (or the default); the `compaction` line; the badge |
+| Claude Code | The CLI's own, near the model's window; Haiku just under 100,000 tokens (window 125,000, start 93,000) | Sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to N + 32,000, N held to 68,000–968,000 (a log line if it moves) | Sets none, Haiku's included; a value inherited from Ordewell's own environment is dropped under every setting | Meter `compacts at` the window less 32,000; a `compaction` line in the task log; the running-long badge |
+| Codex | Its own | Sets `model_auto_compact_token_limit` to N (scope total) when the thread starts, N at least 16,000; Codex compacts at 90% of its window at most, so once it reports the window a larger N is held there (a log line if either moves) | Sets nothing | Meter `compacts at N`; the log line; the badge |
+| OpenCode 1.x and 2.x | Its own | Sets `compaction.reserved` to the window less N, N held to 16,000 up to the window less 16,000; nothing, with a warning, when the model's window is unknown; 1.x applies it only to models with an input limit, and for any other one line says N is not applied and OpenCode keeps its own start | Sets nothing; compaction room inherited in `OPENCODE_CONFIG_CONTENT` is dropped | Meter `compacts at N`; the log line; the badge |
+| ACP runners | The agent's own | Nothing to set: one warning that it cannot be honoured | Nothing | No `compacts at` (no window known); a compaction is inferred from a fall of more than half in the reported context from above 32,000 tokens (or half the window, if smaller), outside the agent's own commands, and logged; the badge |
+| Built-in runner | The model's window less the runner's reserve (108,800 under the assumed 128,000) | Start N, held to between 32,000 (or the default, if lower) and the default (a log line if it moves) | Not honoured: compacts as `auto` does, with a line in the task log | Meter `compacts at N` under a number (lower once a refused request shrinks the window); the model's window otherwise; one `compaction` line per step; the badge |
 
 Whatever the harness, a compaction does the same three things. The runner gets a
 reminder of its brief, once. The supervisor's running-long count goes up: under a
 window below 200,000 tokens a task compacts a few times in ordinary work, so
-the badge shows from the third compaction, otherwise from the first. And the
+the badge shows from the third compaction, otherwise from the first. The window in
+force is the start plus 32,000 tokens on every harness, so one number counts
+alike whichever runner holds it. And the
 context meter resets to the size the runner left, or to nothing until its next
 call.
 

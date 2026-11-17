@@ -12,6 +12,7 @@ import { toTaskLogEvent } from '../../../models/TaskLog';
 import { replayTaskLog } from '../../../conversation/taskLog';
 import { patient } from '../../../testing';
 import { expectCompactionChain } from '../../__tests__/compactionChainKit';
+import { modelDetails } from '../../ModelDetails';
 
 /**
  * OpenCode's task mode (ADR-0018, #55): `opencode serve` driven over HTTP
@@ -1621,10 +1622,21 @@ describe('OpenCodeAdapter task mode — a command turn whose POST is held open',
 });
 
 describe('OpenCodeAdapter 1.x task compaction point (taskCompactAt)', () => {
-  // claude-sonnet-4-5 has a 200,000-token window in the bundled models.dev snapshot.
+  // claude-sonnet-4-5 has a 200,000-token window in the bundled models.dev snapshot, and no
+  // input limit, without which 1.x keeps its own start: the tests give it one unless they say otherwise.
   const sonnet = 'anthropic/claude-sonnet-4-5';
   const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
-  beforeEach(() => { vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined); });
+  let inputLimited = true;
+  beforeEach(() => {
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined);
+    inputLimited = true;
+    const store = modelDetails();
+    const lookup = store.lookup.bind(store);
+    vi.spyOn(store, 'lookup').mockImplementation((provider, model) => {
+      const details = lookup(provider, model);
+      return details && inputLimited ? { ...details, inputLimit: details.contextWindow } : details;
+    });
+  });
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
   async function taskWith(at: string, opts: Partial<TaskStartOptions> = {}, workspaceEnv: Record<string, string> = {}) {
@@ -1666,6 +1678,26 @@ describe('OpenCodeAdapter 1.x task compaction point (taskCompactAt)', () => {
     expect(adapter.compactWindowTokens).toBe(184_000);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).toContain('199000');
+    adapter.dispose();
+  });
+
+  it('takes the start back, with one line, once the server is 1.x and the model has no input limit, which 1.x needs to apply it', async () => {
+    inputLimited = false;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('150000');
+    expect(configOf(env)).toEqual({ compaction: { reserved: 50_000 } });
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    expect(adapter.compactStartTokens).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('input limit');
+    adapter.dispose();
+  });
+
+  it('sets no window when the inline config it was given cannot take the start', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('150000', {}, { OPENCODE_CONFIG_CONTENT: 'not json' });
+    expect(env.OPENCODE_CONFIG_CONTENT).not.toContain('reserved');
+    expect(adapter.compactWindowTokens).toBeUndefined();
     adapter.dispose();
   });
 

@@ -100,12 +100,14 @@ export const ACP_COMPACTION_FALL = 0.5;
  * The compaction an ACP agent made on its own between two readings of one
  * session's meter, or null. ACP has no word for one: a compacting agent's
  * meter just falls, so a fall of more than half from above
- * {@link ACP_COMPACTION_FLOOR} is read as one. A changed window is another
+ * {@link ACP_COMPACTION_FLOOR}, or half the window where that is smaller, is
+ * read as one. A changed window is another
  * model, whose context is not the one measured before, so no fall across it
  * counts.
  */
 export function compactionBetween(before: AcpContextReading | null, after: AcpContextReading): AgentEvent | null {
-  if (!before || before.size !== after.size || before.used < ACP_COMPACTION_FLOOR) return null;
+  // A window under twice the floor compacts before it would reach it, so half the window stands in.
+  if (!before || before.size !== after.size || before.used < Math.min(ACP_COMPACTION_FLOOR, before.size / 2)) return null;
   if (after.used >= before.used * ACP_COMPACTION_FALL) return null;
   return { type: 'compaction', trigger: 'auto', preTokens: before.used, postTokens: after.used };
 }

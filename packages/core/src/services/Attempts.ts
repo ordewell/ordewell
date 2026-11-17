@@ -923,12 +923,25 @@ export class Attempts {
   /** Follow a running attempt's session: its usage, its verdict, its turns and what its runner switches to. */
   private watch(task: Task, attempt: TaskAttempt, session: IRunnerSession): void {
     // Where its runner compacts, for the context meter to read against (ADR-0018 W1).
-    const window = session.compactWindowTokens;
-    if (window !== undefined) this.deps.store.setAttemptCompaction(task.id, attempt.attempt, { windowTokens: window, startsAtTokens: session.compactStartTokens ?? compactionStartOf(window) });
+    // A runner may move it as it runs (a request shrunk to fit, a window its
+    // harness names, a setting it turns out not to apply), so each reading
+    // and compaction looks again (ADR-0018 C4).
+    let point: string | undefined;
+    const notePoint = (): void => {
+      const window = session.compactWindowTokens;
+      const now = window === undefined ? undefined : { windowTokens: window, startsAtTokens: session.compactStartTokens ?? compactionStartOf(window) };
+      const key = now && `${now.windowTokens}/${now.startsAtTokens}`;
+      if (key === point) return;
+      point = key;
+      this.deps.store.setAttemptCompaction(task.id, attempt.attempt, now);
+    };
+    notePoint();
     // Attached before the verifier, so the summary of the call that settles
     // the attempt is captured before its verdict asks for the final text.
     session.onEvent((event) => {
+      if (event.type === 'compaction' && attempt.planScope === this.planScope) notePoint();
       if (event.type !== 'usage' || attempt.planScope !== this.planScope || (this.live.get(task.id) !== attempt && !attempt.runnerStopped)) return;
+      notePoint();
       this.deps.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
       // A delegated task's usage rolled up from its child, whose node was charged as it arrived (ADR-0055 D20, ADR-0056 M5).
       if (!attempt.delegated) this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });

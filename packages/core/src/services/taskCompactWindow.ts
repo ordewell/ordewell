@@ -122,3 +122,16 @@ export function claudeCompactWindowOf(
   const starts = { min: compactionStartOf(CLAUDE_WINDOW_BOUNDS.min), max: compactionStartOf(CLAUDE_WINDOW_BOUNDS.max) };
   return clampTaskCompactAt(at, starts, 'Claude Code', log) + COMPACT_BUFFER_TOKENS;
 }
+
+/**
+ * The window a session's compaction point reads as, the same for every
+ * harness: where compaction starts plus {@link COMPACT_BUFFER_TOKENS}, which on
+ * Claude Code is the window it is handed. Codex, OpenCode and the built-in
+ * runner report the start as their window, so read raw, one setting would put
+ * running long's routine line and threshold 32k apart from one harness to the
+ * next (ADR-0018 C4).
+ */
+export function compactWindowInForce(session: { readonly compactWindowTokens?: number; readonly compactStartTokens?: number }): number | undefined {
+  const start = session.compactStartTokens;
+  return start !== undefined ? start + COMPACT_BUFFER_TOKENS : session.compactWindowTokens;
+}

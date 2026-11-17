@@ -19,7 +19,7 @@ import { mcpClientConfig } from '../mcp/clientConfig';
 import type { ModelClient } from '../model';
 import { codexAnswer, fakeSpawn, fixture, sseResponse, type FakeEventStream } from './harnessTestKit';
 import { fakeAcpSpawn, type FakeAcpStep } from './fakeAcpAgent';
-import { expectCompactionChain } from './compactionChainKit';
+import { expectCompactionChain, type Flagged } from './compactionChainKit';
 
 /**
  * One decision, one setting, every harness (ADR-0018 C4): what Ordewell passes
@@ -32,7 +32,13 @@ import { expectCompactionChain } from './compactionChainKit';
 
 /** A number every harness honours as it stands: Claude Code's window is 32,000 above it, a 200,000-token OpenCode model keeps the rest, the built-in runner's assumed 128,000 guards from 108,800. */
 const N = 100_000;
-const SETTINGS = { auto: 'auto', number: String(N), off: 'off' } as const;
+/**
+ * A start whose window (the start plus the 32,000 every harness is read as
+ * keeping above it) is past running long's routine bound of 200,000: the same
+ * number must make the same compaction news on every harness.
+ */
+const LARGE = 170_000;
+const SETTINGS = { auto: 'auto', number: String(N), large: String(LARGE), off: 'off' } as const;
 type Setting = keyof typeof SETTINGS;
 
 /** What one task launch shows of the setting, and what Ordewell kept of it for the runner's session. */
@@ -52,8 +58,13 @@ interface Kind {
   planner?(at: string): Promise<unknown>;
   /** One automatic compaction of the task's context, as the harness reports it. */
   compaction(at: string): Promise<{ events: AgentEvent[]; adapter: TaskModeAgentAdapter }>;
-  expected: Record<Setting, Omit<Launch, 'said'> & { said?: RegExp[]; meter?: CompactionPoint }>;
+  expected: Record<Setting, Omit<Launch, 'said'> & { said?: RegExp[]; meter?: CompactionPoint; flagged: Flagged }>;
 }
+
+/** The compaction running long first flags, and the compaction window it names: the start plus 32,000, whatever the harness. */
+const NEWS: Flagged = { at: 1 };
+const routine = (start: number): Flagged => ({ at: 3, window: start + 32_000 });
+const news = (start: number): Flagged => ({ at: 1, window: start + 32_000 });
 
 const processDeps = (spawn: SpawnFn, extra: Partial<AgentProcessDeps> = {}): AgentProcessDeps => ({
   spawn,
@@ -145,27 +156,43 @@ const codexKind: Kind = {
     return { adapter, events };
   },
   expected: {
-    auto: { passed: undefined, window: undefined, start: undefined },
-    number: { passed: { model_auto_compact_token_limit: N, model_auto_compact_token_limit_scope: 'total' }, window: N, start: N, meter: { windowTokens: N, startsAtTokens: N } },
-    off: { passed: undefined, window: undefined, start: undefined },
+    auto: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
+    number: { passed: { model_auto_compact_token_limit: N, model_auto_compact_token_limit_scope: 'total' }, window: N, start: N, meter: { windowTokens: N, startsAtTokens: N }, flagged: routine(N) },
+    large: { passed: { model_auto_compact_token_limit: LARGE, model_auto_compact_token_limit_scope: 'total' }, window: LARGE, start: LARGE, meter: { windowTokens: LARGE, startsAtTokens: LARGE }, flagged: news(LARGE) },
+    off: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
   },
 };
 
 const OPENCODE_BASE = 'http://127.0.0.1:4096';
-/** A scripted `opencode serve` answering what a task's start and one turn ask of it, and nothing else. */
-function openCodeServer() {
+/**
+ * A scripted `opencode serve` answering what a task's start and one turn ask
+ * of it, and nothing else: 1.x's routes, or 2.x's under `/api`, which 1.x
+ * does not answer with a version.
+ */
+function openCodeServer(major: 1 | 2) {
   const streams: FakeEventStream[] = [];
   const reply = (body: unknown) => ({ ok: true, status: 200, statusText: 'OK', json: async () => body }) as unknown as Response;
+  const empty = { ok: true, status: 204, statusText: '204', json: async () => { throw new SyntaxError('no body'); } } as unknown as Response;
   const fetchImpl = async (input: unknown, init?: RequestInit): Promise<Response> => {
     const route = `${init?.method ?? 'GET'} ${String(input).replace(OPENCODE_BASE, '')}`;
-    if (route.endsWith(' /event')) {
+    if (route.endsWith(' /event') || route.endsWith(' /api/event')) {
       const { response, stream } = sseResponse(init);
       streams.push(stream);
       return response;
     }
+    if (major === 2) {
+      if (route === 'GET /api/info') return reply({ version: '2.0.22' });
+      if (route === 'POST /api/session') return reply({ data: { id: 'ses_task' } });
+      if (route === 'GET /api/session/active') return reply({ data: {} });
+      if (route === 'GET /api/command') return reply({ data: [] });
+      if (route.endsWith('/message') && route.startsWith('GET')) return reply({ data: [] });
+      if (route.endsWith('/prompt')) return reply({ data: { id: 'msg_user', type: 'user' } });
+      if (route.startsWith('PUT')) return empty;
+      return reply({});
+    }
     if (route === 'GET /session/status') return reply({});
     if (route === 'POST /session') return reply({ id: 'ses_task' });
-    if (route.endsWith('/prompt_async')) return { ok: true, status: 204, statusText: '204', json: async () => { throw new SyntaxError('no body'); } } as unknown as Response;
+    if (route.endsWith('/prompt_async')) return empty;
     if (route.endsWith('/message') && route.startsWith('GET')) return reply([]);
     return reply(true);
   };
@@ -178,51 +205,79 @@ function openCodeServer() {
   };
 }
 
-async function openCodeStart(opts: AgentStartOptions) {
-  const server = openCodeServer();
+async function openCodeStart(major: 1 | 2, opts: AgentStartOptions) {
+  const server = openCodeServer(major);
   const spawned = fakeSpawn([]);
   const envs: NodeJS.ProcessEnv[] = [];
   const spawn: SpawnFn = (cmd, argv, options) => { envs.push(options.env); return spawned.spawn(cmd, argv, options); };
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   const adapter = new OpenCodeAdapter(processDeps(spawn, { fetch: server.fetch }));
   const started = adapter.start(opts);
   for (let i = 0; i < 50 && spawned.processes.length === 0; i += 1) await Promise.resolve();
   spawned.processes[0].emitStdout(`opencode server listening on ${OPENCODE_BASE}\n`);
   await started;
-  return { adapter, server, env: envs[0] };
+  const said = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('taskCompactAt'));
+  warn.mockRestore();
+  return { adapter, server, env: envs[0], said };
 }
 
-// claude-sonnet-4-5 has a 200,000-token window in the bundled models.dev snapshot.
+// claude-sonnet-4-5 has a 200,000-token window in the bundled models.dev snapshot, and no input limit.
 const OPENCODE_MODEL = 'anthropic/claude-sonnet-4-5';
 const openCodeTask = (): TaskStartOptions => task({ model: OPENCODE_MODEL, mode: 'build', flags: { permissionMode: 'build', modeSettings: { approvals: 'auto' } } });
 
-const openCodeKind: Kind = {
-  name: 'OpenCode 1.x',
-  async launch() {
-    const { adapter, env } = await openCodeStart(openCodeTask());
-    const config = env.OPENCODE_CONFIG_CONTENT ? JSON.parse(env.OPENCODE_CONFIG_CONTENT) as { compaction?: unknown } : undefined;
-    return { adapter, passed: config?.compaction, window: adapter.compactWindowTokens, start: adapter.compactStartTokens, said: [] };
-  },
-  async planner() {
-    const { adapter, env } = await openCodeStart({ ...planner, model: OPENCODE_MODEL } as AgentStartOptions);
-    adapter.dispose();
-    return { config: env.OPENCODE_CONFIG_CONTENT, window: adapter.compactWindowTokens };
-  },
-  async compaction() {
-    const { adapter, server } = await openCodeStart(openCodeTask());
-    const events: AgentEvent[] = [];
-    const turn = adapter.send('do the task', (e) => events.push(e));
-    const stream = await server.stream();
-    stream.push({ type: 'session.status', properties: { sessionID: 'ses_task', status: { type: 'busy' } } });
-    stream.push({ type: 'session.compacted', properties: { sessionID: 'ses_task' } });
-    stream.push({ type: 'session.status', properties: { sessionID: 'ses_task', status: { type: 'idle' } } });
-    await turn;
-    return { adapter, events };
-  },
+function openCodeKind(major: 1 | 2): Omit<Kind, 'expected'> {
+  return {
+    name: `OpenCode ${major}.x`,
+    async launch() {
+      const { adapter, env, said } = await openCodeStart(major, openCodeTask());
+      const config = env.OPENCODE_CONFIG_CONTENT ? JSON.parse(env.OPENCODE_CONFIG_CONTENT) as { compaction?: unknown } : undefined;
+      return { adapter, passed: config?.compaction, window: adapter.compactWindowTokens, start: adapter.compactStartTokens, said };
+    },
+    async planner() {
+      const { adapter, env } = await openCodeStart(major, { ...planner, model: OPENCODE_MODEL } as AgentStartOptions);
+      adapter.dispose();
+      return { config: env.OPENCODE_CONFIG_CONTENT, window: adapter.compactWindowTokens };
+    },
+    async compaction() {
+      const { adapter, server } = await openCodeStart(major, openCodeTask());
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('do the task', (e) => events.push(e));
+      const stream = await server.stream();
+      if (major === 2) {
+        const frame = (type: string, data: Record<string, unknown> = {}) => ({ type, data: { sessionID: 'ses_task', ...data } });
+        stream.push(frame('session.execution.started'));
+        stream.push(frame('session.compaction.ended', { reason: 'auto' }));
+        stream.push(frame('session.execution.succeeded'));
+      } else {
+        stream.push({ type: 'session.status', properties: { sessionID: 'ses_task', status: { type: 'busy' } } });
+        stream.push({ type: 'session.compacted', properties: { sessionID: 'ses_task' } });
+        stream.push({ type: 'session.status', properties: { sessionID: 'ses_task', status: { type: 'idle' } } });
+      }
+      await turn;
+      return { adapter, events };
+    },
+  };
+}
+
+const openCode1Kind: Kind = {
+  ...openCodeKind(1),
   expected: {
-    auto: { passed: undefined, window: undefined, start: undefined },
-    // The rest of the 200,000-token window is what OpenCode keeps back, so compaction starts at N.
-    number: { passed: { reserved: 200_000 - N }, window: N, start: N, meter: { windowTokens: N, startsAtTokens: N } },
-    off: { passed: undefined, window: undefined, start: undefined },
+    auto: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
+    // 1.x keeps its own start for a model with no input limit, whatever `reserved` says, and the server says it is 1.x only once it runs: the room is written, then dropped from what Ordewell reads, with a line.
+    number: { passed: { reserved: 200_000 - N }, window: undefined, start: undefined, said: [/OpenCode 1\.x.*taskCompactAt 100000 is not applied/], flagged: NEWS },
+    large: { passed: { reserved: 200_000 - LARGE }, window: undefined, start: undefined, said: [/OpenCode 1\.x.*taskCompactAt 170000 is not applied/], flagged: NEWS },
+    off: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
+  },
+};
+
+const openCode2Kind: Kind = {
+  ...openCodeKind(2),
+  expected: {
+    auto: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
+    // The rest of the 200,000-token window is what OpenCode keeps back, so compaction starts at the number.
+    number: { passed: { reserved: 200_000 - N }, window: N, start: N, meter: { windowTokens: N, startsAtTokens: N }, flagged: routine(N) },
+    large: { passed: { reserved: 200_000 - LARGE }, window: LARGE, start: LARGE, meter: { windowTokens: LARGE, startsAtTokens: LARGE }, flagged: news(LARGE) },
+    off: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
   },
 };
 
@@ -273,9 +328,10 @@ const acpKind: Kind = {
     return { adapter, events: await nextTurn(adapter) };
   },
   expected: {
-    auto: { passed: { args: ['--acp'] }, window: undefined, start: undefined },
-    number: { passed: { args: ['--acp'] }, window: undefined, start: undefined, said: [/Fake Agent: taskCompactAt 100000 cannot be honoured/] },
-    off: { passed: { args: ['--acp'] }, window: undefined, start: undefined },
+    auto: { passed: { args: ['--acp'] }, window: undefined, start: undefined, flagged: NEWS },
+    number: { passed: { args: ['--acp'] }, window: undefined, start: undefined, said: [/Fake Agent: taskCompactAt 100000 cannot be honoured/], flagged: NEWS },
+    large: { passed: { args: ['--acp'] }, window: undefined, start: undefined, said: [/Fake Agent: taskCompactAt 170000 cannot be honoured/], flagged: NEWS },
+    off: { passed: { args: ['--acp'] }, window: undefined, start: undefined, flagged: NEWS },
   },
 };
 
@@ -325,26 +381,32 @@ const builtInKind: Kind = {
     return { adapter, events: await nextTurn(adapter, 'Go.') };
   },
   expected: {
-    auto: { passed: undefined, window: undefined, start: undefined },
-    number: { passed: undefined, window: N, start: N, meter: { windowTokens: N, startsAtTokens: N } },
+    auto: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
+    number: { passed: undefined, window: N, start: N, meter: { windowTokens: N, startsAtTokens: N }, flagged: routine(N) },
+    // Past what its guard allows: held to the guard, with a line, so the start in force is routine.
+    large: { passed: undefined, window: 108_800, start: 108_800, meter: { windowTokens: 108_800, startsAtTokens: 108_800 }, said: [/taskCompactAt 170000 .*using 108800/], flagged: routine(108_800) },
     // `off` is not honoured here: the runner compacts as auto does, and says so once.
-    off: { passed: undefined, window: undefined, start: undefined, said: [/taskCompactAt off is not honoured.*from 108800 tokens/] },
+    off: { passed: undefined, window: undefined, start: undefined, said: [/taskCompactAt off is not honoured.*from 108800 tokens/], flagged: NEWS },
   },
 };
 
 const claudeExpected = (model: 'opus' | 'haiku'): Kind['expected'] => ({
   // Haiku's `auto` window is where it starts compacting, 93,000, plus the CLI's 32,000-token buffer.
-  auto: model === 'haiku' ? { passed: '125000', window: 125_000, start: undefined, meter: { windowTokens: 125_000, startsAtTokens: 93_000 } } : { passed: undefined, window: undefined, start: undefined },
+  auto: model === 'haiku'
+    ? { passed: '125000', window: 125_000, start: undefined, meter: { windowTokens: 125_000, startsAtTokens: 93_000 }, flagged: routine(93_000) }
+    : { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
   // A number is where compaction starts: the window handed the CLI is that plus its buffer.
-  number: { passed: String(N + 32_000), window: N + 32_000, start: undefined, meter: { windowTokens: N + 32_000, startsAtTokens: N } },
-  off: { passed: undefined, window: undefined, start: undefined },
+  number: { passed: String(N + 32_000), window: N + 32_000, start: undefined, meter: { windowTokens: N + 32_000, startsAtTokens: N }, flagged: routine(N) },
+  large: { passed: String(LARGE + 32_000), window: LARGE + 32_000, start: undefined, meter: { windowTokens: LARGE + 32_000, startsAtTokens: LARGE }, flagged: news(LARGE) },
+  off: { passed: undefined, window: undefined, start: undefined, flagged: NEWS },
 });
 
 const KINDS: Kind[] = [
   { name: 'Claude Code (Opus)', ...claudeKind('opus'), expected: claudeExpected('opus') },
   { name: 'Claude Code (Haiku)', ...claudeKind('haiku'), expected: claudeExpected('haiku') },
   codexKind,
-  openCodeKind,
+  openCode1Kind,
+  openCode2Kind,
   acpKind,
   builtInKind,
 ];
@@ -369,6 +431,15 @@ describe.each(KINDS)('$name', (kind) => {
       want.said?.forEach((pattern, i) => expect(launched.said[i]).toMatch(pattern));
     });
 
+    it('passes the same when the host\'s own environment carries a compaction setting, as a nested Ordewell inherits its parent\'s', async () => {
+      vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', SETTINGS[setting]);
+      vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', '150000');
+      vi.stubEnv('OPENCODE_CONFIG_CONTENT', JSON.stringify({ compaction: { reserved: 25_000 } }));
+      const launched = await kind.launch(SETTINGS[setting]);
+      launched.adapter.dispose();
+      expect({ passed: launched.passed, window: launched.window, start: launched.start }).toEqual({ passed: want.passed, window: want.window, start: want.start });
+    });
+
     it('turns an automatic compaction into the brief\'s reminder, a running-long count and a reset meter, read against the start in force', async () => {
       vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', SETTINGS[setting]);
       const { adapter, events } = await kind.compaction(SETTINGS[setting]);
@@ -379,7 +450,7 @@ describe.each(KINDS)('$name', (kind) => {
       const pre = events.flatMap((e) => (e.type === 'compaction' && e.preTokens ? [e.preTokens] : []))[0] ?? 160_000;
       expect(after[0]?.compacted === true || (after[0]?.contextTokens ?? Infinity) < pre).toBe(true);
 
-      const meter = await expectCompactionChain(events, adapter.compactWindowTokens, adapter.compactStartTokens);
+      const meter = await expectCompactionChain(events, adapter.compactWindowTokens, adapter.compactStartTokens, want.flagged);
       expect(meter).toEqual(want.meter);
     });
   });
@@ -388,7 +459,7 @@ describe.each(KINDS)('$name', (kind) => {
     it('launches a planner as it does with the setting at auto, whatever the setting says', async () => {
       vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', 'auto');
       const unset = await kind.planner!('auto');
-      for (const at of [SETTINGS.number, SETTINGS.off]) {
+      for (const at of [SETTINGS.number, SETTINGS.large, SETTINGS.off]) {
         vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', at);
         expect(await kind.planner!(at)).toEqual(unset);
       }

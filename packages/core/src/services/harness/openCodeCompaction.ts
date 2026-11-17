@@ -27,6 +27,18 @@ export function openCodeModelWindow(model: string): number | undefined {
 }
 
 /**
+ * Whether models.dev states an input limit for `model`, the one case where
+ * OpenCode 1.x applies `compaction.reserved`; for any other it keeps its own
+ * start, so a number set for it is not applied there.
+ */
+export function openCodeInputLimited(model: string | undefined): boolean {
+  const split = model ? splitModelId(model) : undefined;
+  if (!split) return false;
+  const ours = (Object.keys(MODELS_DEV_PROVIDERS) as AiProvider[]).find((id) => MODELS_DEV_PROVIDERS[id] === split.providerID);
+  return (ours ? modelDetails().lookup(ours, split.modelID)?.inputLimit : undefined) !== undefined;
+}
+
+/**
  * Where a task's OpenCode compacts, as `compaction.reserved` in the config
  * Ordewell injects, or nothing. `auto` and `off` leave OpenCode's own start,
  * already near the window: 85% of it on 2.x (a 15% buffer, 16k at least) and

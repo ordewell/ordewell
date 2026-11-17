@@ -412,9 +412,10 @@ describe('overflow recovery', () => {
     expect(client.mainRequests).toHaveLength(5);
     const sizes = client.mainRequests.map((request) => request.messages.length);
     for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeLessThan(sizes[i - 1] ?? 0);
-    const compactions = eventsOf(events, 'compaction');
-    expect(compactions).toHaveLength(4);
-    const posts = compactions.map((c) => c.postTokens ?? 0);
+    // One step, so one compaction for the brief's reminder and running long; the meter follows each shrink.
+    expect(eventsOf(events, 'compaction')).toHaveLength(1);
+    const posts = eventsOf(events, 'usage').map((e) => e.record).filter((r) => r.compacted).map((r) => r.contextTokens ?? 0);
+    expect(posts).toHaveLength(4);
     for (let i = 1; i < posts.length; i++) expect(posts[i]).toBeLessThan(posts[i - 1] ?? 0);
     // The task message is kept every time.
     expect(client.mainRequests.at(-1)?.messages[0]).toEqual({ role: 'user', text: 'The task prompt.' });
@@ -438,6 +439,41 @@ describe('overflow recovery', () => {
     // The meter reads the window the attempt now runs under.
     const windows = eventsOf(events, 'usage').map((e) => e.record).filter((r) => !r.aggregate).map((r) => r.contextWindow);
     expect(windows.at(-1)).toBe(85_000);
+  });
+
+  it('says one compaction for a step refused twice, as the harness compacted once before the model replied', async () => {
+    const store = await longConversation(60);
+    let main = 0;
+    const client = splitClient(() => (main++ < 2 ? overflow() : [text('Done.'), STOP]));
+    const { loop, events } = loopWith(client, {}, store);
+    await expect(loop.runTurn('Go on.', abort())).resolves.toEqual({ interrupted: false });
+
+    expect(client.summaryRequests).toHaveLength(2);
+    // Each compaction event is a reminder of the brief and a running-long count (ADR-0018 C4).
+    expect(eventsOf(events, 'compaction')).toHaveLength(1);
+    const resets = eventsOf(events, 'usage').map((e) => e.record).filter((r) => r.compacted);
+    expect(resets).toHaveLength(2);
+    expect(resets[1]?.contextTokens).toBeLessThan(resets[0]?.contextTokens ?? 0);
+  });
+
+  it('reports the start in force once a refusal leaves a window whose guard is under the start set', async () => {
+    const store = await longConversation(60);
+    const client = splitClient((_request, index) => {
+      if (index === 0) return overflow();
+      if (index === 1) return [call('c1', 'note', {}), usage(50_000), STOP];
+      return [text('Done.'), usage(20_000), STOP];
+    });
+    // 80k under a 100k window (guard 84k); the refusal leaves 85k, whose guard is under 80k.
+    const { loop, events } = loopWith(client, { compactAt: 80_000 }, store);
+    expect(loop.compactStartTokens).toBe(80_000);
+    await loop.runTurn('Go on.', abort());
+
+    expect(compactionThreshold(85_000)).toBeLessThan(80_000);
+    expect(loop.compactStartTokens).toBe(compactionThreshold(85_000));
+    // The second compaction started from under 80k: the start reported is the one it compacted at.
+    const second = eventsOf(events, 'compaction')[1];
+    expect(second?.preTokens).toBeLessThan(80_000);
+    expect(second?.preTokens).toBeGreaterThan(compactionThreshold(85_000));
   });
 
   it('fails at once when there is nothing to compact', async () => {

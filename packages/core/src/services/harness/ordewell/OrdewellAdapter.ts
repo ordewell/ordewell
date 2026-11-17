@@ -99,12 +99,19 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
    * running long reads as routine below its window (ADR-0057 R4); undefined
    * under `auto` and `off`, whose guard sits near the model's own window.
    */
-  compactWindowTokens?: number;
-
-  /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
-  get compactStartTokens(): number | undefined {
-    return this.compactWindowTokens;
+  get compactWindowTokens(): number | undefined {
+    return this.compactStartTokens;
   }
+
+  /**
+   * The setting is the start itself here, so the meter reads against it, and
+   * an overflow that leaves a smaller window can bring it lower (ADR-0018 C4).
+   */
+  get compactStartTokens(): number | undefined {
+    return this.compactAtSet === undefined ? undefined : this.loop?.compactStartTokens ?? this.compactAtSet;
+  }
+
+  private compactAtSet?: number;
 
   constructor(private readonly provider: AiProvider, private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
     this.agentId = provider;
@@ -178,7 +185,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     // Read for every task, so a setting no harness can act on refuses the start here as on the others.
     const compactSetting = taskCompactAtOf();
     const compactAt = compactionStart(model.contextWindow, compactSetting, `${this.label} runner`, (line) => this.startNotices.push(line));
-    this.compactWindowTokens = typeof compactSetting === 'number' ? compactAt : undefined;
+    this.compactAtSet = typeof compactSetting === 'number' ? compactAt : undefined;
     const effort = EFFORTS.find((level) => level === opts.flags.effort);
 
     this.store = store;

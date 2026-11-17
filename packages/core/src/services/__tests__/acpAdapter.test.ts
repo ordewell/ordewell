@@ -3306,6 +3306,30 @@ describe('AcpAdapter compaction', () => {
     expect(compactions(await turn(adapter, 'go on'))).toEqual([]);
   });
 
+  it('records a compaction in a turn whose message only starts with a slash, as a path does, not a command', async () => {
+    const { adapter } = setup([...handshake(), ...prompt(usage(150_000)), ...prompt(usage(160_000), usage(31_000))]);
+    await adapter.start(taskStart());
+    await turn(adapter, 'go');
+    expect(compactions(await turn(adapter, '/tmp/build.log shows the failure; fix it'))).toHaveLength(1);
+  });
+
+  it('reads a turn as a command only when the agent lists one by that name, once it has listed its commands', async () => {
+    const commands = { notify: 'session/update', params: update('available_commands_update', { availableCommands: [{ name: 'clear', description: 'Clear the context.' }] }) } as const;
+    const { adapter } = setup([...handshake(), ...prompt(commands, usage(150_000)), ...prompt(usage(160_000), usage(31_000)), ...prompt(usage(150_000)), ...prompt(usage(12_000))]);
+    await adapter.start(taskStart());
+    await turn(adapter, 'go');
+    expect(compactions(await turn(adapter, '/fix the failing test'))).toHaveLength(1);
+    await turn(adapter, 'go on');
+    expect(compactions(await turn(adapter, '/clear'))).toEqual([]);
+  });
+
+  it('records a compaction on a model whose window is smaller than the floor a larger one reads falls from', async () => {
+    const { adapter } = setup([...handshake(), ...prompt(usage(28_000, 32_768)), ...prompt(usage(6_000, 32_768))]);
+    await adapter.start(taskStart());
+    await turn(adapter, 'go');
+    expect(compactions(await turn(adapter, 'go on'))).toHaveLength(1);
+  });
+
   it('says once at launch that a number in taskCompactAt is not its to honour, and nothing for auto or off', async () => {
     for (const [setting, said] of [['120000', 1], ['auto', 0], ['off', 0]] as const) {
       const restore = setEnv({ ORDEWELL_TASK_COMPACT_AT: setting });

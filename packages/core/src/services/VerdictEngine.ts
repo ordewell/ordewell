@@ -2,6 +2,7 @@ import type { Task, TurnAuthority, Verdict, VerificationCheck } from '../models/
 import type { IRunnerSession, ScriptExit, ScriptFullOutput, ScriptStatus } from '../interfaces/IRunner';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 import { RUNNING_LONG_FLOOR_MS, RunningLongClock, type RunningLongFacts, type RunningLongThreshold } from './RunningLong';
+import { compactWindowInForce } from './taskCompactWindow';
 
 export type VerdictListener = (taskId: string, verdict: Verdict) => void;
 export type CheckpointListener = (taskId: string, summary: string) => void;
@@ -252,7 +253,7 @@ export class VerdictEngine {
     const clock = task.type === 'ai' ? new RunningLongClock(this.runningLongThreshold, (facts) => {
       if (this.generations.get(task.id) !== gen) return;
       for (const l of this.runningLongListeners) l(task.id, facts);
-    }, () => session.compactWindowTokens) : undefined;
+    }, () => compactWindowInForce(session)) : undefined;
     if (clock) {
       this.clocks.set(task.id, clock);
       clock.run();

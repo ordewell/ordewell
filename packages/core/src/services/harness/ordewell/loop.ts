@@ -176,6 +176,11 @@ export class OrdewellLoop {
     });
   }
 
+  /** Where a set start now has compaction begin, after any overflow shrank the window (ADR-0018 C4). */
+  get compactStartTokens(): number | undefined {
+    return this.compactor.startTokens;
+  }
+
   get toolDefinitions(): readonly ToolDefinition[] {
     return this.tools;
   }

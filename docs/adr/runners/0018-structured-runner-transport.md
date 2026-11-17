@@ -190,20 +190,37 @@ and completion evidence.
     CLI's 100,000 to 1,000,000 with a log line when it moves. `auto` sets none,
     except for Haiku, which charges several times its base prices over a
     100,000-token prompt: its window is set for compaction to start just under
-    that step. `off` sets none, Haiku's included.
+    that step. `off` sets none, Haiku's included. A window inherited from
+    Ordewell's own environment (a nested Ordewell started from a task) is
+    dropped from a task's launch under every setting, so `auto` and `off` mean
+    the CLI's own.
   - **Codex** takes `model_auto_compact_token_limit` (scope `total`) at
-    `thread/start`, **OpenCode** `compaction.reserved` (the model's window less
-    the number, held to 16,000 from either end with a warning, and nothing set
-    for a model whose window is unknown, with a warning), each for a number
-    only; `auto` and `off` set nothing.
+    `thread/start`, held to at least 16,000; Codex compacts at 90% of its
+    window at most, so once it reports the window a number above that is held
+    there, each with a log line. **OpenCode** takes `compaction.reserved` (the
+    model's window less the number, held to 16,000 from either end with a
+    warning, and nothing set for a model whose window is unknown, with a
+    warning). Each is for a number only; `auto` and `off` set nothing, and the
+    compaction room a task's inherited `OPENCODE_CONFIG_CONTENT` carries is
+    dropped from it. OpenCode 1.x applies `reserved` only to a model with an
+    input limit; the version is known only once the server answers, so for any
+    other model a 1.x task says in one line that the number is not applied and
+    keeps no start, as under `auto`. An inline config that cannot be read takes
+    no start either.
   - **An ACP agent** exposes nothing to set, so a number is warned about, once,
     as one that cannot be honoured, and nothing is passed; `auto` and `off` are silent. Its
-    compactions are inferred from a sharp fall in its reported context.
+    compactions are inferred from a fall of more than half in its reported
+    context from above 32,000 tokens, or half the window where that is less,
+    outside a turn that runs one of the agent's own commands (a listed name,
+    or before the agent lists any, a slash and a bare name, not a path).
   - **The built-in runner** reads the setting itself: a number is clamped to
     what its guard allows (the window less its reserve), with a line in the
     task's log when it moves; `off` is not honoured, since without compaction
     the runner would run into its provider's limit, so it compacts as `auto`
-    does, and says so in the log (ADR-0070).
+    does, and says so in the log (ADR-0070). A request the provider refuses
+    as too long shrinks the window the guard reads, which can bring the start
+    below the number; the start it reports follows, and the refusals of one
+    step are announced as one compaction.
 
   What Ordewell sets is kept on the session as `compactWindowTokens`, the
   window in force, and, where the setting itself is the start (Codex, OpenCode,
@@ -211,7 +228,10 @@ and completion evidence.
   inferred from its window as the window less the buffer. The context meter
   reads against where compaction starts when a window is in force (`ctx 61k
   (52% · compacts at 118k)`) and against the model's window otherwise (`ctx 61k
-  (6%)`). A model whose own window is smaller than the one set is no reason to
+  (6%)`), and follows the start as it moves during an attempt. The running-long
+  clock reads the window in force as the start plus Claude Code's 32,000-token
+  buffer on every harness, so one number counts alike whichever runner holds
+  it. A model whose own window is smaller than the one set is no reason to
   set less: the harness compacts at the smaller of the two.
 
   An automatic compaction is reported on every harness as the same
@@ -737,3 +757,4 @@ transport is retained for take-over.
 - 2026-11-17 — W1: a Claude Code task's compaction window is the `taskCompactAt` setting (`auto`: none, except Haiku's, set to compact just under its price step; a number, where compaction starts; `off`), no longer a fixed 150k; a compaction is routine only under a window below 200k.
 - 2026-11-17 — W1: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, flags running long; the context meter reads against where compaction starts under a compaction window in force.
 - 2026-11-17 — C4: when a task compacts is stated once for every harness: one `taskCompactAt` setting (`auto`, a number, `off`), what each harness is given, `compactStartTokens` for the meter, and the running-long and reminder effects; W1 refers to it.
+- 2026-11-17 — C4: the running-long clock reads every harness's window as its start plus 32,000; Codex's number is held to 16,000 and 90% of its window; an inherited Claude Code window or OpenCode compaction room is dropped from a task's launch; OpenCode 1.x keeps no start for a model without an input limit; ACP infers compactions under small windows and after non-command slash messages; the built-in runner announces one compaction per step and reports the start in force.

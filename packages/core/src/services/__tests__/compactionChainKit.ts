@@ -11,6 +11,9 @@ import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { AgentEvent } from '../harness/AgentAdapter';
 import type { CompactionPoint } from '../../models/Usage';
 
+/** Which compaction running long first flags, and the compaction window it names there, where one is in force. */
+export interface Flagged { at: number; window?: number }
+
 /**
  * What a harness adapter reported for one automatic compaction, carried
  * through what a StructuredRunner session passes on unchanged (its events and
@@ -18,11 +21,14 @@ import type { CompactionPoint } from '../../models/Usage';
  * act on it: the reminder of the brief (Attempts), the running-long clock
  * (VerdictEngine) and the context meter's stored start. Returns that stored
  * `{ windowTokens, startsAtTokens }`, or undefined where no window is in force.
+ * `flagged` is what running long should make of it, by default the first
+ * compaction with no window and the third under one.
  */
 export async function expectCompactionChain(
   adapterEvents: readonly AgentEvent[],
   compactWindowTokens: number | undefined,
   compactStartTokens?: number,
+  flagged: Flagged = compactWindowTokens === undefined ? { at: 1 } : { at: 3, window: compactWindowTokens },
 ): Promise<CompactionPoint | undefined> {
   const compaction = adapterEvents.find((e): e is Extract<AgentEvent, { type: 'compaction' }> => e.type === 'compaction' && e.trigger === 'auto');
   expect(compaction).toBeDefined();
@@ -58,22 +64,20 @@ export async function expectCompactionChain(
   expect(reminders).toHaveLength(1);
   expect(reminders[0].text).toContain('Parse objects and arrays.');
 
-  // Under a window Ordewell set, compactions are routine until the third (RunningLong); with none, the first is flagged.
+  // Under a window Ordewell set below 200,000, compactions are routine until the third (RunningLong); with none, the first is flagged.
   const engine = new VerdictEngine({ runningLongThreshold: () => runningLongThreshold([]) });
   const flags: RunningLongFacts[] = [];
   engine.onRunningLong((_taskId, facts) => flags.push(facts));
   const session = new FakeRunnerSession();
   session.compactWindowTokens = compactWindowTokens;
+  session.compactStartTokens = compactStartTokens;
   engine.watch(createTask({ id: 't2', title: 'watched', taskMode: 'build' }), session);
-  const flaggedAt = compactWindowTokens === undefined ? 1 : 3;
-  for (let i = 1; i <= flaggedAt; i += 1) {
+  for (let i = 1; i <= flagged.at; i += 1) {
     expect(flags).toEqual([]);
     session.emitEvent(compaction);
   }
-  expect(flags).toEqual([expect.objectContaining({
-    reason: 'compaction', compactions: flaggedAt,
-    ...(compactWindowTokens === undefined ? {} : { compactionWindow: compactWindowTokens }),
-  })]);
+  expect(flags).toEqual([expect.objectContaining({ reason: 'compaction', compactions: flagged.at })]);
+  expect(flags[0].compactionWindow).toBe(flagged.window);
   engine.reset();
   return meter;
 }

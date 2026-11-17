@@ -442,6 +442,11 @@ describe('compactionBetween', () => {
       .toMatchObject({ type: 'compaction' });
   });
 
+  it('reads a fall from half a window smaller than twice the floor, which never reaches the floor before it compacts', () => {
+    expect(compactionBetween({ used: 28_000, size: 32_768 }, { used: 6_000, size: 32_768 })).toMatchObject({ type: 'compaction' });
+    expect(compactionBetween({ used: 16_383, size: 32_768 }, { used: 1_000, size: 32_768 })).toBeNull();
+  });
+
   it.each<[string, AcpContextReading | null, AcpContextReading]>([
     ['the first reading of a session', null, { used: 15_000, size: 128_000 }],
     ['growth', { used: 40_000, size: 128_000 }, { used: 90_000, size: 128_000 }],

@@ -84,6 +84,21 @@ describe('an attempt\'s compaction window (ADR-0018 W1)', () => {
     expect(h.task('t1').attemptUsage!.at(-1)!.compaction).toEqual({ windowTokens: 100_000, startsAtTokens: 100_000 });
   });
 
+  it('follows the start in force when the runner moves it as it runs: a shrink to fit, a window learned, a setting not applied (ADR-0018 C4)', async () => {
+    const h = setup(100_000, 100_000);
+    h.orchestrator.loadPlan([plan()]);
+    await h.orchestrator.forceStartTask('t1');
+    const session = h.sessions[0];
+    session.compactWindowTokens = 80_000;
+    session.compactStartTokens = 80_000;
+    session.emitEvent({ type: 'usage', record: { source: 'ordewell', model: 'm', inputTokens: 5, contextTokens: 5 } });
+    expect(h.task('t1').attemptUsage!.at(-1)!.compaction).toEqual({ windowTokens: 80_000, startsAtTokens: 80_000 });
+    session.compactWindowTokens = undefined;
+    session.compactStartTokens = undefined;
+    session.emitEvent({ type: 'compaction', trigger: 'auto' });
+    expect(h.task('t1').attemptUsage!.at(-1)!).not.toHaveProperty('compaction');
+  });
+
   it('is absent where Ordewell set none', async () => {
     const h = setup();
     h.orchestrator.loadPlan([plan()]);
