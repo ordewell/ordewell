@@ -10,6 +10,41 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **The desktop app says when a newer version is out.** It runs the same daily
+  version check as the CLI and VS Code, from the same `~/.ordewell/` file, so
+  it sends nothing the machine did not already send: on its first launch it
+  shows the check's notice, with OK and Turn off, and sends nothing. When a
+  newer version is known, a banner says "Ordewell X is available. You have Y."
+  with What's new, which opens that version's GitHub Release, and Later; the
+  status bar keeps `↑ X available` after Later, and clicking it brings the
+  banner back. A signed build offers Update, shows its progress, then Restart
+  to update, which asks first while a run or a terminal is live. Any other
+  build, an unsigned Windows build or any Linux build, offers Download, which
+  opens ordewell.ai/download. **Check for new versions** in Settings, under
+  This app, turns the check off, and `ORDEWELL_NO_VERSION_CHECK=1` and
+  `DO_NOT_TRACK=1` turn it off too. **Check for updates…**, in the app menu on
+  macOS, the Help menu on Windows and Linux, and the `⋯` menu, asks on
+  demand. A signed build asks its GitHub release feed. Any other build runs
+  the version check again, which asks ordewell.ai only once the machine's day
+  is up.
+- **The terminal UI keeps a newer version in view.** While one is known, the
+  status row reads `↑ X available · /update`, shortened on a narrow terminal,
+  during a run too, and the welcome names it, so the transcript line no longer
+  scrolls away unseen.
+- **VS Code's update message has Update and What's new buttons,** and a status
+  bar item, `Ordewell X`, stays while a newer version is known. Update and the
+  item open the extension's page in the Extensions view, and What's new opens
+  that version's GitHub Release. The message still comes at most once a day
+  across windows, now on the extension's own clock, so a line the terminal
+  showed today no longer hides it.
+- **The desktop app's install docs are back for releases that carry it.** The
+  desktop guide covers the downloads, Homebrew (`ordewell-desktop`), winget,
+  the unsigned Windows installer, and a new Updates section.
+  `install.sh --help` lists `--desktop` again, and the CLI and VS Code READMEs
+  point to the app.
+- **The README leads with the desktop app,** with screenshots of a run and a
+  plan, a Download section, and the desktop app in the interfaces, the quick
+  start and "What Ordewell sends".
 - **A built-in runner on every provider you have a key for.** It runs a task
   inside Ordewell on a provider key alone (OpenRouter, Anthropic, OpenAI,
   Gemini and the other providers Ordewell supports whose models can be
@@ -40,6 +75,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **The desktop app no longer checks GitHub for an update at launch.** Its
+  updater asks the release feed only when you press Update or choose Check for
+  updates…, so the daily version check is the one request it makes unasked.
+- **`ordewell update` says to restart Ordewell** after an update succeeds, and
+  `/update`'s help says it exits for you to restart.
 - **`/key set` is now `/key-set`,** one word like `/task-model`. `/key` still
   opens the key entry, which offers every provider Ordewell supports, and in
   the terminal says to use the new name. `/key-set <provider>` asks for that
@@ -71,6 +111,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A newer version is named on every surface that is behind it.** A copy
+  that is already running reads the shared state every hour, so a version
+  another copy on the machine learned shows within the hour, in the process
+  that showed the first-run notice too. A copy already on the latest version no
+  longer erases it for older copies on the machine. An answer that names no
+  version, a timeout or an older version no longer clears the one remembered.
 - **Claude Code plans on Windows again.** Its planner was handed the whole
   system prompt on its command line, which is past the 32767 characters
   Windows allows, so every start failed with "its arguments are … over the

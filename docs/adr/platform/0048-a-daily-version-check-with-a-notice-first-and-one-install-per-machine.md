@@ -121,16 +121,22 @@ which no dismissal and no other surface's once-a-day line hides:
   in its transcript, on every start while the remembered version is newer,
   since a write to the terminal would tear its frame and a TUI start is a
   person at the keyboard. Its status row reads `↑ <latest> available ·
-  /update` for as long as that version is known.
+  /update`, shortened on a narrow terminal, for as long as that version is
+  known, during a run too, and its welcome names the line again.
 - **A headless command** writes the notice to stderr, so stdout stays its own,
   and the update line to stderr only when stderr is a terminal, at most once a
   day across the machine (`updateShownAt`): a script's log is no place for it,
   and a command run many times a day would repeat it.
 - **The VS Code extension** shows the line as an information message pointing
   at the Extensions view, since the Marketplace updates the extension, with
-  Update and What's new buttons, at most once a day, since every window starts
-  an extension host and a message interrupts each one. A status bar item names
-  the version for as long as it is known.
+  Update, which opens the extension's page there, and What's new (the GitHub
+  Release tagged `v<latest>`). The message comes at most once a day across
+  every window, since every window starts an extension host and a message
+  interrupts each one, on the extension's own clock in VS Code's `globalState`
+  rather than `updateShownAt`, so a line the TUI or a command showed today
+  does not hide it. A status bar item, `Ordewell <latest>`, names the version
+  on every start for as long as it is known (`every-start`), and opens the
+  extension's page.
 - **The desktop app** runs the check in main and shows the notice as a banner
   with OK and Turn off. It names a newer version on every launch (`every-start`),
   in a banner, "Ordewell <latest> is available. You have <version>.", with What's
@@ -139,11 +145,11 @@ which no dismissal and no other surface's once-a-day line hides:
   opens ordewell.ai/download, on any other (ADR-0063 H9). Later hides the
   banner for that version only; a status bar item, `↑ <latest> available`,
   stays and brings it back. A launch is a person at the app, as a TUI start
-  is, and a banner interrupts nothing. Check for updates…, in the app menu and the
-  `⋯` menu, asks now: a signed build its release feed, any other build the
+  is, and a banner interrupts nothing. Check for updates…, in the app menu on
+  macOS, the Help menu elsewhere and the `⋯` menu, asks now: a signed build its release feed, any other build the
   version check, which still pings only once the machine's day is up.
 
-A once-a-day line that cannot record `updateShownAt` is not shown, as a notice
+A headless command's once-a-day line that cannot record `updateShownAt` is not shown, as a notice
 that cannot be recorded is not. `main` starts the check for every command but
 `tui` and `update`, and the TUI starts its own as it opens, so each start
 checks exactly once. `--help` and `--version` start none.
@@ -314,4 +320,5 @@ still running afterwards, and one with the same contract is driven.
 - 2026-11-06 — the update line names the install method: Homebrew, the installer for another binary install, or npm.
 - 2026-11-06 — the newer version is remembered and named on every TUI start, a terminal's stderr once a day and VS Code once a day; `ordewell update` and `/update`; an idle daemon a CLI cannot drive is replaced, a live one left running.
 - 2026-11-17 — the desktop app runs the check, on by default, with its Settings toggle as an off switch; the TUI, VS Code and the desktop keep an indicator in view while a newer version is known.
+- 2026-11-17 — VS Code's message keeps its own once-a-day clock in `globalState`, apart from `updateShownAt`.
 - 2026-11-17 — every answer's version is kept for every copy and never cleared by no news; the hourly timer re-reads it, in the process that showed the notice too.
