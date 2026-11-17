@@ -264,6 +264,8 @@ export type Action =
   /** `sessionId` names the session a notice is about, so one the user has left is not shown on another. */
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean; sessionId?: string }
   /** What `/update` would run, or why it runs nothing (`status` non-zero when that is a failure). */
+  /** The version check named a newer version; `line` is its full sentence, as the transcript shows it. */
+  | { type: 'updateKnown'; latest: string; line: string }
   | { type: 'updatePlanned'; plan: { kind: 'run'; shown: string } | { kind: 'none'; message: string; status: number } }
   | { type: 'resize'; rows: number; cols: number }
   /** Every plan below `sessionId`, the root, whole: the list replaces the one held (ADR-0055 D20). */
