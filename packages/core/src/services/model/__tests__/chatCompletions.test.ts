@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createChatCompletionsClient, requestBody } from '../adapters/chatCompletions';
 import { ModelError } from '../ModelError';
+import { withRetry } from '../retry';
 import type { AiProvider } from '../../../interfaces/IConfig';
 import type { ModelEvent, ModelRequest } from '../types';
 import { BASE_REQUEST, collect, failure, fixture, refusal, replay, sse, type Replay } from './replay';
@@ -330,5 +331,99 @@ describe('chat-completions adapter: errors', () => {
     const err = await failure(clientFor('groq', transport), { ...BASE_REQUEST, effort: 'high' });
     expect(err).toMatchObject({ kind: 'bad-request', param: 'tools' });
     expect(transport.sent).toHaveLength(1);
+  });
+});
+
+// OpenRouter wraps an upstream provider's failure in its own body, with the
+// upstream's name and verbatim payload in `metadata` (`provider_name`, `raw`),
+// and documents a canonical `error_type` and the upstream `provider_code` there
+// (https://openrouter.ai/docs/api-reference/errors).
+describe('chat-completions adapter: an aggregator\'s wrapped upstream errors', () => {
+  const wrapped = (status: number, metadata: Record<string, unknown>, message = 'Provider returned error') =>
+    refusal(status, { error: { code: status, message, metadata } });
+  const upstreamBody = (error: Record<string, unknown>) => JSON.stringify({ error });
+
+  it('names the upstream provider and its own message in the error', async () => {
+    const response = wrapped(400, { provider_name: 'DeepSeek', raw: upstreamBody({ message: 'Model Not Exist', type: 'invalid_request_error', param: null, code: 'invalid_request_error' }) });
+    const err = await failure(clientFor('openrouter', replay(response)), BASE_REQUEST);
+    expect((err as ModelError).message).toContain('Provider returned error');
+    expect((err as ModelError).message).toContain('DeepSeek');
+    expect((err as ModelError).message).toContain('Model Not Exist');
+  });
+
+  it('bounds and redacts the upstream message it keeps', async () => {
+    const key = `sk-or-v1-${'a1b2'.repeat(16)}`;
+    const response = wrapped(400, { provider_name: 'Chutes', raw: `upstream rejected key ${key} ${'x'.repeat(5_000)}` });
+    const err = await failure(clientFor('openrouter', replay(response)), BASE_REQUEST);
+    expect((err as ModelError).message).toContain('Chutes');
+    expect((err as ModelError).message).not.toContain(key);
+    expect((err as ModelError).message.length).toBeLessThan(1_000);
+  });
+
+  // The run that motivated this: DeepSeek behind OpenRouter, a bare 400 whose upstream said nothing usable.
+  const unexplained = () => wrapped(400, { provider_name: 'DeepSeek', raw: 'upstream connect error or disconnect/reset before headers' });
+
+  it('retries a wrapper that gives no upstream reason a few times, then fails with the detail', async () => {
+    const transport = replay(unexplained(), unexplained(), unexplained(), unexplained(), unexplained(), unexplained());
+    const client = withRetry(clientFor('openrouter', transport), { policy: { initialDelayMs: 0, maxDelayMs: 0 } });
+    const err = await failure(client, BASE_REQUEST);
+    expect(err).toMatchObject({ kind: 'transient', status: 400 });
+    expect(transport.sent).toHaveLength(3);
+    expect((err as ModelError).message).toContain('DeepSeek: upstream connect error');
+  });
+
+  it('does not retry a wrapped client error the upstream named', async () => {
+    const named = () => wrapped(400, { provider_name: 'DeepSeek', raw: upstreamBody({ message: 'Model Not Exist', type: 'invalid_request_error', param: null, code: 'invalid_request_error' }) });
+    const transport = replay(named(), named());
+    const err = await failure(withRetry(clientFor('openrouter', transport), { policy: { initialDelayMs: 0, maxDelayMs: 0 } }), BASE_REQUEST);
+    expect(err).toMatchObject({ kind: 'bad-request', status: 400 });
+    expect(transport.sent).toHaveLength(1);
+  });
+
+  const classes: Array<[string, Response, Partial<ModelError>]> = [
+    ['an upstream 503 in Google\'s shape', wrapped(400, { provider_name: 'Google AI Studio', raw: upstreamBody({ code: 503, message: 'The model is overloaded.', status: 'UNAVAILABLE' }) }), { kind: 'transient' }],
+    ['an upstream 400 in Google\'s shape', wrapped(400, { provider_name: 'Google AI Studio', raw: upstreamBody({ code: 400, message: 'Invalid JSON payload received.', status: 'INVALID_ARGUMENT' }) }), { kind: 'bad-request' }],
+    ['an upstream overload in Anthropic\'s shape', wrapped(400, { provider_name: 'Anthropic', raw: JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }) }), { kind: 'transient' }],
+    ['an upstream rate limit in Anthropic\'s shape', wrapped(400, { provider_name: 'Anthropic', raw: JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Too many requests' } }) }), { kind: 'rate-limited' }],
+    ['a canonical upstream overload', wrapped(400, { error_type: 'provider_overloaded' }), { kind: 'transient' }],
+    ['a canonical invalid request', wrapped(400, { error_type: 'invalid_request', provider_code: 'invalid_parameter' }, 'tools[0] is invalid'), { kind: 'bad-request' }],
+    ['a canonical rate limit', wrapped(429, { error_type: 'rate_limit_exceeded', provider_code: 'rate_limited' }, 'Rate limit exceeded'), { kind: 'rate-limited', status: 429 }],
+    ['a moderation refusal', wrapped(403, { reasons: ['violence'], flagged_input: 'kill the...process', provider_name: 'OpenAI', model_slug: 'openai/gpt-4o' }, 'Input flagged'), { kind: 'auth', status: 403 }],
+    ['an upstream\'s refused key', wrapped(401, { provider_name: 'DeepSeek', raw: upstreamBody({ code: 503, message: 'Service busy' }) }), { kind: 'auth', status: 401 }],
+    ['spent credits naming a provider', wrapped(402, { provider_name: 'DeepSeek' }, 'Insufficient credits'), { kind: 'usage-limit', status: 402 }],
+  ];
+  it.each(classes)('classes %s by what the upstream said', async (_name, response, expected) => {
+    const err = await failure(clientFor('openrouter', replay(response)), BASE_REQUEST);
+    expect(err).toMatchObject(expected);
+    expect((err as ModelError).maxAttempts).toBeUndefined();
+  });
+
+  // DeepSeek's own refusal of a long prompt names only the class of error in its code.
+  const deepseekOverflow = upstreamBody({ message: "This model's maximum context length is 131072 tokens. However, you requested 243410 tokens (243410 in the messages, 0 in the completion). Please reduce the length of the messages or completion.", type: 'invalid_request_error', param: null, code: 'invalid_request_error' });
+
+  it('takes a wrapped context-length refusal to the overflow path, not a retry or a bad request', async () => {
+    const transport = replay(wrapped(400, { provider_name: 'DeepSeek', raw: deepseekOverflow }));
+    const err = await failure(withRetry(clientFor('openrouter', transport), { policy: { initialDelayMs: 0, maxDelayMs: 0 } }), BASE_REQUEST);
+    expect(err).toMatchObject({ kind: 'context-overflow', status: 400 });
+    expect(transport.sent).toHaveLength(1);
+  });
+
+  it('takes a canonical context-length refusal to the overflow path', async () => {
+    const err = await failure(clientFor('openrouter', replay(wrapped(400, { error_type: 'context_length_exceeded', provider_code: 'invalid_request_error' }, 'Prompt too long'))), BASE_REQUEST);
+    expect(err).toMatchObject({ kind: 'context-overflow' });
+  });
+
+  it('takes OpenRouter\'s own context-length refusal, whose code only repeats the status, to the overflow path', async () => {
+    const response = refusal(400, { error: { code: 400, message: "This endpoint's maximum context length is 163840 tokens. However, you requested about 251000 tokens. Please reduce the length of either one, or use the \"middle-out\" transform." } });
+    expect(await failure(clientFor('openrouter', replay(response)), BASE_REQUEST)).toMatchObject({ kind: 'context-overflow' });
+  });
+
+  it('classes a wrapped error sent mid-stream the same way', async () => {
+    const event = (error: unknown) => `data: ${JSON.stringify({ error })}\n\n`;
+    const overflow = await failure(clientFor('openrouter', replay(sse(event({ code: 400, message: 'Provider returned error', metadata: { provider_name: 'DeepSeek', raw: deepseekOverflow } })))), BASE_REQUEST);
+    expect(overflow).toMatchObject({ kind: 'context-overflow' });
+    const bare = await failure(clientFor('openrouter', replay(sse(event({ code: 400, message: 'Provider returned error', metadata: { provider_name: 'DeepSeek' } })))), BASE_REQUEST);
+    expect(bare).toMatchObject({ kind: 'transient', maxAttempts: 3 });
+    expect((bare as ModelError).message).toContain('DeepSeek');
   });
 });

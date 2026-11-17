@@ -228,6 +228,23 @@ is one runner per API provider, under the provider's own id and name.**
   sends the same request again; with one, the calls and their results are
   already recorded and the turn goes on to its next step from them. Either
   retry follows the retry policy and leaves a line in the task log.
+- **An aggregator's error is read for its upstream's.** OpenRouter wraps an
+  upstream provider's failure in its own body, often a bare 400 "Provider
+  returned error", with the upstream's name (`provider_name`), its verbatim body
+  (`raw`), a canonical `error_type` and the upstream's `provider_code` in
+  `metadata`. `classifyHttpFailure` keeps the name and the upstream's message in
+  the error, redacted as a runner's text is and cut to 400 characters, so the
+  task log, the escalation and the supervisor see who failed and why. A 400, a
+  5xx or a mid-stream error is classed by the upstream's status, type, code or
+  `error_type`, so an overload is retried, a context too long takes the overflow
+  path, and a request the upstream named invalid is not retried; a code that
+  only repeats the status or names the class of error (`invalid_request_error`)
+  lets the message's overflow wording count. A wrapped 400 with none of these is
+  as likely the upstream's fault, which the aggregator may route around, so it
+  is retried, but within three attempts in all (`maxAttempts` on the
+  `ModelError`), not the policy's six, and then fails with the kept detail. A
+  401, 402, 403 or 429 is the aggregator's own verdict on the key, the credits,
+  moderation or its rate limit, and is classed by its status as before.
 
 ## Modes
 
@@ -357,3 +374,6 @@ comes from that call.
   `ordewellContextWindows` setting or its provider's listing, else an assumed
   128,000 tokens named as assumed; an overflow's smaller window holds for the
   attempt.
+- 2026-11-17 — an aggregator's wrapped error names its upstream provider and
+  message, and is classed by the upstream's reason; one with none is retried
+  three times in all.

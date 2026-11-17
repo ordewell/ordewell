@@ -393,6 +393,7 @@ function toModelError(err: unknown, signal?: AbortSignal): unknown {
       code: providerCode(err),
       type: err.type ?? null,
       param: err.param ?? null,
+      metadata: isRecord(err.error) ? err.error.metadata : undefined,
       cause: err,
     });
   }
