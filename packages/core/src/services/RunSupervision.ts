@@ -76,6 +76,8 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   save(): void;
   /** Send the end-of-run handoff again, unmarked, unless the run merged meanwhile or a new one opened. */
   resendHandoff(): void;
+  /** The run's end stands for a follower that cannot answer it; see {@link RunSupervision.runFinished}. */
+  runConcluded(): void;
 }
 
 /**
@@ -98,6 +100,8 @@ export class RunSupervision {
   private running = false;
   /** The user changed a run setting after the last run ended: the next supervisor call reads their copy, not the finished run's. */
   private changedAfterRun = false;
+  /** The run ended, and a follower has not been told the end stands. */
+  private endOwed = false;
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -119,6 +123,7 @@ export class RunSupervision {
       goUnsupervised: (reason) => this.goUnsupervised(reason),
       wakeUpEnded: () => {
         if (!this.supervisor.awaitsRunEnd) this.handOver();
+        this.conclude();
       },
       dropToWatch: (reason) => this.dropToWatch(reason),
       notice: (level, message) => host.notice(level, message),
@@ -165,6 +170,7 @@ export class RunSupervision {
     if (origin === 'user') this.supervisor.userStarted();
     this.running = true;
     this.changedAfterRun = false;
+    this.endOwed = false;
     this.supervisor.runStarted(continued);
   }
 
@@ -211,6 +217,7 @@ export class RunSupervision {
     if (!this.host.plan()) return;
     this.supervisor.userStopped();
     this.handOver();
+    this.conclude();
   }
 
   /**
@@ -302,9 +309,15 @@ export class RunSupervision {
    * wake-up turn on it is over. The update says whether its landed work is
    * merged already: an automatic Merge all at the run's end comes before it,
    * and a live planner is told of that nowhere else (ADR-0029).
+   *
+   * The end is concluded for a follower that cannot answer it (`ordewell run`)
+   * once no turn of the supervisor's can continue the run: at once below Act,
+   * and at Act once its closing turn, retry included, is over, unless that
+   * turn opened the run again (ADR-0029).
    */
   runFinished(): void {
     this.running = false;
+    this.endOwed = true;
     // A skip of a body task stops its loop and settles nothing.
     this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
@@ -313,6 +326,7 @@ export class RunSupervision {
       : landed === 'pending' ? '; its landed work is not merged yet' : '';
     this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
+    this.conclude();
   }
 
   /** The end-of-run handoff as the surfaces get it: marked as the supervisor's first while it is at Act (ADR-0029). */
@@ -342,7 +356,8 @@ export class RunSupervision {
    * see {@link Supervisor.turn}.
    */
   wakeUp<T>(reply: (signal: AbortSignal, turn: WakeUpTurn) => Promise<T>, signal?: AbortSignal, authority: TurnAuthority = 'supervisor'): Promise<T> {
-    return this.supervisor.turn(reply, signal, authority);
+    // A retried closing turn has no caller to hear it end: the turn itself says so.
+    return this.supervisor.turn(reply, signal, authority).finally(() => this.conclude());
   }
 
   /** The command seam's loop guard: a supervisor's call checked against what this run remembers. */
@@ -388,6 +403,7 @@ export class RunSupervision {
     this.handoffDeferred = false;
     this.running = false;
     this.changedAfterRun = false;
+    this.endOwed = false;
     this.guards.forget();
   }
 
@@ -416,6 +432,7 @@ export class RunSupervision {
     this.host.systemNote(text);
     this.host.notice('warn', text);
     this.handOver();
+    this.conclude();
   }
 
   /** The wake-up rate guard tripped: the run carries on at Watch, and the user is told in the supervisor's voice. */
@@ -428,6 +445,7 @@ export class RunSupervision {
     const text = `Loop guard, wake-up rate: I ${reason}, so I am at Watch for the rest of this run: I tell you what needs you and suggest, and act only when you say so.`;
     this.host.supervisorNote(text);
     this.host.notice('warn', text);
+    this.conclude();
   }
 
   /**
@@ -439,6 +457,17 @@ export class RunSupervision {
     if (!this.handoffDeferred) return;
     this.handoffDeferred = false;
     this.host.resendHandoff();
+  }
+
+  /**
+   * Tell a follower the run's end stands, once per end: no run is under way,
+   * and no supervisor at Act still has the end, or a retry of the turn on it.
+   */
+  private conclude(): void {
+    if (!this.endOwed || this.running) return;
+    if (this.level === 'act' && (this.supervisor.awaitsRunEnd || this.supervisor.retryOwed)) return;
+    this.endOwed = false;
+    this.host.runConcluded();
   }
 
   /** How one run update reads the plan: `#3 "Title"` for a task, and what a failure blocks, each walked once. */

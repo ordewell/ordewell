@@ -154,6 +154,7 @@ export function reduceRun(view: RunView, input: RunInput): RunView {
     case 'review_needed':
     case 'review_approved':
     case 'execution_complete':
+    case 'run_concluded':
     case 'execution_stopped':
     case 'execution_action':
     case 'task_output':

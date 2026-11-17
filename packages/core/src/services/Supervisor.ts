@@ -198,6 +198,14 @@ export class Supervisor {
     return this.runEndPending;
   }
 
+  /**
+   * A wake-up turn failed once and the restarted planner takes it again: what
+   * it was woken to act on is still the supervisor's (see {@link failed}).
+   */
+  get retryOwed(): boolean {
+    return this.failures > 0 && this.level !== 'off';
+  }
+
   /** Whether wake-ups alone may open a turn now: the supervisor watches. A usage limit holds every turn, and is the planner turns' to wait out. */
   mayWake(): boolean {
     return this.watching;

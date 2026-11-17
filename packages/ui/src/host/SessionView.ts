@@ -97,6 +97,7 @@ export class SessionView {
       case 'isolation_handoff':
       case 'isolation_merge':
       case 'run_closed':
+      case 'run_concluded':
       case 'planner_message':
       case 'plan_token':
       case 'planner_text_delta':
