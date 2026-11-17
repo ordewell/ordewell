@@ -678,7 +678,8 @@ describe('answer_checkpoint at Act', () => {
     env.planner.calls[0].finish(prose('It was my own tool; I approved it.'));
 
     expect(approved.isError, approved.text).toBeFalsy();
-    await expect(answer).resolves.toEqual({ kind: 'continue' });
+    // The runner is told the supervisor said yes, not that the user did.
+    await expect(answer).resolves.toEqual({ kind: 'continue', by: 'supervisor' });
     expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
     expect(records(env).at(-1)).toMatchObject({ command: 'answer_checkpoint', actor: 'supervisor', level: 'act', outcome: 'done', task: { ref: '#1' } });
   });
@@ -689,7 +690,7 @@ describe('answer_checkpoint at Act', () => {
     const rejected = await env.planner.tools().answerCheckpoint!({ task: '1', answer: 'reject', reason: 'Stop, and tell the user: someone else is editing this worktree.' }, ctx);
 
     expect(rejected.isError, rejected.text).toBeFalsy();
-    await expect(answer).resolves.toEqual({ kind: 'rejected', reason: 'Stop, and tell the user: someone else is editing this worktree.' });
+    await expect(answer).resolves.toEqual({ kind: 'rejected', reason: 'Stop, and tell the user: someone else is editing this worktree.', by: 'supervisor' });
     expect(records(env).at(-1)).toMatchObject({ command: 'answer_checkpoint', actor: 'supervisor', outcome: 'done', detail: 'Stop, and tell the user: someone else is editing this worktree.' });
   });
 

@@ -18,11 +18,12 @@ describe('the tool list a runner is actually sent', () => {
     // `record` is in every planner's list (ADR-0067): the decision record a checkpoint seeds the next context with.
     // Every planner's `submit_plan` lists its task's fields from one table (`TaskSpec`): an id or ref may be a number, as a text reply's always could, and the top-level `thinkingEffort` the intake reads is named.
     ['PLANNER_TOOLS', PLANNER_TOOLS, 24_500],
-    ['TASK_TOOLS', TASK_TOOLS, 8_200],
-    ['READ_ONLY_TASK_TOOLS', READ_ONLY_TASK_TOOLS, 10_700],
+    // `checkpoint` says when to ask, since its description is all some runners read as they choose: a call stops the task and what waits on it.
+    ['TASK_TOOLS', TASK_TOOLS, 8_500],
+    ['READ_ONLY_TASK_TOOLS', READ_ONLY_TASK_TOOLS, 11_100],
     // A board's cost to a runner in a subtree (ADR-0057 R8, R11): `post` and nothing else, `read` taking "board" as it stands.
-    ['a task on a board', taskToolSet({ board: true }), 9_500],
-    ['a read-only task on a board', taskToolSet({ readOnly: true, board: true }), 12_000],
+    ['a task on a board', taskToolSet({ board: true }), 9_600],
+    ['a read-only task on a board', taskToolSet({ readOnly: true, board: true }), 12_200],
     // Delegation's cost, past the flat list (ADR-0057 R11): what `submit_plan` adds to take a delegated task, `read`, `post`, and a raise on `answer_checkpoint` (ADR-0056 M5).
     ['a delegating planner', plannerToolSet({ delegates: true }), 28_000],
     // A subplanner's `task_complete` and `checkpoint`, with `promote` and `open`, and that its question parks it (ADR-0056 M8), and its board's `read` and `post`.

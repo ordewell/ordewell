@@ -274,10 +274,18 @@ const CHECKPOINT_INSTRUCTION = [
   'operations, after major design decisions, or when multiple viable paths exist — pause',
   'and request input:',
   '',
-  '1. Call the `checkpoint` tool with a brief summary of what you are about to do and why human input is needed. The call waits for the human, and its result is their answer',
-  '2. If the result is `continue`: proceed with the action you described',
-  '3. If the result starts with `rejected:`: the rest is why. Adjust your approach and call `checkpoint` again if needed',
+  '1. Call the `checkpoint` tool with a brief summary of what you are about to do and why human input is needed. The call waits for an answer, from the user or from the supervisor when the user lets it answer for them, and its result is that answer',
+  '2. If the result starts with `approved:`: proceed with the action you described',
+  '3. If the result starts with `rejected:`: the rest says who answered and why. Adjust your approach and call `checkpoint` again if needed',
 ].join('\n');
+
+/**
+ * What an AFK task is told of `checkpoint`. It rides in the first message, the
+ * one text every runner gets, the built-in one included, which reads no
+ * completion contract. A checkpoint nobody is there to answer held a headless
+ * run's task, and the tasks behind it, for hours.
+ */
+export const UNATTENDED_INSTRUCTION = 'Nobody is watching this task as it runs, and a `checkpoint` call stops it, and every task waiting on it, until someone answers, which can take hours. So decide yourself whatever your brief and the repository let you decide, and record each such decision under the assumptions in your handoff. Call `checkpoint` only before an effect your brief did not authorise that cannot be undone or that reaches outside the workspace, or when you cannot go on without something only a person has: a credential, or a choice your brief leaves open that changes the outcome. Never ask whether to keep waiting, or to confirm what your brief says.';
 
 function isHitlTask(task: Task): boolean {
   return task.autonomy === 'HITL' || task.sliceType === 'HITL';
@@ -290,7 +298,8 @@ function isHitlTask(task: Task): boolean {
  */
 export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], opts?: ComposeOptions): string {
   const basePrompt = task.prompt ?? '';
-  const blocks: string[] = [];
+  // First, as how the whole task is to be read: the dependencies' handoffs stay against the brief they inform.
+  const blocks: string[] = isHitlTask(task) ? [] : [UNATTENDED_INSTRUCTION];
 
   if (opts?.loop && task.type === 'ai' && task.loop && opts.loop.round > 1) {
     blocks.push(renderSinceLastRound(task, allTasks, opts.loop));
@@ -312,7 +321,6 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
   // Last, against the check's own words: past its dependencies' handoffs, the block a runner reads just before its task is the one it acts on.
   if (task.type === 'ai' && task.loop) blocks.push(renderLoopVerdict(task.loop, opts?.loop?.round));
 
-  if (blocks.length === 0) return basePrompt;
   return `${blocks.join('\n\n')}\n\n${basePrompt}`;
 }
 
@@ -346,7 +354,7 @@ export function composeContinuationPrompt(task: Task, message: string, opts: { o
     reminder.push(LOOP_VERDICT_REMINDER);
   }
   if (isHitlTask(task)) {
-    reminder.push('If you reach a decision that needs human judgment, call the `checkpoint` tool: its result is `continue` or `rejected: <why>`.');
+    reminder.push('If you reach a decision that needs human judgment, call the `checkpoint` tool: its result starts with `approved:` or `rejected:`, the rest saying who answered and, for a rejection, why.');
   }
   return `${message.trim()}\n\n---\n${reminder.join('\n\n')}`;
 }

@@ -343,7 +343,7 @@ export function scopeOverlaps(tasks: readonly Task[]): string[] {
       }
       for (const [producer, consumer] of [[a, b], [b, a]] as const) {
         for (const name of producer.scope?.provides ?? []) {
-          if (consumer.scope?.consumes?.includes(name)) said.push(`Task "${consumer.title}" consumes "${name}", which "${producer.title}" provides, and nothing orders them: a dependency puts the producer first; without one it gets a line when "${producer.title}" lands.`);
+          if (consumer.scope?.consumes?.includes(name)) said.push(`Task "${consumer.title}" consumes "${name}", which "${producer.title}" provides, and nothing orders them: a dependency puts the producer first, as it must when the consumer's check needs what it makes; without one it gets a line when "${producer.title}" lands.`);
         }
       }
     }

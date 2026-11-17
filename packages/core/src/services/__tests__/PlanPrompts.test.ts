@@ -64,12 +64,23 @@ describe('task skill catalog', () => {
     }
   });
 
-  it('documents the skills field, and a dependency creating the skill, with or without a catalog', () => {
+  // Validation refuses any other name, which would fail its task as it starts.
+  it('limits the skills field to a listed skill or one a dependency creates, with or without a catalog', () => {
     for (const text of [prompt([]), prompt([], false), prompt([skill('pr-style')])]) {
-      expect(text).toContain('"skills": ["task-skill-name"]');
-      expect(text).toContain('a task it depends on creates');
-      expect(text).toContain('accepted with a warning');
+      expect(text).toContain('otherwise only one listed here, or one a task it depends on creates at .ordewell/skills/<name>/SKILL.md and names in its prompt. Any other name is refused');
+      expect(text).not.toContain('accepted with a warning');
     }
+  });
+
+  // A planner shown an example skill name and no catalog attached invented names to every task.
+  it('says none is listed, and shows no example skill name, when the catalog is empty', () => {
+    for (const text of [prompt([]), prompt([], false), prompt([skill('tdd', { modelInvocable: false })])]) {
+      expect(text).toContain('- No task skill is listed here.');
+      expect(text).not.toContain('"skills": [');
+    }
+    const listed = prompt([skill('pr-style')]);
+    expect(listed).toContain('"skills": ["task-skill-name"]');
+    expect(listed).not.toContain('No task skill is listed here.');
   });
 });
 
@@ -78,10 +89,22 @@ describe('the one-shot prompts, per transport', () => {
     buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, tools),
   ];
 
-  it.each([false, true])('includes research and skills in the shared plan example (tools: %s)', (tools) => {
+  it.each([false, true])('includes research in the shared plan example, and no skill name, since it lists none (tools: %s)', (tools) => {
     for (const prompt of prompts(tools)) {
       expect(prompt).toContain('"research": false');
-      expect(prompt).toContain('"skills": ["task-skill-name"]');
+      expect(prompt).not.toContain('"skills": [');
+      expect(prompt).toContain('- No task skill is listed here.');
+      expect(prompt).toContain('or one a task it depends on creates at .ordewell/skills/<name>/SKILL.md');
+    }
+  });
+
+  // A one-shot plan ended on a user task nobody was there to do.
+  it.each([false, true])('makes every task an AFK ai task unless the goal requires a person\'s act (tools: %s)', (tools) => {
+    for (const prompt of [...prompts(tools), buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES)]) {
+      expect(prompt).toContain('Whatever an agent can do (edit, run commands, check its own work) is an AFK "ai" task. Use type "user" or HITL only where the goal itself requires a person\'s act.');
+      expect(prompt).toContain('A brief leaves open no question only a person could answer: decide it from your research and write the assumption into the prompt.');
+      expect(prompt).not.toContain('any task requiring manual action');
+      expect(prompt).not.toContain('user-facing touchpoints');
     }
   });
 
@@ -688,6 +711,14 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
       expect(p).toMatch(/Once a leading task fixes a contract the rest only add to \(a registry or layout where each addition is a new file\), each depends on it alone, never on its siblings\./);
       expect(p).toMatch(/make that shared decision a small leading task that fixes it, not the first layer of a chain\./);
       expect(p).toMatch(/- Keep one line of reasoning, or a small job, in one task: .* This never justifies chaining layers a contract task can decouple\./);
+    }
+  });
+
+  // A plan whose tasks each passed delivered nothing: no task made the project build, so no test could be collected.
+  it('has each task verify its own slice, behind a leading task that makes the project build', () => {
+    for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO), conversation(false), oneShot(false)]) {
+      expect(p).toContain('- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven.');
+      expect(p).toContain('If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.');
     }
   });
 
