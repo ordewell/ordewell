@@ -106,9 +106,15 @@ function text(chars) {
 /**
  * Dependencies by shape. `wide`: none. `chain`: each on the one before.
  * `dag`: phases of 50, each task on two of the phase before, the shape a
- * planner writes when work fans out and joins.
+ * planner writes when work fans out and joins. `long`: a dag over the settled
+ * tasks; of the rest, the first `ready` stand on what settled, and every one
+ * after them on the first of those, so nothing past them is ready to start.
  */
-function dependenciesOf(i, shape, id) {
+function dependenciesOf(i, shape, id, done = 0, ready = 0) {
+  if (shape === 'long' && i >= done) {
+    if (i < done + ready) return done > 0 ? [id(done - 1)] : [];
+    return [id(done)];
+  }
   if (i === 0 || shape === 'wide') return [];
   if (shape === 'chain') return [id(i - 1)];
   const phase = Math.floor(i / 50);
@@ -117,20 +123,58 @@ function dependenciesOf(i, shape, id) {
   return [id(before + (i * 7) % 50), id(before + (i * 13 + 3) % 50)].filter((d, at, all) => all.indexOf(d) === at);
 }
 
+/** Text of `chars` that differs from one use to the next, as a planner's and a runner's words do. */
+function varied(chars, seed) {
+  if (chars <= 0) return '';
+  return `[${seed}] ${text(chars)}`.slice(0, chars);
+}
+
+const AT = '2026-10-20T19:19:52.056Z';
+
+/** A digest as the plan keeps it (ADR-0047): its summary, its first findings, artifacts and the commit. */
+function handoffOf(i, { handoffChars, findings }) {
+  return {
+    commit: { subject: `Change module ${i + 1} and verify it`, body: varied(220, `commit ${i}`) },
+    summary: varied(handoffChars, `handoff ${i}`),
+    findings: Array.from({ length: findings }, (_, f) => ({
+      id: `F${f + 1}`, severity: f === 0 ? 'major' : 'minor', title: varied(90, `finding ${i}.${f}`), detail: varied(300, `detail ${i}.${f}`),
+      evidence: [{ kind: 'file', path: `packages/core/src/services/Module${i}.ts`, line: 10 + f }],
+    })),
+    findingCount: findings,
+    artifacts: [{ kind: 'file', path: `packages/core/src/services/Module${i}.ts` }, { kind: 'commit', sha: (i + 1).toString(16).padStart(12, 'a') }],
+    attempt: 1,
+  };
+}
+
+/** How many attempts the `i`th settled task took, so that over the plan they average `attempts`. */
+const attemptsOf = (i, attempts) => 1 + Math.floor((i + 1) * (attempts - 1)) - Math.floor(i * (attempts - 1));
+
 /**
  * `done` tasks completed before the run the benchmark looks at. Sizes are the
  * median of this repository's own saved sessions (real.mjs): a finished task
  * is about 11.5 KB of JSON, of it a 3 KB prompt, a 5 KB summary and a 1 KB
- * usage ledger, so a save weighs what a real one does. A real session also
- * carries the planner's `researchLog` and transcript, which these plans do not.
+ * usage ledger, so a save weighs what a real one does. Those defaults are what
+ * the other benchmarks were calibrated with. A long session (long.mjs) asks
+ * for today's shape instead: the report in the attempt's log and a handoff
+ * digest on the task (`reportChars: 0`, `handoffChars`, `findings`), a second
+ * attempt on some (`attempts`, their mean), the skills an attempt was given on
+ * a share of them (`skillShare`, `skillChars`), and words that differ from
+ * task to task (`vary`). `ready` is the `long` shape's.
  */
-export function makeTasks(n, { shape = 'dag', done = 0, promptChars = 2958 } = {}) {
+export function makeTasks(n, { shape = 'dag', done = 0, ready = 0, promptChars = 2958, reportChars = 4800, handoffChars = 0, findings = 0, attempts = 1, skillShare = 0, skillChars = 0, vary = false } = {}) {
   const id = (i) => `t${String(i + 1).padStart(6, '0')}`;
   const prompt = text(promptChars);
-  const report = text(4800);
+  const report = text(reportChars);
   const reason = 'Verified: the runner reported completion through task_complete with status done.';
-  const at = '2026-10-20T19:19:52.056Z';
+  const at = AT;
   const totals = { inputTokens: 324883, outputTokens: 2285, cachedInputTokens: 296379, reportedCost: { USD: 0.16 }, costProvenance: { USD: { kind: 'estimate', billing: 'subscription', basis: 'list' } } };
+  const usageOf = (attempt) => ({
+    attempt, runner: 'claude-code', startedAt: at, wallTimeMs: 68987, endedAt: at, totals,
+    byModel: [{ source: 'claude-code', model: 'claude-sonnet-5-5', totals }],
+    sessionBilling: { type: 'subscription', plan: 'Claude Max' }, source: 'claude-code', lastPromptTokens: 41415, contextWindow: 1000000, model: 'claude-sonnet-5-5', sessionId: '2ae84370-a459-44c0-a0b9-60b9d8961b1a',
+  });
+  // Spread evenly, so the share holds at any size.
+  const skilled = (i) => skillShare > 0 && Math.floor((i + 1) * skillShare) > Math.floor(i * skillShare);
   return Array.from({ length: n }, (_, i) => {
     const finished = i < done;
     return core.createTask({
@@ -138,10 +182,10 @@ export function makeTasks(n, { shape = 'dag', done = 0, promptChars = 2958 } = {
       order: i + 1,
       title: `Task ${i + 1}: change one module and verify it holds`,
       description: `Slice ${i + 1} of the plan, from the module it touches to the tests that cover it.`,
-      prompt,
+      prompt: vary ? varied(promptChars, `prompt ${i}`) : prompt,
       type: 'ai',
       status: finished ? 'completed' : 'pending',
-      dependencies: dependenciesOf(i, shape, id),
+      dependencies: dependenciesOf(i, shape, id, done, ready),
       assignedRunner: 'claude-code',
       assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet', thinkingEffort: 'medium', availableVariants: ['adaptive', 'low', 'medium', 'high', 'xhigh', 'max'] },
       taskMode: 'bypassPermissions',
@@ -149,22 +193,148 @@ export function makeTasks(n, { shape = 'dag', done = 0, promptChars = 2958 } = {
       ...(finished ? {
         attempted: true,
         verdict: { outcome: 'pass', reason, checks: [{ name: 'task_complete', passed: true, skipped: false, detail: 'the runner called task_complete with status done' }], decidedAt: at },
-        outputSummary: { reviewReason: reason, report, logTail: '', capturedAt: at },
+        outputSummary: { reviewReason: reason, ...(reportChars > 0 ? { report } : {}), logTail: '', capturedAt: at },
+        ...(handoffChars > 0 ? { handoff: handoffOf(i, { handoffChars, findings }) } : {}),
+        ...(skilled(i) ? { skills: ['tdd'], attemptSkills: [{ name: 'tdd', source: 'workspace', path: '.ordewell/skills/tdd/SKILL.md', content: varied(skillChars, `skill ${i}`) }] } : {}),
         runnerSessionId: '2ae84370-a459-44c0-a0b9-60b9d8961b1a',
         runnerSessionOwner: 'claude-code',
-        attemptUsage: [{
-          attempt: 1, runner: 'claude-code', startedAt: at, wallTimeMs: 68987, endedAt: at, totals,
-          byModel: [{ source: 'claude-code', model: 'claude-sonnet-5-5', totals }],
-          sessionBilling: { type: 'subscription', plan: 'Claude Max' }, source: 'claude-code', lastPromptTokens: 41415, contextWindow: 1000000, model: 'claude-sonnet-5-5', sessionId: '2ae84370-a459-44c0-a0b9-60b9d8961b1a',
-        }],
+        attemptUsage: Array.from({ length: attemptsOf(i, attempts) }, (_, a) => usageOf(a + 1)),
       } : {}),
     });
   });
 }
 
-export function planOf(tasks) {
+export function planOf(tasks, extra = {}) {
   const stamp = new Date().toISOString();
-  return { tasks, generatedAt: stamp, status: 'approved', runners: ['claude-code'], lastUpdated: stamp, conversationHistory: [] };
+  return { tasks, generatedAt: stamp, status: 'approved', runners: ['claude-code'], lastUpdated: stamp, conversationHistory: [], ...extra };
+}
+
+/**
+ * What a long planner conversation leaves in `conversationHistory`, `turns`
+ * turns of it. The mix is this repository's longest saved session's: a third
+ * of the turns answer the user and the rest a wake-up, two in five make a call
+ * at the command seam, one in ten carries a host notice, and a compaction
+ * checkpoint lands every `compactEvery` turns. A reply keeps its runs beside
+ * its content, as a saved one does (ADR-0017 A1).
+ */
+export function conversationOf(turns, { userChars = 105, replyChars = 1300, wakeChars = 330, supervisorChars = 580, executionChars = 140, compactionChars = 17600, compactEvery = 130 } = {}) {
+  const history = [];
+  const at = (t) => new Date(Date.parse(AT) + t * 60_000).toISOString();
+  const runsOf = (content, t) => [{ segmentId: `seg-${t}`, text: content, startedAt: at(t) }];
+  for (let t = 0; t < turns; t++) {
+    const timestamp = at(t);
+    if (t % 3 === 0) {
+      history.push({ role: 'user', content: varied(userChars, `user ${t}`), timestamp });
+      const content = varied(replyChars, `reply ${t}`);
+      history.push({ role: 'assistant', content, timestamp, runs: runsOf(content, t) });
+    } else {
+      history.push({ role: 'user', kind: 'wake_up', content: varied(wakeChars, `wake ${t}`), timestamp });
+      const content = varied(supervisorChars, `supervisor ${t}`);
+      history.push({ role: 'assistant', kind: 'supervisor', content, timestamp, runs: runsOf(content, t) });
+    }
+    if (t % 5 < 2) {
+      const ref = (t % 280) + 1;
+      const task = { id: `t${String(ref).padStart(6, '0')}`, ref: `#${ref}`, title: `Task ${ref}: change one module and verify it holds` };
+      history.push({ role: 'assistant', kind: 'execution', content: `Retried #${ref} with a note.`, timestamp, execution: { command: 'retry_task', actor: 'supervisor', level: 'act', task, outcome: 'done', detail: varied(executionChars, `exec ${t}`), at: timestamp } });
+    }
+    if (t % 10 === 9) history.push({ role: 'assistant', kind: 'system', actor: 'Ordewell setting', content: 'Supervisor level set to Act.', timestamp });
+    if (compactEvery > 0 && t % compactEvery === compactEvery - 1) {
+      history.push({ role: 'assistant', kind: 'compaction', content: varied(compactionChars, `compaction ${t}`), timestamp, checkpoint: { id: `cp-${t}`, keptFrom: Math.max(0, history.length - 12), trigger: 'auto' } });
+    }
+  }
+  return history;
+}
+
+/**
+ * The planner's tool trace: `perTurn` entries a turn, the results the size
+ * this repository's are by tool (a file read about 5 KB, a fetch or a
+ * subagent's digest past 10 KB), times `resultScale`.
+ */
+export function researchLogOf(turns, { perTurn = 3.7, resultScale = 1 } = {}) {
+  const tools = [['read_file', 4800], ['grep', 1600], ['agent_tool', 1800], ['bash', 1000], ['read_file', 4800], ['grep', 1600], ['agent_tool', 1800], ['glob', 650], ['fetch', 10700]];
+  const log = [];
+  for (let e = 0; e < Math.round(turns * perTurn); e++) {
+    const timestamp = new Date(Date.parse(AT) + e * 15_000).toISOString();
+    if (e % 100 === 50) {
+      log.push({ id: `sub-${e}`, type: 'subagent', subagentId: `sa-${e}`, brief: varied(400, `brief ${e}`), outcome: 'done', digest: varied(Math.round(11000 * resultScale), `digest ${e}`), timestamp });
+    } else if (e % 30 === 0) {
+      log.push({ id: `prompt-${e}`, type: 'user_prompt', content: varied(200, `prompt ${e}`), timestamp });
+    } else {
+      const [tool, chars] = tools[e % tools.length];
+      log.push({
+        id: `step-${e}`, tool, ...(tool === 'agent_tool' ? { toolLabel: 'Read' } : {}), args: JSON.stringify({ path: `packages/core/src/services/Module${e % 300}.ts` }),
+        result: varied(Math.round(chars * resultScale), `result ${e}`), success: true, outcome: 'success', toolCallId: `call-${e}`, timestamp,
+      });
+    }
+  }
+  return log;
+}
+
+/** The decision record a long planner conversation keeps (ADR-0067). */
+export function decisionRecordOf(entries, chars = 380) {
+  const kinds = ['decision', 'constraint', 'rejected', 'question'];
+  return Array.from({ length: entries }, (_, e) => {
+    const kind = kinds[e % kinds.length];
+    return { id: `${kind[0].toUpperCase()}${Math.floor(e / 4) + 1}`, kind, text: varied(chars, `record ${e}`), ...(kind === 'decision' || kind === 'rejected' ? { why: varied(120, `why ${e}`) } : {}), at: e * 2, timestamp: AT };
+  });
+}
+
+/**
+ * The plan's isolation run as a long session keeps it: every settled task's
+ * landing, and a record for the last `records` of them, landed and not yet
+ * merged into the user's branch.
+ */
+export function isolationOf(tasks, workspace, records = 8) {
+  const landed = tasks.filter((t) => t.status === 'completed');
+  const tip = (i) => (i + 1).toString(16).padStart(40, '0');
+  const ref = (t) => ({ taskId: t.id, order: t.order, title: t.title });
+  const worktree = (t) => path.join(workspace, '.ordewell', 'worktrees', t.id);
+  const run = {
+    id: 'run-long', workspaceRoot: workspace,
+    repos: [{ path: '.', root: workspace, baseRef: tip(0), baseBranch: 'main', integrationBranch: 'ordewell/run-long' }],
+    shared: [], sharedRepos: [],
+    tasks: Object.fromEntries(landed.slice(-records).map((t) => [t.id, {
+      ...ref(t), branch: `ordewell/run-long/${t.id}`, workspace: worktree(t), status: 'merged',
+      repos: { '.': { baseRef: tip(t.order), taskTip: tip(t.order + 1), worktree: worktree(t), linked: ['node_modules'], changed: true, landedTip: tip(t.order + 2) } },
+      commit: { subject: `Change module ${t.order}`, body: 'Why it changed.' },
+    }])),
+    landings: Object.fromEntries(landed.map((t) => [t.id, { '.': [tip(t.order + 2)] }])),
+    keepsEveryLanding: true,
+    carried: {},
+    landedTasks: Object.fromEntries(landed.map((t) => [t.id, { ...ref(t), commit: { subject: `Change module ${t.order}` } }])),
+    landedOn: Object.fromEntries(landed.map((t) => [t.id, t.dependencies])),
+  };
+  return { run, resolvers: {} };
+}
+
+/**
+ * Attempt logs on disk as a structured runner leaves them, through core's own
+ * writer: `kb` of events per attempt in this repository's mix (thinking
+ * deltas, tool calls and results, usage, text), a line about 500 bytes.
+ * Returns the bytes written.
+ */
+export function writeAttemptLogs(location, tasks, kb) {
+  let bytes = 0;
+  for (const task of tasks) {
+    for (const { attempt } of task.attemptUsage ?? []) {
+      const events = [{ type: 'turn_start', message: 'Start the task.', startedAt: AT }];
+      let size = 0;
+      for (let e = 0; size < kb * 1024; e++) {
+        const kind = e % 8;
+        const event = kind < 4 ? { type: 'thinking_delta', text: varied(420, `${task.id} ${e}`) }
+          : kind === 4 ? { type: 'tool_call', id: `call-${e}`, name: 'Read', args: JSON.stringify({ file_path: `src/m${e}.ts` }) }
+            : kind === 5 ? { type: 'tool_result', id: `call-${e}`, output: varied(900, `${task.id} out ${e}`), success: true }
+              : kind === 6 ? { type: 'usage', record: { source: 'claude-code', model: 'claude-sonnet-5-5', inputTokens: 41415, outputTokens: 228, cachedInputTokens: 39000 } }
+                : { type: 'text', text: varied(300, `${task.id} said ${e}`) };
+        size += JSON.stringify(event).length + 1;
+        events.push(event);
+      }
+      events.push({ type: 'turn_end', reason: 'completed' });
+      core.openTaskLog(location, task.id, attempt).append(events);
+      bytes += size;
+    }
+  }
+  return bytes;
 }
 
 // ---------- the host ----------
@@ -216,7 +386,7 @@ const resolver = { getCachedRunnerModels: () => [], contextWindowFor: () => unde
  * production ones. `stats` counts them; `muted` lets a benchmark reach a state
  * without paying for what it does not measure on the way.
  */
-export function hostSession({ runner, level = 'off', maxParallel = 3, broadcast = () => {}, workspace = tempWorkspace(), config = {} }) {
+export function hostSession({ runner, level = 'off', maxParallel = 3, broadcast = () => {}, workspace = tempWorkspace(), config = {}, aiService, sessionId }) {
   const stats = { saves: 0, saveBytes: 0, saveMs: 0, statusMessages: 0, statusBytes: 0, statusBuildMs: 0, otherBroadcasts: 0, otherBytes: 0, taskLogMessages: 0 };
   const muted = { saves: false, status: false };
   const session = core.createSession({
@@ -237,11 +407,12 @@ export function hostSession({ runner, level = 'off', maxParallel = 3, broadcast 
         stats.otherBytes += bytes;
         if (msg.type === 'task_log') stats.taskLogMessages += 1;
       }
-      broadcast(msg);
+      broadcast(msg, bytes);
     },
     modelResolver: resolver,
     settings: () => ({ run: { ...core.RUN_SETTINGS_DEFAULTS, supervisorLevel: level } }),
-    sessionId: `session-${Math.random().toString(16).slice(2, 10)}`,
+    sessionId: sessionId ?? `session-${Math.random().toString(16).slice(2, 10)}`,
+    ...(aiService ? { aiService } : {}),
   });
   // The default store, wrapped: a saveSession dependency would turn the lease off.
   const save = session.save;

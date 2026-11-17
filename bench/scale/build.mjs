@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Bundle core's source for the scale benchmark, internals included. No dist or tsup needed. */
+/** Bundle core's source for the scale benchmark, internals included, and the daemon's session pool. No dist or tsup needed. */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -16,6 +16,8 @@ await esbuild.build({
   format: 'esm',
   target: 'node20',
   packages: 'external',
+  // The pool imports core by its package name: its source, not its dist, so one copy of each class.
+  alias: { '@ordewell/core': path.join(here, '../../packages/core/src/index.ts') },
   logLevel: 'warning',
 });
 console.log('bundled bench/scale/.build/core.mjs');

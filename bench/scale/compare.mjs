@@ -60,6 +60,8 @@ function flatten(value, prefix = '') {
 
 const figures = (run) => new Map([
   ...flatten(run.live ?? {}).map(([name, value]) => [`live: ${name}`, value]),
+  // long.mjs: each point of its grid by its label, and the slopes between them.
+  ...Object.entries(run.long ?? {}).flatMap(([point, inner]) => flatten(inner ?? {}).map(([name, value]) => [`long ${point}: ${name}`, value])),
   ...Object.entries(run.ops ?? {}).flatMap(([name, sizes]) => Object.entries(sizes).map(([size, value]) => [`ops n=${size}: ${name}`, value])),
 ]);
 
