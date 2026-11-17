@@ -69,6 +69,19 @@ describe('/planner', () => {
     expect(executeCommand).toHaveBeenCalledWith('ordewell.setPlanner', 'claude-code');
     expect(__quickPicks).toHaveLength(0);
   });
+
+  // Other coding agents change their model with /model; here it is the planner's.
+  it('is what /model runs, with or without a backend id', async () => {
+    __resetQuickPicks();
+    const executeCommand = commands.executeCommand as unknown as ReturnType<typeof vi.fn>;
+    executeCommand.mockClear();
+    expect(isKnownSlashCommand('/model')).toBe(true);
+
+    await handleSlashCommand('/model claude-code', makeDeps({ plannerBackends: async () => [backend] }));
+
+    expect(executeCommand).toHaveBeenCalledWith('ordewell.setPlanner', 'claude-code');
+    expect(__quickPicks).toHaveLength(0);
+  });
 });
 
 describe('/login', () => {
@@ -152,7 +165,7 @@ describe('isKnownSlashCommand', () => {  it('recognizes every extension slash co
 
   // /settings and /planner own these values now; the one-value commands only
   // exist headless, where no panel can be opened.
-  it.each(['/model', '/model set foo', '/planner-effort', '/auto full', '/supervisor act', '/automerge on', '/autorun on', '/research parallel 2', '/parallel 8'])(
+  it.each(['/planner-effort', '/auto full', '/supervisor act', '/automerge on', '/autorun on', '/research parallel 2', '/parallel 8'])(
     'does not claim the retired command %s',
     (line) => {
       expect(isKnownSlashCommand(line)).toBe(false);
@@ -206,11 +219,11 @@ describe('conversation-editing slash commands', () => {
     await handleSlashCommand('/help', makeDeps());
     const text = info.mock.calls[0][0] as string;
     const lines = text.split('\n');
-    for (const command of ['/refresh', '/planner', '/login', '/key-set', '/sessions', '/allowlist', '/help', '/new', '/fork', '/rewind', '/compact', '/settings']) {
+    for (const command of ['/refresh', '/planner', '/login', '/key-set', '/sessions', '/allowlist', '/help', '/new', '/fork', '/rewind', '/compact', '/settings', '/model']) {
       expect(isKnownSlashCommand(command)).toBe(true);
       expect(lines.some((line) => line.startsWith(command))).toBe(true);
     }
-    for (const retired of ['/model', '/planner-effort', '/auto', '/supervisor', '/automerge', '/autorun', '/parallel']) {
+    for (const retired of ['/planner-effort', '/auto', '/supervisor', '/automerge', '/autorun', '/parallel']) {
       expect(isKnownSlashCommand(retired)).toBe(false);
       expect(lines.some((line) => line.startsWith(retired))).toBe(false);
     }
