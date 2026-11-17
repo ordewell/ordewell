@@ -1487,3 +1487,99 @@ test('ADV2 F-a: a forged summary within the reference count is valid, so a pytes
   assert.deepEqual(sel.copy, []);
   assert.equal(sel.needsInspection.length, 4);
 });
+
+// --- Reading a live run -------------------------------------------------------
+
+/** The daemon's `GET /api/sessions/:id` as SESSION_VIEW_JS prints it, for a session the pool holds. */
+const daemonSession = ({ tasks, activity, approved = true, plannerUsage } = {}) => ({
+  status: 200,
+  body: {
+    meta: { id: 's1', goal: 'g' },
+    // The phase-tagged plan the route serves: its tasks split between the log and the pending list.
+    plan: { phase: 'executing', executionLog: [], pendingTasks: tasks.map(({ subtasks: _subtasks, ...t }) => t), approved, approvedTasks: tasks.map((t) => t.id), status: 'approved' },
+    ...(plannerUsage ? { conversation: { plannerUsage } } : {}),
+    run: { tasks, runMerge: null, handoff: null, mergeResult: null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false, ...activity } },
+  },
+});
+
+/** Polls a run every 30 s for `minutes`, nothing moving, and says whether it ever settled. */
+const settlesWithin = (view, minutes, usageLines = 7) => {
+  const fingerprint = L.planFingerprint(view.plan, usageLines);
+  let state = null;
+  for (let nowMs = 0; nowMs <= minutes * 60_000; nowMs += 30_000) {
+    const d = L.settleDecision({ ...view, fingerprint, nowMs, state });
+    if (d.settled) return true;
+    state = d.state;
+  }
+  return false;
+};
+
+test('a run whose task is in progress, with no model call for twenty minutes, is not settled', () => {
+  const task = { id: 't1', order: 1, title: 'Implement', type: 'ai', status: 'in_progress', attempted: true, subtasks: [] };
+  const view = L.liveView({ response: daemonSession({ tasks: [task], activity: { running: true, scheduled: true, advancesOnItsOwn: true } }), saved: null });
+  assert.equal(view.source, 'daemon');
+  assert.equal(view.plan.tasks[0].status, 'in_progress', 'the daemon\'s word on the task, not a loader\'s');
+  assert.equal(settlesWithin(view, 20), false, 'a long shell command or a stream-idle retry was cut off as a quiet run');
+  // An attempt the daemon counts live while its task reads otherwise (landing, starting) is no quieter.
+  const landing = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'completed' }], activity: { running: true } }), saved: null });
+  assert.equal(settlesWithin(landing, 20), false, 'an attempt still running settled');
+  const starting = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'failed' }], activity: { starting: true } }), saved: null });
+  assert.equal(settlesWithin(starting, 20), false, 'a start on its way settled');
+  const resuming = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'awaiting_user', awaitingReason: 'usage-limit' }], activity: { resumable: true } }), saved: null });
+  assert.equal(settlesWithin(resuming, 20), false, 'a run that resumes by itself settled');
+});
+
+test('a run whose tasks have all ended settles once nothing moved for the settle time', () => {
+  const tasks = [
+    { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', attempted: true, subtasks: [], attemptUsage: [{ totals: { reportedCost: { USD: 0.25 } } }] },
+    { id: 't2', order: 2, title: 'two', type: 'ai', status: 'failed', attempted: true, subtasks: [] },
+  ];
+  const view = L.liveView({ response: daemonSession({ tasks, activity: { scheduled: true }, plannerUsage: { totals: { reportedCost: { USD: 0.5 } } } }), saved: null });
+  assert.equal(settlesWithin(view, (L.SETTLE_MS / 60_000) - 0.5), false, 'settled before the settle time');
+  assert.equal(settlesWithin(view, L.SETTLE_MS / 60_000), true);
+  // The caps read the daemon's view too: the planner's spend and every attempt's.
+  assert.equal(L.recordedSpend(view.plan).usd, 0.75);
+});
+
+test('a run waiting on a person follows the stall rule and does not settle', () => {
+  const tasks = [
+    { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', attempted: true, subtasks: [] },
+    { id: 't2', order: 2, title: 'two', type: 'ai', status: 'awaiting_user', awaitingReason: 'checkpoint', attempted: true, subtasks: [] },
+  ];
+  const view = L.liveView({ response: daemonSession({ tasks }), saved: null });
+  assert.equal(settlesWithin(view, 30), false, 'a wait on a person settled');
+  const stallMs = 15 * 60_000;
+  const first = L.stallDecision({ plan: view.plan, nowMs: 0, sinceMs: null, stallMs });
+  assert.equal(first.stalled, null);
+  assert.equal(L.stallDecision({ plan: view.plan, nowMs: stallMs, sinceMs: first.sinceMs, stallMs }).stalled.waiting, 'checkpoint');
+});
+
+test('without the daemon\'s run the saved session is read as written, a task in progress still in progress', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-saved-'));
+  try {
+    const dir = path.join(ws, '.ordewell', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const plan = { tasks: [{ id: 't1', title: 'Implement', type: 'ai', status: 'in_progress', attempted: true }], status: 'approved', runners: [], generatedAt: 'x', lastUpdated: 'x' };
+    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify({ meta: { id: 'other' }, plan: { tasks: [] } }));
+    fs.writeFileSync(path.join(dir, '2026-11-17-s1.json'), JSON.stringify({ meta: { id: 's1', goal: 'g' }, plan }));
+    const read = (id) => JSON.parse(execFileSync(process.execPath, ['-e', L.SAVED_PLAN_JS, ws, id], { encoding: 'utf8' }));
+    assert.deepEqual(read('s1'), plan, 'the saved plan, nothing settled on it');
+    assert.equal(read('missing'), null);
+    for (const response of [{ error: 'no daemon token: the daemon is not running' }, { status: 200, body: { meta: { id: 's1' }, plan: { phase: 'executing' } } }]) {
+      const view = L.liveView({ response, saved: read('s1') });
+      assert.equal(view.source, 'saved');
+      assert.equal(view.run, null);
+      assert.equal(settlesWithin(view, 20), false, 'an attempt the file still holds in progress settled');
+    }
+    assert.equal(L.liveView({ response: { error: 'x' }, saved: null }).plan, null);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('the harness never reads a session through core\'s loader, which fails every task in progress in what it returns', () => {
+  for (const file of ['lib.mjs', 'drive.mjs', 'batch.mjs']) {
+    const src = fs.readFileSync(path.join(here, file), 'utf8');
+    assert.doesNotMatch(src, /\bloadSession(PlanState)?\s*\(|getLatestSession\s*\(|loadChildSession\s*\(/, `${file} reads a session through core's loader`);
+  }
+});
