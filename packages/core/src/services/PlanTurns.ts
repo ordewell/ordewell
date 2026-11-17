@@ -95,6 +95,8 @@ export interface PlanTurnsHost {
   run(prompt: TurnPrompt, opts: { taken: () => void; signal?: AbortSignal }): Promise<LegacyPlanState>;
   /** Tell the user what no caller is waiting to hear: a replayed input's failed turn, a resume that failed. */
   notice(message: string): void;
+  /** The planner gate refused a turn while wake-ups waited: they stay, and no turn is open to take them. */
+  wakeUpsRefused?(err: unknown): void;
   /** The runner the planner runs as now, whose account a usage limit belongs to; null when it is not a coding agent. */
   plannerRunner(): RunnerId | null;
 }
@@ -486,6 +488,7 @@ export class PlanTurns {
     const heard = new Set(waiting.filter((t) => t.source === 'user' && this.waiters.has(t.id)).map((t) => t.id));
     if (this.take(plan, heard)) this.host.persist();
     for (const t of waiting) this.settle(t.id, (w) => w.reject(err));
+    if (waiting.some((t) => t.source !== 'user')) this.host.wakeUpsRefused?.(err);
     const kept = waiting.filter((t) => t.source === 'user' && !heard.has(t.id));
     if (kept.length === 0) return;
     const told = `${reasonOf(err)} ${keptUnanswered(kept)}`;

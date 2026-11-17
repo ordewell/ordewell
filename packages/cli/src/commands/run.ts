@@ -132,6 +132,8 @@ async function followRun(
   const refs = new Map<string, string>();
   const supervisorTurns = new Set<string>();
   const waitsSaid = new Set<string>();
+  /** When the planner's context pause began, once it is said: the plan goes out again and again while it lasts. */
+  let pauseSaid: string | null = null;
   let blocked: string | null = null;
   let dirtyRepos: string[] = [];
   const taskStates = new Map<string, TaskLine>();
@@ -190,6 +192,10 @@ async function followRun(
       for (const { task, label } of walkPlan(event.plan.tasks)) refs.set(task.id, `#${label}`);
       level = levelOf(event.plan.runSettings) ?? level;
       if (event.turnId && supervisorTurns.has(event.turnId)) process.stderr.write('· The supervisor edited the plan.\n');
+      // A wait on a person like any other: the turn on it, the closing turn at Act among them, goes on only on a Retry.
+      const pause = event.plan.plannerContextPause;
+      if (pause && pause.at !== pauseSaid) process.stderr.write('· The planner is paused on its context, and its turn waits: `ordewell compact retry` carries it on. Nobody does that unattended: it waits until someone does.\n');
+      pauseSaid = pause?.at ?? null;
     }
     if (event.type === 'planner_turn_started' && event.supervisor) supervisorTurns.add(event.turnId);
     if (event.type === 'planner_message' && event.supervisor && event.content.trim()) {

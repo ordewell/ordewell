@@ -999,6 +999,7 @@ export class Session {
         return landed;
       },
       notice: (message) => this.notice('error', message),
+      wakeUpsRefused: (err) => this.supervision.wakeUpsRefused(err),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
     });
 

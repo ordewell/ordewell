@@ -61,6 +61,26 @@ describe('a run concluded at Act', () => {
   });
 });
 
+describe('a closing turn that failed, whose retry the planner gate refused', () => {
+  it('concludes with the supervisor stopped, saying why', async () => {
+    const env = await failedRun('act');
+    await until(() => env.planner.calls.length === 1);
+    // The spend cap is met between the closing turn and its retry: the gate refuses every turn.
+    vi.spyOn(env.session, 'assertPlannerReady').mockImplementation(() => {
+      throw new Error('the spend cap is met');
+    });
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => concluded(env).length > 0);
+
+    expect(env.planner.calls).toHaveLength(1);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(env.notices).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      message: expect.stringMatching(/^The supervisor stopped: its wake-up turn failed, and its retry was refused \(the spend cap is met\)\./),
+    }));
+  });
+});
+
 describe.each(['watch', 'off'] as const)('a run concluded at %s', (level) => {
   it('concludes as the run ends: no turn may continue it', async () => {
     const env = await failedRun(level);
