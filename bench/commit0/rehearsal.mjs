@@ -168,6 +168,7 @@ export const SCENARIOS = Object.freeze({
       passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 },
     },
     playedOut: ['edit'],
+    cutShort: ['spend'],
   },
 });
 
@@ -325,7 +326,8 @@ export function taskCounts(tasks) {
 /**
  * Whether the fake played every step of the attempts `playedOut` names, from
  * its request log: an attempt the driver stopped mid-step never reaches its
- * last one. Returns the failures.
+ * last one. Each task `cutShort` names must have started and never reached
+ * its last step. Returns the failures.
  */
 export function judgePlayed(name, turns, ctx) {
   const s = scenario(name);
@@ -338,6 +340,12 @@ export function judgePlayed(name, turns, ctx) {
       const reached = turns.some((t) => t.role === 'runner' && t.key === key && t.attempt === i + 1 && t.round === last && t.toolCall?.name === steps[last].tool);
       if (!reached) f.push(`task ${key}, attempt ${i + 1}: its last scripted step (${steps[last].tool}) was never played`);
     });
+  }
+  for (const key of s.cutShort ?? []) {
+    const steps = scripts[key]?.[0] ?? [];
+    const mine = turns.filter((t) => t.role === 'runner' && t.key === key);
+    if (!mine.length) f.push(`task ${key} never started: there was no attempt for the stop to cut short`);
+    else if (mine.some((t) => t.round === steps.length - 1 && t.toolCall?.name === steps.at(-1)?.tool)) f.push(`task ${key}, attempt 1: its last scripted step (${steps.at(-1).tool}) was played: the stop did not cut it short`);
   }
   for (const tool of s.supervised ?? []) {
     if (!turns.some((t) => t.role === 'supervisor' && t.toolCall?.name === tool)) f.push(`the supervisor never played ${tool}`);

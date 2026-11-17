@@ -1744,6 +1744,13 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.deepEqual(R.judgePlayed('a-failed', [last], playCtx), []);
   assert.match(R.judgePlayed('a-failed', [{ ...last, round: 0, toolCall: { name: 'shell' } }], playCtx).join(), /never played/);
   assert.match(R.judgePlayed('b-retry', [], playCtx).join(), /supervisor never played retry_task/);
+  // b-cap's stop must land mid-attempt: its spending task began, and never reached its last step.
+  const capSteps = R.scenario('b-cap').attempts(playCtx);
+  const played = (key, steps) => steps.map((st, round) => ({ role: 'runner', key, attempt: 1, round, toolCall: { name: st.tool } }));
+  const editDone = played('edit', capSteps.edit[0]);
+  assert.deepEqual(R.judgePlayed('b-cap', [...editDone, ...played('spend', capSteps.spend[0]).slice(0, 2)], playCtx), []);
+  assert.match(R.judgePlayed('b-cap', [...editDone, ...played('spend', capSteps.spend[0])], playCtx).join(), /task spend, attempt 1: its last scripted step \(task_complete\) was played: the stop did not cut it short/);
+  assert.match(R.judgePlayed('b-cap', editDone, playCtx).join(), /task spend never started/);
 });
 
 test('judgeBatch holds the rehearsal\'s batch.json to its one run, marked a rehearsal and never a paid batch', () => {

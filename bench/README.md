@@ -179,6 +179,8 @@ labelled containers and networks whose driver on this host is no longer running.
 | `--cpus <n>` | 8 | the box's CPU quota |
 | `--memory <size>` | `12g` | the box's memory quota |
 | `--stall-min <min>` | 15 | how long a person may be waited on with nothing running |
+| `--settle-min`, `--no-start-min`, `--poll-sec`, `--wall-min` | 5, 10, 30 s, 180 | the settle window, the no-start bound, the poll interval and the wall-clock cap, which a rehearsal shortens |
+| `--rehearse <scenario>` | | run the arms on the scripted fake provider (see Rehearsal) |
 | `--ordewell-root <dir>` | this tree | the built tree packed into the box |
 | `--allow-stale-dist` | off | run a dist older than its sources; the result is not valid |
 | `--sweep` | | remove boxes of dead drivers; alone, nothing else runs |
@@ -219,6 +221,56 @@ model call, and the OpenRouter key never enters the box. It checks:
   must count the source and the added module, keep the reference's test, run
   neither the filter nor the monitor (in either box), and pass more tests than
   the baseline
+
+### Rehearsal
+
+The dry run starts no agent, so it cannot see how the driver follows, stops
+and scores a live run. The rehearsal can. Run it on the real image before any
+paid run, and again after any change to `drive.mjs`, `lib.mjs` or `batch.mjs`:
+
+```bash
+npm run build
+node bench/commit0/drive.mjs --sweep
+node bench/commit0/rehearse.mjs --libs <libraries.json> [--only tlslite-ng] [--scenario a-done,b-cap]
+```
+
+Each scenario goes through `batch.mjs` and `drive.mjs` as a paid run does: both
+arms really run, through the same code, on the library's image. Only the model
+is replaced. `rehearsal-fake.mjs` is an OpenRouter-shaped endpoint on the box's
+own loopback, where the box's `OPENROUTER_BASE_URL` points, since the gateway
+lets nothing through to a private address. It plays the scripts in
+`rehearsal.mjs` to the planner, the built-in runner and the supervisor, and it
+prices each call through the usage it reports. The box's key is a placeholder.
+`rehearse.mjs`, `batch.mjs --rehearse` and `drive.mjs --rehearse` each refuse to
+start while a real credential is in the environment, and none of them reads
+the key's usage. The settle, no-start, stall and wall-clock windows are
+shortened. Results go to `rehearsals/`, never to `results.jsonl`.
+
+The scripted agent's edits are the reference source (copied into the box after
+the leak probe has found it out of reach), a new module inside the library that
+the package imports, and an edit to a test file. Every scenario checks the
+fields its `result.json` holds. Each one also checks that its `batch.json`
+holds its one run, that `results.jsonl` did not grow, that the fake played the
+last scripted step of every attempt the scenario needs, and that no container
+or network of the bench is left behind:
+
+| Scenario | Arm | What happens | What `result.json` must say |
+| --- | --- | --- | --- |
+| `a-done` | A | the task makes the edits and reports done | valid; `ordewell run` returned by itself with exit 0; not truncated; 1 task completed; more passed than the baseline; the test edit excluded |
+| `a-failed` | A | one shell command runs past the settle window, then the edits, then the task reports failed | not stopped while the command ran; settled with 1 task open; scored from the task's unlanded worktree; more passed than the baseline; the test edit excluded |
+| `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint` |
+| `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it | settled with both tasks held open, a stall record naming them; never complete; scored from merged work, at the baseline, since nothing landed |
+| `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
+
+`npm run test:bench` runs the scripts' own logic and never starts the Docker
+rehearsal. `ORDEWELL_COMMIT0_REHEARSAL=<libraries.json>` (with
+`ORDEWELL_COMMIT0_REHEARSAL_SCENARIOS=a,b` for some) makes
+`bench/commit0/commit0.test.mjs` run it.
+
+Only a paid run can show what a real model does with the goal: how long its
+attempts take, its usage and how OpenRouter bills it, the key's usage and the
+batch budget's stop, provider routing, and whether a stream stalls or a call is
+refused.
 
 ### Running
 
