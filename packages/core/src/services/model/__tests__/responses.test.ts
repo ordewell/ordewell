@@ -130,6 +130,24 @@ describe('responses adapter: streams', () => {
     expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' });
   });
 
+  it('completes the whole tool calls of a reply cut off by the output limit, and not the one cut short', async () => {
+    let seq = 0;
+    const event = (type: string, data: object) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data, sequence_number: seq++ })}\n\n`;
+    const response = { id: 'resp_02', object: 'response', created_at: 1731500000, model: REASONER, output: [] };
+    const body = [
+      event('response.created', { response: { ...response, status: 'in_progress' } }),
+      event('response.output_item.added', { output_index: 0, item: { id: 'fc_1', type: 'function_call', call_id: 'call_whole', name: 'grep', arguments: '', status: 'in_progress' } }),
+      event('response.function_call_arguments.delta', { item_id: 'fc_1', output_index: 0, delta: '{"pattern":"TODO"}' }),
+      event('response.function_call_arguments.done', { item_id: 'fc_1', output_index: 0, arguments: '{"pattern":"TODO"}' }),
+      event('response.output_item.added', { output_index: 1, item: { id: 'fc_2', type: 'function_call', call_id: 'call_cut', name: 'read_file', arguments: '', status: 'in_progress' } }),
+      event('response.function_call_arguments.delta', { item_id: 'fc_2', output_index: 1, delta: '{"path":"src/a' }),
+      event('response.incomplete', { response: { ...response, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, usage: { input_tokens: 300, input_tokens_details: { cached_tokens: 0 }, output_tokens: 64, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 364 } } }),
+    ].join('');
+    const events = await collect(clientFor(replay(sse(body))), { ...BASE_REQUEST, model: REASONER, tools: TOOLS });
+    expect(ofType(events, 'tool-call-complete').map((e) => [e.call.id, e.call.arguments])).toEqual([['call_whole', { pattern: 'TODO' }]]);
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' });
+  });
+
   it('treats a stream that ends before the response completes as a transient failure', async () => {
     const err = await failure(clientFor(replay(recorded('truncated.sse'))), BASE_REQUEST);
     expect(err).toBeInstanceOf(ModelError);

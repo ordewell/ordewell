@@ -69,7 +69,7 @@ export interface SessionEventRelayDeps {
  * ({@link SessionEventRelay.executionComplete}). A model switch is a plan edit,
  * which Session's editor announces as one.
  */
-export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onTaskRunningLong' | 'onIsolationHandoff' | 'onRunClosed' | 'onScriptClaimed' | 'onExecutionComplete'>>;
+export type RelayObserver = Required<Omit<OrchestratorObserver, 'onTaskSettled' | 'onRunStarted' | 'onAutoMerge' | 'onUsageLimitWait' | 'onModelSwitched' | 'onTaskIdle' | 'onTaskRunningLong' | 'onIsolationHandoff' | 'onRunClosed' | 'onWaitingOnUser' | 'onScriptClaimed' | 'onExecutionComplete'>>;
 
 /**
  * Status updates held back until what they announce is saved, and let go

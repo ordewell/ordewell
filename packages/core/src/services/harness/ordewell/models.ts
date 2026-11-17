@@ -219,7 +219,10 @@ function sessionListing(env: RunnerEnv, provider: AiProvider, fetchImpl: typeof 
  * One model's info for an attempt. A catalog that fails or is slow costs the
  * attempt nothing but defaults: the model id is the plan's, never something
  * a listing has to confirm (ADR-0040). The window is the user's setting, else
- * the catalog's, else the listing's, else {@link ASSUMED_CONTEXT_WINDOW}.
+ * the catalog's, else the listing's, else {@link ASSUMED_CONTEXT_WINDOW}. The
+ * output limit is the lower of the catalog's and the listing's, either one when
+ * only it states one, else the default (ADR-0070); the loop then holds each
+ * request to the room its window leaves.
  */
 export async function lookupModelInfo(
   id: string,
@@ -236,7 +239,14 @@ export async function lookupModelInfo(
   if (!parsed) throw new Error(`"${id}" is not a built-in runner model: assign one as <provider>:<model>.`);
   const info = (await listedInfo(parsed.provider, parsed.model, env, options)) ?? defaultModelInfo(parsed.provider, parsed.model);
   const setting = options.windows?.[info.id];
-  const catalog = (options.details ?? modelDetails()).lookup(parsed.provider, parsed.model)?.contextWindow;
+  const catalogued = (options.details ?? modelDetails()).lookup(parsed.provider, parsed.model);
+  const catalog = catalogued?.contextWindow;
+  const output = catalogued?.maxOutputTokens;
+  if (output !== undefined && output > 0) {
+    // The lower of two stated limits: one a provider would refuse is worse than a reply cut short.
+    info.maxOutputTokens = info.known.maxOutputTokens ? Math.min(info.maxOutputTokens, output) : output;
+    info.known.maxOutputTokens = true;
+  }
   if (setting !== undefined && setting > 0) {
     info.contextWindow = setting;
     info.contextWindowSource = 'setting';

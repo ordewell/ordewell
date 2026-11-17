@@ -320,6 +320,18 @@ describe('OrdewellAdapter', () => {
     expect(events.at(-1)).toEqual({ type: 'error', message: 'quota reached', usageLimit: {} });
   });
 
+  it('ends a turn the output limit cut off three times in a row as failed, not completed', async () => {
+    const cut: ScriptedStep = [{ type: 'thinking-delta', text: 'Thinking at length' }, { type: 'finish', reason: 'length' }];
+    const { adapter } = adapterWith([cut, cut, cut]);
+    const { reports, mcp } = inProcessTools();
+    await adapter.start(taskOptions({ mcp }));
+    const events: AgentEvent[] = [];
+    await adapter.send('Go.', (event) => events.push(event));
+    const reason = 'The model\'s reply was cut off at the output limit of 4096 tokens 3 times in a row without a tool call, so the built-in runner ended the attempt.';
+    expect(reports).toEqual([{ status: 'failed', summary: reason, reason }]);
+    expect(events.at(-1)).toEqual({ type: 'error', message: reason, usageLimit: false });
+  });
+
   it('interrupt stops cooperatively, then hard-aborts inside the grace', async () => {
     const streaming = deferred();
     const hanging: ScriptedStep = async function* (_request, signal) {

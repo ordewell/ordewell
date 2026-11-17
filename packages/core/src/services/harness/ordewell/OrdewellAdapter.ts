@@ -237,7 +237,11 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     let last: AgentEvent;
     try {
       const outcome = await loop.runTurn(message, { stop: turn.stop.signal, hard: turn.hard.signal });
-      last = { type: 'turn_end', ...(outcome.interrupted ? { interrupted: true } : {}) };
+      // A turn the runner failed ends as failed, never as a completed one the session would nudge and wait on (ADR-0070).
+      last =
+        outcome.failed !== undefined
+          ? this.held.hideIn({ type: 'error', message: outcome.failed, usageLimit: false })
+          : { type: 'turn_end', ...(outcome.interrupted ? { interrupted: true } : {}) };
     } catch (err) {
       last = turn.stop.signal.aborted || turn.hard.signal.aborted ? { type: 'turn_end', interrupted: true } : this.held.hideIn(stepFailure(err));
     }

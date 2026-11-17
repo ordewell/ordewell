@@ -13,6 +13,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { REPO_ROOT, checkedBenchDir } from '../lib/data-dir.mjs';
 import * as L from './lib.mjs';
@@ -128,8 +129,8 @@ const must = (ok, why) => { if (!ok) throw new Abort(why); };
 const openSandboxes = new Set();
 
 function removeSandboxSync(sb) {
-  spawnSync('docker', ['rm', '-f', sb.box, sb.proxy], { env: hostEnv, stdio: 'ignore' });
-  spawnSync('docker', ['network', 'rm', sb.network], { env: hostEnv, stdio: 'ignore' });
+  spawnSync('docker', ['rm', '-f', sb.box, ...(sb.proxy ? [sb.proxy] : [])], { env: hostEnv, stdio: 'ignore' });
+  if (sb.network) spawnSync('docker', ['network', 'rm', sb.network], { env: hostEnv, stdio: 'ignore' });
   openSandboxes.delete(sb);
 }
 
@@ -512,43 +513,47 @@ async function probeLeak(lib, sb) {
   try { return JSON.parse(r.stdout.trim().split('\n').pop()); } catch { return { error: r.stderr.trim().slice(-800) }; }
 }
 
-/** Builds the fixture's repository and plant, and proves the probe finds each. */
-async function prepareFixture(lib, sb) {
+/** Builds the fixture's repository and plant, and, in the arm's box, proves the probe finds each. */
+async function prepareFixture(lib, sb, { probe = true } = {}) {
   const r = await inBox(sb, ['sh', '-c', FIXTURE_SH]);
   must(check(lib.name, 'fixture', r.code === 0, r.code === 0 ? 'a repository with its implementation in history, a tag and a remote ref; a copy in site-packages; a wheel in /tmp; bytecode in __pycache__' : r.stderr.trim()), 'fixture');
   const [ref, base, sitePackages] = r.stdout.trim().split(/\s+/);
   lib.referenceCommit = ref;
   lib.baseCommit = base;
-  const before = await probeLeak(lib, sb);
-  const verdict = L.judgeLeak(before);
-  const seen = L.leakKinds(before);
-  const all = ['history', 'reference', 'import', 'installed', 'archive', 'untracked'];
-  const caught = all.every((k) => seen.includes(k));
-  check(lib.name, 'leak probe sees a planted leak', !verdict.ok && caught, [`caught: ${seen.join(', ')}${caught ? '' : `; missed: ${all.filter((k) => !seen.includes(k)).join(', ')}`}`, ...verdict.failures], { expectedFailure: true });
+  if (probe) {
+    const before = await probeLeak(lib, sb);
+    const verdict = L.judgeLeak(before);
+    const seen = L.leakKinds(before);
+    const all = ['history', 'reference', 'import', 'installed', 'archive', 'untracked'];
+    const caught = all.every((k) => seen.includes(k));
+    check(lib.name, 'leak probe sees a planted leak', !verdict.ok && caught, [`caught: ${seen.join(', ')}${caught ? '' : `; missed: ${all.filter((k) => !seen.includes(k)).join(', ')}`}`, ...verdict.failures], { expectedFailure: true });
+  }
   await inBox(sb, ['sh', '-c', `rm -rf "${sitePackages}/calc" "${sitePackages}/calc-1.0.dist-info" /tmp/calc-1.0-py3-none-any.whl`]);
 }
 
-async function flattenAndProbe(lib, sb) {
-  const flat = await inBox(sb, ['sh', '-c', `${L.flattenScript(lib)}\ngit rev-parse HEAD`]);
-  must(check(lib.name, 'flatten history', flat.code === 0, flat.code === 0 ? `one commit, the tree of ${lib.baseCommit.slice(0, 12)}, on commit0-base` : flat.stderr.trim()), 'flatten failed');
+/** The setup both boxes share, the arm's and the eval's: `where` names the box in each check. */
+async function flattenAndProbe(lib, sb, where = '') {
+  const n = (name) => (where ? `${name} (${where})` : name);
+  const flat = await inBox(sb, ['sh', '-c', `${L.flattenScript(lib)}\ngit rev-parse HEAD HEAD^{tree}`]);
+  must(check(lib.name, n('flatten history'), flat.code === 0, flat.code === 0 ? `one commit, the tree of ${lib.baseCommit.slice(0, 12)}, on commit0-base` : flat.stderr.trim()), 'flatten failed');
   // Before any worktree exists: the rule is what keeps an agent's `git add -A` from committing the bootstrap's venv link.
   const ignore = await inBox(sb, ['sh', '-c', L.workspaceIgnoreScript(lib)]);
-  must(check(lib.name, 'venv ignored', ignore.code === 0, ignore.code === 0 ? `/${L.VENV_DIR} in the workspace's info/exclude, so no arm commits the link to it` : ignore.stderr.trim()), 'the venv cannot be ignored');
-  // `ordewell merge` lands on commit0-base, so the arm's diff and the restore are taken against this commit, not the branch.
-  lib.flatCommit = flat.stdout.trim().split('\n').pop();
+  must(check(lib.name, n('venv ignored'), ignore.code === 0, ignore.code === 0 ? `/${L.VENV_DIR} in the workspace's info/exclude, so no arm commits the link to it` : ignore.stderr.trim()), 'the venv cannot be ignored');
+  // `ordewell merge` lands on commit0-base, so the scored diff is taken against this commit, not the branch; the tree is what both boxes must share.
+  [lib.flatCommit, lib.flatTree] = flat.stdout.trim().split('\n').slice(-2);
   // The image's build and the reference collection can leave bytecode of the implementation, which a supervisor once pointed a task at.
   const cleaned = await inBox(sb, ['sh', '-c', L.leftoverCleanupScript(lib)]);
   const removed = cleaned.stdout.split('\n').map((l) => l.replace(/^Removing /, '').trim()).filter(Boolean);
-  must(check(lib.name, 'leftovers removed', cleaned.code === 0, cleaned.code === 0
+  must(check(lib.name, n('leftovers removed'), cleaned.code === 0, cleaned.code === 0
     ? (removed.length ? `untracked and ignored, the venv kept: ${removed.slice(0, 5).join(', ')}${removed.length > 5 ? ` and ${removed.length - 5} more` : ''}` : 'nothing untracked or ignored but the venv')
     : cleaned.stderr.trim()), 'the leftovers cannot be removed');
   const probe = await probeLeak(lib, sb);
   const verdict = probe.error ? { ok: false, failures: [`the probe failed: ${probe.error}`] } : L.judgeLeak(probe);
-  check(lib.name, 'reference implementation out of reach', verdict.ok, verdict.ok
+  check(lib.name, n('reference implementation out of reach'), verdict.ok, verdict.ok
     ? [`git log --all: ${probe.commits} commit; ${probe.objectCommits} commit object; reference ${probe.reference ?? 'not named'}; ${lib.importName} imports from ${probe.resolves.length ? probe.resolves.join(', ') : 'nowhere'} outside a test run; no installed copy, no archive, nothing untracked or ignored`]
     : verdict.failures);
   const clean = await inBox(sb, ['git', 'status', '--porcelain', '--untracked-files=no'], { workdir: lib.workdir });
-  check(lib.name, 'workspace clean', clean.stdout.trim() === '', clean.stdout.trim() === '' ? 'no tracked change, so `ordewell run` isolates without a stash' : clean.stdout.trim());
+  check(lib.name, n('workspace clean'), clean.stdout.trim() === '', clean.stdout.trim() === '' ? 'no tracked change, so `ordewell run` isolates without a stash' : clean.stdout.trim());
   return { ...probe, ok: verdict.ok, failures: verdict.failures };
 }
 
@@ -615,6 +620,12 @@ async function createArmASession(lib, sb) {
 async function readPlan(lib, sb, sessionId) {
   const r = await inBox(sb, [NODE_IN_BOX, '-e', L.READ_PLAN_JS, lib.workdir, sessionId]);
   try { return JSON.parse(r.stdout); } catch { return null; }
+}
+
+/** The daemon's run view of a session (core's RunView), the one place a scheduler's hold is kept; null when it cannot be read. */
+async function readRunView(lib, sb, sessionId) {
+  const r = await inBox(sb, ['ordewell', 'status', '--session-id', sessionId, '--workspace', lib.workdir, '--json'], { workdir: lib.workdir, timeoutMs: 120_000 });
+  try { return JSON.parse(r.stdout).run ?? null; } catch { return null; }
 }
 
 async function lastSessionId(lib, sb) {
@@ -755,90 +766,59 @@ async function dryArm(lib, sb, arm, settings, runDir) {
 }
 
 /**
- * A worktree layout as a stopped run leaves it, built in the box with git:
- * the patch chooser must find each task's work where it is, never in the
- * integration worktree, and the patch it writes must apply to the flat commit
- * with the venv left out.
+ * A worktree layout as a stopped run leaves it, built in the box by core's
+ * isolation (L.CHOOSER_JS) and read on the host as the scoring reads an arm's:
+ * the chooser must find each task's work where core recorded it, never in the
+ * integration worktree, and its files must come out whole, from a worktree or
+ * a preserved branch.
  */
-const CHOOSER_SH = String.raw`
-set -eu
-R=/tmp/commit0-chooser
-rm -rf "$R" "$R-tmp" "$R-a" "$R-b"; mkdir -p "$R/pkg"; cd "$R"
-git init -q -b commit0-base
-printf 'a = 1\n' > pkg/a.py; printf 'b = 1\n' > pkg/b.py
-printf '/.venv\n' >> .git/info/exclude
-git add -A; git commit -qm flat
-FLAT=$(git rev-parse HEAD)
-W=.ordewell/worktrees/run1
-git worktree add -q -b ordewell/run1/integration "$W/integration"
-(cd "$W/integration" && printf 'merged = 1\n' > pkg/merged.py && git add -A && git commit -qm merged)
-git worktree add -q -b ordewell/run1/1-one "$W/1-one"
-(cd "$W/1-one" && printf 'one = 1\n' > pkg/one.py && git add -A && git commit -qm one && printf 'a = 2\n' > pkg/a.py && printf 'new = 1\n' > pkg/new.py && mkdir .venv && printf junk > .venv/junk)
-mk() { git branch "$1" "$FLAT"; git worktree add -q "$R-tmp" "$1"; (cd "$R-tmp" && printf '%s\n' "$2" > pkg/two.py && git add -A && git commit -qm "$1"); git worktree remove --force "$R-tmp"; }
-mk ordewell/run1/2-two branch
-mk ordewell-preserved/run1/2-two older
-mk ordewell-preserved/run1/2-two-2 newest
-git worktree add -q -b ordewell/run1/4-four "$W/4-four"
-(cd "$W/4-four" && printf 'b = 4\n' > pkg/b.py)
-echo "$FLAT"
-`;
-
 async function checkChooser(lib, sb) {
-  const made = await inBox(sb, ['sh', '-c', CHOOSER_SH]);
-  if (made.code !== 0) return check(lib.name, 'patch chooser', false, `the layout could not be built: ${made.stderr.trim().split('\n').slice(-3).join(' | ')}`);
   const root = '/tmp/commit0-chooser';
-  const flatCommit = made.stdout.trim().split('\n').pop();
-  const w = (name) => `${root}/.ordewell/worktrees/run1/${name}`;
-  const rec = (taskId, name, status, worktree = w(name)) => ({ taskId, branch: `ordewell/run1/${name}`, workspace: w(name), status, repos: { '.': { worktree } } });
-  const plan = {
-    tasks: [
-      { id: 't1', order: 1, title: 'one', status: 'failed' },
-      { id: 't2', order: 2, title: 'two', status: 'failed' },
-      { id: 't3', order: 3, title: 'three', status: 'completed' },
-      { id: 't4', order: 4, title: 'four', status: 'completed', subtasks: [{ id: 't4a', title: 'four, a', status: 'failed' }] },
-      { id: 't5', order: 5, title: 'five', status: 'blocked' },
-    ],
-    isolation: {
-      run: { id: 'run1', workspaceRoot: root, repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration' }] },
-      tasks: {
-        t1: rec('t1', '1-one', 'active'),
-        t2: rec('t2', '2-two', 'kept'),
-        t3: rec('t3', '3-three', 'merged'),
-        t4: rec('t4', '4-four', 'kept'),
-        t5: rec('t5', '5-five', 'active', w('integration')),
-      },
-    },
-  };
-  const wt = await inBox(sb, ['git', 'worktree', 'list', '--porcelain'], { workdir: root });
-  const br = await inBox(sb, ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { workdir: root });
-  const chosen = L.choosePatches({ plan, worktrees: L.parseWorktrees(wt.stdout), branches: br.stdout.split('\n').filter(Boolean) });
-  const got = Object.fromEntries(chosen.map((c) => [c.taskId, c.landed ? 'landed' : c.source ? (c.source.path ?? c.source.ref) : 'none']));
-  const want = { t1: w('1-one'), t2: 'ordewell-preserved/run1/2-two-2', t3: 'landed', t4: w('4-four'), t5: 'none' };
-  const failures = Object.keys(want).filter((k) => got[k] !== want[k]).map((k) => `${k}: chose ${got[k]}, not ${want[k]}`);
-  const a = L.scoringPlan(L.ARMS.A, chosen);
-  const b = L.scoringPlan(L.ARMS.B, chosen);
-  if (a.scoredFrom !== 'task-worktree' || a.apply?.taskId !== 't1') failures.push(`arm A scores ${a.scoredFrom} from ${a.apply?.taskId ?? 'nothing'}, not the task worktree of t1`);
-  if (b.scoredFrom !== 'merged' || b.diagnostic.map((c) => c.taskId).join() !== 't1,t2,t4') failures.push(`arm B scores ${b.scoredFrom} and keeps ${b.diagnostic.map((c) => c.taskId).join(', ')} for diagnosis, not merged and t1, t2, t4`);
-  // Each chosen patch applied to a clean checkout of the flat commit, as the scoring applies it.
-  const scratch = { ...lib, flatCommit };
-  const applied = async (source, dir, expect) => {
-    const script = [
-      `${L.taskPatchScript(scratch, source)} > ${dir}.patch`,
-      `git worktree add -q --detach ${dir} ${flatCommit}`,
-      `cd ${dir} && ${L.applyPatchCommand(`${dir}.patch`)}`,
-      ...expect.map(([file, text]) => `grep -qxF ${L.shellQuote(text)} ${L.shellQuote(file)}`),
-      'test ! -e .venv',
-    ].join(' && ');
-    const r = await inBox(sb, ['sh', '-c', script], { workdir: root });
-    if (r.code !== 0) failures.push(`the patch from ${source.path ?? source.ref} did not apply as expected: ${r.stderr.trim().split('\n').slice(-2).join(' | ') || `exit ${r.code}`}`);
-  };
-  const by = Object.fromEntries(chosen.map((c) => [c.taskId, c]));
-  if (by.t1?.source) await applied(by.t1.source, `${root}-a`, [['pkg/one.py', 'one = 1'], ['pkg/a.py', 'a = 2'], ['pkg/new.py', 'new = 1']]);
-  if (by.t2?.source) await applied(by.t2.source, `${root}-b`, [['pkg/two.py', 'newest']]);
-  await inBox(sb, ['rm', '-rf', root, `${root}-a`, `${root}-b`, `${root}-a.patch`, `${root}-b.patch`]);
+  const made = await inBox(sb, [NODE_IN_BOX, '-e', L.CHOOSER_JS, root], { timeoutMs: 120_000 });
+  let plan = null;
+  try { plan = JSON.parse(made.stdout); } catch { /* reported below */ }
+  if (made.code !== 0 || !plan) return check(lib.name, 'patch chooser', false, `core could not build the layout: ${(made.stderr || made.stdout).trim().split('\n').slice(-3).join(' | ')}`);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-chooser-'));
+  const failures = [];
+  try {
+    const copy = path.join(tmp, 'copy');
+    if (!(await copyOut(sb, root, copy))) failures.push('the layout could not be copied out');
+    const runId = plan.isolation?.run?.id;
+    const w = (name) => `${root}/.ordewell/worktrees/${runId}/${name}`;
+    const ids = Object.fromEntries((plan.tasks ?? []).map((t) => [`t${t.order}`, t.id]));
+    const layout = L.readGitLayout(copy, root);
+    const chosen = L.choosePatches({ plan, worktrees: layout.worktrees, branches: [...layout.branches.keys()], tips: layout.branches });
+    const got = Object.fromEntries(chosen.map((c) => [`t${c.order}`, c.landed ? 'landed' : c.source ? (c.source.path ?? c.source.ref) : 'none']));
+    const want = { t1: w('1-one'), t2: `ordewell-preserved/${runId}/2-two-2`, t3: 'landed', t4: w('4-four'), t5: 'none' };
+    failures.push(...Object.keys(want).filter((k) => got[k] !== want[k]).map((k) => `${k}: chose ${got[k]}, not ${want[k]}`));
+    const a = L.scoringPlan(L.ARMS.A, chosen);
+    const b = L.scoringPlan(L.ARMS.B, chosen);
+    if (a.scoredFrom !== 'task-worktree' || a.apply?.taskId !== ids.t1) failures.push(`arm A scores ${a.scoredFrom} from task ${a.apply?.order ?? 'nothing'}, not the task worktree of t1`);
+    if (b.scoredFrom !== 'merged' || b.diagnostic.map((c) => `t${c.order}`).join() !== 't1,t2,t4') failures.push(`arm B scores ${b.scoredFrom} and keeps ${b.diagnostic.map((c) => `t${c.order}`).join(', ')} for diagnosis, not merged and t1, t2, t4`);
+    // The files each source yields on the host, as the scoring reads them.
+    const expect = (dir, files) => {
+      for (const [file, text] of files) {
+        let body = null;
+        try { body = fs.readFileSync(path.join(dir, ...file.split('/')), 'utf8').trim(); } catch { /* missing */ }
+        if (body !== text) failures.push(`${dir}: ${file} holds ${body === null ? 'nothing' : JSON.stringify(body)}, not ${JSON.stringify(text)}`);
+      }
+    };
+    const one = L.hostPathOf(copy, root, w('1-one'));
+    expect(one, [['pkg/one.py', 'one = 1'], ['pkg/a.py', 'a = 2'], ['pkg/new.py', 'new = 1']]);
+    if (!L.treeManifest(one).get(L.VENV_DIR)?.pruned) failures.push('the worktree\'s venv is read as the arm\'s work');
+    const sha = layout.branches.get(`ordewell-preserved/${runId}/2-two-2`);
+    if (sha) expect(materialize(path.join(copy, '.git'), sha, path.join(tmp, 't2')), [['pkg/two.py', 'newest'], ['pkg/a.py', 'a = 1']]);
+    else failures.push('the preserved branch is not read from the copy');
+  } catch (err) {
+    failures.push(err.message);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    await inBox(sb, ['rm', '-rf', root]);
+  }
   return check(lib.name, 'patch chooser', failures.length === 0, failures.length ? failures : [
-    'a failed task: its own worktree, committed and uncommitted work, no venv; a gone worktree: the newest preserved branch;',
-    'an open subtask: not landed; a record on the integration worktree: nothing; A applies its task, B keeps three for diagnosis',
+    `core's isolation in the box (run ${plan.isolation.run.id}), its records at plan.isolation.run.tasks, read on the host from the copied files:`,
+    'a failed task\'s kept worktree, committed and uncommitted work, its venv left out;',
+    'a gone worktree: the newest preserved branch, its files whole; an open subtask: not landed; the integration worktree: nothing',
   ]);
 }
 
@@ -916,6 +896,12 @@ async function realArm(lib, sb, arm, settings, runDir) {
     settle = d.state;
     if (d.settled) {
       endMs = d.state.sinceMs;
+      // A run that settles with tasks open stopped short: the record says what was open and what held each (D5).
+      stalled = L.settledStall({ plan, run: await readRunView(lib, sb, sessionId), quietMs: nowMs - d.state.sinceMs });
+      if (stalled) {
+        const by = L.judgeLanding({ stopped: null, stalled, plan }).why;
+        return `settled: nothing running, nobody waited on, nothing moved, ${by.replace(/^settled /, '')}`;
+      }
       return 'settled: nothing running, nobody waited on, nothing moved';
     }
     return null;
@@ -986,90 +972,280 @@ async function realArm(lib, sb, arm, settings, runDir) {
   };
 }
 
+// --- Scoring, in a fresh box ------------------------------------------------
+
+/** A shell line run on the host, its arguments as $1, $2, ... */
+const onHost = (script, args, input) => exec('bash', ['-o', 'pipefail', '-c', script, 'bash', ...args], { input });
+const nul = (paths) => paths.map((p) => `${p}\0`).join('');
+
 /**
- * The tests and pytest's config as the dataset wrote them, whatever the arm
- * did to them, and whether it did. Only those: networkx's testDir is its
- * srcDir, so restoring the whole directory would undo the arm's work.
+ * The arm's box stopped, then its workdir copied to the host by the engine,
+ * the venv left behind. Nothing in that box runs again, so no git
+ * configuration, hook or process the arm left there touches what is scored.
  */
-async function restoreTests(lib, sb) {
-  const o = { workdir: lib.workdir };
-  const args = L.testRestoreArgs(lib);
-  const diff = await inBox(sb, args.diff, o);
-  const untracked = await inBox(sb, args.untracked, o);
-  const added = L.addedRootModules(diff.stdout, untracked.stdout);
-  const probe = added.length ? await inBox(sb, L.shadowProbeArgs(lib, added), { workdir: '/' }) : null;
-  must(!probe || probe.code === 0, `the shadow probe failed: ${probe?.stderr.trim().split('\n').slice(-2).join(' | ')}`);
-  const plan = L.testRestorePlan(lib, diff.stdout, untracked.stdout, probe ? probe.stdout.split('\n').filter(Boolean) : []);
-  if (plan.checkout.length) await inBox(sb, ['git', 'checkout', '-q', lib.flatCommit, '--', ...plan.checkout], o);
-  if (plan.remove.length) await inBox(sb, ['rm', '-f', '--', ...plan.remove], o);
-  return plan.checkout.length + plan.remove.length > 0;
+async function copyArmWorkdir(lib, sb, dest) {
+  await docker(['kill', sb.box]);
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+  const r = await onHost('docker cp "$1" - | tar -x -C "$2" --strip-components=1 --exclude="$3"', [`${sb.box}:${lib.workdir}`, dest, `${path.posix.basename(lib.workdir)}/${L.VENV_DIR}`]);
+  must(check(lib.name, 'the arm\'s files copied out', r.code === 0, r.code === 0 ? `${lib.workdir} from the stopped box, without ${L.VENV_DIR}, into ${dest}` : r.stderr.trim()), 'the arm\'s files cannot be copied out');
+  return dest;
 }
 
 /**
- * Whether the eval runs on the image's own Python: the venv not a link and
- * untracked, and nothing the box changed outside the workdir's own work
- * (L.boxChanges, read by `docker diff` from outside the box). Bytecode the box
- * wrote is deleted first, wherever it lies.
+ * A commit's files, from a copied repository's objects, by a git that reads
+ * none of that repository's configuration or attributes: a bare repository of
+ * its own borrows the objects, and each blob is written as it is stored.
  */
-async function checkBoxIntact(lib, sb) {
-  const name = 'eval on the image\'s venv and interpreter';
-  const venv = await inBox(sb, ['sh', '-c', L.venvIntactScript(lib)]);
-  if (venv.code !== 0) return check(lib.name, name, false, venv.stderr.trim());
-  const cfg = await inBox(sb, ['cat', path.posix.join(lib.workdir, L.VENV_DIR, 'pyvenv.cfg')]);
-  const basePrefix = cfg.code === 0 ? L.venvBasePrefix(cfg.stdout) : null;
-  if (!basePrefix) return check(lib.name, name, false, `no interpreter named in ${L.VENV_DIR}/pyvenv.cfg: ${cfg.stderr.trim()}`);
-  const diff = await docker(['diff', sb.box]);
-  if (diff.code !== 0) return check(lib.name, name, false, `docker diff: ${diff.stderr.trim()}`);
-  const mounts = [NODE_IN_BOX, ORDEWELL_IN_BOX, '/usr/sbin/docker-init'];
-  const changes = L.boxChanges(diff.stdout, { workdir: lib.workdir, home: BOX_HOME, basePrefix, mounts });
-  if (changes.bytecode.length) {
-    const rm = await inBox(sb, ['rm', '-rf', '--', ...changes.bytecode]);
-    if (rm.code !== 0) return check(lib.name, name, false, `the box's bytecode could not be removed: ${rm.stderr.trim()}`);
+function materialize(gitDir, sha, out) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-git-'));
+  try {
+    const env = { ...hostEnv, GIT_DIR: path.join(tmp, 'objects.git'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(tmp, 'gitconfig'), HOME: tmp };
+    const git = (args, input) => {
+      const r = spawnSync('git', args, { env, input, maxBuffer: 2 ** 31 - 1 });
+      if (r.status !== 0) throw new Error(`git ${args[0]}: ${String(r.stderr).trim()}`);
+      return r.stdout;
+    };
+    git(['init', '-q', '--bare']);
+    fs.writeFileSync(path.join(env.GIT_DIR, 'objects', 'info', 'alternates'), `${path.join(gitDir, 'objects')}\n`);
+    const entries = [...L.parseLsTree(git(['ls-tree', '-r', '-z', sha]).toString())];
+    const blobs = git(['cat-file', '--batch'], entries.map(([, e]) => `${e.oid}\n`).join(''));
+    fs.rmSync(out, { recursive: true, force: true });
+    let at = 0;
+    for (const [p, e] of entries) {
+      const nl = blobs.indexOf(10, at);
+      const size = Number(blobs.toString('latin1', at, nl).split(' ')[2]);
+      const body = blobs.subarray(nl + 1, nl + 1 + size);
+      at = nl + 2 + size;
+      const file = path.join(out, ...p.split('/'));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      if (e.mode === '120000') fs.symlinkSync(body.toString(), file);
+      else fs.writeFileSync(file, body, { mode: e.mode === '100755' ? 0o755 : 0o644 });
+    }
+    return out;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  const ok = changes.tampered.length === 0;
-  return check(lib.name, name, ok, ok
-    ? `${L.VENV_DIR} is the image's, untracked; nothing outside the workdir's work changed (on ${basePrefix}); ${changes.bytecode.length} bytecode paths the box wrote removed`
-    : `the box changed ${changes.tampered.length} paths the eval may load: ${changes.tampered.slice(0, 8).join(', ')}${changes.tampered.length > 8 ? ', ...' : ''}`);
 }
 
 /**
- * What the eval scores (D2, D3), and every patch on record. A's unlanded
- * task is applied to the workspace from its own worktree or preserved branch;
- * B's unlanded work is written out for diagnosis and never applied. arm.patch
- * is the workspace's diff once that is done: the diff that is scored.
+ * Where the files to score are (D2, D3), read from the copy alone: arm A's
+ * unlanded task's worktree, or its newest preserved branch, written out; else,
+ * and always for B, the workspace Ordewell merged into. B's unlanded work stays
+ * in the copy, for diagnosis, and is never scored.
  */
-async function prepareScoring(lib, sb, arm, sessionId, runDir) {
-  const o = { workdir: lib.workdir };
-  const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
-  const wt = await inBox(sb, ['git', 'worktree', 'list', '--porcelain'], o);
-  const br = await inBox(sb, ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], o);
-  const chosen = L.choosePatches({ plan, worktrees: L.parseWorktrees(wt.stdout), branches: br.stdout.split('\n').filter(Boolean) });
-  const scoring = L.scoringPlan(arm, chosen);
-  const patches = [];
-  const write = async (c, file, scored) => {
-    const r = await inBox(sb, ['sh', '-c', `${L.taskPatchScript(lib, c.source)} > /tmp/${file}`], o);
-    await copyOut(sb, `/tmp/${file}`, path.join(runDir, file));
-    patches.push({ file, taskId: c.taskId, order: c.order, source: c.source, scored, ...(r.code === 0 ? {} : { error: r.stderr.trim().slice(-300) }) });
-    return r.code === 0;
-  };
-  let scoredFrom = scoring.scoredFrom;
-  if (scoring.apply) {
-    const c = scoring.apply;
-    const file = `task-${c.order ?? c.taskId}.patch`;
-    const made = await write(c, file, true);
-    const applied = made && (await inBox(sb, ['sh', '-c', L.applyPatchCommand(`/tmp/${file}`)], o));
-    const ok = Boolean(applied) && applied.code === 0;
-    check(lib.name, `arm ${arm.id} task work applied`, ok, ok
-      ? `task ${c.order} did not land: its work from ${c.source.kind} ${c.source.path ?? c.source.ref} is applied to the workspace`
-      : `the patch from ${c.source.path ?? c.source.ref} did not apply: ${(applied?.stderr ?? patches.at(-1).error ?? '').trim().split('\n').slice(-2).join(' | ')}`);
-    if (!ok) scoredFrom = 'merged';
-    await restoreTests(lib, sb);
+function chooseFromCopy(lib, arm, copy, plan) {
+  const layout = L.readGitLayout(copy, lib.workdir);
+  const chosen = L.choosePatches({ plan, worktrees: layout.worktrees, branches: [...layout.branches.keys()], tips: layout.branches });
+  return { layout, chosen, s: L.scoringPlan(arm, chosen) };
+}
+
+function filesToScore(lib, arm, copy, plan) {
+  const { layout, chosen, s } = chooseFromCopy(lib, arm, copy, plan);
+  let dir = copy;
+  let scoredFrom = s.scoredFrom;
+  if (s.apply) {
+    const src = s.apply.source;
+    try {
+      dir = src.kind === 'worktree' ? L.hostPathOf(copy, lib.workdir, src.path) : materialize(path.join(copy, '.git'), layout.branches.get(src.ref), `${copy}-task`);
+      if (dir && !fs.existsSync(dir)) dir = null;
+    } catch (err) {
+      dir = null;
+      src.error = err.message;
+    }
+    check(lib.name, `arm ${arm.id} task work found`, Boolean(dir), dir
+      ? `task ${s.apply.order} did not land: scored on its ${src.kind} ${src.path ?? src.ref}`
+      : `the work of task ${s.apply.order} cannot be read from ${src.path ?? src.ref}: ${src.error ?? 'outside the workdir'}`);
+    if (!dir) [dir, scoredFrom] = [copy, 'merged'];
   }
-  for (const c of scoring.diagnostic) await write(c, `unlanded-${c.order ?? c.taskId}.patch`, false);
-  const arm_ = await inBox(sb, ['sh', '-c', `${L.armPatchScript(lib)} > /tmp/arm.patch`], o);
-  await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
-  patches.unshift({ file: 'arm.patch', taskId: null, order: null, source: { kind: 'workspace', path: lib.workdir }, scored: true, ...(arm_.code === 0 ? {} : { error: arm_.stderr.trim().slice(-300) }) });
-  return { plan, chosen, scoredFrom, patches };
+  const patches = [
+    { file: 'arm.patch', taskId: s.apply?.taskId ?? null, order: s.apply?.order ?? null, source: dir === copy ? { kind: 'workspace', path: lib.workdir } : s.apply.source, scored: true },
+    ...s.diagnostic.map((c) => ({ file: null, taskId: c.taskId, order: c.order, source: c.source, scored: false, kept: 'arm-workdir' })),
+  ];
+  // Judged after any fall back to the merged workspace, so arm A scored on the stubs is never valid.
+  const source = L.judgeScoredSource({ arm, chosen, scoredFrom });
+  check(lib.name, `arm ${arm.id} scored from its work`, source.ok, source.ok ? `scored from ${scoredFrom}` : source.failures);
+  return { dir, scoredFrom, chosen, patches, source };
+}
+
+/**
+ * The dry run's fixture task with its worktree hidden from the driver: the
+ * work has no source left, and the run must be judged invalid for it.
+ */
+function checkHiddenWorktree(lib, arm, copy, plan) {
+  const { s } = chooseFromCopy(lib, arm, copy, plan);
+  const wt = s.apply?.source?.kind === 'worktree' ? L.hostPathOf(copy, lib.workdir, s.apply.source.path) : null;
+  if (!wt) return check(lib.name, 'a hidden task worktree fails the run', false, 'the fixture task\'s worktree was not chosen, so it cannot be hidden');
+  const aside = `${wt}.hidden`;
+  fs.renameSync(wt, aside);
+  try {
+    const hidden = chooseFromCopy(lib, arm, copy, plan);
+    const source = L.judgeScoredSource({ arm, chosen: hidden.chosen, scoredFrom: hidden.s.scoredFrom });
+    const validity = L.judgeValidity({ aborted: null, checks: [], tests: { passed: 1 }, freshness: { stale: false }, scoring: source });
+    const failed = !source.ok && source.failures.some((f) => /did not land and no source for its work was found/.test(f)) && validity.invalidReasons.some((r) => r.startsWith('arm A scored without its work'));
+    return check(lib.name, 'a hidden task worktree fails the run', failed, failed ? validity.invalidReasons.filter((r) => r.startsWith('arm A scored'))
+      : `with ${s.apply.source.path} hidden the run is still judged ${validity.valid ? 'valid' : `invalid only for: ${validity.invalidReasons.join('; ')}`}`);
+  } finally {
+    fs.renameSync(aside, wt);
+  }
+}
+
+/**
+ * The box an arm's files are scored in: the arm's image and quota, and nothing
+ * else, no network, mount, key or Ordewell. Set up as the arm's box was before
+ * its run, through the same steps, and checked to flatten to the same tree.
+ */
+async function openEvalBox(lib, runId, settings) {
+  const sb = { name: `commit0-${runId}`, box: `commit0-${runId}-eval`, network: null, proxy: null };
+  sb.close = async () => { await docker(['rm', '-f', sb.box]); openSandboxes.delete(sb); };
+  openSandboxes.add(sb);
+  const r = await docker(['run', '-d', '--init', '--name', sb.box, '--label', LABEL, '--network', 'none', '--user', '0:0',
+    ...L.boxRunArgs({ cpus: settings.cpus, memory: settings.memory, parallel: settings.parallel, driver: L.driverId() }),
+    '--entrypoint', 'sleep', lib.image, 'infinity']);
+  must(r.code === 0, `eval box: ${r.stderr.trim()}`);
+  const setup = await inBox(sb, ['sh', '-c', 'git config --system user.name commit0-bench && git config --system user.email commit0-bench@localhost && git config --system --add safe.directory "*"']);
+  must(check(lib.name, 'eval box', setup.code === 0, setup.code === 0 ? `${lib.image}, no network, no mount, no key, no Ordewell` : setup.stderr.trim()), 'the eval box cannot be set up');
+  return sb;
+}
+
+/**
+ * Scores the files under `dir` in a fresh box, through L.scoreFiles, the one
+ * path every arm takes from its files onward. `inspect(box)`, when given, looks
+ * at the eval box before it goes.
+ */
+async function scoreInFreshBox(lib, dir, { runId, settings, runDir, inspect }) {
+  const box = await openEvalBox(lib, runId, settings);
+  const fresh = { ...lib };
+  const o = { workdir: lib.workdir };
+  let patchError = null;
+  try {
+    const io = {
+      prepare: async () => {
+        if (opts.fixture) await prepareFixture(fresh, box, { probe: false });
+        must((await flattenAndProbe(fresh, box, 'eval box')).ok, 'the reference implementation is reachable in the eval box');
+        const ls = await inBox(box, ['git', 'ls-tree', '-r', '-z', 'HEAD'], o);
+        const std = await inBox(box, [lib.python, '-I', '-c', L.STDLIB_NAMES_PY], { workdir: '/' });
+        must(ls.code === 0 && std.code === 0, `the eval box's tree or standard library cannot be read: ${(ls.stderr + std.stderr).trim()}`);
+        return { tree: fresh.flatTree, lsTree: ls.stdout, stdlib: std.stdout.split('\n').filter(Boolean) };
+      },
+      manifest: async (d, algo) => L.treeManifest(d, algo),
+      remove: async (paths) => {
+        if (paths.length) must((await inBox(box, ['xargs', '-0', 'rm', '-f', '--'], { ...o, input: nul(paths) })).code === 0, 'the arm\'s deletions cannot be made');
+      },
+      put: async (d, paths) => {
+        if (!paths.length) return;
+        const r = await onHost('tar -c -C "$1" --null --verbatim-files-from -T - | docker cp - "$2"', [d, `${box.box}:${lib.workdir}`], nul(paths));
+        must(r.code === 0, `the arm's files cannot be put in: ${r.stderr.trim()}`);
+      },
+      patch: async (paths) => {
+        const r = await inBox(box, ['sh', '-c', L.armPatchScript(fresh)], { ...o, input: nul(paths) });
+        fs.writeFileSync(path.join(runDir, 'arm.patch'), r.stdout);
+        if (r.code !== 0) patchError = r.stderr.trim().slice(-300);
+      },
+      evaluate: () => evaluate(fresh, box, fs.createWriteStream(path.join(runDir, 'tests.log'))),
+    };
+    const scored = await L.scoreFiles({ lib, dir, armTree: lib.flatTree }, io);
+    check(lib.name, 'eval box flattens to the arm\'s tree', scored.treeCheck.ok, scored.treeCheck.detail);
+    check(lib.name, 'files scored', scored.treeCheck.ok, [
+      `${scored.copied.length} copied in, ${scored.removed.length} removed, ${scored.excluded.length} left out${patchError ? `; the diff failed: ${patchError}` : ''}`,
+      ...scored.needsInspection.map((r) => `needs inspection: ${r}`),
+    ]);
+    if (inspect) await inspect(box, scored);
+    return { ...scored, patchError };
+  } finally {
+    if (opts.keep && opts.dryRun) {
+      openSandboxes.delete(box);
+      console.log(`  kept: docker exec -it ${box.box} sh; clean up with: docker rm -f ${box.box}`);
+    } else await box.close();
+  }
+}
+
+// --- The dry run's fixture arm ----------------------------------------------
+
+const REF_FILES = '/tmp/commit0-reference-files.tar';
+const DRY_MODULE = '_commit0_dry';
+const DRY_TEST = 'test_commit0_dry_edit';
+const DRY_MARKS = ['/tmp/commit0-smudge-ran', '/tmp/commit0-fsmonitor-ran'];
+const srcDirOf = (lib) => lib.srcDir.replace(/^\.\//, '').replace(/\/+$/, '');
+
+/** The reference's source files, for the dry run's fixture arm, taken to the host before the flatten and the leak probe. */
+async function exportReferenceFiles(lib, sb, runDir) {
+  const r = await inBox(sb, ['git', 'archive', '-o', REF_FILES, lib.referenceCommit, '--', srcDirOf(lib)], { workdir: lib.workdir });
+  const file = path.join(runDir, 'reference-files.tar');
+  const ok = r.code === 0 && (await copyOut(sb, REF_FILES, file));
+  await inBox(sb, ['rm', '-f', REF_FILES]);
+  must(check(lib.name, 'reference source taken out', ok, ok ? `the reference's ${srcDirOf(lib)} files, for the fixture arm` : r.stderr.trim()), 'the reference files cannot be taken out');
+  return file;
+}
+
+/**
+ * What the dry run's fixture arm does in the arm's box: the reference's
+ * source, a module added inside the library and imported, a test edited to
+ * pass one more, and git configuration that would run on the driver's git.
+ * Arm A's is the work of a task core's isolation cut a worktree for and kept
+ * unlanded (L.FIXTURE_TASK_JS), as a failed task leaves it; arm B's is in the
+ * workspace, where its merge leaves it.
+ */
+async function fixtureArm(lib, sb, refFiles, arm) {
+  let at = lib.workdir;
+  let sessionId = null;
+  if (arm.id === 'A') {
+    const prep = await inBox(sb, [NODE_IN_BOX, '-e', L.FIXTURE_TASK_JS, 'prepare', lib.workdir, L.goalText(lib)], { timeoutMs: 120_000 });
+    let made = null;
+    try { made = JSON.parse(prep.stdout); } catch { /* reported below */ }
+    must(check(lib.name, 'fixture task worktree', Boolean(made?.cwd), made?.cwd ? `core's isolation cut ${made.cwd} for session ${made.sessionId}` : (prep.stderr || prep.stdout).trim().split('\n').slice(-3)), 'core could not cut the fixture task\'s worktree');
+    [at, sessionId] = [made.cwd, made.sessionId];
+  }
+  const put = await onHost('docker cp - "$1" < "$2"', [`${sb.box}:${at}`, refFiles]);
+  const src = srcDirOf(lib);
+  const work = [
+    'set -eu',
+    `T=$(git ls-files -- ${L.shellQuote(lib.testDir)} | grep -E '(^|/)test_[^/]*\\.py$' | head -n 1)`,
+    `printf '\\n\\ndef ${DRY_TEST}():\\n    pass\\n' >> "$T"`,
+    `printf 'VALUE = 1\\n' > ${L.shellQuote(`${src}/${DRY_MODULE}.py`)}`,
+    `printf '\\nfrom . import ${DRY_MODULE}\\n' >> ${L.shellQuote(`${src}/__init__.py`)}`,
+    'echo "$T"',
+  ].join('\n');
+  // Set last, after core's git has run, so only a git the driver runs could set them off.
+  const config = [
+    'set -eu',
+    'I="$(git rev-parse --git-common-dir)/info" && mkdir -p "$I" && printf \'* filter=commit0\\n\' >> "$I/attributes"',
+    `git config filter.commit0.smudge 'touch ${DRY_MARKS[0]}; cat'`,
+    `git config filter.commit0.clean 'touch ${DRY_MARKS[0]}; cat'`,
+    `printf '#!/bin/sh\\ntouch ${DRY_MARKS[1]}\\n' > /tmp/commit0-fsmonitor && chmod +x /tmp/commit0-fsmonitor`,
+    'git config core.fsmonitor /tmp/commit0-fsmonitor',
+  ].join('\n');
+  let r = put.code === 0 ? await inBox(sb, ['sh', '-c', work], { workdir: at }) : put;
+  const test = r.stdout.trim();
+  let plan = null;
+  if (r.code === 0 && sessionId) {
+    const rel = await inBox(sb, [NODE_IN_BOX, '-e', L.FIXTURE_TASK_JS, 'release', lib.workdir, sessionId], { timeoutMs: 120_000 });
+    try { plan = JSON.parse(rel.stdout); } catch { /* reported below */ }
+    if (!plan) r = { code: rel.code || 1, stderr: `core could not keep the fixture task's worktree: ${(rel.stderr || rel.stdout).trim()}` };
+  }
+  if (r.code === 0) r = { ...(await inBox(sb, ['sh', '-c', config], { workdir: at })), stdout: r.stdout };
+  must(check(lib.name, 'fixture arm', r.code === 0 && Boolean(test), r.code === 0
+    ? `${sessionId ? `in task 1's kept worktree ${at}, uncommitted, the task failed: ` : ''}the reference's source, ${src}/${DRY_MODULE}.py imported by ${src}/__init__.py, ${test} edited, a smudge and clean filter and core.fsmonitor set`
+    : r.stderr.trim()), 'the fixture arm failed');
+  return { module: `${src}/${DRY_MODULE}.py`, init: `${src}/__init__.py`, test, plan };
+}
+
+/** Whether the fresh eval counted the fixture arm's source and nothing else of its box. */
+async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline) {
+  const failures = [];
+  for (const p of [fixture.module, fixture.init]) if (!scored.copied.includes(p)) failures.push(`${p} did not cross`);
+  if (!scored.excluded.some((e) => e.path === fixture.test && /test/.test(e.reason))) failures.push(`${fixture.test} was not left out as a test`);
+  const edited = await inBox(evalBox, ['grep', '-c', DRY_TEST, fixture.test], { workdir: lib.workdir });
+  if (edited.stdout.trim() !== '0') failures.push(`the eval box's ${fixture.test} holds the arm's edit`);
+  const ran = await inBox(evalBox, ['sh', '-c', `ls ${DRY_MARKS.join(' ')} 2>/dev/null; true`]);
+  if (ran.stdout.trim()) failures.push(`the arm's git configuration ran in the eval box: ${ran.stdout.trim()}`);
+  for (const mark of DRY_MARKS) if ((await docker(['cp', `${sb.box}:${mark}`, os.devNull])).code === 0) failures.push(`the arm's git configuration ran in its own box after it ended: ${mark}`);
+  const t = scored.tests;
+  if (!(t?.passed > (baseline?.passed ?? 0))) failures.push(`${t?.passed ?? 'no'} passed, not more than the baseline's ${baseline?.passed ?? 0}`);
+  const broken = (t?.collectionErrors ?? []).filter((e) => String(e).includes(DRY_MODULE));
+  if (broken.length) failures.push(`collection errors name ${DRY_MODULE}: ${broken.slice(0, 2).join(' | ')}`);
+  check(lib.name, 'fresh eval counts the fixture arm\'s source alone', failures.length === 0, failures.length ? failures
+    : `${t.passed} passed against the baseline's ${baseline?.passed ?? 0}: the source edit and ${fixture.module} counted; the test edit, the filters and core.fsmonitor did not reach the eval`);
 }
 
 async function copyOut(sb, from, to) {
@@ -1099,7 +1275,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const startedAt = new Date().toISOString();
   const first = checks.length;
   let sb = null;
-  const record = { window: { window: null }, egress: null, leak: null, network: null, tests: null, baseline: null, baselineEval: null, arm: null, transcripts: null, testsModified: null, scoring: null };
+  const record = { window: { window: null }, egress: null, leak: null, network: null, tests: null, baseline: null, baselineEval: null, arm: null, transcripts: null, files: null, scoring: null };
   try {
     sb = await openSandbox(lib, runId, ordewell.runtime, settings);
     record.egress = await checkEgress(lib, sb);
@@ -1110,6 +1286,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     }
     const reference = await collectReference(lib, sb);
     must(reference.ok, 'the tests do not collect offline at the reference');
+    const refFiles = opts.dryRun ? await exportReferenceFiles(lib, sb, runDir) : null;
     record.leak = await flattenAndProbe(lib, sb);
     must(record.leak.ok, 'the reference implementation is reachable: nothing runs');
     record.network = await collect(lib, sb, reference);
@@ -1121,22 +1298,25 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     check(lib.name, 'baseline on the stubs', br.ok, br.baseline
       ? `collected 0 at the stubs (exit ${base.exit}): ${br.baseline.reason}; the library's own, recorded as the baseline`
       : br.ok ? `${base.passed} passed, ${base.failed} failed, ${base.errors ?? 0} errors of ${record.network.collected} collected (exit ${base.exit})` : `no summary (exit ${base.exit}${base.timedOut ? ', timed out' : ''})`);
+    let fixture = null;
     if (opts.dryRun) {
       await dryArm(lib, sb, arm, settings, runDir);
-      await checkBoxIntact(lib, sb);
+      fixture = await fixtureArm(lib, sb, refFiles, arm);
     } else {
       record.arm = await realArm(lib, sb, arm, settings, runDir);
       if (record.arm.stopped?.why === 'no-start') {
         check(lib.name, `arm ${arm.id} run started`, false, record.arm.stopped.detail);
         throw new Abort(`the run never started: ${record.arm.stopped.detail}`);
       }
-      record.testsModified = await restoreTests(lib, sb);
-      record.scoring = await prepareScoring(lib, sb, arm, record.arm.sessionId, runDir);
-      record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.scoring.plan });
-      must(await checkBoxIntact(lib, sb), 'the arm changed what the eval loads: the eval cannot run');
-      const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
-      record.tests = { ...evaluated, collected: record.network.collected };
+      record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.arm.finalPlan });
     }
+    const copy = await copyArmWorkdir(lib, sb, path.join(runDir, 'arm-workdir'));
+    record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? fixture?.plan ?? null);
+    if (fixture?.plan) checkHiddenWorktree(lib, arm, copy, fixture.plan);
+    const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline) : null;
+    record.scoring = await scoreInFreshBox(lib, record.files.dir, { runId, settings, runDir, inspect });
+    if (record.scoring.patchError) record.files.patches[0].error = record.scoring.patchError;
+    record.tests = record.scoring.tests ? { ...record.scoring.tests, collected: record.network.collected } : null;
   } catch (err) {
     if (!(err instanceof Abort)) throw err;
     console.log(`  stopped: ${err.message}`);
@@ -1148,27 +1328,29 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       record.transcripts = readTranscripts(path.join(runDir, 'ordewell-home'));
       if (opts.keep && opts.dryRun) {
         openSandboxes.delete(sb);
-        console.log(`  kept: docker exec -it ${sb.box} sh; clean up with: docker rm -f ${sb.box} ${sb.proxy}; docker network rm ${sb.network}`);
+        console.log(`  kept, stopped once its files were copied out: docker start ${sb.box}; clean up with: docker rm -f ${sb.box} ${sb.proxy}; docker network rm ${sb.network}`);
       } else await sb.close();
     }
   }
   const armChecks = checks.slice(first);
-  const plan = record.scoring?.plan ?? record.arm?.finalPlan ?? null;
+  const plan = record.arm?.finalPlan ?? null;
   const recorded = plan ? L.recordedSpend(plan) : null;
   const sessionId = record.arm?.sessionId ?? null;
   const metrics = plan && sessionId ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
-  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun });
+  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun, scoring: record.files?.source });
   const result = {
     ...L.resultRecord({
       lib, arm, settings, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,
       tests: record.tests, baseline: record.baseline, wallClockMs: record.arm?.wallClockMs,
       spend: record.arm?.billed ?? (record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
       transcripts: record.transcripts, stopped: record.arm?.stopped, stalled: record.arm?.stalled, truncated: record.truncated,
-      scoredFrom: record.scoring?.scoredFrom, patches: record.scoring?.patches, validity,
+      scoredFrom: record.files?.scoredFrom, scoring: record.scoring, patches: record.files?.patches, validity,
       providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,
+    // Whether arm A's score came from its own work, and if not, which task's work had no source.
+    scoredSource: record.files?.source ?? null,
     // What Ordewell recorded for the session: the planner's turns, the supervisor's and every attempt's, as the providers priced them.
     recordedUsd: recorded?.usd ?? null,
     recorded,
@@ -1178,8 +1360,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     sessionId,
     steps: record.arm?.steps ?? null,
     closing: record.arm?.closing ?? null,
-    tasks: record.scoring?.chosen ?? null,
-    testsModified: record.testsModified,
+    tasks: record.files?.chosen ?? null,
     baselineEval: record.baselineEval,
     aborted: record.aborted ?? null,
     checks: armChecks,

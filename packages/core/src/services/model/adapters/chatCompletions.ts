@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
 import type { AiProvider } from '../../../interfaces/IConfig';
 import { classifyHttpFailure, ModelError } from '../ModelError';
+import { cameThroughWhole } from './cutShort';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -315,8 +316,9 @@ async function* readStream(
     throw new ModelError({ kind: 'transient', message: 'The stream ended before the model finished its reply.' });
   }
 
-  const completed = [...calls.entries()].sort(([a], [b]) => a - b).map(([, c]) => c).filter((c) => c.started);
-  for (const call of completed) yield { type: 'tool-call-complete', call: toolCall(call) };
+  const started = [...calls.entries()].sort(([a], [b]) => a - b).map(([, c]) => c).filter((c) => c.started).map(toolCall);
+  const completed = finishReason === 'length' ? started.filter(cameThroughWhole) : started;
+  for (const call of completed) yield { type: 'tool-call-complete', call };
   const reported = usage && modelUsage(provider, usage);
   if (reported) yield { type: 'usage', usage: reported };
   if (state.reasoning !== undefined || state.details) yield { type: 'provider-state', state: { dialect: 'chat-completions', data: state } };
@@ -393,6 +395,7 @@ function toModelError(err: unknown, signal?: AbortSignal): unknown {
       code: providerCode(err),
       type: err.type ?? null,
       param: err.param ?? null,
+      metadata: isRecord(err.error) ? err.error.metadata : undefined,
       cause: err,
     });
   }

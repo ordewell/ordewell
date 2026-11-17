@@ -110,16 +110,25 @@ export interface LoopOptions {
   emit: (event: AgentEvent) => void;
 }
 
-/** How a turn ended. `interrupted` is a stop the user or the session asked for. */
+/**
+ * How a turn ended. `interrupted` is a stop the user or the session asked for;
+ * `failed` is why the runner ended the attempt itself where the turn has no
+ * finished reply to end on, so it is never recorded as a completed one (ADR-0070).
+ */
 export interface TurnOutcome {
   interrupted: boolean;
+  failed?: string;
 }
 
-/** What a step left behind: the tool calls it made, if any, and a repeat that ends the attempt. */
+/**
+ * What a step left behind: the tool calls it made, if any, a repeat that ends
+ * the attempt, and the output limit its reply was cut off at, when it was.
+ */
 interface StepResult {
   calls: number;
   interrupted: boolean;
   repeated?: string;
+  cutOffAt?: number;
 }
 
 /** A step whose stream failed: what it left behind, and whether any event had reached the loop. */
@@ -129,6 +138,23 @@ interface FailedStep extends StepResult {
 }
 
 const INTERRUPTED = 'Interrupted: the call was stopped before it finished.';
+
+/** Replies in a row cut off at the output limit with no tool call before the runner ends the attempt (ADR-0070). */
+export const CUT_OFF_FAIL_AT = 3;
+
+function cutOffNote(limit: number): string {
+  return `[Ordewell] Your last reply was cut off at the output limit of ${limit} tokens before it made a tool call. Go on with the task: act through tool calls, and keep your text and thinking short.`;
+}
+
+function cutOffLog(limit: number, calls: number, inARow: number): string {
+  return calls > 0
+    ? `[Ordewell] The model's reply stopped at the output limit of ${limit} tokens; its ${calls} complete tool call${calls === 1 ? ' runs' : 's run'} and the turn goes on.`
+    : `[Ordewell] The model's reply stopped at the output limit of ${limit} tokens with no tool call (cut-off ${inARow} of ${CUT_OFF_FAIL_AT} in a row); the turn goes on.`;
+}
+
+function cutOffFailure(limit: number): string {
+  return `The model's reply was cut off at the output limit of ${limit} tokens ${CUT_OFF_FAIL_AT} times in a row without a tool call, so the built-in runner ended the attempt.`;
+}
 
 /**
  * The runner's agent loop (ADR-0070). A turn is steps until one ends with no
@@ -212,6 +238,8 @@ export class OrdewellLoop {
     // A message in voids a report made before it (ADR-0023 D6).
     this.reported = false;
 
+    // A reply cut off at the output limit is not a finished one: the turn goes on, within the step limit, until CUT_OFF_FAIL_AT in a row.
+    let cutOffs = 0;
     for (let turnSteps = 0; ; turnSteps++) {
       if (signals.stop.aborted || signals.hard.aborted) return { interrupted: true };
       step += 1;
@@ -247,6 +275,27 @@ export class OrdewellLoop {
         if (!this.reported) await this.endAttempt(step, result.repeated, signals);
         return { interrupted: false };
       }
+      if (result.cutOffAt !== undefined) {
+        const limit = result.cutOffAt;
+        if (result.calls > 0) {
+          cutOffs = 0;
+          this.emit({ type: 'command_output', text: cutOffLog(limit, result.calls, 0) });
+          continue;
+        }
+        // The work is reported: the turn ends here, as a finished reply would end it, with no call billed to go on.
+        if (this.reported) return { interrupted: false };
+        cutOffs += 1;
+        if (cutOffs >= CUT_OFF_FAIL_AT) {
+          const reason = cutOffFailure(limit);
+          await this.endAttempt(step, reason, signals);
+          return { interrupted: false, failed: reason };
+        }
+        this.emit({ type: 'command_output', text: cutOffLog(limit, 0, cutOffs) });
+        if (this.limitReached()) return this.endAtLimit(step, signals);
+        await this.recordMessage(step, { role: 'user', text: cutOffNote(limit) });
+        continue;
+      }
+      cutOffs = 0;
       if (result.calls === 0) return this.limitReached() ? this.endAtLimit(step, signals) : { interrupted: false };
     }
   }
@@ -308,7 +357,8 @@ export class OrdewellLoop {
 
   private assemble(transcript: LoadedTranscript, plan: StepPlan): ModelRequest {
     return (this.options.assemble ?? assembleRequest)({
-      model: this.options.model,
+      // The model's own output limit, held to the room its window leaves a reply (ADR-0070).
+      model: { ...this.options.model, maxOutputTokens: this.compactor.replyTokens },
       system: transcript.system ?? this.options.system,
       transcript,
       tools: this.tools,
@@ -387,6 +437,7 @@ export class OrdewellLoop {
     let streamError: unknown;
     let streamedAny = false;
     let repeated: string | undefined;
+    let cutOff = false;
     let streamed!: () => void;
     this.streaming = new Promise((resolve) => {
       streamed = resolve;
@@ -415,6 +466,8 @@ export class OrdewellLoop {
           usage = event.usage;
         } else if (event.type === 'provider-state') {
           providerState = event.state;
+        } else if (event.type === 'finish') {
+          cutOff = event.reason === 'length';
         }
       }
     } catch (err) {
@@ -442,7 +495,12 @@ export class OrdewellLoop {
     } else {
       await this.recordStep(step, text, calls, providerState, running);
     }
-    return { calls: calls.length, interrupted: aborted || signals.stop.aborted, ...(repeated !== undefined ? { repeated } : {}) };
+    return {
+      calls: calls.length,
+      interrupted: aborted || signals.stop.aborted,
+      ...(repeated !== undefined ? { repeated } : {}),
+      ...(cutOff ? { cutOffAt: request.maxOutputTokens ?? this.compactor.replyTokens } : {}),
+    };
   }
 
   private async recordStep(

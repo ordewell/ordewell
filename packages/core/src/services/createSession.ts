@@ -1850,6 +1850,7 @@ export class Session {
         this.supervision.observe({ kind: 'running_long', taskId, runningLong });
       },
       onRunClosed: () => { this.closedUnannounced = true; },
+      onWaitingOnUser: () => this.supervision.runIdle(),
       onIsolationHandoff: (handoff) => this.broadcast({ type: 'isolation_handoff', ...this.supervision.handoff(handoff) }),
       onExecutionComplete: () => {
         // What waited goes ahead of the run's close, as ahead of its end.

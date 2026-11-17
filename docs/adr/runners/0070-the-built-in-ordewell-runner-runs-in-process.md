@@ -86,6 +86,15 @@ is one runner per API provider, under the provider's own id and name.**
   is named as assumed in the context meter and the running-long facts, and the
   attempt's first log line says how to set it; the overflow path below is what
   catches a model whose true window is smaller.
+- **A model's output limit** is the lower of the catalog's reply cap and the
+  provider listing's (OpenRouter's `top_provider.max_completion_tokens`), either
+  one where only it states one, and else 4,096 tokens. Each request asks for
+  that limit, held to the room the window keeps above the compaction threshold
+  (the reserve below), so a prompt the guard let through and its reply fit the
+  window together. A cap of Ordewell's own, smaller than the model's, would cut
+  off a reasoning model's thinking before it acted; asking for the whole stated
+  cap on a model whose cap is near its window asks for more than the window
+  leaves, which a provider refuses or quietly cuts to its own default.
 - **The one id it had before** (`ordewell`, unreleased) is moved as it is read:
   a task on it runs on the runner its model's provider names, its session with
   it; a plan's runner set names those runners instead, and keeps the old id
@@ -97,8 +106,8 @@ is one runner per API provider, under the provider's own id and name.**
   runner, both entries are kept as they were, ignored as an unknown id is, and
   moved at a later read once one is configured: an expansion to nothing, saved,
   would lose them.
-- **The loop** (`OrdewellLoop`) runs a turn as steps until one ends with no tool
-  call. Each step is one `ModelClient.stream` call whose request is rebuilt from
+- **The loop** (`OrdewellLoop`) runs a turn as steps until one ends with a
+  finished reply and no tool call. Each step is one `ModelClient.stream` call whose request is rebuilt from
   the saved transcript; retries are `ModelClient`'s policy. A tool call starts
   as soon as the stream completes it, calls run in parallel, and their results
   are recorded in call order. Each message is appended to a transcript store
@@ -108,6 +117,24 @@ is one runner per API provider, under the provider's own id and name.**
   resume reads it back. Events map to the task log's vocabulary: text, thinking,
   `tool_call`, `tool_result`, usage. An interrupt stops cooperatively, and a
   short grace later aborts the stream and the running tools.
+- **A reply cut off at the output limit is not a finished one.** Every dialect
+  reports it as the `length` finish (chat completions' `length`, Anthropic's
+  `max_tokens` and `model_context_window_exceeded`, a Responses `incomplete`
+  that is not a content filter, Gemini's `MAX_TOKENS`), and completes only the
+  tool calls whose arguments came through whole: a call the limit cut short is
+  never run, nor replayed. A cut-off reply with a complete call runs it and the
+  turn goes on from its result. One with none keeps its partial text, and the
+  turn goes on with a note to the model: "[Ordewell] Your last reply was cut off
+  at the output limit of N tokens before it made a tool call. Go on with the
+  task: act through tool calls, and keep your text and thinking short." The
+  task log says why the step ended either way. Once the attempt's report
+  stands, a cut-off reply with no tool call ends the turn, as a finished one
+  would, and costs no further call. Three in a row with no tool call
+  end the attempt as failed through the runner's own `task_complete`, with a
+  reason naming the output limit, and the turn ends as an `error`, never as a
+  completed turn the session would nudge and then wait on. A model that spent
+  its whole output thinking otherwise ended its turn as if finished, was nudged,
+  was cut off again, and its task waited for input with its dependents behind it.
 - **One neutral tool set**: `read`, `edit`, `write`, `shell`, `grep`, `glob`,
   then the task tools as native tools, `task_complete` and `read_task` (the
   token's `read`, renamed because `read` reads files here). The list is fixed
@@ -213,7 +240,11 @@ is one runner per API provider, under the provider's own id and name.**
   is done and what remains. Each goes out at most once an attempt, none while a
   report stands and none on the last call, and two falling due together send
   only the later; so a limit of 5 or less sends neither, and one of 6 to 20 only
-  the 80% one, its 95% share falling on the last call. The repeat guard nudges the third identical tool call
+  the 80% one, its 95% share falling on the last call. A step continued after
+  a cut-off reply is a model call like any other: it counts against the limit,
+  can carry a notice or the forced last call, and is compacted before like any
+  step; a cut-off on the last allowed call ends the attempt at the step limit.
+  The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
   limit pauses the attempt, and a resume reads the transcript back; one with no
@@ -228,6 +259,23 @@ is one runner per API provider, under the provider's own id and name.**
   sends the same request again; with one, the calls and their results are
   already recorded and the turn goes on to its next step from them. Either
   retry follows the retry policy and leaves a line in the task log.
+- **An aggregator's error is read for its upstream's.** OpenRouter wraps an
+  upstream provider's failure in its own body, often a bare 400 "Provider
+  returned error", with the upstream's name (`provider_name`), its verbatim body
+  (`raw`), a canonical `error_type` and the upstream's `provider_code` in
+  `metadata`. `classifyHttpFailure` keeps the name and the upstream's message in
+  the error, redacted as a runner's text is and cut to 400 characters, so the
+  task log, the escalation and the supervisor see who failed and why. A 400, a
+  5xx or a mid-stream error is classed by the upstream's status, type, code or
+  `error_type`, so an overload is retried, a context too long takes the overflow
+  path, and a request the upstream named invalid is not retried; a code that
+  only repeats the status or names the class of error (`invalid_request_error`)
+  lets the message's overflow wording count. A wrapped 400 with none of these is
+  as likely the upstream's fault, which the aggregator may route around, so it
+  is retried, but within three attempts in all (`maxAttempts` on the
+  `ModelError`), not the policy's six, and then fails with the kept detail. A
+  401, 402, 403 or 429 is the aggregator's own verdict on the key, the credits,
+  moderation or its rate limit, and is classed by its status as before.
 
 ## Modes
 
@@ -357,3 +405,9 @@ comes from that call.
   `ordewellContextWindows` setting or its provider's listing, else an assumed
   128,000 tokens named as assumed; an overflow's smaller window holds for the
   attempt.
+- 2026-11-17 — an aggregator's wrapped error names its upstream provider and
+  message, and is classed by the upstream's reason; one with none is retried
+  three times in all.
+- 2026-11-17 — each request asks for the model's stated output limit, held to
+  the room its window leaves; a reply cut off at that limit continues the turn,
+  and three in a row with no tool call fail the attempt.
