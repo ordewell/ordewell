@@ -1,5 +1,5 @@
 import {
-  Task, TaskSnapshot, TaskStatus, RunnerId, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
+  Task, TaskSnapshot, TaskStatus, RunnerId, RetryNote, AwaitingReason, DEFAULT_RUNNERS, flattenTasks,
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
   releaseMadeManual, runsAsOps,
 } from '../models/Task';
@@ -11,7 +11,7 @@ import { handoffDigest, type StoredHandoff } from '../models/Handoff';
 import { ATTEMPT_FIELDS, freshAttempt, type AttemptField } from '../models/TaskExecution';
 
 /** See {@link PlanStore.ready}. */
-const READY_KEEPS: readonly AttemptField[] = ['loopRound', 'reverted', 'carriedFrom'];
+const READY_KEEPS: readonly AttemptField[] = ['loopRound', 'reverted', 'carriedFrom', 'retryNote'];
 
 /**
  * Changes laid on a task the store owns. A field cleared stays as an
@@ -262,8 +262,8 @@ export class PlanStore {
    * not yet started. So it keeps what that attempt is still owed: the round,
    * which its caller decides (ADR-0045 L5, L7), a revert's hold, which is the
    * user's to release by a retry or a force start and which the load after a
-   * reset holds again (ADR-0054), and a carry-over, which the attempt it
-   * readies is (ADR-0018 U1).
+   * reset holds again (ADR-0054), a carry-over, which the attempt it
+   * readies is (ADR-0018 U1), and a retry's note, which is that attempt's (ADR-0029).
    */
   private ready(t: Task): void {
     this._revision++;
@@ -453,6 +453,11 @@ export class PlanStore {
   setCarriedFrom(id: string, runner: RunnerId): void {
     const task = this.edit(id);
     if (task) task.carriedFrom = runner;
+  }
+
+  setRetryNote(id: string, note: RetryNote): void {
+    const task = this.edit(id);
+    if (task) task.retryNote = note;
   }
 
   clearCarriedFrom(id: string): void {

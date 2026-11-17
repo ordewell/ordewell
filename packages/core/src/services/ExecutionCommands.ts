@@ -1,4 +1,4 @@
-import { flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, type Task, type TaskReportTo, type TaskStatus } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, type RetryNote, type Task, type TaskReportTo, type TaskStatus } from '../models/Task';
 import { resolveTaskRef, resolveUserTaskRef } from './TaskRefs';
 import { actorAuthority, type ExecutionActor, type ExecutionCommandName, type ExecutionRecord, type ScriptConsent, type ScriptResult, type SupervisorLevel } from '../models/Execution';
 import { sameScriptBody, scriptBodyOf, scriptBodyText, type ScriptBody } from '../models/ScriptTask';
@@ -30,7 +30,8 @@ export type ExecutionCommand =
   /**
    * `session`: continue the saved runner session with `message` (ADR-0018, K1),
    * or resume a task paused on a usage limit in it, the message optional;
-   * `fresh`: a new attempt from the task's prompt.
+   * `fresh`: a new attempt from the task's prompt, where a model's `message`
+   * is its note for that attempt (ADR-0029) and a user's is not read.
    */
   | { command: 'retry_task'; task: string; from: 'fresh' | 'session'; message?: string }
   /** `force`: the user's force send (ADR-0023, F1), which interrupts the running turn and is read next. */
@@ -904,7 +905,7 @@ export class ExecutionCommands {
       case 'run_plan': return this.prepareRunPlan(actor, tasks);
       case 'run_task': return this.prepareStart(located!, actor, 'run', tasks);
       case 'retry_task': return command.from === 'fresh'
-        ? this.prepareStart(located!, actor, 'retry', tasks)
+        ? this.prepareStart(located!, actor, 'retry', tasks, command.message)
         : located!.paused ? this.prepareResume(located!, actor, command.message)
           : located!.landsKept ? this.prepareLandKept(located!, actor)
           : this.prepareContinue(located!, actor, command.message);
@@ -1015,8 +1016,13 @@ export class ExecutionCommands {
     return this.orchestrator.isScheduling || this.orchestrator.hasLiveWork || this.orchestrator.runHeld ? `${running} ${left}` : `Nothing could start. ${left}`;
   }
 
-  /** A start of one task: `run_task`, or a fresh `retry_task`, which also takes a task that failed or waits on the user. */
-  private prepareStart(located: Located, actor: ExecutionActor, how: 'run' | 'retry', tasks: readonly Task[]): Prepared {
+  /**
+   * A start of one task: `run_task`, or a fresh `retry_task`, which also takes
+   * a task that failed or waits on the user. A model's fresh retry may carry
+   * `message`, its note for the new attempt (ADR-0029); the user's own retry
+   * takes none.
+   */
+  private prepareStart(located: Located, actor: ExecutionActor, how: 'run' | 'retry', tasks: readonly Task[], message?: string): Prepared {
     const { task } = located;
     const label = describe(located);
     const voice = this.voiceOf(actor);
@@ -1037,6 +1043,13 @@ export class ExecutionCommands {
     // Past that refusal, nothing else will run a check between rounds: this start is its next round.
     const nextRound = start.kind === 'own' ? undefined : start.wait;
     const settled = !nextRound && (task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped');
+    const note = noteOf(actor, message);
+    if (note) {
+      const unread = task.type === 'script' || task.type === 'delegated'
+        ? `${capitalize(label)} is a ${task.type === 'script' ? 'script' : 'delegated task'}, which reads no note: change it with edit_plan, then retry it without a message.`
+        : !settled ? `${capitalize(label)} has not failed or stopped, so there is no attempt to retry with a note: change its prompt with edit_plan instead.` : null;
+      if (unread) return { refusal: unread };
+    }
     if (how === 'run' && settled) {
       const next = task.status === 'awaiting_user' && task.awaitingReason === 'input'
         ? voice.answerOrRetry
@@ -1065,7 +1078,7 @@ export class ExecutionCommands {
       ...approval,
       act: async (stopped) => {
         // The Retry button's own path: it continues a run that ended on a failure, and hands the task to a scheduler that runs.
-        if (settled) await this.controls.retryTask(task.id, runOrigin(actor));
+        if (settled) await this.controls.retryTask(task.id, runOrigin(actor), note);
         // A Stop while the retry let go of the old worktree withdrew the start that would follow it.
         if (stopped()) throw new Error(STOPPED_BEFORE_START);
         if (!this.running(task.id) && !(settled && this.orchestrator.isScheduling)) await this.host.startTask(task.id, actor);
@@ -2056,4 +2069,17 @@ export function mergeStopped(result: IsolationMergeResult): string {
     case 'conflict': return `it conflicts in ${result.repo}${result.files?.length ? `: ${result.files.slice(0, 5).join(', ')}` : ''}`;
     case 'failed': return `it failed in ${result.repo}`;
   }
+}
+
+/**
+ * The note a fresh retry gives its new attempt (ADR-0029): a model's message,
+ * marked as whose turn wrote it. The user's own retry, and the autorun that
+ * stands for them, carry none.
+ */
+function noteOf(actor: ExecutionActor, message: string | undefined): RetryNote | undefined {
+  const text = message?.trim();
+  if (!text) return undefined;
+  if (actor.kind === 'supervisor') return { by: 'supervisor', text };
+  if (actor.kind === 'planner-turn' || actor.kind === 'subplanner') return { by: 'planner', text };
+  return undefined;
 }

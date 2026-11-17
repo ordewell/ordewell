@@ -310,6 +310,52 @@ describe('the loop guards', () => {
     expect(env.run.spawnedIds()).toEqual(['t1']);
   });
 
+  it('tells it, refusing an identical retry, to retry with a note or edit and retry in the same reply', async () => {
+    const env = await failedOnce();
+
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh' }, ctx);
+
+    expect(JSON.parse(retry.text).reason).toBe('Refused: task #1 "Task t1" failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: call retry_task from "fresh" again with a message, your note to the new attempt saying what to do differently; or edit its prompt with edit_plan, or move it to another model or runner, and call retry_task again in this same reply, since an edit alone starts nothing; or tell the user.');
+  });
+
+  // The supervisor's retry with a note is one call, so a turn cannot end between the change and the retry.
+  it('retries in one call with a note: the note is the change, and the runner gets it marked as the supervisor\'s', async () => {
+    const env = await failedOnce();
+
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Import from ./lib, not ../lib.' }, ctx);
+
+    expect(retry.isError).toBeFalsy();
+    expect(taskOf(env.session, 't1')!.retryNote).toEqual({ by: 'supervisor', text: 'Import from ./lib, not ../lib.' });
+    env.planner.calls[0].finish(prose('Retried task 1 with a note.'));
+    await until(() => env.run.spawnedIds().length === 2);
+    expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('## The supervisor\'s note for this attempt\n\nThe last attempt at this task failed, and the supervisor retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\nImport from ./lib, not ../lib.');
+  });
+
+  it('refuses the same note again once the attempt it was given failed', async () => {
+    const env = await failedOnce();
+    await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Import from ./lib.' }, ctx);
+    env.planner.calls[0].finish(prose('Retried task 1 with a note.'));
+    await failsAgain(env, 2);
+
+    const same = await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Import from ./lib.' }, ctx);
+    const other = await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Import from ./src/lib.' }, ctx);
+
+    expect(JSON.parse(same.text).reason).toMatch(/^Refused: task #1 "Task t1" failed with this same prompt, model and note/);
+    expect(other.isError).toBeFalsy();
+  });
+
+  it('leaves the user\'s own retry as it was: no note, whatever the call carries', async () => {
+    const env = await failedOnce();
+    env.planner.calls[0].finish(prose('Task 1 failed.'));
+    await settled();
+
+    await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh', message: 'a stray message' }, { kind: 'user' });
+
+    await until(() => env.run.spawnedIds().length === 2);
+    expect(taskOf(env.session, 't1')!.retryNote).toBeUndefined();
+    expect(env.run.runner.spawn.mock.calls[1][0].prompt).not.toContain('note for this attempt');
+  });
+
   // ADR-0022 P2: the edit is in the plan as its call answers, so the retry that follows it is handed to the run as edited,
   // at once; the run starts it once the turn's start hold lets go (ADR-0029).
   it('hands a retry asked for after an edit in the same reply to the run at once, as edited', async () => {

@@ -104,8 +104,11 @@ export interface SupervisorHost {
   abandonTurn(): void;
   /** The run carries on as Off: save why, and tell the user. */
   goUnsupervised(reason: string): void;
-  /** A turn that took a wake-up ended, however it ended; see {@link Supervisor.awaitsRunEnd}. */
-  wakeUpEnded(): void;
+  /**
+   * A turn that took a wake-up ended, however it ended; see {@link Supervisor.awaitsRunEnd}.
+   * `tasks` are those the supervisor's own turn was woken for; none for a turn that carried the user's reports.
+   */
+  wakeUpEnded(tasks?: readonly string[]): void;
   /** Whether an input of the supervisor's that opens a turn still waits on the plan: what a retry would take. */
   inputsWait(): boolean;
   /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
@@ -600,7 +603,7 @@ export class Supervisor {
       if (this.idle(own)) void this.host.deliver(text, undefined, true, tasks).catch(() => {});
       else void this.host.deliver(text, asked, undefined, tasks).catch(() => {}).then(() => {
         if (runEnd) this.runEndPending = false;
-        this.host.wakeUpEnded();
+        this.host.wakeUpEnded(tasks);
       });
     }
     if (theirs.length > 0) {
@@ -683,10 +686,10 @@ function actBrief(readBudget: number, retryLimit: number): WakeBrief {
       'When a task that failed, is blocked or waits for input should not hold up the rest, skip_task it with your reason: none of its work lands, and its dependents go ahead once the work it waited on is done, told why. You never mark work complete; only the user vouches for it.',
       'A task waiting at a checkpoint is answered with answer_checkpoint: approve and it goes on, or reject with a reason, which the runner reads and acts on. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect (a deletion, a push, a payment, a message to someone) is theirs: escalate it to the user rather than approving it. Leave it waiting and tell them what it asks and why you did not answer. When you reject, give the reason the runner should act on.',
       readsLine(readBudget),
-      'To change a task and run it again, call edit_plan and then retry_task in the same reply: the edit is in the plan as edit_plan answers, so the retry runs it as edited.',
+      'To run a failed or stopped task again with a change, call retry_task from "fresh" with a message: your note for the new attempt, saying what to do differently, which its runner reads with its brief. To change the task itself, call edit_plan and then retry_task in the same reply: the edit is in the plan as edit_plan answers, so the retry runs it as edited, and an edit alone starts nothing.',
       'A task you stop stays on hold, and every task that depends on it waits, until it is retried or skipped: a stop alone moves nothing on. To change a stopped task\'s prompt and run it again, call edit_plan and then retry it in the same reply.',
       'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
-      `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
+      `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model, or carry a new note; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
       'Then tell the user, in a few lines, what happened, what you did and why, and what needs them.',
     ].join('\n'),
     line: `You are the supervisor at Act now: you act and then tell the user, as you were told, with up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
@@ -704,7 +707,7 @@ function subplannerBrief(readBudget: number, retryLimit: number): WakeBrief {
       'You were woken by the run update above. If the run ended with its work done, call task_complete now.',
       'Otherwise act on it yourself: run, stop, retry or skip tasks, message their runners, answer their checkpoints, and change tasks with edit_plan, then retry_task in the same reply.',
       readsLine(readBudget),
-      `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a retry after a failure must change its prompt or model. When a guard stops you, end with task_complete and status "blocked".`,
+      `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a retry after a failure must change its prompt or model, or carry a new note. When a guard stops you, end with task_complete and status "blocked".`,
     ].join('\n'),
     line: `You have up to ${readBudget} reads a turn and ${retryLimit} retries of a task.`,
   };
@@ -771,6 +774,7 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   start_refused: 'refused a start',
   run_finished: 'ended',
   run_held: 'holding the run',
+  failure_standing: 'still holding work back',
   task_report: 'reported',
 };
 
@@ -867,6 +871,8 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     case 'run_finished': return `the run finished${colon}`;
     // Each hold whole, with what it holds back and who put it there: what the supervisor decides on (ADR-0057 R4).
     case 'run_held': return event.detail ?? 'the run is idle: nothing is running and nothing can start';
+    // Whole, with the calls that release it: the turn before it left the task standing (ADR-0057 R4).
+    case 'failure_standing': return event.detail ?? `${task} is still failed or on hold after your turn`;
     // Its result whole, not a digest line: the planner asked for it, and reads it here (ADR-0037, R2).
     case 'task_report': return `${task}${REPORT_LEAD} ${(event.report?.text ?? '').split('\n').join('\n  ')}`;
     case 'task_passed': return `${task} passed`;

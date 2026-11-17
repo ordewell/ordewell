@@ -70,6 +70,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
 import { taskRefOf } from './TaskRefs';
+import { standingBlock, standingWords } from './runHolds';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { withTaskRunnerConfig } from './taskRunnerConfig';
 import { containerExecution } from './container/dockerLease';
@@ -2437,10 +2438,27 @@ export class Session {
       const task = this.store.get(id);
       return task ? [[name, this.taskHeads([task])[0]] as const] : [];
     });
+    const stillStanding = this.editedWhileStanding(committed.before);
     return {
-      ok: true, summary, coerced: adjustments, warnings, tasks: this.taskHeads(added),
+      ok: true, summary, coerced: adjustments, warnings: stillStanding.length > 0 ? [...(warnings ?? []), ...stillStanding] : warnings, tasks: this.taskHeads(added),
       ...(named.length > 0 ? { handles: Object.fromEntries(named) } : {}),
     };
+  }
+
+  /**
+   * A prompt edit to a failed or held task starts nothing, which a model can
+   * read the other way and end its turn on (ADR-0029): the edit's answer says
+   * the task still stands as it did, and what runs it as edited.
+   */
+  private editedWhileStanding(before: readonly Task[]): string[] {
+    const was = new Map(flattenTasks([...before]).map((t) => [t.id, t.prompt]));
+    const plan = this.store.planTasks;
+    const waits = this.orchestrator.planStartWaits();
+    return flattenTasks(plan).flatMap((task) => {
+      if (!was.has(task.id) || was.get(task.id) === task.prompt) return [];
+      const standing = standingBlock(plan, waits, task.id);
+      return standing ? [`Task ${this.namedRow(task)} is still ${standingWords(standing.block)}: an edit starts nothing, so call retry_task to run it as edited.`] : [];
+    });
   }
 
   /** Tasks as a planner tool's answer names them: by id and by the reference the plan gives each now. */
