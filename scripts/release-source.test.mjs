@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { load } from 'js-yaml';
-import { DELIVERY_FILES, verifyReleaseSource } from './release-source.mjs';
+import { verifyReleaseSource } from './release-source.mjs';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -25,51 +25,82 @@ function repository() {
   git('init', '-q', '-b', 'main', '--template=');
   write('package.json', '{"version":"0.14.0"}\n');
   write('packages/desktop/src/main.ts', 'released application\n');
-  for (const file of DELIVERY_FILES) write(file, 'original delivery\n');
-  commit();
-  git('tag', 'v0.14.0');
-  return { cwd, git, write, commit };
+  write('.github/workflows/release.yml', 'original delivery\n');
+  commit(); git('tag', 'v0.14.0');
+  const released = git('rev-parse', 'HEAD');
+  const run = { headSha: released, headBranch: 'main', event: 'push', conclusion: 'success', databaseId: 42,
+    url: 'https://github.com/ordewell/ordewell/actions/runs/42' };
+  const options = { cwd, recovery: true, ref: 'refs/heads/main',
+    findRuns: () => JSON.stringify([run]), readPublishedCommit: async () => released };
+  return { cwd, git, write, commit, released, run, options };
 }
 
-test('a tag push proves the checkout is exactly that tag', () => {
+test('a tag push proves the checkout is exactly that tag without requiring a prior publication', async () => {
   const { cwd, git, write, commit } = repository();
-  assert.equal(verifyReleaseSource('v0.14.0', { cwd }).sourceCommit, git('rev-parse', 'HEAD'));
-  write('.github/workflows/desktop-build.yml', 'new delivery\n'); commit();
-  assert.throws(() => verifyReleaseSource('v0.14.0', { cwd }), /tagged commit/);
+  const result = await verifyReleaseSource('v0.14.0', { cwd, readPublishedCommit: () => { throw new Error('not published yet'); } });
+  assert.equal(result.sourceCommit, git('rev-parse', 'HEAD'));
+  write('.github/workflows/release.yml', 'new delivery\n'); commit();
+  await assert.rejects(verifyReleaseSource('v0.14.0', { cwd }), /tagged commit/);
 });
 
-test('recovery permits delivery repairs while preserving the original tag and application', () => {
-  const { cwd, git, write, commit } = repository();
-  const released = git('rev-parse', 'v0.14.0');
-  for (const file of DELIVERY_FILES) write(file, 'repaired delivery\n');
-  commit();
-  const result = verifyReleaseSource('v0.14.0', { cwd, recovery: true, ref: 'refs/heads/main' });
+test('recovery retains the original CI-proven published tag when application work lands on main', async () => {
+  const { git, write, commit, released, options, run } = repository();
+  write('packages/desktop/src/main.ts', 'new work for a later release\n');
+  write('README.md', 'new main documentation\n'); commit();
+  const lookedUp = [];
+  const result = await verifyReleaseSource('v0.14.0', { ...options,
+    findRuns: (sha) => { lookedUp.push(sha); return JSON.stringify([run]); },
+    readPublishedCommit: async (version) => { assert.equal(version, '0.14.0'); return released; },
+  });
+  assert.deepEqual(lookedUp, [released]);
   assert.equal(result.sourceCommit, released);
   assert.equal(git('rev-parse', 'v0.14.0'), released);
   assert.notEqual(result.workflowCommit, released);
-  assert.equal(result.deliveryChanges.length, DELIVERY_FILES.size);
+  assert.equal(result.proof, run.url);
+  assert.equal(result.publishedSource, released);
 });
 
-for (const file of ['packages/desktop/src/main.ts', 'package.json', 'scripts/desktop-package-check.mjs', 'README.md']) {
-  test(`recovery refuses a change to ${file}`, () => {
-    const { cwd, write, commit } = repository();
-    write(file, 'changed released source\n'); commit();
-    assert.throws(() => verifyReleaseSource('v0.14.0', { cwd, recovery: true, ref: 'refs/heads/main' }), /change released sources/);
+for (const [field, value] of [['headSha', 'f'.repeat(40)], ['headBranch', 'other'], ['event', 'pull_request'], ['conclusion', 'failure']]) {
+  test(`recovery rejects a CI proof with the wrong ${field}`, async () => {
+    const { options, run } = repository();
+    await assert.rejects(verifyReleaseSource('v0.14.0', { ...options,
+      findRuns: () => JSON.stringify([{ ...run, [field]: value }]),
+      readPublishedCommit: () => { throw new Error('must not reach publication lookup'); },
+    }), /no verified main CI proof/);
   });
 }
 
-test('renaming a delivery file into application sources is refused', () => {
-  const { cwd, git, commit } = repository();
-  git('mv', '.github/workflows/release.yml', 'packages/desktop/src/release.ts'); commit();
-  assert.throws(() => verifyReleaseSource('v0.14.0', { cwd, recovery: true, ref: 'refs/heads/main' }), /packages\/desktop\/src\/release.ts/);
+test('recovery fails closed when CI proof cannot be found or read', async () => {
+  const { options } = repository();
+  await assert.rejects(verifyReleaseSource('v0.14.0', { ...options, findRuns: () => '[]' }), /no verified main CI proof/);
+  await assert.rejects(verifyReleaseSource('v0.14.0', { ...options, findRuns: () => { throw new Error('offline'); } }), /offline/);
 });
 
-test('recovery refuses another branch, missing tags and arbitrary refs', () => {
-  const { cwd } = repository();
-  assert.throws(() => verifyReleaseSource('v0.14.0', { cwd, recovery: true, ref: 'refs/heads/other' }), /main only/);
-  assert.throws(() => verifyReleaseSource('v9.0.0', { cwd, recovery: true, ref: 'refs/heads/main' }), /does not exist/);
+test('moving a tag to a different, even CI-proven, commit cannot replace the published source', async () => {
+  const { options, git, write, commit, run } = repository();
+  write('packages/desktop/src/main.ts', 'changed application\n'); commit(); git('tag', '-f', 'v0.14.0');
+  const moved = git('rev-parse', 'HEAD');
+  await assert.rejects(verifyReleaseSource('v0.14.0', { ...options,
+    findRuns: () => JSON.stringify([{ ...run, headSha: moved }]),
+  }), /already-published npm source commit/);
+});
+
+test('recovery fails closed when published source metadata is unavailable', async () => {
+  const { options } = repository();
+  await assert.rejects(verifyReleaseSource('v0.14.0', { ...options,
+    readPublishedCommit: async () => { throw new Error('registry unavailable'); },
+  }), /registry unavailable/);
+  await assert.rejects(verifyReleaseSource('v0.14.0', { ...options, readPublishedCommit: async () => undefined }), /npm source commit/);
+});
+
+test('recovery refuses another branch, missing tags, wrong versions and arbitrary refs', async () => {
+  const { cwd, options, git } = repository();
+  await assert.rejects(verifyReleaseSource('v0.14.0', { ...options, ref: 'refs/heads/other' }), /main only/);
+  await assert.rejects(verifyReleaseSource('v9.0.0', options), /does not exist/);
+  git('tag', 'v0.15.0');
+  await assert.rejects(verifyReleaseSource('v0.15.0', options), /version in its own sources/);
   for (const tag of ['main', 'HEAD', '--help', 'v0.14.0;echo test', 'v0.14.0/other']) {
-    assert.throws(() => verifyReleaseSource(tag, { cwd }), /existing version tag/);
+    await assert.rejects(verifyReleaseSource(tag, { cwd }), /existing version tag/);
   }
 });
 
@@ -78,6 +109,8 @@ test('recovery gates publishing and every build checks out the requested tag', (
   const release = workflow('release');
   assert.ok(release.on.workflow_dispatch.inputs.tag.required);
   assert.equal(release.jobs.ci.needs, 'release-source');
+  assert.deepEqual(release.jobs['release-source'].permissions, { contents: 'read', actions: 'read' });
+  assert.equal(release.jobs['release-source'].steps.at(-1).env.GH_TOKEN, '${{ github.token }}');
   assert.equal(release.jobs['release-source'].steps.find((s) => s.uses?.startsWith('actions/checkout@')).with['fetch-depth'], 0);
   for (const [name, job] of Object.entries(release.jobs)) {
     if (name === 'release-source') continue;

@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -7,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Rebuild an existing release tag with repaired delivery workflows (main only; application sources must match)
+        description: Recover a published tag using its original CI proof and npm source commit (main only)
         type: string
         required: true
 
@@ -23,12 +24,13 @@ concurrency:
 
 # Each job names its image, as ci.yml's do, so a move of the -latest labels is a change here.
 jobs:
-  # A repaired workflow can recover a release without moving its public tag.
-  # CI proves main; this guard proves the tag has identical application sources.
+  # Recovery builds the original, CI-proven and npm-published commit even
+  # when main has moved on. CI below proves the repaired delivery workflows.
   release-source:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -41,6 +43,7 @@ jobs:
         env:
           RECOVERY: ${{ github.event_name == 'workflow_dispatch' }}
           RELEASE_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/release-source.mjs "$RELEASE_TAG"
 
   # Coverage floors, the integration test, the artifact checks and the real
