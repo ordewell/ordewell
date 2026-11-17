@@ -16,7 +16,7 @@ export interface SlashCommandSpec {
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
-  { label: '/planner', detail: 'Pick the planner: harness, model and effort in one flow', insertText: '/planner' },
+  { label: '/planner', detail: 'Pick the planner: harness, model and effort in one flow', insertText: '/planner', aliases: ['model'] },
   { label: '/login', detail: 'Sign the active planner in; /login <runner> signs in a named agent', insertText: '/login' },
   // One word, like /task-model; `/key` (and its old `/key set`) still opens it.
   { label: '/key-set ', detail: 'Set an API key for a provider', insertText: '/key-set ', aliases: ['key'] },
