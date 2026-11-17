@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createTask, type RunSettings, type Task } from '../../models/Task';
+import { createTask, type PendingPlanTurn, type RunSettings, type Task } from '../../models/Task';
 import type { ExecutionRecord } from '../../models/Execution';
 import { RunSupervision, runOrigin, type RunSupervisionHost } from '../RunSupervision';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
@@ -14,7 +14,7 @@ const SUPERVISOR_RETRY: ExecutionRecord = { command: 'retry_task', actor: 'super
 
 function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptions = {}) {
   const tasks = [task('t1', 1)];
-  const plan: { runSettings?: RunSettings } = {};
+  const plan: { runSettings?: RunSettings; pendingTurns?: PendingPlanTurn[] } = {};
   const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, ...user };
   const transcript: { text: string; voice: 'system' | 'supervisor' }[] = [];
   const host = {
@@ -48,6 +48,19 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/**
+ * A wake-up turn's reply that fails as the planner exiting does: its input
+ * stays waiting, as PlanTurns keeps a failed turn's, so the retry is owed.
+ */
+const failsKeepingInput = (plan: { pendingTurns?: PendingPlanTurn[] }) => async (): Promise<never> => {
+  plan.pendingTurns = [{ id: 'wake', source: 'supervisor', text: 'the run ended', timestamp: '2026-10-13T00:00:00Z' }];
+  throw new Error('planner exited');
+};
+/** A reply that answers, taking the waiting input with it. */
+const answers = (plan: { pendingTurns?: PendingPlanTurn[] }) => async (): Promise<void> => {
+  plan.pendingTurns = [];
+};
 
 describe('whose authority a report opens with', () => {
   it.each([
@@ -199,7 +212,7 @@ describe('an automatic lowering', () => {
   it('leaves the run unsupervised when the supervisor fails twice, and the user\'s command brings it back', async () => {
     const { supervision, plan, host, transcript } = harness({ supervisorLevel: 'watch' });
     supervision.runStarted('user');
-    const fail = () => supervision.wakeUp(async () => { throw new Error('planner exited'); });
+    const fail = () => supervision.wakeUp(failsKeepingInput(plan));
 
     await expect(fail()).rejects.toThrow('planner exited');
     await expect(fail()).rejects.toThrow('planner exited');
@@ -219,7 +232,7 @@ describe('an automatic lowering', () => {
   it('stops only the report turns at Off when a report turn fails twice: there was no supervisor to stop', async () => {
     const { supervision, plan, transcript } = harness({ supervisorLevel: 'off' });
     supervision.runStarted('user');
-    const fail = () => supervision.wakeUp(async () => { throw new Error('planner exited'); }, undefined, 'user');
+    const fail = () => supervision.wakeUp(failsKeepingInput(plan), undefined, 'user');
 
     await expect(fail()).rejects.toThrow('planner exited');
     await expect(fail()).rejects.toThrow('planner exited');
@@ -308,27 +321,27 @@ describe('a run concluded for a follower that cannot answer it', () => {
 
   it('waits through the closing turn\'s one retry, and concludes once the retry is over', async () => {
     vi.useFakeTimers();
-    const { supervision, host } = harness({ supervisorLevel: 'act' });
-    turnsThrough(supervision, host, async () => { throw new Error('planner exited'); });
+    const { supervision, host, plan } = harness({ supervisorLevel: 'act' });
+    turnsThrough(supervision, host, failsKeepingInput(plan));
     supervision.runStarted('user');
 
     supervision.runFinished();
     await vi.advanceTimersByTimeAsync(10);
 
     expect(host.runConcluded).not.toHaveBeenCalled();
-    await supervision.wakeUp(async () => undefined);
+    await supervision.wakeUp(answers(plan));
     expect(host.runConcluded).toHaveBeenCalledTimes(1);
   });
 
   it('concludes once the supervisor is given up on: its closing turn failed twice', async () => {
     vi.useFakeTimers();
-    const { supervision, host } = harness({ supervisorLevel: 'act' });
-    turnsThrough(supervision, host, async () => { throw new Error('planner exited'); });
+    const { supervision, host, plan } = harness({ supervisorLevel: 'act' });
+    turnsThrough(supervision, host, failsKeepingInput(plan));
     supervision.runStarted('user');
 
     supervision.runFinished();
     await vi.advanceTimersByTimeAsync(10);
-    await expect(supervision.wakeUp(async () => { throw new Error('planner exited'); })).rejects.toThrow('planner exited');
+    await expect(supervision.wakeUp(failsKeepingInput(plan))).rejects.toThrow('planner exited');
 
     expect(supervision.level).toBe('off');
     expect(host.runConcluded).toHaveBeenCalledTimes(1);

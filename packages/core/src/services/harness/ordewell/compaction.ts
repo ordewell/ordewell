@@ -335,15 +335,33 @@ export interface CompactorOptions {
 export class Compactor {
   /** Messages a failed or fruitless attempt must wait for before the next proactive one. */
   private retryAt = 0;
+  /**
+   * The window this attempt runs under: the model's, until the provider
+   * refuses a request as too long. A shrink that let the request through
+   * keeps its smaller window for the rest of the attempt, so the next steps
+   * compact before they reach the size that was refused (ADR-0070).
+   */
+  private effectiveWindow: number;
 
-  constructor(private readonly options: CompactorOptions) {}
+  constructor(private readonly options: CompactorOptions) {
+    this.effectiveWindow = options.model.contextWindow;
+  }
+
+  /** The window the meter and the next compaction measure against. */
+  get contextWindow(): number {
+    return this.effectiveWindow;
+  }
+
+  /** The window in force is the assumed one: no setting, catalog or listing stated it and no overflow has measured it. */
+  get windowAssumed(): boolean {
+    return this.options.model.contextWindowSource === 'assumed' && this.effectiveWindow === this.options.model.contextWindow;
+  }
 
   /** Compacts when the next prompt passes the threshold; the transcript as it now stands either way. */
   async beforeRequest(transcript: LoadedTranscript, step: number, signal: AbortSignal): Promise<LoadedTranscript> {
-    const { model } = this.options;
     const fixed = this.fixedTokens(transcript);
     const estimated = estimatePromptTokens(transcript, fixed);
-    if (!shouldCompact(estimated, model.contextWindow) || transcript.messages.length < this.retryAt) return transcript;
+    if (!shouldCompact(estimated, this.effectiveWindow) || transcript.messages.length < this.retryAt) return transcript;
     try {
       const compacted = await this.compact(transcript, step, signal, { fraction: undefined, preTokens: estimated });
       if (compacted) return compacted;
@@ -362,6 +380,11 @@ export class Compactor {
    * so the caller tries a smaller fraction.
    */
   shrink(transcript: LoadedTranscript, step: number, signal: AbortSignal, fraction: number): Promise<LoadedTranscript | undefined> {
+    // A fraction is of the model's window; one no smaller than the window an
+    // earlier overflow left in force would retry a size already refused.
+    if (Math.floor(this.options.model.contextWindow * fraction) >= this.effectiveWindow && this.effectiveWindow < this.options.model.contextWindow) {
+      return Promise.resolve(undefined);
+    }
     const fixed = this.fixedTokens(transcript);
     return this.compact(transcript, step, signal, { fraction, preTokens: estimatePromptTokens(transcript, fixed) });
   }
@@ -377,7 +400,7 @@ export class Compactor {
     plan: { fraction: number | undefined; preTokens: number },
   ): Promise<LoadedTranscript | undefined> {
     const { model, client, store } = this.options;
-    const window = model.contextWindow;
+    const window = plan.fraction === undefined ? this.effectiveWindow : model.contextWindow;
     const fixed = this.fixedTokens(transcript);
     const headTokens = transcript.messages.length > 0 && transcript.messages[0]?.role === 'user' ? estimateMessageTokens(transcript.messages[0]) : 0;
     const summaryAllowance = Math.min(SUMMARY_MAX_OUTPUT_TOKENS, model.maxOutputTokens, Math.floor(window * 0.1));
@@ -415,6 +438,7 @@ export class Compactor {
       postTokens,
       ...(usage ? { usage } : {}),
     });
+    if (plan.fraction !== undefined) this.effectiveWindow = Math.floor(window * plan.fraction);
     this.announce(plan.preTokens, postTokens, usage);
     return store.load();
   }
@@ -424,7 +448,7 @@ export class Compactor {
     const { model, emit } = this.options;
     emit({ type: 'compaction', trigger: 'auto', preTokens, postTokens });
     if (usage) emit({ type: 'usage', record: compactionUsageRecord(model, usage) });
-    const reset: UsageRecord = { source: 'ordewell', model: model.id, compacted: true, contextTokens: postTokens, contextWindow: model.contextWindow };
+    const reset: UsageRecord = { source: 'ordewell', model: model.id, compacted: true, contextTokens: postTokens, contextWindow: this.effectiveWindow, ...(this.windowAssumed ? { contextWindowAssumed: true } : {}) };
     emit({ type: 'usage', record: reset });
   }
 }

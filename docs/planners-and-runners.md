@@ -159,6 +159,17 @@ wait 180 seconds for its first event and 60 between events; set them as
 same file. A reply cut after a tool call has run is not sent again: the call's
 result is kept and the model goes on from it.
 
+**Context windows.** The runner compacts a conversation as it nears the model's
+context window. It takes that window from, in order: `ordewellContextWindows` in the
+same file, the model catalog, and the provider's own model listing where it states
+one (OpenRouter's does, and so do some compatible servers'). Where none states it,
+the runner assumes 128,000 tokens; the context meter then reads "of an assumed
+128k" and the task log's first line says so. Set a model's window, by its
+`<provider>:<model>` id, in tokens, as
+`"ordewellContextWindows": { "openrouter:acme/model": 200000 }`. The setting wins
+over the catalog and the listing. When a provider refuses a request as too long, the
+runner compacts further and keeps the smaller window for the rest of that attempt.
+
 **Resuming and messages.** The runner keeps each attempt's conversation in a
 transcript under Ordewell's data directory, outside your repository, so a resumed
 task continues from it, and compacts a long conversation itself.

@@ -156,6 +156,7 @@ export function goalText(lib) {
     'The tests in the repository are the specification.',
     'Do not edit, delete or skip the tests.',
     'Every dependency is already installed and the network is closed, so do not install or download anything.',
+    'The original implementation is off limits: do not look for it in caches, compiled files, installed packages or on the network; write it from the docstrings and the tests.',
   ].join(' ');
 }
 
@@ -284,8 +285,16 @@ const urls = JSON.parse(process.argv[1]);
 
 // --- The venv ---------------------------------------------------------------
 
-/** What no diff carries: the image's venv, and the session data Ordewell keeps in the workspace. */
-const UNSCORED = () => [VENV_DIR, '.ordewell'].map((d) => shellQuote(`:(exclude,literal)${d}`)).join(' ');
+/**
+ * What no diff carries: the image's venv, the session data Ordewell keeps in
+ * the workspace, and bytecode, which is no one's work and once made a partial
+ * patch mostly binaries.
+ */
+const UNSCORED = () => [
+  ...[VENV_DIR, '.ordewell'].map((d) => `:(exclude,literal)${d}`),
+  ':(exclude,glob)**/__pycache__/**',
+  ':(exclude,glob)**/*.pyc',
+].map(shellQuote).join(' ');
 /** Marks every untracked, unignored file but those as intent-to-add, so `git diff` shows it; `git add -N .` would fail on an ignored venv link. */
 const INTENT_TO_ADD = () => `git ls-files -z --others --exclude-standard -- . ${UNSCORED()} | xargs -0 -r git add -N --`;
 
@@ -461,6 +470,16 @@ for root, subdirs, files in os.walk(scan_root, topdown=True):
             continue
         archives.append(full)
 out['archives'] = archives
+# After the cleanup nothing untracked or ignored is left but the venv, Ordewell's
+# own directory and an editable install's metadata: anything else (bytecode, a
+# build tree, a stray copy) may carry the implementation, and is a hit.
+st = git('status', '--ignored', '--porcelain', '-z', '--untracked-files=all', '--', '.',
+         ':(exclude,literal).venv', ':(exclude,literal).ordewell', ':(exclude,glob)**/*.egg-info/**')
+if st.returncode == 0:
+    entries = [e for e in st.stdout.split('\0') if e]
+    out['untracked'] = sorted(e[3:] for e in entries if e[:2] in ('??', '!!'))
+else:
+    out['untracked'] = None
 print(json.dumps(out))
 `;
 
@@ -474,6 +493,8 @@ export function judgeLeak(probe) {
   for (const p of probe.resolvesOutside ?? []) failures.push(`the library imports from ${p}, outside the repository`);
   for (const p of probe.installedOutside ?? []) failures.push(`an installed copy sits at ${p}`);
   for (const p of probe.archives ?? []) failures.push(`a package archive sits at ${p}`);
+  if (!Array.isArray(probe.untracked)) failures.push('git status could not list the untracked and ignored files');
+  for (const p of probe.untracked ?? []) failures.push(`an untracked or ignored file ${p} is left in the workspace`);
   return { ok: failures.length === 0, failures };
 }
 
@@ -486,6 +507,7 @@ export function leakKinds(probe) {
   if ((probe.resolvesOutside ?? []).length) kinds.push('import');
   if ((probe.installedOutside ?? []).length) kinds.push('installed');
   if ((probe.archives ?? []).length) kinds.push('archive');
+  if ((probe.untracked ?? []).length) kinds.push('untracked');
   return kinds;
 }
 
@@ -542,6 +564,16 @@ export function judgeStubCollection({ code, output }) {
  * after the marker was touched, then the marker. (find will not combine
  * -prune with -delete.)
  */
+/**
+ * Removes every untracked and ignored file the image or the reference
+ * collection left in the flattened workspace, printing each: bytecode compiled
+ * from the implementation, a build tree. The venv stays, and so does an
+ * editable install's metadata, which names the package and holds no module.
+ */
+export function leftoverCleanupScript(lib) {
+  return `set -eu\ncd ${shellQuote(lib.workdir)}\ngit clean -ffdx -e /${VENV_DIR} -e '*.egg-info'`;
+}
+
 export function removeWrittenScript(mark) {
   const q = shellQuote;
   const list = `${mark}.list`;
@@ -948,12 +980,14 @@ export function judgePlan(plan) {
 }
 
 /**
- * The cap a watchdog enforces, read every poll. The key's own usage counts
- * every caller's spend, B's planner included; the transcripts are the
- * fallback when the key cannot be read, and both are checked when both are known.
+ * The cap a watchdog enforces, read every poll, on the largest spend it knows.
+ * The session's recorded spend (recordedSpend) counts every call Ordewell made
+ * for the run, B's planner included; the key's delta counts every caller, so
+ * it is passed only for a run alone on the key, and the transcripts are the
+ * floor when the session cannot be read.
  */
-export function capDecision({ elapsedMs, keySpentUsd, transcriptSpentUsd, capUsd, wallCapMs = WALL_CAP_MS }) {
-  const spent = Math.max(keySpentUsd ?? 0, transcriptSpentUsd ?? 0);
+export function capDecision({ elapsedMs, recordedSpentUsd, keySpentUsd, transcriptSpentUsd, capUsd, wallCapMs = WALL_CAP_MS }) {
+  const spent = Math.max(recordedSpentUsd ?? 0, keySpentUsd ?? 0, transcriptSpentUsd ?? 0);
   if (spent >= capUsd) return { stop: true, why: 'spend', spentUsd: round6(spent) };
   if (elapsedMs >= wallCapMs) return { stop: true, why: 'wall-clock', spentUsd: round6(spent) };
   return { stop: false, why: null, spentUsd: round6(spent) };
@@ -1239,12 +1273,313 @@ export function resultRecord({ lib, arm, settings = armSettings(arm), window, or
   };
 }
 
+// --- Recorded spend and run metrics -----------------------------------------
+
+/** What one model call record's provider reported it cost in dollars; undefined when it reported none. */
+const reportedUsd = (usage) => {
+  const n = usage?.totals?.reportedCost?.USD;
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+};
+
+/**
+ * Every model call Ordewell recorded for the session, in dollars as the
+ * provider reported them: the planner's ledger (`plan.plannerUsage`, its
+ * turns and the supervisor's wake-up turns alike, core's PlannerUsageLedger)
+ * and each attempt's (`task.attemptUsage`, subtasks included, as core's
+ * `planUsage` sums them). Unlike the runner transcripts, it counts the
+ * planner. An attempt with no reported price is counted as unpriced, never
+ * guessed; usd is null when nothing was priced at all.
+ */
+export function recordedSpend(plan) {
+  const plannerUsd = reportedUsd(plan?.plannerUsage) ?? null;
+  let attemptsUsd = null;
+  let attempts = 0;
+  let unpriced = 0;
+  for (const t of allTasks(plan)) {
+    for (const u of t.attemptUsage ?? []) {
+      attempts++;
+      const n = reportedUsd(u);
+      if (n === undefined) unpriced++;
+      else attemptsUsd = (attemptsUsd ?? 0) + n;
+    }
+  }
+  const usd = plannerUsd === null && attemptsUsd === null ? null : round6((plannerUsd ?? 0) + (attemptsUsd ?? 0));
+  return { usd, plannerUsd, attemptsUsd: attemptsUsd === null ? null : round6(attemptsUsd), attempts, unpriced };
+}
+
+/**
+ * The plan's longest dependency chain and its widest level, a task's level
+ * being one more than its deepest dependency's. Top-level tasks only, as the
+ * plan orders them; null for a plan with none, a cycle or a dependency on no task.
+ */
+export function planShape(plan) {
+  const tasks = plan?.tasks ?? [];
+  const none = { longestChain: null, widestLevel: null };
+  if (!tasks.length) return none;
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const level = new Map();
+  const visit = (t, stack) => {
+    if (level.has(t.id)) return level.get(t.id);
+    if (stack.has(t.id)) return null;
+    stack.add(t.id);
+    let deepest = 0;
+    for (const d of t.dependencies ?? []) {
+      const dep = byId.get(d);
+      const l = dep ? visit(dep, stack) : null;
+      if (l === null) return null;
+      deepest = Math.max(deepest, l);
+    }
+    stack.delete(t.id);
+    level.set(t.id, deepest + 1);
+    return deepest + 1;
+  };
+  for (const t of tasks) if (visit(t, new Set()) === null) return none;
+  const widths = new Map();
+  for (const l of level.values()) widths.set(l, (widths.get(l) ?? 0) + 1);
+  return { longestChain: Math.max(...level.values()), widestLevel: Math.max(...widths.values()) };
+}
+
+/**
+ * The mean number of attempts running at once while any ran: their summed
+ * wall time over the length of the union of their intervals. Null with none,
+ * or with one that has no end, since its length would be a guess.
+ */
+export function meanConcurrency(attemptUsages) {
+  const spans = [];
+  for (const u of attemptUsages ?? []) {
+    const s = Date.parse(u.startedAt);
+    const e = Date.parse(u.endedAt);
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+    spans.push([s, Math.max(s, e)]);
+  }
+  if (!spans.length) return null;
+  spans.sort((a, b) => a[0] - b[0]);
+  let union = 0;
+  let sum = 0;
+  let [from, to] = spans[0];
+  for (const [s, e] of spans) {
+    sum += e - s;
+    if (s > to) {
+      union += to - from;
+      [from, to] = [s, e];
+    } else to = Math.max(to, e);
+  }
+  union += to - from;
+  return union > 0 ? round6(sum / union) : null;
+}
+
+const toolName = (name, tool) => name === tool || String(name).endsWith(`__${tool}`);
+const parseArgsJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+/** Who answered a checkpoint, read from core's reply to the model (checkpointReply, services/mcp/tools.ts). */
+function checkpointAnswer(output) {
+  const m = /^(approved|rejected): the (supervisor|user) said/.exec(output ?? '');
+  if (m) return { answeredBy: m[2], answer: m[1] };
+  if (/^The checkpoint was withdrawn/.test(output ?? '')) return { answeredBy: 'withdrawn', answer: 'withdrawn' };
+  return { answeredBy: null, answer: null };
+}
+
+/**
+ * What explains a run's result, read from its session: the plan as core saved
+ * it and, when the session's task logs were copied out, each attempt's log
+ * (readTaskLogs). A figure the session does not hold is null, never guessed.
+ * Steps count the runner's own tool calls, a subagent's left out.
+ */
+export function runMetrics(plan, taskLogs) {
+  if (!plan) return null;
+  const tasks = allTasks(plan);
+  const count = (f) => tasks.filter(f).length;
+  const blocked = (t) => t.verdict?.reported === 'blocked' && t.status !== 'completed';
+  const counts = {
+    total: tasks.length,
+    passed: count((t) => t.status === 'completed'),
+    failed: count((t) => t.status === 'failed' && !blocked(t)),
+    blocked: count(blocked),
+    skipped: count((t) => t.status === 'skipped'),
+  };
+  counts.open = counts.total - counts.passed - counts.failed - counts.blocked - counts.skipped;
+  counts.hitl = count((t) => t.autonomy === 'HITL' || t.sliceType === 'HITL');
+  counts.user = count((t) => t.type === 'user');
+
+  const attemptsOf = (t) => {
+    const logs = taskLogs?.[t.id] ?? {};
+    const numbers = new Set([...(t.attemptUsage ?? []).map((u) => u.attempt), ...Object.keys(logs).map(Number)]);
+    return [...numbers].sort((a, b) => a - b).map((n) => ({ n, usage: (t.attemptUsage ?? []).find((u) => u.attempt === n), events: logs[n] ?? null }));
+  };
+  const checkpoints = taskLogs ? [] : null;
+  const perTask = tasks.map((t) => {
+    const attempts = attemptsOf(t).map(({ n, usage, events }) => {
+      let ended = null;
+      let steps = null;
+      if (events) {
+        const calls = events.filter((e) => e.type === 'tool_call' && !e.subagentId);
+        steps = calls.length;
+        const done = calls.filter((c) => toolName(c.name, 'task_complete')).pop();
+        ended = done ? (parseArgsJson(done.args)?.status ?? 'task_complete without a status') : 'ended without task_complete';
+        for (const c of calls.filter((x) => toolName(x.name, 'checkpoint'))) {
+          const reply = events.find((e) => e.type === 'tool_result' && e.id === c.id);
+          checkpoints.push({ taskId: t.id, attempt: n, question: parseArgsJson(c.args)?.question ?? null, ...checkpointAnswer(reply?.output) });
+        }
+      }
+      return { attempt: n, ended, steps, runningMs: usage?.runningMs ?? null };
+    });
+    const logged = attempts.filter((a) => a.steps !== null);
+    return {
+      id: t.id, order: t.order ?? null, title: t.title ?? null, type: t.type ?? null, status: t.status ?? null,
+      runningMs: attempts.some((a) => a.runningMs === null) ? null : attempts.reduce((s, a) => s + a.runningMs, 0),
+      steps: logged.length && logged.length === attempts.length ? logged.reduce((s, a) => s + a.steps, 0) : null,
+      attempts,
+    };
+  });
+
+  const history = Array.isArray(plan.conversationHistory) ? plan.conversationHistory : null;
+  const supervisor = {
+    wakeUps: history ? history.filter((m) => m.kind === 'wake_up').length : null,
+    actions: history ? history.filter((m) => m.kind === 'execution' && m.execution?.actor === 'supervisor')
+      .map(({ execution: x }) => ({ command: x.command, task: x.task?.ref ?? null, outcome: x.outcome, at: x.at })) : null,
+  };
+  return {
+    tasks: counts,
+    checkpoints,
+    supervisor,
+    perTask,
+    plan: planShape(plan),
+    meanConcurrentAttempts: meanConcurrency(tasks.flatMap((t) => t.attemptUsage ?? [])),
+  };
+}
+
+/** Core's path segment for an id (utils/sessionDir.ts idSegment). */
+const idSegment = (id) => (/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/.test(id) ? id : `~${Buffer.from(id, 'utf-8').toString('hex')}`);
+
+/**
+ * Each task's attempt logs from a copied-out `.ordewell` directory, as core
+ * writes them (utils/taskLogStore.ts): `sessions/<session>/tasks/<task>/<n>.jsonl`.
+ * Null when the session has no log directory; a line that does not parse is skipped.
+ */
+export function readTaskLogs(ordewellDir, sessionId, plan) {
+  const root = path.join(ordewellDir, 'sessions', idSegment(sessionId), 'tasks');
+  if (!fs.existsSync(root)) return null;
+  const out = {};
+  for (const t of allTasks(plan)) {
+    const dir = path.join(root, idSegment(t.id));
+    out[t.id] = {};
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) {
+      const n = /^([1-9]\d*)\.jsonl$/.exec(name)?.[1];
+      if (!n) continue;
+      out[t.id][n] = fs.readFileSync(path.join(dir, name), 'utf8').split('\n').filter(Boolean)
+        .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+    }
+  }
+  return out;
+}
+
+// --- Batches ----------------------------------------------------------------
+
+/** The share of the host's memory a batch's boxes may hold between them, the rest left to the host. */
+export const BATCH_MEMORY_SHARE = 0.8;
+export const JOBS = 2;
+/** The file in a batch's directory whose presence tells every run of the batch to stop: the batch budget is spent. */
+export const BATCH_STOP_FILE = 'stop';
+
+/** Whether `jobs` boxes at their fixed quotas fit the host: CPUs at most its count, memory at most 80% of it. */
+export function capacityCheck({ jobs, cpus, memory, hostCpus, hostMemBytes }) {
+  const failures = [];
+  const wantCpus = jobs * cpus;
+  if (wantCpus > hostCpus) failures.push(`${jobs} runs × ${cpus} cpus = ${wantCpus} cpus, the host has ${hostCpus}: lower --jobs or --cpus`);
+  const each = dockerBytes(memory);
+  const gib = (b) => `${round6(b / 2 ** 30)}g`;
+  if (each === null) failures.push(`--memory ${memory} is not a docker size`);
+  else if (jobs * each > BATCH_MEMORY_SHARE * hostMemBytes) {
+    failures.push(`${jobs} runs × ${memory} = ${gib(jobs * each)}, above 80% of the host's ${gib(hostMemBytes)}: lower --jobs or --memory`);
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+/** The key's lifetime usage in dollars from OpenRouter's /api/v1/key; null without a key or on any failure. */
+export async function keyUsage(key, fetchImpl = fetch) {
+  if (!key) return null;
+  try {
+    const res = await fetchImpl('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body?.data?.usage === 'number' ? body.data.usage : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The key's usage once it stops moving: OpenRouter books a call some seconds after it returns. */
+export async function settledKeyUsage(key, { read = () => keyUsage(key), waitMs = 15_000, tries = 8 } = {}) {
+  let last = await read();
+  for (let i = 0; i < tries; i++) {
+    await new Promise((r) => setTimeout(r, waitMs));
+    const now = await read();
+    if (now !== null && now === last) return now;
+    last = now;
+  }
+  return last;
+}
+
+/** Whether the key's delta since the batch began has reached the batch budget. An unread key stops nothing. */
+export function budgetDecision({ keyBeforeUsd, keyNowUsd, budgetUsd }) {
+  if (keyBeforeUsd == null || keyNowUsd == null) return { stop: false, spentUsd: null };
+  const spentUsd = round6(keyNowUsd - keyBeforeUsd);
+  return { stop: budgetUsd != null && spentUsd >= budgetUsd, spentUsd };
+}
+
+/**
+ * A run's id: its directory's name and its box's, network's and proxy's
+ * (`commit0-<id>-…`). The library, the arm and the seed make it unique within
+ * a batch, which never holds a pair twice (batchPlan).
+ */
+export function runIdFor({ stamp, lib, arm, seed = null }) {
+  return [stamp.slice(0, 19), lib, arm, ...(seed ? [seed] : [])].join('-').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+}
+
+/**
+ * batch.json: the key's usage around the batch against the sum of what
+ * Ordewell recorded for its runs. The gap is what the records do not explain
+ * (a run's unpriced calls, or a call outside the batch on the same key). When
+ * runs overlapped, no run's own key delta exists, and each says so.
+ */
+export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, startedAt, endedAt, runs }) {
+  const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
+  const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
+  const keyDeltaUsd = keyBeforeUsd != null && keyAfterUsd != null ? round6(keyAfterUsd - keyBeforeUsd) : null;
+  return {
+    dryRun, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
+    keyBeforeUsd: keyBeforeUsd ?? null,
+    keyAfterUsd: keyAfterUsd ?? null,
+    keyDeltaUsd,
+    recordedSumUsd,
+    unrecordedRuns: runs.filter((r) => typeof r.recordedUsd !== 'number').map((r) => `${r.lib} ${r.arm}`),
+    gapUsd: keyDeltaUsd !== null && recordedSumUsd !== null ? round6(keyDeltaUsd - recordedSumUsd) : null,
+    budgetUsd: budgetUsd ?? null,
+    stoppedByBudget,
+    perRunKeyBilled: overlapped ? 'not available: the runs overlapped on one key' : 'each run\'s result.json, its key delta',
+    runs,
+  };
+}
+
+/** The runs of a batch, library by library and arm by arm; a library named twice would give two runs one name. */
+export function batchPlan({ libs, arms, seed }) {
+  const seen = new Set();
+  for (const name of libs) {
+    if (seen.has(name)) throw new Error(`library ${name} is listed twice: each run of a batch needs its own name`);
+    seen.add(name);
+  }
+  return libs.flatMap((lib) => arms.map((arm) => ({ lib, arm, seed })));
+}
+
 // --- Command line -----------------------------------------------------------
 
 export function parseArgs(argv) {
   const out = {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
     capUsd: CAP_USD, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
+    seed: null, batchDir: null, batchShared: false,
   };
   const number = (name, v, ok) => {
     const n = Number(v);
@@ -1282,8 +1617,13 @@ export function parseArgs(argv) {
     else if (a === '--ordewell-root') out.ordewellRoot = path.resolve(value());
     else if (a === '--allow-stale-dist') out.allowStaleDist = true;
     else if (a === '--sweep') out.sweep = true;
+    else if (a === '--seed') out.seed = seedLabel(value());
+    // Set by batch.mjs on each run it starts: the batch holds the key and its results.
+    else if (a === '--batch-dir') out.batchDir = path.resolve(value());
+    else if (a === '--batch-shared') out.batchShared = true;
     else throw new Error(`unknown argument ${a}`);
   }
+  if (out.batchShared && !out.batchDir) throw new Error('--batch-shared is for a run batch.mjs starts, with --batch-dir');
   if (out.help || (out.sweep && !out.dryRun && !out.run)) return out;
   // Spending is never the default: a run that bills the key has to say so.
   if (out.dryRun === out.run) throw new Error('pass --dry-run to set up and check without a model call, or --run to run the arms and spend');
@@ -1292,6 +1632,61 @@ export function parseArgs(argv) {
   if (!out.fixture && !out.libs) throw new Error('pass --libs <file>, a list of libraries as libraries.example.json shows, or --fixture');
   if (out.run && !out.providerPin) throw new Error('a run needs --provider-pin <provider>: the one OpenRouter provider the key is pinned to');
   return out;
+}
+
+function seedLabel(v) {
+  if (!/^[\w.-]{1,40}$/.test(v)) throw new Error(`--seed takes a label of letters, digits, ".", "_" and "-", not ${v}`);
+  return v;
+}
+
+/** What batch.mjs passes on to each run as given, beside the libraries file. */
+const BATCH_PASSED = Object.freeze({
+  flags: ['--dry-run', '--run', '--allow-stale-dist', '--keep'],
+  values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root'],
+});
+
+/**
+ * batch.mjs's options: its own (--jobs, --batch-budget-usd, --seed, --only,
+ * --arm, --sweep), and every run's, checked as drive.mjs checks them and
+ * passed on in `driveArgs`.
+ */
+export function parseBatchArgs(argv) {
+  const own = { jobs: JOBS, budgetUsd: null, seed: null, only: [], arm: 'both', sweep: false, help: false };
+  const driveArgs = [];
+  const positive = (name, v, ok, what) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || !ok(n)) throw new Error(`${name} takes ${what}, not ${v}`);
+    return n;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const value = () => {
+      const v = argv[++i];
+      if (v === undefined || v.startsWith('--')) throw new Error(`${a} needs a value`);
+      return v;
+    };
+    if (a === '--help' || a === '-h') own.help = true;
+    else if (a === '--jobs') own.jobs = positive(a, value(), (n) => Number.isInteger(n) && n >= 1, 'a whole number, 1 or more');
+    else if (a === '--batch-budget-usd') own.budgetUsd = positive(a, value(), (n) => n > 0, 'a number above 0');
+    else if (a === '--seed') own.seed = seedLabel(value());
+    else if (a === '--only') own.only.push(...value().split(',').filter(Boolean));
+    else if (a === '--arm') {
+      const v = value().toUpperCase();
+      if (!['A', 'B', 'BOTH'].includes(v)) throw new Error('--arm takes A, B or both');
+      own.arm = v === 'BOTH' ? 'both' : v;
+    } else if (a === '--sweep') own.sweep = true;
+    else if (a === '--libs') driveArgs.push(a, path.resolve(value()));
+    else if (a === '--ordewell-root') driveArgs.push(a, path.resolve(value()));
+    else if (BATCH_PASSED.flags.includes(a)) driveArgs.push(a);
+    else if (BATCH_PASSED.values.includes(a)) driveArgs.push(a, value());
+    else throw new Error(`unknown argument ${a}`);
+  }
+  if (own.help) return { ...own, driveArgs };
+  const run = parseArgs(driveArgs);
+  if (!run.libs) throw new Error('a batch runs a list of libraries: pass --libs <file>');
+  // The key's delta counts every run of the batch: on a key no cap of one run bounds that.
+  if (run.run && own.budgetUsd === null) throw new Error('a paid batch needs --batch-budget-usd <usd>: the most the key may spend across the batch');
+  return { ...run, ...own, driveArgs };
 }
 
 export const armsOf = (arm) => (arm === 'both' ? [ARMS.A, ARMS.B] : [ARMS[arm]]);

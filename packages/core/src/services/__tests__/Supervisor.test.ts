@@ -65,6 +65,20 @@ describe('wakeUpDigest', () => {
       ]);
     });
 
+    it('names a window no catalog or listing stated as assumed', () => {
+      const event = runningLong('t4', { contextTokens: 90_000, contextWindow: 128_000, contextWindowAssumed: true });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toContain('; context 90k of an assumed 128k tokens');
+    });
+
+    it('names an assumed window when the context flag fires against it', () => {
+      const event = runningLong('t4', { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 200_000, contextTokens: 210_000, contextWindow: 400_000, contextWindowAssumed: true });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toContain('context 210k of an assumed 400k window, past 200k');
+    });
+
     it('names the floor when no AI task has passed, and a threshold doubled by earlier flags', () => {
       const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE });
 
@@ -241,7 +255,7 @@ describe('Supervisor', () => {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), stoppedByUser: () => false, digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
       // Nothing left to wait for: what is held goes at the window, as the tests here want it to (WakePolicy.test.ts holds the rest).
       wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
-      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
+      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), inputsWait: () => true, dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
 

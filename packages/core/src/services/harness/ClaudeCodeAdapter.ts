@@ -22,7 +22,7 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
-import { taskCompactWindowOf } from '../taskCompactWindow';
+import { claudeCompactWindowOf } from '../taskCompactWindow';
 import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
 import { UsageRecordBuilder, type CallUsage } from './usageBuilder';
@@ -135,7 +135,7 @@ const NO_CONNECTORS = { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
 
 /**
  * A task's environment. Its context compacts at `window`
- * ({@link taskCompactWindowOf}); the completion contract rides in the system
+ * ({@link claudeCompactWindowOf}); the completion contract rides in the system
  * prompt, where a summary cannot drop it. The variable, which an older CLI
  * ignores, is read by 2.1.314 (`--autocompact` is the same setting as a flag);
  * a plain integer, because a `k` suffix is only read by newer ones. A
@@ -656,7 +656,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * hands it the whole command as one argument (ADR-0036 N2).
    */
   override async start(opts: AgentStartOptions): Promise<void> {
-    this.compactWindowTokens = opts.kind === 'task' ? taskCompactWindowOf(opts.model) : undefined;
+    this.compactWindowTokens = opts.kind === 'task' ? claudeCompactWindowOf(opts.model) : undefined;
     this.nativeShell = await this.ownNativeShell(opts);
     await super.start(opts);
   }

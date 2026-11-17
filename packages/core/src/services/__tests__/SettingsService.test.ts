@@ -79,6 +79,19 @@ describe('SettingsService', () => {
     }
   });
 
+  it('keeps each built-in runner context window only as a positive whole number of tokens', () => {
+    for (const [value, kept] of [
+      [{ 'openrouter:acme/m': 200_000, 'openai_compatible:qwen3:8b': 32_768 }, { 'openrouter:acme/m': 200_000, 'openai_compatible:qwen3:8b': 32_768 }],
+      [{ 'openrouter:acme/m': 0, 'openrouter:acme/n': 1.5, 'openrouter:acme/o': '9', 'openrouter:acme/p': 64_000 }, { 'openrouter:acme/p': 64_000 }],
+      [{ 'openrouter:acme/m': 0 }, undefined],
+      [128_000, undefined],
+      [[128_000], undefined],
+    ] as const) {
+      fs.writeFileSync(tempFile, JSON.stringify({ ordewellContextWindows: value }));
+      expect(new SettingsService(tempFile).getAll().ordewellContextWindows, JSON.stringify(value)).toEqual(kept);
+    }
+  });
+
   it('picks up a write from another process (mtime-based cache invalidation)', () => {
     service.setModelAllowlist('opencode', ['a']);
     expect(service.getModelAllowlist('opencode')).toEqual(['a']);
@@ -287,16 +300,16 @@ describe('SettingsService', () => {
   });
 
   // Config-file control only, like plannerAutoCompaction. Kept as written: one a task cannot use refuses its start.
-  it('reads taskCompactWindow from the file and keeps it, as written, through other writes', () => {
+  it('reads taskCompactAt from the file and keeps it, as written, through other writes', () => {
     for (const value of ['off', 'auto', 400_000, 5]) {
-      fs.writeFileSync(tempFile, JSON.stringify({ taskCompactWindow: value }));
-      expect(service.getAll().taskCompactWindow).toBe(value);
+      fs.writeFileSync(tempFile, JSON.stringify({ taskCompactAt: value }));
+      expect(service.getAll().taskCompactAt).toBe(value);
 
       service.setEnabledRunners(['codex']);
-      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ taskCompactWindow: value, enabledRunners: ['codex'] });
+      expect(JSON.parse(fs.readFileSync(tempFile, 'utf-8'))).toEqual({ taskCompactAt: value, enabledRunners: ['codex'] });
     }
 
-    fs.writeFileSync(tempFile, JSON.stringify({ taskCompactWindow: { tokens: 400_000 } }));
+    fs.writeFileSync(tempFile, JSON.stringify({ taskCompactAt: { tokens: 400_000 } }));
     expect(service.getAll()).toEqual({});
   });
 

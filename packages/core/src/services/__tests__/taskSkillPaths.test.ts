@@ -16,7 +16,7 @@ const skillsService = { findSkill: (name: string) => SKILLS.find((s) => s.name =
 function twoTaskPlan(): LegacyPlanState {
   return {
     tasks: [
-      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'p', assignedRunner: 'claude-code', skills: ['tdd', 'pr-style'] }),
+      createTask({ id: 'a', order: 1, title: 'Setup', prompt: 'Write .ordewell/skills/later/SKILL.md', assignedRunner: 'claude-code', skills: ['tdd', 'pr-style'] }),
       createTask({ id: 'b', order: 2, title: 'Build', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code' }),
     ],
     generatedAt: new Date().toISOString(),
@@ -57,7 +57,7 @@ describe('task skills checked where a planner reply lands', () => {
     const broadcast = vi.fn<(message: SessionMessage) => void>();
     const planned = (skills: string[]) => ({
       kind: 'plan', text: '', researchLog: [],
-      tasks: [createTask({ id: 't1', order: 1, title: 'Cache', prompt: 'p', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK', skills })],
+      tasks: [createTask({ id: 't0', order: 1, title: 'Make', prompt: 'Write .ordewell/skills/later/SKILL.md', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK' }), createTask({ id: 't1', order: 2, title: 'Cache', prompt: 'p', dependencies: ['t0'], assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK', skills })],
     });
     const continueConversation = vi.fn().mockResolvedValue(planned(['tdd', 'later']));
     const session = makeSession({
@@ -70,7 +70,7 @@ describe('task skills checked where a planner reply lands', () => {
     await session.startPlanning('add a cache', ['claude-code']);
 
     expect(continueConversation.mock.calls[0][0]).toMatch(/Task "Cache": "grilling" is a planner skill/);
-    expect(session.planTasks[0].skills).toEqual(['tdd', 'later']);
+    expect(session.planTasks[1].skills).toEqual(['tdd', 'later']);
     expect(onNotice).toHaveBeenCalledWith({ type: 'notice', level: 'warn', message: expect.stringContaining('Task "Cache": skill "later" not found') });
     const note = skillCheckNote(session.planState?.conversationHistory);
     expect(note?.content).toMatch(/^Skill check:\n- Task "Cache": skill "later" not found/);
@@ -81,7 +81,7 @@ describe('task skills checked where a planner reply lands', () => {
   // What the planner submitted, as parsing saw it: the check reports what parsing had to drop.
   const parsedPlan = (subtaskSkills: unknown[]) => parsePlanJson(JSON.stringify({
     tasks: [
-      { id: 'a', order: 1, title: 'Make it', description: 'd', prompt: 'p', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK' },
+      { id: 'a', order: 1, title: 'Make it', description: 'd', prompt: 'Write .ordewell/skills/later/SKILL.md', assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK' },
       {
         id: 'b', order: 2, title: 'Use it', description: 'd', prompt: 'p', dependencies: ['a'], assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK',
         subtasks: [{ id: 'b1', order: 1, title: 'Wire it', description: 'd', type: 'ai', skills: subtaskSkills }],
@@ -162,7 +162,7 @@ describe('task skills checked where a planner reply lands', () => {
     const sub = (title: string, skills: unknown[], subtasks: unknown[] = []): unknown => ({ title, subtasks, skills });
     const batch = (child: unknown) => [
       { op: 'update', taskId: '#1', changes: { title: 'Renamed' } },
-      { op: 'add', task: { title: 'Docs', skills: ['tdd'], subtasks: [child] } },
+      { op: 'add', task: { title: 'Docs', skills: ['tdd'], dependencies: ['#1'], subtasks: [child] } },
     ];
     let between: string[] = [];
     const continueConversation = vi.fn()

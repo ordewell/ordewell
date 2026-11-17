@@ -30,7 +30,7 @@ describe('model ids and info', () => {
 
   it('defaults what no catalog stated, and marks it so', () => {
     const info = defaultModelInfo('openai', 'gpt-x');
-    expect(info).toMatchObject({ id: 'openai:gpt-x', contextWindow: 32_000, maxOutputTokens: 4096, supportsTools: true, supportsReasoning: false });
+    expect(info).toMatchObject({ id: 'openai:gpt-x', contextWindow: 128_000, contextWindowSource: 'assumed', maxOutputTokens: 4096, supportsTools: true, supportsReasoning: false });
     expect(Object.values(info.known).every((known) => !known)).toBe(true);
   });
 
@@ -46,7 +46,8 @@ describe('model ids and info', () => {
 
     const unpriced = modelInfoFromCatalog('openrouter', { id: 'm', name: '', description: '', contextLength: 0, pricing: { prompt: '?', completion: '?' } });
     expect(unpriced.known.pricing).toBe(false);
-    expect(unpriced.contextWindow).toBe(32_000);
+    expect(unpriced.contextWindow).toBe(128_000);
+    expect(unpriced.contextWindowSource).toBe('assumed');
   });
 });
 
