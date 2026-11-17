@@ -44,7 +44,7 @@ Use it in the [desktop app](#download-the-desktop-app), the
 [terminal](#install-the-terminal-app), [VS Code](#vs-code) or from the command
 line. Every one drives the same plans, runners and settings.
 
-This README describes 0.13.4. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Why Ordewell
@@ -129,14 +129,16 @@ brew install --cask ordewell/tap/ordewell-desktop   # macOS
 winget install Ordewell.Ordewell                    # Windows
 ```
 
-**The Windows installer may be unsigned.** Until the project's Windows
-code-signing credentials are configured, SmartScreen shows **Windows protected
-your PC** on first launch (choose **More info**, then **Run anyway**), and the
-app does not update itself: when a new version is out, its notice offers
-**Download** instead, and you install the next release yourself. A macOS build
-opens without a prompt only when it is signed and notarized. The
-[desktop guide](docs/desktop/README.md#install) covers each platform, the
-checksums and updates.
+Official macOS installers are signed with a Developer ID and notarized by
+Apple. The Windows installer is signed by **Alessandro Costanzo Ciano**.
+macOS and Windows builds support in-app updates; Linux updates by installing
+the next release. Windows SmartScreen may still warn while the new certificate
+builds reputation. The [desktop guide](docs/desktop/README.md#install) covers
+each platform, checksums and updates.
+
+The first winget submission requires Microsoft's review before
+`winget install Ordewell.Ordewell` becomes available. The installer above works
+while that review is pending.
 
 The desktop app carries Electron and its own copy of the Ordewell daemon, so it
 needs no Node.js.

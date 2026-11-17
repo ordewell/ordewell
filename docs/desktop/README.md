@@ -26,24 +26,16 @@ installers, named `Ordewell-<version>-<os>-<arch>.<ext>`:
 | Windows | `.exe` (NSIS installer) | x64 |
 | Linux | `.AppImage`, `.deb` | x64 |
 
-A release is signed, and on macOS notarized by Apple, once the project's
-signing credentials are configured ([Signed releases](#signed-releases));
-until then its builds are **unsigned**. An unsigned build carries no Developer
-ID and no Windows code-signing certificate, so macOS and Windows ask you to
-allow the app on first launch. That is expected, and nothing is wrong with the
-download. A signed build opens without asking, and it is the only kind that
-updates itself; an unsigned one, and every Linux build, is updated by
-downloading the next release ([Updates](#updates)).
+Official releases from 0.14.0 are signed with a Developer ID and notarized by
+Apple on macOS. Windows installers are Authenticode-signed by **Alessandro
+Costanzo Ciano** using SSL.com eSigner. Signed macOS and Windows builds support
+in-app updates; Linux builds update by installing the next release
+([Updates](#updates)). Windows SmartScreen may still warn while the new
+certificate builds reputation.
 
-**The Windows installer may be unsigned.** Until the project's Windows
-code-signing credentials are configured, the `.exe` carries no Authenticode
-signature: SmartScreen shows **Windows protected your PC** on first launch (see
-[Windows](#windows) below), and the app does not update itself, so you download
-the next installer to upgrade. The release's `SHA256SUMS` still lets you check
-that the file is the one the release published. macOS is described the
-same way: a build opens without a prompt only when it is signed with a Developer
-ID and notarized by Apple, which depends on the project's Apple credentials
-being configured when the release was made.
+Pull-request and local builds without signing credentials are unsigned
+(ad hoc on macOS), with in-app updates disabled. The unsigned-build steps below
+apply to those builds. `SHA256SUMS` lets you check every release download.
 
 ### One line
 
@@ -114,6 +106,9 @@ brew install --cask ordewell/tap/ordewell-desktop
 ```powershell
 winget install Ordewell.Ordewell
 ```
+
+The first winget submission needs Microsoft's review before the package is
+available there; use the direct installer while review is pending.
 
 `brew upgrade --cask ordewell-desktop` and `winget upgrade Ordewell.Ordewell` move to a
 later release, and a signed, notarized build also updates itself
@@ -322,7 +317,7 @@ build:
 |---|---|---|
 | macOS, signed with a Developer ID and notarized | **Update**, then **Restart to update** | Downloads the update inside the app, then restarts into it. If a run is live, the app asks you to confirm first, since restarting closes the app and its windows. |
 | Windows, signed | The same | The same. |
-| Windows, unsigned (until the project's signing credentials are configured), and every Linux build | **Download** | Opens [ordewell.ai/download](https://ordewell.ai/download) in your browser. You install the new version yourself; the app never replaces itself. |
+| Unsigned Windows builds, and every Linux build | **Download** | Opens [ordewell.ai/download](https://ordewell.ai/download) in your browser. You install the new version yourself; the app never replaces itself. |
 
 A signed install accepts only an update signed the same way
 ([ADR-0063 H9](../adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
