@@ -14,6 +14,7 @@ import type { ProjectMcpServer } from '../repoConfig';
 import type { StructuredEvent } from '../../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../../models/TaskLog';
 import { replayTaskLog } from '../../../conversation/taskLog';
+import { expectCompactionChain } from '../../__tests__/compactionChainKit';
 
 /**
  * OpenCode 2.x (`opencode serve`, the `/api` surface), recorded at v2.0.22: a
@@ -1619,4 +1620,55 @@ it('reports OpenCode 2.x manual compaction failure even when execution ends norm
   await turn;
   expect(events.filter((e) => e.type === 'error' || e.type === 'turn_end' || e.type === 'compaction')).toEqual([{ type: 'error', message: 'Nothing to compact yet' }]);
   adapter.dispose();
+});
+
+
+describe('OpenCode 2.x task compaction point (taskCompactAt)', () => {
+  // 2.x reads compaction.reserved as its token `buffer` (opencode 2.2.7 config/normalize.ts); the window is 200,000 here.
+  const sonnet = 'anthropic/claude-sonnet-4-5';
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
+
+  async function on2x(at: string, opts: AgentStartOptions) {
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined);
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', at);
+    const server = fakeServer({ 'GET /api/command': () => ({ data: [] }) });
+    return { ...await start(server, opts), server };
+  }
+
+  it.each(['auto', 'off'])('sets nothing under %s', async (at) => {
+    const { adapter, env } = await on2x(at, taskStart({ model: sonnet }));
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    adapter.dispose();
+  });
+
+  it('starts compaction at a number, through the room it keeps below the window', async () => {
+    const { adapter, env } = await on2x('150000', taskStart({ model: sonnet }));
+    expect(configOf(env)).toEqual({ compaction: { reserved: 50_000 } });
+    expect(adapter.compactWindowTokens).toBe(150_000);
+    adapter.dispose();
+  });
+
+  it('leaves a planner\'s launch as it is', async () => {
+    const planner = { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: sonnet } as AgentStartOptions;
+    const before = await on2x('auto', planner);
+    const after = await on2x('150000', planner);
+    expect(configOf(after.env)).toEqual(configOf(before.env));
+    expect(after.adapter.compactWindowTokens).toBeUndefined();
+    before.adapter.dispose();
+    after.adapter.dispose();
+  });
+
+  it('turns OpenCode\'s own session.compaction.ended into the brief\'s reminder and a running-long flag counted under the point set', async () => {
+    const { adapter, server } = await on2x('150000', taskStart({ model: sonnet }));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('continue', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push(started()); stream.push(frame('session.compaction.ended', { reason: 'auto' })); stream.push(succeeded());
+    await turn;
+    expect(adapter.compactWindowTokens).toBe(150_000);
+    await expectCompactionChain(events, adapter.compactWindowTokens);
+    adapter.dispose();
+  });
 });

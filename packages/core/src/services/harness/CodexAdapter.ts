@@ -23,6 +23,7 @@ import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type 
 import { SubagentTracker } from './subagentTracker';
 import { UsageRecordBuilder } from './usageBuilder';
 import { TurnOutcome, type TurnError } from './turnOutcome';
+import { taskCompactAtOf, type TaskCompactAt } from '../taskCompactWindow';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
 
@@ -346,6 +347,17 @@ const NO_SUBAGENTS = { multi_agent: false, multi_agent_v2: false };
  */
 const NO_IMAGE_VIEWER = { view_image: false };
 
+/**
+ * A task's compaction point as Codex's thread config spells it, or nothing:
+ * `auto` and `off` leave Codex's own, which starts at 90% of the model's
+ * window, and a number N starts it once the whole context (`total`, not only
+ * what follows a carried prefix) reaches N tokens (codex-cli 0.167.0). Codex
+ * itself holds a limit to 90% of the window, so a larger one compacts there.
+ */
+function codexCompactLimit(at: TaskCompactAt): { model_auto_compact_token_limit: number; model_auto_compact_token_limit_scope: 'total' } | undefined {
+  return typeof at === 'number' ? { model_auto_compact_token_limit: at, model_auto_compact_token_limit_scope: 'total' } : undefined;
+}
+
 /** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
 function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
   return Object.fromEntries(servers.map((name) => [name, { enabled: false }]));
@@ -378,6 +390,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private threadModel: string | null = null;
   private readonly rpc = new CodexRpc((payload) => this.writeLine(payload));
   private startOpts: AgentStartOptions | null = null;
+  private compactLimit: ReturnType<typeof codexCompactLimit>;
   /** The planner thread's runs of reply text this turn, each under its `agentMessage` item's id. */
   private replyRuns = new ReplyRuns();
   /** The turn in flight. `turn/interrupt` and `turn/steer` cannot be sent before it has an id. */
@@ -440,8 +453,13 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     });
   }
 
+  /** Where a task's context compacts, when Ordewell set it (ADR-0057 R4): a planner's conversation is the user's. */
+  compactWindowTokens?: number;
+
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
     this.startOpts = opts;
+    this.compactLimit = opts.kind === 'task' ? codexCompactLimit(taskCompactAtOf()) : undefined;
+    this.compactWindowTokens = this.compactLimit?.model_auto_compact_token_limit;
     return { command: 'codex', args: ['app-server', ...NO_MEMORIES], ...(opts.mcp ? { env: CODEX_ORDEWELL.env(opts.mcp) } : {}) };
   }
 
@@ -640,6 +658,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const config = {
       ...(Object.keys(features).length > 0 ? { features } : {}),
       ...(opts?.mcp ? { mcp_servers: CODEX_ORDEWELL.threadServers(opts.mcp) } : {}),
+      ...this.compactLimit,
     };
     const threadConfig = Object.keys(config).length ? { config } : {};
     const noWindowsSandbox = this.windowsSandbox !== null && this.windowsSandbox !== 'ready';
