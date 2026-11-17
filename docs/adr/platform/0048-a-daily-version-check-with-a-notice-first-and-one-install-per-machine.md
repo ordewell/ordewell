@@ -37,26 +37,33 @@ the update line, and decides only where they appear.
   to update depends on the surface and on how this copy was installed
   ([ADR-0065](../surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md)
   C9): "run `ordewell update`" for a headless command, "type /update" in the
-  TUI, "update it from the Extensions view" in VS Code; a copy no command
+  TUI, "update it from the Extensions view" in VS Code, and in the desktop app
+  an Update or a Download button
+  ([ADR-0063](../surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
+  H9); a copy no command
   updates in place is told what would instead: "`npx ordewell@latest` runs it"
   for an npx run, "pull and rebuild this checkout" for a source checkout or a
-  development build. A 204, or a 200 whose JSON object names nothing newer, is
-  no news. Any other answer, a status that is neither, a body that is not a
+  development build. Only a 200 whose JSON object names a version says
+  anything; a 204, a 200 naming none, any other status, a body that is not a
   JSON object, a network failure or no answer within three seconds is no
-  answer at all. The check never throws and never holds up a start.
-- **The answer is remembered.** A newer `latest` is written to the state file
-  as `latest`, with `latestAt`, the time it was learned. A start whose version
-  is older than the remembered `latest` can show the line straight away, from
-  the file, without a request, as often as its surface shows it (see
-  [Where it runs](#where-it-runs)); a start already at that version or past it
-  shows nothing. The next answer replaces it, no news clears it, and no answer
-  leaves it as it was. The ping itself is unchanged: once a day, with only
-  `v` and `id`.
+  answer at all, since a cold server can answer 204 for a release it knows.
+  The check never throws and never holds up a start.
+- **The answer is remembered.** The `latest` an answer names is written to
+  the state file as given, with `latestAt`, the time it was learned, whether or
+  not it is newer than the copy that asked: another copy on the machine may be
+  older. Each copy compares it with its own version when it reads it, so a
+  start whose version is older than the remembered `latest` can show the line
+  straight away, from the file, without a request, as often as its surface
+  shows it (see [Where it runs](#where-it-runs)); a start already at that
+  version or past it shows nothing. A later answer naming a newer version
+  replaces it; one naming an older version, as a stale cache would, and no
+  answer leave it as it was. The ping itself is unchanged: once a day, with
+  only `v` and `id`.
 - **One install per machine.** The state is `version-check.json` in
   `globalDataDir()` (`~/.ordewell/`), next to the global `settings.json`:
   `installId`, `installIdAt`, `noticeShownAt`, `lastCheckAt`, `latest`,
-  `latestAt` and `updateShownAt`. The CLI and the VS Code extension read and
-  write the same file. It is written atomically and owner only. A field of the
+  `latestAt` and `updateShownAt`. The CLI, the VS Code extension and the
+  desktop app read and write the same file. It is written atomically and owner only. A field of the
   wrong type counts as absent, as does a `latest` that is not a version, so a
   file an earlier release wrote loads as it is; an earlier release that
   rewrites the file drops the fields it does not know, which only costs the
@@ -72,11 +79,15 @@ the update line, and decides only where they appear.
   not ping, so a read-only home directory never turns into a ping per start.
   A process that keeps running asks the same question every hour on an
   unref'd timer, so a TUI or an extension host left open still checks daily,
-  and a check another surface made in the shared file counts.
+  and a check another surface made in the shared file counts. Each hour it
+  also reads the remembered `latest`, day up or not, so a version another
+  process on the machine learned is named within the hour.
 - **The notice first.** On a machine with no `noticeShownAt`, the start shows
   the notice, records `noticeShownAt` and the new install ID, and sends nothing,
   then or later from that process: the off switches are read once at start, so
-  only a later start could honour one the notice just told the user about. A
+  only a later start could honour one the notice just told the user about. Its
+  hourly timer still reads the file, which sends nothing, so a version a later
+  start learns is named in that process too. A
   start that cannot record the notice does not show it, since it would show
   again on every start, and a machine with no install ID on disk sends nothing
   to tell the user about. The notice reads: "Ordewell checks for a new version
@@ -84,32 +95,61 @@ the update line, and decides only where they appear.
   30 days. Like any server, ordewell.ai sees your IP address. Set
   ORDEWELL_NO_VERSION_CHECK=1 to turn this off. Details:
   https://ordewell.ai/docs#version-check". It names the IP address because that
-  request is the only thing a user is not already choosing to send.
+  request is the only thing a user is not already choosing to send. The
+  desktop app adds its own switch to it, "In this app: Settings → Check for
+  new versions."
+
 - **Off switches.** `ORDEWELL_NO_VERSION_CHECK` or `DO_NOT_TRACK` set to `1`,
-  `true` or `yes`, or a caller passing `telemetryEnabled: false` (the VS Code
-  extension, from VS Code's telemetry setting). Any one turns everything off:
-  no notice, no install ID, no file written, no request, and no update line,
-  even from a version a file written earlier remembers.
+  `true` or `yes`, or a caller passing `telemetryEnabled: false`: the VS Code
+  extension from VS Code's telemetry setting, and the desktop app from its
+  Settings toggle "Check for new versions" (`versionCheck` in the app's
+  preferences), which is on unless the person turns it off, so a preferences
+  file without it checks. Any one turns everything off: no notice, no install
+  ID, no file written, no request, and no update line, even from a version a
+  file written earlier remembers. Nothing else does: the check is on by
+  default on every surface.
 
 ## Where it runs
 
-In the CLI process the user started, never in the daemon. Each surface shows
-the line where its user looks, as often as they can bear it:
+In the process the user started, never in the daemon: the CLI, the VS Code
+extension host, or the desktop app's main process. Each surface shows the line
+where its user looks, as often as they can bear it, and the TUI, VS Code and
+the desktop also keep an indicator in view while a newer version is known,
+which no dismissal and no other surface's once-a-day line hides:
 
 - **The TUI** shows the notice in its welcome and the update line as a notice
   in its transcript, on every start while the remembered version is newer,
   since a write to the terminal would tear its frame and a TUI start is a
-  person at the keyboard.
+  person at the keyboard. Its status row reads `↑ <latest> available ·
+  /update`, shortened on a narrow terminal, for as long as that version is
+  known, during a run too, and its welcome names the line again.
 - **A headless command** writes the notice to stderr, so stdout stays its own,
   and the update line to stderr only when stderr is a terminal, at most once a
   day across the machine (`updateShownAt`): a script's log is no place for it,
   and a command run many times a day would repeat it.
 - **The VS Code extension** shows the line as an information message pointing
-  at the Extensions view, since the Marketplace updates the extension, at most
-  once a day, since every window starts an extension host and a message
-  interrupts each one.
+  at the Extensions view, since the Marketplace updates the extension, with
+  Update, which opens the extension's page there, and What's new (the GitHub
+  Release tagged `v<latest>`). The message comes at most once a day across
+  every window, since every window starts an extension host and a message
+  interrupts each one, on the extension's own clock in VS Code's `globalState`
+  rather than `updateShownAt`, so a line the TUI or a command showed today
+  does not hide it. A status bar item, `Ordewell <latest>`, names the version
+  on every start for as long as it is known (`every-start`), and opens the
+  extension's page.
+- **The desktop app** runs the check in main and shows the notice as a banner
+  with OK and Turn off. It names a newer version on every launch (`every-start`),
+  in a banner, "Ordewell <latest> is available. You have <version>.", with What's
+  new (the GitHub Release tagged `v<latest>`), Later, and the way this build
+  updates: Update then Restart to update on a signed build, Download, which
+  opens ordewell.ai/download, on any other (ADR-0063 H9). Later hides the
+  banner for that version only; a status bar item, `↑ <latest> available`,
+  stays and brings it back. A launch is a person at the app, as a TUI start
+  is, and a banner interrupts nothing. Check for updates…, in the app menu on
+  macOS, the Help menu elsewhere and the `⋯` menu, asks now: a signed build its release feed, any other build the
+  version check, which still pings only once the machine's day is up.
 
-A once-a-day line that cannot record `updateShownAt` is not shown, as a notice
+A headless command's once-a-day line that cannot record `updateShownAt` is not shown, as a notice
 that cannot be recorded is not. `main` starts the check for every command but
 `tui` and `update`, and the TUI starts its own as it opens, so each start
 checks exactly once. `--help` and `--version` start none.
@@ -173,15 +213,23 @@ next request names the token file.
 `startVersionCheck` is the seam. Its tests inject the clock, `fetch`, the
 environment and the state directory, so they need no network and no real home
 directory, and assert on the URL and `init` handed to the fake `fetch`, the
-callbacks and the state file. The hourly re-check runs under fake timers.
+callbacks and the state file. The hourly re-check runs under fake timers. The
+desktop's `UpdateService` runs the real check against a temporary state
+directory and a fake `fetch`, so a remembered version, one another surface
+already showed today, the toggle and each variable are asserted on what the
+service names, and its renderer tests drive the real frame from a fake main,
+from that state to the banner, its actions and the status bar item.
 `vitest.setup.ts`, `scripts/ci.mjs` and the CI job set
 `ORDEWELL_NO_VERSION_CHECK=1`, so code that starts a check as a side effect
 never reaches ordewell.ai from a test or a CI run. The TUI's notice is asserted
 in the rendered welcome, like the rest of the welcome, and its update line in
 the transcript of a launched TUI. The remembered version is asserted through
-the state file across starts: shown, replaced, cleared, a start at or past it,
-fields of the wrong type, a file an earlier release wrote, and nothing written
-with an off switch set.
+the state file across starts: shown, replaced, kept through no answer and a
+newer copy's ping, a start at or past it, one another process wrote while this
+one runs, fields of the wrong type, a file an earlier release wrote, and
+nothing written with an off switch set. Each surface's tests assert the same
+cases on what it shows, and a desktop e2e launches the app on a seeded file and
+finds the banner and the status bar item.
 
 `runUpdate` takes its effects as dependencies (what runs, what it prints, the
 download, whether a folder is writable, the copy's paths and platform), so each
@@ -236,6 +284,11 @@ still running afterwards, and one with the same contract is driven.
 - **Drive an older daemon until it stops on its own.** Rejected: a CLI that
   sends requests in a contract the daemon does not speak fails in ways that
   describe the wrong problem, or acts on a misread answer.
+- **The desktop leaves the check to the CLI and VS Code.** First chosen, then
+  dropped: a person who uses only the app would never hear that a newer one is
+  out, and an unsigned build, which cannot update itself, has no other way to
+  learn it. The app sends the same ping from the same file, so it costs the
+  machine nothing extra.
 - **Ping from the daemon.** One long-lived process, which would check daily on
   its own. Rejected for the reasons under Where it runs: it cannot show the
   notice or the update line where the user sees them.
@@ -250,9 +303,9 @@ still running afterwards, and one with the same contract is driven.
 - The README's "What Ordewell sends" and the notice are promises: a new query
   parameter, header or trigger is a change to this decision, not a tweak.
 - The endpoint must answer at that URL without a redirect, or no check counts.
-- A newer version an older surface showed can be cleared by a newer one: a
-  start that already runs it gets no news and clears the remembered version,
-  so the older surface shows nothing until its own next ping.
+- The remembered version only moves forward: a release withdrawn after an
+  answer named it stays named until a newer one ships, or the file is
+  recreated.
 - A daemon from before `live` cannot say whether work is under way, so the
   first command after updating from such a release refuses rather than replaces
   it until the user runs `ordewell stop --server`.
@@ -266,3 +319,6 @@ still running afterwards, and one with the same contract is driven.
 - 2026-10-25: the install ID is replaced every 30 days, and the notice names the IP address.
 - 2026-11-06 — the update line names the install method: Homebrew, the installer for another binary install, or npm.
 - 2026-11-06 — the newer version is remembered and named on every TUI start, a terminal's stderr once a day and VS Code once a day; `ordewell update` and `/update`; an idle daemon a CLI cannot drive is replaced, a live one left running.
+- 2026-11-17 — the desktop app runs the check, on by default, with its Settings toggle as an off switch; the TUI, VS Code and the desktop keep an indicator in view while a newer version is known.
+- 2026-11-17 — VS Code's message keeps its own once-a-day clock in `globalState`, apart from `updateShownAt`.
+- 2026-11-17 — every answer's version is kept for every copy and never cleared by no news; the hourly timer re-reads it, in the process that showed the notice too.

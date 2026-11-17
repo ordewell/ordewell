@@ -110,3 +110,44 @@ function runPrompt(liveRuns: readonly LiveRun[] | undefined, owned: boolean): Qu
     confirmLabel: 'Quit',
   };
 }
+
+/**
+ * Whether [Restart to update] asks first, and what it says stops (ADR-0063
+ * H9). Restarting is quitting and coming back on the new version, so it stops
+ * what quitting stops: an owned daemon's runs, whose running tasks stop with
+ * them, and every terminal's process.
+ */
+export function restartPrompt(liveRuns: readonly LiveRun[] | undefined, owned: boolean, busyTerminals = 0): QuitPrompt | undefined {
+  const terminals = busyTerminals === 1
+    ? 'A terminal is running a process, and restarting ends it.'
+    : `${busyTerminals} terminals are running a process, and restarting ends them.`;
+  const runs = restartRuns(liveRuns, owned);
+  if (!runs) {
+    return busyTerminals > 0
+      ? { message: `${busyTerminals === 1 ? 'A terminal is' : `${busyTerminals} terminals are`} running a process. Restart to update?`, detail: terminals, confirmLabel: 'Restart' }
+      : undefined;
+  }
+  return busyTerminals > 0 ? { ...runs, detail: `${runs.detail}\n\n${terminals}` } : runs;
+}
+
+function restartRuns(liveRuns: readonly LiveRun[] | undefined, owned: boolean): QuitPrompt | undefined {
+  if (liveRuns !== undefined && liveRuns.length === 0) return undefined;
+  const stops = runsQuitStops(liveRuns, owned);
+  if (owned && (liveRuns === undefined || stops.length > 0)) {
+    const one = stops.length <= 1;
+    return {
+      message: `${inProgress(stops.length)} in progress. Stop ${one ? 'it' : 'them'} and restart to update?`,
+      detail: `${named(stops)}\n\nThis app started the daemon ${one ? 'this run belongs' : 'these runs belong'} to, so restarting stops the daemon, and its running tasks stop with it.`,
+      confirmLabel: 'Stop and restart',
+    };
+  }
+  const runs = liveRuns ?? [];
+  const why = owned
+    ? `Another host holds ${runs.length === 1 ? 'it, so it goes' : 'them, so they go'} on.`
+    : 'The daemon was already running when this app connected, so it keeps running and the runs go on.';
+  return {
+    message: `${inProgress(runs.length)} in progress. Restart to update?`,
+    detail: `${named(runs)}\n\n${why}`,
+    confirmLabel: 'Restart',
+  };
+}

@@ -416,6 +416,9 @@ kbd.frame-menu-hint { font-family: inherit; }
 .frame-status-slot:last-child { margin-left: auto; }
 .frame-status-text { color: var(--ow-fg-secondary); white-space: nowrap; }
 .frame-status-runners { display: inline-flex; gap: var(--ow-space-3); }
+/* A newer version: the one thing in the bar that is a button, so it reads as one. */
+.frame-status-update { padding: 0 var(--ow-space-1); border: 0; border-radius: var(--ow-radius-sm); background: none; color: var(--ow-accent); font: inherit; white-space: nowrap; cursor: pointer; }
+.frame-status-update:hover { text-decoration: underline; }
 
 /* Command palette. */
 .frame-scrim { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: rgb(0 0 0 / 0.2); }

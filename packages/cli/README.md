@@ -6,7 +6,7 @@ and model assigned to each AI task. With worktree isolation enabled, code tasks
 run in separate worktrees; ops and script tasks run at the workspace root.
 Ordewell records task outcomes and combines code changes for review and merging.
 
-This README describes 0.13.4. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.0. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Installation
@@ -31,6 +31,10 @@ ordewell`; or `npm install -g` with the package you installed. Add `--dry-run`
 to print the command without running it. An npx run or a source checkout is told
 how to update instead. The terminal UI names a newer release on every start, and
 `/update` updates from there once no run is live.
+
+Ordewell also runs as a [desktop app](https://github.com/ordewell/ordewell/blob/main/docs/desktop/README.md) for macOS, Windows and Linux, and as
+a [VS Code extension](https://marketplace.visualstudio.com/items?itemName=ordewell.ordewell).
+Both are clients of the same local daemon as this terminal UI.
 
 **Requirements:** a supported coding agent such as Claude Code or Codex,
 installed and signed in. git is optional: without it, tasks run directly in the

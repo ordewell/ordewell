@@ -17,11 +17,6 @@ window holds, and what to do when it will not start.
 
 ## Install
 
-> **Not in a release yet.** Releases do not carry the desktop installers yet:
-> they are made with the app left out until it is ready (ADR-0065 C10). Until
-> then, [run it from source](#run-it-from-source). The instructions below are
-> how it installs once a release carries it.
-
 Each [release](https://github.com/ordewell/ordewell/releases) attaches the
 installers, named `Ordewell-<version>-<os>-<arch>.<ext>`:
 
@@ -31,14 +26,16 @@ installers, named `Ordewell-<version>-<os>-<arch>.<ext>`:
 | Windows | `.exe` (NSIS installer) | x64 |
 | Linux | `.AppImage`, `.deb` | x64 |
 
-A release is signed, and on macOS notarized by Apple, once the project's
-signing credentials are configured ([Signed releases](#signed-releases));
-until then its builds are **unsigned**. An unsigned build carries no Developer
-ID and no Windows code-signing certificate, so macOS and Windows ask you to
-allow the app on first launch. That is expected, and nothing is wrong with the
-download. A signed build opens without asking, and it is the only kind that
-updates itself; an unsigned one, and every Linux build, is updated by
-downloading the next release.
+Official releases from 0.14.0 are signed with a Developer ID and notarized by
+Apple on macOS. Windows installers are Authenticode-signed by **Alessandro
+Costanzo Ciano** using SSL.com eSigner. Signed macOS and Windows builds support
+in-app updates; Linux builds update by installing the next release
+([Updates](#updates)). Windows SmartScreen may still warn while the new
+certificate builds reputation.
+
+Pull-request and local builds without signing credentials are unsigned
+(ad hoc on macOS), with in-app updates disabled. The unsigned-build steps below
+apply to those builds. `SHA256SUMS` lets you check every release download.
 
 ### One line
 
@@ -98,7 +95,9 @@ protected instead is that the file matches the checksum the release published.
 
 ### Homebrew and winget
 
-Two package managers install the same release, once it has published there:
+Two package managers install the same release, once it has published there
+(the cask is named `ordewell-desktop`; an earlier cask called `ordewell` moves
+to it on `brew upgrade`):
 
 ```bash
 brew install --cask ordewell/tap/ordewell-desktop
@@ -108,13 +107,18 @@ brew install --cask ordewell/tap/ordewell-desktop
 winget install Ordewell.Ordewell
 ```
 
+The first winget submission needs Microsoft's review before the package is
+available there; use the direct installer while review is pending.
+
 `brew upgrade --cask ordewell-desktop` and `winget upgrade Ordewell.Ordewell` move to a
-later release, and a signed, notarized build also updates itself. Neither is
-published yet: the release renders the cask and the manifests and pushes them
-only when the maintainers have configured the tokens for it ([Signed
-releases](#signed-releases)). A cask is published only for a
+later release, and a signed, notarized build also updates itself
+([Updates](#updates)). A release renders the cask and the manifests and pushes
+them only when the maintainers have configured the tokens for it ([Signed
+releases](#signed-releases)); a release made before then is not on either
+manager, and the installers above work for it. A cask is published only for a
 notarized macOS build, because Homebrew will not install an app that Gatekeeper
-stops; the winget manifests are published for every release.
+stops; the winget manifests are published for every release, an unsigned
+Windows build included.
 
 ### Stable links and checksums
 
@@ -206,9 +210,12 @@ deliberate: the CLI's `ordewell` binary keeps its own name.
 ### What the app needs
 
 A desktop build carries Electron and its own copy of the daemon, so it needs no
-Node.js. It uses the runners already on your machine — at least one of Claude
-Code, Codex or OpenCode, installed and signed in. git is optional; 2.38 or
-newer gives isolated worktrees, delegated tasks and Merge all. The welcome window says which runners it found.
+Node.js. It uses the runners already on your machine: a coding-agent CLI
+(Claude Code, Codex, OpenCode or another over ACP), installed and signed in, or
+Ordewell's own built-in runner, which needs only a provider API key (see
+[Planners and runners](../planners-and-runners.md)). git is optional; 2.38 or
+newer gives isolated worktrees, delegated tasks and Merge all. The welcome
+window says which runners it found.
 
 ## Run it from source
 
@@ -284,6 +291,58 @@ and the winget manifests from its own installers and checksums
 when the maintainers have configured the tokens for it; without them the
 release still succeeds. The cask is published only for a notarized macOS
 build, because Homebrew will not install an app Gatekeeper stops.
+
+## Updates
+
+The app runs the same daily version check as the CLI, the terminal UI and the VS
+Code extension
+([ADR-0048](../adr/platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md)):
+once a day it asks ordewell.ai for the latest version, sending its own version
+and a random install ID that is replaced every 30 days, and, like any server,
+ordewell.ai sees your IP address. The first time, a **privacy notice** says so
+before anything is sent, and the start that shows it sends nothing. To turn the
+check off, turn off **Check for new versions** in **Settings** (under **This
+app**), or set `ORDEWELL_NO_VERSION_CHECK=1`
+or `DO_NOT_TRACK=1` in the environment the app starts in, the same switches the
+other surfaces honor. Any one turns it off entirely: no notice, no request and
+no update line.
+
+When a newer release exists, a **banner** says **Ordewell X is available. You
+have Y.** with **What's new** and **Later**, and the status bar keeps saying
+**↑ X available** after you press Later, so a missed banner is not a missed
+update; clicking it brings the banner back. What happens next depends on the
+build:
+
+| Build | Action | What it does |
+|---|---|---|
+| macOS, signed with a Developer ID and notarized | **Update**, then **Restart to update** | Downloads the update inside the app, then restarts into it. If a run is live, the app asks you to confirm first, since restarting closes the app and its windows. |
+| Windows, signed | The same | The same. |
+| Unsigned Windows builds, and every Linux build | **Download** | Opens [ordewell.ai/download](https://ordewell.ai/download) in your browser. You install the new version yourself; the app never replaces itself. |
+
+A signed install accepts only an update signed the same way
+([ADR-0063 H9](../adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+Self-update is decided when the build is
+made, not by a setting: no environment variable turns it on in an unsigned
+build.
+
+You can also update the way you installed:
+
+- **Homebrew:** `brew upgrade --cask ordewell-desktop`.
+- **winget:** `winget upgrade Ordewell.Ordewell`.
+- **The `.deb`:** with your package manager, installing the newer `.deb` over it
+  (for example `sudo apt install ./Ordewell-<version>-linux-x64.deb`).
+- **The one-line installers:** run the same command again.
+- **The AppImage:** download the new file.
+
+**Check for updates…**, in the app menu on macOS, the **Help** menu on Windows
+and Linux, and the **⋯** menu, asks on demand. A signed build asks its release
+feed right away. Any other build runs the version check again, which asks
+ordewell.ai only once the machine's day is up, and otherwise answers from the
+version it last heard.
+
+The app's own updater, `electron-updater`, contacts GitHub Releases only when
+you ask: when you press **Update** or choose **Check for updates…** in a signed
+build. The daily check talks to ordewell.ai alone.
 
 ## First run
 

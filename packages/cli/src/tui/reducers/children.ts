@@ -17,7 +17,7 @@ const SHARED_FIELDS = [
   'orchestratorModels', 'providerErrors', 'runnerErrors', 'orchestratorModel', 'plannerProvider', 'plannerEffort', 'plannerModels',
   'maxParallel', 'configuredProviders', 'customEndpoint', 'allowlist', 'autonomous', 'runSettings', 'runSettingsKnown', 'settingsRead',
   'runSettingsRead', 'plannerKnown', 'runnersKnown', 'providersKnown', 'isolationPreview', 'isolationPreviewRead',
-  'versionCheckNotice', 'mouseCapture', 'selection', 'workspace', 'overlay', 'pendingApprovals', 'toast', 'rows', 'cols',
+  'versionCheckNotice', 'knownUpdate', 'mouseCapture', 'selection', 'workspace', 'overlay', 'pendingApprovals', 'toast', 'rows', 'cols',
   'exiting', 'spinnerFrame', 'now', 'childTree',
 ] as const satisfies ReadonlyArray<keyof TuiState>;
 

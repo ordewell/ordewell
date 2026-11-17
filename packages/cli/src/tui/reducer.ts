@@ -518,6 +518,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       return step(say(state, 'system', `${restarted} and retried.`), [retry]);
     }
 
+    case 'updateKnown':
+      return step({ ...state, knownUpdate: { latest: action.latest, line: action.line } });
+
     case 'updatePlanned':
       return updatePlanned(state, action.plan);
 

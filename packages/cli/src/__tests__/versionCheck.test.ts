@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
-import type { PingFetch } from '@ordewell/core';
+import { startVersionCheck, type PingFetch } from '@ordewell/core';
 import { fakeSea } from '@ordewell/core/testing';
 import { startCliVersionCheck, startHeadlessVersionCheck } from '../versionCheck';
 import { cliVersion } from '../version';
@@ -98,6 +98,60 @@ describe('the CLI version check (ADR-0048)', () => {
       const tty = terminal(true);
       await start(tty.stderr, now + 2 * 60_000);
       expect(tty.written).toEqual([`Ordewell 999.0.0 is out (you have ${cliVersion()}) — run \`ordewell update\`\n`]);
+    });
+
+    const remember = (state: Record<string, unknown>): void => {
+      const at = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(join(stateDir, 'version-check.json'), JSON.stringify({ installId: '3f0c1d9e-0000-4000-8000-000000000000', installIdAt: at, noticeShownAt: at, ...state }));
+    };
+
+    it('writes the line for a version an earlier answer remembered, sending nothing within the day', async () => {
+      const now = new Date().toISOString();
+      remember({ lastCheckAt: now, latest: '999.0.0', latestAt: now });
+      const urls: string[] = [];
+      const { stderr, written } = terminal(true);
+
+      const check = startHeadlessVersionCheck(stderr, { stateDir, env: {}, fetch: answering('999.0.0', urls) }, npmCopy);
+      await check.settled();
+      check.stop();
+
+      expect(written).toEqual([`Ordewell 999.0.0 is out (you have ${cliVersion()}) — run \`ordewell update\`\n`]);
+      expect(urls).toEqual([]);
+    });
+
+    it('writes the line though the TUI named it today and a newer copy on the machine has since pinged', async () => {
+      remember({ lastCheckAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() });
+      const tui = startCliVersionCheck({ onNotice: () => {}, onUpdate: () => {} }, { stateDir, env: {}, fetch: answering('999.0.0') }, npmCopy);
+      await tui.settled();
+      tui.stop();
+      // That copy is on 999.0.0 already; its answer names nothing newer for it, and must not unsay it for this one.
+      const newer = startVersionCheck({ version: '999.0.0', onNotice: () => {}, stateDir, env: {}, now: () => Date.now() + 25 * 60 * 60_000, fetch: answering('999.0.0') });
+      await newer.settled();
+      newer.stop();
+
+      const { stderr, written } = terminal(true);
+      await start(stderr, Date.now() + 26 * 60 * 60_000);
+
+      expect(written).toEqual([`Ordewell 999.0.0 is out (you have ${cliVersion()}) — run \`ordewell update\`\n`]);
+    });
+
+    it.each([
+      ['ORDEWELL_NO_VERSION_CHECK', '1'],
+      ['ORDEWELL_NO_VERSION_CHECK', 'yes'],
+      ['DO_NOT_TRACK', '1'],
+      ['DO_NOT_TRACK', 'true'],
+    ])('writes nothing and sends nothing with %s=%s', async (name, value) => {
+      const now = new Date().toISOString();
+      remember({ lastCheckAt: new Date(0).toISOString(), latest: '999.0.0', latestAt: now });
+      const urls: string[] = [];
+      const { stderr, written } = terminal(true);
+
+      const check = startHeadlessVersionCheck(stderr, { stateDir, env: { [name]: value }, fetch: answering('999.0.0', urls) }, npmCopy);
+      await check.settled();
+      check.stop();
+
+      expect(written).toEqual([]);
+      expect(urls).toEqual([]);
     });
 
     it('never writes to stdout', async () => {

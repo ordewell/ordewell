@@ -18,6 +18,7 @@ import * as settingsTab from './settings/SettingsTab';
 import * as statusSlots from './status/StatusSlots';
 import * as taskTab from './task/TaskTab';
 import * as terminalPanel from './terminal/TerminalPanel';
+import * as updateNotice from './update/UpdateNotice';
 
 /**
  * Every view module, each registering itself through the frame API alone. A
@@ -29,7 +30,7 @@ const VIEWS: ReadonlyArray<{ register(api: FrameApi): Unregister }> = [
   explorerSidebar, fileTab, scopeSwitcher,
   changesSidebar, diffTab, checkoutGroup,
   gitSidebar, commitGraphTab, commitDiffTab,
-  terminalPanel, liveWork,
+  terminalPanel, liveWork, updateNotice,
 ];
 
 export function registerViews(api: FrameApi): Unregister {
