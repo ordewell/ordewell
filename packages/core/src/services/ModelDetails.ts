@@ -246,6 +246,14 @@ export class ModelDetailsStore {
     return lookupIn(this.loadCache()?.table, theirs, model) ?? lookupIn(this.snapshot, theirs, model);
   }
 
+  /** Which source {@link lookup} answers from for a model, or none when neither holds it. */
+  sourceOf(provider: AiProvider, model: string): 'cache' | 'snapshot' | undefined {
+    const theirs = MODELS_DEV_PROVIDERS[provider];
+    if (!theirs) return undefined;
+    if (lookupIn(this.loadCache()?.table, theirs, model)) return 'cache';
+    return lookupIn(this.snapshot, theirs, model) ? 'snapshot' : undefined;
+  }
+
   /** Starts a refresh when one is due and none is running; never throws, never awaited by a caller that must not wait. */
   refreshInBackground(): void {
     void this.refresh();

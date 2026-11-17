@@ -43,12 +43,23 @@ const usage = (used: number) => ({ notify: 'session/update', params: { sessionId
 type MeterEvent = Extract<AgentEvent, { type: 'usage' | 'compaction' }>;
 const isMeterEvent = (event: AgentEvent): event is MeterEvent => event.type === 'usage' || event.type === 'compaction';
 
-async function acpCompacting(): Promise<MeterEvent[]> {
+/**
+ * The context before the compaction: under the 150,000 tokens at which running
+ * long flags the context of a 200,000-token window (ADR-0057 R4), so a test of
+ * the compaction flag sees that flag alone, and above the floor from which an
+ * ACP meter's fall reads as a compaction.
+ */
+const BELOW_CONTEXT_FLAG = [100_000, 120_000] as const;
+/** The same context grown past that size before it compacts. */
+const PAST_CONTEXT_FLAG = [150_000, 170_000] as const;
+type Sizes = readonly [first: number, peak: number];
+
+async function acpCompacting([first, peak]: Sizes = BELOW_CONTEXT_FLAG): Promise<MeterEvent[]> {
   const spawned = fakeAcpSpawn([
     { expect: 'initialize', reply: { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true } } } },
     { expect: 'session/new', reply: { sessionId: 'sess-1' } },
-    { expect: 'session/prompt' }, usage(150_000), { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
-    { expect: 'session/prompt' }, usage(170_000), usage(24_000), { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    { expect: 'session/prompt' }, usage(first), { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
+    { expect: 'session/prompt' }, usage(peak), usage(24_000), { answer: { stopReason: 'end_turn' }, to: 'session/prompt' },
   ]);
   const deps: AgentProcessDeps = {
     spawn: spawned.spawn,
@@ -74,32 +85,37 @@ async function acpCompacting(): Promise<MeterEvent[]> {
 }
 
 /** What the built-in runner's compactor reports of one compaction (compaction.ts `announce`): the event, then the meter's reset. */
-const builtInCompacting = (): MeterEvent[] => {
+const builtInCompacting = ([first, peak]: Sizes = BELOW_CONTEXT_FLAG): MeterEvent[] => {
   const reset: UsageRecord = { source: 'ordewell', model: 'openrouter:acme/m', compacted: true, contextTokens: 9_000, contextWindow: 200_000 };
   return [
-    { type: 'usage', record: { source: 'ordewell', model: 'openrouter:acme/m', contextTokens: 160_000, contextWindow: 200_000 } },
-    { type: 'compaction', trigger: 'auto', preTokens: 170_000, postTokens: 9_000 },
+    { type: 'usage', record: { source: 'ordewell', model: 'openrouter:acme/m', contextTokens: first, contextWindow: 200_000 } },
+    { type: 'compaction', trigger: 'auto', preTokens: peak, postTokens: 9_000 },
     { type: 'usage', record: reset },
   ];
 };
 
-const runners: Array<[string, () => Promise<MeterEvent[]> | MeterEvent[]]> = [['an ACP runner', acpCompacting], ['the built-in runner', builtInCompacting]];
+const runners: Array<[string, (sizes?: Sizes) => Promise<MeterEvent[]> | MeterEvent[]]> = [['an ACP runner', acpCompacting], ['the built-in runner', builtInCompacting]];
 
 describe('a compaction on an ACP runner or the built-in runner', () => {
   beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }));
   afterEach(() => vi.useRealTimers());
 
-  it.each(runners)('on %s, is flagged as running long when Ordewell set no window', async (_, compacting) => {
-    const events = await compacting();
+  function flagsOf(events: MeterEvent[]): Array<[RunningLongFacts['reason'], number]> {
     const engine = new VerdictEngine({ runningLongThreshold: () => runningLongThreshold([]) });
     const flags: RunningLongFacts[] = [];
     engine.onRunningLong((_taskId, facts) => flags.push(facts));
     const session = new FakeRunnerSession();
     engine.watch(createTask({ id: 't1', title: 'do thing', taskMode: 'build' }), session);
-
     for (const event of events) session.emitEvent(event);
+    return flags.map((f) => [f.reason, f.compactions]);
+  }
 
-    expect(flags.map((f) => [f.reason, f.compactions])).toEqual([['compaction', 1]]);
+  it.each(runners)('on %s, is flagged as running long when Ordewell set no window', async (_, compacting) => {
+    expect(flagsOf(await compacting())).toEqual([['compaction', 1]]);
+  });
+
+  it.each(runners)('on %s, comes after the flag for a context grown past 150,000 tokens of its window', async (_, compacting) => {
+    expect(flagsOf(await compacting(PAST_CONTEXT_FLAG))).toEqual([['context', 0], ['compaction', 1]]);
   });
 });
 
