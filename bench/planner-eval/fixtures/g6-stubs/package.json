@@ -1,0 +1,13 @@
+{
+  "name": "invoice-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads an invoice from CSV, totals it with tax, and renders it as text.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

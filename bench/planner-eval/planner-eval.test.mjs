@@ -10,23 +10,24 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import {
-  aggregate, isComplete, markdown, median, spread, verdict, widthInRange,
+  aggregate, goalRows, isComplete, markdown, median, spread, verdict, widthInRange,
 } from './lib/aggregate.mjs';
 import {
-  ANSWER, BASELINE_REF, CELLS, CONFIRM, NUDGES, QUOTA, quotaOf, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
+  ANSWER, BASELINE_REF, CELLS, CONFIRM, CONTROL_REF_ENV, NUDGES, QUOTA, quotaOf, TEST_COMMANDS, VARIANTS, goalText, loadGoals, missingFor, mockCell,
   approvalPolicy, outputDirs, parseArgs, runEnv, runId, runSettings, selectRuns, substituteFor, timeoutFor, withModel,
 } from './lib/config.mjs';
 import { guardFiles, snapshot } from './lib/guard.mjs';
 import { keyChecks, keyHash, keyViolations, plannerRanTest } from './lib/keys.mjs';
 import {
-  criticalPath, ownReadShare, planDigest, ownReadTally, agentCalls, resultBytes, runMetrics, sessionParts, width, wordingViolations,
+  changePath, criticalPath, endsInCheck, ownReadShare, planDigest, ownReadTally, agentCalls, resultBytes, runMetrics, sessionParts, width, wordingViolations,
 } from './lib/metrics.mjs';
 import { classifyTurn, newestSession, plannerApprovals, replyLanded } from './lib/observe.mjs';
 import { REDACTED, redactJson, redactor } from './lib/redact.mjs';
 import { citedOnly, questionsFor, rubricPrompt } from './lib/rubric.mjs';
-import { applyPatches, linkTree, workParent } from './lib/target.mjs';
-import { cliMain, ensureBuild, resolveRef } from './lib/builds.mjs';
+import { applyPatches, ensureTemplate, fixtureOf, linkTree, treeHash, workParent } from './lib/target.mjs';
+import { cliMain, controlSha, ensureBuild, resolveRef } from './lib/builds.mjs';
 import { ptyCommand, shellQuote, stripAnsi, typed } from './lib/tui.mjs';
 
 const goals = loadGoals();
@@ -43,8 +44,8 @@ const atBaseline = (args) => {
 };
 
 describe('the goals', () => {
-  it('are G1 to G5, each with a goal and a key whose patterns compile', () => {
-    assert.deepEqual(goals.map((g) => g.id), ['g1', 'g2', 'g3', 'g4', 'g5']);
+  it('are G1 to G6, each with a goal and a key whose patterns compile', () => {
+    assert.deepEqual(goals.map((g) => g.id), ['g1', 'g2', 'g3', 'g4', 'g5', 'g6']);
     for (const g of goals) {
       assert.ok(g.goal.length > 40, g.id);
       assert.ok(g.key.taskCount.min <= g.key.taskCount.max, g.id);
@@ -53,9 +54,18 @@ describe('the goals', () => {
       const r = g.key.reproduceFirst;
       if (r) [r.reproduce, r.fix, r.plannerRanTest, r.validates, r.reproduceInFix, ...[r.causeNamed ?? []].flat()].forEach((p) => new RegExp(p, 'i'));
       if (g.key.breadth) new RegExp(g.key.breadth.packages, 'i');
+      if (g.key.slices) Object.values(g.key.slices.modules).forEach((p) => new RegExp(p, 'i'));
       if (g.expectedSlices) assert.ok(g.expectedSlices.min <= g.expectedSlices.max, g.id);
     }
     assert.deepEqual(goal('g1').expectedSlices, { min: 4, max: 6, tolerance: 1 });
+  });
+
+  it('name G1, G2 and G4 as the guards against over-flattening, outside their keys', () => {
+    assert.deepEqual(goals.filter((g) => g.guards).map((g) => g.id), ['g1', 'g2', 'g4']);
+    for (const g of goals.filter((x) => x.guards)) {
+      assert.match(g.guards, /^over-flattening: /, g.id);
+      assert.equal(keyHash(g), keyHash({ ...g, guards: undefined }), 'a guard note changes no key hash');
+    }
   });
 
   it('hash a key with the goal text, so a changed key or goal is a changed hash', () => {
@@ -918,5 +928,194 @@ describe('re-scoring stored runs', () => {
     assert.deepEqual(v0.map((r) => [r.goal, r.source ?? 'own']).sort(), [['g3', stored], ['g4', 'own']]);
     assert.equal(verdicts.find((v) => v.candidate === 'V1').result, 'pass');
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("G6's fixture and key", () => {
+  const g6 = goal('g6');
+  const fixture = fixtureOf(g6);
+  const modules = Object.keys(g6.key.slices.modules);
+  const impl = (m, extra) => task(m, `Implement src/${m}.mjs`, extra);
+  const closing = (ids) => task('check', 'Run npm test over every module', { dependencies: ids });
+  const failed = (tasks) => keyViolations(keyChecks(g6, tasks)).map((c) => c.check);
+
+  it("matches the fixture: one test file per module, and the key's calls are the modules' imports", () => {
+    const src = fs.readdirSync(path.join(fixture, 'src')).map((f) => f.replace(/\.mjs$/, '')).sort();
+    assert.deepEqual(src, [...modules].sort());
+    assert.deepEqual(fs.readdirSync(path.join(fixture, 'test')).sort(), src.map((m) => `${m}.mjs`));
+    const imports = Object.fromEntries(src.map((m) => [m, [...fs.readFileSync(path.join(fixture, 'src', `${m}.mjs`), 'utf8').matchAll(/from '\.\/(\w+)\.mjs'/g)].map((x) => x[1]).sort()])
+      .filter(([, callees]) => callees.length));
+    assert.deepEqual(imports, Object.fromEntries(Object.entries(g6.key.slices.calls).map(([m, callees]) => [m, [...callees].sort()])));
+    for (const m of modules) assert.match(g6.goal, new RegExp(`\\b${m}\\b`), `the goal names ${m}`);
+  });
+
+  it('holds stubs only, whose tests npm test finds and which all fail, none of them a file test:bench would run', async () => {
+    for (const m of modules) {
+      const exported = await import(pathToFileURL(path.join(fixture, 'src', `${m}.mjs`)).href);
+      assert.ok(Object.keys(exported).length > 0, m);
+      for (const [name, fn] of Object.entries(exported)) assert.throws(() => fn(), /not implemented/, `${m}.${name}`);
+    }
+    const all = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? all(path.join(dir, e.name)) : [e.name]));
+    assert.ok(all(fixture).every((f) => !/\.test\.mjs$/.test(f)), "bench's own glob, bench/**/*.test.mjs, must not run the failing fixture tests");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(fixture, 'package.json'), 'utf8')).scripts.test, 'node --test');
+    // NODE_TEST_CONTEXT would make the child report to this run as a subtest, not print its own summary.
+    const env = { ...process.env, NODE_OPTIONS: '' };
+    delete env.NODE_TEST_CONTEXT;
+    const r = spawnSync(process.execPath, ['--test'], { cwd: fixture, encoding: 'utf8', env, timeout: 60_000 });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout, /# pass 0\b/);
+    assert.match(r.stdout, /# fail [1-9]/);
+  });
+
+  it('names each module slice by its own pattern alone', () => {
+    for (const m of modules) {
+      const hit = modules.filter((n) => new RegExp(g6.key.slices.modules[n], 'i').test(`Implement src/${m}.mjs`));
+      assert.deepEqual(hit, [m]);
+    }
+  });
+
+  it('passes every module at once with a closing check, which neither lengthens the path nor counts as a slice', () => {
+    const plan = [...modules.map((m) => impl(m)), closing(modules)];
+    assert.deepEqual(failed(plan), []);
+    const m = runMetrics({ plan: { tasks: plan } });
+    assert.deepEqual([m.criticalPath, m.changePath, m.width, m.endsInCheck], [2, 1, 6, true]);
+    const grouped = [task('a', 'Implement money and tax'), task('b', 'Implement csv'), task('c', 'Implement lines, invoice and render')];
+    assert.deepEqual(failed(grouped), []);
+    assert.equal(endsInCheck(grouped), false, 'a plan with no check is allowed, and says so');
+  });
+
+  it('fails a plan chained along the import graph, by its path and by every slice ordered only by a call', () => {
+    const chained = [impl('money'), impl('tax'), impl('csv'), impl('lines', { dependencies: ['money', 'tax'] }),
+      impl('invoice', { dependencies: ['csv', 'lines'] }), impl('render', { dependencies: ['money', 'lines', 'invoice'] }), closing(['render'])];
+    const checks = keyChecks(g6, chained);
+    assert.deepEqual(keyViolations(checks).map((c) => c.check), ['change path', 'no slice waits on a module it calls']);
+    assert.match(checks.find((c) => c.check === 'change path').detail, /^4 change task/);
+    assert.match(checks.find((c) => c.check === 'no slice waits on a module it calls').detail, /lines \(lines\) after money \(money\)/);
+    assert.equal(changePath(chained), 4);
+  });
+
+  it('fails an order through a check between a caller and its callee, and leaves an order between unrelated modules to the path', () => {
+    const throughCheck = [impl('money'), task('cm', 'Check money', { dependencies: ['money'] }), impl('lines', { dependencies: ['cm'] }), impl('csv'), impl('tax')];
+    assert.deepEqual(failed(throughCheck), ['no slice waits on a module it calls']);
+    const unrelated = [impl('tax'), impl('csv', { dependencies: ['tax'] }), impl('money'), impl('lines')];
+    assert.deepEqual(failed(unrelated), []);
+  });
+
+  it('fails one task that implements everything: nothing runs at once', () => {
+    assert.deepEqual(failed([task('1', 'Implement every stub')]), ['task count', 'slices at once']);
+  });
+
+  it('counts change tasks only on the path: research before and a check or loop after add nothing', () => {
+    const plan = [task('r', 'Map the modules', { research: true }), impl('money', { dependencies: ['r'] }), impl('lines', { dependencies: ['r'] }),
+      task('l', 'Fix until green', { loop: { body: ['f'] }, dependencies: ['money', 'lines'] }), task('f', 'Fix what fails')];
+    assert.equal(criticalPath(plan), 3);
+    assert.equal(changePath(plan), 1);
+    assert.equal(endsInCheck(plan), true, 'a verify/fix loop that waits for every change closes the plan');
+    assert.equal(endsInCheck([impl('money'), impl('lines'), task('c', 'Integration check', { dependencies: ['money'] })]), false, 'a check must wait for every change');
+    assert.equal(changePath([task('x', 'X', { dependencies: ['y'] }), task('y', 'Y', { dependencies: ['x'] })]), null);
+  });
+
+  it('cuts its template from the fixture, as one commit, and again when the fixture changes', async () => {
+    const templatesDir = tmp();
+    const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+    const dir = await ensureTemplate({ repo: repo, templatesDir, sha: '0'.repeat(40), goal: g6 });
+    assert.equal(path.basename(dir), `g6-fixture-${treeHash(fixture)}`);
+    assert.ok(fs.existsSync(path.join(dir, 'src', 'render.mjs')) && !fs.existsSync(path.join(dir, 'packages')), 'the fixture, none of Ordewell');
+    assert.equal(git(dir, 'rev-list', '--count', 'HEAD').trim(), '1');
+    assert.equal(git(dir, 'status', '--porcelain'), '');
+    assert.equal(await ensureTemplate({ repo, templatesDir, sha: '0'.repeat(40), goal: g6 }), dir, 'cut once');
+    const root = tmp();
+    fs.cpSync(fixture, path.join(root, ...g6.setup.fixture.split('/')), { recursive: true });
+    fs.appendFileSync(path.join(root, ...g6.setup.fixture.split('/'), 'README.md'), '\nEdited.\n');
+    assert.notEqual(await ensureTemplate({ repo, templatesDir, sha: '0'.repeat(40), goal: g6, root }), dir);
+    fs.rmSync(templatesDir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('the control variant, V3', () => {
+  it('builds the control ref as it is and asks it as V1 is asked', () => {
+    const v3 = VARIANTS.V3;
+    assert.deepEqual([v3.build, v3.nudges, v3.optional], ['control', false, true]);
+    assert.deepEqual(v3.env, VARIANTS.V1.env);
+    assert.equal(goalText(goal('g6'), v3), goal('g6').goal);
+    const env = runEnv({}, { cell: CELLS[0], variant: v3, settingsPath: 's', maxParallel: 4, enabledRunners: ['claude-code'] });
+    assert.equal(env.ORDEWELL_PLANNER_READ_LIMIT, 'off');
+  });
+
+  it('runs only when named, beside V1', () => {
+    assert.ok(selectRuns(parseArgs(['--full'], {}), { goals }).every((r) => r.variant.id !== 'V3'));
+    const runs = selectRuns(parseArgs(['--full', '--backend', 'claude-code', '--goal', 'g1,g2,g4,g6', '--variant', 'V1,V3', '--repeats', '1'], {}), { goals });
+    assert.deepEqual(runs.map((r) => `${r.goal.id} ${r.variant.id}`), ['g1 V1', 'g1 V3', 'g2 V1', 'g2 V3', 'g4 V1', 'g4 V3', 'g6 V1', 'g6 V3']);
+  });
+
+  it('takes its ref from --control-ref, else the variable, else leaves it to the merge-base', () => {
+    assert.equal(CONTROL_REF_ENV, 'ORDEWELL_BENCH_CONTROL_REF');
+    assert.equal(parseArgs(['--full'], {}).controlRef, null);
+    assert.equal(parseArgs(['--full'], { [CONTROL_REF_ENV]: 'v1.2.0' }).controlRef, 'v1.2.0');
+    assert.equal(parseArgs(['--full', '--control-ref', 'abc123'], { [CONTROL_REF_ENV]: 'v1.2.0' }).controlRef, 'abc123');
+    assert.equal(parseArgs(['--full'], { [CONTROL_REF_ENV]: '' }).controlRef, null);
+  });
+
+  it('resolves a named ref, or the merge-base of the candidate and the upstream, and says how to name one when there is none', async () => {
+    const calls = [];
+    const git = (answer) => async (args) => {
+      calls.push(args);
+      if (answer instanceof Error) throw answer;
+      return `${answer}\n`;
+    };
+    assert.equal(await controlSha({ ref: 'v1', candidateSha: 'c'.repeat(40), upstream: 'origin/main', git: git('a'.repeat(40)) }), 'a'.repeat(40));
+    assert.equal(await controlSha({ ref: null, candidateSha: 'c'.repeat(40), upstream: 'origin/main', git: git('b'.repeat(40)) }), 'b'.repeat(40));
+    assert.deepEqual(calls, [['rev-parse', '--verify', 'v1^{commit}'], ['merge-base', 'c'.repeat(40), 'origin/main']]);
+    await assert.rejects(controlSha({ ref: null, candidateSha: 'c'.repeat(40), upstream: 'origin/main', git: git(new Error('fatal: Not a valid object name origin/main')) }),
+      /no merge-base with origin\/main .*--control-ref or ORDEWELL_BENCH_CONTROL_REF/);
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+    assert.equal(await controlSha({ repo, ref: null, candidateSha: head, upstream: 'HEAD' }), head, 'real git: a commit is its own merge-base');
+  });
+});
+
+describe('V1 against V3, per goal', () => {
+  const run = (variant, goalId, repeat, metrics = {}, failing = 0) => ({
+    id: `${goalId}--c--${variant}--r${repeat}`, cell: 'c', variant, goal: goalId, repeat,
+    metrics: { submitted: true, stopped: 'plan submitted', taskCount: 4, width: 2, criticalPath: 3, changePath: 2, endsInCheck: false, wordingViolations: [], ...metrics },
+    keyChecks: Array.from({ length: failing }, () => ({ check: 'kept together: rename', status: 'fail', detail: 'split' })),
+  });
+  const records = [
+    run('V3', 'g2', 1), run('V1', 'g2', 1, {}, 1),
+    run('V3', 'g6', 1, { width: 1, criticalPath: 5, changePath: 4, taskCount: 6 }, 2),
+    run('V1', 'g6', 1, { width: 6, criticalPath: 2, changePath: 1, taskCount: 7, endsInCheck: true }),
+    { ...run('V1', 'g6', 2), error: 'timeout after 900s', metrics: { submitted: false, stopped: 'timeout' } },
+  ];
+
+  it('is judged and given rows only on a backend that ran V3', () => {
+    const result = aggregate(records, goals);
+    assert.deepEqual(result.verdicts.map((v) => `${v.baseline}>${v.candidate}`), ['V0>V1', 'V3>V1']);
+    assert.deepEqual(result.goalRows.map((r) => r.goal), ['g2', 'g6']);
+    const without = aggregate(records.filter((r) => r.variant !== 'V3'), goals);
+    assert.deepEqual(without.goalRows, []);
+    assert.doesNotMatch(markdown(without), /per goal/);
+  });
+
+  it('gives each side its key violations, width, paths, task count and closing checks, and whether the guard held', () => {
+    const [g2, g6] = goalRows(records, goals, { cell: 'c', baseline: 'V3', candidate: 'V1' });
+    assert.match(g2.guard, /^over-flattening/);
+    assert.equal(g2.keyViolationsHold, false, 'a guard whose key violations rose');
+    assert.equal(g6.guard, null);
+    assert.equal(g6.keyViolationsHold, true);
+    assert.deepEqual([g6.sides.V3.complete, g6.sides.V3.runs, g6.sides.V1.complete, g6.sides.V1.runs], [1, 1, 1, 2], 'a timeout counts toward completion only');
+    const medians = (s) => ['keyViolations', 'width', 'criticalPath', 'changePath', 'taskCount'].map((k) => s[k].median);
+    assert.deepEqual(medians(g6.sides.V3), [2, 1, 5, 4, 6]);
+    assert.deepEqual(medians(g6.sides.V1), [0, 6, 2, 1, 7]);
+    assert.deepEqual([g6.sides.V3.endsInCheck, g6.sides.V1.endsInCheck], [{ yes: 0, of: 1 }, { yes: 1, of: 1 }]);
+    const stored = goalRows([{ ...run('V3', 'g6', 1), metrics: { ...run('V3', 'g6', 1).metrics, endsInCheck: undefined } }, run('V1', 'g6', 1)], goals, { cell: 'c', baseline: 'V3', candidate: 'V1' });
+    assert.equal(stored[0].sides.V3.endsInCheck, null, 'a record scored before the metric existed says nothing about it');
+  });
+
+  it('prints a row per goal and backend, V3 then V1 in each pair of columns', () => {
+    const md = markdown(aggregate(records, goals));
+    assert.match(md, /## V1 against V3, per goal/);
+    assert.match(md, /\| goal \| backend \| guard \| complete \| key viol\. V3 \| key viol\. V1 \| width V3 \| width V1 \| path V3 \| path V1 \| change path V3 \| change path V1 \| tasks V3 \| tasks V1 \| ends in a check V3 \| ends in a check V1 \| key viol\. holds \|/);
+    assert.match(md, /\| g2 \| c \| yes \| 1\/1, 1\/1 \| 0 \| 1 \| 2 \| 2 \| 3 \| 3 \| 2 \| 2 \| 4 \| 4 \| 0\/1 \| 0\/1 \| no \|/);
+    assert.match(md, /\| g6 \| c \| {2}\| 1\/1, 1\/2 \| 2 \| 0 \| 1 \| 6 \| 5 \| 2 \| 4 \| 1 \| 6 \| 7 \| 0\/1 \| 1\/1 \| yes \|/);
   });
 });

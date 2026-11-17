@@ -1,6 +1,7 @@
 /**
  * The repository a run plans against: Ordewell itself at the baseline commit,
- * with the goal's setup patches applied, as a fresh throwaway clone per run.
+ * or the goal's own fixture where it names one (G6), with the goal's setup
+ * patches applied, as a fresh throwaway clone per run.
  *
  * Each goal's tree is cut once into a template repository holding a single
  * commit, and every run clones that. A single commit, not the real history,
@@ -8,9 +9,11 @@
  * away; every goal gets the same treatment, so no goal's history tells the
  * planner more than another's.
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { must } from './proc.mjs';
 
 const IDENTITY = ['-c', 'user.name=planner-eval', '-c', 'user.email=planner-eval@localhost', '-c', 'commit.gpgsign=false'];
@@ -26,21 +29,49 @@ export function applyPatches(dir, patches = []) {
   }
 }
 
-/** The template for `goal` at `sha`, cut now unless an earlier run left it. */
-export async function ensureTemplate({ repo, templatesDir, sha, goal }) {
-  const dir = path.join(templatesDir, `${goal.id}-${sha.slice(0, 12)}`);
+/** bench/planner-eval, which a goal's `setup.fixture` is relative to. */
+export const EVAL_DIR = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+/** The fixture directory a goal plans against instead of Ordewell, or null for a goal cut from the baseline. */
+export const fixtureOf = (goal, root = EVAL_DIR) => (goal.setup?.fixture ? path.join(root, ...goal.setup.fixture.split('/')) : null);
+
+/** A short hash of every file under `dir`, by path and content, so an edited fixture is cut again. */
+export function treeHash(dir) {
+  const hash = createHash('sha256');
+  const walk = (rel) => {
+    for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(child);
+      else hash.update(`${child}\0`).update(fs.readFileSync(path.join(dir, child))).update('\0');
+    }
+  };
+  walk('');
+  return hash.digest('hex').slice(0, 12);
+}
+
+/**
+ * The template for `goal`, cut now unless an earlier run left it: the tree at
+ * `sha`, or the goal's own fixture (G6), which needs nothing of Ordewell's.
+ */
+export async function ensureTemplate({ repo, templatesDir, sha, goal, root = EVAL_DIR }) {
+  const fixture = fixtureOf(goal, root);
+  const dir = path.join(templatesDir, fixture ? `${goal.id}-fixture-${treeHash(fixture)}` : `${goal.id}-${sha.slice(0, 12)}`);
   if (fs.existsSync(path.join(dir, '.git', 'planner-eval-ready'))) return dir;
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const archive = path.join(templatesDir, `${goal.id}-${sha.slice(0, 12)}.tar`);
-  await must('git', ['archive', '--format=tar', '-o', archive, sha], { cwd: repo });
-  await must('tar', ['-xf', archive, '-C', dir]);
-  fs.rmSync(archive, { force: true });
+  if (fixture) {
+    fs.cpSync(fixture, dir, { recursive: true });
+  } else {
+    const archive = path.join(templatesDir, `${goal.id}-${sha.slice(0, 12)}.tar`);
+    await must('git', ['archive', '--format=tar', '-o', archive, sha], { cwd: repo });
+    await must('tar', ['-xf', archive, '-C', dir]);
+    fs.rmSync(archive, { force: true });
+  }
   applyPatches(dir, goal.setup?.patches);
   await must('git', ['init', '-q', '-b', 'main'], { cwd: dir });
   await must('git', ['add', '-A'], { cwd: dir });
-  await must('git', [...IDENTITY, 'commit', '-q', '-m', 'Ordewell'], { cwd: dir });
-  fs.writeFileSync(path.join(dir, '.git', 'planner-eval-ready'), `${sha}\n`);
+  await must('git', [...IDENTITY, 'commit', '-q', '-m', fixture ? 'Initial commit' : 'Ordewell'], { cwd: dir });
+  fs.writeFileSync(path.join(dir, '.git', 'planner-eval-ready'), `${fixture ? goal.setup.fixture : sha}\n`);
   return dir;
 }
 

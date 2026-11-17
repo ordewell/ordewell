@@ -9,7 +9,9 @@
  * mentions every neighbour it must not touch.
  */
 import { createHash } from 'node:crypto';
-import { agentCalls, ancestors, flatten, isLoop, isReadOnly, isResearch, ownReadTally, width } from './metrics.mjs';
+import {
+  agentCalls, ancestors, changePath, changeTasks, flatten, isLoop, isResearch, isVerify, ownReadTally, width,
+} from './metrics.mjs';
 
 const pattern = (source) => new RegExp(source, 'i');
 const titleOf = (t) => String(t.title ?? '');
@@ -21,33 +23,6 @@ const textOf = (t) => `${titleOf(t)}\n${t.description ?? ''}\n${t.prompt ?? ''}`
  * made stale. The goal text is in it because the reviewer reads that too.
  */
 export const keyHash = (goal) => createHash('sha256').update(JSON.stringify({ goal: goal.goal, key: goal.key })).digest('hex').slice(0, 12);
-
-/** A task that checks the work rather than doing it: a verify script, or one titled as a check or gate. */
-const VERIFY_TITLE = /^\s*(verify|check|validate|review|confirm|re-?run|run)\b|\bgate\b/i;
-const DOCS_TITLE = /\b(docs?|documentation|changelog|readme|CONTEXT\.md|ADRs?|ADR[- ]?\d+)\b/i;
-const CODE_TITLE = /\b(code|src|source|tests?|types?|field|schema|migrat\w*|persist\w*|implement\w*|model|reader|writer)\b/i;
-
-/** The ids of every task a loop runs as its body: the fix half of a verify/fix pair. */
-function loopBodies(all) {
-  return new Set(all.flatMap((t) => (Array.isArray(t.loop?.body) ? t.loop.body : [])));
-}
-
-const isVerify = (t) => t.type === 'script' || VERIFY_TITLE.test(titleOf(t));
-
-/**
- * A task that changes the code a key is about. Research, read-only, verify
- * and loop tasks change nothing of their own, a loop's body fixes only what
- * its check reports, and a docs task edits prose: two of those beside the
- * change are not the change split in two.
- */
-function changeTasks(top) {
-  const bodies = loopBodies(flatten(top));
-  return top.filter((t) => !isReadOnly(t)
-    && !isVerify(t)
-    && !(isLoop(t) && Array.isArray(t.loop.body) && t.loop.body.length)
-    && !bodies.has(t.id)
-    && !(DOCS_TITLE.test(titleOf(t)) && !CODE_TITLE.test(titleOf(t))));
-}
 
 /**
  * The tasks the count leaves out: one verify/fix loop pair, or one verify
@@ -202,6 +177,49 @@ function breadthChecks(spec, top, up, researchLog) {
   ];
 }
 
+/**
+ * G6's checks: the interfaces are written, so the module slices can all run
+ * at once. A change task is a slice of every module its title names. The work
+ * is judged in change tasks only, so a closing check that waits for every
+ * slice neither lengthens the path nor narrows the width. Two slices are
+ * ordered for no reason when one's modules call the other's and no module is
+ * in both: the call is all that orders them, and its contract is already in
+ * the doc comment.
+ */
+function sliceChecks(spec, top, up) {
+  const changes = changeTasks(top);
+  const modulesOf = new Map(changes.map((t) => [t.id, Object.keys(spec.modules).filter((m) => pattern(spec.modules[m]).test(titleOf(t)))]));
+  const calls = (a, b) => a.some((m) => (spec.calls[m] ?? []).some((callee) => b.includes(callee)));
+  const ordered = [];
+  for (const later of changes) {
+    for (const earlier of changes) {
+      if (!up.get(later.id).has(earlier.id)) continue;
+      const [a, b] = [modulesOf.get(later.id), modulesOf.get(earlier.id)];
+      if (!a.length || !b.length || a.some((m) => b.includes(m))) continue;
+      if (calls(a, b) || calls(b, a)) ordered.push(`${later.id} (${a.join('+')}) after ${earlier.id} (${b.join('+')})`);
+    }
+  }
+  const path = changePath(top);
+  const wide = width(top, changes.map((t) => t.id));
+  return [
+    {
+      check: 'change path',
+      status: path !== null && path <= spec.maxChangePath ? 'pass' : 'fail',
+      detail: `${path ?? 'a cycle, no'} change task(s) on the longest chain; the key allows ${spec.maxChangePath}`,
+    },
+    {
+      check: 'slices at once',
+      status: wide >= spec.minWidth ? 'pass' : 'fail',
+      detail: `${wide} change task(s) can run at once; the key wants ${spec.minWidth} or more`,
+    },
+    {
+      check: 'no slice waits on a module it calls',
+      status: ordered.length === 0 ? 'pass' : 'fail',
+      detail: ordered.length ? `ordered only by a call: ${ordered.join('; ')}` : `${changes.filter((t) => modulesOf.get(t.id).length).length} module slice(s), none ordered by a call alone`,
+    },
+  ];
+}
+
 /** Every mechanical check of `goal`'s key against a submitted plan's tasks. */
 export function keyChecks(goal, tasks, { researchLog } = {}) {
   const key = goal.key;
@@ -213,6 +231,7 @@ export function keyChecks(goal, tasks, { researchLog } = {}) {
     ...(key.keepTogether ?? []).map((g) => keepTogetherCheck(g, top)),
     ...(key.reproduceFirst ? reproduceChecks(key.reproduceFirst, key, top, up, researchLog) : []),
     ...(key.breadth ? breadthChecks(key.breadth, top, up, researchLog) : []),
+    ...(key.slices ? sliceChecks(key.slices, top, up) : []),
   ];
 }
 

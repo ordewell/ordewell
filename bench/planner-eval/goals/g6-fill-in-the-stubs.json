@@ -1,0 +1,39 @@
+{
+  "id": "g6",
+  "title": "Fill in the stubs",
+  "kind": "interfaces already written: independent slices along an import graph",
+  "goal": "This repository is a small invoice library whose functions are stubs: every function in src/ has its signature and a doc comment that is its contract, and throws 'not implemented'. The modules are money, tax and csv, which call nothing, lines, which calls money and tax, invoice, which calls csv and lines, and render, which calls money, lines and invoice. Each module has its tests in test/<module>.mjs. Implement every stub to its doc comment so that `npm test` passes. Do not change the tests, the doc comments or any function's signature, and add no dependency.",
+  "setup": {
+    "fixture": "fixtures/g6-stubs"
+  },
+  "key": {
+    "taskCount": { "min": 3, "max": 8 },
+    "parallelAllowed": true,
+    "sharedDecisions": [],
+    "keepTogether": [],
+    "slices": {
+      "modules": {
+        "money": "\\bmoney\\b|toCents|formatCents",
+        "tax": "\\btax(\\.mjs)?\\b|taxCents",
+        "csv": "\\bcsv(\\.mjs)?\\b|parseCsv",
+        "lines": "\\blines(\\.mjs)?\\b|parseLine|lineAmounts",
+        "invoice": "\\binvoice(\\.mjs)?\\b|readInvoice|invoiceTotals",
+        "render": "\\brender(\\.mjs|ing)?\\b|renderInvoice"
+      },
+      "calls": {
+        "lines": ["money", "tax"],
+        "invoice": ["csv", "lines"],
+        "render": ["money", "lines", "invoice"]
+      },
+      "maxChangePath": 3,
+      "minWidth": 3
+    },
+    "integrationRisks": [
+      "Module tasks chained along the import graph (money, then lines, then invoice, then render), though every interface is already written down and no slice needs another's code to be written.",
+      "One task that implements every module, which leaves nothing to run at once.",
+      "A slice that changes a doc comment or a signature another slice codes against.",
+      "No task that runs the whole suite once every slice has landed, since a slice's own tests pass only once the modules it calls are implemented."
+    ],
+    "expectedStrategy": "The modules (or small groups of them) as change tasks that can all run at once, each implementing its module to the doc comments and running its own tests, with no change task waiting for another because one module calls the other; then one closing check that runs `npm test` over everything and depends on every slice. That check is the only task the slices feed."
+  }
+}
