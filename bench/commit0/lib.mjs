@@ -4,6 +4,7 @@
 // engine, no key and no network.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /** The model both arms run, in Ordewell's `<provider>:<model>` form. */
@@ -34,12 +35,29 @@ export const PR177_MERGE = '3c4ad79fb4bbde91872693ae18c000c43d9af277';
 export const WALL_CAP_MS = 3 * 60 * 60 * 1000;
 
 /**
- * Per-run spend caps. B's covers its planner turn as well as its tasks, which
- * is why it is larger: the spend is the key's, whichever caller made it.
+ * One spend cap for both arms (D1): B's planner turn spends inside it, as a
+ * user's would, so a larger cap for B would hand it a budget A never had.
  */
+export const CAP_USD = 8;
+
+/** B's ORDEWELL_MAX_PARALLEL (D3), and the box's quota (D4), so a run's wall-clock does not depend on what else the host runs. */
+export const PARALLEL = 8;
+export const CPUS = 8;
+export const MEMORY = '12g';
+
+/** How long a task may wait on a person, with no attempt running, before the run is called stalled. */
+export const STALL_MIN = 15;
+
+/**
+ * How long a run must hold still, once nothing runs and nobody is waited on,
+ * before it is over. `ordewell run` is no judge of that (D5): at Act the
+ * supervisor's closing turn may retry a task after the run's own end.
+ */
+export const SETTLE_MS = 5 * 60 * 1000;
+
 export const ARMS = Object.freeze({
-  A: Object.freeze({ id: 'A', capUsd: 2.5, label: 'one hand-written task, no planner' }),
-  B: Object.freeze({ id: 'B', capUsd: 5.5, label: 'ordewell plan, run, merge' }),
+  A: Object.freeze({ id: 'A', label: 'one hand-written task, no planner, no supervisor' }),
+  B: Object.freeze({ id: 'B', label: 'ordewell plan and run, supervisor at Act, automatic merging' }),
 });
 
 /**
@@ -266,6 +284,11 @@ const urls = JSON.parse(process.argv[1]);
 
 // --- The venv ---------------------------------------------------------------
 
+/** What no diff carries: the image's venv, and the session data Ordewell keeps in the workspace. */
+const UNSCORED = () => [VENV_DIR, '.ordewell'].map((d) => shellQuote(`:(exclude,literal)${d}`)).join(' ');
+/** Marks every untracked, unignored file but those as intent-to-add, so `git diff` shows it; `git add -N .` would fail on an ignored venv link. */
+const INTENT_TO_ADD = () => `git ls-files -z --others --exclude-standard -- . ${UNSCORED()} | xargs -0 -r git add -N --`;
+
 /**
  * The image's venv, relative to the workdir. Commit0 leaves it untracked and
  * unignored, and core's worktree bootstrap links it into each task worktree,
@@ -292,9 +315,13 @@ export function workspaceIgnoreScript(lib) {
   ].join('\n');
 }
 
-/** The arm's diff from the flattened base, the venv and everything under it left out. */
+/**
+ * The arm's diff from the flattened base: what the eval scores, so a file left
+ * untracked (one a task patch applied, an agent's uncommitted new module) is
+ * in it through an intent-to-add. The venv and Ordewell's own directory are not.
+ */
 export function armPatchScript(lib) {
-  return `git diff ${shellQuote(lib.flatCommit)} -- . ${shellQuote(`:(exclude,literal)${VENV_DIR}`)}`;
+  return `${INTENT_TO_ADD()} && git diff --binary ${shellQuote(lib.flatCommit)} -- . ${UNSCORED()}`;
 }
 
 /**
@@ -716,14 +743,121 @@ const loaded = core.loadSession(sessionId, workspace);
 process.stdout.write(JSON.stringify(loaded ? loaded.plan : null));
 `;
 
-/** The settings both arms run under, written to the box's `~/.ordewell/settings.json`. */
-export function boxSettings() {
+/**
+ * What an arm runs under, as result.json records it. A is one agent alone
+ * (D2): no supervisor to answer for it, nothing started or merged on its
+ * behalf, one task at a time. B is Ordewell as its user runs it (D3).
+ */
+export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = MEMORY, capUsd = CAP_USD, wallCapMs = WALL_CAP_MS } = {}) {
+  const b = arm.id === 'B';
+  return {
+    supervisorLevel: b ? 'act' : 'off',
+    autorun: b,
+    automerge: b,
+    parallel: b ? parallel : 1,
+    cpus,
+    memory,
+    capUsd,
+    wallCapMs,
+  };
+}
+
+/**
+ * The box's `~/.ordewell/settings.json` for an arm, under core's own keys
+ * (runSettingsDefaults.ts, SettingsService.ts): automatic merging is
+ * `mergeAtGatesAutomatically`.
+ */
+export function boxSettings(arm, settings = armSettings(arm)) {
   return {
     autonomousMode: true,
     enabledRunners: [RUNNER],
     modelAllowlist: { [RUNNER]: [MODEL_ID] },
     ordewellStepLimit: STEP_LIMIT,
+    supervisorLevel: settings.supervisorLevel,
+    autorun: settings.autorun,
+    mergeAtGatesAutomatically: settings.automerge,
   };
+}
+
+/**
+ * Asks the box's daemon for the settings a session opened with, as a surface
+ * would (`GET /api/settings`), with the daemon's own token. Prints
+ * `{status, body}`, or `{error}` when it cannot be asked.
+ */
+export const SETTINGS_PROBE_JS = String.raw`
+const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
+const [workspace, sessionId] = process.argv.slice(1);
+(async () => {
+  try {
+    const port = core.DEFAULT_DAEMON_PORT;
+    const token = core.readDaemonToken(port);
+    if (!token) throw new Error('no daemon token: the daemon is not running');
+    const q = new URLSearchParams({ workspace, sessionId });
+    const res = await fetch('http://127.0.0.1:' + port + '/api/settings?' + q, { headers: { Authorization: core.bearerHeaderValue(token) }, signal: AbortSignal.timeout(15000) });
+    process.stdout.write(JSON.stringify({ status: res.status, body: await res.json() }));
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ error: String(err && err.message || err) }));
+  }
+})();
+`;
+
+/** Whether the daemon reads back what the arm's settings say: the session's run settings, and the parallel limit from the box's environment. */
+export function judgeSettingsReadback(settings, response) {
+  if (!response || response.error || response.status !== 200) {
+    return { ok: false, failures: [`the daemon could not be asked: ${response?.error ?? `status ${response?.status ?? 'none'}`}`] };
+  }
+  const run = response.body?.run ?? {};
+  const failures = [];
+  const want = [
+    ['supervisorLevel', run.supervisorLevel, settings.supervisorLevel],
+    ['autorun', run.autorun, settings.autorun],
+    ['mergeAtGatesAutomatically', run.mergeAtGatesAutomatically, settings.automerge],
+    ['maxParallel', response.body?.maxParallel, settings.parallel],
+  ];
+  for (const [key, got, expected] of want) if (got !== expected) failures.push(`${key} is ${JSON.stringify(got)}, not ${JSON.stringify(expected)}`);
+  return { ok: failures.length === 0, failures, read: { supervisorLevel: run.supervisorLevel, autorun: run.autorun, mergeAtGatesAutomatically: run.mergeAtGatesAutomatically, maxParallel: response.body?.maxParallel } };
+}
+
+/**
+ * Names the driver on everything it starts, as `<host>/<pid>`, so `--sweep`
+ * can tell a box whose driver was killed from one whose driver still runs.
+ */
+export const DRIVER_LABEL = 'commit0-bench-driver';
+export const driverId = () => `${os.hostname()}/${process.pid}`;
+export function parseDriver(value) {
+  const m = /^(.+)\/(\d+)$/.exec(value ?? '');
+  return m ? { host: m[1], pid: Number(m[2]) } : null;
+}
+
+/** The box's quota (D4) and its parallel limit, as `docker run` arguments: swap is held to the memory quota, or the quota would not bind. */
+export function boxRunArgs({ cpus, memory, parallel, driver }) {
+  return ['--cpus', String(cpus), '--memory', memory, '--memory-swap', memory, '--label', `${DRIVER_LABEL}=${driver}`, '-e', `ORDEWELL_MAX_PARALLEL=${parallel}`];
+}
+
+/** A `--memory` size in bytes as the engine holds it: binary units, as docker's own parser reads them. */
+export function dockerBytes(size) {
+  const m = /^(\d+(?:\.\d+)?)([bkmg]?)$/i.exec(String(size));
+  if (!m) return null;
+  const power = { '': 0, b: 0, k: 1, m: 2, g: 3 }[m[2].toLowerCase()];
+  return Math.trunc(Number(m[1]) * 1024 ** power);
+}
+
+/**
+ * What `--sweep` removes: a labelled container or network whose driver ran on
+ * this host and is dead. One from another host, or naming no driver, is left
+ * with the reason, since nothing here says its driver is gone.
+ */
+export function sweepTargets(items, { host = os.hostname(), isAlive = pidAlive } = {}) {
+  const remove = [];
+  const keep = [];
+  for (const item of items) {
+    const d = parseDriver(item.driver);
+    if (!d) keep.push({ ...item, why: 'it names no driver' });
+    else if (d.host !== host) keep.push({ ...item, why: `its driver ran on ${d.host}` });
+    else if (isAlive(d.pid)) keep.push({ ...item, why: `its driver, pid ${d.pid}, is running` });
+    else remove.push(item);
+  }
+  return { remove, keep };
 }
 
 /** The commands an arm runs in the box, in order, so a dry run can show them without running them. */
@@ -847,43 +981,247 @@ export function startDecision({ sinceRunMs, usageLines, plan, boundMs = NO_START
   return { stop: true, why: 'no-start', detail: `no model call ${minutes} min into the run; ${waiting.length ? `waiting: ${waiting.join('; ')}` : 'the plan could not be read or holds no open AI task'}` };
 }
 
-/** Worktree paths in `git worktree list --porcelain` other than the workspace's own: where a task's work lives until it merges. */
-export function otherWorktrees(porcelain, workdir) {
-  return porcelain.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => l.slice('worktree '.length)).filter((p) => path.posix.normalize(p) !== path.posix.normalize(workdir));
+// --- Watching a run ---------------------------------------------------------
+
+/** Every task of a plan, subtasks included, depth first. */
+export function allTasks(plan) {
+  const out = [];
+  const walk = (tasks) => {
+    for (const t of tasks ?? []) {
+      out.push(t);
+      walk(t.subtasks);
+    }
+  };
+  walk(plan?.tasks);
+  return out;
+}
+
+const isOpen = (t) => t.status !== 'completed' && t.status !== 'skipped';
+/** A task with an open subtask has not landed, whatever its own status says. */
+const isClosed = (t) => !isOpen(t) && (t.subtasks ?? []).every(isClosed);
+
+/**
+ * The task a person must answer before the run can go on: one parked on a
+ * checkpoint or an input, or one core's waitsForApproval (Task.ts) leaves
+ * for the user. None while any attempt runs, since that attempt may still
+ * finish the run; a usage limit waits on the clock, not a person.
+ */
+export function waitingOnPerson(plan) {
+  const tasks = allTasks(plan);
+  if (tasks.some((t) => t.status === 'in_progress')) return null;
+  const approved = plan?.approved === true;
+  const record = plan?.approvedTasks ?? [];
+  for (const t of tasks) {
+    let waiting = null;
+    if (t.status === 'awaiting_user' && (t.awaitingReason === 'checkpoint' || t.awaitingReason === 'input')) waiting = t.awaitingReason;
+    else if (approved && t.type !== 'user' && (t.status === 'pending' || t.status === 'approved') && !record.includes(t.id)) waiting = 'approval';
+    if (waiting) return { task: { id: t.id, title: t.title }, waiting, question: t.parkedQuestion ?? null };
+  }
+  return null;
 }
 
 /**
- * Whether a run's work is partial. A run stopped at a cap, or leaving a task
- * not completed (blocked, failed, awaiting the user), never merged, so its
- * patch comes from the task worktree and its score reads as a truncated one.
+ * Whether a run has stalled: a person waited on, with nothing running, for
+ * stallMs. `sinceMs` is when the wait was first seen, carried poll to poll;
+ * the stall records how long it lasted.
  */
-export function judgeLanding({ stopped, plan, runExit }) {
+export function stallDecision({ plan, nowMs, sinceMs, stallMs }) {
+  const w = waitingOnPerson(plan);
+  if (!w) return { sinceMs: null, stalled: null };
+  const since = sinceMs ?? nowMs;
+  return { sinceMs: since, stalled: nowMs - since >= stallMs ? { ...w, sinceMs: nowMs - since } : null };
+}
+
+/** What moves while a run goes on: every task's status and attempt, and the model calls made. */
+export function planFingerprint(plan, usageLines) {
+  return JSON.stringify([usageLines, allTasks(plan).map((t) => [t.id, t.status, t.awaitingReason ?? null, t.attempted ?? null])]);
+}
+
+/**
+ * Whether a run is over (D5): no attempt running, nobody waited on, some AI
+ * task tried or ended, and nothing moved for settleMs. `ordewell run`'s exit
+ * says none of this: it may exit non-zero on a failed task, or return before
+ * the supervisor's closing turn retries one.
+ */
+export function settleDecision({ plan, fingerprint, nowMs, state, settleMs = SETTLE_MS }) {
+  const tasks = allTasks(plan).filter((t) => (t.type ?? 'ai') === 'ai');
+  const quiet = plan && !tasks.some((t) => t.status === 'in_progress') && !waitingOnPerson(plan)
+    && tasks.some((t) => t.attempted || !isOpen(t) || t.status === 'failed');
+  if (!quiet) return { settled: false, state: null };
+  const next = state && state.fingerprint === fingerprint ? state : { fingerprint, sinceMs: nowMs };
+  return { settled: nowMs - next.sinceMs >= settleMs, state: next };
+}
+
+// --- Choosing what is scored --------------------------------------------------
+
+/** `git worktree list --porcelain` as `{path, branch}`; a detached one's branch is null. */
+export function parseWorktrees(porcelain) {
+  const out = [];
+  for (const block of porcelain.split(/\n\s*\n/)) {
+    const wt = /^worktree (.+)$/m.exec(block);
+    if (!wt) continue;
+    const br = /^branch refs\/heads\/(.+)$/m.exec(block);
+    out.push({ path: wt[1], branch: br ? br[1] : null });
+  }
+  return out;
+}
+
+/**
+ * Each top-level AI task, whether its work landed, and where its work is if
+ * not: its own worktree while git still lists it, never the run's integration
+ * worktree; else the newest `ordewell-preserved/<run>/<name>[-N]` branch that
+ * core's preserve() left; else its own branch. A task whose subtask is open,
+ * or whose isolation never merged, has not landed.
+ */
+export function choosePatches({ plan, worktrees, branches }) {
+  const iso = plan?.isolation;
+  const runId = iso?.run?.id ?? null;
+  const integrationBranches = new Set((iso?.run?.repos ?? []).map((r) => r.integrationBranch).filter(Boolean));
+  const listed = new Map(worktrees.map((w) => [path.posix.normalize(w.path), w]));
+  const branchSet = new Set(branches);
+  const integrationRoot = runId && iso.run.workspaceRoot ? path.posix.join(iso.run.workspaceRoot, '.ordewell', 'worktrees', runId, 'integration') : null;
+  const isIntegration = (p) => {
+    const n = path.posix.normalize(p);
+    return Boolean(integrationRoot && (n === integrationRoot || n.startsWith(`${integrationRoot}/`))) || integrationBranches.has(listed.get(n)?.branch);
+  };
+  const out = [];
+  for (const t of plan?.tasks ?? []) {
+    if ((t.type ?? 'ai') !== 'ai') continue;
+    const rec = iso?.tasks?.[t.id];
+    // A merged record's worktree is gone and its work is on the integration branch; a released one drops its record.
+    const landed = isClosed(t) && (!rec || rec.status === 'merged');
+    let source = null;
+    if (!landed) {
+      const wt = rec?.repos?.['.']?.worktree ?? rec?.workspace;
+      if (wt && listed.has(path.posix.normalize(wt)) && !isIntegration(wt)) source = { kind: 'worktree', path: wt };
+      else {
+        const name = rec?.workspace ? path.posix.basename(rec.workspace) : null;
+        const preserved = name && runId ? branches.filter((b) => b === `ordewell-preserved/${runId}/${name}` || new RegExp(`^ordewell-preserved/${escapeRe(runId)}/${escapeRe(name)}-(\\d+)$`).test(b)) : [];
+        const n = (b) => Number(/-(\d+)$/.exec(b.slice(`ordewell-preserved/${runId}/${name}`.length))?.[1] ?? 1);
+        preserved.sort((a, b) => n(b) - n(a));
+        if (preserved.length) source = { kind: 'branch', ref: preserved[0] };
+        else if (rec?.branch && branchSet.has(rec.branch) && !integrationBranches.has(rec.branch)) source = { kind: 'branch', ref: rec.branch };
+      }
+    }
+    out.push({ taskId: t.id, order: t.order ?? null, title: t.title, status: t.status, isolation: rec?.status ?? null, landed, source });
+  }
+  return out;
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * A task's work as a binary diff from the flattened commit. From a worktree,
+ * its committed and uncommitted work, new files included through an
+ * intent-to-add; from a branch, the branch's tip. The venv is never in it.
+ */
+export function taskPatchScript(lib, source) {
+  const flat = shellQuote(lib.flatCommit);
+  if (source.kind === 'worktree') {
+    return `cd ${shellQuote(source.path)} && ${INTENT_TO_ADD()} && git diff --binary ${flat} -- . ${UNSCORED()}`;
+  }
+  return `git diff --binary ${flat} ${shellQuote(source.ref)} -- . ${UNSCORED()}`;
+}
+
+export const applyPatchCommand = (file) => `git apply --binary --whitespace=nowarn ${shellQuote(file)}`;
+
+/**
+ * What an arm is scored on. A (D2) on its working tree's final state: an
+ * unlanded task's work is applied to the workspace first. B (D3) only on
+ * what Ordewell merged; its unlanded work is kept for diagnosis, never scored.
+ */
+export function scoringPlan(arm, chosen) {
+  if (arm.id === 'A') {
+    const apply = chosen.find((c) => !c.landed && c.source) ?? null;
+    return { scoredFrom: apply ? 'task-worktree' : 'merged', apply, diagnostic: [] };
+  }
+  return { scoredFrom: 'merged', apply: null, diagnostic: chosen.filter((c) => !c.landed && c.source) };
+}
+
+/**
+ * Whether a run's work is partial: stopped at a cap, stalled, or leaving a
+ * task (or a subtask) not completed. Judged on the session's tasks, never on
+ * `ordewell run`'s exit (D5).
+ */
+export function judgeLanding({ stopped, stalled, plan }) {
   if (stopped) return { truncated: true, why: `cap: ${stopped.why}` };
-  const open = (plan?.tasks ?? []).filter((t) => t.status !== 'completed' && t.status !== 'skipped').length;
+  if (stalled) return { truncated: true, why: `stalled: waiting on ${stalled.waiting}` };
+  if (!plan) return { truncated: true, why: 'blocked: no plan to read' };
+  const open = (plan.tasks ?? []).filter((t) => !isClosed(t)).length;
   if (open > 0) return { truncated: true, why: `blocked: ${open} task${open === 1 ? '' : 's'} not completed` };
-  if (!plan && runExit) return { truncated: true, why: `blocked: run exit ${runExit}, no plan to read` };
   return { truncated: false, why: null };
 }
 
+// --- Validity -----------------------------------------------------------------
+
+/** The sources a packed dist must be newer than. */
+export const FRESHNESS_SOURCES = Object.freeze(['packages/core/src', 'packages/web/server', 'packages/cli/src']);
+
+/**
+ * Whether the dist about to be packed was built from the tree whose sha the
+ * result records: its oldest file no older than the newest tracked source.
+ * An allowed stale dist runs, and the result says so.
+ */
+export function distFreshness({ dists, sources, allowStale = false }) {
+  if (dists.length === 0) return { ok: false, stale: true, allowed: false, detail: 'no dist: build the tree first' };
+  const oldest = dists.reduce((a, b) => (b.mtimeMs < a.mtimeMs ? b : a));
+  const newest = sources.reduce((a, b) => (!a || b.mtimeMs > a.mtimeMs ? b : a), null);
+  const stale = Boolean(newest && oldest.mtimeMs < newest.mtimeMs);
+  const detail = stale ? `${oldest.path} is older than ${newest.path}` : `${oldest.path} is newer than every tracked source`;
+  return { ok: !stale || allowStale, stale, allowed: stale && allowStale, detail };
+}
+
+/** A failed check is one that neither was expected to fail nor could not be verified. */
+export const failedCheck = (c) => !c.ok && !c.unverified && !c.expectedFailure;
+
+/** Every reason a result is not one to compare. */
+export function judgeValidity({ aborted, checks, tests, freshness, dryRun = false }) {
+  const reasons = [];
+  if (aborted) reasons.push(`aborted: ${aborted}`);
+  for (const c of checks ?? []) if (failedCheck(c)) reasons.push(`failed check: ${c.scope}: ${c.name}`);
+  if (dryRun) reasons.push('dry run: no arm ran');
+  else if (tests?.timedOut) reasons.push('eval timed out');
+  else if (!tests || tests.passed === undefined) reasons.push('eval gave no summary');
+  if (freshness?.stale && freshness.allowed) reasons.push('stale dist allowed');
+  return { valid: reasons.length === 0, invalidReasons: reasons };
+}
+
+/**
+ * The stub baseline. One that collects nothing is the library's own (the
+ * stubs of networkx and sphinx do not import), recorded with its reason
+ * rather than failed; one with no summary at all is still a failure.
+ */
+export function baselineRecord(evaluation) {
+  if (!evaluation || evaluation.passed === undefined) return { ok: false, baseline: null };
+  const collected = evaluation.passed + evaluation.failed + evaluation.errors + (evaluation.skipped ?? 0);
+  if (evaluation.collectionError) return { ok: true, baseline: { collected: 0, reason: evaluation.collectionError } };
+  if (collected === 0) return { ok: true, baseline: { collected: 0, reason: 'pytest collected no test' } };
+  return { ok: true, baseline: null };
+}
+
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, window, ordewell, egress, leak, network, tests, wallClockMs, spend, transcripts, stopped, truncated, providerPin, dryRun, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, patches, validity, providerPin, dryRun, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
     dryRun,
+    valid: validity?.valid ?? null,
+    invalidReasons: validity?.invalidReasons ?? [],
+    ...settings,
     model: MODEL_ID,
     providerPin: providerPin ?? null,
     ordewellSha: ordewell.sha,
     pr177Merge: PR177_MERGE,
     containsPr177: ordewell.containsPr177,
+    staleDistAllowed: ordewell.staleDistAllowed ?? false,
     contextWindow: window.window,
     windowCheck: window,
     egress,
     leak,
     networkDeselected: network?.deselected ?? null,
-    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, collectionErrors: tests.collectionErrors ?? [] } : null,
+    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, collectionErrors: tests.collectionErrors ?? [], exit: tests.exit ?? null, timedOut: tests.timedOut ?? false } : null,
+    baseline: baseline ?? null,
     wallClockMs: wallClockMs ?? null,
-    capUsd: arm.capUsd,
     billedUsd: spend?.billedUsd ?? null,
     billedSource: spend?.source ?? null,
     runnerReportedUsd: transcripts?.spendUsd ?? null,
@@ -891,7 +1229,10 @@ export function resultRecord({ lib, arm, window, ordewell, egress, leak, network
     compactions: transcripts?.compactions ?? null,
     windowFallbackSuspected: transcripts && window.window ? windowFallbackSuspected(transcripts.compactionPreTokens, window.window) : null,
     stopped: stopped ?? null,
+    stalled: stalled ?? null,
     truncated: truncated ?? { truncated: false, why: null },
+    scoredFrom: scoredFrom ?? null,
+    patches: patches ?? [],
     stepLimit: STEP_LIMIT,
     startedAt,
     endedAt,
@@ -901,7 +1242,15 @@ export function resultRecord({ lib, arm, window, ordewell, egress, leak, network
 // --- Command line -----------------------------------------------------------
 
 export function parseArgs(argv) {
-  const out = { dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false };
+  const out = {
+    dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
+    capUsd: CAP_USD, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
+  };
+  const number = (name, v, ok) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || !ok(n)) throw new Error(`${name} takes ${name === '--parallel' ? 'a whole number, 1 or more' : 'a number above 0'}, not ${v}`);
+    return n;
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = () => {
@@ -922,9 +1271,20 @@ export function parseArgs(argv) {
     else if (a === '--only') out.only.push(...value().split(',').filter(Boolean));
     else if (a === '--image') out.image = value();
     else if (a === '--provider-pin') out.providerPin = value();
+    else if (a === '--cap-usd') out.capUsd = number(a, value(), (n) => n > 0);
+    else if (a === '--parallel') out.parallel = number(a, value(), (n) => Number.isInteger(n) && n >= 1);
+    else if (a === '--cpus') out.cpus = number(a, value(), (n) => n > 0);
+    else if (a === '--memory') {
+      const v = value();
+      if (!/^\d+(\.\d+)?[bkmg]?$/i.test(v)) throw new Error(`--memory takes a docker size such as 12g, not ${v}`);
+      out.memory = v;
+    } else if (a === '--stall-min') out.stallMin = number(a, value(), (n) => n > 0);
+    else if (a === '--ordewell-root') out.ordewellRoot = path.resolve(value());
+    else if (a === '--allow-stale-dist') out.allowStaleDist = true;
+    else if (a === '--sweep') out.sweep = true;
     else throw new Error(`unknown argument ${a}`);
   }
-  if (out.help) return out;
+  if (out.help || (out.sweep && !out.dryRun && !out.run)) return out;
   // Spending is never the default: a run that bills the key has to say so.
   if (out.dryRun === out.run) throw new Error('pass --dry-run to set up and check without a model call, or --run to run the arms and spend');
   if (out.fixture && !out.dryRun) throw new Error('--fixture is a dry-run library: pass --dry-run with it');

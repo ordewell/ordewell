@@ -66,13 +66,14 @@ test('the goal is one text for both arms and names the tests and the closed netw
   assert.equal(plan[3], L.goalText(lib()));
 });
 
-test('the arms hold the protocol: one model, the caps, no planner in A', () => {
+test('the arms hold the protocol: one model, one cap for both (D1), no planner in A', () => {
   assert.equal(L.MODEL_ID, 'openrouter:deepseek/deepseek-v4.1-flash');
-  assert.equal(L.ARMS.A.capUsd, 2.5);
-  assert.equal(L.ARMS.B.capUsd, 5.5);
+  assert.equal(L.CAP_USD, 8);
+  assert.equal(L.ARMS.A.capUsd, undefined, 'no per-arm cap');
+  assert.equal(L.ARMS.B.capUsd, undefined, 'no per-arm cap');
   assert.equal(L.WALL_CAP_MS, 3 * 3600 * 1000);
   assert.deepEqual(L.armsOf('both').map((a) => a.id), ['A', 'B']);
-  assert.deepEqual(L.boxSettings().modelAllowlist, { openrouter: [L.MODEL_ID] });
+  for (const arm of L.armsOf('both')) assert.deepEqual(L.boxSettings(arm).modelAllowlist, { openrouter: [L.MODEL_ID] });
   assert.match(L.ARM_A_PLAN_JS, /assignedRunner: 'openrouter'/);
   assert.match(L.ARM_A_PLAN_JS, /status: 'approved'/);
 });
@@ -462,15 +463,17 @@ test('lockKey removes a lock whose pid is dead, logs it, and keeps one whose pid
   }
 });
 
-test('a run that ends blocked or at its cap is landed from the task worktree and marked truncated', () => {
-  const porcelain = ['worktree /testbed', 'HEAD aaa', 'branch refs/heads/main', '', 'worktree /testbed/.ordewell/worktrees/s1/t1', 'HEAD bbb', 'branch refs/heads/ordewell/s1/t1', ''].join('\n');
-  assert.deepEqual(L.otherWorktrees(porcelain, '/testbed'), ['/testbed/.ordewell/worktrees/s1/t1']);
+test('a run that ends blocked or at its cap is marked truncated, judged by its tasks and never by run\'s exit (D5)', () => {
   const done = { tasks: [{ status: 'completed' }] };
-  assert.deepEqual(L.judgeLanding({ stopped: null, plan: done, runExit: 0 }), { truncated: false, why: null });
-  assert.deepEqual(L.judgeLanding({ stopped: { why: 'spend' }, plan: done, runExit: 0 }), { truncated: true, why: 'cap: spend' });
-  assert.deepEqual(L.judgeLanding({ stopped: { why: 'wall-clock' }, plan: null, runExit: 1 }), { truncated: true, why: 'cap: wall-clock' });
-  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'failed' }] }, runExit: 1 }), { truncated: true, why: 'blocked: 1 task not completed' });
-  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'awaiting_user' }] }, runExit: 0 }), { truncated: true, why: 'blocked: 1 task not completed' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: done }), { truncated: false, why: null });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: done, runExit: 1 }), { truncated: false, why: null }, 'a non-zero exit with every task done is not truncated');
+  assert.deepEqual(L.judgeLanding({ stopped: { why: 'spend' }, plan: done }), { truncated: true, why: 'cap: spend' });
+  assert.deepEqual(L.judgeLanding({ stopped: { why: 'wall-clock' }, plan: null }), { truncated: true, why: 'cap: wall-clock' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, stalled: { waiting: 'checkpoint' }, plan: done }), { truncated: true, why: 'stalled: waiting on checkpoint' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'failed' }] } }), { truncated: true, why: 'blocked: 1 task not completed' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'awaiting_user' }] } }), { truncated: true, why: 'blocked: 1 task not completed' });
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: { tasks: [{ status: 'completed', subtasks: [{ status: 'failed' }] }] } }), { truncated: true, why: 'blocked: 1 task not completed' }, 'an open subtask leaves its task open');
+  assert.deepEqual(L.judgeLanding({ stopped: null, plan: null }), { truncated: true, why: 'blocked: no plan to read' });
   const rec = L.resultRecord({
     lib: lib(), arm: L.ARMS.A, window: L.judgeWindow({ listed: 1048576, snapshot: 1048576 }), ordewell: { sha: 'abc', containsPr177: true },
     egress: { ok: true }, leak: { ok: true }, network: { collected: 9, deselected: 2 }, tests: null, truncated: { truncated: true, why: 'cap: spend' },
@@ -549,8 +552,8 @@ test('the runner is the built-in runner\'s on the protocol\'s provider, as core 
   assert.equal(old.ok, false);
   assert.match(old.failures[0], /runs on ordewell, not openrouter/);
 
-  assert.deepEqual(L.boxSettings().enabledRunners, [L.RUNNER]);
-  assert.deepEqual(L.boxSettings().modelAllowlist, { [L.RUNNER]: [L.MODEL_ID] });
+  assert.deepEqual(L.boxSettings(L.ARMS.A).enabledRunners, [L.RUNNER]);
+  assert.deepEqual(L.boxSettings(L.ARMS.B).modelAllowlist, { [L.RUNNER]: [L.MODEL_ID] });
   assert.match(L.ARM_A_PLAN_JS, /assignedRunner: 'openrouter'/);
   assert.match(L.ARM_A_PLAN_JS, /runners: \['openrouter'\]/);
   assert.doesNotMatch(L.ARM_A_PLAN_JS, /'ordewell'/);
@@ -586,10 +589,10 @@ test('resultRecord carries every field the comparison reports', () => {
   assert.equal(r.contextWindow, 1048576);
   assert.equal(r.pr177Merge, L.PR177_MERGE);
   assert.equal(r.ordewellSha, 'abc');
-  assert.deepEqual(r.tests, { passed: 7, collected: 9, failed: 2, errors: 0, skipped: 0, collectionErrors: [] });
+  assert.deepEqual(r.tests, { passed: 7, collected: 9, failed: 2, errors: 0, skipped: 0, collectionErrors: [], exit: 1, timedOut: false });
   assert.equal(r.networkDeselected, 2);
   assert.equal(r.billedUsd, 1.5);
-  assert.equal(r.capUsd, 5.5);
+  assert.equal(r.capUsd, L.CAP_USD);
   assert.equal(r.peakContext, 5300);
   assert.equal(r.compactions, 1);
   assert.equal(r.windowFallbackSuspected, false);
@@ -621,4 +624,285 @@ test('the driver holds no key and writes no run data into the repository', () =>
     assert.doesNotMatch(text, /sk-or-v1-[0-9a-f]{8,}/, `${f} holds an OpenRouter key`);
   }
   assert.match(fs.readFileSync(path.join(here, 'drive.mjs'), 'utf8'), /checkedBenchDir\('commit0'\)/);
+});
+
+// --- A sound single run (task #219) -----------------------------------------
+
+test('the settings keys are core\'s own: supervisorLevel, mergeAtGatesAutomatically, autorun', () => {
+  const defaults = ['runSettingsDefaults.ts', 'SettingsService.ts'].map((f) => fs.readFileSync(path.join(repo, 'packages', 'core', 'src', 'services', f), 'utf8')).join('\n');
+  for (const key of ['supervisorLevel', 'mergeAtGatesAutomatically', 'autorun', 'autonomousMode', 'enabledRunners', 'modelAllowlist', 'ordewellStepLimit']) {
+    assert.match(defaults, new RegExp(`\\n  ${key}\\??: `), `${key} is a run setting`);
+  }
+  assert.match(fs.readFileSync(path.join(repo, 'packages', 'cli', 'src', 'commands', 'parallel.ts'), 'utf8'), /ORDEWELL_MAX_PARALLEL/);
+});
+
+test('arm A runs alone with the supervisor off (D2), arm B as its user runs it at Act (D3)', () => {
+  const a = L.boxSettings(L.ARMS.A);
+  const b = L.boxSettings(L.ARMS.B);
+  assert.deepEqual([a.supervisorLevel, a.autorun, a.mergeAtGatesAutomatically], ['off', false, false]);
+  assert.deepEqual([b.supervisorLevel, b.autorun, b.mergeAtGatesAutomatically], ['act', true, true]);
+  for (const s of [a, b]) assert.deepEqual([s.autonomousMode, s.ordewellStepLimit], [true, L.STEP_LIMIT]);
+  const opts = L.parseArgs(['--dry-run', '--libs', 'x', '--parallel', '3', '--cpus', '2', '--memory', '4g', '--cap-usd', '1.5']);
+  const recA = L.armSettings(L.ARMS.A, opts);
+  const recB = L.armSettings(L.ARMS.B, opts);
+  assert.deepEqual(recA, { supervisorLevel: 'off', autorun: false, automerge: false, parallel: 1, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS });
+  assert.deepEqual(recB, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 3, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS });
+  assert.equal(L.boxSettings(L.ARMS.B, recB).supervisorLevel, 'act');
+});
+
+test('the box runs under its quota (D4), with the parallel limit and its driver named', () => {
+  const args = L.boxRunArgs({ cpus: 8, memory: '12g', parallel: 8, driver: 'host/123' });
+  const at = (flag) => args[args.indexOf(flag) + 1];
+  assert.equal(at('--cpus'), '8');
+  assert.equal(at('--memory'), '12g');
+  assert.equal(at('--memory-swap'), '12g', 'no swap beyond the quota');
+  assert.ok(args.includes(`${L.DRIVER_LABEL}=host/123`));
+  assert.ok(args.includes('ORDEWELL_MAX_PARALLEL=8'));
+  assert.match(L.driverId(), new RegExp(`/${process.pid}$`));
+  assert.deepEqual(L.parseDriver('host/123'), { host: 'host', pid: 123 });
+  assert.equal(L.parseDriver('nonsense'), null);
+  // The dry run compares the engine's figure with this, so it must read sizes as docker does.
+  assert.equal(L.dockerBytes('12g'), 12 * 1024 ** 3);
+  assert.equal(L.dockerBytes('512m'), 512 * 1024 ** 2);
+  assert.equal(L.dockerBytes('1.5G'), 1.5 * 1024 ** 3);
+  assert.equal(L.dockerBytes('100'), 100);
+  assert.equal(L.dockerBytes('12t'), null);
+});
+
+test('the options and their defaults', () => {
+  const o = L.parseArgs(['--dry-run', '--libs', 'x']);
+  assert.deepEqual(
+    [o.capUsd, o.parallel, o.cpus, o.memory, o.stallMin, o.ordewellRoot, o.allowStaleDist, o.sweep],
+    [8, 8, 8, '12g', 15, null, false, false],
+  );
+  const s = L.parseArgs(['--sweep']);
+  assert.equal(s.sweep, true, '--sweep needs neither --dry-run nor --run');
+  assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'x', '--cap-usd', '0']), /--cap-usd/);
+  assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'x', '--parallel', '1.5']), /--parallel/);
+  assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'x', '--memory', 'lots']), /--memory/);
+  assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'x', '--stall-min', '-1']), /--stall-min/);
+  const r = L.parseArgs(['--dry-run', '--libs', 'x', '--ordewell-root', '/somewhere', '--allow-stale-dist', '--stall-min', '0.5']);
+  assert.deepEqual([r.ordewellRoot, r.allowStaleDist, r.stallMin], [path.resolve('/somewhere'), true, 0.5]);
+});
+
+test('--sweep removes only what a dead driver on this host left', () => {
+  const alive = new Set([10]);
+  const items = [
+    { kind: 'container', name: 'dead-box', driver: 'me/20' },
+    { kind: 'network', name: 'dead-net', driver: 'me/20' },
+    { kind: 'container', name: 'live-box', driver: 'me/10' },
+    { kind: 'container', name: 'other-host', driver: 'them/20' },
+    { kind: 'container', name: 'unnamed', driver: null },
+  ];
+  const { remove, keep } = L.sweepTargets(items, { host: 'me', isAlive: (pid) => alive.has(pid) });
+  assert.deepEqual(remove.map((i) => i.name), ['dead-box', 'dead-net']);
+  assert.deepEqual(keep.map((i) => [i.name, i.why]), [
+    ['live-box', 'its driver, pid 10, is running'],
+    ['other-host', 'its driver ran on them'],
+    ['unnamed', 'it names no driver'],
+  ]);
+});
+
+test('waitingOnPerson finds a task waiting on a checkpoint, an input or an approval, and none while an attempt runs', () => {
+  const t = (o) => ({ id: o.id ?? 't', title: o.title ?? 'T', type: 'ai', ...o });
+  assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'checkpoint' }), t({ id: 'u', status: 'in_progress' })] }), null, 'an attempt running is not a stall');
+  assert.deepEqual(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'checkpoint', parkedQuestion: 'ok?' })] }), { task: { id: 't', title: 'T' }, waiting: 'checkpoint', question: 'ok?' });
+  assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'input' })] }).waiting, 'input');
+  // core's waitsForApproval (Task.ts): an approved plan's task outside its approval record.
+  assert.equal(L.waitingOnPerson({ approved: true, approvedTasks: [], tasks: [t({ status: 'pending' })] }).waiting, 'approval');
+  assert.equal(L.waitingOnPerson({ approved: true, approvedTasks: ['t'], tasks: [t({ status: 'pending' })] }), null, 'already approved');
+  assert.equal(L.waitingOnPerson({ approved: false, tasks: [t({ status: 'pending' })] }), null, 'a plan never approved singles nothing out');
+  assert.equal(L.waitingOnPerson({ approved: true, tasks: [t({ status: 'pending', type: 'user' })] }), null);
+  assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'usage-limit' })] }), null, 'a usage limit waits on the clock');
+  assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'completed', subtasks: [t({ id: 's', status: 'awaiting_user', awaitingReason: 'input' })] })] }).task.id, 's');
+  assert.equal(L.waitingOnPerson(null), null);
+});
+
+test('stallDecision stalls after --stall-min of waiting on a person, and resets when work runs', () => {
+  const waiting = { tasks: [{ id: 't', title: 'T', status: 'awaiting_user', awaitingReason: 'checkpoint', parkedQuestion: 'q' }] };
+  const running = { tasks: [{ id: 't', title: 'T', status: 'in_progress' }] };
+  const stallMs = 15 * 60_000;
+  let d = L.stallDecision({ plan: waiting, nowMs: 1000, sinceMs: null, stallMs });
+  assert.deepEqual(d, { sinceMs: 1000, stalled: null });
+  d = L.stallDecision({ plan: waiting, nowMs: 1000 + stallMs - 1, sinceMs: d.sinceMs, stallMs });
+  assert.equal(d.stalled, null);
+  d = L.stallDecision({ plan: waiting, nowMs: 1000 + stallMs, sinceMs: d.sinceMs, stallMs });
+  assert.deepEqual(d.stalled, { task: { id: 't', title: 'T' }, waiting: 'checkpoint', question: 'q', sinceMs: stallMs });
+  assert.deepEqual(L.stallDecision({ plan: running, nowMs: 1e9, sinceMs: 1000, stallMs }), { sinceMs: null, stalled: null });
+});
+
+test('settleDecision ends a run once no attempt runs, no person is waited on and nothing moved for the settle time', () => {
+  const settleMs = 60_000;
+  const done = { tasks: [{ id: 'a', status: 'completed', attempted: true }, { id: 'b', status: 'failed', attempted: true }] };
+  const unstarted = { tasks: [{ id: 'a', status: 'pending' }] };
+  const running = { tasks: [{ id: 'a', status: 'in_progress', attempted: true }] };
+  assert.equal(L.settleDecision({ plan: unstarted, fingerprint: 'x', nowMs: 1e9, state: { fingerprint: 'x', sinceMs: 0 }, settleMs }).settled, false, 'a run that never started has not settled');
+  assert.equal(L.settleDecision({ plan: running, fingerprint: 'x', nowMs: 1e9, state: { fingerprint: 'x', sinceMs: 0 }, settleMs }).settled, false);
+  let d = L.settleDecision({ plan: done, fingerprint: 'x', nowMs: 0, state: null, settleMs });
+  assert.equal(d.settled, false);
+  d = L.settleDecision({ plan: done, fingerprint: 'y', nowMs: settleMs, state: d.state, settleMs });
+  assert.equal(d.settled, false, 'the supervisor moved something: the clock restarts');
+  d = L.settleDecision({ plan: done, fingerprint: 'y', nowMs: 2 * settleMs, state: d.state, settleMs });
+  assert.equal(d.settled, true);
+  assert.equal(L.planFingerprint(done, 3), L.planFingerprint(structuredClone(done), 3));
+  assert.notEqual(L.planFingerprint(done, 3), L.planFingerprint(done, 4), 'a model call moves it');
+});
+
+test('choosePatches takes each task\'s own worktree, never the integration one, then its preserved branch', () => {
+  const runRoot = '/testbed/.ordewell/worktrees/r1';
+  const plan = {
+    isolation: {
+      run: { id: 'r1', workspaceRoot: '/testbed', repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration' }] },
+      tasks: {
+        a: { taskId: 'a', order: 1, branch: 'ordewell/r1/1-a', workspace: `${runRoot}/1-a`, status: 'kept', repos: { '.': { worktree: `${runRoot}/1-a` } } },
+        b: { taskId: 'b', order: 2, branch: 'ordewell/r1/2-b', workspace: `${runRoot}/2-b`, status: 'kept', repos: { '.': { worktree: `${runRoot}/2-b` } } },
+        c: { taskId: 'c', order: 3, branch: 'ordewell/r1/3-c', workspace: `${runRoot}/3-c`, status: 'merged', repos: { '.': {} } },
+        d: { taskId: 'd', order: 4, branch: 'ordewell/r1/4-d', workspace: `${runRoot}/integration`, status: 'active', repos: { '.': { worktree: `${runRoot}/integration` } } },
+      },
+    },
+    tasks: [
+      { id: 'a', order: 1, title: 'A', type: 'ai', status: 'failed' },
+      { id: 'b', order: 2, title: 'B', type: 'ai', status: 'awaiting_user' },
+      { id: 'c', order: 3, title: 'C', type: 'ai', status: 'completed' },
+      { id: 'd', order: 4, title: 'D', type: 'ai', status: 'completed', subtasks: [{ id: 'd1', status: 'failed' }] },
+      { id: 's', order: 5, title: 'S', type: 'script', status: 'failed' },
+    ],
+  };
+  const worktrees = [
+    { path: '/testbed', branch: 'commit0-base' },
+    { path: `${runRoot}/integration`, branch: 'ordewell/r1/integration' },
+    { path: `${runRoot}/1-a`, branch: 'ordewell/r1/1-a' },
+  ];
+  const branches = ['commit0-base', 'ordewell/r1/integration', 'ordewell-preserved/r1/2-b', 'ordewell-preserved/r1/2-b-2', 'ordewell/r1/4-d'];
+  const got = L.choosePatches({ plan, worktrees, branches });
+  assert.deepEqual(got.map((p) => [p.taskId, p.landed, p.source]), [
+    ['a', false, { kind: 'worktree', path: `${runRoot}/1-a` }],
+    ['b', false, { kind: 'branch', ref: 'ordewell-preserved/r1/2-b-2' }],
+    ['c', true, null],
+    ['d', false, { kind: 'branch', ref: 'ordewell/r1/4-d' }],
+  ], 'the newest preserved branch; an open subtask leaves its task unlanded; the integration worktree is never a source');
+  assert.deepEqual(L.choosePatches({ plan: { tasks: [{ id: 'x', title: 'X', status: 'failed' }] }, worktrees, branches }).map((p) => p.source), [null]);
+  assert.deepEqual(L.parseWorktrees(['worktree /testbed', 'HEAD aaa', 'branch refs/heads/main', '', 'worktree /w/t', 'HEAD bbb', 'detached', ''].join('\n')), [
+    { path: '/testbed', branch: 'main' }, { path: '/w/t', branch: null },
+  ]);
+});
+
+test('taskPatchScript takes a worktree\'s committed and uncommitted work, and a branch\'s, without the venv', { skip: !(hasGit && process.platform !== 'win32') && 'needs git and sh' }, () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-')));
+  const ws = path.join(dir, 'testbed');
+  const wt = path.join(dir, 'task');
+  try {
+    const g = (cwd, ...a) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
+    fs.mkdirSync(path.join(ws, 'tinylib'), { recursive: true });
+    g(ws, 'init', '-q', '-b', 'commit0-base');
+    fs.writeFileSync(path.join(ws, 'tinylib', '__init__.py'), 'def f():\n    raise NotImplementedError\n');
+    g(ws, 'add', '-A'); g(ws, 'commit', '-qm', 'Commit0 base');
+    const l = lib({ workdir: ws, baseCommit: g(ws, 'rev-parse', 'HEAD') });
+    l.flatCommit = g(ws, 'rev-parse', 'HEAD');
+    g(ws, 'worktree', 'add', '-q', '-b', 'ordewell/r1/1-a', wt);
+    fs.writeFileSync(path.join(wt, 'tinylib', '__init__.py'), 'def f():\n    return 1\n');
+    g(wt, 'commit', '-qam', 'committed');
+    fs.writeFileSync(path.join(wt, 'tinylib', 'new.py'), 'X = 2\n');
+    fs.symlinkSync(path.join(ws, '.venv'), path.join(wt, '.venv'));
+    const fromWorktree = execFileSync('sh', ['-c', L.taskPatchScript(l, { kind: 'worktree', path: wt })], { encoding: 'utf8' });
+    assert.match(fromWorktree, /\+ {4}return 1/, 'committed work');
+    assert.match(fromWorktree, /\+X = 2/, 'an untracked new file');
+    assert.doesNotMatch(fromWorktree, /\.venv/);
+    const fromBranch = execFileSync('sh', ['-c', L.taskPatchScript(l, { kind: 'branch', ref: 'ordewell/r1/1-a' })], { cwd: ws, encoding: 'utf8' });
+    assert.match(fromBranch, /\+ {4}return 1/);
+    assert.doesNotMatch(fromBranch, /X = 2/);
+    // Applied to the workspace, it is what A is scored on.
+    fs.writeFileSync(path.join(dir, 'p.patch'), fromWorktree);
+    execFileSync('sh', ['-c', `cd ${L.shellQuote(ws)} && ${L.applyPatchCommand(path.join(dir, 'p.patch'))}`]);
+    assert.equal(fs.readFileSync(path.join(ws, 'tinylib', '__init__.py'), 'utf8'), 'def f():\n    return 1\n');
+    assert.equal(fs.readFileSync(path.join(ws, 'tinylib', 'new.py'), 'utf8'), 'X = 2\n');
+    // arm.patch is the scored tree: the applied new file, still untracked, is in it; Ordewell's session data is not.
+    fs.mkdirSync(path.join(ws, '.ordewell'));
+    fs.writeFileSync(path.join(ws, '.ordewell', 'session.json'), '{}\n');
+    const scored = execFileSync('sh', ['-c', L.armPatchScript(l)], { cwd: ws, encoding: 'utf8' });
+    assert.match(scored, /\+X = 2/);
+    assert.match(scored, /\+ {4}return 1/);
+    assert.doesNotMatch(scored, /\.ordewell|\.venv/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the score\'s source per arm: A from its worktree when its task did not land (D2), B only from what merged (D3)', () => {
+  const unlanded = [{ taskId: 'a', order: 1, landed: false, source: { kind: 'worktree', path: '/w/1-a' } }];
+  assert.deepEqual(L.scoringPlan(L.ARMS.A, unlanded), { scoredFrom: 'task-worktree', apply: unlanded[0], diagnostic: [] });
+  assert.deepEqual(L.scoringPlan(L.ARMS.A, [{ ...unlanded[0], source: null }]), { scoredFrom: 'merged', apply: null, diagnostic: [] }, 'no work to apply: the workspace as it is');
+  assert.deepEqual(L.scoringPlan(L.ARMS.A, [{ ...unlanded[0], landed: true, source: null }]), { scoredFrom: 'merged', apply: null, diagnostic: [] });
+  const b = [unlanded[0], { taskId: 'c', order: 3, landed: true, source: null }, { taskId: 'd', order: 4, landed: false, source: null }];
+  assert.deepEqual(L.scoringPlan(L.ARMS.B, b), { scoredFrom: 'merged', apply: null, diagnostic: [unlanded[0]] });
+});
+
+test('distFreshness refuses a dist older than the newest tracked source, unless allowed', () => {
+  const fresh = L.distFreshness({ dists: [{ path: 'packages/core/dist/index.js', mtimeMs: 200 }], sources: [{ path: 'packages/core/src/a.ts', mtimeMs: 100 }] });
+  assert.deepEqual([fresh.ok, fresh.stale], [true, false]);
+  const stale = L.distFreshness({ dists: [{ path: 'packages/core/dist/index.js', mtimeMs: 200 }, { path: 'packages/web/dist/x.js', mtimeMs: 50 }], sources: [{ path: 'packages/cli/src/b.ts', mtimeMs: 100 }] });
+  assert.deepEqual([stale.ok, stale.stale], [false, true]);
+  assert.match(stale.detail, /packages\/web\/dist\/x\.js is older than packages\/cli\/src\/b\.ts/);
+  const allowed = L.distFreshness({ dists: [{ path: 'd', mtimeMs: 1 }], sources: [{ path: 's', mtimeMs: 2 }], allowStale: true });
+  assert.deepEqual([allowed.ok, allowed.stale, allowed.allowed], [true, true, true]);
+  assert.equal(L.distFreshness({ dists: [], sources: [] }).ok, false, 'no dist at all');
+  assert.deepEqual(L.FRESHNESS_SOURCES, ['packages/core/src', 'packages/web/server', 'packages/cli/src']);
+});
+
+test('judgeValidity names every reason a result cannot be compared', () => {
+  const ok = { ok: true };
+  assert.deepEqual(L.judgeValidity({ aborted: null, checks: [ok], tests: { passed: 1, exit: 0, timedOut: false }, freshness: { stale: false } }), { valid: true, invalidReasons: [] });
+  const v = L.judgeValidity({
+    aborted: 'boom',
+    checks: [{ ok: false, scope: 'x', name: 'egress' }, { ok: false, unverified: true, name: 'u' }, { ok: false, expectedFailure: true, name: 'e' }],
+    tests: { exit: 124, timedOut: true },
+    freshness: { stale: true, allowed: true },
+  });
+  assert.equal(v.valid, false);
+  assert.deepEqual(v.invalidReasons, ['aborted: boom', 'failed check: x: egress', 'eval timed out', 'stale dist allowed']);
+  assert.deepEqual(L.judgeValidity({ checks: [], tests: null, freshness: { stale: false } }).invalidReasons, ['eval gave no summary']);
+  assert.deepEqual(L.judgeValidity({ checks: [], tests: null, freshness: { stale: false }, dryRun: true }).invalidReasons, ['dry run: no arm ran']);
+});
+
+test('the daemon must read back the arm\'s supervisor level, autorun, merging and parallel limit', () => {
+  const b = L.armSettings(L.ARMS.B);
+  const a = L.armSettings(L.ARMS.A);
+  const reply = (run, maxParallel) => ({ status: 200, body: { run, maxParallel } });
+  assert.equal(L.judgeSettingsReadback(b, reply({ supervisorLevel: 'act', autorun: true, mergeAtGatesAutomatically: true }, 8)).ok, true);
+  assert.equal(L.judgeSettingsReadback(a, reply({ supervisorLevel: 'off', autorun: false, mergeAtGatesAutomatically: false }, 1)).ok, true);
+  // The daemon's defaults, which the sweep's runs got: the supervisor at Watch and five at once.
+  const defaults = L.judgeSettingsReadback(b, reply({ supervisorLevel: 'watch', autorun: false, mergeAtGatesAutomatically: false }, 5));
+  assert.equal(defaults.ok, false);
+  assert.equal(defaults.failures.length, 4);
+  assert.match(defaults.failures[0], /supervisorLevel is "watch", not "act"/);
+  assert.equal(L.judgeSettingsReadback(b, { error: 'no daemon token' }).ok, false);
+  assert.equal(L.judgeSettingsReadback(b, { status: 401, body: {} }).ok, false);
+  assert.match(L.SETTINGS_PROBE_JS, /\/api\/settings\?/);
+});
+
+test('a stub baseline that collects nothing is recorded as the library\'s, not a defect', () => {
+  assert.deepEqual(L.baselineRecord({ passed: 0, failed: 0, errors: 0, collectionErrors: [], collectionError: 'ImportError while loading conftest x', exit: 4 }).baseline, { collected: 0, reason: 'ImportError while loading conftest x' });
+  assert.deepEqual(L.baselineRecord({ passed: 0, failed: 0, errors: 0, skipped: 0, exit: 5 }).baseline, { collected: 0, reason: 'pytest collected no test' });
+  assert.equal(L.baselineRecord({ passed: 0, failed: 9, errors: 0, exit: 1 }).baseline, null);
+  assert.equal(L.baselineRecord(null).ok, false, 'no summary is still a failure');
+  assert.equal(L.baselineRecord({ passed: 0, failed: 0, errors: 0, collectionError: 'x', exit: 4 }).ok, true);
+});
+
+test('resultRecord records the arm\'s settings, the eval exit, the stop, the stall, the source and the validity', () => {
+  const settings = L.armSettings(L.ARMS.B, L.parseArgs(['--dry-run', '--libs', 'x']));
+  const r = L.resultRecord({
+    lib: lib(), arm: L.ARMS.B, settings, window: L.judgeWindow({ listed: 1048576, snapshot: 1048576 }), ordewell: { sha: 'abc', containsPr177: true, staleDistAllowed: false },
+    egress: { ok: true }, leak: { ok: true }, network: { collected: 9, deselected: 2 }, tests: { passed: 1, collected: 2, failed: 1, errors: 0, skipped: 0, exit: 124, timedOut: true },
+    stopped: { why: 'wall-clock' }, stalled: { waiting: 'input' }, scoredFrom: 'merged', patches: [{ file: 'arm.patch', source: null }],
+    validity: { valid: false, invalidReasons: ['eval timed out'] }, baseline: { collected: 0, reason: 'r' }, dryRun: false, startedAt: 'a', endedAt: 'b',
+  });
+  for (const [k, v] of Object.entries({ supervisorLevel: 'act', autorun: true, automerge: true, parallel: 8, cpus: 8, memory: '12g', capUsd: 8, wallCapMs: L.WALL_CAP_MS })) assert.deepEqual(r[k], v, k);
+  assert.deepEqual([r.tests.exit, r.tests.timedOut], [124, true]);
+  assert.deepEqual(r.stopped, { why: 'wall-clock' });
+  assert.deepEqual(r.stalled, { waiting: 'input' });
+  assert.equal(r.scoredFrom, 'merged');
+  assert.deepEqual(r.patches, [{ file: 'arm.patch', source: null }]);
+  assert.deepEqual([r.valid, r.invalidReasons], [false, ['eval timed out']]);
+  assert.deepEqual(r.baseline, { collected: 0, reason: 'r' });
+  assert.equal(r.staleDistAllowed, false);
 });
