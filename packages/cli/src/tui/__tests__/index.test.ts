@@ -572,6 +572,52 @@ describe('handleTui', () => {
       }
     });
 
+    describe('the status row’s update indicator', () => {
+      const file = path.join(os.homedir(), '.ordewell', 'version-check.json');
+      const longAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+      const remember = (state: Record<string, unknown>): void => {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ installId: '3f0c1d9e-0000-4000-8000-000000000000', installIdAt: longAgo, noticeShownAt: longAgo, ...state }));
+      };
+      const statusRow = (): string => frame().split('\n').find((row) => row.includes('↑ 999.0.0')) ?? '';
+
+      beforeEach(() => {
+        vi.stubEnv('ORDEWELL_NO_VERSION_CHECK', '');
+        vi.stubEnv('DO_NOT_TRACK', '');
+        vi.stubEnv('NO_COLOR', '1');
+      });
+      afterEach(() => {
+        vi.unstubAllGlobals();
+        fs.rmSync(file, { force: true });
+      });
+
+      it('shows from the first frame for a version an earlier answer remembered, though the daily line was shown today', async () => {
+        const now = new Date().toISOString();
+        // `updateShownAt` is the headless commands' once-a-day mark, shared with this file: it must not hide the TUI's.
+        remember({ lastCheckAt: now, latest: '999.0.0', latestAt: now, updateShownAt: now });
+        void handleTui([], { selfUpdate: installed().deps });
+
+        await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+        const first = (fakeTerminal.draw.mock.calls[0]![0] as string[]).join('\n');
+        expect(first).toContain('↑ 999.0.0 available · /update');
+        expect(first).toContain('Ordewell 999.0.0 is out (you have 0.12.6)');
+      });
+
+      it('shows an answer that arrives mid-session', async () => {
+        remember({ lastCheckAt: longAgo });
+        let answer!: (response: { status: number; text(): Promise<string> }) => void;
+        vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => { answer = resolve; })));
+        void handleTui([], { selfUpdate: installed().deps });
+        await vi.waitFor(() => expect(answer).toBeDefined());
+        await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
+        expect(frame()).not.toContain('available · /update');
+
+        answer({ status: 200, text: async () => JSON.stringify({ latest: '999.0.0' }) });
+
+        await vi.waitFor(() => expect(statusRow()).toContain('↑ 999.0.0 available · /update'));
+      });
+    });
+
     it('asks first, naming the command, then leaves the screen, stops its daemon, updates and exits 0', async () => {
       vi.stubEnv('NO_COLOR', '1');
       const copy = installed();

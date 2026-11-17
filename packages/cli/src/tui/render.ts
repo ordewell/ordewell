@@ -247,13 +247,43 @@ function scrolledBackMark(state: TuiState): string {
   return state.focus !== 'plan' && state.scroll > 0 ? '↑ scrolled back · pgdn for live' : '';
 }
 
-/** The status on the left, the settings badge on the right while both fit; the status wins the row when not. */
+/** What a known update says in the status row, longest first: it is shortened before it is dropped. */
+function updateMarks(state: TuiState): string[] {
+  if (!state.knownUpdate) return [];
+  const { latest } = state.knownUpdate;
+  return [`↑ ${latest} available · /update`, `↑ ${latest} · /update`, '↑ /update'];
+}
+
+/** The least room the status keeps for itself beside the update mark; under it the mark is dropped instead. */
+const MIN_STATUS = 20;
+
+/**
+ * The status on the left; on the right the update mark and the settings badge
+ * while they fit. The status wins the row, then the update (the badge is one
+ * `/settings` away, and an update nobody sees is the one nobody installs): a
+ * row too full for both keeps the mark and drops the badge, and a status that
+ * fills the row, a long runner label, gives up its tail for the mark.
+ */
 function renderStatus(state: TuiState, cols: number, panes: BodyPanes): string {
   const left = statusText(state, cols, panes);
   const badge = settingsBadge(state);
-  if (!badge) return left;
-  const gap = cols - width(left) - width(badge);
-  return gap >= 2 ? `${left}${' '.repeat(gap)}${badge}` : left;
+  const marks = updateMarks(state).map((mark) => style.brand(mark));
+  const sep = style.grey(' · ');
+  const beside = (text: string, right: string): string | null => {
+    const gap = cols - width(text) - width(right);
+    return gap >= 2 ? `${text}${' '.repeat(gap)}${right}` : null;
+  };
+  const withBadge = badge ? marks.map((mark) => `${mark}${sep}${badge}`) : [];
+  for (const right of [...withBadge, ...marks]) {
+    const row = beside(left, right);
+    if (row) return row;
+  }
+  for (const mark of marks) {
+    if (cols - width(mark) - 2 < MIN_STATUS) continue;
+    const row = beside(statusText(state, cols - width(mark) - 2, panes), mark);
+    if (row) return row;
+  }
+  return (badge && beside(left, badge)) || left;
 }
 
 function statusText(state: TuiState, cols: number, panes: BodyPanes): string {

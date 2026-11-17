@@ -200,6 +200,8 @@ function planNodeUpdate(deps: SelfUpdateDeps, sea: SeaDeps): UpdatePlan {
   };
 }
 
+const RESTART_NOTICE = 'Restart Ordewell (any that is running) to use the new version.';
+
 /** `ordewell update [--dry-run]`: resolves with the status to exit with. */
 export async function runUpdate(args: string[], deps: SelfUpdateDeps = {}): Promise<number> {
   // Before the plan is made: a mistyped option must not start a real update.
@@ -214,7 +216,11 @@ export async function runUpdate(args: string[], deps: SelfUpdateDeps = {}): Prom
     (deps.say ?? console.log)(`Would run: ${plan.shown}`);
     return 0;
   }
-  return carryOutUpdate(plan, deps);
+  const status = await carryOutUpdate(plan, deps);
+  // The TUI says its own, as it exits; here the shell's other Ordewells, a TUI
+  // among them, are still the old version.
+  if (status === 0 && plan.kind === 'run') (deps.say ?? console.log)(RESTART_NOTICE);
+  return status;
 }
 
 /** Runs what {@link planUpdate} decided, with the terminal, and names the version before and after. */
