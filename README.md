@@ -193,14 +193,6 @@ for scripting.
 
 Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell/discussions/115).
 
-## See it in the terminal
-
-<p align="center">
-  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run in Ordewell's terminal UI: a goal becomes a four-task plan, Claude Code, Codex and OpenCode run independent tasks in parallel, and a final verification task completes the plan. Sped up stretches are marked.">
-  <br>
-  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
-</p>
-
 ## How it works
 
 <p align="center">
@@ -225,6 +217,14 @@ The planner only reads; tasks run as you, in the mode the plan assigns. See
 Without a git repository or with isolation disabled, tasks share the workspace;
 some files can also be shared between worktrees. See
 [isolation and handoff](https://ordewell.ai/docs#isolation) for details.
+
+## See it in the terminal
+
+<p align="center">
+  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run in Ordewell's terminal UI: a goal becomes a four-task plan, Claude Code, Codex and OpenCode run independent tasks in parallel, and a final verification task completes the plan. Sped up stretches are marked.">
+  <br>
+  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
+</p>
 
 ## Documentation
 
