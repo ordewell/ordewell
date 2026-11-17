@@ -4,7 +4,9 @@ import { ModelError } from '../../../model';
 import type { ModelClient, ModelEvent, ModelMessage, ModelRequest } from '../../../model';
 import {
   SUMMARY_HEADINGS,
+  COMPACT_AT_MIN_TOKENS,
   compactionReserve,
+  compactionStart,
   compactionThreshold,
   estimateMessageTokens,
   estimatePromptTokens,
@@ -57,6 +59,45 @@ describe('the compaction trigger', () => {
     // No count (a fresh attempt, or the step after a compaction): everything is estimated, the system prompt and tools included.
     const all = messages.reduce((sum, m) => sum + estimateMessageTokens(m), 0);
     expect(estimatePromptTokens({ messages, steps: 1, compactions: 0 }, 100)).toBe(100 + all);
+  });
+});
+
+describe('where taskCompactAt starts compaction on the built-in runner', () => {
+  const RUNNER = 'OpenRouter runner';
+  const start = (window: number, at: 'auto' | 'off' | number) => {
+    const lines: string[] = [];
+    return { at: compactionStart(window, at, RUNNER, (line) => lines.push(line)), lines };
+  };
+
+  it('auto keeps the capacity guard: the window less the larger of 16k and 15%, never under half', () => {
+    expect(start(200_000, 'auto')).toEqual({ at: 170_000, lines: [] });
+    expect(start(100_000, 'auto')).toEqual({ at: 84_000, lines: [] });
+    expect(start(20_000, 'auto')).toEqual({ at: 10_000, lines: [] });
+  });
+
+  it('a number starts compaction at that context size, silently, when the window allows it', () => {
+    expect(start(200_000, 60_000)).toEqual({ at: 60_000, lines: [] });
+    expect(start(200_000, 170_000)).toEqual({ at: 170_000, lines: [] });
+  });
+
+  it('a number past the guard is held at the guard, and one under the floor at the floor, each said in one line', () => {
+    expect(COMPACT_AT_MIN_TOKENS).toBe(32_000);
+    const high = start(200_000, 500_000);
+    expect(high.at).toBe(170_000);
+    expect(high.lines).toEqual(['OpenRouter runner: taskCompactAt 500000 is outside the 32000 to 170000 tokens it can compact at; using 170000.']);
+    const low = start(200_000, 5_000);
+    expect(low.at).toBe(32_000);
+    expect(low.lines).toHaveLength(1);
+    // A window too small for the floor leaves only the guard.
+    expect(start(40_000, 25_000).at).toBe(24_000);
+  });
+
+  it('off is auto here, since this runner would otherwise run into the provider\'s overflow error, and says so', () => {
+    const off = start(200_000, 'off');
+    expect(off.at).toBe(170_000);
+    expect(off.lines).toEqual([
+      'OpenRouter runner: taskCompactAt off is not honoured: without compaction this runner would run into the provider\'s context limit, so it compacts as auto does, from 170000 tokens.',
+    ]);
   });
 });
 
@@ -288,6 +329,18 @@ describe('compaction in the loop', () => {
     }
     // The compaction in the middle of the run did not touch the cached prefix.
     expect(client.mainRequests[3]?.system).toEqual(client.mainRequests[0]?.system);
+  });
+
+  it('compacts from the start size a number sets, well below the guard', async () => {
+    // Under auto the fourth request (an estimated 85k) is the first past 84k; at 40k the third (about 55k) is.
+    const client = splitClient(script);
+    const { loop, events } = loopWith(client, { compactAt: 40_000 });
+    await loop.runTurn('The task prompt.', abort());
+    const [first] = eventsOf(events, 'compaction');
+    expect(first?.preTokens).toBeGreaterThan(40_000);
+    expect(first?.preTokens).toBeLessThan(84_000);
+    // The summary call came between the second and third main requests.
+    expect(client.requests.findIndex((r) => client.summaryRequests.includes(r))).toBe(2);
   });
 
   it('does not compact below the threshold', async () => {

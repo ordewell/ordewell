@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentEvent } from '../harness/AgentAdapter';
-import { endTurn, newTurn, reduceUpdate, type AcpTurn } from '../harness/acpEvents';
+import * as fs from 'fs';
+import * as path from 'path';
+import { ACP_COMPACTION_FALL, ACP_COMPACTION_FLOOR, compactionBetween, endTurn, newTurn, reduceUpdate, type AcpContextReading, type AcpTurn } from '../harness/acpEvents';
 import { parseSessionUpdate } from '../harness/acpSchema';
 import { TurnOutcome } from '../harness/turnOutcome';
 
@@ -429,5 +431,45 @@ describe('endTurn', () => {
       const events = endTurn(newTurn({ source: 's', model: 'm-1' }), 'end_turn', { inputTokens: 1 }, new TurnOutcome());
       expect(events[0]).toMatchObject({ record: { model: 'm-1' } });
     });
+  });
+});
+
+describe('compactionBetween', () => {
+  it('reads a fall of more than half, from above the floor, in the same window as a compaction the agent made on its own', () => {
+    expect(compactionBetween({ used: 150_000, size: 200_000 }, { used: 28_000, size: 200_000 }))
+      .toEqual({ type: 'compaction', trigger: 'auto', preTokens: 150_000, postTokens: 28_000 });
+    expect(compactionBetween({ used: ACP_COMPACTION_FLOOR, size: 128_000 }, { used: ACP_COMPACTION_FLOOR * ACP_COMPACTION_FALL - 1, size: 128_000 }))
+      .toMatchObject({ type: 'compaction' });
+  });
+
+  it.each<[string, AcpContextReading | null, AcpContextReading]>([
+    ['the first reading of a session', null, { used: 15_000, size: 128_000 }],
+    ['growth', { used: 40_000, size: 128_000 }, { used: 90_000, size: 128_000 }],
+    ['a fall of half or less', { used: 100_000, size: 128_000 }, { used: 50_000, size: 128_000 }],
+    ['a sharp fall from below the floor', { used: ACP_COMPACTION_FLOOR - 1, size: 128_000 }, { used: 1_000, size: 128_000 }],
+    ['a fall across a change of window, which is another model', { used: 200_000, size: 272_000 }, { used: 20_000, size: 128_000 }],
+  ])('records none for %s', (_, before, after) => {
+    expect(compactionBetween(before, after)).toBeNull();
+  });
+
+  it('records none across any recorded ACP session: their meters only grow', () => {
+    const root = path.join(__dirname, 'fixtures', 'acp');
+    let pairs = 0;
+    for (const agent of fs.readdirSync(root)) {
+      for (const file of fs.readdirSync(path.join(root, agent)).filter((name) => name.endsWith('.jsonl'))) {
+        const readings = new Map<string, AcpContextReading>();
+        for (const line of fs.readFileSync(path.join(root, agent, file), 'utf8').split('\n').filter(Boolean)) {
+          const params = (JSON.parse(line) as { line?: { method?: string; params?: { sessionId?: string; update?: { sessionUpdate?: string; used?: number; size?: number } } } }).line?.params;
+          const update = params?.update;
+          if (update?.sessionUpdate !== 'usage_update' || typeof update.used !== 'number' || typeof update.size !== 'number') continue;
+          const reading = { used: update.used, size: update.size };
+          const before = readings.get(params?.sessionId ?? '') ?? null;
+          if (before) pairs++;
+          expect(compactionBetween(before, reading), `${agent}/${file}`).toBeNull();
+          readings.set(params?.sessionId ?? '', reading);
+        }
+      }
+    }
+    expect(pairs).toBeGreaterThan(50);
   });
 });

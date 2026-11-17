@@ -177,6 +177,45 @@ describe('OrdewellAdapter', () => {
     expect(eventsOf(second, 'command_output')).toEqual([]);
   });
 
+  it('reads taskCompactAt at the start: off and a number it cannot honour are each said once in the task log', async () => {
+    const said = async (setting: string): Promise<string[]> => {
+      const restore = setEnv({ ORDEWELL_TASK_COMPACT_AT: setting });
+      try {
+        const { adapter } = adapterWith([[{ type: 'text-delta', text: 'One.' }, STOP]]);
+        await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+        const events: AgentEvent[] = [];
+        await adapter.send('Go.', (event) => events.push(event));
+        return eventsOf(events, 'command_output').slice(1).map((e) => e.text);
+      } finally {
+        restore();
+      }
+    };
+    // The assumed 128,000-token window guards from 108,800.
+    expect(await said('off')).toEqual([
+      'OpenRouter runner: taskCompactAt off is not honoured: without compaction this runner would run into the provider\'s context limit, so it compacts as auto does, from 108800 tokens.',
+    ]);
+    expect(await said('5000')).toEqual(['OpenRouter runner: taskCompactAt 5000 is outside the 32000 to 108800 tokens it can compact at; using 32000.']);
+    expect(await said('60000')).toEqual([]);
+    expect(await said('auto')).toEqual([]);
+    await expect(said('soon')).rejects.toThrow(/must be auto, off or a whole number of tokens/);
+
+    // Where a number has it compact is the window running long measures a compaction against, as Claude Code's is.
+    const windowFor = async (setting: string): Promise<number | undefined> => {
+      const restore = setEnv({ ORDEWELL_TASK_COMPACT_AT: setting });
+      try {
+        const { adapter } = adapterWith([]);
+        await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+        return adapter.compactWindowTokens;
+      } finally {
+        restore();
+      }
+    };
+    expect(await windowFor('60000')).toBe(60_000);
+    expect(await windowFor('500000')).toBe(108_800);
+    expect(await windowFor('auto')).toBeUndefined();
+    expect(await windowFor('off')).toBeUndefined();
+  });
+
   it('takes a model\'s window from the settings file\'s ordewellContextWindows, and says nothing of an assumed one', async () => {
     const settingsFile = path.join(tempDir(), 'settings.json');
     await writeFile(settingsFile, JSON.stringify({ ordewellContextWindows: { 'openrouter:acme/unknown': 64_000 } }));

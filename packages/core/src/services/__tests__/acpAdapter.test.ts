@@ -20,7 +20,7 @@ import type { TaskCompleteArgs } from '../mcp';
 import { McpAttachTimeout, RunnerStartupExit, spawnAttached } from '../harness/ordewellBinding';
 import { fakeAcpSpawn, type FakeAcpAgentOptions, type FakeAcpStep } from './fakeAcpAgent';
 import { planJson, type FakeSpawnOptions } from './harnessTestKit';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, setEnv } from '../../testing';
 import { CURSOR_EXTENSION_REQUESTS } from '../harness/cursorRequests';
 import { runnerEnv } from '../harness/runnerEnv';
 import { clineCredentials } from '../harness/clineCredentials';
@@ -3238,6 +3238,87 @@ describe('AcpAdapter through CliAgentAiService', () => {
       expect(spawned.agent.problems).toEqual([]);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+// An ACP agent compacts on its own terms and says so nowhere: only its meter falls (ADR-0018 W1).
+describe('AcpAdapter compaction', () => {
+  const usage = (used: number, size = 200_000, extra: Record<string, unknown> = {}) => ({ notify: 'session/update', params: update('usage_update', { used, size, ...extra }) }) as const;
+  const prompt = (...within: FakeAcpStep[]): FakeAcpStep[] => [{ expect: 'session/prompt' }, ...within, { answer: { stopReason: 'end_turn' }, to: 'session/prompt' }];
+  const compactions = (events: AgentEvent[]) => events.filter((e) => e.type === 'compaction');
+  const meter = (events: AgentEvent[]) => events.flatMap((e) => (e.type === 'usage' ? [e.record.contextTokens] : []));
+
+  it('records a sharp fall of the meter between turns as a compaction the agent made, before the meter it reports', async () => {
+    const { adapter } = setup([...handshake(), ...prompt(usage(150_000)), ...prompt(usage(160_000), usage(31_000))]);
+    await adapter.start(taskStart());
+    expect(compactions(await turn(adapter, 'go'))).toEqual([]);
+    const events = await turn(adapter, 'go on');
+    expect(events.filter((e) => e.type === 'compaction' || e.type === 'usage').map((e) => e.type)).toEqual(['usage', 'compaction', 'usage']);
+    expect(compactions(events)).toEqual([{ type: 'compaction', trigger: 'auto', preTokens: 160_000, postTokens: 31_000 }]);
+    expect(meter(events)).toEqual([160_000, 31_000]);
+  });
+
+  it('records none for ordinary movement of the meter', async () => {
+    const { adapter } = setup([...handshake(), ...prompt(usage(15_233), usage(15_359), usage(90_000), usage(60_000), usage(64_000))]);
+    await adapter.start(taskStart());
+    expect(compactions(await turn(adapter, 'go'))).toEqual([]);
+  });
+
+  it('records none for a new session, whose first reading has nothing to fall from', async () => {
+    const { adapter } = setup([
+      { expect: 'initialize', reply: initializedWith({ loadSession: true }) },
+      { expect: 'session/load' },
+      usage(180_000),
+      { answer: {} },
+      ...prompt(usage(20_000)),
+    ]);
+    await adapter.start(taskStart('ask', { resumeSessionId: 'sess-1' }));
+    const events = await turn(adapter, 'go on');
+    expect(compactions(events)).toEqual([]);
+    expect(meter(events)).toEqual([20_000]);
+  });
+
+  it('records none across a model switch, whether the window changes with it or not', async () => {
+    const list = (model: string) => [select('model', 'model', model, ['m-0', 'm-1'])];
+    const { adapter } = setup([
+      ...withOptions(list('m-0')),
+      ...prompt(usage(150_000, 272_000), usage(20_000, 128_000)),
+      ...prompt(usage(150_000, 128_000), { notify: 'session/update', params: update('config_option_update', { configOptions: list('m-1') }) }, usage(20_000, 128_000)),
+    ]);
+    await adapter.start(taskStart());
+    expect(compactions(await turn(adapter, 'go'))).toEqual([]);
+    expect(compactions(await turn(adapter, '/model m-1'))).toEqual([]);
+  });
+
+  it('records none for a subagent\'s meter, and measures the main context across it', async () => {
+    const { adapter } = setup([...handshake(), ...prompt(usage(150_000), usage(9_000, 200_000, { _meta: { parentToolCallId: 'p-1' } }), usage(152_000))]);
+    await adapter.start(taskStart());
+    const events = await turn(adapter, 'go');
+    expect(compactions(events)).toEqual([]);
+  });
+
+  it('records none for a fall in a turn the user spent on a command, such as /clear', async () => {
+    const { adapter } = setup([...handshake(), ...prompt(usage(150_000)), ...prompt(usage(12_000)), ...prompt(usage(14_000))]);
+    await adapter.start(taskStart());
+    await turn(adapter, 'go');
+    expect(compactions(await turn(adapter, '/clear'))).toEqual([]);
+    expect(compactions(await turn(adapter, 'go on'))).toEqual([]);
+  });
+
+  it('says once at launch that a number in taskCompactAt is not its to honour, and nothing for auto or off', async () => {
+    for (const [setting, said] of [['120000', 1], ['auto', 0], ['off', 0]] as const) {
+      const restore = setEnv({ ORDEWELL_TASK_COMPACT_AT: setting });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const { adapter } = setup(handshake());
+        await adapter.start(taskStart());
+        const lines = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('taskCompactAt'));
+        expect(lines).toEqual(said ? ['Fake Agent: taskCompactAt 120000 cannot be honoured: an ACP agent compacts its context on its own terms, and Ordewell has nothing to set it with.'] : []);
+      } finally {
+        warn.mockRestore();
+        restore();
+      }
     }
   });
 });

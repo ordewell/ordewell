@@ -3,6 +3,7 @@ import type { UsageRecord } from '../../../models/Usage';
 import type { ModelClient, ModelMessage, ModelRequest, ModelUsage, SystemPart, ToolDefinition } from '../../model';
 import type { ModelInfo } from './models';
 import type { CompactionEntry, LoadedTranscript, TranscriptStore } from './transcript';
+import { clampTaskCompactAt, type TaskCompactAt } from '../../taskCompactWindow';
 
 /**
  * Context compaction for the built-in runner (ADR-0070): spend fewer tokens
@@ -49,8 +50,33 @@ export function compactionThreshold(contextWindow: number): number {
   return Math.max(contextWindow - compactionReserve(contextWindow), Math.floor(contextWindow * THRESHOLD_FLOOR_FRACTION));
 }
 
-export function shouldCompact(estimatedPrompt: number, contextWindow: number): boolean {
-  return estimatedPrompt > compactionThreshold(contextWindow);
+export function shouldCompact(estimatedPrompt: number, contextWindow: number, startAt?: number): boolean {
+  return estimatedPrompt > Math.min(startAt ?? Infinity, compactionThreshold(contextWindow));
+}
+
+/**
+ * The least context a set start size compacts from. Below it what a compaction
+ * keeps (the system prompt and tools, the task message, a summary of up to
+ * {@link SUMMARY_MAX_OUTPUT_TOKENS} and a verbatim tail) would leave too little
+ * room under the start to work in before the next one.
+ */
+export const COMPACT_AT_MIN_TOKENS = 32_000;
+
+/**
+ * Where a task on this runner starts compacting under `taskCompactAt`. `auto`
+ * is the capacity guard ({@link compactionThreshold}); a number is held
+ * between {@link COMPACT_AT_MIN_TOKENS} and that guard, with one line to `log`
+ * when it moves. `off` cannot mean no compaction: the loop is Ordewell's own,
+ * and with nothing compacting it would run into the provider's overflow
+ * error, so it is `auto`, said in one line.
+ */
+export function compactionStart(window: number, at: TaskCompactAt, runner: string, log: (line: string) => void): number {
+  const guard = compactionThreshold(window);
+  if (at === 'off') {
+    log(`${runner}: taskCompactAt off is not honoured: without compaction this runner would run into the provider's context limit, so it compacts as auto does, from ${guard} tokens.`);
+  }
+  if (typeof at !== 'number') return guard;
+  return clampTaskCompactAt(at, { min: Math.min(COMPACT_AT_MIN_TOKENS, guard), max: guard }, runner, log);
 }
 
 export function estimateTokens(chars: number): number {
@@ -329,6 +355,8 @@ export interface CompactorOptions {
   /** Writes a transcript line, secrets redacted (ADR-0061). */
   record: (entry: CompactionEntry) => Promise<void>;
   emit: (event: AgentEvent) => void;
+  /** Where a set `taskCompactAt` starts compaction, already held within bounds ({@link compactionStart}); the guard alone when absent. */
+  startAt?: number;
 }
 
 /** The compaction the loop asks for; each applies to the transcript just loaded. */
@@ -361,7 +389,7 @@ export class Compactor {
   async beforeRequest(transcript: LoadedTranscript, step: number, signal: AbortSignal): Promise<LoadedTranscript> {
     const fixed = this.fixedTokens(transcript);
     const estimated = estimatePromptTokens(transcript, fixed);
-    if (!shouldCompact(estimated, this.effectiveWindow) || transcript.messages.length < this.retryAt) return transcript;
+    if (!shouldCompact(estimated, this.effectiveWindow, this.options.startAt) || transcript.messages.length < this.retryAt) return transcript;
     try {
       const compacted = await this.compact(transcript, step, signal, { fraction: undefined, preTokens: estimated });
       if (compacted) return compacted;
@@ -404,9 +432,10 @@ export class Compactor {
     const fixed = this.fixedTokens(transcript);
     const headTokens = transcript.messages.length > 0 && transcript.messages[0]?.role === 'user' ? estimateMessageTokens(transcript.messages[0]) : 0;
     const summaryAllowance = Math.min(SUMMARY_MAX_OUTPUT_TOKENS, model.maxOutputTokens, Math.floor(window * 0.1));
-    // A retry's tail shrinks with its fraction, so each step down leaves less than the one before.
+    // A retry's tail shrinks with its fraction, so each step down leaves less than the one before;
+    // a start set below the guard shrinks it in proportion, so what is kept fits well under that start.
     const tailBudget = plan.fraction === undefined
-      ? Math.floor(window * TAIL_FRACTION)
+      ? Math.floor(window * TAIL_FRACTION * Math.min(1, (this.options.startAt ?? Infinity) / compactionThreshold(window)))
       : Math.max(0, Math.min(Math.floor(window * TAIL_FRACTION * plan.fraction), Math.floor(window * plan.fraction) - fixed - headTokens - summaryAllowance));
     const split = splitForCompaction(transcript.messages, tailBudget, { allowEmptyTail: plan.fraction !== undefined });
     if (!split) return undefined;
