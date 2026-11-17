@@ -115,25 +115,88 @@ what each metric means. It writes its results and its builds to
 
 ## Commit0 (`bench/commit0/`)
 
-The driver for comparing the built-in `ordewell` runner on Commit0 libraries
-two ways, on one model. Arm A is one hand-written task assigned to the
-`ordewell` runner with no planner. Arm B is `ordewell plan --goal <the same
-text> --runner ordewell --no-chat --yes`, then `ordewell run` and `merge
+The driver for comparing the built-in runner, `openrouter`, on Commit0
+libraries two ways, on one model. Arm A is one hand-written task assigned to
+that runner with no planner. Arm B is `ordewell plan --goal <the same
+text> --runner openrouter --no-chat --yes`, then `ordewell run` and `merge
 --yes`. Each library and arm runs in its own container on an internal Docker
 network. The only way out is a gateway (core's egress sidecar) that opens
-`openrouter.ai` alone. Inside, the box runs Ordewell packed from this
-checkout's built `dist/`, with `ORDEWELL_NO_MODELS_DEV=1`.
+`openrouter.ai` alone. Inside, the box runs Ordewell packed from a built tree's
+`dist/`, with `ORDEWELL_NO_MODELS_DEV=1`.
 
 ```bash
 npm run build
 node bench/commit0/drive.mjs --dry-run --fixture --image <a python image with pytest and git>
 node bench/commit0/drive.mjs --dry-run --libs <libraries.json>
+node bench/commit0/drive.mjs --sweep
 ```
+
+### How the arms are held equal
+
+- **D1. One budget.** Both arms get the same wall-clock cap (3 hours) and the
+  same spend cap, `--cap-usd` (default 8). A run that meets either is stopped
+  and labelled `stopped: {why: 'spend' | 'wall-clock'}`.
+- **D2. Arm A is one agent alone**: supervisor off, one task, mode `full`,
+  nothing started or merged on its behalf. It is scored on its working tree's
+  final state whether or not its task passed: when the task did not land, its
+  worktree's diff against the flattened commit (committed and uncommitted work,
+  `.venv` left out) is applied to the workspace, the tests are restored as for
+  any run, and the eval runs. That is what one agent working in a directory
+  would be scored on.
+- **D3. Arm B is Ordewell as its user runs it**: supervisor at Act, autorun on,
+  automatic merging on, and `ORDEWELL_MAX_PARALLEL` from `--parallel` (default
+  8). It is scored only on what Ordewell merged into the workspace: work with
+  no passing verdict does not count, which is Ordewell's own rule. The
+  unlanded work of its non-passing tasks is saved as `unlanded-<order>.patch`
+  for diagnosis and never scored.
+- **D4. A fixed quota per box**: `--cpus` (default 8) and `--memory` (default
+  `12g`, swap held to it) apply to the box container, so a run's wall-clock
+  does not depend on what else the host runs.
+- **D5. A run is judged by its tasks' states**, read from the session, never
+  by `ordewell run`'s exit status: that may be non-zero when a task failed, and
+  at Act it may return only after the supervisor's closing turn, which can
+  retry a task. The driver tolerates both, and ends a run when it is capped,
+  stalled, never started, or settled (nothing running, nobody waited on,
+  nothing moved for five minutes).
+
+A run stalls when, for `--stall-min` minutes (default 15), no attempt runs and
+a task waits on a person (a checkpoint, an input, an approval or an open user
+task, which nobody in the bench does). It is
+recorded as `stalled: {task, waiting, question, sinceMs}`, stopped and scored:
+a result, not an abort. Every end goes the same way: `ordewell stop` for the
+session, waited for; the `plan` and `run` followers ended, never a `merge`;
+`ordewell merge` of what landed; the daemon stopped; and no Ordewell process
+left in the box before the closing spend reading. On SIGINT, SIGTERM or an
+uncaught error the driver removes its own containers and network. Everything
+it starts is labelled with its `<host>/<pid>`, and `--sweep` removes the
+labelled containers and networks whose driver on this host is no longer running.
+
+### Options
+
+| Option | Default | |
+| --- | --- | --- |
+| `--cap-usd <usd>` | 8 | the spend cap, both arms |
+| `--parallel <n>` | 8 | arm B's `ORDEWELL_MAX_PARALLEL`; arm A runs one task |
+| `--cpus <n>` | 8 | the box's CPU quota |
+| `--memory <size>` | `12g` | the box's memory quota |
+| `--stall-min <min>` | 15 | how long a person may be waited on with nothing running |
+| `--ordewell-root <dir>` | this tree | the built tree packed into the box |
+| `--allow-stale-dist` | off | run a dist older than its sources; the result is not valid |
+| `--sweep` | | remove boxes of dead drivers; alone, nothing else runs |
+
+The tree `--ordewell-root` names is pinned: its HEAD sha is recorded, a tree
+with tracked changes is refused, and so is a `dist/` older than its newest
+tracked source under `packages/core/src`, `packages/web/server` and
+`packages/cli/src`, unless `--allow-stale-dist` is passed. The driver builds
+nothing.
+
+### Dry run
 
 `--dry-run` sets up everything a run would and runs every check, but makes no
 model call, and the OpenRouter key never enters the box. It checks:
 
-- the checkout holds the PR 177 merge
+- the tree holds the PR 177 merge, is clean, and its dist is fresh
+- `--sweep` removes a dead driver's container and network and keeps a live one's
 - the egress: only openrouter.ai answers, through the gateway or around it
 - the model's context window, from OpenRouter's listing and the offline catalog
   (a missing window or the fallback value fails the run)
@@ -143,24 +206,98 @@ model call, and the OpenRouter key never enters the box. It checks:
   taken at the reference commit, before the history goes, and is the
   denominator; at the stubs, which break imports, only a missing module fails
 - the count of network-marked tests left out
+- per arm, the settings are written and the box's daemon reads them back
+  (supervisor off for A, at Act for B, autorun, automatic merging, the
+  parallel limit), and the engine holds the box's quota
+- the patch chooser, on a worktree layout built with git: a task's own
+  worktree, never the integration one; a gone worktree's newest
+  `ordewell-preserved/<run>/...` branch; an open subtask as not landed; and
+  each patch applies to the flat commit with no `.venv`
+- the stop path on an idle session leaves no Ordewell process
+
+### Running
 
 Each step that would call the model is reported UNVERIFIED. `--run` runs the
 arms and spends on the key in `OPENROUTER_API_KEY`. That key must be one the
-run has to itself, its limit set to the arm's cap and its provider pinned in the
+run has to itself, its limit set to the cap and its provider pinned in the
 OpenRouter account, since a request cannot pin it. Pass that provider as
 `--provider-pin` so every result records it.
 `libraries.example.json` shows the shape of a library list. Results, per library
 and arm, go to `<bench dir>/commit0/` (`dry-runs/`, `runs/`, `results.jsonl`),
-and so does the packed runtime (`runtime/<sha>`). A library's `testCmd` defaults
+and so does the packed runtime (`runtime/<sha>-<dist build>`). A library's `testCmd` defaults
 to the venv Commit0's images install into, `<workdir>/.venv/bin/python -m pytest`,
 since `docker exec` puts it on no PATH. The driver ignores `/.venv` in the
 workspace's `.git/info/exclude`, so an agent's own `git add -A` never commits the
-link core's worktree bootstrap makes to it; `arm.patch` leaves `.venv` out, and
+link core's worktree bootstrap makes to it; every patch leaves `.venv` out, and
 the eval refuses to run if the arm replaced or tracked it. After an arm, the tests under
-`testDir` (`test_*.py`, `conftest.py`, `tests/` and `unit_tests/`) are put back
-as the base had them, and nothing else there, since a `testDir` may lie inside
-the source. Its offline tests are
-`bench/commit0/commit0.test.mjs`.
+`testDir` (`test_*.py`, `*_test.py`, `tests/` and `unit_tests/`) and every
+`conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg` and `tox.ini` in the
+workspace (outside `.venv` and `.ordewell`), ignored files included, are put
+back as the base had them, and nothing else, since a `testDir` may lie inside
+the source. A module or package the arm added at the workspace root under a
+name the venv's Python imports from elsewhere (`pytest`, `pluggy`, a stdlib
+module: `python -m` puts the workspace first on `sys.path`) is removed too.
+Before the eval, `docker diff` on the box, which nothing inside it can rewrite,
+must show no change in `.venv`, in the interpreter its `pyvenv.cfg` names, or
+anywhere outside the workspace, the box's home and scratch (a `.pth` in
+site-packages, a `/pytest.ini`): any such change fails the check, and the run
+is invalid. Bytecode the box wrote anywhere is deleted first. The baseline and the scored eval bound each test at 120 s (a pytest
+plugin the driver writes to `/opt/commit0-bench`, since the images carry no
+pytest-timeout) and the whole run at 1800 s, so a stub that spins fails its one
+test instead of losing the count.
+
+`result.json` records, beyond the counts: `valid` and `invalidReasons` (an
+abort, a failed check, an eval that timed out or gave no summary, more test
+outcomes than the reference collected, a stop by the batch budget, which cut
+this arm short of its pair's cap, an allowed stale dist); the arm's `supervisorLevel`, `autorun`, `automerge`, `parallel`,
+`cpus`, `memory`, `capUsd` and `wallCapMs`; `tests.exit` and `tests.timedOut`;
+`stopped` and `stalled`; `scoredFrom` (`merged` or `task-worktree`) and
+`patches`, each with the worktree or branch it came from and whether it was
+scored (`arm.patch` is always the scored diff); and `staleDistAllowed`. A stub
+baseline that collects nothing (networkx's and sphinx's stubs do not import)
+is recorded as `baseline: {collected: 0, reason}`, not failed. Its offline
+tests are `bench/commit0/commit0.test.mjs`.
+
+The original implementation is off limits to both arms, and their shared
+goal text says so: the agents must not look for it in caches, compiled files,
+installed packages or on the network, and write it from the docstrings and the
+tests. The driver backs that up: after the flatten it removes every untracked
+and ignored file but `.venv`, the leak probe fails the run on any that is
+left, and every patch leaves out `__pycache__` and `*.pyc`.
+
+### Batches
+
+`batch.mjs` runs a list of libraries and arms with up to `--jobs` runs at
+once, each a `drive.mjs` process with its own box at the fixed quotas, on one
+key whose lock the batch takes once:
+
+```bash
+node bench/commit0/batch.mjs --dry-run --libs <libraries.json> --jobs 2
+node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <provider> --batch-budget-usd <usd>
+```
+
+| Option | Default | |
+| --- | --- | --- |
+| `--jobs <n>` | 2 | runs at once |
+| `--batch-budget-usd <usd>` | required with `--run` | stop every run when the key's usage since the batch began reaches it |
+| `--only`, `--arm` | every library, both arms | which runs |
+| `--seed <label>` | none | kept in each `result.json` and run directory's name |
+| `--sweep` | | sweep before the batch |
+
+The other `drive.mjs` options are passed to every run. A batch refuses to
+start when `--jobs` times `--cpus` exceeds the host's CPUs or `--jobs` times
+`--memory` exceeds 80% of its memory. A run that fails leaves the others
+running. Each run's spend cap acts on what Ordewell recorded for its session
+(`recordedUsd`: the planner's turns, the supervisor's and every attempt's).
+A paid batch reads the key's usage before its first run, retrying, and
+refuses to start when it cannot, since the budget measures from that reading.
+When the batch budget is met, every run stops through its own stop path. On
+SIGINT or SIGTERM the batch passes the signal to its running runs and starts
+none of those still queued. The
+runs and `batch.json` go in `runs/batch-<time>[-<seed>]/`. `batch.json` holds
+the key's usage before and after, the recorded sum and the gap. When runs
+overlapped, a run's `billedUsd` is null and `billedSource` says why; a run
+alone keeps its key delta.
 
 ## Execution pipeline harness (`bench/pipeline/`)
 

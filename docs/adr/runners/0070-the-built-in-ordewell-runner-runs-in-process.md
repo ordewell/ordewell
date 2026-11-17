@@ -74,7 +74,18 @@ is one runner per API provider, under the provider's own id and name.**
   ids a plan, a transcript and the model catalog hold mean the same on every
   runner. One `ModelInfo` shape carries the context window, the reply cap,
   prices per million tokens, tool and reasoning support, and which of those a
-  catalog stated (`known`); what none stated takes a conservative default.
+  catalog stated (`known`); what none stated takes a default, the window as below.
+- **A model's context window** comes from, in order: the settings file's
+  `ordewellContextWindows`, which maps a `<provider>:<model>` id to its window
+  in tokens and wins over any other source; the catalog (models.dev or the
+  snapshot); the provider's own model listing where it states one
+  (`context_length`, `context_window`, `max_context_length` or `max_model_len`,
+  or Gemini's `inputTokenLimit`), fetched once a session through the runner's
+  own fetch, a failure falling through; and else an assumed 128,000 tokens. An
+  assumed window is too large for some models and too small for others, so it
+  is named as assumed in the context meter and the running-long facts, and the
+  attempt's first log line says how to set it; the overflow path below is what
+  catches a model whose true window is smaller.
 - **The one id it had before** (`ordewell`, unreleased) is moved as it is read:
   a task on it runs on the runner its model's provider names, its session with
   it; a plan's runner set names those runners instead, and keeps the old id
@@ -101,19 +112,29 @@ is one runner per API provider, under the provider's own id and name.**
   then the task tools as native tools, `task_complete` and `read_task` (the
   token's `read`, renamed because `read` reads files here). The list is fixed
   for the whole attempt so the cached prefix holds.
-- **The prompt** is short and provider-neutral: one task in its own worktree,
-  ended by `task_complete` with a summary, findings and a handoff, and a commit
-  message when the task commits
-  ([ADR-0047](../supervision/0047-structured-task-handoffs.md)). An environment
-  block (working directory, platform, date, whether it is a git repository)
-  follows, then the worktree's AGENTS.md, or else its CLAUDE.md. Earlier tasks'
-  handoffs are in the first user message, as `StructuredSession` writes it.
+- **The prompt** is short and provider-neutral: one task in its own worktree;
+  how a long brief is worked through, each rule with its reason (how much work
+  remains is never a reason to stop or to report `blocked`; the context is
+  compacted for the model; the attempt's step limit, as a fixed number so the
+  prompt stays one cached prefix; each coherent part committed as it works,
+  when the task commits; `blocked` for an obstacle outside the model's control,
+  saying what is missing; near the budget's end, what works committed and an
+  honest report, never `done` short of the done criterion); then the completion
+  contract every runner is given (ADR-0018 C2,
+  [ADR-0047](../supervision/0047-structured-task-handoffs.md)), the same text,
+  with the summary's limit and where the rest goes on one line of its own. A
+  model that read a large brief as too much for one session reported `blocked`
+  with tests passing and nothing committed; nothing outside it had stopped it.
+  An environment block (working directory, platform, date, whether it is a git
+  repository) follows, then the worktree's AGENTS.md, or else its CLAUDE.md.
+  Earlier tasks' handoffs are in the first user message, as `StructuredSession`
+  writes it.
 - **Completion is the token-bound `task_complete` alone**
   ([ADR-0025](0025-structured-only-runners.md)). The loop ending a turn, or the
   model saying it is done, proves nothing.
 - **Context is managed by the runner** (`compaction.ts`), to spend fewer tokens without losing the task:
-  - **Fill.** Every step reports its usage with the model's context window, a
-    defaulted one included, since compaction acts on the same figure, and with
+  - **Fill.** Every step reports its usage with the window compaction acts on,
+    an assumed one (flagged so) or one an overflow shrank included, and with
     the prompt plus reply as `contextTokens`, so `ContextWindowFill` reads the
     meter. A compaction resets it to the compacted size.
   - **Trigger.** Before each request the next prompt is estimated: the provider's
@@ -123,6 +144,12 @@ is one runner per API provider, under the provider's own id and name.**
     of the window and at least 16k tokens, the conversation is compacted. The
     threshold is never under half the window, so a window under about 32k does not
     compact on every step. Estimates count four characters to a token.
+    Where the `taskCompactAt` setting names a start, compaction begins there
+    instead, never above that guard and never below 32k or the guard if that is
+    lower; `off` is not honoured here, since a runner that never compacted would
+    run into its provider's limit, and the task's log says so
+    ([ADR-0018](0018-structured-runner-transport.md) C4 states the rule for every
+    harness, this runner's included).
   - **Summary.** A separate call, with no tools, writes the messages between the
     kept head and tail under fixed headings: Objective, Requirements, Decisions,
     Work State (Completed, Active, Blocked), Next Move, Relevant Files, Important
@@ -140,7 +167,11 @@ is one runner per API provider, under the provider's own id and name.**
   - **Overflow.** When the provider refuses a request as too long (a context
     overflow), the same step is retried from a conversation compacted to 0.85,
     0.7, 0.5 and then 0.35 of the window, the tail shrinking with it, before the
-    refusal fails the step.
+    refusal fails the step. The window that let the request through stays in
+    force for the rest of the attempt, so later steps compact before the size
+    that was refused. An overflow is read from the provider's code (OpenAI,
+    Groq and compatible servers), Anthropic's and Gemini's own wording, any 413,
+    and on a bare 400 the wording OpenAI, xAI, LM Studio and llama.cpp use.
   - **Cache hints.** Every request marks breakpoints after the tool list, after
     the system prompt and at the last message. The tool list and the system prompt
     are fixed for the attempt (the prompt is read back from the transcript, never
@@ -175,7 +206,14 @@ is one runner per API provider, under the provider's own id and name.**
   read-only task is read-only whatever level it was planned at.
 - **Lifecycle.** An attempt makes at most the step limit's model calls
   (`ordewellStepLimit` in the settings file, default 200); the last is told so and
-  forced to `task_complete`. The repeat guard nudges the third identical tool call
+  forced to `task_complete`. Before it the model is told up to twice, once it
+  has used 80% of the calls and once at 95% (each rounded down), with a message
+  appended to the conversation, never a rewritten system prompt: bring the part
+  in hand to a committed state, then, at 95%, start nothing new and report what
+  is done and what remains. Each goes out at most once an attempt, none while a
+  report stands and none on the last call, and two falling due together send
+  only the later; so a limit of 5 or less sends neither, and one of 6 to 20 only
+  the 80% one, its 95% share falling on the last call. The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
   limit pauses the attempt, and a resume reads the transcript back; one with no
@@ -312,3 +350,10 @@ comes from that call.
 - 2026-11-16 — a provider with no model listing has no runner; the default reads
   the host's own keys, not a workspace's; the old id stays where moving it would
   lose a task or a setting.
+- 2026-11-17 — the prompt says how a long brief is worked through and the step
+  budget, carries every runner's completion contract, and the loop sends the 80%
+  and 95% budget notices.
+- 2026-11-17 — a model no catalog describes takes its window from the
+  `ordewellContextWindows` setting or its provider's listing, else an assumed
+  128,000 tokens named as assumed; an overflow's smaller window holds for the
+  attempt.

@@ -200,6 +200,10 @@ function answerWaiting(state: TuiState, tv: TaskLogState, sessionId: string, dec
  */
 function sendNow(state: TuiState, tv: TaskLogState, sessionId: string): Step {
   const text = state.editor.text.trim();
+  // A subplanner reads a message at its next turn and has none to interrupt (ADR-0055 D3).
+  if (findTask(state.tasks, tv.taskId)?.type === 'delegated') {
+    return step(say(state, 'system', 'A delegated task\'s subplanner has no turn to interrupt: enter sends it at its next step.'));
+  }
   if (text) {
     const task = findTask(state.tasks, tv.taskId);
     if (continuesTask(task)) {

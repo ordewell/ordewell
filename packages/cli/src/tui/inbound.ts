@@ -389,6 +389,11 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       dispatch({ type: 'taskLog', taskId: String(event.taskId), attempt: event.attempt, events: event.events, position: stampOf(event) ?? undefined, sessionId });
       return;
 
+    // The TUI already says the run ended at `execution_complete`, and stays
+    // open through the closing turn: this is for a follower that leaves.
+    case 'run_concluded':
+      return;
+
     // Raw runner chatter. Listed rather than defaulted, so a new lifecycle
     // variant fails to compile here until someone decides what a run's watcher
     // does with it.

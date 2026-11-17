@@ -36,7 +36,16 @@ starting as usual.
   ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
   There is no `blocked` task status: a plan file saved with one loads it as
   pending.
-  Subtasks follow the same rule. A loop's check that failed a round with
+  A subtask is part of its parent's work, so it is held to the dependencies
+  of every ancestor as well as its own (`heldDependencies`, `blocking.ts`):
+  it is blocked when an ancestor's dependency failed, and the start rule
+  waits on an ancestor's dependencies as on its own, the merge gate's
+  ancestors included, so an ops subtask waits at its ops parent's gate. The
+  edges are read from the tree, never copied onto the subtask in the stored
+  plan. A skip of the parent passes over the parent alone and releases none of
+  its subtasks. An ancestor's dependency that itself waits, through any task,
+  on that ancestor's own subtree is not inherited: the subtask would wait on
+  itself. A loop's check that failed a round with
   rounds left is stored failed but blocks nothing yet: its body takes its
   report as input, and its other dependents wait for it as for work under way,
   until its loop stops or runs out of rounds
@@ -65,7 +74,7 @@ starting as usual.
   loop's check between rounds, its loop runs it again once its body lands),
   Mark complete is landing it, it has no prompt, it is outside the user's
   approval record, it is on hold, it is blocked, it is in a loop's body whose
-  check has not failed this round, its dependencies are not met (or, for
+  check has not failed this round, its dependencies or an ancestor's are not met (or, for
   a force start queued behind them, are still under way), a Merge all is under
   way and it is an ops task, its runner waits on a usage limit's reset, a
   planner turn holds new starts, it is at its merge gate (ADR-0020), or it is
@@ -90,6 +99,11 @@ starting as usual.
   summary carries all four. A loop's check between rounds is not a failed task
   left: its loop still has work to start. A run whose every task completed or was skipped
   is finished.
+  A follower that cannot answer, such as `ordewell run`, takes the end as the
+  outcome only at `run_concluded`, once an Act supervisor's closing turn could
+  no longer continue the run, or when its bounded wait for that runs out
+  (ADR-0029), and exits non-zero when a task
+  failed or is blocked.
   A task waiting on the user, on hold, at a merge gate or on a usage limit
   keeps the run open, as before.
 - **A retry, a skip or Mark complete continues the run.** Retrying, skipping or
@@ -150,6 +164,13 @@ attempt. This decides what a failure stops, not how a verdict is reached.
   Dropped: a restart unblocked the failure's dependents with nothing said about
   it, so a task could read as ready on a failure nobody had seen. Execute gives
   that chance when the user asks for it.
+- **Hold a subtask to its own dependencies alone.** The design until
+  2026-11-17. Dropped: subtasks started, and passed, while their parent's
+  dependency had failed, building on output that was never produced.
+- **Copy a parent's dependencies onto its subtasks in the stored plan.**
+  Rejected: the plan would stop being what the planner wrote, and every edit
+  of the parent's dependencies would have to be copied down again; read from
+  the tree, the rule cannot drift from it.
 - **Keep the run open until every failure is retried.** Rejected: a run that
   never ends never hands its work over, and a surface treats the end of the
   execution stream as the run's end; the retry continues an ended run instead.
@@ -177,3 +198,6 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-10-31 — a load and an edit outside a run leave a failed task failed, so its block stands; Execute gives the fresh chance ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-10-31 — a failed task an edit makes manual has nothing to retry, so it stops being failed, in a run or not ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-11-14 — Mark complete of a task in a run that ended on a failure continues that run, as a retry or a skip does.
+- 2026-11-17 — a follower that cannot answer takes the run's end from `run_concluded`, after any closing turn, and `ordewell run` exits 2 on a failed or blocked task ([ADR-0029](0029-the-supervisor.md)).
+- 2026-11-17 — a subtask is held to every ancestor's dependencies, for the blocked rule and the start rule alike, the merge gate included; it was held to its own alone.
+- 2026-11-17 — `ordewell run`'s wait for `run_concluded` is bounded by the supervisor's own limits ([ADR-0029](0029-the-supervisor.md)).

@@ -118,11 +118,26 @@ export interface UserSettings {
    */
   ordewellStreamTimeouts?: { firstEventSeconds?: number; idleSeconds?: number };
   /**
+   * The context window, in tokens, of a model the built-in runner runs,
+   * keyed by its plan id (`<provider>:<model>`). It wins over the catalog and
+   * the provider's listing (ADR-0070). Set in the file only: no surface offers it.
+   */
+  ordewellContextWindows?: Record<string, number>;
+  /**
    * What a task runner loads of the user's own setup: all of it (`user`) or
    * what a task needs (`minimal`). Absent means `user`. Set in the file only:
    * no surface offers it.
    */
   taskRunnerConfig?: TaskRunnerConfig;
+  /**
+   * Where a task's context compacts, on any harness: `auto`, `off` or the
+   * context size in tokens at which compaction starts (`taskCompactAtOf`).
+   * Absent means `auto`, unless `ORDEWELL_TASK_COMPACT_AT` says otherwise.
+   * Kept as written, since a value no harness can use must refuse a task, not
+   * fall back to another point.
+   * Set in the file only: no surface offers it.
+   */
+  taskCompactAt?: string | number;
   /**
    * Run tasks in containers (ADR-0059 L5), as `containerSettings` reads it:
    * absent means local worktrees. Kept as written, since one it cannot use must
@@ -505,8 +520,13 @@ export class SettingsService {
     }
     const streamTimeouts = streamTimeoutsSetting(raw.ordewellStreamTimeouts);
     if (streamTimeouts !== undefined) settings.ordewellStreamTimeouts = streamTimeouts;
+    const contextWindows = contextWindowsSetting(raw.ordewellContextWindows);
+    if (contextWindows !== undefined) settings.ordewellContextWindows = contextWindows;
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
+    }
+    if (typeof raw.taskCompactAt === 'string' || typeof raw.taskCompactAt === 'number') {
+      settings.taskCompactAt = raw.taskCompactAt;
     }
     if (raw.containers !== undefined) {
       // Ignored, not refused, in a published build (ADR-0059 L5): the user hears it once, so nobody thinks tasks are isolated when they run on the host.
@@ -597,4 +617,12 @@ function streamTimeoutsSetting(raw: unknown): { firstEventSeconds?: number; idle
     ...(seconds(firstEventSeconds) ? { firstEventSeconds } : {}),
     ...(seconds(idleSeconds) ? { idleSeconds } : {}),
   };
+}
+
+/** The settings file's `ordewellContextWindows`, each a whole number of tokens of at least 1; an entry it cannot use is left out, and a map left empty is none. */
+function contextWindowsSetting(raw: unknown): Record<string, number> | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const kept = Object.entries(raw as Record<string, unknown>)
+    .filter((entry): entry is [string, number] => Number.isInteger(entry[1]) && (entry[1] as number) >= 1);
+  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
 }

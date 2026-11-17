@@ -11,6 +11,8 @@ import type { StructuredEvent } from '../../../interfaces/IRunner';
 import { toTaskLogEvent } from '../../../models/TaskLog';
 import { replayTaskLog } from '../../../conversation/taskLog';
 import { patient } from '../../../testing';
+import { expectCompactionChain } from '../../__tests__/compactionChainKit';
+import { modelDetails } from '../../ModelDetails';
 
 /**
  * OpenCode's task mode (ADR-0018, #55): `opencode serve` driven over HTTP
@@ -1615,6 +1617,137 @@ describe('OpenCodeAdapter task mode — a command turn whose POST is held open',
 
     expect(events).toContainEqual({ type: 'permission_cancelled', id: 'per_1' });
     expect(events.at(-1)).toEqual({ type: 'turn_end' });
+    adapter.dispose();
+  });
+});
+
+describe('OpenCodeAdapter 1.x task compaction point (taskCompactAt)', () => {
+  // claude-sonnet-4-5 has a 200,000-token window in the bundled models.dev snapshot, and no
+  // input limit, without which 1.x keeps its own start: the tests give it one unless they say otherwise.
+  const sonnet = 'anthropic/claude-sonnet-4-5';
+  const configOf = (env: NodeJS.ProcessEnv) => JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? 'null') as unknown;
+  let inputLimited = true;
+  beforeEach(() => {
+    vi.stubEnv('OPENCODE_CONFIG_CONTENT', undefined);
+    inputLimited = true;
+    const store = modelDetails();
+    const lookup = store.lookup.bind(store);
+    vi.spyOn(store, 'lookup').mockImplementation((provider, model) => {
+      const details = lookup(provider, model);
+      return details && inputLimited ? { ...details, inputLimit: details.contextWindow } : details;
+    });
+  });
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+  async function taskWith(at: string, opts: Partial<TaskStartOptions> = {}, workspaceEnv: Record<string, string> = {}) {
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', at);
+    return startTask(fakeServer(), taskStart({ model: sonnet, ...opts }), workspaceEnv);
+  }
+
+  it.each(['auto', 'off'])('leaves OpenCode its own start under %s: no config, no window', async (at) => {
+    const { adapter, env } = await taskWith(at);
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    adapter.dispose();
+  });
+
+  it('starts compaction at a number by keeping the rest of the window as compaction.reserved', async () => {
+    const { adapter, env } = await taskWith('150000');
+    expect(configOf(env)).toEqual({ compaction: { reserved: 50_000 } });
+    expect(adapter.compactWindowTokens).toBe(150_000);
+    adapter.dispose();
+  });
+
+  it('adds it to the inline config it was given, over the user\'s own buffer and beside their other keys', async () => {
+    const { adapter, env } = await taskWith('150000', {}, { OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: 'dark', compaction: { auto: true, buffer: '10%' } }) });
+    expect(configOf(env)).toEqual({ theme: 'dark', compaction: { auto: true, reserved: 50_000 } });
+    adapter.dispose();
+  });
+
+  it('adds it beside the Ordewell tools a task with the MCP server gets', async () => {
+    const mcp = mcpClientConfig({ token: 'tok-secret', url: 'http://127.0.0.1:4555/mcp' });
+    const { adapter, env } = await taskWith('150000', { mcp });
+    expect(configOf(env)).toMatchObject({ mcp: { ordewell: expect.anything() }, compaction: { reserved: 50_000 } });
+    adapter.dispose();
+  });
+
+  it('clamps a start that leaves no room for the summary, with one line', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('199000');
+    expect(configOf(env)).toEqual({ compaction: { reserved: 16_000 } });
+    expect(adapter.compactWindowTokens).toBe(184_000);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('199000');
+    adapter.dispose();
+  });
+
+  it('takes the start back, with one line, once the server is 1.x and the model has no input limit, which 1.x needs to apply it', async () => {
+    inputLimited = false;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('150000');
+    expect(configOf(env)).toEqual({ compaction: { reserved: 50_000 } });
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    expect(adapter.compactStartTokens).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('input limit');
+    adapter.dispose();
+  });
+
+  it('sets nothing, with one line, for a model of a provider that states input limits when only the bundled snapshot describes it', async () => {
+    // The snapshot gives openai/gpt-5 its 400,000-token window and not the 272,000-token input limit OpenCode measures against.
+    inputLimited = false;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('200000', { model: 'openai/gpt-5' });
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    expect(adapter.compactStartTokens).toBeUndefined();
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([expect.stringMatching(/taskCompactAt 200000 is not applied: the window of openai\/gpt-5 is not known/)]);
+    adapter.dispose();
+  });
+
+  it('sets no window when the inline config it was given cannot take the start', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('150000', {}, { OPENCODE_CONFIG_CONTENT: 'not json' });
+    expect(env.OPENCODE_CONFIG_CONTENT).not.toContain('reserved');
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    adapter.dispose();
+  });
+
+  it('sets nothing, with one line, for a model whose window it does not know', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await taskWith('150000', { model: 'somelab/unknown-model' });
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    adapter.dispose();
+  });
+
+  it('leaves a planner\'s launch as it is', async () => {
+    const planner = { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: sonnet } as AgentStartOptions;
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', 'auto');
+    const before = await startTask(fakeServer(), planner);
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', '150000');
+    const after = await startTask(fakeServer(), planner);
+    expect(configOf(after.env)).toEqual(configOf(before.env));
+    expect(after.env.OPENCODE_CONFIG_CONTENT).not.toContain('compaction');
+    expect(after.adapter.compactWindowTokens).toBeUndefined();
+    before.adapter.dispose();
+    after.adapter.dispose();
+  });
+
+  it('turns OpenCode\'s own session.compacted into the brief\'s reminder and a running-long flag counted under the point set', async () => {
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', '150000');
+    const server = fakeServer();
+    const { adapter } = await startTask(server, taskStart({ model: sonnet }));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('do the task', (e) => events.push(e));
+    const stream = await server.stream();
+    stream.push({ type: 'session.status', properties: { sessionID: 'ses_task', status: { type: 'busy' } } });
+    stream.push({ type: 'session.compacted', properties: { sessionID: 'ses_task' } });
+    stream.push({ type: 'session.status', properties: { sessionID: 'ses_task', status: { type: 'idle' } } });
+    await turn;
+    expect(adapter.compactWindowTokens).toBe(150_000);
+    await expectCompactionChain(events, adapter.compactWindowTokens);
     adapter.dispose();
   });
 });

@@ -3,6 +3,7 @@ import type { DiscoveredModel } from '../../../models/Task';
 import type { RunnerEnv } from '../../../plugins/types';
 import { VENDORS, vendorApiKeyIn, vendorBaseUrlIn, vendorConfiguredIn } from '../../apiProviders';
 import type { CatalogModel } from '../../ModelCatalog';
+import { modelDetails, type ModelDetailsStore } from '../../ModelDetails';
 import type { EffortLevel } from '../../model';
 
 /**
@@ -20,6 +21,12 @@ export interface ModelInfo {
   model: string;
   label: string;
   contextWindow: number;
+  /**
+   * Where `contextWindow` came from, in the order lookup tries them: the
+   * user's setting, the catalog (models.dev or its snapshot), the provider's
+   * own listing, else assumed (ADR-0070).
+   */
+  contextWindowSource: ContextWindowSource;
   maxOutputTokens: number;
   /** USD per million tokens; 0 where `known.pricing` is false. */
   pricing: { input: number; output: number; cacheRead: number; cacheWrite: number };
@@ -30,14 +37,23 @@ export interface ModelInfo {
   known: Record<'contextWindow' | 'maxOutputTokens' | 'pricing' | 'supportsTools' | 'supportsReasoning', boolean>;
 }
 
+export type ContextWindowSource = 'setting' | 'catalog' | 'listing' | 'assumed';
+
 /**
- * Defaults that fail safe: a small window makes compaction start early rather
- * than overflow, a small reply cap is one every served model accepts, and
+ * The window a model nothing describes is given. Compaction is a capacity
+ * guard near the true window, so assuming a small one compacts a large model
+ * every few steps; a window assumed too large is caught by the overflow path,
+ * which shrinks it for the rest of the attempt (ADR-0070).
+ */
+export const ASSUMED_CONTEXT_WINDOW = 128_000;
+
+/**
+ * Defaults: a small reply cap is one every served model accepts, and
  * tools are assumed because a runner without them cannot work at all, so a
  * model that refuses them fails loudly on its first step.
  */
 export const DEFAULT_MODEL_INFO: Readonly<Pick<ModelInfo, 'contextWindow' | 'maxOutputTokens' | 'supportsTools' | 'supportsReasoning'>> = {
-  contextWindow: 32_000,
+  contextWindow: ASSUMED_CONTEXT_WINDOW,
   maxOutputTokens: 4_096,
   supportsTools: true,
   supportsReasoning: false,
@@ -64,6 +80,7 @@ export function defaultModelInfo(provider: AiProvider, model: string): ModelInfo
     model,
     label: model,
     ...DEFAULT_MODEL_INFO,
+    contextWindowSource: 'assumed',
     pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     efforts: [],
     known: { contextWindow: false, maxOutputTokens: false, pricing: false, supportsTools: false, supportsReasoning: false },
@@ -93,6 +110,7 @@ export function modelInfoFromCatalog(provider: AiProvider, entry: CatalogModel):
   info.label = entry.name || entry.id;
   if (entry.contextLength > 0) {
     info.contextWindow = entry.contextLength;
+    info.contextWindowSource = 'listing';
     info.known.contextWindow = true;
   }
   if (entry.maxOutputTokens !== undefined && entry.maxOutputTokens > 0) {
@@ -160,31 +178,95 @@ export async function discoverProviderModels(env: RunnerEnv, provider: AiProvide
   }));
 }
 
+type Listing = Promise<ModelInfo[]>;
+
+// One provider's listing per route and key, held for the session so a window
+// it states costs one request; a failed fetch is dropped so the next attempt
+// tries again. Keyed by the fetch too, since that is the route (proxy, egress).
+const listings = new Map<object, Map<string, Listing>>();
+const PLATFORM_FETCH = {};
+
+/** For tests: forget every listing held this session. */
+export function resetModelListings(): void {
+  listings.clear();
+}
+
+function sessionListing(env: RunnerEnv, provider: AiProvider, fetchImpl: typeof fetch | undefined): Listing {
+  const credentials = providerCredentials(env, provider);
+  if (!credentials) return Promise.resolve([]);
+  const route: object = fetchImpl ?? PLATFORM_FETCH;
+  let byKey = listings.get(route);
+  if (!byKey) listings.set(route, (byKey = new Map()));
+  const key = `${provider}\n${credentials.baseUrl}\n${credentials.apiKey}`;
+  const held = byKey.get(key);
+  if (held) return held;
+  const fetched = (async () => {
+    const { fetchAllProviderModels } = await import('../../ProviderRouting');
+    const { models, errors } = await fetchAllProviderModels({
+      apiKeys: credentials.apiKey ? { [provider]: credentials.apiKey } : {},
+      baseUrls: credentials.baseUrl ? { [provider]: credentials.baseUrl } : {},
+      ...(fetchImpl ? { fetchImpl } : {}),
+    });
+    if (errors[provider] !== undefined) throw new Error(errors[provider]);
+    return (models[provider] ?? []).map((entry) => modelInfoFromCatalog(provider, entry));
+  })();
+  byKey.set(key, fetched);
+  fetched.catch(() => { if (byKey.get(key) === fetched) byKey.delete(key); });
+  return fetched;
+}
+
 /**
  * One model's info for an attempt. A catalog that fails or is slow costs the
  * attempt nothing but defaults: the model id is the plan's, never something
- * a listing has to confirm (ADR-0040).
+ * a listing has to confirm (ADR-0040). The window is the user's setting, else
+ * the catalog's, else the listing's, else {@link ASSUMED_CONTEXT_WINDOW}.
  */
 export async function lookupModelInfo(
   id: string,
   env: RunnerEnv,
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    timeoutMs?: number;
+    /** The `ordewellContextWindows` setting: plan model id to tokens. */
+    windows?: Readonly<Record<string, number>>;
+    details?: ModelDetailsStore;
+  } = {},
 ): Promise<ModelInfo> {
   const parsed = parseModelId(id);
   if (!parsed) throw new Error(`"${id}" is not a built-in runner model: assign one as <provider>:<model>.`);
-  const fallback = defaultModelInfo(parsed.provider, parsed.model);
-  if (!providerCredentials(env, parsed.provider)) return fallback;
+  const info = (await listedInfo(parsed.provider, parsed.model, env, options)) ?? defaultModelInfo(parsed.provider, parsed.model);
+  const setting = options.windows?.[info.id];
+  const catalog = (options.details ?? modelDetails()).lookup(parsed.provider, parsed.model)?.contextWindow;
+  if (setting !== undefined && setting > 0) {
+    info.contextWindow = setting;
+    info.contextWindowSource = 'setting';
+    info.known.contextWindow = true;
+  } else if (catalog !== undefined && catalog > 0) {
+    info.contextWindow = catalog;
+    info.contextWindowSource = 'catalog';
+    info.known.contextWindow = true;
+  }
+  return info;
+}
+
+async function listedInfo(
+  provider: AiProvider,
+  model: string,
+  env: RunnerEnv,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number },
+): Promise<ModelInfo | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const listed = listProviderModels(env, parsed.provider, options.fetchImpl);
     const timeout = new Promise<ModelInfo[]>((resolve) => {
       timer = setTimeout(() => resolve([]), options.timeoutMs ?? 5_000);
       timer.unref?.();
     });
-    const infos = await Promise.race([listed, timeout]);
-    return infos.find((info) => info.model === parsed.model) ?? fallback;
+    const infos = await Promise.race([sessionListing(env, provider, options.fetchImpl), timeout]);
+    const found = infos.find((info) => info.model === model);
+    // A copy, since the held listing serves later attempts unchanged.
+    return found ? { ...found, pricing: { ...found.pricing }, efforts: [...found.efforts], known: { ...found.known } } : undefined;
   } catch {
-    return fallback;
+    return undefined;
   } finally {
     if (timer) clearTimeout(timer);
   }

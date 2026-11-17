@@ -6,7 +6,7 @@ and model assigned to each AI task. With worktree isolation enabled, code tasks
 run in separate worktrees; ops and script tasks run at the workspace root.
 Ordewell records task outcomes and combines code changes for review and merging.
 
-This README describes 0.13.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.13.4. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Installation
@@ -49,7 +49,7 @@ Windows' shell (required), and the terminal UI's mouse and paste need Node.js
 
 Run `ordewell` in your project to open the terminal UI: the conversation on the
 left, the live plan on the right (or beneath it, below 70 columns). The first run lets you pick a planner and runners
-with `/planner` (Harness › Model › Effort, each step saved as you go) and `/runners`, and no API key is needed if you plan with a coding
+with `/planner` (also typed `/model`; Harness › Model › Effort, each step saved as you go) and `/runners`, and no API key is needed if you plan with a coding
 agent you already use.
 By default, submitted build plans wait for your approval. Autorun can start them
 automatically; research tasks and consented script tasks can start during planning.
@@ -84,6 +84,15 @@ ordewell merge review               # read the diff
 ordewell merge                      # bring it onto your branch
 ordewell decisions                  # what the planner recorded as standing (`all` adds the superseded)
 ```
+
+`ordewell run` follows the run until its end stands: with the supervisor at
+Act, that is after the closing turn the supervisor is woken to, and it keeps
+following if that turn continues the run. It prints the run's supervisor level,
+each action the supervisor takes, and, at a task waiting on a person, the
+command that answers it and who can. Below Act nobody answers such a wait
+unattended, so the run waits until someone does. It exits 0 when every task
+completed or was skipped, 2 when a task failed or is blocked, and 1 when the
+command itself failed; a stopped run exits 0.
 
 Run `ordewell --help` for the full list, or `ordewell setup` to write a
 starter `.env` file.

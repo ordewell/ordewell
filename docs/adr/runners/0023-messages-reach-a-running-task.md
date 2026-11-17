@@ -134,7 +134,10 @@ and never touches the run's tasks.**
   queue, so there is nothing to send now; force sending one already forced
   changes nothing. The surfaces: `ctrl-s` in the TUI task view (the composer
   text, or the oldest queued message when the composer is empty; either sends the
-  whole queue), *Send all now* and `Ctrl+Enter` in the task log, which draw the
+  whole queue), which its footer names while the runner's turn is in flight, in
+  the planner chat's words and place, and never at a checkpoint or in a
+  delegated task's log, whose subplanner has no turn to interrupt (ADR-0055),
+  *Send all now* and `Ctrl+Enter` in the task log, which draw the
   planner chat's queue control, and the daemon's `execute-command` route
   carrying `message_task` with `force` or `force_send_queued`. The planner chat's force send is
   F5.
@@ -409,3 +412,4 @@ interrupt (D4 covers it either way).
 - 2026-11-10 — F1, F2, F5: a force send and a turn's end glue everything the person queued into one message, instead of sending held messages one at a time.
 - 2026-11-10 — F1: the task log draws the planner chat's queue control ("Send all now") instead of a bar of its own, and the TUI's ctrl-s with an empty composer sends the oldest queued message and so the whole queue, whatever row is picked.
 - 2026-11-14 — D6: only a message the person sent holds completion evidence; one of Ordewell's own still queued does not.
+- 2026-11-17 — F1: the TUI task view's footer names ctrl-s whenever the runner's turn is in flight, empty composer included, as the planner chat does; not at a checkpoint or in a delegated task's log.

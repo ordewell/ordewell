@@ -16,6 +16,7 @@ import { ApprovalPolicy, effectiveApprovalMode, type ApprovalModeSetting } from 
 import { WebReadPolicy } from '../webReadPolicy';
 import type { PlacedLaunch, RunnerLaunch } from '../executionLease';
 import { codexAnswer, modeIds, fakeSpawn, fixture, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { expectCompactionChain } from './compactionChainKit';
 
 /**
  * Codex's task mode (ADR-0018, #54) over `codex app-server`. The traffic is
@@ -194,6 +195,92 @@ type Change = { path: string; kind: { type: string; move_path?: string | null };
 const fileChangeStarted = (id: string, changes: Change[]) => line({ method: 'item/started', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id, type: 'fileChange', status: 'inProgress', changes } } });
 const fileChangeDone = (id: string, status: string, changes: Change[]) => line({ method: 'item/completed', params: { threadId: 'thr-task-1', turnId: 'turn-a', item: { id, type: 'fileChange', status, changes } } });
 const threadIdle = (threadId = 'thr-task-1') => line({ method: 'thread/status/changed', params: { threadId, status: { type: 'idle' } } });
+
+describe('CodexAdapter task compaction point (taskCompactAt)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  async function threadStartWith(at: string, start: AgentStartOptions = taskStart('agent', { model: 'gpt-5.5' })) {
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', at);
+    const { spawned, processDeps } = deps(start.kind === 'planner' ? [fixture('codex', 'handshake'), fixture('codex', 'new-conversation')] : handshake());
+    const adapter = new CodexAdapter(processDeps);
+    await adapter.start(start);
+    const [thread] = sentNamed(spawned.processes[0].written, 'thread/start');
+    adapter.dispose();
+    return { params: thread.params, adapter };
+  }
+
+  it.each(['auto', 'off'])('sets no compaction point on a task\'s thread under %s: Codex already compacts near the model\'s window', async (at) => {
+    const { params, adapter } = await threadStartWith(at);
+    expect(params).toEqual({ cwd: '/repo', model: 'gpt-5.5', sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' });
+    expect(adapter.compactWindowTokens).toBeUndefined();
+  });
+
+  it('starts a task\'s compaction at the number of tokens set, counted over its whole context, and says so to the running-long clock', async () => {
+    const { params, adapter } = await threadStartWith('150000');
+    expect(params?.config).toEqual({ model_auto_compact_token_limit: 150_000, model_auto_compact_token_limit_scope: 'total' });
+    expect(adapter.compactWindowTokens).toBe(150_000);
+  });
+
+  it('keeps the point beside a read-only task\'s own thread config', async () => {
+    const { params } = await threadStartWith('150000', taskStart('readOnly', { flags: { readOnly: true, permissionMode: 'read-only', modeSettings: { approvalPolicy: 'never' } } }));
+    expect(params?.config).toMatchObject({ model_auto_compact_token_limit: 150_000, model_auto_compact_token_limit_scope: 'total', web_search: 'disabled' });
+  });
+
+  it('leaves a planner\'s thread as it is whatever the setting says', async () => {
+    const { params: set } = await threadStartWith('150000', { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' } as AgentStartOptions);
+    const { params: unset } = await threadStartWith('auto', { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' } as AgentStartOptions);
+    expect(set).toEqual(unset);
+    expect(JSON.stringify(set)).not.toContain('compact');
+  });
+
+  it('turns Codex\'s own automatic compaction into the brief\'s reminder and a running-long flag counted under the point set', async () => {
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', '150000');
+    const { processDeps, spawned } = deps(handshake());
+    const adapter = new CodexAdapter(processDeps);
+    await adapter.start(taskStart('agent', { model: 'gpt-5.5' }));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go on', (e) => events.push(e));
+    spawned.processes[0].emitStdout(turnStarted('auto-turn') + line({ method: 'item/completed', params: { threadId: 'thr-task-1', item: { id: 'auto-item', type: 'contextCompaction' } } }) + turnCompleted('auto-turn'));
+    await turn;
+    expect(adapter.compactWindowTokens).toBe(150_000);
+    await expectCompactionChain(events, adapter.compactWindowTokens, adapter.compactStartTokens, { at: 3, window: 182_000 });
+    adapter.dispose();
+  });
+
+  it('holds a number too small to leave room for a turn at the floor, with a line, and passes the point it holds', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { params, adapter } = await threadStartWith('5000');
+      expect(params?.config).toEqual({ model_auto_compact_token_limit: 16_000, model_auto_compact_token_limit_scope: 'total' });
+      expect(adapter.compactStartTokens).toBe(16_000);
+      expect(warn.mock.calls.map(([l]) => String(l))).toContainEqual(expect.stringMatching(/Codex: taskCompactAt 5000 is below the 16000 tokens it can compact at; using 16000\./));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('reads the start in force as 90% of the window Codex reports, where the number set is above it, and says so once', async () => {
+    vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', '190000');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { processDeps, spawned } = deps(handshake());
+      const adapter = new CodexAdapter(processDeps);
+      await adapter.start(taskStart('agent', { model: 'gpt-5.5' }));
+      expect(adapter.compactStartTokens).toBe(190_000);
+      const events: AgentEvent[] = [];
+      const turn = adapter.send('go on', (e) => events.push(e));
+      const usage = line({ method: 'thread/tokenUsage/updated', params: { threadId: 'thr-task-1', tokenUsage: { last: { inputTokens: 1000, outputTokens: 10, totalTokens: 1010 }, total: { inputTokens: 1000, outputTokens: 10, totalTokens: 1010 }, modelContextWindow: 200_000 } } });
+      spawned.processes[0].emitStdout(turnStarted('t') + usage + usage + turnCompleted('t'));
+      await turn;
+      expect(adapter.compactStartTokens).toBe(180_000);
+      expect(adapter.compactWindowTokens).toBe(180_000);
+      expect(warn.mock.calls.map(([l]) => String(l)).filter((l) => l.includes('taskCompactAt'))).toEqual([expect.stringMatching(/Codex: taskCompactAt 190000 is above the 180000 tokens .*200000.*; it compacts at 180000\./)]);
+      adapter.dispose();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
 
 describe('CodexAdapter task sandbox', () => {
   const BWRAP_FAILURE = 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted';

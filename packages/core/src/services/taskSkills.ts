@@ -165,9 +165,10 @@ export function plannedSkillLookup(
 }
 
 /**
- * A submitted plan's skills, subtasks included, checked leniently: a name
- * missing now may be created by a task the attaching one depends on, so it is
- * only a warning; a planner skill is never right on a task, so it is refused.
+ * A submitted plan's skills, subtasks included: a name missing now is a
+ * warning, since a task the attaching one depends on may create it (whether
+ * one does is {@link unprovidedSkills}' rule); a planner skill is never right
+ * on a task, so it is refused.
  * A name parsing dropped is warned about as it was submitted.
  */
 export function checkPlanSkills(tasks: readonly Task[], lookup: SkillLookup): Promise<SkillCheck> {
@@ -226,6 +227,105 @@ export function checkOpSkills(ops: readonly TaskOp[], lookup: SkillLookup): Prom
   return check(entries, lookup);
 }
 
+/**
+ * A name no installed task skill answers to stands on a task only when a task
+ * it depends on, directly or not, creates it: one whose prompt names
+ * `.ordewell/skills/<name>` (ADR-0024). Otherwise nothing will have written
+ * it by the time the task starts, and the task would fail there with its
+ * dependents behind it. A subtask is also held behind what its parents wait on.
+ */
+function unprovided(tasks: readonly Task[], lookup: Pick<SkillLookup, 'findSkill'>): { task: Task; name: string }[] {
+  const byId = new Map<string, Task>();
+  const parentOf = new Map<string, Task>();
+  const visit = (list: readonly Task[], parent?: Task) => {
+    for (const task of list) {
+      byId.set(task.id, task);
+      if (parent) parentOf.set(task.id, parent);
+      visit(task.subtasks ?? [], task);
+    }
+  };
+  visit(tasks);
+  const upstream = (task: Task): Task[] => {
+    const seen = new Set<string>();
+    const queue = [task];
+    for (let p = parentOf.get(task.id); p; p = parentOf.get(p.id)) queue.push(p);
+    const found: Task[] = [];
+    for (let at = queue.shift(); at; at = queue.shift()) {
+      for (const id of at.dependencies ?? []) {
+        const dep = byId.get(id);
+        if (!dep || seen.has(id)) continue;
+        seen.add(id);
+        found.push(dep);
+        queue.push(dep);
+        for (let p = parentOf.get(dep.id); p; p = parentOf.get(p.id)) queue.push(p);
+      }
+    }
+    return found;
+  };
+  const out: { task: Task; name: string }[] = [];
+  for (const task of byId.values()) {
+    const missing = (task.skills ?? []).filter((name) => !lookup.findSkill(name));
+    if (missing.length === 0) continue;
+    const prompts = upstream(task).map((dep) => dep.prompt ?? '');
+    for (const name of missing) {
+      // The name must end where the path's segment does, so `house-style-v2` does not create `house-style`.
+      const creates = new RegExp(`\\.ordewell[\\\\/]skills[\\\\/]${name}(?![a-z0-9_-])`, 'i');
+      if (!prompts.some((prompt) => creates.test(prompt))) out.push({ task, name });
+    }
+  }
+  return out;
+}
+
+function unprovidedMessage(task: Pick<Task, 'title'>, name: string): string {
+  return `Task "${task.title}": skill "${name}" is not an installed task skill, and no task it depends on creates it.`
+    + ` Remove "${name}" from its skills, or add a task whose prompt says to write .ordewell/skills/${name}/SKILL.md and make Task "${task.title}" depend on it.`;
+}
+
+/**
+ * The skills a change leaves on a task that nothing installed or upstream
+ * provides, less those the plan already held before it: a saved plan from
+ * before this rule still loads and can still be edited, and an edit answers
+ * only for what it brought. A task a merge or split built holds what stood on
+ * a task it was built from, as `builtFrom` maps it.
+ */
+export function unprovidedSkills(
+  before: readonly Task[],
+  after: readonly Task[],
+  lookup: Pick<SkillLookup, 'findSkill'>,
+  builtFrom: ReadonlyMap<string, readonly string[]> = new Map(),
+): { taskId: string; message: string }[] {
+  const key = (id: string, name: string) => `${id}\u0000${name}`;
+  const standing = new Set(unprovided(before, lookup).map(({ task, name }) => key(task.id, name)));
+  return unprovided(after, lookup)
+    .filter(({ task, name }) => !(builtFrom.get(task.id) ?? [task.id]).some((id) => standing.has(key(id, name))))
+    .map(({ task, name }) => ({ taskId: task.id, message: unprovidedMessage(task, name) }));
+}
+
+/**
+ * A one-shot plan with the names {@link unprovidedSkills} would refuse taken
+ * off its tasks, subtasks included, each said in a warning. A one-shot planner
+ * has no conversation to send a refusal back through, and one invented name
+ * must not cost the whole plan; the name is not accepted, only dropped.
+ */
+export function withoutUnprovidedSkills(tasks: readonly Task[], lookup: Pick<SkillLookup, 'findSkill'>): { tasks: Task[]; warnings: string[] } {
+  const found = unprovided(tasks, lookup);
+  if (found.length === 0) return { tasks: [...tasks], warnings: [] };
+  const drop = new Map<Task, Set<string>>();
+  for (const { task, name } of found) drop.set(task, new Set([...(drop.get(task) ?? []), name]));
+  const strip = (list: readonly Task[]): Task[] => list.map((task) => {
+    const names = drop.get(task);
+    return {
+      ...task,
+      ...(names ? { skills: (task.skills ?? []).filter((name) => !names.has(name)) } : {}),
+      ...(task.subtasks ? { subtasks: strip(task.subtasks) } : {}),
+    };
+  });
+  return {
+    tasks: strip(tasks),
+    warnings: found.map(({ task, name }) => `Task "${task.title}": skill "${name}" is not an installed task skill, and no task it depends on creates it, so it was removed from the task's skills.`),
+  };
+}
+
 /** Why a task cannot start with the skills it names; the runner is never spawned without them. */
 export class TaskSkillsError extends Error {
   constructor(message: string) {
@@ -261,11 +361,16 @@ export function resolveTaskSkills(
   const problems: string[] = [];
   if (missing.length > 0) {
     const toCommit = uncommittedFolder ? missing.flatMap((name) => uncommittedFolder(name) ?? []) : [];
+    // The way out comes first: a supervisor's wake cuts a failure's detail short, and the paths searched are the long part.
+    const fix = missing.length === 1
+      ? `skill "${missing[0]}" not found: create .ordewell/skills/${missing[0]}/SKILL.md, or remove "${missing[0]}" from the task's skills with edit_plan, then retry the task`
+      : `skills ${quotedList(missing)} not found: create each at .ordewell/skills/<name>/SKILL.md, or remove them from the task's skills with edit_plan, then retry the task`;
     problems.push(
-      `${missing.length === 1 ? 'skill' : 'skills'} ${quotedList(missing)} not found in ${lookup.searchedDirs().join(' or ')}`
+      `${fix} (searched ${lookup.searchedDirs().join(' or ')}`
       + (toCommit.length > 0
-        ? ` (a workspace skill reaches a task's worktree only once committed: commit ${toCommit.join(', ')} so task worktrees receive ${toCommit.length === 1 ? 'it' : 'them'})`
-        : ''),
+        ? `; a workspace skill reaches a task's worktree only once committed: commit ${toCommit.join(', ')} so task worktrees receive ${toCommit.length === 1 ? 'it' : 'them'}`
+        : '')
+      + ')',
     );
   }
   for (const skill of planner) problems.push(`"${skill.name}" is a planner skill (applies-to: planner, ${skill.path}), not a task skill`);

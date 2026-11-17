@@ -1,5 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
+import { compactionStartOf } from '../compactionStart';
 import type { AgentProcessDeps, TaskStartOptions } from '../harness/AgentAdapter';
 import { fakeSpawn, flagJson } from './harnessTestKit';
 
@@ -44,20 +48,153 @@ async function started(start: Parameters<ClaudeCodeAdapter['start']>[0]) {
 const REPOSITORY_TOO = ['--strict-mcp-config', '--disable-slash-commands'];
 
 describe('a Claude task runner\'s compaction window', () => {
-  it('is set for a task, so a long attempt compacts instead of growing to the model window', async () => {
-    const { env } = await started(taskStart());
-    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('150000');
+  it.each([
+    ['a Haiku', 'claude-haiku-5-5'],
+    ['a Haiku alias', 'haiku'],
+  ])('is set for %s task by default so that it starts compacting just under its 100000-token price step', async (_label, model) => {
+    const { env } = await started(taskStart({ model }));
+    const startsAt = compactionStartOf(Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW));
+    expect(startsAt).toBeGreaterThanOrEqual(90_000);
+    expect(startsAt).toBeLessThanOrEqual(95_000);
+  });
+
+  it.each([
+    ['an Opus', 'opus'],
+    ['a Sonnet', 'claude-sonnet-5-5'],
+    ['an unnamed', undefined],
+  ])('is not set for %s task by default, so it compacts near its model\'s own window', async (_label, model) => {
+    // Ordewell sets none here, and passes on what the user's own shell set.
+    vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
+    const { env } = await started(taskStart(model ? { model } : {}));
+    vi.unstubAllEnvs();
+    expect(env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+  });
+
+  describe('as the user sets it', () => {
+    afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+    /** A settings file of its own holding `taskCompactAt: value`. */
+    const inFile = (value: unknown): void => {
+      const file = path.join(mkdtempSync(path.join(tmpdir(), 'compact-at-')), 'settings.json');
+      writeFileSync(file, JSON.stringify({ taskCompactAt: value }));
+      vi.stubEnv('ORDEWELL_SETTINGS_PATH', file);
+    };
+
+    it('gives a number N in the settings file the window N plus the buffer, whatever the model', async () => {
+      inFile(250_000);
+      const { env } = await started(taskStart({ model: 'haiku' }));
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('282000');
+    });
+
+    it('starts compacting where the user said, by the CLI\'s own rule', async () => {
+      inFile(200_000);
+      const { env } = await started(taskStart({ model: 'opus' }));
+      expect(compactionStartOf(Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW))).toBe(200_000);
+    });
+
+    it.each([
+      [1, 68_000, 100_000],
+      [67_999, 68_000, 100_000],
+      [968_001, 968_000, 1_000_000],
+      [5_000_000, 968_000, 1_000_000],
+    ])('clamps %i to a start of %i, the CLI\'s window %i, saying so once', async (value, start, window) => {
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      inFile(value);
+      const { env } = await started(taskStart({ model: 'opus' }));
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(String(window));
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0]?.[0])).toMatch(new RegExp(`Claude Code.*taskCompactAt.*${value}.*${start}`));
+    });
+
+    it.each([[68_000, '100000'], [968_000, '1000000']])('takes %i, a bound, without a word', async (value, window) => {
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      inFile(value);
+      const { env } = await started(taskStart({ model: 'opus' }));
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(window);
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('says nothing when the number is within the CLI\'s bounds', async () => {
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      inFile(68_001);
+      const { env } = await started(taskStart({ model: 'opus' }));
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('100001');
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it.each([0, -5, 150_000.5, 'big', '12k'])('refuses %s, saying what is accepted', async (value) => {
+      inFile(value);
+      await expect(started(taskStart({ model: 'opus' }))).rejects.toThrow(/taskCompactAt.*auto, off or a whole number of tokens greater than zero/);
+    });
+
+    it('sets nothing when off, not even for Haiku, and passes on what the user\'s own shell set', async () => {
+      inFile('off');
+      vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
+      const { spawned, processDeps } = deps();
+      const adapter = new ClaudeCodeAdapter(processDeps);
+      await adapter.start(taskStart({ model: 'haiku' }));
+      adapter.dispose();
+      expect(spawned.lastEnv()).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+      expect(adapter.compactWindowTokens).toBeUndefined();
+    });
+
+    it('chooses per model when auto', async () => {
+      inFile('auto');
+      const { env } = await started(taskStart({ model: 'haiku' }));
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('125000');
+    });
+
+    it.each([
+      ['300000', 'opus', '332000'],
+      [' Auto ', 'haiku', '125000'],
+    ])('reads ORDEWELL_TASK_COMPACT_AT=%s over the settings file', async (value, model, window) => {
+      inFile(250_000);
+      vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', value);
+      const { env } = await started(taskStart({ model }));
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe(window);
+    });
+
+    it('sets none for an Opus task when ORDEWELL_TASK_COMPACT_AT is auto, over a number in the file', async () => {
+      inFile(250_000);
+      vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', 'auto');
+      vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
+      const { env } = await started(taskStart({ model: 'opus' }));
+      expect(env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+    });
+
+    it('reads off from ORDEWELL_TASK_COMPACT_AT', async () => {
+      vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', 'off');
+      vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
+      const { env } = await started(taskStart({ model: 'opus' }));
+      expect(env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+    });
+
+    it('refuses a non-numeric ORDEWELL_TASK_COMPACT_AT, naming it', async () => {
+      vi.stubEnv('ORDEWELL_TASK_COMPACT_AT', 'soon');
+      await expect(started(taskStart({ model: 'opus' }))).rejects.toThrow(/ORDEWELL_TASK_COMPACT_AT.*greater than zero/);
+    });
+
+    it('leaves a planner without one, whatever the setting', async () => {
+      inFile(300_000);
+      vi.stubEnv('CLAUDE_CODE_AUTO_COMPACT_WINDOW', undefined);
+      const { env } = await started({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
+      expect(env).not.toHaveProperty('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+    });
+  });
+
+  it('starts compacting a fixed buffer below the window, as the CLI\'s recorded compactions do', () => {
+    expect([compactionStartOf(150_000), compactionStartOf(400_000)]).toEqual([118_000, 368_000]);
   });
 
   it('is set for a read-only task too', async () => {
-    const { env } = await started(taskStart({ flags: readOnlyFlags }));
-    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('150000');
+    const { env } = await started(taskStart({ flags: readOnlyFlags, model: 'haiku' }));
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('125000');
   });
 
   it('is the window the adapter states it compacts at, which a planner has none of', async () => {
     const { spawned, processDeps } = deps();
     const task = new ClaudeCodeAdapter(processDeps);
-    await task.start(taskStart());
+    await task.start(taskStart({ model: 'haiku' }));
     const planner = new ClaudeCodeAdapter(deps().processDeps);
     await planner.start({ kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN' });
     const windows = [task.compactWindowTokens, planner.compactWindowTokens];

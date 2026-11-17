@@ -681,11 +681,13 @@ describe('submit_plan with task skills', () => {
       turn: async (mcp) => {
         submitted = await call(mcp!, 'submit_plan', {
           tasks: [
-            planTask('a', 1, 'claude-code', 'claude-sonnet-4', {
+            planTask('w', 1, 'claude-code', 'claude-sonnet-4', { prompt: 'Write .ordewell/skills/deploy-checklist/SKILL.md' }),
+            planTask('a', 2, 'claude-code', 'claude-sonnet-4', {
               skills: ['tdd'],
+              dependencies: ['w'],
               subtasks: [planTask('a1', 1, 'claude-code', 'claude-sonnet-4', { skills: ['deploy-checklist'] })],
             }),
-            planTask('b', 2, 'claude-code', 'claude-sonnet-4'),
+            planTask('b', 3, 'claude-code', 'claude-sonnet-4'),
           ],
         });
         return 'Submitted.';
@@ -698,9 +700,34 @@ describe('submit_plan with task skills', () => {
     expect((submitted?.body as { warnings: string[] }).warnings).toEqual([
       'Task "Task a1": skill "deploy-checklist" not found; it must exist in the task\'s worktree (.ordewell/skills/deploy-checklist/SKILL.md) or in ~/.ordewell/skills/ when the task starts, or the task fails.',
     ]);
-    expect(session.planTasks[0].skills).toEqual(['tdd']);
-    expect(session.planTasks[0].subtasks[0].skills).toEqual(['deploy-checklist']);
-    expect(session.planTasks[1].skills).toBeUndefined();
+    expect(session.planTasks[1].skills).toEqual(['tdd']);
+    expect(session.planTasks[1].subtasks[0].skills).toEqual(['deploy-checklist']);
+    expect(session.planTasks[2].skills).toBeUndefined();
+  });
+
+  it('refuses a skill nothing installed or depended on provides, saying how to fix it, and commits nothing', async () => {
+    let submitted: { isError: boolean; body: unknown } | undefined;
+    const { session } = plannerSession(fakeClaude({
+      turn: async (mcp) => {
+        submitted = await call(mcp!, 'submit_plan', { tasks: [planTask('a', 1, 'claude-code', 'claude-sonnet-4', { skills: ['tdd', 'python'] })] });
+        return 'Submitted.';
+      },
+    }), {}, { skills: SKILLS });
+
+    await session.startPlanning('add a cache', ['claude-code']);
+
+    expect(submitted).toEqual({
+      isError: true,
+      body: {
+        ok: false,
+        errors: [{
+          taskId: 'a',
+          field: 'skills',
+          message: 'Task "Task a": skill "python" is not an installed task skill, and no task it depends on creates it. Remove "python" from its skills, or add a task whose prompt says to write .ordewell/skills/python/SKILL.md and make Task "Task a" depend on it.',
+        }],
+      },
+    });
+    expect(session.planTasks).toEqual([]);
   });
 
   it('refuses a planner skill on a task, and commits nothing', async () => {
@@ -731,7 +758,8 @@ describe('submit_plan with task skills', () => {
 
 describe('submit_plan with names it cannot attach', () => {
   const withSubtaskSkills = (skills: unknown[]) => [
-    planTask('a', 1, 'claude-code', 'claude-sonnet-4', { subtasks: [planTask('a1', 1, 'claude-code', 'claude-sonnet-4', { skills })] }),
+    planTask('w', 1, 'claude-code', 'claude-sonnet-4', { prompt: 'Write .ordewell/skills/later/SKILL.md' }),
+    planTask('a', 2, 'claude-code', 'claude-sonnet-4', { dependencies: ['w'], subtasks: [planTask('a1', 1, 'claude-code', 'claude-sonnet-4', { skills })] }),
   ];
 
   it('warns about a nested name no skill could have, as written, in its answer, the transcript and a notice', async () => {
@@ -751,7 +779,7 @@ describe('submit_plan with names it cannot attach', () => {
       expect.stringMatching(/^Task "Task a1": skill "later" not found/),
     ];
     expect((submitted?.body as { warnings: string[] }).warnings).toEqual(warnings);
-    expect(session.planTasks[0].subtasks[0].skills).toEqual(['tdd', 'later']);
+    expect(session.planTasks[1].subtasks[0].skills).toEqual(['tdd', 'later']);
     const note = session.planState?.conversationHistory?.find((m) => m.kind === 'system' && m.content.startsWith('Skill check:'));
     expect(note?.content).toContain('\n- Task "Task a1": "Bad Name!" is not a valid skill name');
     expect(note?.content).toContain('\n- Task "Task a1": skill "later" not found');
@@ -963,11 +991,15 @@ async function runningPlan(second: Parameters<typeof planThen>[0], opts: { sessi
 }
 
 describe('edit_plan with task skills', () => {
-  it('attaches a skill not created yet with a warning, and refuses a planner skill', async () => {
+  it('attaches a skill a task it depends on creates with a warning, and refuses a planner skill or a skill nothing provides', async () => {
     const answers: { isError: boolean; body: unknown }[] = [];
     const planner = await planThen(async (mcp) => {
       answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { skills: ['grilling'] } }] }));
-      answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { skills: ['tdd', 'smoke-test'] } }] }));
+      answers.push(await call(mcp!, 'edit_plan', { ops: [{ op: 'update', taskId: '#2', changes: { skills: ['python'] } }] }));
+      answers.push(await call(mcp!, 'edit_plan', { ops: [
+        { op: 'update', taskId: '#1', changes: { prompt: 'do a, then write .ordewell/skills/smoke-test/SKILL.md' } },
+        { op: 'update', taskId: '#2', changes: { skills: ['tdd', 'smoke-test'] } },
+      ] }));
       return 'Done.';
     }, { skills: SKILLS });
 
@@ -980,9 +1012,16 @@ describe('edit_plan with task skills', () => {
         errors: [{ op: 1, kind: 'update', message: '"grilling" is a planner skill (applies-to: planner, /home/u/.ordewell/skills/grilling/SKILL.md). Only skills with applies-to: task can be attached to a task.' }],
       },
     });
-    expect(answers[1].isError).toBe(false);
-    expect((answers[1].body as { warnings: string[] }).warnings).toEqual([
-      expect.stringContaining('op 1 (update): skill "smoke-test" not found'),
+    expect(answers[1]).toEqual({
+      isError: true,
+      body: {
+        ok: false,
+        errors: [{ message: 'Task "Task b": skill "python" is not an installed task skill, and no task it depends on creates it. Remove "python" from its skills, or add a task whose prompt says to write .ordewell/skills/python/SKILL.md and make Task "Task b" depend on it.' }],
+      },
+    });
+    expect(answers[2].isError).toBe(false);
+    expect((answers[2].body as { warnings: string[] }).warnings).toEqual([
+      expect.stringContaining('op 2 (update): skill "smoke-test" not found'),
     ]);
     expect(planner.session.planTasks[1].skills).toEqual(['tdd', 'smoke-test']);
   });
@@ -1003,7 +1042,10 @@ describe('edit_plan adding a task with subtasks', () => {
       }));
       between = planner.session.planTasks.map((t) => t.title);
       answers.push(await call(mcp!, 'edit_plan', {
-        ops: [{ op: 'add', task: { title: 'Docs', subtasks: [sub('Child', ['tdd', 'Bad Name!'], [sub('Deep', ['later'])])] } }],
+        ops: [
+          { op: 'update', taskId: '#1', changes: { prompt: 'do a, then write .ordewell/skills/later/SKILL.md' } },
+          { op: 'add', task: { title: 'Docs', dependencies: ['#1'], subtasks: [sub('Child', ['tdd', 'Bad Name!'], [sub('Deep', ['later'])])] } },
+        ],
       }));
       return 'Done.';
     }, { skills: SKILLS });
@@ -1020,8 +1062,8 @@ describe('edit_plan adding a task with subtasks', () => {
     expect(between).toEqual(['Task a', 'Task b']);
     expect(answers[1].isError).toBe(false);
     expect((answers[1].body as { warnings: string[] }).warnings).toEqual([
-      expect.stringMatching(/^op 1 \(add\): subtask "Child": "Bad Name!" is not a valid skill name/),
-      expect.stringMatching(/^op 1 \(add\): subtask "Child" > "Deep": skill "later" not found/),
+      expect.stringMatching(/^op 2 \(add\): subtask "Child": "Bad Name!" is not a valid skill name/),
+      expect.stringMatching(/^op 2 \(add\): subtask "Child" > "Deep": skill "later" not found/),
     ]);
     expect(planner.session.planTasks.map((t) => t.title)).toEqual(['Task a', 'Task b', 'Docs']);
     const docs = planner.session.planTasks[2];

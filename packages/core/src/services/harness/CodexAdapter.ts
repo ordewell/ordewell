@@ -23,6 +23,7 @@ import { codexSessionBilling, codexUsageLimitSignal, mergeCodexRateLimits, type 
 import { SubagentTracker } from './subagentTracker';
 import { UsageRecordBuilder } from './usageBuilder';
 import { TurnOutcome, type TurnError } from './turnOutcome';
+import { taskCompactAtOf, type TaskCompactAt } from '../taskCompactWindow';
 
 const HANDSHAKE_TIMEOUT_MS = 30000;
 
@@ -346,6 +347,29 @@ const NO_SUBAGENTS = { multi_agent: false, multi_agent_v2: false };
  */
 const NO_IMAGE_VIEWER = { view_image: false };
 
+/**
+ * A task's compaction point as Codex's thread config spells it, or nothing:
+ * `auto` and `off` leave Codex's own, which starts at 90% of the model's
+ * window, and a number N starts it once the whole context (`total`, not only
+ * what follows a carried prefix) reaches N tokens (codex-cli 0.167.0). Codex
+ * itself holds a limit to 90% of the window, so a larger one compacts there.
+ */
+function codexCompactLimit(at: TaskCompactAt, log: (line: string) => void = (line) => console.warn(line)): { model_auto_compact_token_limit: number; model_auto_compact_token_limit_scope: 'total' } | undefined {
+  if (typeof at !== 'number') return undefined;
+  if (at < CODEX_COMPACT_FLOOR) log(`Codex: taskCompactAt ${at} is below the ${CODEX_COMPACT_FLOOR} tokens it can compact at; using ${CODEX_COMPACT_FLOOR}.`);
+  return { model_auto_compact_token_limit: Math.max(at, CODEX_COMPACT_FLOOR), model_auto_compact_token_limit_scope: 'total' };
+}
+
+/**
+ * The least start a task's Codex is given: Codex takes any limit, and one
+ * under a turn's own prompt and reply would compact on every turn. The room
+ * OpenCode keeps for a summary, for the same reason.
+ */
+const CODEX_COMPACT_FLOOR = 16_000;
+
+/** Codex holds its compaction limit to this share of the window it reports, so a larger one starts there (codex-cli 0.167.0). */
+const CODEX_LIMIT_SHARE = 0.9;
+
 /** Thread config that keeps these of the user's MCP servers from starting; Codex merges it over their own entries. */
 function withheld(servers: readonly string[]): Record<string, { enabled: false }> {
   return Object.fromEntries(servers.map((name) => [name, { enabled: false }]));
@@ -378,6 +402,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   private threadModel: string | null = null;
   private readonly rpc = new CodexRpc((payload) => this.writeLine(payload));
   private startOpts: AgentStartOptions | null = null;
+  private compactLimit: ReturnType<typeof codexCompactLimit>;
   /** The planner thread's runs of reply text this turn, each under its `agentMessage` item's id. */
   private replyRuns = new ReplyRuns();
   /** The turn in flight. `turn/interrupt` and `turn/steer` cannot be sent before it has an id. */
@@ -440,8 +465,34 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     });
   }
 
+  /** Where a task's context compacts, when Ordewell set it (ADR-0057 R4): a planner's conversation is the user's. */
+  compactWindowTokens?: number;
+
+  /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
+  get compactStartTokens(): number | undefined {
+    return this.compactWindowTokens;
+  }
+
+  /**
+   * The start in force once Codex names its window: a number above its share
+   * of it compacts at that share, so the meter and running long read that,
+   * said once (ADR-0018 C4).
+   */
+  private holdToWindow(window: number): void {
+    const set = this.compactLimit?.model_auto_compact_token_limit;
+    if (set === undefined || this.compactWindowTokens === undefined) return;
+    const held = Math.min(set, Math.floor(window * CODEX_LIMIT_SHARE));
+    if (held === this.compactWindowTokens) return;
+    if (held < set && this.compactWindowTokens === set) {
+      console.warn(`Codex: taskCompactAt ${set} is above the ${held} tokens Codex compacts at in its ${window}-token window; it compacts at ${held}.`);
+    }
+    this.compactWindowTokens = held;
+  }
+
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
     this.startOpts = opts;
+    this.compactLimit = opts.kind === 'task' ? codexCompactLimit(taskCompactAtOf()) : undefined;
+    this.compactWindowTokens = this.compactLimit?.model_auto_compact_token_limit;
     return { command: 'codex', args: ['app-server', ...NO_MEMORIES], ...(opts.mcp ? { env: CODEX_ORDEWELL.env(opts.mcp) } : {}) };
   }
 
@@ -640,6 +691,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const config = {
       ...(Object.keys(features).length > 0 ? { features } : {}),
       ...(opts?.mcp ? { mcp_servers: CODEX_ORDEWELL.threadServers(opts.mcp) } : {}),
+      ...this.compactLimit,
     };
     const threadConfig = Object.keys(config).length ? { config } : {};
     const noWindowsSandbox = this.windowsSandbox !== null && this.windowsSandbox !== 'ready';
@@ -1090,6 +1142,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     const inContext = last.totalTokens !== undefined && last.totalTokens > 0
       ? last.totalTokens
       : (last.inputTokens !== undefined ? last.inputTokens + (last.outputTokens ?? 0) : undefined);
+    if (!subagentId && typeof window === 'number') this.holdToWindow(window);
     const record = this.usage.call({
       ...(model ? { model } : {}),
       ...(last.inputTokens !== undefined ? { inputTokens: last.inputTokens } : {}),

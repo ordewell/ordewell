@@ -50,6 +50,11 @@ export interface UsageRecord {
    */
   contextWindow?: number;
   /**
+   * Set where no source stated `contextWindow` and the runner assumed it
+   * (the built-in runner, ADR-0070): the meter and running-long name it so.
+   */
+  contextWindowAssumed?: boolean;
+  /**
    * What the main model's context holds once this call is done, counted the
    * way its runner's own UI counts it, so the meter reads what the user would
    * see there. Runners differ, and no sum of the measures above can tell.
@@ -166,6 +171,16 @@ export interface PlannerUsage {
   model?: string;
   lastPromptTokens?: number;
   contextWindow?: number;
+  /** The record that set `contextWindow` said it was assumed. */
+  contextWindowAssumed?: boolean;
+}
+
+/** `contextWindow` as the record states it, with whether it was assumed; a window of 0 is not known. */
+function takeWindow(next: PlannerUsage, record: UsageRecord): void {
+  if (record.contextWindow === undefined) return;
+  next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
+  if (next.contextWindow !== undefined && record.contextWindowAssumed) next.contextWindowAssumed = true;
+  else delete next.contextWindowAssumed;
 }
 
 export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): PlannerUsage {
@@ -180,12 +195,15 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
     const next: PlannerUsage = { ...usage };
     if (record.source !== undefined) next.source = record.source;
     if (record.model !== undefined) {
-      if (record.source !== usage.source || record.model !== usage.model) delete next.contextWindow;
+      if (record.source !== usage.source || record.model !== usage.model) {
+        delete next.contextWindow;
+        delete next.contextWindowAssumed;
+      }
       next.model = record.model;
     }
     if (record.contextTokens !== undefined) next.lastPromptTokens = record.contextTokens;
     else delete next.lastPromptTokens;
-    if (record.contextWindow !== undefined) next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
+    takeWindow(next, record);
     return next;
   }
   if (record.sessionBilling && !record.reportedCost && record.inputTokens === undefined && record.outputTokens === undefined && record.cachedInputTokens === undefined && record.contextWindow === undefined) {
@@ -209,6 +227,7 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
   if (record.source !== usage.source || record.model !== usage.model) {
     delete next.lastPromptTokens;
     delete next.contextWindow;
+    delete next.contextWindowAssumed;
   }
   if (record.source !== usage.source && !record.sessionBilling) delete next.sessionBilling;
   next.source = record.source;
@@ -217,7 +236,7 @@ export function addPlannerUsage(usage: PlannerUsage, record: UsageRecord): Plann
   if (used !== undefined) next.lastPromptTokens = used;
   // A reported window of 0 means "not known", not "no room": keep it out so the
   // meter shows no share rather than one against a guessed zero.
-  if (record.contextWindow !== undefined) next.contextWindow = record.contextWindow > 0 ? record.contextWindow : undefined;
+  takeWindow(next, record);
   return next;
 }
 
@@ -234,6 +253,8 @@ export function isMeasured(totals: UsageTotals): boolean {
 export interface ContextFill {
   usedTokens: number;
   windowTokens?: number;
+  /** No catalog or listing stated `windowTokens`: the runner assumed it (ADR-0070). */
+  windowAssumed?: true;
   /**
    * Why an API planner's automatic compaction (ADR-0002) is not running for
    * its model, as it stood when the meter was sent: the settings file turns it
@@ -241,6 +262,18 @@ export interface ContextFill {
    * a harness planner, whose agent compacts its own context.
    */
   autoCompaction?: { off: 'settings' } | { off: 'unknown_window'; model: string };
+  /**
+   * A task's compaction window in force below its model's own, and where its
+   * runner starts compacting under it (ADR-0018 W1): the meter reads against
+   * that start, since the model's window is not where its context ends.
+   */
+  compaction?: CompactionPoint;
+}
+
+/** A compaction window Ordewell set for a task's runner, and the size at which that runner starts compacting under it. */
+export interface CompactionPoint {
+  windowTokens: number;
+  startsAtTokens: number;
 }
 
 /** What the usage line draws of a ledger — live from its broadcast, or reloaded from the saved one. */
@@ -275,7 +308,8 @@ export function usageLine(usage: PlannerUsage): UsageLine {
  */
 export function plannerContextFill(usage: PlannerUsage): ContextFill | undefined {
   if (usage.lastPromptTokens === undefined) return undefined;
-  return { usedTokens: usage.lastPromptTokens, ...(usage.contextWindow !== undefined && usage.contextWindow > 0 ? { windowTokens: usage.contextWindow } : {}) };
+  if (usage.contextWindow === undefined || usage.contextWindow <= 0) return { usedTokens: usage.lastPromptTokens };
+  return { usedTokens: usage.lastPromptTokens, windowTokens: usage.contextWindow, ...(usage.contextWindowAssumed ? { windowAssumed: true as const } : {}) };
 }
 
 export interface ModelUsage {
@@ -320,6 +354,8 @@ export interface AttemptUsage extends PlannerUsage {
   runningMs?: number;
   /** What was counted of its runner session's running cost as it ended: a continue of that session counts on from it. */
   runnerSessionCost?: RunnerSessionCost;
+  /** The compaction window Ordewell set for its runner, absent where it set none. */
+  compaction?: CompactionPoint;
 }
 
 export function startAttemptUsage(attempt: number, runner: string, startedAt: string): AttemptUsage {
@@ -329,7 +365,7 @@ export function startAttemptUsage(attempt: number, runner: string, startedAt: st
 /** What its runner reports as it winds down after the attempt ended is added without moving its end. */
 export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: string): AttemptUsage {
   const folded = addPlannerUsage(usage, record);
-  return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, wallTimeMs: Math.max(0, Date.parse(usage.endedAt ?? now) - Date.parse(usage.startedAt)) };
+  return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, contextWindowAssumed: folded.contextWindowAssumed, wallTimeMs: Math.max(0, Date.parse(usage.endedAt ?? now) - Date.parse(usage.startedAt)) };
 }
 
 /** An attempt ends once; ended again once its runner wound down, it only takes the count that runner ended on. */
@@ -416,12 +452,24 @@ export function taskUsageSummary(task: Pick<UsageTask, 'attemptUsage' | 'type'>)
   const attempts = task.attemptUsage ?? [];
   const latest = attempts.at(-1);
   // A delegated task's usage is its whole subtree's (ADR-0055 D20): no one session's context, so it has no meter.
-  const contextFill = latest && task.type !== 'delegated' ? plannerContextFill(latest) : undefined;
+  const contextFill = latest && task.type !== 'delegated' ? attemptContextFill(latest) : undefined;
   return {
     totals: attempts.reduce((sum, attempt) => addUsageTotals(sum, attempt.totals), {} as UsageTotals),
     attempts: attempts.length,
     ...(contextFill ? { contextFill } : {}),
   };
+}
+
+/**
+ * An attempt's context as {@link plannerContextFill} reads it, with the
+ * compaction window it ran under where that is below its model's window: one
+ * at or past it is not where its runner compacts.
+ */
+export function attemptContextFill(usage: AttemptUsage): ContextFill | undefined {
+  const fill = plannerContextFill(usage);
+  const compaction = usage.compaction;
+  if (!fill || !compaction || (fill.windowTokens !== undefined && compaction.windowTokens >= fill.windowTokens)) return fill;
+  return { ...fill, compaction };
 }
 
 // ── The text surfaces draw ───────────────────────────────────────────────────
@@ -442,18 +490,39 @@ export function formatCost(currency: string, amount: number): string {
   return currency.toLowerCase() === 'usd' ? `$${value}` : `${value} ${currency.toUpperCase()}`;
 }
 
-/** `ctx 61k (6%)`, `ctx 61k` while the window is unknown, nothing before a call was measured; `· no auto-compact` when automatic compaction is not running. */
+/**
+ * `ctx 61k (6%)`, `ctx 61k` while the window is unknown, nothing before a call
+ * was measured; `ctx 61k (52% · compacts at 118k)` against where compaction
+ * starts under a compaction window in force; `ctx 61k (48% of an assumed 128k)`
+ * where the runner assumed the window; `· no auto-compact` when automatic
+ * compaction is not running.
+ */
 export function contextMeterText(fill: ContextFill | undefined): string | null {
   if (!fill) return null;
   const used = `ctx ${formatTokenCount(fill.usedTokens)}`;
-  const share = fill.windowTokens ? fill.usedTokens / fill.windowTokens * 100 : undefined;
-  const meter = share === undefined ? used : `${used} (${share < 1 ? '<1' : Math.round(share)}%)`;
+  const against = fill.compaction?.startsAtTokens ?? fill.windowTokens;
+  const share = against ? fill.usedTokens / against * 100 : undefined;
+  const percent = share === undefined ? undefined : `${share < 1 ? '<1' : Math.round(share)}%`;
+  const meter = percent === undefined ? used
+    : fill.compaction ? `${used} (${percent} · compacts at ${formatTokenCount(fill.compaction.startsAtTokens)})`
+      : fill.windowAssumed && fill.windowTokens ? `${used} (${percent} of an assumed ${formatTokenCount(fill.windowTokens)})`
+        : `${used} (${percent})`;
   return fill.autoCompaction ? `${meter} · no auto-compact` : meter;
 }
 
 /** Exact counts for the meter's hover, and why automatic compaction is not running, where it is not. */
 export function contextMeterTitle(fill: ContextFill): string {
   const used = fill.usedTokens.toLocaleString('en-US');
+  if (fill.compaction) {
+    const { windowTokens, startsAtTokens } = fill.compaction;
+    const model = !fill.windowTokens ? ''
+      : fill.windowAssumed ? `; the model's window is assumed to be ${fill.windowTokens.toLocaleString('en-US')} tokens`
+        : `; the model's window is ${fill.windowTokens.toLocaleString('en-US')} tokens`;
+    return `${used} of ${startsAtTokens.toLocaleString('en-US')} tokens before its runner compacts, under a compaction window of ${windowTokens.toLocaleString('en-US')} tokens${model}`;
+  }
+  if (fill.windowAssumed && fill.windowTokens) {
+    return `${used} of an assumed ${fill.windowTokens.toLocaleString('en-US')} tokens: no catalog or listing states this model's window; ordewellContextWindows in the settings file sets it.`;
+  }
   const counts = fill.windowTokens ? `${used} of ${fill.windowTokens.toLocaleString('en-US')} tokens` : `${used} tokens`;
   const off = fill.autoCompaction;
   if (!off) return counts;

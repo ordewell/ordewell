@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   parseSlash, SLASH_COMMANDS, findCommand, completions, registerSkillCommands,
   slashTokens, activeToken, skillMatchKind, tokenCompletions,
-  slashCommandTable, canonicalCommandName, composerCompletions, parseRunnerCommand,
+  slashCommandTable, canonicalCommandName, renamedNotice, composerCompletions, parseRunnerCommand,
 } from '../slash';
 
 describe('parseSlash', () => {
@@ -44,7 +44,7 @@ describe('SLASH_COMMANDS', () => {
 
   // `/settings` and `/planner` cover these; one command per value only made
   // the surface larger than the thing it described.
-  it.each(['auto', 'supervisor', 'automerge', 'autorun', 'research', 'parallel', 'model', 'planner-effort'])(
+  it.each(['auto', 'supervisor', 'automerge', 'autorun', 'research', 'parallel', 'planner-effort'])(
     'no longer exposes /%s',
     (name) => {
       expect(findCommand(name)).toBeUndefined();
@@ -289,6 +289,27 @@ describe('task-chat boundary', () => {
     // The planner's alias lives only in the built-in table; a runner-less chat
     // still offers it, so the two surfaces stay distinct by construction.
     expect(composerCompletions(token, null)).toContain('resume');
+  });
+});
+
+describe('/model, a plain alias of /planner', () => {
+  it('resolves to /planner', () => {
+    expect(canonicalCommandName('/model')).toBe('planner');
+  });
+
+  it('completes on /mo, right after /planner, described as the planner pick', () => {
+    expect(completions('/mo').map((c) => c.name)).toContain('model');
+    const table = slashCommandTable().map((c) => c.name);
+    expect(table.indexOf('model')).toBe(table.indexOf('planner') + 1);
+    expect(slashCommandTable().find((c) => c.name === 'model')?.description).toMatch(/alias for \/planner.*planner/i);
+  });
+
+  it('is not deprecated and leaves /pl, /pla and /task-model alone', () => {
+    expect(slashCommandTable().find((c) => c.name === 'model')?.description).not.toMatch(/deprecated/i);
+    expect(renamedNotice('/model')).toBeNull();
+    expect(completions('/pl').map((c) => c.name)).not.toContain('model');
+    expect(completions('/pla').map((c) => c.name)).not.toContain('model');
+    expect(canonicalCommandName('task-model')).toBe('task-model');
   });
 });
 

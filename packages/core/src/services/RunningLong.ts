@@ -50,17 +50,21 @@ export function runningLongThreshold(tasks: readonly Task[]): RunningLongThresho
  * stops and fails nothing.
  */
 export interface RunningLongFacts {
-  /** Its running time passed the threshold, or its runner's session compacted on its own. */
-  reason: 'duration' | 'compaction';
+  /** Its running time passed the threshold, its runner's session compacted on its own, or its context passed {@link contextThresholdOf}. */
+  reason: 'duration' | 'compaction' | 'context';
   /** Time the attempt has spent running, waits on a person left out. */
   elapsedMs: number;
   /** The running time this flag was due at: the threshold, doubled for each duration flag before it. */
   thresholdMs: number;
   basis?: RunningLongBasis;
+  /** On a context flag, the size it was due at: the context threshold, doubled for each context flag before it. */
+  contextThreshold?: number;
   /** What the main model's context holds now, from the last usage record or compaction. */
   contextTokens?: number;
   contextWindow?: number;
-  /** Where Ordewell set the runner to compact its context, when it did: a compaction there is routine. */
+  /** No catalog or listing stated `contextWindow`: the built-in runner assumed it (ADR-0070). */
+  contextWindowAssumed?: true;
+  /** Where Ordewell set the runner to compact its context, when it did: under {@link ROUTINE_WINDOW_BELOW} a compaction there is routine. */
   compactionWindow?: number;
   /** The most the context has held this attempt: the saved usage keeps only the last. */
   peakContextTokens?: number;
@@ -72,13 +76,41 @@ export interface RunningLongFacts {
 export type RunningLongEvent = RunningLongFacts & { attempt: number };
 
 /**
- * Compactions of a runner that Ordewell set a window for are routine, and
- * flagged from the third, then each time their count doubles: the 3rd, 6th,
- * 12th (ADR-0057 R4). Past that window each call re-reads a long prefix for
- * little new information, so a task compacts a few times in the course of
- * ordinary work.
+ * Compactions of a runner that Ordewell set a small window for are routine,
+ * and flagged from the third, then each time their count doubles: the 3rd,
+ * 6th, 12th (ADR-0057 R4). Under such a window a task compacts a few times in
+ * the course of ordinary work.
  */
 export const ROUTINE_COMPACTIONS = 3;
+
+/**
+ * The window from which a compaction is not routine but news, as one at the
+ * model's own window is: an ordinarily sized task never fills it, so one that
+ * did has outgrown its brief (ADR-0057 R4).
+ */
+export const ROUTINE_WINDOW_BELOW = 200_000;
+
+/**
+ * The share of its effective window a task's context may fill before it is
+ * flagged, and the size below which it never is (ADR-0057 R4). Both are a
+ * judgement, not a measurement: quality is reported to fall with context
+ * length well before a window is full, but no published study gives a size
+ * where it starts, so these say only when the supervisor should look.
+ */
+export const CONTEXT_SHARE = 0.4;
+export const CONTEXT_FLOOR_TOKENS = 150_000;
+
+/**
+ * The context a task may hold before it is first flagged: {@link CONTEXT_SHARE}
+ * of its effective window, the smaller of the model's and a compaction window
+ * in force, and never under {@link CONTEXT_FLOOR_TOKENS}. None while the
+ * model's window is unknown.
+ */
+export function contextThresholdOf(modelWindow: number | undefined, compactWindow: number | undefined): { tokens: number; window: number } | undefined {
+  if (modelWindow === undefined) return undefined;
+  const window = compactWindow === undefined ? modelWindow : Math.min(modelWindow, compactWindow);
+  return { tokens: Math.max(CONTEXT_FLOOR_TOKENS, window * CONTEXT_SHARE), window };
+}
 
 /** The longest delay a timer keeps: Node fires a longer one at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -94,6 +126,7 @@ export class RunningLongClock {
   private since: number | null = null;
   private timer: NodeJS.Timeout | null = null;
   private flags = 0;
+  private contextFlags = 0;
   private compactions = 0;
   /** The main model's context as the usage meter keeps it, by the same rules: a compaction or a model change clears it. */
   private meter: PlannerUsage = { totals: {} };
@@ -133,6 +166,24 @@ export class RunningLongClock {
     // A peak is measured against one model's window: another model's does not carry over.
     if (before.model !== this.meter.model || before.source !== this.meter.source) this.peak = undefined;
     this.measure();
+    this.sized();
+  }
+
+  /**
+   * One flag as the context first reaches its threshold, then one at each
+   * doubling of it that is still under the effective window: a single call
+   * that jumps past two raises one.
+   */
+  private sized(): void {
+    const tokens = this.meter.lastPromptTokens;
+    const threshold = contextThresholdOf(this.meter.contextWindow, this.compactWindow());
+    if (tokens === undefined || !threshold) return;
+    let crossed: number | undefined;
+    for (let due = threshold.tokens * 2 ** this.contextFlags; due < threshold.window && tokens >= due; due *= 2) {
+      this.contextFlags += 1;
+      crossed = due;
+    }
+    if (crossed !== undefined) this.flag({ ...this.facts('context', this.due()), contextThreshold: crossed });
   }
 
   /** A compaction of the attempt's own session: only one the runner did by itself says the context ran out. */
@@ -143,8 +194,13 @@ export class RunningLongClock {
     this.measure();
     if (trigger !== 'auto') return;
     this.compactions += 1;
-    if (this.compactWindow() !== undefined && !this.beyondRoutine()) return;
+    if (this.routine() && !this.beyondRoutine()) return;
     this.flag(this.facts('compaction', this.due()));
+  }
+
+  private routine(): boolean {
+    const window = this.compactWindow();
+    return window !== undefined && window < ROUTINE_WINDOW_BELOW;
   }
 
   /** The 3rd compaction, the 6th, the 12th: the first that is no longer routine, then each doubling. */
@@ -200,6 +256,7 @@ export class RunningLongClock {
       ...(basis ? { basis } : {}),
       ...(this.meter.lastPromptTokens !== undefined ? { contextTokens: this.meter.lastPromptTokens } : {}),
       ...(this.meter.contextWindow !== undefined ? { contextWindow: this.meter.contextWindow } : {}),
+      ...(this.meter.contextWindow !== undefined && this.meter.contextWindowAssumed ? { contextWindowAssumed: true as const } : {}),
       ...(this.compactWindow() !== undefined ? { compactionWindow: this.compactWindow() } : {}),
       ...(this.peak !== undefined ? { peakContextTokens: this.peak } : {}),
       compactions: this.compactions,

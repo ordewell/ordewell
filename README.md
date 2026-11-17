@@ -44,7 +44,7 @@ Use it in the [desktop app](#download-the-desktop-app), the
 [terminal](#install-the-terminal-app), [VS Code](#vs-code) or from the command
 line. Every one drives the same plans, runners and settings.
 
-This README describes 0.13.3. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.13.4. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Why Ordewell

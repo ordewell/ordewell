@@ -66,7 +66,7 @@ export function taskOpsProtocol(executionNote = '', tools = false): string[] {
     'Just declare the dependencies you want — display order is repaired for you afterwards, so a rewire or a newly added prerequisite never needs a "reorder" op. Only a task that is running or completed cannot be shifted, so an edit that would need one to move is rejected.' + executionNote,
     'Flipping "type" between "ai", "user" and "script" is a content change, not just a label: an update to "user" needs "userSteps" in the SAME op, an update to "ai" needs "prompt", and an update to "script" needs "commands" or "script" — the fields the old type had and the new one does not are cleared automatically (flipping to "user" also makes the task HITL). Only a task that has not started can flip to or from "script".',
     'A script task ("type":"script", top-level only) is run by Ordewell with no model: "commands" is a list of argument vectors run in order with no shell, stopping at the first that fails (e.g. [["git","push","origin","main"]]), or "script" is one script for the shell; "timeoutMs" is its time limit (ten minutes when left out). Give it exactly one of "commands" or "script", and never ' + forbiddenFields('script').map((f) => `"${f}"`).join(', ') + '. Writing one body replaces the other. Changing its body or time limit takes it out of what the user approved, so it waits for their approval again.',
-    '"skills" in "changes" REPLACES the task\'s whole skill list. To add one, send the names the plan block shows in its skills:[...] plus the new one; to drop one, send the rest; [] removes them all.',
+    '"skills" in "changes" REPLACES the task\'s whole skill list. To add one, send the names the plan block shows in its skills:[...] plus the new one; to drop one, send the rest; [] removes them all. Name only a task skill the session lists, or one a task it depends on creates at .ordewell/skills/<name>/SKILL.md and names in its prompt.',
     '"rearm" puts a failed OR completed task back to pending — verdict and output summary are cleared, any dependents it had blocked are released, and it may carry field changes (e.g. a corrected "prompt") applied in the same op. A running task cannot be re-armed. Never rearm a task just to relabel it — only when it should actually run again.',
   ];
 }
@@ -221,6 +221,8 @@ export interface ApplyTaskOpsResult {
   adjustments?: AssignmentAdjustment[];
   /** On ok, the id of the task each batch handle names. */
   handles?: ReadonlyMap<string, string>;
+  /** On ok, for each task a merge or split built, the ids of the plan's tasks it was built from. */
+  builtFrom?: ReadonlyMap<string, readonly string[]>;
 }
 
 function refused(tasks: readonly Task[], refusals: OpRefusal[]): ApplyTaskOpsResult {
@@ -256,6 +258,9 @@ export function applyTaskOps(
   const errors: OpRefusal[] = [];
   const summary: string[] = [];
   const adjustments: AssignmentAdjustment[] = [];
+  const builtFrom = new Map<string, readonly string[]>();
+  // A task built earlier in this batch stands for the plan's tasks it was built from.
+  const sourcesOf = (ids: readonly string[]) => [...new Set(ids.flatMap((id) => builtFrom.get(id) ?? [id]))];
 
   // Batch handles: planner-chosen names for a task an add/merge/split op is
   // about to create, so a later op in the same batch can reference it before
@@ -505,6 +510,7 @@ export function applyTaskOps(
         const mergedTask: Task = { ...built.task, dependencies: [...new Set([...ids, ...stated])] };
         const mergedId = mergedTask.id;
         tasks = PlanGraph.replace(tasks, idSet, [mergedTask], mergedId);
+        builtFrom.set(mergedId, sourcesOf([...idSet]));
         if (op.handle) handleId.set(op.handle, mergedId);
         summary.push(`Merged ${toMerge.length} tasks into "${spec.title}"${droppedSubtasksNote(toMerge)}`);
         break;
@@ -571,6 +577,7 @@ export function applyTaskOps(
         if (buildError) break;
         const tailId = newTasks[newTasks.length - 1].id;
         tasks = PlanGraph.replace(tasks, [target.id], newTasks, tailId);
+        for (const part of newTasks) builtFrom.set(part.id, sourcesOf([target.id]));
         if (op.handle) handleId.set(op.handle, tailId);
         summary.push(`Split "${target.title}" into ${newTasks.length} tasks${droppedSubtasksNote([target])}`);
         break;
@@ -630,5 +637,5 @@ export function applyTaskOps(
     told.add(key);
     return true;
   });
-  return { ok: true, tasks, errors: [], refusals: [], summary, handles: handleId, adjustments: standingAdjustments };
+  return { ok: true, tasks, errors: [], refusals: [], summary, handles: handleId, adjustments: standingAdjustments, builtFrom };
 }

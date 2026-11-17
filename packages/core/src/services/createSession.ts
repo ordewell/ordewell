@@ -970,10 +970,15 @@ export class Session {
       mayWake: () => this.supervision.mayWake(),
       mayReport: () => this.supervision.mayReport(),
       stoppedByUser: (tasks) => this.supervision.stoppedByUser(tasks),
-      persist: () => this.saves.after(),
+      // Every change to the waiting inputs is saved or announced, or ends a turn: each may be what a run's conclusion waited on (ADR-0029).
+      persist: () => {
+        this.saves.after();
+        this.supervision.settle();
+      },
       announce: () => {
         this.saves.after();
         this.announcePlan();
+        this.supervision.settle();
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
@@ -981,6 +986,7 @@ export class Session {
       turnSettled: () => {
         this.gate.settled();
         this.events.waitsMayHaveChanged(this.plan);
+        this.supervision.settle();
       },
       // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
@@ -990,20 +996,23 @@ export class Session {
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) => this.conversation.reply(prompt, {
           signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, asides: prompt.asides, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
         });
-        // Wake-ups that ride with a user's message are context for the user's turn.
+        // Wake-ups that ride with a user's message are context for the user's turn, which answers them, a failed one's retry included.
+        const carries = prompt.wakeUps.length > (prompt.asides?.length ?? 0);
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
           ? this.supervision.wakeUp(reply, signal, prompt.authority)
-          : reply(signal)));
+          : carries ? this.supervision.carry(reply(signal)) : reply(signal)));
         // A report turn for a task the user's turn started acts as their turns do, autorun included (ADR-0037, R3).
         if (prompt.source !== 'supervisor' || prompt.authority === 'user') this.autorunSubmitted(effects);
         return landed;
       },
       notice: (message) => this.notice('error', message),
+      wakeUpsRefused: (err) => this.supervision.wakeUpsRefused(err),
       plannerRunner: () => runnerForProvider(this.config.aiProvider),
     });
 
     this.supervision = new RunSupervision({
       plan: () => this.plan,
+      wakeUpsParked: () => this.turns.parked,
       subplanner: () => this.position.answersToParent,
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,
@@ -1027,6 +1036,7 @@ export class Session {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
+      runConcluded: (held) => this.events.runConcluded(held),
       // Async so a failed save rejects, as a turn's failure does: the input already waits on the plan, and a Stop that took must not throw.
       deliver: async (digest, report, idle, tasks) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}), ...(idle ? { idle } : {}), ...(tasks ? { tasks } : {}) }),
       pump: () => this.turns.pump(),

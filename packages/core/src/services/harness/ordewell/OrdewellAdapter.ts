@@ -13,6 +13,8 @@ import type { AiProvider } from '../../../interfaces/IConfig';
 import { attemptModeOf, GuardedShell, toolsOf } from './modes';
 import { lookupModelInfo, parseModelId, providerCredentials } from './models';
 import { buildSystemPrompt } from './prompt';
+import { compactionStart } from './compaction';
+import { taskCompactAtOf } from '../../taskCompactWindow';
 import { taskToolsOf } from './taskTools';
 import { FileTranscriptStore, ordewellSessionsRoot, type LoadedTranscript, type TranscriptStore } from './transcript';
 import { OrdewellLoop, retryNote, stepFailure, type RequestAssembler, type StepBoundary, type StepBoundaryHook, type StepPlan } from './loop';
@@ -90,6 +92,26 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   });
   private guard: GuardedShell | null = null;
   private readonly held: HeldSecrets;
+  /** Said once each, as the attempt's first log lines: no events reach anyone before its first turn. */
+  private startNotices: string[] = [];
+  /**
+   * Where a number in `taskCompactAt` has this runner start compacting, which
+   * running long reads as routine below its window (ADR-0057 R4); undefined
+   * under `auto` and `off`, whose guard sits near the model's own window.
+   */
+  get compactWindowTokens(): number | undefined {
+    return this.compactStartTokens;
+  }
+
+  /**
+   * The setting is the start itself here, so the meter reads against it, and
+   * an overflow that leaves a smaller window can bring it lower (ADR-0018 C4).
+   */
+  get compactStartTokens(): number | undefined {
+    return this.compactAtSet === undefined ? undefined : this.loop?.compactStartTokens ?? this.compactAtSet;
+  }
+
+  private compactAtSet?: number;
 
   constructor(private readonly provider: AiProvider, private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
     this.agentId = provider;
@@ -137,9 +159,9 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const sessionId = opts.resumeSessionId ?? randomUUID();
     const store = (this.options.openStore ?? ((id, dir) => new FileTranscriptStore(id, dir)))(sessionId, root);
     const saved = opts.resumeSessionId ? await this.savedSession(store, opts.resumeSessionId) : undefined;
-    const system = saved?.system ?? buildSystemPrompt({ cwd: opts.cwd, commits: opts.commits === true });
     const settings = new SettingsService().getAll();
     const stepLimit = this.options.stepLimit ?? settings.ordewellStepLimit ?? DEFAULT_ORDEWELL_STEP_LIMIT;
+    const system = saved?.system ?? buildSystemPrompt({ cwd: opts.cwd, commits: opts.commits === true, stepLimit });
     const timeouts = this.options.streamTimeouts ?? streamTimeoutsOf(settings.ordewellStreamTimeouts);
 
     const inProcess = opts.mcp?.inProcess;
@@ -157,7 +179,13 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const model = await lookupModelInfo(opts.model, env, {
       fetchImpl: this.deps.fetch,
       ...(this.options.modelInfoTimeoutMs !== undefined ? { timeoutMs: this.options.modelInfoTimeoutMs } : {}),
+      ...(settings.ordewellContextWindows ? { windows: settings.ordewellContextWindows } : {}),
     });
+    this.startNotices = model.contextWindowSource === 'assumed' ? [assumedWindowNote(model.id, model.contextWindow)] : [];
+    // Read for every task, so a setting no harness can act on refuses the start here as on the others.
+    const compactSetting = taskCompactAtOf();
+    const compactAt = compactionStart(model.contextWindow, compactSetting, `${this.label} runner`, (line) => this.startNotices.push(line));
+    this.compactAtSet = typeof compactSetting === 'number' ? compactAt : undefined;
     const effort = EFFORTS.find((level) => level === opts.flags.effort);
 
     this.store = store;
@@ -185,6 +213,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
       retry,
       ...(this.options.assemble ? { assemble: this.options.assemble } : {}),
       ...(effort ? { effort } : {}),
+      // `auto` and `off` leave the guard alone, so it still follows a window the provider shrinks mid-attempt.
+      ...(typeof compactSetting === 'number' ? { compactAt } : {}),
       hide: (value) => this.held.hideIn(value),
       emit,
     });
@@ -202,6 +232,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     this.turn = turn;
     this.onEvent = onEvent;
     this.onActivity = onActivity ?? null;
+    for (const text of this.startNotices) onEvent({ type: 'command_output', text });
+    this.startNotices = [];
     let last: AgentEvent;
     try {
       const outcome = await loop.runTurn(message, { stop: turn.stop.signal, hard: turn.hard.signal });
@@ -360,4 +392,10 @@ function streamTimeoutsOf(setting: { firstEventSeconds?: number; idleSeconds?: n
     firstEventMs: setting?.firstEventSeconds !== undefined ? setting.firstEventSeconds * 1000 : DEFAULT_STREAM_TIMEOUTS.firstEventMs,
     idleMs: setting?.idleSeconds !== undefined ? setting.idleSeconds * 1000 : DEFAULT_STREAM_TIMEOUTS.idleMs,
   };
+}
+
+/** How to state a window no catalog or listing gave, so compaction measures against the true one (ADR-0070). */
+function assumedWindowNote(id: string, window: number): string {
+  return `No catalog or provider listing states ${id}'s context window: assuming ${window.toLocaleString('en-US')} tokens. `
+    + `Set it in the settings file as "ordewellContextWindows": { "${id}": <tokens> }.`;
 }

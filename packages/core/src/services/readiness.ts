@@ -2,7 +2,7 @@ import { runsAsOps, type Task } from '../models/Task';
 import type { PlanStore } from './PlanStore';
 import type { IsolationRunController } from './IsolationRunController';
 import { classifyAttempt, mergeExcludes } from './attemptKind';
-import { planBlocks } from './blocking';
+import { heldDependencies, planBlocks, type HeldDependency } from './blocking';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { betweenRounds, checksOfBodies, loopRoundOf } from '../models/Loop';
 
@@ -177,6 +177,17 @@ interface PlanJudgement {
   limited(): ReadonlySet<string>;
   /** The loop's check a body task answers to, by body task. */
   checks(): ReadonlyMap<string, Readonly<Task>>;
+  /** The dependencies a task is held to, its ancestors' among them. */
+  held: Held;
+}
+
+/** The dependencies a task is held to; see {@link heldDependencies}. */
+type Held = (task: Readonly<Pick<Task, 'id' | 'dependencies'>>) => HeldDependency[];
+
+/** {@link heldDependencies} over the store's plan, read only when a task asks. */
+function heldIn(store: Pick<PlanStore, 'allTasks'>): Held {
+  let held: Held | undefined;
+  return (task) => (held ??= heldDependencies(store.allTasks))(task);
 }
 
 function judgeOnce(store: StartRuleInput['store']): PlanJudgement {
@@ -185,6 +196,7 @@ function judgeOnce(store: StartRuleInput['store']): PlanJudgement {
   let checks: ReadonlyMap<string, Readonly<Task>> | undefined;
   const judged = () => (blocks ??= planBlocks(store.allTasks));
   return {
+    held: heldIn(store),
     blocked: () => judged().blocked,
     repeating: () => judged().repeating,
     limited: () => (limited ??= new Set(store.allTasks
@@ -224,7 +236,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   const forCheck = !!check && UNDECIDED.has(check.status);
   if (forCheck) waits.push({ kind: 'loop-check', check: check.id });
   // A forced start goes past a failure, so only what is still under way holds it.
-  const deps = waitingBehind(heldTo(task, store), store, runs, { pastFailures: !!forced || queued, plan: () => ({ blocked: plan.blocked(), repeating: plan.repeating() }) })
+  const deps = waitingBehind(heldTo(task, store, plan.held), store, runs, { pastFailures: !!forced || queued, held: plan.held, plan: () => ({ blocked: plan.blocked(), repeating: plan.repeating() }) })
     .filter((id) => !forCheck || id !== check.id);
   const waiting = [...deps, ...bodyAtWork(task, store, runs)];
   if (waiting.length > 0) waits.push(queued ? { kind: 'queued', waiting } : { kind: 'dependencies', waiting });
@@ -239,7 +251,7 @@ function waitsOf(task: Readonly<Task>, input: StartRuleInput, forced: ForcedStar
   if (input.startsHeld && !byHand && forced?.queued !== false) waits.push({ kind: 'start-hold' });
   // A start forced now passes the whole gate, which the user confirmed; a queued one only what they confirmed then.
   const confirmed = forced?.queued ? forced.pastGate : [];
-  const unmerged = forced?.queued === false ? [] : mergeGate(task, store, runs).filter((id) => !confirmed.includes(id));
+  const unmerged = forced?.queued === false ? [] : gateOf(task, store, runs, plan.held).filter((id) => !confirmed.includes(id));
   if (unmerged.length > 0) waits.push({ kind: 'merge-gate', unmerged });
   if (byHand) waits.push({ kind: 'by-hand' });
   return waits;
@@ -266,15 +278,18 @@ const UNDECIDED: ReadonlySet<string> = new Set(['pending', 'approved', 'in_progr
 type DependencyStore = Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isSkipped'>;
 
 /**
- * A task's dependencies the dependency rule holds it to. A body task's
- * dependency on its own check between rounds is met: the check's report is
- * what it fixes, and the check runs again only after it (ADR-0045 L4).
+ * A task's dependencies the dependency rule holds it to, a subtask's
+ * ancestors' among them (ADR-0034). A body task's dependency on its own check
+ * between rounds is met: the check's report is what it fixes, and the check
+ * runs again only after it (ADR-0045 L4); so is a subtask's, inherited from
+ * an ancestor in the body.
  */
-function heldTo(task: Readonly<Pick<Task, 'dependencies'> & Partial<Pick<Task, 'id'>>>, store: Pick<PlanStore, 'get'>): readonly string[] {
-  return task.dependencies.filter((id) => {
+function heldTo(task: Readonly<Pick<Task, 'dependencies'> & Partial<Pick<Task, 'id'>>>, store: Pick<PlanStore, 'get'>, held: Held): readonly string[] {
+  const deps = task.id === undefined ? task.dependencies.map((id) => ({ id, holder: undefined })) : held({ id: task.id, dependencies: task.dependencies });
+  return deps.filter(({ id, holder }) => {
     const dep = store.get(id);
-    return !(dep && task.id !== undefined && betweenRounds(dep) && dep.loop?.body.includes(task.id));
-  });
+    return !(dep && holder !== undefined && betweenRounds(dep) && dep.loop?.body.includes(holder));
+  }).map(({ id }) => id);
 }
 
 /**
@@ -294,7 +309,8 @@ export function unmetDependencies(
   store: DependencyStore,
   runs: Pick<IsolationRunController, 'openTaskState'>,
 ): string[] {
-  return waitingBehind(heldTo(task, store), store, runs, { pastFailures: false });
+  const held = heldIn(store);
+  return waitingBehind(heldTo(task, store, held), store, runs, { pastFailures: false, held });
 }
 
 /** The blocked rule's reading of the plan a dependency walk needs. */
@@ -313,7 +329,7 @@ function waitingBehind(
   depIds: readonly string[],
   store: DependencyStore,
   runs: Pick<IsolationRunController, 'openTaskState'>,
-  opts: { pastFailures: boolean; plan?: () => JudgedBlocks },
+  opts: { pastFailures: boolean; held: Held; plan?: () => JudgedBlocks },
 ): string[] {
   const seen = new Set<string>();
   const waiting: string[] = [];
@@ -321,7 +337,10 @@ function waitingBehind(
   let blocks: JudgedBlocks | undefined;
   const judged = () => (blocks ??= opts.plan?.() ?? planBlocks(store.allTasks));
   const isBlocked = (id: string): boolean => judged().blocked.has(id);
-  const dependenciesOf = (id: string, behindSkip: boolean) => (store.get(id)?.dependencies ?? []).map((dep) => ({ id: dep, behindSkip }));
+  const dependenciesOf = (id: string, behindSkip: boolean) => {
+    const task = store.get(id);
+    return task ? opts.held(task).map((dep) => ({ id: dep.id, behindSkip })) : [];
+  };
   const queue = depIds.map((id) => ({ id, behindSkip: false }));
   for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
     const { id, behindSkip } = next;
@@ -362,11 +381,15 @@ export function landed(id: string, store: Pick<PlanStore, 'isCompleted'>, runs: 
  */
 export function mergeGate(
   task: Readonly<Task>,
-  store: Pick<PlanStore, 'get' | 'isCompleted' | 'isOps'>,
+  store: Pick<PlanStore, 'allTasks' | 'get' | 'isCompleted' | 'isOps'>,
   runs: Pick<IsolationRunController, 'awaitsMerge'>,
 ): string[] {
+  return gateOf(task, store, runs, heldIn(store));
+}
+
+function gateOf(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isCompleted' | 'isOps'>, runs: Pick<IsolationRunController, 'awaitsMerge'>, held: Held): string[] {
   if (task.type !== 'user' && !opsOf(task, store)) return [];
-  return ancestors(task, store).filter((id) => store.isCompleted(id) && runs.awaitsMerge(id));
+  return ancestors(task, store, held).filter((id) => store.isCompleted(id) && runs.awaitsMerge(id));
 }
 
 /**
@@ -378,16 +401,21 @@ function opsOf(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isOps'>): b
   return store.get(task.id) ? store.isOps(task.id) : runsAsOps(task);
 }
 
-/** Every task a task depends on, directly or through others, nearest first, and a check's body; a cycle is walked once. */
-function ancestors(task: Readonly<Task>, store: Pick<PlanStore, 'get'>): string[] {
+/**
+ * Every task a task depends on, directly or through others, a subtask's
+ * ancestors' dependencies among them, nearest first, and a check's body; a
+ * cycle is walked once.
+ */
+function ancestors(task: Readonly<Task>, store: Pick<PlanStore, 'get'>, held: Held): string[] {
   const seen = new Set<string>([task.id]);
-  const queue = [...task.dependencies, ...task.loop?.body ?? []];
+  const queue = [...held(task).map((dep) => dep.id), ...task.loop?.body ?? []];
   const found: string[] = [];
   for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
     if (seen.has(id)) continue;
     seen.add(id);
     found.push(id);
-    queue.push(...(store.get(id)?.dependencies ?? []));
+    const dep = store.get(id);
+    if (dep) queue.push(...held(dep).map((d) => d.id));
   }
   return found;
 }

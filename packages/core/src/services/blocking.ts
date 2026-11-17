@@ -13,6 +13,75 @@ export interface BlockingSubject extends Omit<LoopSubject, 'id' | 'status'> {
   subtasks?: readonly BlockingSubject[];
 }
 
+/**
+ * One dependency a task is held to, and `holder`, the task whose dependency
+ * it is: the task itself, or the ancestor it inherits it from.
+ */
+export interface HeldDependency {
+  id: string;
+  holder: string;
+}
+
+/**
+ * The dependencies each task is held to (ADR-0034): its own, then every
+ * ancestor's, nearest first. A subtask is part of its parent's work, so it
+ * waits for what its parent waits for, and is blocked by what blocks it,
+ * without the plan copying an edge onto it. An ancestor's dependency that
+ * itself waits, through any task, on that ancestor's own subtree is not
+ * inherited: the subtask is part of what it waits for, and would wait on
+ * itself. Takes the plan tree, or a flat list whose tasks keep their
+ * subtasks; a task outside it is held to its own dependencies alone.
+ */
+export function heldDependencies(tasks: readonly BlockingSubject[]): (task: Pick<BlockingSubject, 'id' | 'dependencies'>) => HeldDependency[] {
+  const byId = new Map<string, BlockingSubject>();
+  const parentOf = new Map<string, string>();
+  const index = (list: readonly BlockingSubject[], parent?: string): void => {
+    for (const t of list) {
+      byId.set(t.id, t);
+      if (parent !== undefined) parentOf.set(t.id, parent);
+      index(t.subtasks ?? [], t.id);
+    }
+  };
+  index(tasks);
+  const subtreeOf = (id: string): Set<string> => {
+    const found = new Set<string>();
+    const add = (t: BlockingSubject): void => { found.add(t.id); (t.subtasks ?? []).forEach(add); };
+    const root = byId.get(id);
+    if (root) add(root);
+    return found;
+  };
+  // A task waits on its dependencies and, through its parent, on its parent's.
+  const reachesInto = (start: string, inside: ReadonlySet<string>): boolean => {
+    const seen = new Set<string>();
+    for (const stack = [start]; stack.length > 0;) {
+      const id = stack.pop()!;
+      if (inside.has(id)) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      stack.push(...byId.get(id)?.dependencies ?? []);
+      const parent = parentOf.get(id);
+      if (parent !== undefined) stack.push(parent);
+    }
+    return false;
+  };
+  // By parent, so siblings share one reading of what they inherit.
+  const passedDown = new Map<string, HeldDependency[]>();
+  const inheritedOf = (id: string): HeldDependency[] => {
+    const parent = parentOf.get(id);
+    if (parent === undefined) return [];
+    const known = passedDown.get(parent);
+    if (known) return known;
+    const inside = subtreeOf(parent);
+    const found = [
+      ...byId.get(parent)!.dependencies.filter((dep) => !reachesInto(dep, inside)).map((dep) => ({ id: dep, holder: parent })),
+      ...inheritedOf(parent),
+    ];
+    passedDown.set(parent, found);
+    return found;
+  };
+  return (task) => [...task.dependencies.map((id) => ({ id, holder: task.id })), ...inheritedOf(task.id)];
+}
+
 /** Statuses of a task that has not started, the only ones a block holds back. */
 const UNSTARTED: ReadonlySet<string> = new Set(['pending', 'approved']);
 
@@ -26,13 +95,15 @@ export interface PlanBlocks {
 
 /**
  * The blocked rule (ADR-0034): a task not started yet is blocked while a
- * dependency failed or is itself blocked. One already at work — force-started,
+ * dependency failed or is itself blocked, a subtask's ancestors' dependencies
+ * among its own ({@link heldDependencies}). One already at work — force-started,
  * or waiting on the user — is not, and does not pass a block on. Each
  * blocked task maps to the failed tasks it waits on, in dependency order and
  * named once; an unblocked task is absent. Nothing is stored, so a retry that
  * passes is all it takes to lift a block.
  *
- * Takes the plan tree or a flat list; a subtask follows the same rule.
+ * Takes the plan tree or a flat list whose tasks keep their subtasks; a
+ * subtask follows the same rule.
  */
 export function blockingFailures(tasks: readonly BlockingSubject[]): Map<string, string[]> {
   return planBlocks(tasks).blocked;
@@ -53,6 +124,7 @@ export function repeatingChecks(tasks: readonly BlockingSubject[]): Set<string> 
  * dependents until what stopped the loop is retried.
  */
 export function planBlocks(tasks: readonly BlockingSubject[]): PlanBlocks {
+  const held = heldDependencies(tasks);
   const byId = new Map<string, BlockingSubject>();
   const index = (list: readonly BlockingSubject[]): void => {
     for (const t of list) {
@@ -85,12 +157,12 @@ export function planBlocks(tasks: readonly BlockingSubject[]): PlanBlocks {
     if (!task || !UNSTARTED.has(task.status) || visiting.has(id)) return [];
     visiting.add(id);
     const failed = new Set<string>();
-    for (const depId of task.dependencies) {
+    for (const { id: depId, holder } of held(task)) {
       const dep = byId.get(depId);
       // A skipped dependency releases its dependents: nobody waits for it.
       if (!dep || dep.status === 'completed' || dep.status === 'skipped') continue;
       if (dep.status === 'failed') {
-        if (betweenRounds(dep) && (dep.loop?.body.includes(id) || repeats(dep))) continue;
+        if (betweenRounds(dep) && (dep.loop?.body.includes(holder) || repeats(dep))) continue;
         failed.add(depId);
       } else for (const root of failuresOf(depId, visiting)) failed.add(root);
     }

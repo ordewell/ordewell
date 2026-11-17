@@ -42,7 +42,7 @@ describe('scope overlap at plan time', () => {
       'Tasks "Task a" and "Task b" both provide "api", and nothing orders them: name one owner.',
     ]);
     expect(warned(delegated('a', { provides: ['api'] }), check('ca', 'a'), delegated('b', { consumes: ['api'] }), check('cb', 'b'))).toEqual([
-      'Task "Task b" consumes "api", which "Task a" provides, and nothing orders them: a dependency puts the producer first; without one it gets a line when "Task a" lands.',
+      'Task "Task b" consumes "api", which "Task a" provides, and nothing orders them: a dependency puts the producer first, as it must when the consumer\'s check needs what it makes; without one it gets a line when "Task a" lands.',
     ]);
   });
 

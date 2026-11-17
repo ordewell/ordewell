@@ -89,8 +89,9 @@ const SERVER_TYPES = new Set(['server_error', 'api_error', 'overloaded_error', '
 const OVERFLOW_CODES = new Set(['context_length_exceeded', 'context_window_exceeded', 'model_context_window_exceeded']);
 
 // Only for a refusal with no code at all: many compatible servers answer an
-// overflow with a bare 400 whose message alone says so, OpenAI's wording echoed.
-const OVERFLOW_WORDING = /maximum context length|context length exceeded|context window|prompt is too long/i;
+// overflow with a bare 400 whose message alone says so: OpenAI's wording echoed,
+// and xAI's, LM Studio's and llama.cpp's own.
+const OVERFLOW_WORDING = /maximum context length|context length exceeded|context window|prompt is too long|maximum prompt length|greater than the context length|exceeds the available context size/i;
 
 /**
  * Classify a failed exchange from its status, its provider code and its

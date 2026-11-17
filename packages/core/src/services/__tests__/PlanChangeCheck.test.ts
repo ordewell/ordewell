@@ -84,16 +84,52 @@ describe('a whole plan, as submitted and as it lands', () => {
       .toThrow(refused.ok ? 'not refused' : refused.errors[0].message);
   });
 
-  it('refuses a planner skill at either end, by task and field, and only warns of one not found', async () => {
+  it('refuses a planner skill at either end, by task and field', async () => {
     const { live, check } = fakeSession();
     const grilling = { name: 'grilling', path: '/g/grilling/SKILL.md', appliesTo: 'planner' } as SkillInfo;
     live.skills = { findSkill: (name) => (name === 'grilling' ? grilling : undefined), searchedDirs: () => [] };
 
     const refused = await check.check({ kind: 'plan', tasks: [raw('a', { skills: ['grilling'] })] }, 'submit');
-    const warned = passed(await check.check({ kind: 'plan', tasks: [raw('a', { skills: ['later'] })] }, 'submit'));
 
     expect(refused).toMatchObject({ ok: false, errors: [{ taskId: 'a', field: 'skills', message: expect.stringContaining('"grilling" is a planner skill') }] });
-    expect(warned.warnings).toEqual([expect.stringContaining('skill "later" not found')]);
+  });
+
+  it('refuses a skill not found that no task it depends on creates, at submit and as it lands, saying both ways out', async () => {
+    const { check } = fakeSession();
+    const tasks = [raw('a', { prompt: 'Write the DNS parser.', skills: ['python', 'dns-protocol'] })];
+
+    const submitted = await check.check({ kind: 'plan', tasks }, 'submit');
+    const landed = await check.check({ kind: 'plan', tasks: parsePlanJson(JSON.stringify({ tasks }), ['claude-code']) }, 'land');
+
+    const said = (name: string) => `Task "Task a": skill "${name}" is not an installed task skill, and no task it depends on creates it.`
+      + ` Remove "${name}" from its skills, or add a task whose prompt says to write .ordewell/skills/${name}/SKILL.md and make Task "Task a" depend on it.`;
+    for (const checked of [submitted, landed]) {
+      expect(checked).toMatchObject({ ok: false, errors: [{ taskId: 'a', field: 'skills', message: said('python') }, { taskId: 'a', field: 'skills', message: said('dns-protocol') }] });
+    }
+  });
+
+  it('accepts, with its warning, a skill not found that a task it depends on, directly or not, creates', async () => {
+    const { check } = fakeSession();
+    const tasks = [
+      raw('w', { prompt: 'Write the house style to `.ordewell/skills/house-style/SKILL.md`, applies-to: task.' }),
+      raw('m', { order: 2, dependencies: ['w'] }),
+      raw('a', { order: 3, dependencies: ['m'], skills: ['house-style'] }),
+    ];
+
+    const warned = passed(await check.check({ kind: 'plan', tasks }, 'submit'));
+
+    expect(warned.warnings).toEqual([expect.stringContaining('skill "house-style" not found')]);
+  });
+
+  it('does not count a task that creates the skill but is not depended on, nor a longer name that starts with it', async () => {
+    const { check } = fakeSession();
+    const tasks = [
+      raw('w', { prompt: 'Write .ordewell/skills/house-style/SKILL.md.' }),
+      raw('v', { order: 2, prompt: 'Write .ordewell/skills/house-style-v2/SKILL.md.' }),
+      raw('a', { order: 3, dependencies: ['v'], skills: ['house-style'] }),
+    ];
+
+    expect(await check.check({ kind: 'plan', tasks }, 'submit')).toMatchObject({ ok: false, errors: [{ taskId: 'a', field: 'skills' }] });
   });
 });
 
@@ -192,6 +228,71 @@ describe('an edit, as it commits', () => {
 
     expect(refused).toMatchObject({ ok: false, errors: [{ field: 'skills', op: { number: 2, kind: 'update' } }] });
     expect(refused.ok ? '' : planChangeErrorText(refused.errors[0])).toMatch(/^op 2 \(update\): "grilling" is a planner skill/);
+  });
+
+  it('refuses an edit that attaches a skill not found that nothing upstream creates, naming the task, the skill and both ways out', async () => {
+    const { check } = fakeSession(plan());
+
+    const refused = await check.check({ kind: 'ops', ops: [{ op: 'update', taskId: '#1', changes: { skills: ['python'] } }] }, 'land');
+
+    expect(refused).toMatchObject({ ok: false, errors: [{ taskId: 't1', field: 'skills' }] });
+    expect(refused.ok ? '' : planChangeErrorText(refused.errors[0])).toBe(
+      'Task "Build": skill "python" is not an installed task skill, and no task it depends on creates it.'
+      + ' Remove "python" from its skills, or add a task whose prompt says to write .ordewell/skills/python/SKILL.md and make Task "Build" depend on it.',
+    );
+  });
+
+  it('accepts the same skill, with its warning, once the edit adds the task that writes it and the dependency on it', async () => {
+    const { check } = fakeSession(plan());
+
+    const checked = passed(await check.check({ kind: 'ops', ops: [
+      { op: 'add', task: { title: 'Write the skill', prompt: 'Write .ordewell/skills/python/SKILL.md for this repo.' }, handle: 'writer' },
+      { op: 'update', taskId: '#1', changes: { skills: ['python'], dependencies: ['writer'] } },
+    ] }, 'land'));
+
+    expect(checked.tasks.find((t) => t.id === 't1')?.skills).toEqual(['python']);
+    expect(checked.warnings).toEqual([expect.stringContaining('skill "python" not found')]);
+  });
+
+  it('lets an edit to a saved plan that already names an unknown skill through, and lets one take the skill off', async () => {
+    const saved = [createTask({ ...plan()[0], skills: ['python'] })];
+    const { check } = fakeSession(saved);
+
+    passed(await check.check({ kind: 'ops', ops: [{ op: 'update', taskId: '#1', changes: { title: 'Build it' } }] }, 'land'));
+    const removed = passed(await check.check({ kind: 'ops', ops: [{ op: 'update', taskId: '#1', changes: { skills: [] } }] }, 'land'));
+
+    expect(removed.tasks[0].skills ?? []).toEqual([]);
+  });
+
+  it('lets a merge or split carry an unknown skill already standing on the saved task, even through a later op of the batch', async () => {
+    const saved = [
+      createTask({ ...plan()[0], skills: ['python'] }),
+      createTask({ id: 't2', order: 2, title: 'Ship', prompt: 'ship', assignedRunner: 'claude-code' }),
+    ];
+    const { check } = fakeSession(saved);
+
+    const merged = passed(await check.check({ kind: 'ops', ops: [{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'Build and ship', prompt: 'p' } }] }, 'land'));
+    const split = passed(await check.check({ kind: 'ops', ops: [{ op: 'split', taskId: '#1', parts: [{ title: 'Build A', prompt: 'p' }, { title: 'Build B', prompt: 'p' }] }] }, 'land'));
+    const chained = passed(await check.check({ kind: 'ops', ops: [
+      { op: 'split', taskId: '#1', handle: 'tail', parts: [{ title: 'Build A', prompt: 'p' }, { title: 'Build B', prompt: 'p' }] },
+      { op: 'merge', taskIds: ['tail', '#2'], merged: { title: 'Build B and ship', prompt: 'p' } },
+    ] }, 'land'));
+
+    expect(merged.tasks.map((t) => [t.title, t.skills])).toEqual([['Build and ship', ['python']]]);
+    expect(split.tasks.map((t) => [t.title, t.skills])).toEqual([['Build A', ['python']], ['Build B', ['python']], ['Ship', undefined]]);
+    expect(chained.tasks.map((t) => [t.title, t.skills])).toEqual([['Build A', ['python']], ['Build B and ship', ['python']]]);
+  });
+
+  it('still refuses an unknown skill a merge brings that none of the merged tasks held', async () => {
+    const saved = [
+      createTask({ ...plan()[0], skills: ['python'] }),
+      createTask({ id: 't2', order: 2, title: 'Ship', prompt: 'ship', assignedRunner: 'claude-code' }),
+    ];
+    const { check } = fakeSession(saved);
+
+    const refused = await check.check({ kind: 'ops', ops: [{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'Build and ship', prompt: 'p', skills: ['python', 'rust'] } }] }, 'land');
+
+    expect(refused.ok ? [] : refused.errors.map(planChangeErrorText)).toEqual([expect.stringMatching(/^Task "Build and ship": skill "rust" is not an installed task skill/)]);
   });
 
   it('refuses what the guard refuses, after the applier passed it', async () => {

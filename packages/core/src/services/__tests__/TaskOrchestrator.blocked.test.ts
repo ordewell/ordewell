@@ -143,3 +143,29 @@ describe('a failed task blocks only its dependents', () => {
     expect(h.spawned()).not.toContain('t2');
   });
 });
+
+describe('a subtask, held to its parent\'s dependencies (ADR-0034)', () => {
+  /** f1, and p2 depending on it, whose subtask s21 depends on nothing of its own. */
+  const parentOnF1 = (): Task[] => [
+    task('f1', 1),
+    createTask({ id: 'p2', order: 2, title: 'Task p2', prompt: 'do p2', dependencies: ['f1'], subtasks: [task('s21', 1)] }),
+  ];
+
+  it('never starts while its parent\'s dependency failed, and runs once a retry of it passes', async () => {
+    const h = setup(parentOnF1());
+    await h.orchestrator.approveReview();
+    await h.fail('f1');
+
+    await vi.waitFor(() => expect(h.executionComplete).toHaveBeenCalledTimes(1));
+    expect(h.spawned()).toEqual(['f1']);
+    expect(h.orchestrator.getBlockedBy('p2')).toEqual(['f1']);
+    expect(h.orchestrator.getBlockedBy('s21')).toEqual(['f1']);
+
+    await h.orchestrator.retryTask('f1');
+    await h.pass('f1');
+    expect(h.orchestrator.getBlockedBy('s21')).toEqual([]);
+    await h.pass('s21');
+    await h.pass('p2');
+    await vi.waitFor(() => expect(h.orchestrator.isAllComplete()).toBe(true));
+  });
+});

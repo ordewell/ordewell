@@ -338,6 +338,16 @@ export type SessionMessage =
   | { type: 'review_approved' }
   | { type: 'checkpoint'; taskId: string; taskTitle: string; summary: string }
   | { type: 'execution_complete'; summary: ExecutionSummary }
+  /**
+   * The run's end stands for a follower that cannot answer it (ADR-0029):
+   * after `execution_complete`, once no supervisor's turn can continue the
+   * run. At Act that is when its closing turn is over; below Act it follows at
+   * once. A run the closing turn continued sends none until its next end.
+   * `supervisorHeld` says why a closing turn that was owed could not run: the
+   * planner waits on its usage limit or its context, and the end stands
+   * without it.
+   */
+  | { type: 'run_concluded'; summary: ExecutionSummary; supervisorHeld?: string }
   | { type: 'execution_stopped' }
   // A call at the command seam (ADR-0029), with who made it: `text` is the
   // line the transcript keeps for it, so a reload shows what was shown live.

@@ -25,9 +25,22 @@ interface OpenRouterModel {
   description?: string;
   pricing?: { prompt: string; completion: string };
   context_length?: number;
+  // Other OpenAI-compatible servers name the window their own way: Groq
+  // context_window, Mistral max_context_length, vLLM max_model_len.
+  context_window?: number;
+  max_context_length?: number;
+  max_model_len?: number;
   /** The provider OpenRouter routes to by default, and the reply cap it serves. */
   top_provider?: { max_completion_tokens?: number | null };
   supported_parameters?: string[];
+}
+
+/** The first positive window a listing entry states, or 0 for none. */
+function statedWindow(m: OpenRouterModel): number {
+  for (const value of [m.context_length, m.context_window, m.max_context_length, m.max_model_len]) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value);
+  }
+  return 0;
 }
 
 const CACHE_KEY = 'model-catalog';
@@ -75,7 +88,7 @@ export class ModelCatalog {
         prompt: m.pricing?.prompt ?? '?',
         completion: m.pricing?.completion ?? '?',
       },
-      contextLength: m.context_length ?? 0,
+      contextLength: statedWindow(m),
       ...(typeof m.top_provider?.max_completion_tokens === 'number' && m.top_provider.max_completion_tokens > 0
         ? { maxOutputTokens: m.top_provider.max_completion_tokens }
         : {}),

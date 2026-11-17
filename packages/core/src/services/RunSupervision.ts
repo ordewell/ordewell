@@ -1,4 +1,4 @@
-import { flattenTasks, flattenTasksWithParents, type RunSettings, type SupervisionSnapshot, type Task, type TaskReportTo, type TurnAuthority } from '../models/Task';
+import { flattenTasks, flattenTasksWithParents, type LegacyPlanState, type RunSettings, type SupervisionSnapshot, type Task, type TaskReportTo, type TurnAuthority } from '../models/Task';
 import { actorAuthority, type ExecutionActor, type ExecutionRecord, type SupervisorLevel } from '../models/Execution';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import type { GlobalRunSettings } from './SettingsService';
@@ -36,8 +36,14 @@ function outOfRoundsNote(task: Readonly<Task>): string {
  * wake-ups need of the planner.
  */
 export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pump' | 'restartPlanner' | 'abandonTurn' | 'notice'> {
-  /** The plan the run belongs to: its `runSettings` are the run's own, saved with it. Null with no plan. */
-  plan(): { runSettings?: RunSettings } | null;
+  /**
+   * The plan the run belongs to: its `runSettings` are the run's own, saved
+   * with it, and its waiting inputs and planner waits say whether a closing
+   * turn can still come. Null with no plan.
+   */
+  plan(): Pick<LegacyPlanState, 'runSettings' | 'pendingTurns' | 'plannerResend' | 'plannerContextPause'> | null;
+  /** The user's Stop of the planner's turn left the supervisor's inputs waiting for their next message: no turn opens them by itself (ADR-0029). */
+  wakeUpsParked(): boolean;
   /** This plan is a child's, with no user above it (ADR-0055 D4). */
   subplanner(): boolean;
   /** The user's run settings as they stand now (ADR-0030). */
@@ -76,6 +82,12 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
   save(): void;
   /** Send the end-of-run handoff again, unmarked, unless the run merged meanwhile or a new one opened. */
   resendHandoff(): void;
+  /**
+   * The run's end stands for a follower that cannot answer it; see
+   * {@link RunSupervision.settle}. `held` says why a closing turn that was
+   * owed could not run: the planner waits on its usage limit or its context.
+   */
+  runConcluded(held?: string): void;
 }
 
 /**
@@ -98,6 +110,8 @@ export class RunSupervision {
   private running = false;
   /** The user changed a run setting after the last run ended: the next supervisor call reads their copy, not the finished run's. */
   private changedAfterRun = false;
+  /** The run ended, and a follower has not been told the end stands. */
+  private endOwed = false;
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -119,7 +133,9 @@ export class RunSupervision {
       goUnsupervised: (reason) => this.goUnsupervised(reason),
       wakeUpEnded: () => {
         if (!this.supervisor.awaitsRunEnd) this.handOver();
+        this.settle();
       },
+      inputsWait: () => (host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor' && !t.rides),
       dropToWatch: (reason) => this.dropToWatch(reason),
       notice: (level, message) => host.notice(level, message),
     }, options);
@@ -165,6 +181,7 @@ export class RunSupervision {
     if (origin === 'user') this.supervisor.userStarted();
     this.running = true;
     this.changedAfterRun = false;
+    this.endOwed = false;
     this.supervisor.runStarted(continued);
   }
 
@@ -185,6 +202,7 @@ export class RunSupervision {
       // copies the session's new values (ADR-0030).
       this.changedAfterRun = true;
       if (level !== undefined && level !== 'act') this.handOver();
+      this.settle();
       return;
     }
     if (level !== undefined && (level !== (settings.supervisorLevel ?? 'off') || settings.unsupervised !== undefined)) {
@@ -200,6 +218,7 @@ export class RunSupervision {
     if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
     if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
     this.host.save();
+    this.settle();
   }
 
   /**
@@ -211,6 +230,7 @@ export class RunSupervision {
     if (!this.host.plan()) return;
     this.supervisor.userStopped();
     this.handOver();
+    this.settle();
   }
 
   /**
@@ -302,9 +322,15 @@ export class RunSupervision {
    * wake-up turn on it is over. The update says whether its landed work is
    * merged already: an automatic Merge all at the run's end comes before it,
    * and a live planner is told of that nowhere else (ADR-0029).
+   *
+   * The end is concluded for a follower that cannot answer it (`ordewell run`)
+   * once no turn of the supervisor's can continue the run: at once below Act,
+   * and at Act once its closing turn, retry included, is over, unless that
+   * turn opened the run again (ADR-0029).
    */
   runFinished(): void {
     this.running = false;
+    this.endOwed = true;
     // A skip of a body task stops its loop and settles nothing.
     this.reportStoppedLoops(repeatingChecks([...this.host.tasks()]));
     const { total, completed, failed, blocked, skipped } = executionSummary(flattenTasks([...this.host.tasks()]));
@@ -313,6 +339,7 @@ export class RunSupervision {
       : landed === 'pending' ? '; its landed work is not merged yet' : '';
     this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
+    this.settle();
   }
 
   /** The end-of-run handoff as the surfaces get it: marked as the supervisor's first while it is at Act (ADR-0029). */
@@ -336,13 +363,32 @@ export class RunSupervision {
     return this.supervisor.mayReport();
   }
 
+  /** The planner gate refused the turn that would take the supervisor's inputs; see {@link Supervisor.refused}. */
+  wakeUpsRefused(err: unknown): void {
+    this.supervisor.refused(err);
+    this.settle();
+  }
+
   /**
    * Run one turn opened without the user, held to the run's level or, on a
    * report owed to the user's turn, to that turn's authority (ADR-0037, R3);
    * see {@link Supervisor.turn}.
    */
   wakeUp<T>(reply: (signal: AbortSignal, turn: WakeUpTurn) => Promise<T>, signal?: AbortSignal, authority: TurnAuthority = 'supervisor'): Promise<T> {
-    return this.supervisor.turn(reply, signal, authority);
+    // A retried closing turn has no caller to hear it end: the turn itself says so.
+    return this.supervisor.turn(reply, signal, authority).finally(() => this.settle());
+  }
+
+  /**
+   * A user's turn that carries the supervisor's inputs: once it lands, the
+   * retry those inputs were owed is answered, and the run's end may stand.
+   * A failure leaves the inputs waiting for a wake-up turn of their own.
+   */
+  async carry<T>(turn: Promise<T>): Promise<T> {
+    const landed = await turn;
+    this.supervisor.carried();
+    this.settle();
+    return landed;
   }
 
   /** The command seam's loop guard: a supervisor's call checked against what this run remembers. */
@@ -384,10 +430,17 @@ export class RunSupervision {
 
   /** The plan is gone: nothing supervision gathered, remembered or owes carries over. */
   reset(): void {
+    // Its closing turn goes with the plan, so the end of its run stands as it
+    // is: a follower waiting on it hears so, here, before the tasks are gone (ADR-0029).
+    if (this.endOwed && !this.running) {
+      this.endOwed = false;
+      this.host.runConcluded();
+    }
     this.supervisor.reset();
     this.handoffDeferred = false;
     this.running = false;
     this.changedAfterRun = false;
+    this.endOwed = false;
     this.guards.forget();
   }
 
@@ -416,6 +469,7 @@ export class RunSupervision {
     this.host.systemNote(text);
     this.host.notice('warn', text);
     this.handOver();
+    this.settle();
   }
 
   /** The wake-up rate guard tripped: the run carries on at Watch, and the user is told in the supervisor's voice. */
@@ -428,6 +482,7 @@ export class RunSupervision {
     const text = `Loop guard, wake-up rate: I ${reason}, so I am at Watch for the rest of this run: I tell you what needs you and suggest, and act only when you say so.`;
     this.host.supervisorNote(text);
     this.host.notice('warn', text);
+    this.settle();
   }
 
   /**
@@ -439,6 +494,45 @@ export class RunSupervision {
     if (!this.handoffDeferred) return;
     this.handoffDeferred = false;
     this.host.resendHandoff();
+  }
+
+  /**
+   * The one place the run's end is judged concluded (ADR-0029): no run is
+   * under way, and no supervisor at Act can still continue it — none of its
+   * turns is in flight, none owes the end, and no failed one owes a retry.
+   * A closing turn the planner cannot take now, waiting on its usage limit,
+   * its context, or the user's next message after their Stop of the turn it
+   * queued behind, does not hold the end: it may be hours off, and the
+   * follower is told why the supervisor did not answer.
+   *
+   * Every input it reads changes in this module, in the {@link Supervisor} it
+   * owns, or on the plan's waiting inputs, whose every change the planner
+   * turns report here: each such change calls this, and the end is told once.
+   */
+  settle(): void {
+    this.supervisor.settled();
+    if (!this.endOwed || this.running) return;
+    let held: string | undefined;
+    if (this.level === 'act') {
+      if (this.supervisor.turning) return;
+      if (this.supervisor.awaitsRunEnd || this.supervisor.retryOwed) {
+        held = this.plannerHeld();
+        if (held === undefined) return;
+      }
+    }
+    this.endOwed = false;
+    this.host.runConcluded(held);
+  }
+
+  /** Why no planner turn can open by itself now; undefined when one can. */
+  private plannerHeld(): string | undefined {
+    const plan = this.host.plan();
+    if (plan?.plannerContextPause) return 'the planner is paused on its context, and waits for you to retry its compaction or stop it';
+    if (plan?.plannerResend?.at) return 'the planner hit its usage limit, and its turn goes again once the limit resets';
+    if (plan?.plannerResend) return 'the planner hit its usage limit, and its turn waits for your next message';
+    // A wake still gathering unparks them as it is delivered (a Stop earlier in the run parked them), and its turn takes them along.
+    if (this.host.wakeUpsParked() && !this.supervisor.wakeOwed) return 'you stopped the planner\'s turn it waited behind, and it goes with your next message';
+    return undefined;
   }
 
   /** How one run update reads the plan: `#3 "Title"` for a task, and what a failure blocks, each walked once. */
@@ -472,7 +566,9 @@ export class RunSupervision {
     const taskId = task.id;
     if (task.status === 'completed') return { kind: 'task_passed', taskId };
     if (task.status === 'failed') {
-      const detail = `${outOfRoundsNote(task)} ${task.verdict?.reason ?? ''}`.trim();
+      // A task that failed before its runner started has no verdict; its output summary says why, and what to do.
+      const why = task.verdict ? task.verdict.reason : task.outputSummary?.reviewReason ?? '';
+      const detail = `${outOfRoundsNote(task)} ${why}`.trim();
       return { kind: 'task_failed', taskId, ...(detail ? { detail } : {}) };
     }
     if (task.status !== 'awaiting_user') return null;

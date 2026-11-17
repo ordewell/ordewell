@@ -161,7 +161,9 @@ A runner-facing tool joins the task side on the same mechanism.
 - **Only `done` passes (V3).** `blocked` and `failed` end the attempt without
   a pass and carry their `reason` on the verdict, so the user — and later the
   supervisor (#28) — sees why the runner stopped instead of a generic
-  "no completion call".
+  "no completion call". The status's own description, which a runner reads as
+  it fills it in, says `blocked` is for an obstacle outside its control, never
+  for how much work remains.
 - **The handoff is delivered (V4).** `task_complete` carries a summary of
   at most 1,500 characters, optional findings and artifacts, and an optional
   report of at most 20,000 ([ADR-0047](../supervision/0047-structured-task-handoffs.md)).
@@ -392,3 +394,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-04 — S1: Cursor uses the server as a planner too (ADR-0060).
 - 2026-11-05 — S1: Cline uses the server, from a settings file of its own, as a planner too (ADR-0060).
 - 2026-11-14 — S2: an in-process runner's direct calls to the token's handlers are its tools (ADR-0070).
+- 2026-11-17 — V3: the status's description says `blocked` is an outside obstacle, not work remaining.

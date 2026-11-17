@@ -29,7 +29,8 @@ describe('ordewell run when a task asks a checkpoint', () => {
       log.mockRestore();
     }
 
-    expect(written.join('')).toContain('· Checkpoint: Migrate the schema: Drop the users table?: `ordewell checkpoint <id> approve|reject [reason]` answers it');
+    // A daemon that cannot say the level or the plan: the task's id stands in for its reference.
+    expect(written.join('')).toContain('· Checkpoint: t1 Migrate the schema: Drop the users table?: `ordewell checkpoint t1 approve|reject [reason]` answers it.\n');
   });
 });
 

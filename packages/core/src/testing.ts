@@ -150,6 +150,8 @@ export class FakeRunnerSession implements IRunnerSession {
   interrupts = 0;
   /** Where Ordewell set this runner to compact; unset, as for a runner it sets no window for. */
   compactWindowTokens?: number;
+  /** Where it starts compacting, when that is not the usual buffer under the window. */
+  compactStartTokens?: number;
   private messageCount = 0;
   private turnEndCbs: Array<(reason: StructuredTurnEnd) => void> = [];
   private eventCbs: Array<(event: StructuredEvent) => void> = [];

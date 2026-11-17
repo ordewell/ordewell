@@ -146,17 +146,38 @@ describe('Planner', () => {
 
     it('returns names not found, or no skill could have, as warnings beside the plan', async () => {
       const aiService = fakeAiService();
-      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue(parsePlanJson(JSON.stringify({ tasks: [{
-        id: 't1', order: 1, title: 'a', description: 'd', prompt: 'p', autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code', skills: ['later', '-bad'],
-      }] }), ['claude-code']));
+      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue(parsePlanJson(JSON.stringify({ tasks: [
+        { id: 't0', order: 1, title: 'w', description: 'd', prompt: 'Write .ordewell/skills/later/SKILL.md', autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code' },
+        { id: 't1', order: 2, title: 'a', description: 'd', prompt: 'p', dependencies: ['t0'], autonomy: 'AFK', sliceType: 'AFK', assignedRunner: 'claude-code', skills: ['later', '-bad'] },
+      ] }), ['claude-code']));
 
       const plan = await generate(aiService);
 
-      expect(plan.tasks[0].skills).toEqual(['later']);
+      expect(plan.tasks[1].skills).toEqual(['later']);
       expect(plan.skillWarnings).toEqual([
         expect.stringContaining('Task "a": "-bad" is not a valid skill name'),
         expect.stringContaining('Task "a": skill "later" not found'),
       ]);
+    });
+
+    it('lands the plan without a skill nothing provides, and warns that it was removed', async () => {
+      const aiService = fakeAiService();
+      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue([
+        createTask({ id: 't1', order: 1, title: 'Fix the build', prompt: 'p' }),
+        createTask({ id: 't2', order: 2, title: 'Add feature', prompt: 'p', skills: ['python'], subtasks: [createTask({ id: 't2a', order: 1, title: 'Part', prompt: 'p', skills: ['rust'] })] }),
+        createTask({ id: 't3', order: 3, title: 'Docs', prompt: 'p' }),
+      ]);
+
+      const plan = await generate(aiService);
+
+      expect(plan.tasks.map((t) => t.title)).toEqual(['Fix the build', 'Add feature', 'Docs']);
+      expect(plan.tasks[1].skills ?? []).toEqual([]);
+      expect(plan.tasks[1].subtasks?.[0].skills ?? []).toEqual([]);
+      expect(plan.skillWarnings).toEqual([
+        'Task "Add feature": skill "python" is not an installed task skill, and no task it depends on creates it, so it was removed from the task\'s skills.',
+        'Task "Part": skill "rust" is not an installed task skill, and no task it depends on creates it, so it was removed from the task\'s skills.',
+      ]);
+      expect(aiService.generatePlanDirect).toHaveBeenCalledOnce();
     });
 
     it('lands nothing when stopped during the skill check', async () => {

@@ -4,7 +4,7 @@ import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_AL
 import { classifyRunnerStop } from './runnerExit';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 import { LAND_KEPT_HINT } from './taskReport';
-import { RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, type RunningLongEvent } from './RunningLong';
+import { CONTEXT_FLOOR_TOKENS, CONTEXT_SHARE, RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, contextThresholdOf, type RunningLongEvent } from './RunningLong';
 import { formatElapsed } from '../conversation/elapsed';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
@@ -17,6 +17,19 @@ export const WAKE_UP_TURN_TIMEOUT_MS = 10 * 60_000;
 
 /** How long a stopped wake-up turn has to end before the conversation is taken back from it. */
 export const HUNG_TURN_GRACE_MS = 30_000;
+
+/** How many times a wake-up turn is tried: once, and once more with the planner restarted, before the run goes unsupervised. */
+export const WAKE_UP_ATTEMPTS = 2;
+
+/**
+ * The longest a supervisor's closing turn runs once it can: each attempt's
+ * time limit and the grace a hung one gets, plus the debounce its batch waits
+ * before it goes. A user's planner turn it queues behind is not counted: that
+ * lasts as long as the user's does. What a follower that cannot answer the
+ * turn waits for the conclusion at most, counted while no user's turn is open
+ * (ADR-0029).
+ */
+export const CLOSING_TURN_BOUND_MS = (WAKE_UP_TURN_TIMEOUT_MS + HUNG_TURN_GRACE_MS) * WAKE_UP_ATTEMPTS + WAKE_DEBOUNCE_MS;
 
 /** How long one event's detail runs in a digest: what happened, never the log behind it. */
 const DETAIL_CHARS = 240;
@@ -93,6 +106,8 @@ export interface SupervisorHost {
   goUnsupervised(reason: string): void;
   /** A turn that took a wake-up ended, however it ended; see {@link Supervisor.awaitsRunEnd}. */
   wakeUpEnded(): void;
+  /** Whether an input of the supervisor's that opens a turn still waits on the plan: what a retry would take. */
+  inputsWait(): boolean;
   /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
   dropToWatch(reason: string): void;
   notice(level: 'info' | 'warn', message: string): void;
@@ -141,8 +156,10 @@ export class WakeUpTimeoutError extends Error {
 export class Supervisor {
   private policy: WakePolicy;
   private tick: ReturnType<typeof setTimeout> | null = null;
-  /** Wake-up turns failed in a row this run; the second ends supervision. */
+  /** Wake-up turns failed in a row this run; the {@link WAKE_UP_ATTEMPTS}th ends supervision. */
   private failures = 0;
+  /** The turn that failed last was a report turn rather than the supervisor's own, for how its end is told. */
+  private failedReport = false;
   /** The run's end was reported: the scheduler can announce it more than once. */
   private finished = false;
   private runEndPending = false;
@@ -198,6 +215,30 @@ export class Supervisor {
     return this.runEndPending;
   }
 
+  /**
+   * A wake-up turn failed once and the restarted planner takes it again: what
+   * it was woken to act on is still the supervisor's (see {@link failed}).
+   * Read from the inputs, not the count: a Stop drops them, a turn that
+   * committed a change took them, and either way no retry will open.
+   */
+  get retryOwed(): boolean {
+    return this.failures > 0 && this.level !== 'off' && this.host.inputsWait();
+  }
+
+  /** A turn opened without the user is in flight: it may still change the plan, or open the run again. */
+  get turning(): boolean {
+    return this.discardTurn !== null;
+  }
+
+  /**
+   * The planner's turns settled. A failure whose inputs no longer wait is
+   * behind it: no retry will take them, so the next failure is a first one
+   * again, as after a turn that landed.
+   */
+  settled(): void {
+    if (this.failures > 0 && !this.turning && !this.host.inputsWait()) this.failures = 0;
+  }
+
   /** Whether wake-ups alone may open a turn now: the supervisor watches. A usage limit holds every turn, and is the planner turns' to wait out. */
   mayWake(): boolean {
     return this.watching;
@@ -216,7 +257,7 @@ export class Supervisor {
    * undelivered wake-ups do.
    */
   mayReport(): boolean {
-    return !this.stopped && this.failures < 2 && this.host.run()?.unsupervised === undefined;
+    return !this.stopped && this.failures < WAKE_UP_ATTEMPTS && this.host.run()?.unsupervised === undefined;
   }
 
   /**
@@ -436,15 +477,44 @@ export class Supervisor {
       return;
     }
     this.failures++;
-    this.host.restartPlanner();
     // A turn on reports owed to the user's turn is the planner's, not the
     // supervisor's (ADR-0037, R3); at Off only reports open one at all.
     const report = authority === 'user' || this.level === 'off';
-    if (this.failures < 2) {
+    this.failedReport = report;
+    const turnName = report ? 'the planner\'s report turn' : 'its wake-up turn';
+    try {
+      this.host.restartPlanner();
+    } catch (restart) {
+      // A retry on a planner that could not be restarted would fail as this turn did.
+      this.giveUp(`${turnName} failed (${brief(reason)}), and the planner could not be restarted (${brief(restart instanceof Error ? restart.message : String(restart))})`);
+      return;
+    }
+    if (this.failures < WAKE_UP_ATTEMPTS) {
       this.host.notice('warn', `${report ? 'The planner\'s report turn' : 'The supervisor\'s wake-up turn'} failed (${brief(reason)}). Retrying once with the planner restarted.`);
       return;
     }
-    this.giveUp(`${report ? 'the planner\'s report turn' : 'its wake-up turn'} failed twice (${brief(reason)})`);
+    this.giveUp(`${turnName} failed twice (${brief(reason)})`);
+  }
+
+  /**
+   * A user's turn took the supervisor's inputs with it and landed: the planner
+   * answered them, a failed wake-up's retry included, so none is owed.
+   */
+  carried(): void {
+    this.failures = 0;
+  }
+
+  /**
+   * The planner gate refused the turn that would retry a failed wake-up: a
+   * planner that cannot plan, a spend cap met. Nothing calls {@link turn} again
+   * until a person acts, so the retry has failed, and the run goes on
+   * unsupervised rather than owing its end to a turn that cannot open. With no
+   * retry owed, the refused inputs wait as they always have.
+   */
+  refused(err: unknown): void {
+    if (!this.retryOwed) return;
+    const reason = brief(err instanceof Error ? err.message : String(err));
+    this.giveUp(`${this.failedReport ? 'the planner\'s report turn' : 'its wake-up turn'} failed, and its retry was refused (${reason})`);
   }
 
   /** The run goes on without a supervisor, and nothing that happened is lost (see {@link standDown}). */
@@ -816,7 +886,7 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
   const modelWindow = facts.contextWindow ? tokens(facts.contextWindow) : undefined;
   const window = facts.compactionWindow
     ? ` of a ${tokens(facts.compactionWindow)} compaction window${modelWindow ? ` (model window ${modelWindow})` : ''}`
-    : modelWindow ? ` of ${modelWindow}` : '';
+    : modelWindow ? ` of ${facts.contextWindowAssumed ? 'an assumed ' : ''}${modelWindow}` : '';
   const unit = facts.compactionWindow ? '' : ' tokens';
   // A compaction that states no size (Codex, OpenCode) leaves the live context unknown, but the peak still says it ran full.
   const context = facts.contextTokens !== undefined
@@ -824,6 +894,8 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
     // Only a compaction names a cause: a /clear or a model switch clears the live size as well.
     : facts.peakContextTokens !== undefined ? `; context unknown${facts.compactions > 0 ? ' since compacting' : ''}, peak ${tokens(facts.peakContextTokens)}${window}${unit}` : '';
   const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
+  const compacted = facts.compactions > 0 ? `; compacted ${times(facts.compactions)}` : '';
+  if (facts.reason === 'context') return `${task}'s context reached its threshold: ${contextLine(facts)}, after ${formatElapsed(facts.elapsedMs)} running${compacted}`;
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
   }
@@ -832,8 +904,19 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
     ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(facts.basis.runningMs)} task ${describe(facts.basis.taskId)} passed in`
     : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
   const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
-  const compacted = facts.compactions > 0 ? `; compacted ${times(facts.compactions)}` : '';
   return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${from}${doubled})${context}${compacted}`;
+}
+
+/** A context flag's size against the window it was measured by: a compaction window in force where it is the smaller, else the model's. */
+function contextLine(facts: RunningLongEvent): string {
+  const model = facts.contextWindow;
+  const threshold = contextThresholdOf(model, facts.compactionWindow);
+  const window = !threshold || model === undefined ? ''
+    : threshold.window < model ? ` of a ${tokens(threshold.window)} compaction window (model window ${tokens(model)})` : ` of ${facts.contextWindowAssumed ? 'an assumed' : 'a'} ${tokens(threshold.window)} window`;
+  const due = facts.contextThreshold ?? threshold?.tokens;
+  const doubled = threshold && due !== undefined && due > threshold.tokens ? ', doubled after each earlier flag' : '';
+  const past = due === undefined ? '' : `, past ${tokens(due)} (${Math.round(CONTEXT_SHARE * 100)}% of the window, ${tokens(CONTEXT_FLOOR_TOKENS)} at least${doubled})`;
+  return `context ${facts.contextTokens === undefined ? 'unknown' : tokens(facts.contextTokens)}${window}${past}`;
 }
 
 /** A token count to the nearest thousand: the supervisor weighs it against the window, not to the token. */
