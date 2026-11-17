@@ -128,6 +128,16 @@ export const SCENARIOS = Object.freeze({
     },
     playedOut: ['A'],
   },
+  'a-stall': {
+    arm: 'A',
+    about: 'arm A: the task makes the edits, then asks a checkpoint nobody answers: the stall rule ends the run, scored from its unlanded worktree',
+    attempts: (ctx) => ({ A: [[...editSteps(ctx), checkpoint('Two docstrings disagree with the tests: may I follow the tests?'), done('Implement the library')]] }),
+    expect: {
+      valid: true, scoredFrom: 'task-worktree', truncated: true, truncatedWhy: /^stalled: waiting on checkpoint/, stoppedWhy: null, stalled: true,
+      notComplete: true, passedAboveBaseline: true, testExcluded: true,
+    },
+    cutShort: ['A'],
+  },
   'b-retry': {
     arm: 'B',
     about: 'arm B: task 1 fails while task 2 waits on it; the supervisor at Act retries it, answers task 2\'s checkpoint, and the run completes; scored from merged work',

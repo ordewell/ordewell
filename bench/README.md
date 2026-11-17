@@ -258,8 +258,9 @@ or network of the bench is left behind:
 | --- | --- | --- | --- |
 | `a-done` | A | the task makes the edits and reports done | valid; `ordewell run` returned by itself with exit 0; not truncated; 1 task completed; more passed than the baseline; the test edit excluded |
 | `a-failed` | A | one shell command runs past the settle window, then the edits, then the task reports failed | not stopped while the command ran; settled with 1 task open; scored from the task's unlanded worktree; more passed than the baseline; the test edit excluded |
+| `a-stall` | A | the task makes the edits, then asks a checkpoint that nobody answers | ended by the stall rule (`stalled: waiting on checkpoint`), not by a cap; never complete; the attempt cut short; scored from the task's unlanded worktree; more passed than the baseline |
 | `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint` |
-| `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it | settled with both tasks held open, a stall record naming them; never complete; scored from merged work, at the baseline, since nothing landed |
+| `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it | ended by the settle rule with both tasks held open, which the stall record names, since nobody is waited on; never complete; scored from merged work, at the baseline, since nothing landed |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
 
 `npm run test:bench` runs the scripts' own logic and never starts the Docker

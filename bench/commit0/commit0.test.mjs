@@ -1728,6 +1728,14 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.match(R.judgeRehearsal('a-failed', { ...passing, truncated: { truncated: true, why: 'cap: wall-clock' }, stopped: { why: 'wall-clock' } }).join('; '), /cap: wall-clock.*stopped by wall-clock/);
   assert.match(R.judgeRehearsal('a-done', { ...passing, scoredFrom: 'merged', truncated: { truncated: false }, tasks: [{ status: 'completed' }], steps: { run: { exit: 0, ended: 'by the stop' } } }).join(), /not by itself/);
   assert.match(R.judgeRehearsal('b-leave', { ...passing, truncated: { truncated: true, why: 'settled with 2 tasks open' }, stalled: {}, tasks: [{ status: 'completed' }, { status: 'completed' }] }).join(), /every task is completed/);
+  // An unanswered checkpoint is the stall rule's: a person waited on with nothing running.
+  const waited = {
+    ...passing, truncated: { truncated: true, why: 'stalled: waiting on checkpoint' }, stopped: null,
+    stalled: { task: { id: 'x', title: 'Implement' }, waiting: 'checkpoint', question: 'q', sinceMs: 120_000 }, tasks: [{ status: 'awaiting_user' }],
+  };
+  assert.deepEqual(R.judgeRehearsal('a-stall', waited), []);
+  assert.match(R.judgeRehearsal('a-stall', { ...waited, truncated: { truncated: true, why: 'settled with 1 task open: 1 waiting on a person' }, stalled: { why: 'settled', open: [] } }).join(), /wanted \/\^stalled: waiting on checkpoint/);
+  assert.match(R.judgeRehearsal('a-stall', { ...waited, tasks: [{ status: 'completed' }] }).join(), /every task is completed/);
   const held = { status: 'failed', held: 'nothing ready', reason: 'failed' };
   const leftAlone = {
     ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
