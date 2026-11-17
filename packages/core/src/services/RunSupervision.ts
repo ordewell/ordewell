@@ -350,6 +350,11 @@ export class RunSupervision {
     return this.supervisor.mayReport();
   }
 
+  /** The planner gate refused the turn that would take the supervisor's inputs; see {@link Supervisor.refused}. */
+  wakeUpsRefused(err: unknown): void {
+    this.supervisor.refused(err);
+  }
+
   /**
    * Run one turn opened without the user, held to the run's level or, on a
    * report owed to the user's turn, to that turn's authority (ADR-0037, R3);

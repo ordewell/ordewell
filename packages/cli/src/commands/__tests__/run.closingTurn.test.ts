@@ -173,6 +173,31 @@ describe('ordewell run at a wait on a person', () => {
   });
 });
 
+describe('ordewell run at a planner paused on its context', () => {
+  it('says, once, that the closing turn waits for someone to retry compaction', async () => {
+    const paused = {
+      type: 'plan_generated',
+      plan: {
+        tasks: [t1, t2],
+        runSettings: { supervisorLevel: 'act' },
+        plannerContextPause: { at: AT, model: 'm', reason: 'The planner ran out of context. The planner is paused: Retry compaction tries to condense its context and continue the turn, or stop it to drop the turn.', inputs: ['w'] },
+      },
+      goal: 'g',
+      runners: [],
+    } as unknown as Event;
+    const { out } = await run('act', [
+      snapshot('act'),
+      complete(1, 1),
+      { type: 'planner_turn_started', turnId: 'w1', supervisor: true },
+      paused,
+      paused,
+      concluded(1, 1),
+    ]);
+
+    expect(out.split('· The planner is paused on its context, and its turn waits: `ordewell compact retry` carries it on. Nobody does that unattended: it waits until someone does.\n')).toHaveLength(2);
+  });
+});
+
 describe('ordewell run when the run is stopped', () => {
   it('returns at the stop and keeps the status it had', async () => {
     const { sentAtReturn, exitCode } = await run('act', [snapshot('act'), { type: 'execution_stopped' }]);

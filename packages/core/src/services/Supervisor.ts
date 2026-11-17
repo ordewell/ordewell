@@ -143,6 +143,8 @@ export class Supervisor {
   private tick: ReturnType<typeof setTimeout> | null = null;
   /** Wake-up turns failed in a row this run; the second ends supervision. */
   private failures = 0;
+  /** The turn that failed last was a report turn rather than the supervisor's own, for how its end is told. */
+  private failedReport = false;
   /** The run's end was reported: the scheduler can announce it more than once. */
   private finished = false;
   private runEndPending = false;
@@ -448,11 +450,25 @@ export class Supervisor {
     // A turn on reports owed to the user's turn is the planner's, not the
     // supervisor's (ADR-0037, R3); at Off only reports open one at all.
     const report = authority === 'user' || this.level === 'off';
+    this.failedReport = report;
     if (this.failures < 2) {
       this.host.notice('warn', `${report ? 'The planner\'s report turn' : 'The supervisor\'s wake-up turn'} failed (${brief(reason)}). Retrying once with the planner restarted.`);
       return;
     }
     this.giveUp(`${report ? 'the planner\'s report turn' : 'its wake-up turn'} failed twice (${brief(reason)})`);
+  }
+
+  /**
+   * The planner gate refused the turn that would retry a failed wake-up: a
+   * planner that cannot plan, a spend cap met. Nothing calls {@link turn} again
+   * until a person acts, so the retry has failed, and the run goes on
+   * unsupervised rather than owing its end to a turn that cannot open. With no
+   * retry owed, the refused inputs wait as they always have.
+   */
+  refused(err: unknown): void {
+    if (!this.retryOwed) return;
+    const reason = brief(err instanceof Error ? err.message : String(err));
+    this.giveUp(`${this.failedReport ? 'the planner\'s report turn' : 'its wake-up turn'} failed, and its retry was refused (${reason})`);
   }
 
   /** The run goes on without a supervisor, and nothing that happened is lost (see {@link standDown}). */
