@@ -138,17 +138,16 @@ node bench/commit0/drive.mjs --sweep
   and labelled `stopped: {why: 'spend' | 'wall-clock'}`.
 - **D2. Arm A is one agent alone**: supervisor off, one task, mode `full`,
   nothing started or merged on its behalf. It is scored on its working tree's
-  final state whether or not its task passed: when the task did not land, its
-  worktree's diff against the flattened commit (committed and uncommitted work,
-  `.venv` left out) is applied to the workspace, the tests are restored as for
-  any run, and the eval runs. That is what one agent working in a directory
-  would be scored on.
+  final state whether or not its task passed: when the task did not land, the
+  files of its worktree (committed and uncommitted work alike), or of its
+  newest preserved branch when the worktree is gone, are the ones scored.
+  That is what one agent working in a directory would be scored on.
 - **D3. Arm B is Ordewell as its user runs it**: supervisor at Act, autorun on,
   automatic merging on, and `ORDEWELL_MAX_PARALLEL` from `--parallel` (default
   8). It is scored only on what Ordewell merged into the workspace: work with
   no passing verdict does not count, which is Ordewell's own rule. The
-  unlanded work of its non-passing tasks is saved as `unlanded-<order>.patch`
-  for diagnosis and never scored.
+  unlanded work of its non-passing tasks stays in the run's `arm-workdir/`
+  copy for diagnosis, listed in `patches`, and is never scored.
 - **D4. A fixed quota per box**: `--cpus` (default 8) and `--memory` (default
   `12g`, swap held to it) apply to the box container, so a run's wall-clock
   does not depend on what else the host runs.
@@ -209,11 +208,17 @@ model call, and the OpenRouter key never enters the box. It checks:
 - per arm, the settings are written and the box's daemon reads them back
   (supervisor off for A, at Act for B, autorun, automatic merging, the
   parallel limit), and the engine holds the box's quota
-- the patch chooser, on a worktree layout built with git: a task's own
-  worktree, never the integration one; a gone worktree's newest
-  `ordewell-preserved/<run>/...` branch; an open subtask as not landed; and
-  each patch applies to the flat commit with no `.venv`
+- the patch chooser, on a worktree layout built with git and read on the host
+  from its copy: a task's own worktree, never the integration one; a gone
+  worktree's newest `ordewell-preserved/<run>/...` branch, its files written
+  out whole; an open subtask as not landed; and no `.venv` read as work
 - the stop path on an idle session leaves no Ordewell process
+- a fixture arm, in place of a model: it writes the reference's source in,
+  adds a module inside the library and imports it, edits a test, and sets a
+  smudge filter and `core.fsmonitor` in the workspace's git. The fresh eval
+  must count the source and the added module, keep the reference's test, run
+  neither the filter nor the monitor (in either box), and pass more tests than
+  the baseline
 
 ### Running
 
@@ -228,20 +233,32 @@ and so does the packed runtime (`runtime/<sha>-<dist build>`). A library's `test
 to the venv Commit0's images install into, `<workdir>/.venv/bin/python -m pytest`,
 since `docker exec` puts it on no PATH. The driver ignores `/.venv` in the
 workspace's `.git/info/exclude`, so an agent's own `git add -A` never commits the
-link core's worktree bootstrap makes to it; every patch leaves `.venv` out, and
-the eval refuses to run if the arm replaced or tracked it. After an arm, the tests under
-`testDir` (`test_*.py`, `*_test.py`, `tests/` and `unit_tests/`) and every
-`conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg` and `tox.ini` in the
-workspace (outside `.venv` and `.ordewell`), ignored files included, are put
-back as the base had them, and nothing else, since a `testDir` may lie inside
-the source. A module or package the arm added at the workspace root under a
-name the venv's Python imports from elsewhere (`pytest`, `pluggy`, a stdlib
-module: `python -m` puts the workspace first on `sys.path`) is removed too.
-Before the eval, `docker diff` on the box, which nothing inside it can rewrite,
-must show no change in `.venv`, in the interpreter its `pyvenv.cfg` names, or
-anywhere outside the workspace, the box's home and scratch (a `.pth` in
-site-packages, a `/pytest.ini`): any such change fails the check, and the run
-is invalid. Bytecode the box wrote anywhere is deleted first. The baseline and the scored eval bound each test at 120 s (a pytest
+link core's worktree bootstrap makes to it.
+
+Every run is scored in a fresh box, never in the one its agent worked in.
+When an arm ends (settled, capped or stalled) its box is stopped and its
+workdir, `.venv` left behind, is copied to the run's `arm-workdir/` by the
+engine (`docker cp`): nothing in that box runs again, so no git configuration,
+hook or process the arm left there touches the score. The files to score are
+read on the host from that copy (D2, D3; a preserved branch is written out by
+a git that reads none of the copy's configuration), and from there both arms
+take one function, `scoreFiles` in `lib.mjs`. It starts a box from the same
+image and quota with no network, mount, key or Ordewell; runs the same flatten
+and leftover cleanup, and checks that it yields the tree the arm's box did;
+then puts in only the files under the workdir that differ from that commit,
+and removes the non-test files the arm deleted (`selectScoredFiles`). It
+leaves out, each recorded in `excluded` with why: the tests under `testDir`
+(`test_*.py`, `*_test.py`, `tests/` and `unit_tests/`); test configuration
+(`conftest.py`, `pytest.ini` and `tox.ini` anywhere; `setup.cfg` and
+`pyproject.toml` are kept whole as the reference has them); `.git`, `.venv`,
+`.ordewell`, `__pycache__` and other caches; a link out of the workdir; and a
+new top-level module, at the workdir root or beside a src layout's package,
+named like something the eval imports (`pytest`, `_pytest`, `pluggy`, the
+timeout plugin, a stdlib module). An edit to test configuration or such a
+module still lets the run be scored, but marks it `needsInspection` with the
+reason. `arm.patch` is the fresh box's diff once the files are in. The
+baseline, in the arm's box before the arm, and the scored eval, in the fresh
+one, run one eval command and bound each test at 120 s (a pytest
 plugin the driver writes to `/opt/commit0-bench`, since the images carry no
 pytest-timeout) and the whole run at 1800 s, so a stub that spins fails its one
 test instead of losing the count.
@@ -253,7 +270,9 @@ this arm short of its pair's cap, an allowed stale dist); the arm's `supervisorL
 `cpus`, `memory`, `capUsd` and `wallCapMs`; `tests.exit` and `tests.timedOut`;
 `stopped` and `stalled`; `scoredFrom` (`merged` or `task-worktree`) and
 `patches`, each with the worktree or branch it came from and whether it was
-scored (`arm.patch` is always the scored diff); and `staleDistAllowed`. A stub
+scored (`arm.patch` is always the scored diff); `evalBox: 'fresh'`,
+`excluded` (`[{path, reason}]`) and `needsInspection`; and
+`staleDistAllowed`. A stub
 baseline that collects nothing (networkx's and sphinx's stubs do not import)
 is recorded as `baseline: {collected: 0, reason}`, not failed. Its offline
 tests are `bench/commit0/commit0.test.mjs`.
@@ -263,7 +282,20 @@ goal text says so: the agents must not look for it in caches, compiled files,
 installed packages or on the network, and write it from the docstrings and the
 tests. The driver backs that up: after the flatten it removes every untracked
 and ignored file but `.venv`, the leak probe fails the run on any that is
-left, and every patch leaves out `__pycache__` and `*.pyc`.
+left, and no bytecode crosses into the eval box.
+
+### Threat model
+
+The arms are not adversaries: they are agents told what is off limits, and
+the harness makes their mistakes and shortcuts not count. It guarantees that
+nothing from an arm's box reaches the eval except its source files, that the
+tests and the test configuration the eval runs are the reference's, and that
+both arms are treated identically, from their files onward through one
+function. It does not claim to stop an implementation that falsifies results
+from inside the library's own code (a module that patches pytest when the
+library is imported, say), which no harness of this kind can. Such a run shows
+in the diff, which is kept with every result as `arm.patch`, and in the
+`arm-workdir/` copy.
 
 ### Batches
 
