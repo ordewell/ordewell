@@ -166,6 +166,23 @@ lists it, and so does an Off run whose last report turn only talked. That is
 deliberate: below Act nobody but the user answers the planner, and an
 unattended run that stops there should say so where the user looks.
 
+### A follower that cannot answer reads the run's end once it stands
+
+`execution_complete` says the run ended, but at Act the closing turn it wakes
+the supervisor to may retry or skip a task and continue the run. A follower
+that cannot answer anything, such as `ordewell run` with nobody attached,
+must not take that end as the run's outcome. So the session also sends
+`run_concluded`, carrying the same summary, once no supervisor's turn can
+continue the run: below Act at once, after `execution_complete`; at Act once
+that closing turn is over, its one retry included, or given up on, or the
+level was lowered (the wake-up-rate guard, the run going unsupervised) or the
+run stopped. A turn that continued the run sends none: its next end does.
+`RunSupervision` owns this, the one place that knows both the run's end and
+its closing turn; `ordewell run` follows the stream to `run_concluded` or
+`execution_stopped` and exits by the summary's verdicts, and the surfaces a
+person watches ignore it. It changes nothing about when the supervisor is
+woken or what any level may do.
+
 ### Live planner turns replace the between-batches queue
 
 The pending plan edit queue is removed. **A user message during a run and a
@@ -785,3 +802,4 @@ until #30 exists.
 - 2026-11-09 — a refusal of the user's own action names the action and the user's surface's control for it rather than a card or button, and a refused `merge_all` with automatic merging on says the merge happens by itself ([ADR-0030](0030-global-run-settings.md)).
 - 2026-11-14 — below Act, a wake-up's reply that leaves nothing to run is listed as a `planner` escalation until the user writes; Watch still changes nothing ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-11-14 — a task running long, or whose runner compacted on its own, is an attention event, held as a quiet task's is (ADR-0018 W1).
+- 2026-11-17 — a follower that cannot answer reads the run's end from `run_concluded`, sent once no closing turn can continue the run; `ordewell run` returns there.

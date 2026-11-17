@@ -124,7 +124,9 @@ Plan options:
   --runner <id>       Runner to use (repeatable; default: all enabled runners)
   --workspace /path   Workspace directory (default: cwd)
   --no-chat           One-shot plan; skips the planner dialogue
-  --yes               Start the plan as soon as it is generated, without a review pause
+  --yes               Grant the planner's own approval prompts (a command, fetch, search or MCP
+                      tool it asks to use, a task start it asks for) without asking; it does not
+                      start the plan: \`ordewell run\` does
   --verbose           Show each planning step as it happens
 
 Run options:
@@ -132,6 +134,11 @@ Run options:
   --workspace /path   Workspace directory (default: cwd)
   --stash             Stash a dirty tree and continue in the task's worktree
   --without-isolation Run the plan in your checkout; tasks share it
+  It returns once the run's end stands: with the supervisor at Act, after the
+  closing turn it is woken to, following the run on if that turn continues it.
+  Exit status: 0 when every task completed or was skipped, 2 when a task failed
+  or is blocked, 1 when the command itself failed (no daemon, a lost connection,
+  a refused start). A stopped run exits 0.
 
 Status options:
   --session-id <id>   Show full detail for one session

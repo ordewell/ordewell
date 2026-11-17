@@ -10,7 +10,7 @@ const landed = [{ taskId: 't1', order: 1, title: 'One' }];
 const handoff: Event = { type: 'isolation_handoff', repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration', baseRef: 'abc', landed }], landed };
 const complete: Event = { type: 'execution_complete', summary: { total: 1, completed: 1, failed: 0, blocked: 0, skipped: 0 } };
 
-const TERMINAL = new Set(['execution_complete', 'execution_stopped']);
+const TERMINAL = new Set(['run_concluded', 'execution_stopped']);
 
 /**
  * Like the daemon: an event reaches only a stream already subscribed when it
@@ -19,7 +19,9 @@ const TERMINAL = new Set(['execution_complete', 'execution_stopped']);
 function liveDaemon(scripts: { execute?: Event[]; approve?: Event[]; stash?: Event[]; shared?: Event[] }) {
   const subscribers = new Set<(event: Event) => void>();
   const settlers = new Set<() => void>();
-  const broadcast = (events: Event[] = []) => { for (const event of events) for (const s of [...subscribers]) s(event); };
+  // Below Act the run's end stands at once: `run_concluded` follows `execution_complete`.
+  const concluded = (events: Event[]): Event[] => events.flatMap((e): Event[] => (e.type === 'execution_complete' ? [e, { type: 'run_concluded', summary: e.summary }] : [e]));
+  const broadcast = (events: Event[] = []) => { for (const event of concluded(events)) for (const s of [...subscribers]) s(event); };
   const api = {
     getSession: vi.fn().mockResolvedValue({ meta: {}, plan: { pendingTasks: [] } }),
     // Like ApiClient: a session has one execution stream, and a new one ends the old.

@@ -33,7 +33,8 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     save: vi.fn(),
     notice: vi.fn(),
     resendHandoff: vi.fn(),
-    deliver: vi.fn(async () => undefined),
+    runConcluded: vi.fn(),
+    deliver: vi.fn(async (..._delivered: unknown[]): Promise<unknown> => undefined),
     pump: vi.fn(),
     restartPlanner: vi.fn(),
     abandonTurn: vi.fn(),
@@ -253,6 +254,95 @@ describe('the end-of-run handoff', () => {
     supervision.apply({ supervisorLevel: 'off' });
 
     expect(host.resendHandoff).not.toHaveBeenCalled();
+  });
+});
+
+describe('a run concluded for a follower that cannot answer it', () => {
+  /** A wake-up turn as the Session runs one: the delivered input goes through the supervisor's turn. */
+  const turnsThrough = (supervision: RunSupervision, host: ReturnType<typeof harness>['host'], reply: () => Promise<unknown>) =>
+    host.deliver.mockImplementation(() => supervision.wakeUp(reply));
+
+  it.each(['off', 'watch'] as const)('concludes at %s as the run finishes: no turn of the supervisor\'s can continue it', (level) => {
+    const { supervision, host } = harness({ supervisorLevel: level });
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('concludes at Act only once the supervisor\'s turn on the end is over', async () => {
+    vi.useFakeTimers();
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    let endTurn: () => void = () => {};
+    turnsThrough(supervision, host, () => new Promise<void>((resolve) => { endTurn = resolve; }));
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.runConcluded).not.toHaveBeenCalled();
+    endTurn();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not conclude a run the closing turn continued, and concludes its next end', async () => {
+    vi.useFakeTimers();
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    supervision.runStarted('user');
+    turnsThrough(supervision, host, async () => { supervision.runStarted('supervisor'); });
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.runConcluded).not.toHaveBeenCalled();
+
+    turnsThrough(supervision, host, async () => undefined);
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits through the closing turn\'s one retry, and concludes once the retry is over', async () => {
+    vi.useFakeTimers();
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    turnsThrough(supervision, host, async () => { throw new Error('planner exited'); });
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.runConcluded).not.toHaveBeenCalled();
+    await supervision.wakeUp(async () => undefined);
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('concludes once the supervisor is given up on: its closing turn failed twice', async () => {
+    vi.useFakeTimers();
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    turnsThrough(supervision, host, async () => { throw new Error('planner exited'); });
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(supervision.wakeUp(async () => { throw new Error('planner exited'); })).rejects.toThrow('planner exited');
+
+    expect(supervision.level).toBe('off');
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('concludes at Act when the user stops before the closing turn opens', () => {
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    supervision.runStarted('user');
+    supervision.runFinished();
+    expect(host.runConcluded).not.toHaveBeenCalled();
+
+    supervision.userStopped();
+
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
   });
 });
 

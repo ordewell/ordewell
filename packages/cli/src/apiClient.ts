@@ -866,8 +866,10 @@ export class ApiClient {
 
   /**
    * One run's progress, for a caller that holds no other socket on the
-   * session: it ends with the run's completion frame, or with a second stream
-   * on the same session, so one run is reported once.
+   * session: it ends when the run's end stands (`run_concluded`, after any
+   * closing turn of the supervisor's that may continue it, ADR-0029), when the
+   * run is stopped, or with a second stream on the same session, so one run is
+   * reported once.
    */
   streamExecution(
     sessionId: string,
@@ -888,7 +890,7 @@ export class ApiClient {
       };
       const socket = this.listen(socketPath(sessionId, undefined, this.workspace), (event) => {
         onEvent(event);
-        if (event.type === 'execution_complete' || event.type === 'execution_stopped') end();
+        if (event.type === 'run_concluded' || event.type === 'execution_stopped') end();
       });
       this.executionStreams.set(sessionId, end);
       void socket.ready.then((open) => {
