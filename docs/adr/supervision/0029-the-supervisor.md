@@ -166,6 +166,38 @@ lists it, and so does an Off run whose last report turn only talked. That is
 deliberate: below Act nobody but the user answers the planner, and an
 unattended run that stops there should say so where the user looks.
 
+### A follower that cannot answer reads the run's end once it stands
+
+`execution_complete` says the run ended, but at Act the closing turn it wakes
+the supervisor to may retry or skip a task and continue the run. A follower
+that cannot answer anything, such as `ordewell run` with nobody attached,
+must not take that end as the run's outcome. So the session also sends
+`run_concluded`, carrying the same summary, once no supervisor's turn can
+continue the run: below Act at once, after `execution_complete`; at Act once
+the run has ended, no wake-up turn is in flight or waiting, and no retry is
+owed. That is a judgement of state, not a call made where a turn happens to
+end: `RunSupervision.settle()` makes it, and every change to any part of it
+runs it again (a turn settling, the planner's inputs persisted or dropped by a
+Stop, a discard, the level changing, the failure that leaves the run
+unsupervised, the plan being replaced or the session closing). A retry is
+owed only while the failed turn's input still waits, so a Stop that drops it
+owes none. A planner held on a usage limit or its context cannot take the
+turn for as long as the hold lasts, and a closing turn queued behind a turn
+the user then stopped goes only with the user's next message, so in either
+case the run concludes at once and
+`run_concluded` carries `supervisorHeld`, the reason, which `ordewell run`
+prints. A turn that continued the run sends none: its next end does.
+`ordewell run` follows the stream to `run_concluded` or `execution_stopped`
+and exits by the summary's verdicts, and the surfaces a person watches ignore
+it. As a backstop it waits at most `CLOSING_TURN_BOUND_MS` after each end, the
+wake-up turn's limit and grace times its attempts plus the debounce, all from
+`Supervisor.ts`. A user's planner turn the closing turn queues behind lasts as
+long as the user's does, so the wait counts only while no user's turn is open,
+and afresh from each planner turn's start or end; past that it says the closing
+turn did not conclude and exits
+by the tasks' outcomes. It changes nothing about when the supervisor is woken
+or what any level may do.
+
 ### Live planner turns replace the between-batches queue
 
 The pending plan edit queue is removed. **A user message during a run and a
@@ -310,7 +342,8 @@ narrow (deny), or hand the decision to a person.
 a checkpoint asks a person to approve its work before it goes on, and the
 answer is the user's judgement unless they let the supervisor act. In a
 wake-up turn at Act the supervisor approves it, so the task goes on, or rejects
-it with a reason, which the runner is told and acts on; a rejection without a
+it with a reason, which the runner is told and acts on; either way the runner's
+reply names the supervisor as answering for the user (ADR-0025). A rejection without a
 reason is refused, since the runner would be left with nothing to act on. A
 planner turn in the user's own turn is refused: the user is in the conversation
 and answers it themselves, by their surface's control for it
@@ -785,3 +818,7 @@ until #30 exists.
 - 2026-11-09 — a refusal of the user's own action names the action and the user's surface's control for it rather than a card or button, and a refused `merge_all` with automatic merging on says the merge happens by itself ([ADR-0030](0030-global-run-settings.md)).
 - 2026-11-14 — below Act, a wake-up's reply that leaves nothing to run is listed as a `planner` escalation until the user writes; Watch still changes nothing ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-11-14 — a task running long, or whose runner compacted on its own, is an attention event, held as a quiet task's is (ADR-0018 W1).
+- 2026-11-17 — a follower that cannot answer reads the run's end from `run_concluded`, sent once no closing turn can continue the run; `ordewell run` returns there.
+- 2026-11-17 — the supervisor's checkpoint answer reaches the runner as its own, "the supervisor said yes for the user" or "no" with the reason, not as the user's (ADR-0025).
+- 2026-11-17 — `run_concluded` is derived from state in `RunSupervision.settle()` and judged again on every change to it, a planner held on a limit concludes with `supervisorHeld`, and `ordewell run` waits at most `CLOSING_TURN_BOUND_MS` per end. Seen in review: a Stop of the closing turn's retry left the end open forever.
+- 2026-11-17 — a Stop that parks the closing turn behind the user's next message concludes the run with `supervisorHeld`, and `ordewell run`'s bound does not count a user's planner turn the closing turn waits behind.

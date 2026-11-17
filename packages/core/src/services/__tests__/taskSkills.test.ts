@@ -92,7 +92,8 @@ describe('resolveTaskSkills', () => {
     writeSkill(globalSkills(), 'tdd', 'task', 'RED, GREEN.');
 
     expect(() => resolveTaskSkills({ title: 'Ship', skills: ['tdd', 'a', 'b'] }, createSkillsService(worktree))).toThrow(
-      `Task "Ship" did not start: skills "a" and "b" not found in ${globalSkills()} or ${skillsOf(worktree)}.`,
+      'Task "Ship" did not start: skills "a" and "b" not found: create each at .ordewell/skills/<name>/SKILL.md, or remove them from the task\'s skills with edit_plan, then retry the task'
+      + ` (searched ${globalSkills()} or ${skillsOf(worktree)}).`,
     );
   });
 
@@ -100,10 +101,13 @@ describe('resolveTaskSkills', () => {
     const inMainCheckout = (name: string) => (name === 'draft' ? '.ordewell/skills/draft' : undefined);
 
     expect(() => resolveTaskSkills({ title: 'Ship', skills: ['draft', 'nowhere'] }, createSkillsService(worktree), inMainCheckout)).toThrow(
-      `Task "Ship" did not start: skills "draft" and "nowhere" not found in ${globalSkills()} or ${skillsOf(worktree)}`
-      + ' (a workspace skill reaches a task\'s worktree only once committed: commit .ordewell/skills/draft so task worktrees receive it).',
+      'Task "Ship" did not start: skills "draft" and "nowhere" not found: create each at .ordewell/skills/<name>/SKILL.md, or remove them from the task\'s skills with edit_plan, then retry the task'
+      + ` (searched ${globalSkills()} or ${skillsOf(worktree)}; a workspace skill reaches a task's worktree only once committed: commit .ordewell/skills/draft so task worktrees receive it).`,
     );
-    expect(() => resolveTaskSkills({ title: 'Ship', skills: ['nowhere'] }, createSkillsService(worktree), inMainCheckout)).toThrow(/not found in [^(]*\.$/);
+    expect(() => resolveTaskSkills({ title: 'Ship', skills: ['nowhere'] }, createSkillsService(worktree), inMainCheckout)).toThrow(
+      'Task "Ship" did not start: skill "nowhere" not found: create .ordewell/skills/nowhere/SKILL.md, or remove "nowhere" from the task\'s skills with edit_plan, then retry the task'
+      + ` (searched ${globalSkills()} or ${skillsOf(worktree)}).`,
+    );
   });
 
   it('refuses a planner skill, which a frontmatter without applies-to is', () => {

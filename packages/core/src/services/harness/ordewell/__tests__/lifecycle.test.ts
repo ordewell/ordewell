@@ -90,6 +90,51 @@ describe('the step limit', () => {
   });
 });
 
+describe('the budget notices', () => {
+  /** A glob per step, each with its own pattern so the repeat guard stays quiet. */
+  const working = (steps: number): ScriptedStep[] => Array.from({ length: steps }, (_, i) => [call(`g${i}`, 'glob', { pattern: `${i}/*.md` }), STOP]);
+  /** The runner's notes the model was sent, by the model call (from 1) each was the last message of. */
+  function notesOf(requests: readonly { messages: readonly { role: string }[] }[]): Map<number, string> {
+    const notes = new Map<number, string>();
+    requests.forEach((request, i) => {
+      const last = request.messages.at(-1);
+      if (i > 0 && last?.role === 'user' && 'text' in last && typeof last.text === 'string') notes.set(i + 1, last.text);
+    });
+    return notes;
+  }
+
+  it('tells the model once at 80% of its step budget and once at 95%, before the forced last call', async () => {
+    const { loop, client } = loopWith([...working(39), [call('end', 'task_complete', { status: 'blocked', summary: 'part done' }), STOP]], { stepLimit: 40 });
+    await loop.runTurn('Work.', signals());
+
+    expect(client.requests).toHaveLength(40);
+    const notes = notesOf(client.requests);
+    // 32 of 40 calls used is 80%, 38 is 95%; the 40th is the last call's own instruction.
+    expect([...notes.keys()]).toEqual([33, 39, 40]);
+    expect(notes.get(33)).toMatch(/^\[Ordewell\] You have used 32 of the 40 model calls/);
+    expect(notes.get(33)).toMatch(/commit/);
+    expect(notes.get(39)).toMatch(/^\[Ordewell\] 2 model calls are left of the 40/);
+    expect(notes.get(39)).toMatch(/what is done and what remains/);
+    expect(notes.get(40)).toMatch(/last model call/);
+  });
+
+  it('sends none once a report stands', async () => {
+    const report = call('r', 'task_complete', { status: 'done', summary: 'ok' });
+    const { loop, client, taskTools } = loopWith([...working(31), [report, STOP], ...working(7), [STOP]], { stepLimit: 40 });
+    await loop.runTurn('Work.', signals());
+
+    expect(client.requests).toHaveLength(40);
+    expect([...notesOf(client.requests).keys()]).toEqual([40]);
+    expect(taskTools.calls.map((c) => (c.args as { status: string }).status)).toEqual(['done']);
+  });
+
+  it('sends neither where a threshold falls on the last call, which has its own instruction', async () => {
+    const { loop, client } = loopWith([...working(4), [call('end', 'task_complete', { status: 'blocked', summary: 'part done' }), STOP]], { stepLimit: 5 });
+    await loop.runTurn('Work.', signals());
+    expect([...notesOf(client.requests).keys()]).toEqual([5]);
+  });
+});
+
 describe('the repeat guard', () => {
   it('nudges the third identical call in a row and ends the attempt on the fourth, naming the call', async () => {
     const { loop, client, taskTools, events } = loopWith([[glob('1'), STOP], [glob('2'), STOP], [glob('3'), STOP], [glob('4'), STOP]]);

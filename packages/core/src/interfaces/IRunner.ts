@@ -132,6 +132,15 @@ export interface IRunnerSession {
    * Ordewell sets none, so the runner compacts near its model's own window.
    */
   readonly compactWindowTokens?: number;
+  /**
+   * Where compaction starts, when it is not the CLI's usual buffer below
+   * {@link compactWindowTokens} (Claude Code's): a runner whose setting names
+   * the start itself reports it here as well, so the context meter reads
+   * against it and not against a start 32k under it. Running long reads the
+   * window in force as this start plus that buffer on every harness, so one
+   * setting flags alike whichever runner holds it (ADR-0018 C4).
+   */
+  readonly compactStartTokens?: number;
   onOutput(callback: (text: string) => void): void;
   onExit(callback: (code: number) => void): void;
   /** End the process at once. {@link stop} is how an attempt that is over lets it go. */

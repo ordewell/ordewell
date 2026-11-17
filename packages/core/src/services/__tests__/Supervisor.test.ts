@@ -65,6 +65,20 @@ describe('wakeUpDigest', () => {
       ]);
     });
 
+    it('names a window no catalog or listing stated as assumed', () => {
+      const event = runningLong('t4', { contextTokens: 90_000, contextWindow: 128_000, contextWindowAssumed: true });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toContain('; context 90k of an assumed 128k tokens');
+    });
+
+    it('names an assumed window when the context flag fires against it', () => {
+      const event = runningLong('t4', { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 200_000, contextTokens: 210_000, contextWindow: 400_000, contextWindowAssumed: true });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toContain('context 210k of an assumed 400k window, past 200k');
+    });
+
     it('names the floor when no AI task has passed, and a threshold doubled by earlier flags', () => {
       const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE });
 
@@ -106,6 +120,23 @@ describe('wakeUpDigest', () => {
       const line = wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1];
       expect(line).toContain('; context unknown, peak 150k of 200k tokens');
       expect(line).not.toContain('compacting');
+    });
+
+    it('names a context that reached its threshold, against the model\'s window, then what the supervisor can do', () => {
+      const event = runningLong('t4', { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 400_000, contextTokens: 412_000, contextWindow: 1_000_000, peakContextTokens: 412_000 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')).toEqual([
+        'Run update:',
+        '- task #4 "Task t4"\'s context reached its threshold: context 412k of a 1000k window, past 400k (40% of the window, 150k at least), after 40m 00s running',
+        ADVICE,
+      ]);
+    });
+
+    it('names a context threshold doubled by an earlier flag, the compaction window it was measured against, and the compactions so far', () => {
+      const event = runningLong('t4', { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 320_000, contextTokens: 330_000, contextWindow: 1_000_000, compactionWindow: 400_000, compactions: 1 });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4"\'s context reached its threshold: context 330k of a 400k compaction window (model window 1000k), past 320k (40% of the window, 150k at least, doubled after each earlier flag), after 40m 00s running; compacted once');
     });
 
     it('says what the supervisor can do once however many tasks run long, and not at all when none does', () => {
@@ -224,7 +255,7 @@ describe('Supervisor', () => {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), stoppedByUser: () => false, digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
       // Nothing left to wait for: what is held goes at the window, as the tests here want it to (WakePolicy.test.ts holds the rest).
       wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
-      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
+      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), inputsWait: () => true, dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
 

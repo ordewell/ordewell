@@ -2,7 +2,7 @@ import { assignmentFlagText } from '../tui/blocks';
 import { writeFileSync } from 'fs';
 import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
-import { blockedByLabel, handoffBaseLine, holdLabel, isolationViewOfPlan, loopRowParts, planBlocks, repairWaitLabel, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type RunView } from '@ordewell/core';
+import { blockedByLabel, handoffBaseLine, holdLabel, isolationViewOfPlan, loopRowParts, planBlocks, repairWaitLabel, scriptTaskText, skippedLabel, flattenTasks, taskOrderLabel, taskRowView, tasksTotalText, usageText, waitsForApproval, walkPlan, type ApprovalRecord, type AssignmentScope, type BlockingSubject, type RunView, type Task } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { ensureDaemon, resolvePort } from '../daemon';
 import { ApiClient, type SessionMeta } from '../apiClient';
@@ -91,7 +91,10 @@ function printOneSession(
 ): void {
   const allTasks = allTasksOf(plan);
   const everyTask = flattenTasks(allTasks);
-  const { blocked, repeating } = planBlocks(everyTask.map((t) => ({ ...t, subtasks: [], dependencies: t.dependencies ?? [] })));
+  // The tree, not the flat list: a subtask is held to its ancestors' dependencies too (ADR-0034).
+  const asSubjects = (tasks: readonly Task[]): BlockingSubject[] =>
+    tasks.map((t) => ({ ...t, dependencies: t.dependencies ?? [], subtasks: asSubjects(t.subtasks ?? []) }));
+  const { blocked, repeating } = planBlocks(asSubjects(allTasks));
   // A hold is live session state; a saved plan has none, and a surface does not rebuild one from it.
   const holds = new Map<string, string>();
   const repairs = new Map<string, string>();

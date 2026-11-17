@@ -168,3 +168,20 @@ describe('PlanStore.load status handling', () => {
     expect(store.get('a')!.status).toBe('pending');
   });
 });
+
+describe('a session saved before a plan\'s skills were checked', () => {
+  it('loads a task naming a skill nothing provides, as it was saved: only a new submission or edit is checked', () => {
+    const saved = JSON.parse(`{
+      "tasks": [
+        { "id": "a", "order": 1, "title": "Resolver", "description": "", "type": "ai", "status": "pending", "dependencies": [], "subtasks": [], "prompt": "p", "assignedRunner": "claude-code", "skills": ["python", "dns-protocol"] }
+      ],
+      "generatedAt": "2026-01-01T00:00:00Z", "lastUpdated": "2026-01-01T00:00:00Z", "status": "approved", "runners": ["claude-code"],
+      "conversationHistory": [{ "role": "user", "content": "build a resolver", "timestamp": "2026-01-01T00:00:00Z" }]
+    }`) as LegacyPlanState;
+    const session = makeSession();
+
+    session.loadPlan(saved, 'build a resolver', testWorkspace, { persist: false });
+
+    expect(session.planTasks.map((t) => t.skills)).toEqual([['python', 'dns-protocol']]);
+  });
+});

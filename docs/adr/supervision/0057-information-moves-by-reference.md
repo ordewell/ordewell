@@ -172,11 +172,13 @@ is no sibling chat, lock tool, wait tool or broadcast.**
     it, from the start of the request: the turn's opening stands for that, which can only make a
     wake early. A prefix already cold has nothing to save, so the age then runs from the event.
 
-  A `running_long` event raised by a compaction is rationed by where the window comes from
-  ([ADR-0018](../runners/0018-structured-runner-transport.md) W1). Where Ordewell sets the window a task
-  compacts at (Claude Code's task environment today), a compaction is routine, and the event comes from
-  the attempt's third, then its 6th, 12th and so on. Where it sets none, the runner compacts near its
-  model's own window, which is rare enough to say so from the first. The time-based event is unrelated.
+  A `running_long` event is raised by a task's running time, by an automatic compaction of its own
+  runner session, or by its context growing large; which compactions count as routine, and where a
+  large context starts, is one rule for every harness
+  ([ADR-0018](../runners/0018-structured-runner-transport.md) C4). A flagged context comes before
+  a compaction, so the supervisor can have the runner commit and report, or split the task, while
+  its context is still sound. All three are held, batched and counted against the rate guard alike;
+  their line says which raised it.
 
   A pass is not held: it wakes nothing and starts no clock, and rides along in the next wake, as it
   does today, so a plan that only passes opens no turn. A delegated task's pass is a child plan
@@ -187,8 +189,9 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   event of at most 120: a pass, or a held event that holds no work back. A digest names a task in at
   most 80, so a long title is cut and the line still says what happened. A `running_long` line
   is the exception: it carries its facts whole, up to 360 characters, with the context measured against the window the task
-  compacts at where Ordewell sets one and the model's window beside it ("context 16k of a 150k compaction
-  window (model window 1000k)"), and the digest says once,
+  compacts at where Ordewell sets one and the model's window beside it ("context 16k of a 400k compaction
+  window (model window 1000k)"), or, for one its context raised, the size it passed ("context 412k
+  of a 1000k window, past 400k"), and the digest says once,
   after the attention lines, what the supervisor can do about one, so the planner's system prompt
   does not grow. What woke the planner goes
   first, whole items only. Overflow becomes counts and a pointer: `task_query` reads the rest. The
@@ -459,3 +462,5 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-10 — R4: at Act, a failure another task depends on wakes at its merge window, so a retry runs beside the rest.
 - 2026-11-14 — R4, R5: `running_long` ([ADR-0018](../runners/0018-structured-runner-transport.md) W1) is held as `task_idle` is, a later one for the same task replaces the first, and its line carries its facts whole with the advice once.
 - 2026-11-15 — R4, R5: where Ordewell sets the window a task compacts at, a compaction raises `running_long` from the attempt's third, then at the 6th, 12th and so on, and its line names that window beside the model's; with no window set it still fires from the first.
+- 2026-11-17 — R4, R5: a compaction is routine only under a window below 200k tokens; with none set, as `auto` sets none but Haiku's, or any window from 200k, `running_long` fires from the first, and R5's example names a 400k window.
+- 2026-11-17 — R4, R5: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, raises `running_long`, held as the others are; its line names the size it passed against the window.

@@ -740,6 +740,21 @@ plan.
 *Avoid:* "notes" or "memory", which say nothing of what it holds or that a
 checkpoint carries it; "summary", which is the paraphrase it exists to avoid.
 
+**Task compaction start** (`taskCompactAt`, ADR-0018 C4) — where a task runner
+starts compacting its own context, one setting for every harness: `auto` (the
+default: the harness's own start near the model's true window, and for Haiku on
+Claude Code just under its 100,000-token price step), a number of tokens, or
+`off`. Saved in `settings.json`; `ORDEWELL_TASK_COMPACT_AT` wins when set. Each
+runner maps a number onto what it offers and says so in its log when it must
+move it; a planner never reads it, and the built-in runner does not honour `off`.
+A runner reports the start it works to (`compactStartTokens`) and the window in
+force (`compactWindowTokens`: the start plus Claude Code's 32,000-token buffer
+there, the start itself elsewhere); the context meter's "compacts at" reads the
+start. Compaction is a capacity guard, not a quality tool: a task grown large is
+flagged by *Running long*, not compacted early.
+*Avoid:* "compaction window" for the start (the window is the model's), "auto
+compact" for the setting.
+
 **Compaction event** (`planner_compaction`, carrying a `PlannerCompaction`) —
 one phase of a planner compaction as surfaces are told it (ADR-0017 C1):
 `started`, then `ended` with an outcome (condensed, pruned, unchanged, stopped,
@@ -1129,8 +1144,12 @@ approval" is derived from the task's pending approvals.
 
 **Running long** (ADR-0018, W1) — the advisory flag on an AI task's attempt
 whose running time passed max(30 min, 3× the longest running time of an AI
-task that passed in its plan), doubled after each flag, or whose own runner session
-compacted its context by itself. Time waiting on a person is left out, of both. It
+task that passed in its plan), doubled after each flag, whose own runner session
+compacted its context by itself, or whose context first reached 40% of its effective
+window (the smaller of the model's and a compaction window in force; see *Task
+compaction start*), never below 150k tokens, and again at each doubling of that
+below the window. Time waiting on a
+person is left out of the running time. It
 carries the running time, the threshold and the task it came from, the live
 and peak context, the model's window and the compactions so far. The
 supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or
@@ -1805,8 +1824,8 @@ one in any session; it is in no settings panel. Only Claude Code's task runner
 narrows its setup (`--setting-sources`, `ENABLE_CLAUDEAI_MCP_SERVERS`, and for a
 read-only task `--strict-mcp-config` and `--disable-slash-commands`); the others
 ignore it. A
-Claude task runner's context also compacts at a fixed window of its own
-(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), which a planner's never does.
+task runner's compaction start is the *Task compaction start*, which a planner's
+never is.
 *Avoid:* "lean mode", "safe mode" (that is a Claude Code flag of another kind).
 
 **Task attempt** (`TaskAttempt`, inside `Attempts`) — one run of one
@@ -1874,10 +1893,14 @@ for input); how one ended goes to `settle`, never applied where it ended.
 `TaskRowView.blockedBy`) — a task not started yet whose dependency failed or is
 itself blocked (ADR-0034). The scheduler never starts it, its own dependents are
 blocked with it, and every surface shows it "blocked by #N", naming the failed
-tasks it waits on. Independent work keeps starting: a failure stops only what
+tasks it waits on. A subtask is part of its parent's work, so it is held to
+the dependencies of every ancestor as well as its own (`heldDependencies`), and
+is blocked when its parent is; the plan does not copy those edges onto it, and
+a *Skip* of the parent passes over the parent alone, releasing none of its
+subtasks. Independent work keeps starting: a failure stops only what
 depends on it. Nothing is stored — there is no `blocked` task status; the rule reads statuses and
-dependencies, and a plan file saved with one loads it as pending — so a retry of the failed task that passes, or a *Skip* of it, unblocks its
-dependents, which then start. A run with nothing running and only failed and blocked tasks left ends,
+dependencies, and a plan file saved with one loads it as pending — so a retry of the failed task that passes, a *Skip* of it or a Mark complete unblocks its
+dependents, its dependents' subtasks among them, which then start. A run with nothing running and only failed and blocked tasks left ends,
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
 reconciled into it rather than reloaded over it, leaving the failed task failed:
@@ -1899,7 +1922,7 @@ a task added to resolve its conflict has that conflict (`resolver`, ADR-0015);
 it has no prompt; it is outside the user's approval record; it is on hold, with
 that reason shown on every surface; it is blocked; it is in a *Loop*'s body
 whose check has not failed this round
-(`loop-check`, "runs if #X fails"); its dependencies are not met, or, queued
+(`loop-check`, "runs if #X fails"); its dependencies, or an ancestor's, are not met, or, queued
 by a force start, are still under way; a Merge all is under way and it is an ops task; its runner
 waits on a usage limit's reset; a planner turn holds new starts; it is at its
 *Merge gate*; it is a user task. One pure function over the plan, the holds
@@ -1910,7 +1933,10 @@ force start reads it as forced: past a hold, a failure, a usage limit and the
 gate the user confirmed. The claim is separate: it checks only what can change
 at the last moment. A loop's check *between rounds* waits `repeating` in place
 of "it has started": its loop starts it again, or, with nothing left to run it,
-a start of it does.
+a start of it does. A subtask waits for every ancestor's dependencies as for
+its own, so an ops subtask waits at the merge gate its ops parent waits at; an
+ancestor's dependency that itself waits on that ancestor's subtree is not
+inherited, since the subtask would wait on itself.
 *Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
 the *Merge gate*.
 
@@ -3843,8 +3869,11 @@ module owning one plan's run supervision (ADR-0029, ADR-0030): the run's own
 **Run settings** (`runSettings`), whether a run starts afresh or continues the
 last (by its **Run origin**), the user's change applied to the run at once
 (`apply`), the lowerings — a tripped wake-up-rate guard to Watch, a failed
-supervisor to unsupervised — the **Loop guards**' memory, and the end-of-run
-handoff an Act supervisor has first. It owns the `Supervisor`, which decides
+supervisor to unsupervised — the **Loop guards**' memory, the end-of-run
+handoff an Act supervisor has first, and when that end stands for a follower
+that cannot answer it (`run_concluded`, derived in `settle()` from state and
+judged again on every change to it: below Act at once, at Act once the run has
+ended, no wake-up turn is in flight or waiting and no retry is owed). It owns the `Supervisor`, which decides
 when the planner wakes. The Session forwards run events to it and reads back
 only the level; the scheduler reads the run's settings through one
 `runSettings()` callback as it decides, and nothing is pushed to it.

@@ -410,7 +410,7 @@ describe.runIf(live)('structured transport — live smoke', () => {
       const call = events.find((e) => e.type === 'tool_call' && e.name === 'mcp__ordewell__checkpoint');
       expect(call, session.getOutput()).toBeDefined();
       expect(asked).toHaveLength(1);
-      expect(events.find((e) => e.type === 'tool_result' && call?.type === 'tool_call' && e.id === call.id)).toMatchObject({ success: true, output: 'rejected: not today' });
+      expect(events.find((e) => e.type === 'tool_result' && call?.type === 'tool_call' && e.id === call.id)).toMatchObject({ success: true, output: 'rejected: the user said no — not today' });
       expect(events.filter((e) => e.type === 'permission_request' && !e.decided)).toEqual([]);
       session.kill();
     } finally {

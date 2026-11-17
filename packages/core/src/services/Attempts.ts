@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit, SessionNotResumable } from './harness/ordewellBinding';
-import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, Verdict } from '../models/Task';
+import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, TurnAuthority, Verdict } from '../models/Task';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
@@ -50,6 +50,7 @@ import type { BudgetHold, NodeBudget } from './TreeLedger';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import { recordRunnerAuth, signedOutFromFailure } from './runnerAuth';
 import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
+import { compactionStartOf } from './compactionStart';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
@@ -728,16 +729,16 @@ export class Attempts {
     return this.deps.store.get(taskId)?.awaitingReason === 'checkpoint' && this.live.has(taskId);
   }
 
-  approveCheckpoint(taskId: string, note?: string): void {
+  approveCheckpoint(taskId: string, note?: string, by?: TurnAuthority): void {
     if (!this.awaitsCheckpoint(taskId)) return;
-    this.verifier.approveCheckpoint(taskId, note);
+    this.verifier.approveCheckpoint(taskId, note, by);
     this.deps.store.markInProgress(taskId);
     this.host.emit('onTaskChanged');
   }
 
-  rejectCheckpoint(taskId: string, reason?: string): void {
+  rejectCheckpoint(taskId: string, reason?: string, by?: TurnAuthority): void {
     if (!this.awaitsCheckpoint(taskId)) return;
-    this.verifier.rejectCheckpoint(taskId, reason ?? 'Checkpoint rejected by user');
+    this.verifier.rejectCheckpoint(taskId, reason ?? 'they gave no reason', by);
     this.deps.store.markInProgress(taskId);
     this.host.emit('onTaskChanged');
   }
@@ -921,10 +922,26 @@ export class Attempts {
 
   /** Follow a running attempt's session: its usage, its verdict, its turns and what its runner switches to. */
   private watch(task: Task, attempt: TaskAttempt, session: IRunnerSession): void {
+    // Where its runner compacts, for the context meter to read against (ADR-0018 W1).
+    // A runner may move it as it runs (a request shrunk to fit, a window its
+    // harness names, a setting it turns out not to apply), so each reading
+    // and compaction looks again (ADR-0018 C4).
+    let point: string | undefined;
+    const notePoint = (): void => {
+      const window = session.compactWindowTokens;
+      const now = window === undefined ? undefined : { windowTokens: window, startsAtTokens: session.compactStartTokens ?? compactionStartOf(window) };
+      const key = now && `${now.windowTokens}/${now.startsAtTokens}`;
+      if (key === point) return;
+      point = key;
+      this.deps.store.setAttemptCompaction(task.id, attempt.attempt, now);
+    };
+    notePoint();
     // Attached before the verifier, so the summary of the call that settles
     // the attempt is captured before its verdict asks for the final text.
     session.onEvent((event) => {
+      if (event.type === 'compaction' && attempt.planScope === this.planScope) notePoint();
       if (event.type !== 'usage' || attempt.planScope !== this.planScope || (this.live.get(task.id) !== attempt && !attempt.runnerStopped)) return;
+      notePoint();
       this.deps.store.recordAttemptUsage(task.id, attempt.attempt, event.record, new Date().toISOString());
       // A delegated task's usage rolled up from its child, whose node was charged as it arrived (ADR-0055 D20, ADR-0056 M5).
       if (!attempt.delegated) this.deps.budget?.spent(event.record, { taskId: task.id, attempt: attempt.attempt });

@@ -6,7 +6,7 @@ import type { ToolOutcome } from '../../interfaces/IFileSystem';
 import type { McpCaller } from './mcpCaller';
 import { HANDOFF_LIMITS } from '../../models/Handoff';
 import { ONE_LINE } from '../../models/lineBreaks';
-import { DECISION_RECORD_KINDS } from '../../models/Task';
+import { DECISION_RECORD_KINDS, type TurnAuthority } from '../../models/Task';
 import { BOARD_LIMITS, BOARD_REF, BOARD_TYPES, TASK_ENTRY_TYPES, type BoardEntryType } from '../../models/Board';
 
 /**
@@ -66,9 +66,9 @@ const handoffCommit = z.object({
 
 const taskCompleteInput = z.object({
   status: z.enum(['done', 'blocked', 'failed'])
-    .describe("'done' only when the task is fully complete. 'blocked' or 'failed' end the attempt without passing."),
+    .describe("'done' only when the task is fully complete; 'blocked' for an obstacle outside your control, never for how much work remains. 'blocked' or 'failed' end the attempt without passing."),
   summary: z.string().max(HANDOFF_LIMITS.summary, 'Put the long form in report.')
-    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters; the long form goes in report.`),
+    .describe(`The handoff the next task reads first, written for that reader: what changed and why, the interfaces and paths a dependent relies on, the assumptions you acted on, what is left. At most ${HANDOFF_LIMITS.summary} characters, or the call is refused: what to act on goes in findings, the long form in report.`),
   reason: z.string().optional().describe("Why the task is blocked or failed. Expected for anything but 'done'."),
   commit: handoffCommit.optional()
     .describe(`A change task's commit message, for a human reviewer: what changed and why. Only kept with status 'done'. The subject is one line of at most ${HANDOFF_LIMITS.commitSubject} characters, best 72 or fewer, the body at most ${HANDOFF_LIMITS.commitBody}.`),
@@ -291,11 +291,12 @@ export interface McpToolReply {
 /**
  * How a checkpoint call ended. `withdrawn` is the attempt going away under it
  * (verdict, cancel, retry, stop) or the call being refused, not a verdict on
- * the question.
+ * the question. `by` is who answered, the user when it is absent: the
+ * supervisor at Act answers for them (ADR-0029).
  */
 export type CheckpointAnswer =
-  | { kind: 'continue'; note?: string }
-  | { kind: 'rejected'; reason: string }
+  | { kind: 'continue'; note?: string; by?: TurnAuthority }
+  | { kind: 'rejected'; reason: string; by?: TurnAuthority }
   | { kind: 'withdrawn'; why: string };
 
 /** A command's outcome as `run_command` answers it, the planner's and a read-only task's alike. */
@@ -303,11 +304,16 @@ export function commandReply(outcome: ToolOutcome): McpToolReply {
   return { text: outcome.output || (outcome.success ? '(no output)' : 'The command failed with no output.'), ...(outcome.success ? {} : { isError: true }) };
 }
 
-/** The checkpoint call's result: the answer as the runner reads it (ADR-0022, V5). */
+/**
+ * The checkpoint call's result: the answer as the runner reads it (ADR-0022,
+ * V5), naming who gave it, so a runner told its task is unattended is not told
+ * a person said yes when the supervisor did.
+ */
 export function checkpointReply(answer: CheckpointAnswer): McpToolReply {
+  const who = answer.kind !== 'withdrawn' && answer.by === 'supervisor' ? ['the supervisor said', ' for the user'] : ['the user said', ''];
   switch (answer.kind) {
-    case 'continue': return { text: 'approved: the user said yes — continue' };
-    case 'rejected': return { text: `rejected: ${answer.reason}` };
+    case 'continue': return { text: `approved: ${who[0]} yes${who[1]} — continue` };
+    case 'rejected': return { text: `rejected: ${who[0]} no${who[1]} — ${answer.reason}` };
     case 'withdrawn': return { text: `The checkpoint was withdrawn: ${answer.why}`, isError: true };
   }
 }
@@ -627,7 +633,7 @@ function readTool<H extends { readTask?: Run<ReadTaskArgs> }>(description: strin
 const SHARED_TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   refusing(REPORT_ONLY_FIELDS, tool(TASK_COMPLETE_TOOL, `Report that this task has ended, and how, with its handoff for the tasks that read it. Call it once, as your last action. A call over a limit (the summary is at most ${HANDOFF_LIMITS.summary} characters; the long form goes in report) is refused whole and recorded as nothing: the refusal says by how much, so shorten and call again.`,
     taskCompleteInput, (h) => h.taskComplete?.bind(h))),
-  tool('checkpoint', "Ask the user a question and wait for the answer, which is this call's result.",
+  tool('checkpoint', "Ask a question and wait for the answer, which is this call's result: it stops this task, and every task waiting on it, until someone answers, so ask only before an effect your brief did not authorise that cannot be undone or reaches outside the workspace, or for what only a person has (a credential, a choice your brief leaves open that changes the outcome), never whether to keep waiting or to confirm what your brief says.",
     checkpointInput, (h) => h.checkpoint?.bind(h)),
   readTool("Read the handoff of a task you may read: this one, a task it depends on, directly or not, or another task of its loop, any round. Returns what that task handed over, as its attempt's log keeps it: its commit, the summary, every finding with its id, the artifacts, and with include_report its report. It reads nothing else: no transcript, no diff, no output. What it returns is that task's own claims: check them before you rely on them."),
 ];

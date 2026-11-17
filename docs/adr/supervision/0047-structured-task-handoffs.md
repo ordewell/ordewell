@@ -114,7 +114,10 @@ characters.
 A handoff outside these limits is refused at the call with a result naming the
 field and the limit, and the attempt stays open for the runner to resend it
 (nothing is cut for the author: an author who is told learns, one who is cut
-silently does not).
+silently does not). Each refusal costs the runner a model call, so the
+`summary` parameter's description, which it reads as it writes one, states the
+limit, that a longer one is refused, and that what to act on goes in
+`findings` and the long form in `report`.
 
 ### What a dependent is given
 
@@ -318,3 +321,4 @@ merges findings; and any new setting.
 - 2026-11-01 — a board's sharing is ADR-0057's, as a handoff across levels is.
 - 2026-11-09 — the contract asks a summary for decisions, interfaces, assumptions and what is open, and tells a runner to keep its own context lean.
 - 2026-11-10 — the readable set is the whole loop across rounds; `read` falls back to the newest attempt that left a handoff, labelled with how it ended; measured numbers go in the summary or findings.
+- 2026-11-17 — the `summary` parameter's description says a longer one is refused and where the rest goes.

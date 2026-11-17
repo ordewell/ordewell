@@ -81,6 +81,37 @@ export function reduceUpdate(turn: AcpTurn, update: AcpSessionUpdate): AcpStep {
   }
 }
 
+/** What an agent's `usage_update` last said of its session's own context: the size it is and the window it is in. */
+export interface AcpContextReading { used: number; size: number }
+
+/**
+ * The size, in tokens, a context must have reached before a fall from it can
+ * read as a compaction. Recorded sessions of Copilot CLI, Gemini CLI and Qwen
+ * Code start at 10k to 23k tokens with the system prompt alone and only grow
+ * from there, so a context this size has grown well past where any session
+ * starts, and an agent compacts far above it.
+ */
+export const ACP_COMPACTION_FLOOR = 32_000;
+
+/** The share of the context a compaction leaves at most: a fall to this or less is a summary, not a pruned tool result. */
+export const ACP_COMPACTION_FALL = 0.5;
+
+/**
+ * The compaction an ACP agent made on its own between two readings of one
+ * session's meter, or null. ACP has no word for one: a compacting agent's
+ * meter just falls, so a fall of more than half from above
+ * {@link ACP_COMPACTION_FLOOR}, or half the window where that is smaller, is
+ * read as one. A changed window is another
+ * model, whose context is not the one measured before, so no fall across it
+ * counts.
+ */
+export function compactionBetween(before: AcpContextReading | null, after: AcpContextReading): AgentEvent | null {
+  // A window under twice the floor compacts before it would reach it, so half the window stands in.
+  if (!before || before.size !== after.size || before.used < Math.min(ACP_COMPACTION_FLOOR, before.size / 2)) return null;
+  if (after.used >= before.used * ACP_COMPACTION_FALL) return null;
+  return { type: 'compaction', trigger: 'auto', preTokens: before.used, postTokens: after.used };
+}
+
 /**
  * The call that started the subagent an update comes from. Qwen Code marks
  * every update a subagent makes with it in `_meta.parentToolCallId`; the

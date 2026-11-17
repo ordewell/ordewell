@@ -22,7 +22,8 @@ import {
   type AcpSessionState,
   type AcpToolCall,
 } from './acpSchema';
-import { endTurn, newTurn, outlivesItsCall, reduceUpdate, subagentStillWorking, type AcpTurn } from './acpEvents';
+import { compactionBetween, endTurn, newTurn, outlivesItsCall, parentCall, reduceUpdate, subagentStillWorking, type AcpContextReading, type AcpTurn } from './acpEvents';
+import { taskCompactAtOf } from '../taskCompactWindow';
 import { acpOrdewellBinding } from './acpOrdewell';
 import { currentValue, findOption, optionValues, type OptionRole } from './acpOptions';
 import type { AcpAskedCall, AcpExtensionHandler, AcpProfile } from './acpProfiles';
@@ -160,6 +161,10 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
   private heldModel: string | undefined;
   /** Whether this turn's message was a model command, which makes a model change in it the user's own. */
   private modelCommandSent = false;
+  /** The session's own context as its meter last read in a turn, that a compaction falls from; null when nothing measured it on this model. */
+  private context: AcpContextReading | null = null;
+  /** Whether this turn's message was a command: a `/clear` or `/compact` the user asked for empties the context on purpose. */
+  private commandTurn = false;
 
   constructor(deps: AgentProcessDeps, profile: AcpProfile) {
     super(deps);
@@ -197,6 +202,11 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (opts.kind === 'planner' && !roles.plans) throw new Error(`${this.name} cannot plan in Ordewell: its profile claims no planner role.`);
     if (opts.kind === 'task' && restricted && !roles.readOnly) throw new Error(`${this.name} cannot run a read-only task in Ordewell: its profile claims no read-only role.`);
     if (!opts.mcp) throw new Error(`${this.name} cannot start without the Ordewell MCP server to carry its tools.`);
+    // Read for every task, so a setting no harness can act on refuses the start here as on the others.
+    const compactAt = opts.kind === 'task' ? taskCompactAtOf() : 'auto';
+    if (typeof compactAt === 'number') {
+      console.warn(`${this.name}: taskCompactAt ${compactAt} cannot be honoured: an ACP agent compacts its context on its own terms, and Ordewell has nothing to set it with.`);
+    }
     const role = opts.kind === 'planner' ? 'plan' : 'run a read-only task';
     // A container starts its runner in the worktree, the one place this start must keep it out of (ADR-0028).
     if (restricted && this.profile.restricted?.privateCwd && this.deps.placement) {
@@ -643,6 +653,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     this.ordewellCalls = new Set();
     this.outcome.open();
     this.noteModelCommand(message);
+    this.commandTurn = this.isCommand(message);
     this.turnAnswered = new Promise<boolean>((resolve) => { this.answerTurn = resolve; });
     const text = this.preamble ? `${this.preamble}\n\n${message}` : message;
     this.preamble = null;
@@ -718,6 +729,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     if (this.turn) {
       if (update.sessionUpdate === 'tool_call' && !this.reports.has(update.toolCallId)) this.reports.set(update.toolCallId, update);
       if ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') && update.kind) this.callKinds.set(update.toolCallId, update.kind);
+      if (update.sessionUpdate === 'usage_update' && parentCall(update) === undefined) this.noteContext({ used: update.used, size: update.size });
       const step = reduceUpdate(this.turn, update);
       this.turn = step.turn;
       for (const event of step.events) this.announce(this.markUnaskedRead(event));
@@ -772,6 +784,18 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     this.dispose();
   }
 
+  /**
+   * Whether a message is one of the agent's own commands (a `/clear` that
+   * empties the context is no compaction). Once the agent has listed them,
+   * only a listed name is; before, any slash and a name, but not a path such
+   * as `/tmp/build.log`, which an ordinary message may start with.
+   */
+  private isCommand(message: string): boolean {
+    const name = /^\/([^\s/]+)(?=\s|$)/.exec(message)?.[1];
+    if (name === undefined) return false;
+    return this.commandList.length === 0 || this.commandList.some((command) => command.name === name);
+  }
+
   private noteCommands(listed: ReadonlyArray<{ name: string; description: string; input?: { hint: string } | null }>): void {
     this.commandList = listed.map(({ name, description, input }): RunnerCommand => ({
       name,
@@ -797,12 +821,26 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     const before = this.heldModel;
     this.heldModel = now ?? before;
     if (now === undefined || before === undefined || now === before) return;
+    // Another model's context is measured afresh: a fall to it is no compaction.
+    this.context = null;
     const from = this.modelRef(before, model);
     const to = this.modelRef(now, model);
     const effort = currentValue(findOption(next, 'effort'));
     this.announce(this.modelCommandSent
       ? { type: 'model_switched', from, to, ...(effort !== undefined ? { effort } : {}) }
       : { type: 'model_drifted', from, to });
+  }
+
+  /**
+   * An agent's compaction reaches Ordewell only as its meter falling, so the
+   * fall is announced as one (ADR-0018 W1) and the runner is reminded of its
+   * brief as on every other harness. Only readings in a turn count: those a
+   * `session/load` replays measure the history, not the context resumed.
+   */
+  private noteContext(reading: AcpContextReading): void {
+    const compaction = this.commandTurn ? null : compactionBetween(this.context, reading);
+    this.context = reading;
+    if (compaction) this.announce(compaction);
   }
 
   private modelRef(model: string, option: AcpConfigOption | undefined): RunnerModelRef {

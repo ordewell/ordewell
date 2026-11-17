@@ -5,6 +5,8 @@ import { isCredentialVariable } from './credentialEnv';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 import { ProcessLifecycle } from './ProcessLifecycle';
 import { OpenCodeV2 } from './OpenCodeV2';
+import { openCodeCompaction, openCodeInputLimited } from './openCodeCompaction';
+import { taskCompactAtOf } from '../taskCompactWindow';
 import { OPENCODE_CONFIG_VARIABLE, OPENCODE_ORDEWELL, OPENCODE_PLANNER_ENV, OPENCODE_READ_ONLY_PERMISSION, leaseGateway } from './openCodeOrdewell';
 import { envValue } from '../../utils/shellPath';
 import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
@@ -282,6 +284,54 @@ function newTurnState(): TurnState {
  * detail, never the final reply. A task turn is posted asynchronously and read
  * entirely from the stream — see {@link sendTask}.
  */
+/**
+ * The inline config with Ordewell's compaction room added, over any of the
+ * user's own compaction keys; null, with a line, when that content is not a
+ * JSON object, which leaves OpenCode at its own start.
+ */
+function withCompaction(content: string | undefined, reserved: number): string | null {
+  let config: unknown = {};
+  try {
+    if (content !== undefined && content.trim() !== '') config = JSON.parse(content) as unknown;
+  } catch {
+    config = null;
+  }
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+    console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so taskCompactAt was not applied.');
+    return null;
+  }
+  const own = (config as { compaction?: unknown }).compaction;
+  const compaction = typeof own === 'object' && own !== null && !Array.isArray(own) ? { ...own as Record<string, unknown> } : {};
+  // 2.x reads `reserved` as its `buffer` and reports the two together as a conflict, so only one is left.
+  delete compaction.buffer;
+  return JSON.stringify({ ...config, compaction: { ...compaction, reserved } });
+}
+
+/**
+ * A task's inline config without the compaction room it inherited, for a task
+ * Ordewell sets no start for (`auto`, `off`, or a model it cannot size): that
+ * room is a parent Ordewell's, handed down through the environment, and left
+ * there it would decide where this task compacts (ADR-0018 C4). Undefined when
+ * there is none to take out, so the content passes as it came.
+ */
+function withoutCompactionRoom(content: string | undefined): string | undefined {
+  if (content === undefined) return undefined;
+  let config: unknown;
+  try {
+    config = JSON.parse(content) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return undefined;
+  const own = (config as { compaction?: unknown }).compaction;
+  if (typeof own !== 'object' || own === null || Array.isArray(own)) return undefined;
+  const { reserved, buffer, ...rest } = own as Record<string, unknown>;
+  if (reserved === undefined && buffer === undefined) return undefined;
+  const others: Record<string, unknown> = { ...config };
+  delete others.compaction;
+  return JSON.stringify(Object.keys(rest).length > 0 ? { ...others, compaction: rest } : others);
+}
+
 export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAdapter {
   readonly agentId = 'opencode';
   private nativeCommands: RunnerCommand[] = [];
@@ -295,6 +345,13 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   /** Sent on every request to a task's server, which a per-task password secures. */
   private authorization: string | null = null;
   private sessionId: string | null = null;
+  /** Where a task's context compacts, when Ordewell set it (ADR-0057 R4): the start a number of `taskCompactAt` mapped to. */
+  compactWindowTokens?: number;
+
+  /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
+  get compactStartTokens(): number | undefined {
+    return this.compactWindowTokens;
+  }
   private planner: PlannerStartOptions | null = null;
   private task: TaskStartOptions | null = null;
   /** The last assistant message already settled — the baseline {@link recoverReply} measures a new reply against. */
@@ -349,6 +406,9 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
     const nativeShell = this.nativeShell?.prefix;
     // What a lease holds in place of an Anthropic key (ADR-0059 L7), read before the server starts: a task's model traffic must go to its gateway, not to Anthropic with a token that means nothing there.
     const gateway = leaseGateway(this.deps.placement?.env);
+    // Only a task's: a planner's server compacts as OpenCode would.
+    const compaction = opts.kind === 'task' ? openCodeCompaction(opts.model, taskCompactAtOf()) : undefined;
+    this.compactWindowTokens = compaction?.start;
     const command = () => ({
       command: 'opencode',
       args: ['serve', '--hostname', '127.0.0.1', '--port', '0'],
@@ -369,10 +429,16 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
           console.error('[opencode] OPENCODE_CONFIG_CONTENT is not a JSON object, so the Ordewell tools were not injected.');
         }
         this.ordewell = ordewellConfig === null ? null : opts.mcp ?? null;
+        let config = compaction ? withCompaction(ordewellConfig ?? existing, compaction.reserved) : opts.kind === 'task' ? withoutCompactionRoom(ordewellConfig ?? existing) ?? ordewellConfig : ordewellConfig;
+        if (config === null && compaction) {
+          // Not applied, so nothing compacts at the number: the meter and running long read OpenCode's own start.
+          this.compactWindowTokens = undefined;
+          config = ordewellConfig;
+        }
         return {
           PWD: opts.cwd,
           ...(opts.kind === 'planner' || readOnly ? OPENCODE_PLANNER_ENV : {}),
-          ...(ordewellConfig === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: ordewellConfig }),
+          ...(config === null ? {} : { [OPENCODE_CONFIG_VARIABLE]: config }),
           OPENCODE_SERVER_USERNAME: SERVER_USERNAME,
           OPENCODE_SERVER_PASSWORD: password,
           // N2: the config layer's `shell` wins over this, and both beat the
@@ -430,6 +496,11 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
 
     const version = await this.v2Version();
     this.serverVersion = version;
+    if (version === null && opts.kind === 'task' && this.compactWindowTokens !== undefined && !openCodeInputLimited(opts.model)) {
+      // The config was written before the version was known; 1.x ignores it here, so the meter must not read a start that is not in force.
+      console.warn(`[opencode] OpenCode 1.x applies compaction.reserved only to a model with an input limit, which ${opts.model ?? 'the default model'} has none of: taskCompactAt ${this.compactWindowTokens} is not applied, so OpenCode compacts at its own start.`);
+      this.compactWindowTokens = undefined;
+    }
     if (version !== null) {
       this.v2 = new OpenCodeV2({
         version,

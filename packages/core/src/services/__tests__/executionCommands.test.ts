@@ -127,6 +127,39 @@ describe('the command seam: run_task', () => {
     expect(outcome).toEqual({ ok: false, outcome: 'refused', message: 'Task #3 "Task t3" is blocked: task #1 "Task t1" failed. Retry it first.' });
   });
 
+  describe('a subtask, held to its parent\'s dependencies (ADR-0034)', () => {
+    const parentOn = (deps: string[]) => [task('t1', 1), task('p2', 2, { dependencies: deps, subtasks: [task('s21', 1)] })];
+
+    it('is refused while its parent\'s dependency has not finished, naming the parent that depends on it', async () => {
+      const env = setup();
+      env.session.loadPlan(plan(parentOn(['t1'])), 'goal', testWorkspace, { persist: false });
+
+      const outcome = await env.run({ command: 'run_task', task: 's21' });
+
+      expect(outcome).toEqual({
+        ok: false, outcome: 'refused',
+        message: 'Task #2.1 "Task s21" depends on task #1 "Task t1" (not started; task #2 "Task p2" depends on it), which has not finished. It can start once it has.',
+      });
+      expect(env.spawn).not.toHaveBeenCalled();
+    });
+
+    it('is refused as blocked while its parent\'s dependency failed, and the user\'s force start still goes past it', async () => {
+      const env = setup();
+      env.session.loadPlan(plan(parentOn(['t1'])), 'goal', testWorkspace, { persist: false });
+      await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+      env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+      await vi.waitFor(() => expect(taskOf(env.session, 't1')!.status).toBe('failed'));
+
+      expect(await env.run({ command: 'run_task', task: 's21' })).toEqual({
+        ok: false, outcome: 'refused', message: 'Task #2.1 "Task s21" is blocked: task #1 "Task t1" failed. Retry it first.',
+      });
+      expect(env.spawned('s21')).toHaveLength(0);
+
+      await env.session.execute({ command: 'force_start', task: 's21' }, { kind: 'user' });
+      await vi.waitFor(() => expect(env.spawned('s21')).toHaveLength(1));
+    });
+  });
+
   it('refuses a task waiting at its merge gate, and says the merge is the user\'s', async () => {
     const env = setup({ isolation: new FakeWorktreeIsolation() });
     env.session.loadPlan(plan([task('t1', 1), task('o2', 2, { ops: true, dependencies: ['t1'] })]), 'goal', testWorkspace, { persist: false });

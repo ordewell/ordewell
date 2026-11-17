@@ -85,8 +85,8 @@ describe('the checkpoint card', () => {
 
   it('shows nothing for a task that waits for input, or has left the checkpoint', () => {
     for (const [task_, keys] of [
-      [task({ awaitingReason: 'input', checkpoint: undefined }), 'ctrl-r remove queued · ctrl-s send now'],
-      [task({ status: 'in_progress', awaitingReason: undefined, checkpoint: undefined }), 'ctrl-x stop runner · ctrl-r remove queued · ctrl-s send now'],
+      [task({ awaitingReason: 'input', checkpoint: undefined }), 'ctrl-r remove queued · esc back'],
+      [task({ status: 'in_progress', awaitingReason: undefined, checkpoint: undefined }), 'ctrl-x stop runner · ctrl-r remove queued · esc back'],
     ] as const) {
       const layout = chatLayout(opened({ tasks: [task_] }), 60, 200);
       expect(layout.lines.join('\n')).not.toContain('asks');

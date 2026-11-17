@@ -3,7 +3,7 @@ import {
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
   releaseMadeManual, runsAsOps,
 } from '../models/Task';
-import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
+import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type CompactionPoint, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { SkipOrigin } from '../models/SkipOrigin';
@@ -468,6 +468,18 @@ export class PlanStore {
   recordAttemptUsage(id: string, attempt: number, record: UsageRecord, now: string): void {
     const task = this.edit(id);
     if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? addAttemptUsage(usage, record, now) : usage);
+  }
+
+  /** Where an attempt's runner compacts, or none (ADR-0018 W1). */
+  setAttemptCompaction(id: string, attempt: number, compaction: CompactionPoint | undefined): void {
+    const task = this.edit(id);
+    if (!task?.attemptUsage) return;
+    task.attemptUsage = task.attemptUsage.map((usage) => {
+      if (usage.attempt !== attempt) return usage;
+      const rest = { ...usage };
+      delete rest.compaction;
+      return compaction ? { ...rest, compaction } : rest;
+    });
   }
 
   endAttemptUsage(id: string, attempt: number, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string, runningMs?: number): void {

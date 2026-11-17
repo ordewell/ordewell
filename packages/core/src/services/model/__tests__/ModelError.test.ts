@@ -66,6 +66,14 @@ describe('classifyHttpFailure', () => {
     expect(classifyHttpFailure({ message: 'prompt is too long', status: 400, code: 'invalid_value' }).kind).toBe('bad-request');
   });
 
+  it.each([
+    ['xAI', "This model's maximum prompt length is 131072 but the request contains 140000 tokens."],
+    ['LM Studio', 'The number of tokens to keep from the initial prompt is greater than the context length.'],
+    ['llama.cpp', 'the request exceeds the available context size, try increasing it'],
+  ])('reads %s\'s overflow wording on a bare 400 as an overflow', (_server, message) => {
+    expect(classifyHttpFailure({ message, status: 400 }).kind).toBe('context-overflow');
+  });
+
   it('classifies a failure with no status by what the SDK saw', () => {
     expect(classifyHttpFailure({ message: 'reset', network: true })).toMatchObject({ kind: 'transient', network: true });
     expect(classifyHttpFailure({ message: 'timed out', timeout: true })).toMatchObject({ kind: 'transient' });

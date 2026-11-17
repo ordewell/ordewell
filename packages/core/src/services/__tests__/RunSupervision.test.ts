@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createTask, type RunSettings, type Task } from '../../models/Task';
+import { createTask, type PendingPlanTurn, type RunSettings, type Task } from '../../models/Task';
 import type { ExecutionRecord } from '../../models/Execution';
 import { RunSupervision, runOrigin, type RunSupervisionHost } from '../RunSupervision';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
@@ -14,12 +14,13 @@ const SUPERVISOR_RETRY: ExecutionRecord = { command: 'retry_task', actor: 'super
 
 function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptions = {}) {
   const tasks = [task('t1', 1)];
-  const plan: { runSettings?: RunSettings } = {};
+  const plan: { runSettings?: RunSettings; pendingTurns?: PendingPlanTurn[] } = {};
   const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, ...user };
   const transcript: { text: string; voice: 'system' | 'supervisor' }[] = [];
   const host = {
     subplanner: () => false,
     plan: () => plan,
+    wakeUpsParked: () => false,
     userSettings: () => ({ ...settings }),
     tasks: () => tasks,
     checkpointQuestion: () => undefined,
@@ -33,7 +34,8 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     save: vi.fn(),
     notice: vi.fn(),
     resendHandoff: vi.fn(),
-    deliver: vi.fn(async () => undefined),
+    runConcluded: vi.fn(),
+    deliver: vi.fn(async (..._delivered: unknown[]): Promise<unknown> => undefined),
     pump: vi.fn(),
     restartPlanner: vi.fn(),
     abandonTurn: vi.fn(),
@@ -47,6 +49,19 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
 afterEach(() => {
   vi.useRealTimers();
 });
+
+/**
+ * A wake-up turn's reply that fails as the planner exiting does: its input
+ * stays waiting, as PlanTurns keeps a failed turn's, so the retry is owed.
+ */
+const failsKeepingInput = (plan: { pendingTurns?: PendingPlanTurn[] }) => async (): Promise<never> => {
+  plan.pendingTurns = [{ id: 'wake', source: 'supervisor', text: 'the run ended', timestamp: '2026-10-13T00:00:00Z' }];
+  throw new Error('planner exited');
+};
+/** A reply that answers, taking the waiting input with it. */
+const answers = (plan: { pendingTurns?: PendingPlanTurn[] }) => async (): Promise<void> => {
+  plan.pendingTurns = [];
+};
 
 describe('whose authority a report opens with', () => {
   it.each([
@@ -198,7 +213,7 @@ describe('an automatic lowering', () => {
   it('leaves the run unsupervised when the supervisor fails twice, and the user\'s command brings it back', async () => {
     const { supervision, plan, host, transcript } = harness({ supervisorLevel: 'watch' });
     supervision.runStarted('user');
-    const fail = () => supervision.wakeUp(async () => { throw new Error('planner exited'); });
+    const fail = () => supervision.wakeUp(failsKeepingInput(plan));
 
     await expect(fail()).rejects.toThrow('planner exited');
     await expect(fail()).rejects.toThrow('planner exited');
@@ -218,7 +233,7 @@ describe('an automatic lowering', () => {
   it('stops only the report turns at Off when a report turn fails twice: there was no supervisor to stop', async () => {
     const { supervision, plan, transcript } = harness({ supervisorLevel: 'off' });
     supervision.runStarted('user');
-    const fail = () => supervision.wakeUp(async () => { throw new Error('planner exited'); }, undefined, 'user');
+    const fail = () => supervision.wakeUp(failsKeepingInput(plan), undefined, 'user');
 
     await expect(fail()).rejects.toThrow('planner exited');
     await expect(fail()).rejects.toThrow('planner exited');
@@ -253,6 +268,95 @@ describe('the end-of-run handoff', () => {
     supervision.apply({ supervisorLevel: 'off' });
 
     expect(host.resendHandoff).not.toHaveBeenCalled();
+  });
+});
+
+describe('a run concluded for a follower that cannot answer it', () => {
+  /** A wake-up turn as the Session runs one: the delivered input goes through the supervisor's turn. */
+  const turnsThrough = (supervision: RunSupervision, host: ReturnType<typeof harness>['host'], reply: () => Promise<unknown>) =>
+    host.deliver.mockImplementation(() => supervision.wakeUp(reply));
+
+  it.each(['off', 'watch'] as const)('concludes at %s as the run finishes: no turn of the supervisor\'s can continue it', (level) => {
+    const { supervision, host } = harness({ supervisorLevel: level });
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('concludes at Act only once the supervisor\'s turn on the end is over', async () => {
+    vi.useFakeTimers();
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    let endTurn: () => void = () => {};
+    turnsThrough(supervision, host, () => new Promise<void>((resolve) => { endTurn = resolve; }));
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.runConcluded).not.toHaveBeenCalled();
+    endTurn();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not conclude a run the closing turn continued, and concludes its next end', async () => {
+    vi.useFakeTimers();
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    supervision.runStarted('user');
+    turnsThrough(supervision, host, async () => { supervision.runStarted('supervisor'); });
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.runConcluded).not.toHaveBeenCalled();
+
+    turnsThrough(supervision, host, async () => undefined);
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits through the closing turn\'s one retry, and concludes once the retry is over', async () => {
+    vi.useFakeTimers();
+    const { supervision, host, plan } = harness({ supervisorLevel: 'act' });
+    turnsThrough(supervision, host, failsKeepingInput(plan));
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(host.runConcluded).not.toHaveBeenCalled();
+    await supervision.wakeUp(answers(plan));
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('concludes once the supervisor is given up on: its closing turn failed twice', async () => {
+    vi.useFakeTimers();
+    const { supervision, host, plan } = harness({ supervisorLevel: 'act' });
+    turnsThrough(supervision, host, failsKeepingInput(plan));
+    supervision.runStarted('user');
+
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(supervision.wakeUp(failsKeepingInput(plan))).rejects.toThrow('planner exited');
+
+    expect(supervision.level).toBe('off');
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('concludes at Act when the user stops before the closing turn opens', () => {
+    const { supervision, host } = harness({ supervisorLevel: 'act' });
+    supervision.runStarted('user');
+    supervision.runFinished();
+    expect(host.runConcluded).not.toHaveBeenCalled();
+
+    supervision.userStopped();
+
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -365,5 +469,28 @@ describe('a passed task whose landing git refused', () => {
     expect(text).toContain('user.name');
     expect(text).toContain('retry_task from "session"');
     expect(text).not.toMatch(/conflict/i);
+  });
+});
+
+describe('a task that failed before its runner started', () => {
+  it('wakes the supervisor with why and what to do, which its output summary holds: no verdict was reached', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    const why = 'Task "Task t1" did not start: skill "python" not found: create .ordewell/skills/python/SKILL.md, or remove "python" from the task\'s skills with edit_plan, then retry the task';
+    tasks[0] = {
+      ...tasks[0],
+      status: 'failed',
+      skills: ['python'],
+      outputSummary: { reviewReason: `${why} (searched /g).`, logTail: '', capturedAt: '2026-10-13T01:00:00Z' },
+    };
+    // As in a plan whose every task named the skill: the failure holds its dependents back, so its line is not cut to a ride-along's.
+    tasks.push({ ...task('t2', 2), dependencies: ['t1'] });
+
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain(why);
   });
 });

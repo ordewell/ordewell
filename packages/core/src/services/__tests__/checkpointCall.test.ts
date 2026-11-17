@@ -170,7 +170,7 @@ describe('a message read mid-turn while a checkpoint call waits', () => {
     expect(await settledAs(first)).toBe('pending');
     expect(get()).toMatchObject({ status: 'awaiting_user', awaitingReason: 'checkpoint' });
     orchestrator.rejectCheckpoint('t1', 'Postgres');
-    expect(await first).toBe('rejected: Postgres');
+    expect(await first).toBe('rejected: the user said no — Postgres');
     expect(get().status).toBe('in_progress');
   });
 });
@@ -220,8 +220,10 @@ describe('the question a checkpoint asks', () => {
 describe('an answer sent from outside the task view settles the open call', () => {
   it.each<[string, (o: Awaited<ReturnType<typeof asking>>['orchestrator']) => void, string]>([
     ['approve', (o) => o.approveCheckpoint('t1'), 'approved: the user said yes — continue'],
-    ['reject with a reason', (o) => o.rejectCheckpoint('t1', 'not on production'), 'rejected: not on production'],
-    ['reject with no reason', (o) => o.rejectCheckpoint('t1'), 'rejected: Checkpoint rejected by user'],
+    ['reject with a reason', (o) => o.rejectCheckpoint('t1', 'not on production'), 'rejected: the user said no — not on production'],
+    ['reject with no reason', (o) => o.rejectCheckpoint('t1'), 'rejected: the user said no — they gave no reason'],
+    ['approve for the user', (o) => o.approveCheckpoint('t1', undefined, 'supervisor'), 'approved: the supervisor said yes for the user — continue'],
+    ['reject for the user', (o) => o.rejectCheckpoint('t1', 'not on production', 'supervisor'), 'rejected: the supervisor said no for the user — not on production'],
   ])('%s', async (_name, answer, text) => {
     const { orchestrator, get, ask } = await asking();
     const call = ask('Drop the table?');

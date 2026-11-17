@@ -60,7 +60,7 @@ describe('OrdewellLoop', () => {
     expect(usage).toMatchObject({ source: 'ordewell', model: 'openrouter:mock/test', inputTokens: 10, outputTokens: 4, cachedInputTokens: 2 });
     expect(usage?.reportedCost).toEqual({ amount: 0.5, currency: 'USD', kind: 'billed' });
     // A defaulted window is still the one compaction acts on, so it is the one reported.
-    expect(usage?.contextWindow).toBe(32_000);
+    expect(usage?.contextWindow).toBe(128_000);
     expect(usage?.contextTokens).toBe(14);
 
     const saved = await store.load();

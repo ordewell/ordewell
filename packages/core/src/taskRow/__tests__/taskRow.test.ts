@@ -110,6 +110,12 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     expect(taskRowView(subject({ status: 'in_progress', runningLong: flag(0) })).status).toBe('running');
   });
 
+  it('shows a flag its context raised as it shows the others', () => {
+    const context = { reason: 'context' as const, elapsedMs: 600_000, thresholdMs: 1_800_000, contextThreshold: 400_000, contextTokens: 412_000, contextWindow: 1_000_000, compactions: 0, attempt: 1 };
+
+    expect(taskRowView(subject({ status: 'in_progress', runningLong: context })).runningLong).toBe('Running long');
+  });
+
   it('says nothing without a flag, or once the task has left its attempt', () => {
     expect(taskRowView(subject({ status: 'in_progress' })).runningLong).toBeNull();
     expect(taskRowView(subject({ status: 'completed', runningLong: flag(2) })).runningLong).toBeNull();
@@ -444,7 +450,7 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject({ dependencies: ['t1'] }), { tasks: [] }).dependencies).toEqual(['t1']);
   });
 
-  it('shows a task a failure blocks as blocked by the failed task, through its dependencies and in a subtask (ADR-0034)', () => {
+  it('shows a task a failure blocks as blocked by the failed task, through its dependencies and in a subtask, its parent\'s among them (ADR-0034)', () => {
     const tree = [
       { id: 't1', order: 1, title: 'Setup', status: 'failed', dependencies: [] },
       { id: 't2', order: 2, title: 'Build', status: 'pending', dependencies: ['t1'], subtasks: [
@@ -456,7 +462,7 @@ describe('the row view, every status against every annotation', () => {
     ];
 
     expect(taskRowView(subject({ id: 't3', order: 3, dependencies: ['t2'] }), { tasks: tree })).toMatchObject({ status: 'blocked', blockedBy: ['#1'] });
-    expect(taskRowView(subject({ id: 's2', order: 2, status: 'approved', dependencies: ['s1'] }), { parent: { order: 2 }, tasks: tree })).toMatchObject({ status: 'blocked', blockedBy: ['#2.1'] });
+    expect(taskRowView(subject({ id: 's2', order: 2, status: 'approved', dependencies: ['s1'] }), { parent: { order: 2 }, tasks: tree })).toMatchObject({ status: 'blocked', blockedBy: ['#2.1', '#1'] });
     expect(taskRowView(subject({ id: 't4', order: 4 }), { tasks: tree })).toMatchObject({ status: 'todo', blockedBy: null });
     expect(taskRowView(subject({ id: 't3', order: 3, dependencies: ['t2'] }))).toMatchObject({ status: 'todo', blockedBy: null });
     expect(blockedByLabel(['#1', '#2.1'])).toBe('Blocked by #1, #2.1');

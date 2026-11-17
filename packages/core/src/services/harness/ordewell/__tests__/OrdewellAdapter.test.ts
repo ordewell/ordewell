@@ -12,7 +12,7 @@ import { removeDir, setEnv } from '../../../../testEnv';
 import { ModelError } from '../../../model';
 import type { ModelClient, ModelEvent } from '../../../model';
 import { CONNECTORS } from '../../connectors';
-import { TASK_TOOLS } from '../../../mcp';
+import { TASK_TOOLS, taskCompletionContract } from '../../../mcp';
 import { DEFAULT_ORDEWELL_STEP_LIMIT, OrdewellAdapter, type OrdewellAdapterOptions } from '../OrdewellAdapter';
 import { call, deferred, eventsOf, MemoryTranscriptStore, scriptedClient, STOP, type ScriptedStep } from './loopKit';
 import type { McpClientConfig } from '../../../mcp/clientConfig';
@@ -160,6 +160,78 @@ describe('OrdewellAdapter', () => {
     // A key with no endpoint named is no endpoint: its default is a guess at a local server.
     const unnamed = adapterWith([], {}, deps({ OPENAI_COMPATIBLE_API_KEY: 'local-key' }), 'openai_compatible');
     await expect(unnamed.adapter.start(taskOptions({ model: 'openai_compatible:qwen3:8b' }))).rejects.toThrow(/No Custom endpoint is set for the built-in runner: set OPENAI_COMPATIBLE_BASE_URL/);
+  });
+
+  it('says once, at the attempt\'s start, that it assumed the model\'s window and how to set it', async () => {
+    const { adapter } = adapterWith([[{ type: 'text-delta', text: 'One.' }, STOP], [{ type: 'text-delta', text: 'Two.' }, STOP]]);
+    await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+    const first: AgentEvent[] = [];
+    await adapter.send('Go.', (event) => first.push(event));
+    expect(first[0]).toEqual({
+      type: 'command_output',
+      text: 'No catalog or provider listing states openrouter:acme/unknown\'s context window: assuming 128,000 tokens. '
+        + 'Set it in the settings file as "ordewellContextWindows": { "openrouter:acme/unknown": <tokens> }.',
+    });
+    const second: AgentEvent[] = [];
+    await adapter.send('Again.', (event) => second.push(event));
+    expect(eventsOf(second, 'command_output')).toEqual([]);
+  });
+
+  it('reads taskCompactAt at the start: off and a number it cannot honour are each said once in the task log', async () => {
+    const said = async (setting: string): Promise<string[]> => {
+      const restore = setEnv({ ORDEWELL_TASK_COMPACT_AT: setting });
+      try {
+        const { adapter } = adapterWith([[{ type: 'text-delta', text: 'One.' }, STOP]]);
+        await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+        const events: AgentEvent[] = [];
+        await adapter.send('Go.', (event) => events.push(event));
+        return eventsOf(events, 'command_output').slice(1).map((e) => e.text);
+      } finally {
+        restore();
+      }
+    };
+    // The assumed 128,000-token window guards from 108,800.
+    expect(await said('off')).toEqual([
+      'OpenRouter runner: taskCompactAt off is not honoured: without compaction this runner would run into the provider\'s context limit, so it compacts as auto does, from 108800 tokens.',
+    ]);
+    expect(await said('5000')).toEqual(['OpenRouter runner: taskCompactAt 5000 is outside the 32000 to 108800 tokens it can compact at; using 32000.']);
+    expect(await said('60000')).toEqual([]);
+    expect(await said('auto')).toEqual([]);
+    await expect(said('soon')).rejects.toThrow(/must be auto, off or a whole number of tokens/);
+
+    // Where a number has it compact is the window running long measures a compaction against, as Claude Code's is.
+    const windowFor = async (setting: string): Promise<number | undefined> => {
+      const restore = setEnv({ ORDEWELL_TASK_COMPACT_AT: setting });
+      try {
+        const { adapter } = adapterWith([]);
+        await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+        return adapter.compactWindowTokens;
+      } finally {
+        restore();
+      }
+    };
+    expect(await windowFor('60000')).toBe(60_000);
+    expect(await windowFor('500000')).toBe(108_800);
+    expect(await windowFor('auto')).toBeUndefined();
+    expect(await windowFor('off')).toBeUndefined();
+  });
+
+  it('takes a model\'s window from the settings file\'s ordewellContextWindows, and says nothing of an assumed one', async () => {
+    const settingsFile = path.join(tempDir(), 'settings.json');
+    await writeFile(settingsFile, JSON.stringify({ ordewellContextWindows: { 'openrouter:acme/unknown': 64_000 } }));
+    const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile });
+    try {
+      const { adapter } = adapterWith([[{ type: 'text-delta', text: 'One.' }, { type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } }, STOP]]);
+      await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+      const events: AgentEvent[] = [];
+      await adapter.send('Go.', (event) => events.push(event));
+      expect(eventsOf(events, 'command_output')).toEqual([]);
+      const record = eventsOf(events, 'usage').at(-1)?.record;
+      expect(record?.contextWindow).toBe(64_000);
+      expect(record?.contextWindowAssumed).toBeUndefined();
+    } finally {
+      restore();
+    }
   });
 
   it('runs a turn in-process: no process, attached at once, the provider\'s key and base URL, and a session id', async () => {
@@ -449,6 +521,15 @@ describe('OrdewellAdapter lifecycle', () => {
     expect(events.at(-1)).toMatchObject({ type: 'error', usageLimit: false, message: expect.stringMatching(/invalid api key.*\/key-set/) });
   });
 
+  it('sends every runner\'s completion contract and its own step budget in the system prompt', async () => {
+    const { adapter, client } = adapterWith([[STOP]], { stepLimit: 137 });
+    await adapter.start(taskOptions({ mcp: inProcessTools().mcp, commits: true }));
+    await adapter.send('Go.', () => {});
+    const system = client.requests[0]?.system.map((part) => part.text).join('\n') ?? '';
+    expect(system).toContain(taskCompletionContract({ commits: true }));
+    expect(system).toContain('a budget of 137 model calls for this attempt');
+  });
+
   it('takes its step limit from the settings file, the default where it names none', async () => {
     const settingsFile = path.join(tempDir(), 'settings.json');
     const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile });
@@ -474,7 +555,7 @@ describe('OrdewellAdapter lifecycle', () => {
 
   it('abandons a stream quiet past the settings file\'s timeout and sends the step again, noting it in the task log', async () => {
     const settingsFile = path.join(tempDir(), 'settings.json');
-    await writeFile(settingsFile, JSON.stringify({ ordewellStreamTimeouts: { firstEventSeconds: 1, idleSeconds: 1 } }));
+    await writeFile(settingsFile, JSON.stringify({ ordewellStreamTimeouts: { firstEventSeconds: 1, idleSeconds: 1 }, ordewellContextWindows: { 'openrouter:mock/test': 128_000 } }));
     const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile });
     const chunk = (delta: object, finish: string | null = null) =>
       `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 1, model: 'mock/test', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;

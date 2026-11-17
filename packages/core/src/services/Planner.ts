@@ -7,6 +7,7 @@ import type { RunnerModeInfo } from './ModeResolver';
 import { filterModelsForPrompt } from './ModelAllowlistResolver';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { PlanChangeCheck, planChangeErrorText, requestScope } from './PlanChangeCheck';
+import { withoutUnprovidedSkills } from './taskSkills';
 
 /**
  * `autonomousDefault` still arrives on its own — it is not a user toggle but a
@@ -73,7 +74,9 @@ export class Planner {
   /**
    * One-shot plan generation for non-conversational surfaces. Never asks
    * questions. A plan attaching a planner skill to a task is refused, not
-   * returned: there is no conversation to send it back through.
+   * returned: there is no conversation to send it back through. A skill name
+   * nothing provides is taken off its task with a warning instead, so one
+   * invented name does not cost the whole plan.
    */
   async generate(req: PlanRequest): Promise<GeneratedPlan> {
     const now = new Date().toISOString();
@@ -113,9 +116,12 @@ export class Planner {
 
     // It lands as a conversation's plan lands, held to the request it was asked under.
     const taskSkills = req.modes?.taskSkills;
-    const checked = await new PlanChangeCheck(requestScope({ ...req, perRunnerAllowlist: req.perRunnerAllowlist ?? {}, taskSkills })).check({ kind: 'plan', tasks }, 'land');
+    // Dropped, never accepted: the task still needs a provider to name it (ADR-0024).
+    const dropped = taskSkills ? withoutUnprovidedSkills(tasks, taskSkills) : { tasks, warnings: [] };
+    const checked = await new PlanChangeCheck(requestScope({ ...req, perRunnerAllowlist: req.perRunnerAllowlist ?? {}, taskSkills })).check({ kind: 'plan', tasks: dropped.tasks }, 'land');
     if (taskSkills && req.signal?.aborted) throw new Error('Plan generation was stopped.');
     if (!checked.ok) throw new PlanSkillsError(`The generated plan was refused: ${checked.errors.map(planChangeErrorText).join(' ')}`);
+    const skillWarnings = [...dropped.warnings, ...checked.warnings];
 
     return {
       tasks: checked.tasks,
@@ -124,7 +130,7 @@ export class Planner {
       runners: req.runners,
       lastUpdated: now,
       researchLog,
-      ...(checked.warnings.length > 0 ? { skillWarnings: checked.warnings } : {}),
+      ...(skillWarnings.length > 0 ? { skillWarnings } : {}),
     };
   }
 }

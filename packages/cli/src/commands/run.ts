@@ -1,7 +1,7 @@
 import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type SerializedTaskStatus } from '@ordewell/core';
+import { CLOSING_TURN_BOUND_MS, handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect, headlessSignedOut } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -51,9 +51,50 @@ export function resolveSessionId(subArgs: string[]): string {
 }
 
 /**
+ * The exit status of a run that ended with a task failed or blocked. 1 stays
+ * the command's own failure (no daemon, a refused start), so a script tells
+ * "the work failed" from "the command did".
+ */
+export const RUN_FAILED_EXIT = 2;
+
+/** A run's own settings, as a plan or a run view carries them. */
+type RunSettingsOf = { supervisorLevel?: SupervisorLevel; unsupervised?: string } | undefined;
+
+/** The level the run acts at now, when the settings say: a supervisor that stood down leaves it unsupervised, which is Off. */
+const levelOf = (settings: RunSettingsOf): SupervisorLevel | null => (settings?.unsupervised ? 'off' : settings?.supervisorLevel ?? null);
+
+/**
+ * Who answers a task waiting on a person, unattended (ADR-0029): at Act the
+ * supervisor is woken to it; below Act nobody is, so the run waits for good.
+ */
+function whoAnswers(level: SupervisorLevel | null): string {
+  if (level === null) return '';
+  return level === 'act'
+    ? ' The supervisor has been woken to answer it.'
+    : ' Nobody answers it unattended: it waits until someone does. `ordewell supervisor act` lets the supervisor answer in new sessions.';
+}
+
+/** The run's level, as the session holds it; null when the daemon cannot say. */
+async function sessionLevel(api: ApiClient, sessionId: string): Promise<SupervisorLevel | null> {
+  try {
+    return (await api.getSettings(sessionId)).run.supervisorLevel ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** A task's reference with no `#`, which a shell would read as a comment. */
+const bare = (ref: string): string => ref.replace(/^#/, '');
+
+/**
  * Follow a session's execution to completion, redrawing one line per task.
  * Shared by `run` and `approve` — both hand the orchestrator work and then
  * watch the same stream, and a second copy of the redraw would drift.
+ *
+ * It returns when the daemon says the run's end stands (`run_concluded`):
+ * at Act, after the supervisor's closing turn, which may continue the run
+ * (ADR-0029). A run that ended with a task failed or blocked sets
+ * {@link RUN_FAILED_EXIT}; a stopped run leaves the status alone.
  *
  * `start` is the call that hands over the work, made only once the stream is
  * open: what it starts can answer before the call returns — a dirty tree's
@@ -66,6 +107,52 @@ export async function followExecution(
   start: () => Promise<unknown>,
   onBlocked?: 'stash' | 'shared',
 ): Promise<void> {
+  const level = await sessionLevel(api, sessionId);
+  if (level) {
+    process.stderr.write(`· Supervisor: ${SUPERVISOR_LEVEL_LABEL[level]}.\n`);
+    if (level !== 'act') process.stderr.write('· A task waiting on a person (a checkpoint, input or an approval) waits until someone answers it.\n');
+  }
+  const summary = await followRun(api, sessionId, start, onBlocked, level);
+  if (summary && (summary.failed > 0 || blockedOf(summary) > 0)) process.exitCode = RUN_FAILED_EXIT;
+}
+
+/** Older summaries left blocked out: what neither completed nor failed nor was skipped. */
+const blockedOf = (summary: ExecutionSummary): number => summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0) - (summary.skipped || 0));
+
+/** {@link followExecution}'s stream, through a dirty tree's block; the run's last summary, or null when it was stopped. */
+async function followRun(
+  api: ApiClient,
+  sessionId: string,
+  start: () => Promise<unknown>,
+  onBlocked: 'stash' | 'shared' | undefined,
+  startLevel: SupervisorLevel | null,
+): Promise<ExecutionSummary | null> {
+  let level = startLevel;
+  let concluded: ExecutionSummary | null = null;
+  // At Act the follower waits on the supervisor's closing turn, never past
+  // the longest that turn may run once it can (ADR-0029): a daemon that never
+  // says so leaves the tasks' outcomes as the answer. A user's planner turn
+  // holds the closing turn back for as long as it lasts, so the bound counts
+  // from when none is open, and afresh at each supervisor turn's start.
+  let ended: ExecutionSummary | null = null;
+  let closingBound: ReturnType<typeof setTimeout> | undefined;
+  let awaitingClose = false;
+  const userTurns = new Set<string>();
+  const rearm = (): void => {
+    clearTimeout(closingBound);
+    if (awaitingClose && userTurns.size === 0) closingBound = setTimeout(noteOverdue, CLOSING_TURN_BOUND_MS);
+  };
+  const stopBound = (): void => {
+    awaitingClose = false;
+    clearTimeout(closingBound);
+  };
+  let noteOverdue: () => void = () => {};
+  const overdue = new Promise<'overdue'>((resolve) => { noteOverdue = () => resolve('overdue'); });
+  const refs = new Map<string, string>();
+  const supervisorTurns = new Set<string>();
+  const waitsSaid = new Set<string>();
+  /** When the planner's context pause began, once it is said: the plan goes out again and again while it lasts. */
+  let pauseSaid: string | null = null;
   let blocked: string | null = null;
   let dirtyRepos: string[] = [];
   const taskStates = new Map<string, TaskLine>();
@@ -114,13 +201,53 @@ export async function followExecution(
   const stream = api.streamExecution(sessionId, (event) => {
     // An update leaves out what has not moved, so joining a run starts from the whole of it.
     if (event.type === 'run_snapshot') {
-      for (const { task } of walkPlan(event.view.tasks)) taskStates.set(task.id, { ...task, verdict: task.verdict ?? null });
+      for (const { task, label } of walkPlan(event.view.tasks)) {
+        taskStates.set(task.id, { ...task, verdict: task.verdict ?? null });
+        refs.set(task.id, `#${label}`);
+      }
+      level = levelOf(event.view.runSettings) ?? level;
+    }
+    if (event.type === 'plan_generated' && 'tasks' in event.plan) {
+      for (const { task, label } of walkPlan(event.plan.tasks)) refs.set(task.id, `#${label}`);
+      level = levelOf(event.plan.runSettings) ?? level;
+      if (event.turnId && supervisorTurns.has(event.turnId)) process.stderr.write('· The supervisor edited the plan.\n');
+      // A wait on a person like any other: the turn on it, the closing turn at Act among them, goes on only on a Retry.
+      const pause = event.plan.plannerContextPause;
+      if (pause && pause.at !== pauseSaid) process.stderr.write('· The planner is paused on its context, and its turn waits: `ordewell compact retry` carries it on. Nobody does that unattended: it waits until someone does.\n');
+      pauseSaid = pause?.at ?? null;
+    }
+    if (event.type === 'planner_turn_started') {
+      (event.supervisor ? supervisorTurns : userTurns).add(event.turnId);
+      rearm();
+    }
+    if (event.type === 'planner_turn_ended') {
+      userTurns.delete(event.turnId);
+      rearm();
+    }
+    if (event.type === 'planner_message' && event.supervisor && event.content.trim()) {
+      process.stderr.write(`· Supervisor: ${event.content.trim().replace(/\n/g, '\n  ')}\n`);
+    }
+    if (event.type === 'execution_action' && event.record.actor === 'supervisor' && event.record.outcome === 'done') {
+      process.stderr.write(`· ${event.text}\n`);
     }
     if (event.type === 'task_started') {
+      // The closing turn continued the run: its next end starts the bound afresh.
+      stopBound();
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }
     if (event.type === 'checkpoint') {
-      process.stderr.write(`· Checkpoint: ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}: \`ordewell checkpoint <id> approve|reject [reason]\` answers it\n`);
+      const ref = refs.get(String(event.taskId)) ?? String(event.taskId);
+      process.stderr.write(`· Checkpoint: ${ref} ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}: \`ordewell checkpoint ${bare(ref)} approve|reject [reason]\` answers it.${whoAnswers(level)}\n`);
+    }
+    if (event.type === 'status_update' && event.escalations) {
+      for (const wait of event.escalations) {
+        if (wait.task) refs.set(wait.task.id, wait.task.ref);
+        // A checkpoint has its own line, with the question; the other waits on a person are said once each.
+        if (!wait.task || (wait.kind !== 'input' && wait.kind !== 'approval') || waitsSaid.has(wait.id)) continue;
+        waitsSaid.add(wait.id);
+        const what = wait.kind === 'input' ? 'Waiting for input' : 'Waiting for approval';
+        process.stderr.write(`· ${what}: ${wait.task.ref} ${wait.task.title}: ${wait.reason.replace(/[.\s]+$/, '')}: \`ordewell tui\`, then \`/open ${bare(wait.task.ref)}\`, answers it.${whoAnswers(level)}\n`);
+      }
     }
     if (event.type === 'status_update' && event.tasks) {
       printStatus(event.tasks);
@@ -138,8 +265,19 @@ export async function followExecution(
       console.log(
         `\nDone. ${summary.completed || 0} completed, ${summary.failed || 0} failed, ${summary.blocked ?? (summary.total - (summary.completed || 0) - (summary.failed || 0))} blocked${skipped}.`,
       );
+      // The stream goes on to `run_concluded`, which at Act follows the turn this waits for.
+      if (level === 'act') process.stderr.write('· The run ended: waiting for the supervisor\'s closing turn, which may continue it.\n');
+      ended = summary;
+      awaitingClose = level === 'act';
+      rearm();
+    }
+    if (event.type === 'run_concluded') {
+      stopBound();
+      concluded = event.summary;
+      if (event.supervisorHeld) process.stderr.write(`· The supervisor could not take its closing turn: ${event.supervisorHeld}.\n`);
     }
     if (event.type === 'execution_stopped') {
+      stopBound();
       console.log('\nExecution stopped.');
     }
     if (event.type === 'notice') console.error(`· ${headlessSignedOut(event.message)}`);
@@ -170,13 +308,19 @@ export async function followExecution(
   await start();
   // The stream outlives a block, which has no completion coming; the choice
   // below opens the next one, and that ends this.
-  const outcome = await Promise.race([stream, blockedSeen]).catch(streamFailed);
+  const outcome = await Promise.race([stream, blockedSeen, overdue]).catch(streamFailed);
+  clearTimeout(closingBound);
+  if (outcome === 'overdue') {
+    api.endExecutionStream(sessionId);
+    process.stderr.write('· The supervisor\'s closing turn did not conclude in time: the run is no longer followed, and its tasks\' outcomes stand as they ended. `ordewell status` shows where it stands.\n');
+    return ended;
+  }
   if (outcome === 'lost') {
     console.error('Lost the connection to the daemon: the run is no longer being followed, but the daemon may still be running it. `ordewell status` shows where it stands.');
     process.exit(1);
   }
 
-  if (blocked === null) return;
+  if (blocked === null) return concluded;
 
   // The daemon parked the start and will hold it until it hears a choice, and a
   // parked start swallows a re-run — so without a choice, release it.
@@ -187,7 +331,7 @@ export async function followExecution(
     console.error(`Nothing was started. Re-run with \`--stash\` to stash your tracked changes${where} first, or \`--without-isolation\` to run in your working tree this once.`);
     process.exit(1);
   }
-  await followExecution(api, sessionId, () => (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId)));
+  return followRun(api, sessionId, () => (onBlocked === 'stash' ? api.continueWithStash(sessionId) : api.continueWithoutIsolation(sessionId)), undefined, level);
 }
 
 /**

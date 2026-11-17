@@ -1,5 +1,5 @@
 import { actorAuthority } from '../models/Execution';
-import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RunSettings } from '../models/Task';
+import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RunSettings, type TurnAuthority } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, QueuedTaskMessage } from '../interfaces/IRunner';
@@ -613,12 +613,13 @@ export class TaskOrchestrator {
 
   get storeInstance(): PlanStore { return this.store; }
 
-  approveCheckpoint(taskId: string, note?: string): void {
-    this.attempts.approveCheckpoint(taskId, note);
+  /** `by` is who answered: the runner is told it (ADR-0029). */
+  approveCheckpoint(taskId: string, note?: string, by?: TurnAuthority): void {
+    this.attempts.approveCheckpoint(taskId, note, by);
   }
 
-  rejectCheckpoint(taskId: string, reason?: string): void {
-    this.attempts.rejectCheckpoint(taskId, reason);
+  rejectCheckpoint(taskId: string, reason?: string, by?: TurnAuthority): void {
+    this.attempts.rejectCheckpoint(taskId, reason, by);
   }
 
   /** What the task's waiting checkpoint asks, whole; undefined once it settles or when none waits. */
@@ -1562,6 +1563,8 @@ export class TaskOrchestrator {
     } else {
       if (failure.leaves === 'failed') {
         this.store.markFailed(task.id);
+        // No verdict was reached: an earlier attempt's would be read as why this one failed.
+        this.store.setTaskVerdict(task.id, undefined);
         this.store.setTaskOutputSummary(task.id, failure.summary);
       } else {
         this.store.markPending(task.id);
