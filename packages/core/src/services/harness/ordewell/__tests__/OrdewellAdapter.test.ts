@@ -12,7 +12,7 @@ import { removeDir, setEnv } from '../../../../testEnv';
 import { ModelError } from '../../../model';
 import type { ModelClient, ModelEvent } from '../../../model';
 import { CONNECTORS } from '../../connectors';
-import { TASK_TOOLS } from '../../../mcp';
+import { TASK_TOOLS, taskCompletionContract } from '../../../mcp';
 import { DEFAULT_ORDEWELL_STEP_LIMIT, OrdewellAdapter, type OrdewellAdapterOptions } from '../OrdewellAdapter';
 import { call, deferred, eventsOf, MemoryTranscriptStore, scriptedClient, STOP, type ScriptedStep } from './loopKit';
 import type { McpClientConfig } from '../../../mcp/clientConfig';
@@ -447,6 +447,15 @@ describe('OrdewellAdapter lifecycle', () => {
     const events: AgentEvent[] = [];
     await adapter.send('Go.', (event) => events.push(event));
     expect(events.at(-1)).toMatchObject({ type: 'error', usageLimit: false, message: expect.stringMatching(/invalid api key.*\/key-set/) });
+  });
+
+  it('sends every runner\'s completion contract and its own step budget in the system prompt', async () => {
+    const { adapter, client } = adapterWith([[STOP]], { stepLimit: 137 });
+    await adapter.start(taskOptions({ mcp: inProcessTools().mcp, commits: true }));
+    await adapter.send('Go.', () => {});
+    const system = client.requests[0]?.system.map((part) => part.text).join('\n') ?? '';
+    expect(system).toContain(taskCompletionContract({ commits: true }));
+    expect(system).toContain('a budget of 137 model calls for this attempt');
   });
 
   it('takes its step limit from the settings file, the default where it names none', async () => {

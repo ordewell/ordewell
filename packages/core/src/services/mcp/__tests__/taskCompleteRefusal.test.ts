@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TASK_TOOLS, type TaskCompleteArgs } from '../tools';
+import { TASK_TOOLS, toolListing, type TaskCompleteArgs } from '../tools';
 
 /**
  * What a runner reads when `task_complete` refuses its arguments (ADR-0047).
@@ -120,5 +120,19 @@ describe('task_complete states its limits before the call', () => {
 
   it('puts the commit subject limit in the field description', () => {
     expect(schema.properties.commit.description ?? '').toContain('72');
+  });
+});
+
+describe('what task_complete says as it is called', () => {
+  // A runner reads the parameter's description as it fills the parameter, the
+  // prompt long behind it: there, the limit and where the rest goes.
+  const properties = toolListing([taskComplete])[0]?.inputSchema.properties as Record<string, { description?: string }>;
+
+  it('states the summary limit, that a longer one is refused, and where the rest goes', () => {
+    expect(properties.summary?.description).toMatch(/at most 1500 characters.*refused.*findings.*report/i);
+  });
+
+  it('says blocked is an outside obstacle, not how much work remains', () => {
+    expect(properties.status?.description).toMatch(/'blocked'.*obstacle outside your control, never .*how much work remains/);
   });
 });

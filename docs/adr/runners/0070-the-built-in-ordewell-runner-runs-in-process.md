@@ -101,13 +101,23 @@ is one runner per API provider, under the provider's own id and name.**
   then the task tools as native tools, `task_complete` and `read_task` (the
   token's `read`, renamed because `read` reads files here). The list is fixed
   for the whole attempt so the cached prefix holds.
-- **The prompt** is short and provider-neutral: one task in its own worktree,
-  ended by `task_complete` with a summary, findings and a handoff, and a commit
-  message when the task commits
-  ([ADR-0047](../supervision/0047-structured-task-handoffs.md)). An environment
-  block (working directory, platform, date, whether it is a git repository)
-  follows, then the worktree's AGENTS.md, or else its CLAUDE.md. Earlier tasks'
-  handoffs are in the first user message, as `StructuredSession` writes it.
+- **The prompt** is short and provider-neutral: one task in its own worktree;
+  how a long brief is worked through, each rule with its reason (how much work
+  remains is never a reason to stop or to report `blocked`; the context is
+  compacted for the model; the attempt's step limit, as a fixed number so the
+  prompt stays one cached prefix; each coherent part committed as it works,
+  when the task commits; `blocked` for an obstacle outside the model's control,
+  saying what is missing; near the budget's end, what works committed and an
+  honest report, never `done` short of the done criterion); then the completion
+  contract every runner is given (ADR-0018 C2,
+  [ADR-0047](../supervision/0047-structured-task-handoffs.md)), the same text,
+  with the summary's limit and where the rest goes on one line of its own. A
+  model that read a large brief as too much for one session reported `blocked`
+  with tests passing and nothing committed; nothing outside it had stopped it.
+  An environment block (working directory, platform, date, whether it is a git
+  repository) follows, then the worktree's AGENTS.md, or else its CLAUDE.md.
+  Earlier tasks' handoffs are in the first user message, as `StructuredSession`
+  writes it.
 - **Completion is the token-bound `task_complete` alone**
   ([ADR-0025](0025-structured-only-runners.md)). The loop ending a turn, or the
   model saying it is done, proves nothing.
@@ -175,7 +185,13 @@ is one runner per API provider, under the provider's own id and name.**
   read-only task is read-only whatever level it was planned at.
 - **Lifecycle.** An attempt makes at most the step limit's model calls
   (`ordewellStepLimit` in the settings file, default 200); the last is told so and
-  forced to `task_complete`. The repeat guard nudges the third identical tool call
+  forced to `task_complete`. Before it the model is told twice, once it has
+  used 80% of the calls and once at 95% (each rounded down), with a message
+  appended to the conversation, never a rewritten system prompt: bring the part
+  in hand to a committed state, then, at 95%, start nothing new and report what
+  is done and what remains. Each goes out at most once an attempt, none while a
+  report stands and none on the last call, and two falling due together send
+  only the later. The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
   limit pauses the attempt, and a resume reads the transcript back; one with no
@@ -312,3 +328,6 @@ comes from that call.
 - 2026-11-16 — a provider with no model listing has no runner; the default reads
   the host's own keys, not a workspace's; the old id stays where moving it would
   lose a task or a setting.
+- 2026-11-17 — the prompt says how a long brief is worked through and the step
+  budget, carries every runner's completion contract, and the loop sends the 80%
+  and 95% budget notices.
