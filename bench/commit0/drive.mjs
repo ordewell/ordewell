@@ -1002,9 +1002,11 @@ async function realArm(lib, sb, arm, settings, runDir) {
     throw err;
   } finally {
     endMs = endMs ?? Date.now();
+    // Recorded, never judged (D5): whether a follower returned by itself or was ended by the stop.
+    const endedBeforeStop = new Set(followers.filter((f) => f.done).map((f) => f.name));
     // A run that never started has nothing to merge, and its result is the failure, not a score.
     closing = await stopRun(lib, sb, { sessionId, followers, merge: !aborted && stopped?.why !== 'no-start', log });
-    for (const f of followers) if (f.done) steps[f.name] = { exit: f.result.code, timedOut: f.result.timedOut };
+    for (const f of followers) if (f.done) steps[f.name] = { exit: f.result.code, timedOut: f.result.timedOut, ended: endedBeforeStop.has(f.name) ? 'by itself' : 'by the stop' };
     if (closing.merge) steps.merge = closing.merge;
     log.end();
   }

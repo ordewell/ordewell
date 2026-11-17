@@ -215,7 +215,8 @@ export function judgeRehearsal(name, result) {
   want(!result.aborted, `the run aborted: ${result.aborted}`);
   if ('valid' in e) want(result.valid === e.valid, `valid is ${result.valid}, not ${e.valid}${result.invalidReasons?.length ? ` (${result.invalidReasons.join('; ')})` : ''}`);
   if (e.scoredFrom) want(result.scoredFrom === e.scoredFrom, `scored from ${result.scoredFrom}, not ${e.scoredFrom}`);
-  if ('runExit' in e) want(result.steps?.run?.exit === e.runExit, `ordewell run exited ${JSON.stringify(result.steps?.run ?? null)}, not ${e.runExit} by itself`);
+  if ('runExit' in e) want(result.steps?.run?.exit === e.runExit && result.steps.run.ended === 'by itself', `ordewell run ended ${JSON.stringify(result.steps?.run ?? null)}, not by itself with exit ${e.runExit}`);
+  if (e.runStopped) want(result.steps?.run?.ended !== 'by itself', `ordewell run ended by itself (${JSON.stringify(result.steps?.run ?? null)}), but the driver had to stop it`);
   if ('truncated' in e) want(Boolean(result.truncated?.truncated) === e.truncated, `truncated is ${JSON.stringify(result.truncated)}, wanted ${e.truncated}`);
   if (e.truncatedWhy) want(e.truncatedWhy.test(result.truncated?.why ?? ''), `truncated because "${result.truncated?.why}", wanted ${e.truncatedWhy}`);
   if ('stoppedWhy' in e) want((result.stopped?.why ?? null) === e.stoppedWhy, `stopped by ${result.stopped?.why ?? 'nothing'}, wanted ${e.stoppedWhy ?? 'nothing'}`);
