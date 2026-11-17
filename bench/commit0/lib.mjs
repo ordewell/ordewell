@@ -196,7 +196,9 @@ const keyless = (url, init = {}) => {
   headers.delete('authorization');
   return fetch(url, { ...init, headers });
 };
-core.fetchAllProviderModels({ apiKeys: { openrouter: key || 'keyless' }, baseUrls: {}, fetchImpl: key ? fetch : keyless })
+// The runner's own listing honours OPENROUTER_BASE_URL (a rehearsal's fake), so the probe asks where it will.
+const baseUrls = process.env.OPENROUTER_BASE_URL ? { openrouter: process.env.OPENROUTER_BASE_URL } : {};
+core.fetchAllProviderModels({ apiKeys: { openrouter: key || 'keyless' }, baseUrls, fetchImpl: key ? fetch : keyless })
   .then(({ models, errors }) => {
     const list = models.openrouter ?? [];
     const mine = list.filter((m) => m.id === model || m.id === 'openrouter:' + model).map((m) => ({ id: m.id, contextLength: m.contextLength }));
@@ -1999,6 +2001,7 @@ export function parseArgs(argv) {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
     capUsd: CAP_USD, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
     seed: null, batchDir: null, batchShared: false,
+    rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
   const number = (name, v, ok) => {
     const n = Number(v);
@@ -2040,17 +2043,30 @@ export function parseArgs(argv) {
     // Set by batch.mjs on each run it starts: the batch holds the key and its results.
     else if (a === '--batch-dir') out.batchDir = path.resolve(value());
     else if (a === '--batch-shared') out.batchShared = true;
+    else if (a === '--rehearse') out.rehearse = rehearsalName(value());
+    // The windows a rehearsal shortens so that it takes minutes; a paid run keeps the defaults.
+    else if (a === '--settle-min') out.settleMin = number(a, value(), (n) => n > 0);
+    else if (a === '--no-start-min') out.noStartMin = number(a, value(), (n) => n > 0);
+    else if (a === '--poll-sec') out.pollSec = number(a, value(), (n) => n > 0);
+    else if (a === '--wall-min') out.wallCapMs = number(a, value(), (n) => n > 0) * 60_000;
     else throw new Error(`unknown argument ${a}`);
   }
   if (out.batchShared && !out.batchDir) throw new Error('--batch-shared is for a run batch.mjs starts, with --batch-dir');
-  if (out.help || (out.sweep && !out.dryRun && !out.run)) return out;
+  if (out.help || (out.sweep && !out.dryRun && !out.run && !out.rehearse)) return out;
   // Spending is never the default: a run that bills the key has to say so.
-  if (out.dryRun === out.run) throw new Error('pass --dry-run to set up and check without a model call, or --run to run the arms and spend');
+  if ([out.dryRun, out.run, Boolean(out.rehearse)].filter(Boolean).length !== 1) {
+    throw new Error('pass --dry-run to set up and check without a model call, --rehearse <scenario> to run the arms on a scripted fake provider, or --run to run the arms and spend');
+  }
   if (out.fixture && !out.dryRun) throw new Error('--fixture is a dry-run library: pass --dry-run with it');
   if (out.fixture && !out.image) throw new Error('--fixture needs --image: an image with python3, pytest and git to build it in');
   if (!out.fixture && !out.libs) throw new Error('pass --libs <file>, a list of libraries as libraries.example.json shows, or --fixture');
   if (out.run && !out.providerPin) throw new Error('a run needs --provider-pin <provider>: the one OpenRouter provider the key is pinned to');
   return out;
+}
+
+function rehearsalName(v) {
+  if (!/^[a-z][a-z0-9-]{0,39}$/.test(v)) throw new Error(`--rehearse takes a scenario name, not ${v}`);
+  return v;
 }
 
 function seedLabel(v) {
@@ -2061,7 +2077,8 @@ function seedLabel(v) {
 /** What batch.mjs passes on to each run as given, beside the libraries file. */
 const BATCH_PASSED = Object.freeze({
   flags: ['--dry-run', '--run', '--allow-stale-dist', '--keep'],
-  values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root'],
+  values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root',
+    '--rehearse', '--settle-min', '--no-start-min', '--poll-sec', '--wall-min'],
 });
 
 /**
