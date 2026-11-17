@@ -1650,6 +1650,17 @@ describe('OpenCode 2.x task compaction point (taskCompactAt)', () => {
     adapter.dispose();
   });
 
+  it('sets nothing, with one line, for a model of a provider that states input limits when only the bundled snapshot describes it', async () => {
+    // The snapshot gives openai/gpt-5 its 400,000-token window and not the 272,000-token input limit OpenCode measures against.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { adapter, env } = await on2x('200000', taskStart({ model: 'openai/gpt-5' }));
+    expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+    expect(adapter.compactWindowTokens).toBeUndefined();
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([expect.stringMatching(/taskCompactAt 200000 is not applied: the window of openai\/gpt-5 is not known/)]);
+    warn.mockRestore();
+    adapter.dispose();
+  });
+
   it('leaves a planner\'s launch as it is', async () => {
     const planner = { kind: 'planner', cwd: '/repo', systemPrompt: 'PLAN', model: sonnet } as AgentStartOptions;
     const before = await on2x('auto', planner);

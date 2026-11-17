@@ -1,5 +1,5 @@
 import type { AiProvider } from '../../interfaces/IConfig';
-import { MODELS_DEV_PROVIDERS, modelDetails } from '../ModelDetails';
+import { MODELS_DEV_PROVIDERS, modelDetails, type ModelDetails } from '../ModelDetails';
 import { clampTaskCompactAt, type TaskCompactAt } from '../taskCompactWindow';
 import { splitModelId } from './openCodeTransport';
 
@@ -12,17 +12,34 @@ import { splitModelId } from './openCodeTransport';
 const SUMMARY_ROOM_TOKENS = 16_000;
 
 /**
+ * Ordewell's providers some of whose models models.dev gives an input limit
+ * below the context window (OpenAI's GPT-5 models, and the hosts that resell
+ * them). The bundled snapshot keeps no input limit, so for these a model only
+ * the snapshot describes has a window OpenCode does not measure against.
+ */
+const INPUT_LIMITED_PROVIDERS: ReadonlySet<AiProvider> = new Set<AiProvider>(['openai', 'openrouter', 'deepinfra', 'novita', 'qwen', 'stepfun']);
+
+function detailsOf(model: string): { provider: AiProvider; modelID: string; details: ModelDetails | undefined } | undefined {
+  const split = splitModelId(model);
+  if (!split) return undefined;
+  const provider = (Object.keys(MODELS_DEV_PROVIDERS) as AiProvider[]).find((id) => MODELS_DEV_PROVIDERS[id] === split.providerID);
+  return provider ? { provider, modelID: split.modelID, details: modelDetails().lookup(provider, split.modelID) } : undefined;
+}
+
+/**
  * The window OpenCode measures a model's context against, from models.dev,
  * whose provider ids OpenCode's are: the input limit where one is stated below
  * the context window, as both majors read it. Only a provider Ordewell's own
- * table carries is known; any other comes back unknown.
+ * table carries is known; any other comes back unknown, and so does a model of
+ * {@link INPUT_LIMITED_PROVIDERS} with no input limit that only the snapshot
+ * describes, since its limit may be missing rather than absent.
  */
 export function openCodeModelWindow(model: string): number | undefined {
-  const split = splitModelId(model);
-  if (!split) return undefined;
-  const ours = (Object.keys(MODELS_DEV_PROVIDERS) as AiProvider[]).find((id) => MODELS_DEV_PROVIDERS[id] === split.providerID);
-  const details = ours ? modelDetails().lookup(ours, split.modelID) : undefined;
-  if (details?.contextWindow === undefined) return undefined;
+  const found = detailsOf(model);
+  const details = found?.details;
+  if (!found || details?.contextWindow === undefined) return undefined;
+  if (details.inputLimit === undefined && INPUT_LIMITED_PROVIDERS.has(found.provider)
+    && modelDetails().sourceOf(found.provider, found.modelID) === 'snapshot') return undefined;
   return Math.min(details.contextWindow, details.inputLimit ?? details.contextWindow);
 }
 
@@ -32,10 +49,7 @@ export function openCodeModelWindow(model: string): number | undefined {
  * start, so a number set for it is not applied there.
  */
 export function openCodeInputLimited(model: string | undefined): boolean {
-  const split = model ? splitModelId(model) : undefined;
-  if (!split) return false;
-  const ours = (Object.keys(MODELS_DEV_PROVIDERS) as AiProvider[]).find((id) => MODELS_DEV_PROVIDERS[id] === split.providerID);
-  return (ours ? modelDetails().lookup(ours, split.modelID)?.inputLimit : undefined) !== undefined;
+  return (model ? detailsOf(model)?.details?.inputLimit : undefined) !== undefined;
 }
 
 /**

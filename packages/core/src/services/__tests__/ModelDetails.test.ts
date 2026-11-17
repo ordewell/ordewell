@@ -96,6 +96,16 @@ describe('cache and refresh', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('says which source answers a model: the cache, the snapshot for what the cache lacks, or none', async () => {
+    const s = store({ fetchImpl: ok(RAW) });
+    expect(s.sourceOf('anthropic', 'claude-new')).toBeUndefined();
+    expect(s.sourceOf('anthropic', 'claude-sonnet-4-5')).toBe('snapshot');
+    await s.refresh();
+    expect(s.sourceOf('anthropic', 'claude-new')).toBe('cache');
+    expect(s.sourceOf('openai', 'text-only')).toBe('snapshot');
+    expect(s.sourceOf('openai_compatible', 'text-only')).toBeUndefined();
+  });
+
   it('a second process reads the first one\'s cache and does not fetch', async () => {
     const cacheDir = dir();
     await store({ cacheDir: () => cacheDir, fetchImpl: ok(RAW) }).refresh();
