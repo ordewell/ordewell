@@ -617,15 +617,23 @@ async function createArmASession(lib, sb) {
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
-async function readPlan(lib, sb, sessionId) {
-  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.READ_PLAN_JS, lib.workdir, sessionId]);
+/** A session's plan as its file holds it: for a run that has stopped, or a session no run has started. */
+async function readSaved(lib, sb, sessionId) {
+  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.SAVED_PLAN_JS, lib.workdir, sessionId]);
   try { return JSON.parse(r.stdout); } catch { return null; }
 }
 
-/** The daemon's run view of a session (core's RunView), the one place a scheduler's hold is kept; null when it cannot be read. */
-async function readRunView(lib, sb, sessionId) {
-  const r = await inBox(sb, ['ordewell', 'status', '--session-id', sessionId, '--workspace', lib.workdir, '--json'], { workdir: lib.workdir, timeoutMs: 120_000 });
-  try { return JSON.parse(r.stdout).run ?? null; } catch { return null; }
+/**
+ * A session that may be live, read without side effects (L.liveView): the
+ * daemon's run view while it holds the session, the file as written otherwise.
+ * Never core's loader, which fails every task in progress in what it returns.
+ */
+async function readLive(lib, sb, sessionId) {
+  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.SESSION_VIEW_JS, lib.workdir, sessionId], { timeoutMs: 60_000 });
+  let response;
+  try { response = JSON.parse(r.stdout); } catch { response = { error: `exit ${r.code}` }; }
+  const live = L.liveView({ response, saved: null });
+  return live.run ? live : L.liveView({ response, saved: await readSaved(lib, sb, sessionId) });
 }
 
 async function lastSessionId(lib, sb) {
@@ -710,8 +718,8 @@ async function stopRun(lib, sb, { sessionId, followers = [], merge = false, log 
     out.stop = record(await inBox(sb, ['ordewell', 'stop', '--session-id', sessionId, ...ws], { workdir: lib.workdir, log, timeoutMs: STOP_TIMEOUT_MS }));
     const deadline = Date.now() + DRAIN_MS;
     for (;;) {
-      const plan = await readPlan(lib, sb, sessionId);
-      out.drained = !L.allTasks(plan).some((t) => t.status === 'in_progress');
+      const { plan, activity } = await readLive(lib, sb, sessionId);
+      out.drained = !L.allTasks(plan).some((t) => t.status === 'in_progress') && !activity?.running && !activity?.starting;
       if (out.drained || Date.now() >= deadline) break;
       await sleep(5000);
     }
@@ -739,7 +747,7 @@ async function dryArm(lib, sb, arm, settings, runDir) {
   await checkQuota(lib, sb, settings);
   // B's planner turn is a model call, so B's settings are read back on a session written as A's is.
   const sessionId = await createArmASession(lib, sb);
-  const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
+  const plan = sessionId ? await readSaved(lib, sb, sessionId) : null;
   const verdict = L.judgePlan(plan);
   check(lib.name, arm.id === 'A' ? 'arm A session' : 'arm B probe session', Boolean(sessionId) && verdict.ok, sessionId
     ? [`session ${sessionId}: ${plan?.tasks?.length ?? 0} task on ${plan?.tasks?.[0]?.assignedRunner} with ${plan?.tasks?.[0]?.assignedModel?.modelId} in mode ${plan?.tasks?.[0]?.taskMode}, plan ${plan?.status}`, ...verdict.failures]
@@ -863,7 +871,8 @@ async function realArm(lib, sb, arm, settings, runDir) {
     const key = opts.batchShared ? null : await keySpent();
     const transcripts = await transcriptSummary(sb);
     if (!sessionId && arm.id === 'B') sessionId = await lastSessionId(lib, sb);
-    const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
+    const view = sessionId ? await readLive(lib, sb, sessionId) : null;
+    const plan = view?.plan ?? null;
     const cap = L.capDecision({
       elapsedMs: nowMs - started,
       recordedSpentUsd: plan ? L.recordedSpend(plan).usd : null,
@@ -892,12 +901,12 @@ async function realArm(lib, sb, arm, settings, runDir) {
       stalled = s.stalled;
       return `stalled: "${s.stalled.task.title}" waits on ${s.stalled.waiting} for ${Math.round(s.stalled.sinceMs / 60_000)} min with nothing running`;
     }
-    const d = L.settleDecision({ plan, fingerprint: L.planFingerprint(plan, transcripts.usageLines), nowMs, state: settle });
+    const d = L.settleDecision({ plan, activity: view.activity, fingerprint: L.planFingerprint(plan, transcripts.usageLines), nowMs, state: settle });
     settle = d.state;
     if (d.settled) {
       endMs = d.state.sinceMs;
       // A run that settles with tasks open stopped short: the record says what was open and what held each (D5).
-      stalled = L.settledStall({ plan, run: await readRunView(lib, sb, sessionId), quietMs: nowMs - d.state.sinceMs });
+      stalled = L.settledStall({ plan, run: view.run, quietMs: nowMs - d.state.sinceMs });
       if (stalled) {
         const by = L.judgeLanding({ stopped: null, stalled, plan }).why;
         return `settled: nothing running, nobody waited on, nothing moved, ${by.replace(/^settled /, '')}`;
@@ -936,7 +945,8 @@ async function realArm(lib, sb, arm, settings, runDir) {
       must(sessionId || why, `the planner left no session (exit ${steps.plan?.exit})`);
     }
     if (sessionId && !stopped && !stalled && !endMs) {
-      const plan = await readPlan(lib, sb, sessionId);
+      // No run has started: the file holds the plan the planner saved.
+      const plan = await readSaved(lib, sb, sessionId);
       const planCheck = L.judgePlan(plan);
       steps.planCheck = planCheck;
       fs.writeFileSync(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2));
@@ -957,7 +967,8 @@ async function realArm(lib, sb, arm, settings, runDir) {
     log.end();
   }
   const after = before === null ? null : await settledKeySpent();
-  const finalPlan = sessionId ? await readPlan(lib, sb, sessionId) : null;
+  // The daemon is down by now (stopRun): the file is the run's last word, read as written.
+  const finalPlan = sessionId ? await readSaved(lib, sb, sessionId) : null;
   return {
     sessionId,
     steps,

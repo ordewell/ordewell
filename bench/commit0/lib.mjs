@@ -916,20 +916,85 @@ const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approv
 process.stdout.write(meta.id);
 `;
 
-/** A saved session's plan, read back with core, as JSON on stdout. */
-export const READ_PLAN_JS = String.raw`
+/**
+ * A saved session as its file holds it, `{meta, plan}` or null, read without
+ * core: core's loadSession settles the copy it returns as if no run were live
+ * (every task in progress failed), which told the settle detector a running
+ * attempt had ended. Interpolated into the box scripts that read a session.
+ */
+const SAVED_SESSION_FN = String.raw`
+function savedSession(workspace, id) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(workspace, '.ordewell', 'sessions');
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return null; }
+  for (const name of names) {
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    if (saved && saved.meta && saved.meta.id === id) return saved;
+  }
+  return null;
+}
+`;
+
+/** A saved session's plan as its file holds it, as JSON on stdout: null for none. */
+export const SAVED_PLAN_JS = String.raw`
+${SAVED_SESSION_FN}
+const [workspace, sessionId] = process.argv.slice(1);
+const saved = savedSession(workspace, sessionId);
+process.stdout.write(JSON.stringify(saved ? saved.plan : null));
+`;
+
+/**
+ * Asks the box's daemon for a session as a surface reads it
+ * (`GET /api/sessions/:id`), with the daemon's own token, never starting one
+ * as `ordewell status` would. Prints `{status, body}`, or `{error}`.
+ */
+export const SESSION_VIEW_JS = String.raw`
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
 const [workspace, sessionId] = process.argv.slice(1);
-const loaded = core.loadSession(sessionId, workspace);
-process.stdout.write(JSON.stringify(loaded ? loaded.plan : null));
+(async () => {
+  try {
+    const port = core.DEFAULT_DAEMON_PORT;
+    const token = core.readDaemonToken(port);
+    if (!token) throw new Error('no daemon token: the daemon is not running');
+    const q = new URLSearchParams({ workspace });
+    const res = await fetch('http://127.0.0.1:' + port + '/api/sessions/' + encodeURIComponent(sessionId) + '?' + q, { headers: { Authorization: core.bearerHeaderValue(token) }, signal: AbortSignal.timeout(15000) });
+    process.stdout.write(JSON.stringify({ status: res.status, body: await res.json() }));
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ error: String(err && err.message || err) }));
+  }
+})();
 `;
+
+/**
+ * A run's state as the watcher reads it: the daemon's own run view while its
+ * pool holds the session, else the saved file as written. The daemon's `plan`
+ * without a `run` is never used: the route reads it through core's loader,
+ * settled as if nothing ran. `plan` keeps the saved plan's shape (`tasks`,
+ * `approved`, `approvedTasks`, `plannerUsage`) for the caps and the detectors.
+ */
+export function liveView({ response, saved }) {
+  const body = response && !response.error && response.status === 200 ? response.body : null;
+  if (body?.run) {
+    return {
+      plan: { tasks: body.run.tasks ?? [], approved: body.plan?.approved, approvedTasks: body.plan?.approvedTasks, plannerUsage: body.conversation?.plannerUsage },
+      run: body.run,
+      activity: body.run.activity ?? null,
+      source: 'daemon',
+    };
+  }
+  return { plan: saved ?? null, run: null, activity: null, source: 'saved' };
+}
 
 /**
  * A worktree layout as a stopped run leaves it, made by core's own isolation
  * in the box, so a change in where core records a task's work breaks the dry
- * run and not a paid one. Prints the saved session's plan as core reloads it.
+ * run and not a paid one. Prints the saved session's plan as its file holds it.
  */
 export const CHOOSER_JS = String.raw`
+${SAVED_SESSION_FN}
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -974,7 +1039,7 @@ const put = (dir, file, text) => { fs.mkdirSync(path.dirname(path.join(dir, file
   await iso.release(run, t4.id, { keep: true });
   const now = new Date().toISOString();
   const meta = core.saveSession({ tasks: [t1, t2, t3, t4, t5], generatedAt: now, status: 'approved', runners: [], lastUpdated: now, isolation: { run, resolvers: {} } }, 'chooser', root);
-  process.stdout.write(JSON.stringify(core.loadSession(meta.id, root).plan));
+  process.stdout.write(JSON.stringify(savedSession(root, meta.id).plan));
 })().catch((err) => { process.stderr.write(String(err && err.stack || err)); process.exit(1); });
 `;
 
@@ -984,6 +1049,7 @@ const put = (dir, file, text) => { fs.mkdirSync(path.dirname(path.join(dir, file
  * the work left uncommitted in it, the task failed, the session saved.
  */
 export const FIXTURE_TASK_JS = String.raw`
+${SAVED_SESSION_FN}
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
 const [phase, workspace, arg] = process.argv.slice(1);
 const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', worktreeSetupCommand: '', workspaceRepos: [], worktreeLinks: [] }, noHooks: true });
@@ -997,13 +1063,13 @@ const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', 
     process.stdout.write(JSON.stringify({ sessionId: core.saveSession(plan, arg, workspace).id, cwd }));
     return;
   }
-  const loaded = core.loadSession(arg, workspace);
+  const loaded = savedSession(workspace, arg);
   const plan = loaded.plan;
   await iso.release(plan.isolation.run, plan.tasks[0].id, { keep: true });
   plan.tasks[0].status = 'failed';
   plan.lastUpdated = now;
   core.saveSession(plan, loaded.meta.goal, workspace, arg);
-  process.stdout.write(JSON.stringify(core.loadSession(arg, workspace).plan));
+  process.stdout.write(JSON.stringify(savedSession(workspace, arg).plan));
 })().catch((err) => { process.stderr.write(String(err && err.stack || err)); process.exit(1); });
 `;
 
@@ -1306,14 +1372,20 @@ export function planFingerprint(plan, usageLines) {
 }
 
 /**
- * Whether a run is over (D5): no attempt running, nobody waited on, some AI
- * task tried or ended, and nothing moved for settleMs. `ordewell run`'s exit
- * says none of this: it may exit non-zero on a failed task, or return before
- * the supervisor's closing turn retries one.
+ * Whether a run is over (D5): no attempt running, none starting, nothing that
+ * resumes by itself, nobody waited on, some AI task tried or ended, and
+ * nothing moved for settleMs. `activity` is the daemon's word on its attempts
+ * (RunActivity), absent once it has stopped. An attempt that runs without a
+ * sign of life is the wall-clock cap's and Ordewell's own limits' business,
+ * never this one's: a long shell command or a stream-idle retry writes no
+ * usage line for minutes. `ordewell run`'s exit says none of this: it may exit
+ * non-zero on a failed task, or return before the supervisor's closing turn
+ * retries one.
  */
-export function settleDecision({ plan, fingerprint, nowMs, state, settleMs = SETTLE_MS }) {
+export function settleDecision({ plan, activity = null, fingerprint, nowMs, state, settleMs = SETTLE_MS }) {
   const tasks = allTasks(plan).filter((t) => (t.type ?? 'ai') === 'ai');
-  const quiet = plan && !tasks.some((t) => t.status === 'in_progress') && !waitingOnPerson(plan)
+  const live = allTasks(plan).some((t) => t.status === 'in_progress') || activity?.running || activity?.starting || activity?.resumable;
+  const quiet = plan && !live && !waitingOnPerson(plan)
     && tasks.some((t) => t.attempted || !isOpen(t) || t.status === 'failed');
   if (!quiet) return { settled: false, state: null };
   const next = state && state.fingerprint === fingerprint ? state : { fingerprint, sinceMs: nowMs };
