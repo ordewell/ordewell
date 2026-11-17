@@ -1,6 +1,6 @@
 import { flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, type Task, type TaskReportTo, type TaskStatus } from '../models/Task';
 import { resolveTaskRef, resolveUserTaskRef } from './TaskRefs';
-import type { ExecutionActor, ExecutionCommandName, ExecutionRecord, ScriptConsent, ScriptResult, SupervisorLevel } from '../models/Execution';
+import { actorAuthority, type ExecutionActor, type ExecutionCommandName, type ExecutionRecord, type ScriptConsent, type ScriptResult, type SupervisorLevel } from '../models/Execution';
 import { sameScriptBody, scriptBodyOf, scriptBodyText, type ScriptBody } from '../models/ScriptTask';
 import { reportEnded, scriptResultOf, taskReport } from './taskReport';
 import type { ApprovalDecision, ApprovalRequest, IApproval } from '../interfaces/IApproval';
@@ -1291,8 +1291,9 @@ export class ExecutionCommands {
         // A child's question wants an answer, not a yes: only a rejection carries words to a runner.
         const said = located.task.type === 'delegated' ? reason : undefined;
         const note = [said, raise === undefined ? undefined : `Your budget was raised by ${raise} tokens.`].filter(Boolean).join(' ') || undefined;
-        if (approve) this.controls.approveCheckpoint(located.task.id, note);
-        else this.controls.rejectCheckpoint(located.task.id, reason);
+        const by = actorAuthority(actor.kind);
+        if (approve) this.controls.approveCheckpoint(located.task.id, note, by);
+        else this.controls.rejectCheckpoint(located.task.id, reason, by);
         const told = actor.kind === 'user' ? 'your reason' : 'the reason';
         return { message: approve ? `Approved the checkpoint of ${label}: it goes on${raise === undefined ? '' : `, with ${raise} more tokens`}.` : `Rejected the checkpoint of ${label}: the runner is told${reason ? ` ${told}` : ''}.` };
       },

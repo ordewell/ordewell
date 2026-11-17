@@ -405,6 +405,20 @@ describe('TaskOrchestrator', () => {
       expect(orchestrator.storeInstance.get('t2')!.status).toBe('in_progress');
     });
 
+    // The built-in runner reads no completion contract, so the first message is where every runner hears it.
+    it.each(['claude-code', 'openrouter'])('tells an AFK task on %s, in its first message, that it runs unattended', async (runner) => {
+      const { spawn } = sessionRunner();
+      const orchestrator = makeOrchestrator({ runner: { spawn }, registry: new RunnerRegistry() });
+      orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'First', prompt: 'do first', autonomy: 'AFK', assignedRunner: runner })], [runner]);
+
+      await orchestrator.forceStartTask('t1');
+
+      const arg = spawn.mock.calls[0][0];
+      expect(arg.runner).toBe(runner);
+      expect(arg.prompt).toContain('Nobody is watching this task as it runs, and a `checkpoint` call stops it, and every task waiting on it, until someone answers');
+      expect(arg.prompt.endsWith('do first')).toBe(true);
+    });
+
     it('is a no-op for unknown ids and non-AI tasks', async () => {
       const { spawn } = sessionRunner();
       const orchestrator = makeOrchestrator({ runner: { spawn } });

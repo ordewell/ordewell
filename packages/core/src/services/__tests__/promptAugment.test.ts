@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createTask, type Task, type TaskSkillSnapshot } from '../../models/Task';
 import type { HandoffDigest, HandoffFinding } from '../../models/Handoff';
 import { TASK_COMPLETION_CONTRACT, taskCompletionContract } from '../mcp';
-import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeCompactionNudge, composeContinuationPrompt, READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE, summarizeOutput } from '../promptAugment';
+import { augmentPromptWithPriorOutputs, composeAugmentedPrompt, composeCompactionNudge, composeContinuationPrompt, READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE, summarizeOutput, UNATTENDED_INSTRUCTION } from '../promptAugment';
 
 describe('summarizeOutput', () => {
   it('clips output to last 500 chars', () => {
@@ -449,18 +449,18 @@ describe('composeAugmentedPrompt', () => {
   it('holds no plan map in a task\'s first message, however many siblings the plan has', () => {
     const tasks = [1, 2, 3, 4, 5].map((n) => createTask({ id: `t${n}`, order: n, title: `Sibling ${n}`, prompt: `do ${n}` }));
     const out = composeAugmentedPrompt(tasks[2], tasks);
-    expect(out).toBe('do 3');
+    expect(out).toBe(`${UNATTENDED_INSTRUCTION}\n\ndo 3`);
     expect(out).not.toContain('Plan map');
     expect(out).not.toContain('Sibling');
     expect(out).not.toContain('you are here');
   });
 
-  it('returns the base prompt verbatim when there are no augmentations to add', () => {
+  it('adds only the unattended note to a base prompt with no other augmentation', () => {
     const a = createTask({ id: 'a', order: 1, title: 'A', prompt: 'solo' });
     const b = createTask({ id: 'b', order: 2, title: 'B', prompt: 'pb' });
     // No deps → no prior outputs.
     const out = composeAugmentedPrompt(a, [a, b]);
-    expect(out).toBe('solo');
+    expect(out).toBe(`${UNATTENDED_INSTRUCTION}\n\nsolo`);
   });
 
   // The runner summarises its first message when it compacts; its instructions it re-applies whole.
@@ -579,7 +579,7 @@ describe('composeAugmentedPrompt', () => {
     const out = composeAugmentedPrompt(tasks[0], tasks);
     expect(out).toContain('## Human-in-the-loop checkpoints');
     expect(out).toContain('Call the `checkpoint` tool');
-    expect(out).toContain('`continue`');
+    expect(out).toContain('`approved:`');
     expect(out).toContain('`rejected:`');
     expect(out).not.toContain('ORDEWELL');
   });
@@ -602,6 +602,35 @@ describe('composeAugmentedPrompt', () => {
     ];
     const out = composeAugmentedPrompt(tasks[0], tasks);
     expect(out).not.toContain('## Human-in-the-loop checkpoints');
+  });
+
+  // A headless run's AFK task asked "the baseline is still running, continue waiting?" and stalled the tasks behind it for hours.
+  it('tells an AFK task it runs unattended: decide, record the assumption, and ask only what a person alone can answer', () => {
+    for (const autonomy of ['AFK', undefined] as const) {
+      const task = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', ...(autonomy ? { autonomy } : {}) });
+      const out = composeAugmentedPrompt(task, [task]);
+      expect(out, String(autonomy)).toContain('Nobody is watching this task as it runs');
+      expect(out).toMatch(/a `checkpoint` call stops it, and every task waiting on it, until someone answers/);
+      expect(out).toMatch(/record each such decision under the assumptions in your handoff/);
+      expect(out).toMatch(/cannot be undone or that reaches outside the workspace/);
+      expect(out).toMatch(/a credential, or a choice your brief leaves open that changes the outcome/);
+      expect(out).toContain('Never ask whether to keep waiting, or to confirm what your brief says.');
+      expect(out.endsWith('do work')).toBe(true);
+    }
+  });
+
+  it('gives a HITL task its own checkpoint guidance, not the unattended one', () => {
+    const task = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', autonomy: 'HITL' });
+    expect(composeAugmentedPrompt(task, [task])).not.toContain('Nobody is watching this task');
+  });
+
+  it('tells a HITL task the replies it really gets, an approval and a rejection, and who may give them', () => {
+    const task = createTask({ id: 'a', order: 1, title: 'A', prompt: 'do work', autonomy: 'HITL' });
+    const out = composeAugmentedPrompt(task, [task]);
+    expect(out).toContain('If the result starts with `approved:`');
+    expect(out).toContain('If the result starts with `rejected:`');
+    expect(out).not.toContain('If the result is `continue`');
+    expect(out).toContain('the supervisor');
   });
 
   it('omits checkpoint instructions for tasks without autonomy or sliceType', () => {
@@ -666,7 +695,7 @@ describe('composeContinuationPrompt (ADR-0018, K1)', () => {
     const hitl = composeContinuationPrompt({ ...task, autonomy: 'HITL' }, 'go on');
 
     expect(plain).not.toContain('`checkpoint` tool');
-    expect(hitl).toContain('call the `checkpoint` tool: its result is `continue` or `rejected: <why>`');
+    expect(hitl).toContain('call the `checkpoint` tool: its result starts with `approved:` or `rejected:`, the rest saying who answered and, for a rejection, why.');
     expect(hitl).not.toContain('ORDEWELL');
   });
 });

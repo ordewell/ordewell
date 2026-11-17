@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit, SessionNotResumable } from './harness/ordewellBinding';
-import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, Verdict } from '../models/Task';
+import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, TurnAuthority, Verdict } from '../models/Task';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
@@ -728,16 +728,16 @@ export class Attempts {
     return this.deps.store.get(taskId)?.awaitingReason === 'checkpoint' && this.live.has(taskId);
   }
 
-  approveCheckpoint(taskId: string, note?: string): void {
+  approveCheckpoint(taskId: string, note?: string, by?: TurnAuthority): void {
     if (!this.awaitsCheckpoint(taskId)) return;
-    this.verifier.approveCheckpoint(taskId, note);
+    this.verifier.approveCheckpoint(taskId, note, by);
     this.deps.store.markInProgress(taskId);
     this.host.emit('onTaskChanged');
   }
 
-  rejectCheckpoint(taskId: string, reason?: string): void {
+  rejectCheckpoint(taskId: string, reason?: string, by?: TurnAuthority): void {
     if (!this.awaitsCheckpoint(taskId)) return;
-    this.verifier.rejectCheckpoint(taskId, reason ?? 'Checkpoint rejected by user');
+    this.verifier.rejectCheckpoint(taskId, reason ?? 'they gave no reason', by);
     this.deps.store.markInProgress(taskId);
     this.host.emit('onTaskChanged');
   }

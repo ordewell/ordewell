@@ -858,7 +858,7 @@ describe('the Ordewell task tools (ADR-0022)', () => {
     answer({ kind: 'rejected', reason: 'keep it' });
 
     expect(asked).toEqual(['Drop the table?']);
-    expect(await call).toMatchObject({ isError: false, content: [{ type: 'text', text: 'rejected: keep it' }] });
+    expect(await call).toMatchObject({ isError: false, content: [{ type: 'text', text: 'rejected: the user said no — keep it' }] });
     session.kill();
   });
 
