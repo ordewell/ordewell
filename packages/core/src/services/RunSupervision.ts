@@ -15,6 +15,7 @@ import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { reportEnded, researchReport, runUpdateReport } from './taskReport';
 import { researchReportTo } from './ResearchTasks';
+import { heldBy, runHeldDetail, runHolds, runHoldsKey } from './runHolds';
 import { taskRefOf } from './TaskRefs';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
@@ -41,7 +42,7 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
    * with it, and its waiting inputs and planner waits say whether a closing
    * turn can still come. Null with no plan.
    */
-  plan(): Pick<LegacyPlanState, 'runSettings' | 'pendingTurns' | 'plannerResend' | 'plannerContextPause'> | null;
+  plan(): Pick<LegacyPlanState, 'runSettings' | 'pendingTurns' | 'plannerResend' | 'plannerContextPause' | 'conversationHistory'> | null;
   /** The user's Stop of the planner's turn left the supervisor's inputs waiting for their next message: no turn opens them by itself (ADR-0029). */
   wakeUpsParked(): boolean;
   /** This plan is a child's, with no user above it (ADR-0055 D4). */
@@ -112,6 +113,8 @@ export class RunSupervision {
   private changedAfterRun = false;
   /** The run ended, and a follower has not been told the end stands. */
   private endOwed = false;
+  /** The holds the run stood idle behind when the supervisor last had a turn on it (ADR-0057 R4); see {@link runIdle}. */
+  private holdsSeen: string | undefined;
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -119,7 +122,11 @@ export class RunSupervision {
         const settings = this.settings();
         return settings ? { level: settings.supervisorLevel ?? 'off', ...(settings.unsupervised ? { unsupervised: settings.unsupervised } : {}) } : null;
       },
-      deliver: (...delivered) => host.deliver(...delivered),
+      deliver: (digest, report, idle, tasks) => {
+        // A turn on the run as it stands idle has seen its holds, whatever woke it.
+        if (!idle) this.holdsSeen = this.idleHolds()?.key ?? this.holdsSeen;
+        return host.deliver(digest, report, idle, tasks);
+      },
       pump: () => host.pump(),
       saveState: () => host.save(),
       stoppedByUser: (tasks) => this.stoppedByUser(tasks),
@@ -134,6 +141,7 @@ export class RunSupervision {
       wakeUpEnded: () => {
         if (!this.supervisor.awaitsRunEnd) this.handOver();
         this.settle();
+        this.runIdle();
       },
       inputsWait: () => (host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor' && !t.rides),
       dropToWatch: (reason) => this.dropToWatch(reason),
@@ -178,7 +186,10 @@ export class RunSupervision {
       };
       this.guards.forget();
     }
-    if (origin === 'user') this.supervisor.userStarted();
+    if (origin === 'user') {
+      this.supervisor.userStarted();
+      this.holdsSeen = undefined;
+    }
     this.running = true;
     this.changedAfterRun = false;
     this.endOwed = false;
@@ -342,6 +353,38 @@ export class RunSupervision {
     this.settle();
   }
 
+  /**
+   * The run waits on a person, or a supervisor's turn ended: if nothing runs,
+   * nothing can start, and what holds the rest is a task on hold or one
+   * waiting on a person, that is an event, as a task waiting for input is
+   * (ADR-0057 R4). It is told once for each distinct set of holds: a turn
+   * that leaves the set it saw in place is not woken to it again. Nothing is
+   * told while a turn is in flight or a wake is owed: that turn sees the holds.
+   */
+  runIdle(): void {
+    if (!this.running || this.supervisor.turning || this.supervisor.wakeOwed) return;
+    if ((this.host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor')) return;
+    const idle = this.idleHolds();
+    if (!idle || idle.key === this.holdsSeen) return;
+    this.holdsSeen = idle.key;
+    const { describe } = this.digestReader();
+    const history = this.host.plan()?.conversationHistory;
+    this.supervisor.observe({
+      kind: 'run_held',
+      taskIds: idle.holds.map((h) => h.taskId),
+      detail: runHeldDetail(idle.holds, describe, (taskId) => heldBy(history, taskId)),
+    });
+  }
+
+  /** The holds the run stands idle behind now, and their key; undefined when it is not idle behind any. */
+  private idleHolds(): { holds: ReturnType<typeof runHolds>; key: string } | undefined {
+    const tasks = this.host.tasks();
+    const waits = this.host.startWaits();
+    if (!planWakeFacts(tasks, waits, true).nothingCanStart) return undefined;
+    const holds = runHolds(tasks, waits);
+    return holds.length === 0 ? undefined : { holds, key: runHoldsKey(holds) };
+  }
+
   /** The end-of-run handoff as the surfaces get it: marked as the supervisor's first while it is at Act (ADR-0029). */
   handoff(handoff: IsolationHandoff): IsolationHandoff {
     this.handoffDeferred = this.level === 'act';
@@ -441,6 +484,7 @@ export class RunSupervision {
     this.running = false;
     this.changedAfterRun = false;
     this.endOwed = false;
+    this.holdsSeen = undefined;
     this.guards.forget();
   }
 

@@ -31,6 +31,7 @@ export type RunEventKind =
   | 'auto_merge_stopped'
   | 'start_refused'
   | 'run_finished'
+  | 'run_held'
   | 'task_report';
 
 export type RunEvent = {
@@ -305,6 +306,8 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
         }
       }
       if (event.kind === 'run_finished' && attention.some((e) => e.kind === 'run_finished')) return;
+      // The run idle behind its holds is one fact, as it stands now.
+      if (event.kind === 'run_held') attention = attention.filter((e) => e.kind !== 'run_held');
       if (event.kind === 'usage_limit') {
         // One limit is one fact however many of its runner's tasks it pauses:
         // they all resume, or wait, together.
