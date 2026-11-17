@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { devNull, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import { load } from 'js-yaml';
@@ -12,11 +12,13 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 function repository() {
   const cwd = mkdtempSync(join(tmpdir(), 'ordewell-release-source-'));
   roots.push(cwd);
+  const config = join(cwd, '.gitconfig-test');
+  writeFileSync(config, '');
   const git = (...args) => execFileSync('git', [
     '-c', 'user.name=Release Test', '-c', 'user.email=release@example.invalid',
     '-c', 'commit.gpgsign=false', '-c', `core.hooksPath=${join(cwd, 'no-hooks')}`, ...args,
   ], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull,
+    ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: config,
   } }).trim();
   const write = (file, body) => { mkdirSync(dirname(join(cwd, file)), { recursive: true }); writeFileSync(join(cwd, file), body); };
   const commit = () => { git('add', '.'); git('commit', '-qm', 'fixture'); };
