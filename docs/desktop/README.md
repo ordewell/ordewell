@@ -26,7 +26,7 @@ installers, named `Ordewell-<version>-<os>-<arch>.<ext>`:
 | Windows | `.exe` (NSIS installer) | x64 |
 | Linux | `.AppImage`, `.deb` | x64 |
 
-Official releases from 0.14.0 are signed with a Developer ID and notarized by
+Official releases from 0.14.1 are signed with a Developer ID and notarized by
 Apple on macOS. Windows installers are Authenticode-signed by **Alessandro
 Costanzo Ciano** using SSL.com eSigner. Signed macOS and Windows builds support
 in-app updates; Linux builds update by installing the next release
