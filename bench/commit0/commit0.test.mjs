@@ -1525,8 +1525,11 @@ test('a run whose task is in progress, with no model call for twenty minutes, is
   assert.equal(settlesWithin(landing, 20), false, 'an attempt still running settled');
   const starting = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'failed' }], activity: { starting: true } }), saved: null });
   assert.equal(settlesWithin(starting, 20), false, 'a start on its way settled');
-  const resuming = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'awaiting_user', awaitingReason: 'usage-limit' }], activity: { resumable: true } }), saved: null });
+  const resuming = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'awaiting_user', awaitingReason: 'usage-limit' }], activity: { resumable: true, advancesOnItsOwn: true } }), saved: null });
   assert.equal(settlesWithin(resuming, 20), false, 'a run that resumes by itself settled');
+  // Core's endedOnFailure: resumable, yet nothing advances until a retry nobody in arm A gives (found by the rehearsal).
+  const endedOnFailure = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'failed', attempted: true }], activity: { resumable: true, advancesOnItsOwn: false } }), saved: null });
+  assert.equal(settlesWithin(endedOnFailure, 20), true, 'a run that ended on a failure never settled, so it ran to the wall cap');
 });
 
 test('a run whose tasks have all ended settles once nothing moved for the settle time', () => {

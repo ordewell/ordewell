@@ -15,7 +15,7 @@ export const FAKE_SERVER = 'rehearsal-fake.mjs';
 export const FAKE_PORT = 3799;
 export const FAKE_LOG_IN_BOX = '/tmp/commit0-rehearsal-requests.jsonl';
 /** The value the box's key holds: core lists and calls only a provider it holds a key for. */
-export const FAKE_KEY = 'rehearsal-fake';
+export const FAKE_KEY = 'not-a-real-key';
 /** The reference source, put in the box after the leak probe, for the scripted agent to "write". */
 export const REFERENCE_TAR_IN_BOX = '/tmp/commit0-rehearsal-reference.tar';
 export const REHEARSAL_MODULE = '_commit0_rehearsal';

@@ -1377,7 +1377,8 @@ export function planFingerprint(plan, usageLines) {
  * Whether a run is over (D5): no attempt running, none starting, nothing that
  * resumes by itself, nobody waited on, some AI task tried or ended, and
  * nothing moved for settleMs. `activity` is the daemon's word on its attempts
- * (RunActivity), absent once it has stopped. An attempt that runs without a
+ * (RunActivity), absent once it has stopped. A run that ended on a failure
+ * settles: core calls it resumable, but only a retry moves it. An attempt that runs without a
  * sign of life is the wall-clock cap's and Ordewell's own limits' business,
  * never this one's: a long shell command or a stream-idle retry writes no
  * usage line for minutes. `ordewell run`'s exit says none of this: it may exit
@@ -1386,7 +1387,11 @@ export function planFingerprint(plan, usageLines) {
  */
 export function settleDecision({ plan, activity = null, fingerprint, nowMs, state, settleMs = SETTLE_MS }) {
   const tasks = allTasks(plan).filter((t) => (t.type ?? 'ai') === 'ai');
-  const live = allTasks(plan).some((t) => t.status === 'in_progress') || activity?.running || activity?.starting || activity?.resumable;
+  // `resumable` also holds for a run that ended on a failure, which waits on a
+  // retry or a skip nobody in an unsupervised arm gives: only what advances on
+  // its own (an attempt, a start, the scheduler, a usage-limit hold) keeps a run live.
+  const advances = activity && 'advancesOnItsOwn' in activity ? activity.advancesOnItsOwn : activity?.resumable;
+  const live = allTasks(plan).some((t) => t.status === 'in_progress') || activity?.running || activity?.starting || advances;
   const quiet = plan && !live && !waitingOnPerson(plan)
     && tasks.some((t) => t.attempted || !isOpen(t) || t.status === 'failed');
   if (!quiet) return { settled: false, state: null };
