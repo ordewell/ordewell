@@ -28,6 +28,8 @@ export const MODELS_DEV_URL = 'https://models.dev/api.json';
 export interface ModelDetails {
   name?: string;
   contextWindow?: number;
+  /** The largest prompt, where models.dev states one below the window (OpenAI's GPT-5 models): what OpenCode measures a context against. */
+  inputLimit?: number;
   maxOutputTokens?: number;
   /** USD per million tokens; a field models.dev does not state is absent. */
   pricing?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
@@ -108,7 +110,7 @@ interface RawModel {
   reasoning?: unknown;
   tool_call?: unknown;
   reasoning_options?: unknown;
-  limit?: { context?: unknown; output?: unknown };
+  limit?: { context?: unknown; input?: unknown; output?: unknown };
   cost?: { input?: unknown; output?: unknown; cache_read?: unknown; cache_write?: unknown };
 }
 
@@ -120,6 +122,8 @@ function detailsFromRaw(raw: RawModel): ModelDetails {
   if (typeof raw.name === 'string' && raw.name !== '') out.name = raw.name;
   const context = positive(raw.limit?.context);
   if (context !== undefined) out.contextWindow = context;
+  const inputLimit = positive(raw.limit?.input);
+  if (inputLimit !== undefined) out.inputLimit = inputLimit;
   const output = positive(raw.limit?.output);
   if (output !== undefined) out.maxOutputTokens = output;
   const input = price(raw.cost?.input);

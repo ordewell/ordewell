@@ -1,0 +1,69 @@
+import { expect, vi } from 'vitest';
+import { TaskOrchestrator } from '../TaskOrchestrator';
+import { VerdictEngine } from '../VerdictEngine';
+import { runningLongThreshold, type RunningLongFacts } from '../RunningLong';
+import { createTask } from '../../models/Task';
+import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import { RunnerRegistry } from '../../plugins/RunnerRegistry';
+import { fakeConfig, FakeRunnerSession } from '../../testing';
+import { fakeNotification } from './sessionTestKit';
+import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
+import type { AgentEvent } from '../harness/AgentAdapter';
+
+/**
+ * What a harness adapter reported for one automatic compaction, carried
+ * through what a StructuredRunner session passes on unchanged (its events and
+ * the adapter's compactWindowTokens) to the two readers that act on it: the
+ * reminder of the brief (Attempts) and the running-long clock (VerdictEngine).
+ */
+export async function expectCompactionChain(adapterEvents: readonly AgentEvent[], compactWindowTokens: number | undefined): Promise<void> {
+  const compaction = adapterEvents.find((e): e is Extract<AgentEvent, { type: 'compaction' }> => e.type === 'compaction' && e.trigger === 'auto');
+  expect(compaction).toBeDefined();
+  if (!compaction) return;
+
+  const sessions: FakeRunnerSession[] = [];
+  const runner = {
+    spawn: vi.fn(async (): Promise<IRunnerSession> => {
+      const session = new FakeRunnerSession(`s${sessions.length + 1}`, 't1', 'native-t1');
+      session.compactWindowTokens = compactWindowTokens;
+      sessions.push(session);
+      return session;
+    }),
+    stop: vi.fn(),
+    stopAll: vi.fn(),
+    activeCount: 0,
+  } satisfies IRunner;
+  const orchestrator = TaskOrchestrator.compose({
+    config: fakeConfig({ worktreeIsolation: false }),
+    notifications: fakeNotification(),
+    runner,
+    output: new BufferedTaskOutputSource(),
+    registry: new RunnerRegistry(),
+    workspaceRoot: () => '/repo',
+    workspaceEnv: async () => ({ env: {}, blockedEnvrc: null, refused: [], trackedEnvFile: null }),
+  });
+  orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'Parse objects and arrays.' })]);
+  await orchestrator.forceStartTask('t1');
+  sessions[0].emitEvent(compaction);
+  const reminders = sessions[0].queued().filter((m) => m.from === 'ordewell');
+  expect(reminders).toHaveLength(1);
+  expect(reminders[0].text).toContain('Parse objects and arrays.');
+
+  // Under a window Ordewell set, compactions are routine until the third (RunningLong); with none, the first is flagged.
+  const engine = new VerdictEngine({ runningLongThreshold: () => runningLongThreshold([]) });
+  const flags: RunningLongFacts[] = [];
+  engine.onRunningLong((_taskId, facts) => flags.push(facts));
+  const session = new FakeRunnerSession();
+  session.compactWindowTokens = compactWindowTokens;
+  engine.watch(createTask({ id: 't2', title: 'watched', taskMode: 'build' }), session);
+  const flaggedAt = compactWindowTokens === undefined ? 1 : 3;
+  for (let i = 1; i <= flaggedAt; i += 1) {
+    expect(flags).toEqual([]);
+    session.emitEvent(compaction);
+  }
+  expect(flags).toEqual([expect.objectContaining({
+    reason: 'compaction', compactions: flaggedAt,
+    ...(compactWindowTokens === undefined ? {} : { compactionWindow: compactWindowTokens }),
+  })]);
+  engine.reset();
+}

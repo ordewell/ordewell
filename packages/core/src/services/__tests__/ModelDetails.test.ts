@@ -54,6 +54,11 @@ describe('trimModelsDev', () => {
     expect(table.openai['gpt-5'].contextWindow).toBe(2);
     expect(table.openai['gpt-5-20260101'].contextWindow).toBe(1);
   });
+
+  it('keeps an input limit models.dev states below the window', () => {
+    const table = trimModelsDev({ openai: { models: { 'gpt-5': { id: 'gpt-5', limit: { context: 400_000, input: 272_000, output: 128_000 } } } } });
+    expect(table.openai['gpt-5']).toEqual({ contextWindow: 400_000, inputLimit: 272_000, maxOutputTokens: 128_000 });
+  });
 });
 
 describe('lookup', () => {
