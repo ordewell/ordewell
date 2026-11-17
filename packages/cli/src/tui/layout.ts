@@ -1066,9 +1066,13 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const versionCheck = state.versionCheckNotice
     ? [...wrap(style.grey(state.versionCheckNotice), Math.max(1, cols - 1)), '']
     : [];
+  const update = state.knownUpdate
+    ? [...wrap(style.brand(`↑ ${state.knownUpdate.line}`), Math.max(1, cols - 1)), '']
+    : [];
   const tail = [
     ...notice,
     ...versionCheck,
+    ...update,
     style.grey('/help   all commands'),
     workspaceLine(state.workspace, cols),
     ...signedOutPlannerLines(state, cols),

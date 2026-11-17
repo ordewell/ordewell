@@ -17,7 +17,7 @@ import { bringForward, windowsHidden } from './testWindows';
 import { webLink } from './terminal/link';
 import type { TerminalChannel } from './terminal/TerminalChannel';
 import type { TerminalHost } from './terminal/TerminalHost';
-import type { UpdateController } from './updater';
+import type { UpdateService } from './updates';
 import type { WindowManager } from './windows';
 
 export interface IpcDeps {
@@ -33,7 +33,9 @@ export interface IpcDeps {
   /** Where a chosen folder opens: focus, switch this window, or a new one (projectSwitch.ts). */
   projects: ProjectOpener;
   prefs: PrefsStore;
-  updates: UpdateController;
+  updates: UpdateService;
+  /** [Restart to update]: asks about live work, then quits into the downloaded update (index.ts). */
+  restartToUpdate: () => Promise<boolean>;
   notifications: AttentionNotifier;
   terminals: { channel: TerminalChannel; host: TerminalHost };
   onDaemonRead?: (route: RouteId) => ((ok: boolean) => void) | undefined;
@@ -235,9 +237,14 @@ export function registerIpc(deps: IpcDeps): void {
     if (!change) throw new Error(`Refused preference ${String(key)}`);
     const next = prefs.set(change);
     if (change.theme) nativeTheme.themeSource = change.theme;
+    if (change.versionCheck !== undefined) deps.updates.setVersionCheck(change.versionCheck);
     return next;
   });
-  handle(CHANNELS.updateState, () => ({ state: deps.updates.state() }));
+  handle(CHANNELS.updateState, () => deps.updates.state());
+  handle(CHANNELS.updateCheck, () => deps.updates.check());
+  handle(CHANNELS.updateDownload, () => deps.updates.download());
+  handle(CHANNELS.updateRestart, () => deps.restartToUpdate());
+  handle(CHANNELS.updateDismissNotice, () => { deps.updates.dismissNotice(); });
 
   handle(CHANNELS.notifyShow, (event, raw) => {
     const request = notificationRequest(raw);
@@ -343,5 +350,6 @@ export function registerIpc(deps: IpcDeps): void {
   handle(CHANNELS.clipboardWriteText, (event, text) => writeClipboard(clipboard, inUse(event), text));
 
   daemon.onStatus((status) => windows.broadcast(EVENTS.daemonStatus, status));
+  deps.updates.onChange((state) => windows.broadcast(EVENTS.updateChange, state));
   nativeTheme.on('updated', () => windows.broadcast(EVENTS.theme, currentTheme()));
 }

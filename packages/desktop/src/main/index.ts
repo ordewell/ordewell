@@ -27,7 +27,7 @@ import { fileSystemPlacement } from './terminal/placement';
 import { shellName } from './terminal/shellChoice';
 import { TerminalHost, type PtySpawn } from './terminal/TerminalHost';
 import { openWordLink } from './terminal/wordLink';
-import { closePrompt, onLastWindowClosed, quitPrompt, runsQuitStops } from './lifecycle';
+import { closePrompt, onLastWindowClosed, quitPrompt, restartPrompt, runsQuitStops, type QuitPrompt } from './lifecycle';
 import { droppedFolder } from './droppedFolder';
 import { launchAction, launchDataOf, OpenProjectsMemory, parseLaunchArgs, type LaunchData } from './launch';
 import { menuTemplate } from './menu';
@@ -39,6 +39,7 @@ import { StartupLog } from './startupLog';
 import { PrefsStore } from './prefs';
 import { RecentsStore } from './recents';
 import { AUTO_UPDATE_ENABLED, UpdateController, type UpdaterPort } from './updater';
+import { UpdateService } from './updates';
 import { lockSession, lockWebContents, registerAppScheme, serveRenderer } from './security';
 import { WindowManager } from './windows';
 import { osSurfacesAllowed, quietTestApp, suppressOsSurfaces } from './testWindows';
@@ -189,7 +190,7 @@ async function main(): Promise<void> {
   late.windows = wm;
   nativeTheme.on('updated', () => wm.retheme());
 
-  const updates = new UpdateController({
+  const updater = new UpdateController({
     enabled: AUTO_UPDATE_ENABLED,
     packaged: app.isPackaged,
     // Imported here, not at the top: a build with updates off never
@@ -198,6 +199,9 @@ async function main(): Promise<void> {
     load: async (): Promise<UpdaterPort> => (await import('electron-updater')).autoUpdater,
     log: (message) => console.warn(message),
   });
+  // Started once the first windows are up, so the version check's notice and
+  // answer have a window to show them in (ADR-0048).
+  const updates = new UpdateService({ version: app.getVersion(), updater, versionCheck: prefs.get().versionCheck });
 
   // node-pty is a native addon: it loads on the first terminal, so a build
   // where it is missing still opens windows and only that terminal fails.
@@ -296,6 +300,7 @@ async function main(): Promise<void> {
     projects,
     prefs,
     updates,
+    restartToUpdate: () => restartToUpdate(),
     notifications,
     terminals: { channel: terminalChannel, host: terminalHost },
     onDaemonRead: (route) => startupLog.request(route),
@@ -334,6 +339,41 @@ async function main(): Promise<void> {
     });
   });
 
+  const ask = async (prompt: QuitPrompt): Promise<boolean> => {
+    const answer = await dialog.showMessageBox({
+      type: 'warning',
+      message: prompt.message,
+      detail: prompt.detail,
+      buttons: [prompt.confirmLabel, 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    return answer.response === 0;
+  };
+
+  /** What quitting does once the user has agreed: stop what the app owns, so each run records a stop rather than a crash. */
+  const shutDown = async (live: LiveRun[] | undefined): Promise<void> => {
+    startupLog.record('quit.started');
+    try {
+      prefs.set({ openProjects: openProjects.list() });
+    } catch (error) {
+      console.warn(`[quit] could not remember the open projects: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // Named with its workspace: an id names a session only within one.
+    for (const run of runsQuitStops(live, daemon.owned)) {
+      const built = buildRequest('plans.stop', { sessionId: run.sessionId, workspace: run.workspace });
+      if (built.ok) await proxy.call(built.request);
+    }
+    hideTray();
+    terminalHost.killAll();
+    updates.stop();
+    await daemon.shutdown();
+    startupLog.record('quit.finished');
+    // The log is best effort even on a disk that stopped answering.
+    await Promise.race([startupLog.flush(), new Promise<void>((resolve) => setTimeout(resolve, 100))]);
+  };
+
   let quitting = false;
   app.on('before-quit', (event) => {
     if (quitting) return;
@@ -341,39 +381,30 @@ async function main(): Promise<void> {
     void (async () => {
       const live = await liveRuns();
       const prompt = quitPrompt(live, daemon.owned, terminalHost.busy(shellName));
-      if (prompt) {
-        const answer = await dialog.showMessageBox({
-          type: 'warning',
-          message: prompt.message,
-          detail: prompt.detail,
-          buttons: [prompt.confirmLabel, 'Cancel'],
-          defaultId: 1,
-          cancelId: 1,
-          noLink: true,
-        });
-        if (answer.response !== 0) return;
-      }
+      if (prompt && !(await ask(prompt))) return;
       quitting = true;
-      startupLog.record('quit.started');
-      try {
-        prefs.set({ openProjects: openProjects.list() });
-      } catch (error) {
-        console.warn(`[quit] could not remember the open projects: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      // Named with its workspace: an id names a session only within one.
-      for (const run of runsQuitStops(live, daemon.owned)) {
-        const built = buildRequest('plans.stop', { sessionId: run.sessionId, workspace: run.workspace });
-        if (built.ok) await proxy.call(built.request);
-      }
-      hideTray();
-      terminalHost.killAll();
-      await daemon.shutdown();
-      startupLog.record('quit.finished');
-      // The log is best effort even on a disk that stopped answering.
-      await Promise.race([startupLog.flush(), new Promise<void>((resolve) => setTimeout(resolve, 100))]);
+      await shutDown(live);
       app.exit(0);
     })();
   });
+
+  /**
+   * [Restart to update] (ADR-0063 H9): asks as quitting does, naming the runs
+   * whose running tasks stop, then shuts down as quitting does and hands over
+   * to the installer. `quitting` is set first, so the quit the installer
+   * starts passes the before-quit handler instead of asking again.
+   */
+  const restartToUpdate = async (): Promise<boolean> => {
+    if (quitting || updates.state().updater.phase !== 'ready') return false;
+    const live = await liveRuns();
+    const prompt = restartPrompt(live, daemon.owned, terminalHost.busy(shellName));
+    if (prompt && !(await ask(prompt))) return false;
+    quitting = true;
+    await shutDown(live);
+    // The daemon is already down: an app left open on a failed hand-over would be a shell of itself.
+    if (!(await updates.install())) app.exit(0);
+    return true;
+  };
 
   app.on('activate', () => wm.show());
 
@@ -411,6 +442,6 @@ async function main(): Promise<void> {
   // The welcome window can paint while the user's login profile resolves.
   // Only the daemon and its runners need the resulting PATH.
   process.env.PATH = await resolvedPath;
-  void updates.start();
+  updates.start();
   await daemon.connect();
 }

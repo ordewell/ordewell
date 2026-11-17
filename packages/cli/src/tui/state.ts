@@ -603,6 +603,12 @@ export interface TuiState {
   isolationPreviewRead: number;
   /** The version check's one-time notice (ADR-0048), on the one start that shows it; empty on every other. */
   versionCheckNotice: string;
+  /**
+   * A newer version the check named, and the line that tells how to get it
+   * (ADR-0048). Kept for the life of the process, whichever session is on
+   * screen: the transcript line scrolls away, this is what stays in view.
+   */
+  knownUpdate: { latest: string; line: string } | null;
   runAutoMerge: boolean | null;
   /** The current run's own level, and why its supervisor stopped if it did; null before any run. */
   runSupervisor: { level: SupervisorLevel; unsupervised?: string } | null;
@@ -895,6 +901,7 @@ export const STATE_SCOPE = {
   isolationPreview: 'workspace',
   isolationPreviewRead: 'workspace',
   versionCheckNotice: 'screen',
+  knownUpdate: 'screen',
   runAutoMerge: 'session',
   runSupervisor: 'session',
   mouseCapture: 'screen',
@@ -1000,6 +1007,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     isolationPreview: undefined,
     isolationPreviewRead: 0,
     versionCheckNotice: '',
+    knownUpdate: null,
     runAutoMerge: null,
     runSupervisor: null,
     mouseCapture: true,

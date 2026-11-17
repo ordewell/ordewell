@@ -47,6 +47,19 @@ describe('menuTemplate', () => {
     expect(command).toHaveBeenCalledWith('terminal.toggle');
   });
 
+  it('offers Check for Updates… in the app menu on macOS and in Help elsewhere, run in the focused window', () => {
+    for (const [platform, menu] of [['darwin', 'Ordewell'], ['win32', 'Help'], ['linux', 'Help']] as const) {
+      const command = vi.fn();
+      const check = submenu(template(platform, false, [], { command }).find((item) => item.label === menu))
+        .find((item) => item.label === 'Check for Updates…');
+      click(check);
+      expect(command).toHaveBeenCalledWith('update.check');
+    }
+    const appMenu = submenu(template('darwin').find((item) => item.label === 'Ordewell'));
+    expect(appMenu.findIndex((item) => item.label === 'Check for Updates…')).toBe(1);
+    expect(template('darwin').some((item) => item.label === 'Help')).toBe(false);
+  });
+
   for (const platform of ['darwin', 'win32', 'linux'] as const) {
     for (const dev of [false, true]) {
       it(`binds none of the frame's chords on ${platform}${dev ? ' in development' : ''}`, () => {

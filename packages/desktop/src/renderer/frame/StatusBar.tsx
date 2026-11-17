@@ -16,7 +16,7 @@ function statusOf(status: DaemonStatus | undefined): StatusId {
   }
 }
 
-/** The bottom row: the daemon as main sees it, then the lease, runners and usage a later slice fills in. */
+/** The bottom row: the daemon as main sees it, then the lease, runners, a newer version and usage a later slice fills in. */
 export function StatusBar({ daemon }: { daemon: DaemonStatus | undefined }): JSX.Element {
   const state = useFrameState();
   const status = statusOf(daemon);
@@ -26,7 +26,7 @@ export function StatusBar({ daemon }: { daemon: DaemonStatus | undefined }): JSX
         <StatusIndicator status={status} size={12} showLabel label={daemon ? daemonLabel(daemon) : 'Reading the daemon…'} />
         {slotsFor(state, 'status.daemon').map((view) => <span key={view.id}>{view.render()}</span>)}
       </span>
-      {(['status.lease', 'status.runners', 'status.usage'] as const).map((slot) => (
+      {(['status.lease', 'status.runners', 'status.update', 'status.usage'] as const).map((slot) => (
         <span key={slot} className="frame-status-slot" data-slot={slot}>
           {slotsFor(state, slot).map((view) => <span key={view.id}>{view.render()}</span>)}
         </span>

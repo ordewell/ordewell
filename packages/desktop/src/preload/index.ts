@@ -14,6 +14,7 @@ import {
   type StreamEvent,
   type SubscribeTarget,
   type Unsubscribe,
+  type UpdateState,
 } from '../shared/bridge';
 
 /**
@@ -121,6 +122,11 @@ const bridge: OrdewellBridge = {
   },
   update: {
     state: () => ipcRenderer.invoke(CHANNELS.updateState),
+    onChange: (cb) => listen<UpdateState>(EVENTS.updateChange, cb),
+    check: () => ipcRenderer.invoke(CHANNELS.updateCheck),
+    download: () => ipcRenderer.invoke(CHANNELS.updateDownload),
+    restart: () => ipcRenderer.invoke(CHANNELS.updateRestart),
+    dismissNotice: () => ipcRenderer.invoke(CHANNELS.updateDismissNotice),
   },
   notify: {
     show: (request: NotificationRequest) => ipcRenderer.invoke(CHANNELS.notifyShow, request),

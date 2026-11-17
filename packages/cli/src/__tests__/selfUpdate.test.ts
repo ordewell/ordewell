@@ -41,6 +41,9 @@ function machine(overrides: Partial<SelfUpdateDeps> & { status?: number; outputs
 
 const binary = (execPath: string) => ({ sea: fakeSea('0.12.6'), execPath, realpath: (path: string) => path });
 
+/** What `ordewell update` ends on: the running copy is the old one until it is restarted. */
+const RESTART = 'Restart Ordewell (any that is running) to use the new version.';
+
 describe('ordewell update', () => {
   describe('a binary the installer put there', () => {
     it('prints the installer command for the binary’s own folder and runs nothing on --dry-run', async () => {
@@ -71,7 +74,8 @@ describe('ordewell update', () => {
         env: { HOME: '/home/me', PATH: '/usr/bin', ORDEWELL_INSTALL_DIR: '/home/me/.local/bin' },
         input: '#!/bin/sh\necho installer\n',
       }]);
-      expect(m.stdout.at(-1)).toBe('Ordewell 0.12.6 → 0.13.0');
+      expect(m.stdout.at(-2)).toBe('Ordewell 0.12.6 → 0.13.0');
+      expect(m.stdout.at(-1)).toBe(RESTART);
     });
 
     it('exits with the installer’s status when it fails, naming no new version', async () => {
@@ -156,7 +160,8 @@ describe('ordewell update', () => {
 
       expect(await runUpdate([], m.deps)).toBe(0);
 
-      expect(m.stdout.at(-1)).toBe('Updated Ordewell 0.12.6, but /home/me/.local/bin/ordewell --version did not answer.');
+      expect(m.stdout.at(-2)).toBe('Updated Ordewell 0.12.6, but /home/me/.local/bin/ordewell --version did not answer.');
+      expect(m.stdout.at(-1)).toBe(RESTART);
     });
   });
 
@@ -173,7 +178,8 @@ describe('ordewell update', () => {
       expect(m.stdout[0]).toBe('Running: brew upgrade ordewell');
       expect(m.ran).toEqual([{ command: 'brew', args: ['upgrade', 'ordewell'] }]);
       expect(m.downloaded).toEqual([]);
-      expect(m.stdout.at(-1)).toBe('Ordewell 0.12.6 → 0.13.0');
+      expect(m.stdout.at(-2)).toBe('Ordewell 0.12.6 → 0.13.0');
+      expect(m.stdout.at(-1)).toBe(RESTART);
     });
 
     it('prints brew upgrade and runs nothing on --dry-run', async () => {
@@ -202,7 +208,8 @@ describe('ordewell update', () => {
       expect(status).toBe(0);
       expect(m.stdout[0]).toBe('Running: npm install -g ordewell@latest');
       expect(m.ran).toEqual([{ command: 'npm', args: ['install', '-g', 'ordewell@latest'] }]);
-      expect(m.stdout.at(-1)).toMatch(/^Ordewell .+ → 0\.13\.0$/);
+      expect(m.stdout.at(-2)).toMatch(/^Ordewell .+ → 0\.13\.0$/);
+      expect(m.stdout.at(-1)).toBe(RESTART);
     });
 
     it('installs the latest @ordewell/cli when that is the package installed', async () => {

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-17
+
+### Added
+
+- A persistent status bar item and Update and What's new actions when a newer
+  version is available. The notice names the newer version across surfaces.
+- Links to the new desktop app for macOS, Windows and Linux, alongside the
+  terminal and extension install paths.
+
 ## [0.13.4] - 2026-11-17
 
 ### Added

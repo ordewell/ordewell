@@ -57,6 +57,8 @@ export type SlotId =
   | 'status.lease'
   | 'status.runners'
   | 'status.usage'
+  /** A newer version while one is known (ADR-0063 H9). */
+  | 'status.update'
   | 'popover.needsYou';
 
 export interface SlotView {

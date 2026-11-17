@@ -127,17 +127,27 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   // Started once the daemon is up, with nothing awaited between here and
   // `createApp`: the notice is synchronous and lands in the first frame. The
   // update line comes at once for a newer version an earlier ping remembered,
-  // and on every start while it is newer (ADR-0048), or with a later ping; it
-  // waits for the app to start, so the transcript it lands in is the one shown.
+  // and on every start while it is newer (ADR-0048), or with a later ping. The
+  // transcript line waits for the app to start, so the transcript it lands in
+  // is the one shown; the version itself seeds the first frame, so the status
+  // row's indicator is there from the start, and a later ping's answer
+  // reaches it as an action.
   let versionCheckNotice = '';
   let appStarted = false;
   let startupUpdateLine: string | undefined;
+  // Assigned in a callback, which narrowing cannot see.
+  let knownUpdate = null as { latest: string; line: string } | null;
   startCliVersionCheck(
     {
       onNotice: (text) => { versionCheckNotice = text; },
-      onUpdate: (line) => {
-        if (appStarted) app.dispatch({ type: 'notice', message: line });
-        else startupUpdateLine = line;
+      onUpdate: (line, latest) => {
+        if (appStarted) {
+          app.dispatch({ type: 'updateKnown', latest, line });
+          app.dispatch({ type: 'notice', message: line });
+        } else {
+          knownUpdate = { latest, line };
+          startupUpdateLine = line;
+        }
       },
     },
     { howToUpdate: updateHint('type /update', selfUpdate) },
@@ -162,6 +172,7 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
       mouseCapture,
       taskSkills,
       versionCheckNotice,
+      knownUpdate,
     },
     draw: (frame) => terminal?.draw(frame),
     perform: (effect) =>
@@ -267,6 +278,9 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
   app.dispatch({ type: 'resize', rows, cols });
   app.start();
   appStarted = true;
+  // Again, though `initial` carried it: an answer that came between `createApp`
+  // and here would otherwise reach neither.
+  if (knownUpdate) app.dispatch({ type: 'updateKnown', ...knownUpdate });
   if (startupUpdateLine) app.dispatch({ type: 'notice', message: startupUpdateLine });
   const inputNotice = windowsInputNotice();
   if (inputNotice) app.dispatch({ type: 'notice', message: inputNotice });
