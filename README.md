@@ -272,16 +272,18 @@ adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
 Ordewell checks for updates daily, sending its version and a random install ID
 to ordewell.ai after a one-time notice, and nothing else. The desktop app sends
 the same daily check. When the answer names a newer release, Ordewell remembers
-it until you update and says so: the desktop app in a banner and a persistent
-indicator, the terminal UI on every start, a command run in a terminal once a
-day, and VS Code once a day. `ordewell update` and `/update` run the update;
-they send nothing to ordewell.ai. To turn the check off, set
-`ORDEWELL_NO_VERSION_CHECK=1` or `DO_NOT_TRACK=1`, use the toggle in the desktop
-app's Settings, or turn off VS Code's telemetry for the extension. See
+it until you update and says so: the desktop app in a banner and its status
+bar, the terminal UI on every start and in its status row, VS Code in its
+status bar and in a message once a day, and a command run in a terminal once a
+day. `ordewell update` and `/update` run the update; they send nothing to
+ordewell.ai. To turn the check off, set `ORDEWELL_NO_VERSION_CHECK=1` or
+`DO_NOT_TRACK=1`, turn off **Check for new versions** in the desktop app's
+Settings, or turn off VS Code's telemetry for the extension. See
 [version check details](https://ordewell.ai/docs#version-check).
 
 A signed desktop build downloads its own updates from GitHub Releases, and
-contacts GitHub only when you ask it to update, by pressing **Update**. See the
+contacts GitHub only when you ask: when you press **Update** or choose **Check
+for updates…**. See the
 desktop guide's [updates](docs/desktop/README.md#updates).
 
 To show each model's context size, prices and capabilities, Ordewell fetches the

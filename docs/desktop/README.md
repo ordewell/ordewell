@@ -306,14 +306,16 @@ once a day it asks ordewell.ai for the latest version, sending its own version
 and a random install ID that is replaced every 30 days, and, like any server,
 ordewell.ai sees your IP address. The first time, a **privacy notice** says so
 before anything is sent, and the start that shows it sends nothing. To turn the
-check off, use the toggle in **Settings** or set `ORDEWELL_NO_VERSION_CHECK=1`
+check off, turn off **Check for new versions** in **Settings** (under **This
+app**), or set `ORDEWELL_NO_VERSION_CHECK=1`
 or `DO_NOT_TRACK=1` in the environment the app starts in, the same switches the
 other surfaces honor. Any one turns it off entirely: no notice, no request and
 no update line.
 
-When a newer release exists, a **banner** says **Ordewell X is available** and
-links to **What's new**, and a persistent indicator in the window keeps saying
-so, so a missed banner is not a missed update. What happens next depends on the
+When a newer release exists, a **banner** says **Ordewell X is available. You
+have Y.** with **What's new** and **Later**, and the status bar keeps saying
+**↑ X available** after you press Later, so a missed banner is not a missed
+update; clicking it brings the banner back. What happens next depends on the
 build:
 
 | Build | Action | What it does |
@@ -337,11 +339,15 @@ You can also update the way you installed:
 - **The one-line installers:** run the same command again.
 - **The AppImage:** download the new file.
 
-**Check for updates…**, in the app's menu, asks right away instead of waiting
-for the daily check.
+**Check for updates…**, in the app menu on macOS, the **Help** menu on Windows
+and Linux, and the **⋯** menu, asks on demand. A signed build asks its release
+feed right away. Any other build runs the version check again, which asks
+ordewell.ai only once the machine's day is up, and otherwise answers from the
+version it last heard.
 
 The app's own updater, `electron-updater`, contacts GitHub Releases only when
-you ask, by pressing **Update**. The daily check talks to ordewell.ai alone.
+you ask: when you press **Update** or choose **Check for updates…** in a signed
+build. The daily check talks to ordewell.ai alone.
 
 ## First run
 
