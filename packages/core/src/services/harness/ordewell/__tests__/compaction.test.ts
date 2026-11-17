@@ -254,6 +254,26 @@ describe('compaction in the loop', () => {
     expect(store.entries.filter((e) => e.kind === 'message').length).toBeGreaterThan(resumed.messages.length);
   });
 
+  it('runs a model nothing describes under an assumed 128,000-token window, not a 16k threshold', async () => {
+    // Eight steps of a 5k-token tool result each: about 45k tokens by the last request, past 16k early on and under 108,800 throughout.
+    const client = splitClient((_request, index) => {
+      if (index < 8) return [call(`c${index + 1}`, 'note', { text: `step ${index}` }), usage(1_000 + index * 5_000), STOP];
+      return [text('Done.'), usage(45_000), STOP];
+    });
+    const { loop, events } = loopWith(client, {
+      model: defaultModelInfo('openrouter', 'acme/unknown'),
+      taskTools: fakeTaskTools(['note'], async () => ({ text: chars(20_000) })),
+    });
+    await expect(loop.runTurn('Task.', abort())).resolves.toEqual({ interrupted: false });
+    expect(client.mainRequests).toHaveLength(9);
+    expect(client.summaryRequests).toHaveLength(0);
+    expect(eventsOf(events, 'compaction')).toEqual([]);
+    const windows = eventsOf(events, 'usage').map((e) => e.record.contextWindow);
+    expect(new Set(windows)).toEqual(new Set([128_000]));
+    // The meter names the window as assumed, so a user reads it as a guess.
+    expect(eventsOf(events, 'usage').every((e) => e.record.contextWindowAssumed === true)).toBe(true);
+  });
+
   it('keeps the system prompt and tools byte-identical across steps, with a breakpoint on each prefix', async () => {
     const client = splitClient(script);
     const { loop } = loopWith(client);
@@ -345,6 +365,26 @@ describe('overflow recovery', () => {
     for (let i = 1; i < posts.length; i++) expect(posts[i]).toBeLessThan(posts[i - 1] ?? 0);
     // The task message is kept every time.
     expect(client.mainRequests.at(-1)?.messages[0]).toEqual({ role: 'user', text: 'The task prompt.' });
+  });
+
+  it('keeps the smaller window for the rest of the attempt, so it does not walk back into the same refusal', async () => {
+    const store = await longConversation(60);
+    // Refused once; the retry, at 85% of the 100k window, measures 50k and adds a 25k tool result.
+    // 75k is under the full window's 84k threshold but past the shrunk 85k window's 69k.
+    const client = splitClient((_request, index) => {
+      if (index === 0) return overflow();
+      if (index === 1) return [call('c1', 'note', {}), usage(50_000), STOP];
+      return [text('Done.'), usage(20_000), STOP];
+    });
+    const { loop, events } = loopWith(client, {}, store);
+    await expect(loop.runTurn('Go on.', abort())).resolves.toEqual({ interrupted: false });
+
+    expect(client.mainRequests).toHaveLength(3);
+    expect(client.summaryRequests).toHaveLength(2);
+    expect(eventsOf(events, 'compaction')).toHaveLength(2);
+    // The meter reads the window the attempt now runs under.
+    const windows = eventsOf(events, 'usage').map((e) => e.record).filter((r) => !r.aggregate).map((r) => r.contextWindow);
+    expect(windows.at(-1)).toBe(85_000);
   });
 
   it('fails at once when there is nothing to compact', async () => {

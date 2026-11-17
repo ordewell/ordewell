@@ -65,6 +65,13 @@ describe('wakeUpDigest', () => {
       ]);
     });
 
+    it('names a window no catalog or listing stated as assumed', () => {
+      const event = runningLong('t4', { contextTokens: 90_000, contextWindow: 128_000, contextWindowAssumed: true });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toContain('; context 90k of an assumed 128k tokens');
+    });
+
     it('names the floor when no AI task has passed, and a threshold doubled by earlier flags', () => {
       const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE });
 

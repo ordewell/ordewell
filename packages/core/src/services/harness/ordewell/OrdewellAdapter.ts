@@ -90,6 +90,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
   });
   private guard: GuardedShell | null = null;
   private readonly held: HeldSecrets;
+  /** Said once, as the attempt's first log line: no events reach anyone before its first turn. */
+  private startNotice: string | null = null;
 
   constructor(private readonly provider: AiProvider, private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
     this.agentId = provider;
@@ -157,7 +159,9 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const model = await lookupModelInfo(opts.model, env, {
       fetchImpl: this.deps.fetch,
       ...(this.options.modelInfoTimeoutMs !== undefined ? { timeoutMs: this.options.modelInfoTimeoutMs } : {}),
+      ...(settings.ordewellContextWindows ? { windows: settings.ordewellContextWindows } : {}),
     });
+    this.startNotice = model.contextWindowSource === 'assumed' ? assumedWindowNote(model.id, model.contextWindow) : null;
     const effort = EFFORTS.find((level) => level === opts.flags.effort);
 
     this.store = store;
@@ -202,6 +206,8 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     this.turn = turn;
     this.onEvent = onEvent;
     this.onActivity = onActivity ?? null;
+    if (this.startNotice) onEvent({ type: 'command_output', text: this.startNotice });
+    this.startNotice = null;
     let last: AgentEvent;
     try {
       const outcome = await loop.runTurn(message, { stop: turn.stop.signal, hard: turn.hard.signal });
@@ -360,4 +366,10 @@ function streamTimeoutsOf(setting: { firstEventSeconds?: number; idleSeconds?: n
     firstEventMs: setting?.firstEventSeconds !== undefined ? setting.firstEventSeconds * 1000 : DEFAULT_STREAM_TIMEOUTS.firstEventMs,
     idleMs: setting?.idleSeconds !== undefined ? setting.idleSeconds * 1000 : DEFAULT_STREAM_TIMEOUTS.idleMs,
   };
+}
+
+/** How to state a window no catalog or listing gave, so compaction measures against the true one (ADR-0070). */
+function assumedWindowNote(id: string, window: number): string {
+  return `No catalog or provider listing states ${id}'s context window: assuming ${window.toLocaleString('en-US')} tokens. `
+    + `Set it in the settings file as "ordewellContextWindows": { "${id}": <tokens> }.`;
 }

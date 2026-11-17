@@ -60,6 +60,8 @@ export interface RunningLongFacts {
   /** What the main model's context holds now, from the last usage record or compaction. */
   contextTokens?: number;
   contextWindow?: number;
+  /** No catalog or listing stated `contextWindow`: the built-in runner assumed it (ADR-0070). */
+  contextWindowAssumed?: true;
   /** Where Ordewell set the runner to compact its context, when it did: a compaction there is routine. */
   compactionWindow?: number;
   /** The most the context has held this attempt: the saved usage keeps only the last. */
@@ -200,6 +202,7 @@ export class RunningLongClock {
       ...(basis ? { basis } : {}),
       ...(this.meter.lastPromptTokens !== undefined ? { contextTokens: this.meter.lastPromptTokens } : {}),
       ...(this.meter.contextWindow !== undefined ? { contextWindow: this.meter.contextWindow } : {}),
+      ...(this.meter.contextWindow !== undefined && this.meter.contextWindowAssumed ? { contextWindowAssumed: true as const } : {}),
       ...(this.compactWindow() !== undefined ? { compactionWindow: this.compactWindow() } : {}),
       ...(this.peak !== undefined ? { peakContextTokens: this.peak } : {}),
       compactions: this.compactions,

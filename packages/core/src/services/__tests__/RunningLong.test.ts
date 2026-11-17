@@ -136,6 +136,15 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     }]);
   });
 
+  it('says the window is assumed when the runner had to assume it', () => {
+    const { session, flags } = watched();
+
+    session.emitEvent({ type: 'usage', record: { source: 'ordewell', model: 'openrouter:acme/m', contextTokens: 90_000, contextWindow: 128_000, contextWindowAssumed: true } });
+    vi.advanceTimersByTime(30 * MINUTE);
+
+    expect(flags[0]).toMatchObject({ contextTokens: 90_000, contextWindow: 128_000, contextWindowAssumed: true });
+  });
+
   describe('where Ordewell sets the window its runner compacts at (ADR-0057 R4)', () => {
     const compacting = () => {
       const watchedRun = watched();
