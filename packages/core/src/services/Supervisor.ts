@@ -22,10 +22,12 @@ export const HUNG_TURN_GRACE_MS = 30_000;
 export const WAKE_UP_ATTEMPTS = 2;
 
 /**
- * The longest a supervisor's closing turn can keep a run's end open: each
- * attempt's time limit and the grace a hung one gets, plus the debounce its
- * batch waits before it goes. What a follower that cannot answer the turn
- * waits for the conclusion at most (ADR-0029).
+ * The longest a supervisor's closing turn runs once it can: each attempt's
+ * time limit and the grace a hung one gets, plus the debounce its batch waits
+ * before it goes. A user's planner turn it queues behind is not counted: that
+ * lasts as long as the user's does. What a follower that cannot answer the
+ * turn waits for the conclusion at most, counted while no user's turn is open
+ * (ADR-0029).
  */
 export const CLOSING_TURN_BOUND_MS = (WAKE_UP_TURN_TIMEOUT_MS + HUNG_TURN_GRACE_MS) * WAKE_UP_ATTEMPTS + WAKE_DEBOUNCE_MS;
 

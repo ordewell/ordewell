@@ -1012,6 +1012,7 @@ export class Session {
 
     this.supervision = new RunSupervision({
       plan: () => this.plan,
+      wakeUpsParked: () => this.turns.parked,
       subplanner: () => this.position.answersToParent,
       userSettings: () => this.userRunSettings(),
       tasks: () => this.store.planTasks,

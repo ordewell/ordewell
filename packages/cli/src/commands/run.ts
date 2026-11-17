@@ -130,10 +130,22 @@ async function followRun(
   let level = startLevel;
   let concluded: ExecutionSummary | null = null;
   // At Act the follower waits on the supervisor's closing turn, never past
-  // the longest the daemon lets that turn keep the end open (ADR-0029): a
-  // daemon that never says so leaves the tasks' outcomes as the answer.
+  // the longest that turn may run once it can (ADR-0029): a daemon that never
+  // says so leaves the tasks' outcomes as the answer. A user's planner turn
+  // holds the closing turn back for as long as it lasts, so the bound counts
+  // from when none is open, and afresh at each supervisor turn's start.
   let ended: ExecutionSummary | null = null;
   let closingBound: ReturnType<typeof setTimeout> | undefined;
+  let awaitingClose = false;
+  const userTurns = new Set<string>();
+  const rearm = (): void => {
+    clearTimeout(closingBound);
+    if (awaitingClose && userTurns.size === 0) closingBound = setTimeout(noteOverdue, CLOSING_TURN_BOUND_MS);
+  };
+  const stopBound = (): void => {
+    awaitingClose = false;
+    clearTimeout(closingBound);
+  };
   let noteOverdue: () => void = () => {};
   const overdue = new Promise<'overdue'>((resolve) => { noteOverdue = () => resolve('overdue'); });
   const refs = new Map<string, string>();
@@ -204,7 +216,14 @@ async function followRun(
       if (pause && pause.at !== pauseSaid) process.stderr.write('· The planner is paused on its context, and its turn waits: `ordewell compact retry` carries it on. Nobody does that unattended: it waits until someone does.\n');
       pauseSaid = pause?.at ?? null;
     }
-    if (event.type === 'planner_turn_started' && event.supervisor) supervisorTurns.add(event.turnId);
+    if (event.type === 'planner_turn_started') {
+      (event.supervisor ? supervisorTurns : userTurns).add(event.turnId);
+      rearm();
+    }
+    if (event.type === 'planner_turn_ended') {
+      userTurns.delete(event.turnId);
+      rearm();
+    }
     if (event.type === 'planner_message' && event.supervisor && event.content.trim()) {
       process.stderr.write(`· Supervisor: ${event.content.trim().replace(/\n/g, '\n  ')}\n`);
     }
@@ -213,7 +232,7 @@ async function followRun(
     }
     if (event.type === 'task_started') {
       // The closing turn continued the run: its next end starts the bound afresh.
-      clearTimeout(closingBound);
+      stopBound();
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }
     if (event.type === 'checkpoint') {
@@ -249,16 +268,16 @@ async function followRun(
       // The stream goes on to `run_concluded`, which at Act follows the turn this waits for.
       if (level === 'act') process.stderr.write('· The run ended: waiting for the supervisor\'s closing turn, which may continue it.\n');
       ended = summary;
-      clearTimeout(closingBound);
-      if (level === 'act') closingBound = setTimeout(noteOverdue, CLOSING_TURN_BOUND_MS);
+      awaitingClose = level === 'act';
+      rearm();
     }
     if (event.type === 'run_concluded') {
-      clearTimeout(closingBound);
+      stopBound();
       concluded = event.summary;
       if (event.supervisorHeld) process.stderr.write(`· The supervisor could not take its closing turn: ${event.supervisorHeld}.\n`);
     }
     if (event.type === 'execution_stopped') {
-      clearTimeout(closingBound);
+      stopBound();
       console.log('\nExecution stopped.');
     }
     if (event.type === 'notice') console.error(`· ${headlessSignedOut(event.message)}`);

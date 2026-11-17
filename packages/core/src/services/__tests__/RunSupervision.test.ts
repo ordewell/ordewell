@@ -20,6 +20,7 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
   const host = {
     subplanner: () => false,
     plan: () => plan,
+    wakeUpsParked: () => false,
     userSettings: () => ({ ...settings }),
     tasks: () => tasks,
     checkpointQuestion: () => undefined,

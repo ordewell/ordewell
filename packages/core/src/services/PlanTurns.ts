@@ -468,6 +468,15 @@ export class PlanTurns {
     void this.run(plan, batch);
   }
 
+  /**
+   * The user stopped the turn the waiting wake-ups were behind: none of them
+   * opens a turn by itself, and they go with the user's next input
+   * ({@link stopQueued}).
+   */
+  get parked(): boolean {
+    return this.quiet;
+  }
+
   /** A turn of these is under way, however many times it takes the conversation. */
   get turnRunning(): boolean {
     return this.running !== null;
