@@ -72,3 +72,79 @@ and no promise.
   real worktrees in a throwaway repository. The fake writes one file per task.
 - **`fake-claude` is a Node script and the swarm has no process at all.** Nothing
   here says what a real runner costs in memory or CPU.
+
+## Long session
+
+`long.mjs` holds one long session as the daemon would and measures what it costs
+as it loads, streams, saves, is edited and is talked to: hundreds of tasks, most
+of them settled and landed, a planner conversation of hundreds of turns, and a
+few tasks live beside them. Each point of its grid runs in a process of its own,
+under a throwaway home, and the session it opens is written by another process
+first, so the heap it reads holds nothing of the generator.
+
+```bash
+node --expose-gc bench/scale/long.mjs --out after.json                   # the grid at the default size, as a table and a file
+node --expose-gc bench/scale/long.mjs --checkout ../base --out before.json   # the same, with another checkout's scripts and core
+node bench/scale/long.mjs --compare before.json after.json               # two runs side by side (target.mjs --compare reads them too)
+node --expose-gc bench/scale/long.mjs --point --settled 280 --turns 400  # one point, one JSON line
+node --expose-gc bench/scale/long.mjs --from ~/project/.ordewell/sessions   # the sizes of a real saved session
+```
+
+**The grid.** Settled tasks at 0, a third and all of `--settled`, with the whole
+conversation; then all of them with no conversation. The last two columns of
+the table are the slopes: a figure's change per 100 settled tasks (over the
+first three points) and per 100 turns (over the last two). A slope is what a fix
+to growth should move; one point says little.
+
+**Sizes**, each the median of this repository's longest saved session unless
+given: `--tasks 300 --settled 280 --turns 400`; per task `--prompt-chars 2400`,
+`--handoff-chars 1200` (the digest's summary) with `--findings 4`,
+`--attempts 1.5` (their mean, each with its usage ledger and its log on disk of
+`--log-kb 178`), `--skill-share 0.33` of them carrying the skill text their
+attempt was given (`--skill-chars 1100`); per turn `--research-per-turn 3.7`
+research log entries; `--decisions 150` decision record entries; and an
+isolation run with every settled task's landing and `--isolated 8` task records.
+A turn is an input (the user's message, or a wake-up two times in three) and its
+reply, a call at the command seam in two of five, a host notice in one of ten,
+and a compaction checkpoint every 130. `--from <folder>` takes every size from
+the largest session in a `.ordewell/sessions` folder (or `--from-session <id>`'s),
+by count and median length; a flag given beside it still wins. It reads that
+folder and never writes there, prints no word of it, and hands the points only
+the numbers. The words themselves are generated: what it reproduces is the
+shape and size of the session, not its content.
+
+**The run.** `--live 6` tasks are started by hand (`run_task`) and stream
+`--events 120` events each at `--rate 6` a second through the swarm, the real
+runner adapter and the MCP server (as `live.mjs` has them). Over that time,
+`--mutations 8` edits (a task's words, a task added, the same removed, a
+dependency changed, in turn) and `--planner-turns 4` turns of a fake planner
+that streams thinking, one research step and its reply. `--host pool` (the
+default) opens the session through packages/web's `OrchestratorPool`
+(`adoptSavedSession`, as a reopened session is) and subscribes one client: a
+socket object that counts what it is sent, so no port is opened. `--host core`
+opens it through `hostSession` instead, and has no wire rows. `--level off`
+keeps the supervisor from waking on its own.
+
+What each figure says (times in ms, sizes in KB or MB):
+
+| Figure | Means |
+| --- | --- |
+| `heap.heldMb` | Heap held once the session is open, past the process's heap before it: what the open session costs. |
+| `heap.growthMb` | Heap the run added and kept, past garbage collection: what the session grows by while it streams, saves and is edited. |
+| `rss.afterLoadMb`, `rss.endMb`, `rss.peakMb` | The process's resident memory then, and its peak. |
+| `load.parseMs`, `load.parsedHeapMb` | `loadSession` alone: reading and settling the files, and the heap the plan it returns takes. |
+| `load.openMs` | Opening the session as the host does (`adoptSavedSession`, or `loadPlan`), the load included. |
+| `status.*` | Each status update while the run streams: how many and how often, the time to build and send one (`msP50`, `msP99`, `msMax`) and its bytes on the wire. |
+| `join.statusMs`, `join.statusKb`, `join.planKb` | What a surface joining now is first sent: every task's status, whole, and the whole plan. |
+| `saves.*` | Each save while the run streams: how many and how many a minute, its time, and the session file it wrote. |
+| `mutations.*` | Each edit: its time and what it put on the wire; and of them, the whole-plan broadcasts (`plan_generated`) with the time to build and send one and its bytes. |
+| `planner.*` | A planner turn from the message to its end, the fake's own pauses included. |
+| `lag.p50`, `lag.p99`, `lag.max` | Event-loop delay while the run streams, past the 10 ms the histogram samples at. |
+| `wire.*` | Every frame the one client was sent while the run streamed, by message type: frames and KB. |
+| `disk.*` | The session file and research log as written, and as the run left the file; the attempt logs. |
+
+Fewer than `--live` tasks finished, or a failed MCP call, is a problem: the
+point's figures describe a shorter run, and `long.mjs` exits non-zero keeping
+them. The isolation run names branches no repository holds, so opening the
+session warns once per task record, as a real load whose branches were deleted
+would; those are the `notice` frames.

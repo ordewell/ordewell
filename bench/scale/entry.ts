@@ -21,3 +21,6 @@ export { TreeLedger } from '../../packages/core/src/services/TreeLedger';
 export { rootMandate } from '../../packages/core/src/services/Mandate';
 export { ROOT_NODE } from '../../packages/core/src/models/TreeEvent';
 export { jsonlEventStore } from '../../packages/core/src/utils/treeEventLog';
+// The daemon's session pool, bundled with the core above (build.mjs points
+// `@ordewell/core` at its source), so its sessions are of the same classes.
+export { OrchestratorPool } from '../../packages/web/server/pool/orchestratorPool';

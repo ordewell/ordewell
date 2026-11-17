@@ -85,3 +85,18 @@ test('reads as a table of figures with no verdict of its own', () => {
   assert.match(text, /live: wallS \| 100 \| 100 \| 1\.00/);
   assert.doesNotMatch(text, /pass|fail/i);
 });
+
+test('compares a long session run point by point and slope by slope, its wire counts included', () => {
+  const long = (heldMb, perHundred) => ({
+    kind: 'long', target: { tasks: 300, settled: 280, turns: 400 }, commit: 'aaaa', host: run().host, problems: [],
+    long: {
+      'settled=280 turns=400': { heap: { heldMb }, wire: { types: { plan_generated: { frames: 4, kb: 13128 } } }, problems: [] },
+      slope: { perHundredSettled: { 'heap.heldMb': perHundred } },
+    },
+  });
+  const { rows, warnings } = compareRuns(long(10, 3), long(5, 1.5));
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(rows.find((row) => row.name === 'long settled=280 turns=400: heap.heldMb'), { name: 'long settled=280 turns=400: heap.heldMb', before: 10, after: 5, ratio: 0.5 });
+  assert.deepEqual(rows.find((row) => row.name === 'long slope: perHundredSettled.heap.heldMb'), { name: 'long slope: perHundredSettled.heap.heldMb', before: 3, after: 1.5, ratio: 0.5 });
+  assert.ok(rows.some((row) => row.name === 'long settled=280 turns=400: wire.types.plan_generated.kb'));
+});
