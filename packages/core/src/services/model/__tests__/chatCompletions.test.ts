@@ -399,6 +399,8 @@ describe('chat-completions adapter: an aggregator\'s wrapped upstream errors', (
     ['an upstream 400 in Google\'s shape', wrapped(400, { provider_name: 'Google AI Studio', raw: upstreamBody({ code: 400, message: 'Invalid JSON payload received.', status: 'INVALID_ARGUMENT' }) }), { kind: 'bad-request' }],
     ['an upstream overload in Anthropic\'s shape', wrapped(400, { provider_name: 'Anthropic', raw: JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }) }), { kind: 'transient' }],
     ['an upstream rate limit in Anthropic\'s shape', wrapped(400, { provider_name: 'Anthropic', raw: JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Too many requests' } }) }), { kind: 'rate-limited' }],
+    // OpenAI's rate limit names its kind in `type` ("requests" or "tokens") and the class in `code`.
+    ['an upstream rate limit in OpenAI\'s shape', wrapped(400, { provider_name: 'OpenAI', raw: upstreamBody({ message: 'Rate limit reached for requests', type: 'requests', param: null, code: 'rate_limit_exceeded' }) }), { kind: 'rate-limited' }],
     ['a canonical upstream overload', wrapped(400, { error_type: 'provider_overloaded' }), { kind: 'transient' }],
     ['a canonical invalid request', wrapped(400, { error_type: 'invalid_request', provider_code: 'invalid_parameter' }, 'tools[0] is invalid'), { kind: 'bad-request' }],
     ['a canonical rate limit', wrapped(429, { error_type: 'rate_limit_exceeded', provider_code: 'rate_limited' }, 'Rate limit exceeded'), { kind: 'rate-limited', status: 429 }],
@@ -420,6 +422,12 @@ describe('chat-completions adapter: an aggregator\'s wrapped upstream errors', (
     const err = await failure(withRetry(clientFor('openrouter', transport), { policy: { initialDelayMs: 0, maxDelayMs: 0 } }), BASE_REQUEST);
     expect(err).toMatchObject({ kind: 'context-overflow', status: 400 });
     expect(transport.sent).toHaveLength(1);
+  });
+
+  it('takes a wrapped context-length refusal in Google\'s wording to the overflow path', async () => {
+    const google = upstreamBody({ code: 400, message: 'The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).', status: 'INVALID_ARGUMENT' });
+    const err = await failure(clientFor('openrouter', replay(wrapped(400, { provider_name: 'Google AI Studio', raw: google }))), BASE_REQUEST);
+    expect(err).toMatchObject({ kind: 'context-overflow' });
   });
 
   it('takes a canonical context-length refusal to the overflow path', async () => {

@@ -282,9 +282,10 @@ export class OrdewellLoop {
           this.emit({ type: 'command_output', text: cutOffLog(limit, result.calls, 0) });
           continue;
         }
+        // The work is reported: the turn ends here, as a finished reply would end it, with no call billed to go on.
+        if (this.reported) return { interrupted: false };
         cutOffs += 1;
         if (cutOffs >= CUT_OFF_FAIL_AT) {
-          if (this.reported) return { interrupted: false };
           const reason = cutOffFailure(limit);
           await this.endAttempt(step, reason, signals);
           return { interrupted: false, failed: reason };

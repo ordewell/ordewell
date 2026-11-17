@@ -256,6 +256,9 @@ export class RunSupervision {
   /** The user asked for a start, which ends their Stop whatever the run's state: not every start opens a run of its own (ADR-0029). */
   userStarting(): void {
     this.supervisor.userStarted();
+    // The user's start asks for the run afresh, a join of one idle behind holds the supervisor already saw included:
+    // a follower waits on a turn about them (ADR-0057 R4).
+    this.holdsSeen = undefined;
   }
 
   /** Whether an input about these tasks waits for the user: they stopped every one (ADR-0029). */
