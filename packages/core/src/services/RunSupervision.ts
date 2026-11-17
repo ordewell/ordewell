@@ -42,6 +42,8 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
    * turn can still come. Null with no plan.
    */
   plan(): Pick<LegacyPlanState, 'runSettings' | 'pendingTurns' | 'plannerResend' | 'plannerContextPause'> | null;
+  /** The user's Stop of the planner's turn left the supervisor's inputs waiting for their next message: no turn opens them by itself (ADR-0029). */
+  wakeUpsParked(): boolean;
   /** This plan is a child's, with no user above it (ADR-0055 D4). */
   subplanner(): boolean;
   /** The user's run settings as they stand now (ADR-0030). */
@@ -498,8 +500,9 @@ export class RunSupervision {
    * The one place the run's end is judged concluded (ADR-0029): no run is
    * under way, and no supervisor at Act can still continue it — none of its
    * turns is in flight, none owes the end, and no failed one owes a retry.
-   * A closing turn the planner cannot take now, waiting on its usage limit or
-   * its context, does not hold the end: it may be hours off, and the
+   * A closing turn the planner cannot take now, waiting on its usage limit,
+   * its context, or the user's next message after their Stop of the turn it
+   * queued behind, does not hold the end: it may be hours off, and the
    * follower is told why the supervisor did not answer.
    *
    * Every input it reads changes in this module, in the {@link Supervisor} it
@@ -527,6 +530,7 @@ export class RunSupervision {
     if (plan?.plannerContextPause) return 'the planner is paused on its context, and waits for you to retry its compaction or stop it';
     if (plan?.plannerResend?.at) return 'the planner hit its usage limit, and its turn goes again once the limit resets';
     if (plan?.plannerResend) return 'the planner hit its usage limit, and its turn waits for your next message';
+    if (this.host.wakeUpsParked()) return 'you stopped the planner\'s turn it waited behind, and it goes with your next message';
     return undefined;
   }
 

@@ -283,6 +283,54 @@ describe('ordewell run when the closing turn never concludes', () => {
     expect(out).not.toContain(OVERDUE);
   });
 
+  it('does not count a user\'s planner turn the closing turn waits behind, and follows the run it then continues', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { out, exitCode } = await run('act', [
+      snapshot('act'),
+      { type: 'planner_turn_started', turnId: 'u1', prompt: 'look into the repo, take your time' },
+      complete(1, 1),
+    ], async ({ out, push, returned }) => {
+      await heard(out, WAITING);
+      await vi.advanceTimersByTimeAsync(25 * 60_000);
+      for (let i = 0; i < 20; i++) await realTurn();
+      expect(returned()).toBe(false);
+
+      push({ type: 'planner_turn_ended', turnId: 'u1', outcome: 'message' });
+      push({ type: 'planner_turn_started', turnId: 'w1', supervisor: true });
+      push(retried);
+      push({ type: 'planner_turn_ended', turnId: 'w1', outcome: 'task_ops' });
+      push({ type: 'task_started', taskId: t1.id, order: 1, title: t1.title, runner: 'claude-code' } as Event);
+      push(complete(2, 0));
+      push(concluded(2, 0));
+    });
+
+    expect(out).not.toContain(OVERDUE);
+    expect(out.match(/\nDone\./g)).toHaveLength(2);
+    expect(exitCode ?? 0).toBe(0);
+  });
+
+  it('counts the whole bound from the end of the user\'s turn the closing turn waited behind', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { out, exitCode } = await run('act', [
+      snapshot('act'),
+      { type: 'planner_turn_started', turnId: 'u1', prompt: 'look into the repo, take your time' },
+      complete(1, 1),
+    ], async ({ out, push, returned }) => {
+      await heard(out, WAITING);
+      await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS - 1_000);
+      push({ type: 'planner_turn_ended', turnId: 'u1', outcome: 'message' });
+      for (let i = 0; i < 20; i++) await realTurn();
+
+      await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS - 1);
+      for (let i = 0; i < 20; i++) await realTurn();
+      expect(returned()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(out.split(OVERDUE)).toHaveLength(2);
+    expect(exitCode).toBe(RUN_FAILED_EXIT);
+  });
+
   it('is not needed when the daemon concludes in time', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const { out } = await run('act', [snapshot('act'), complete(1, 1), concluded(1, 1)]);

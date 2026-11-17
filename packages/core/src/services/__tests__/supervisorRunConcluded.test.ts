@@ -4,6 +4,7 @@ import type { SessionMessage } from '../SessionMessage';
 import { WAKE_UP_RATE } from '../LoopGuards';
 import { CLOSING_TURN_BOUND_MS, WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { PlannerContextExhaustedError } from '../plannerContextBudget';
+import { START_HOLD_TIMEOUT_MS } from '../PlanTurns';
 import { changeSettings, ctx, LIMIT, NOW, plan, prose, RESUME_AT, settled, supervised, task, until, waitForInput, type Env } from './supervisorTestKit';
 
 /**
@@ -294,5 +295,31 @@ describe('the closing turn\'s wait at Act ends on every path', () => {
 
     expect(env.session.planState!.runSettings!.supervisorLevel).toBe('watch');
     expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+});
+
+describe('a user\'s planner turn in flight as the run ends at Act', () => {
+  it('concludes, saying why, when the user stops their turn: the closing turn waits for their next message', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'act' } });
+    const answered = env.session.continueConversation('how is it going?').catch(() => {});
+    await until(() => env.planner.calls.length === 1);
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    // The user's turn holds new starts, and so the run's end, until its hold times out.
+    await vi.advanceTimersByTimeAsync(START_HOLD_TIMEOUT_MS + 10);
+    await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 10);
+    expect(env.session.planState!.pendingTurns!.some((t) => t.source === 'supervisor')).toBe(true);
+
+    env.session.abortPlannerTurn();
+    await answered;
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].supervisorHeld).toMatch(/stopped.*next message/);
+    // Kept as decided (ADR-0029): the Stop opens no turn, and the closing input goes with the user's next message.
+    expect(env.planner.calls).toHaveLength(1);
+    void env.session.continueConversation('carry on').catch(() => {});
+    await until(() => env.planner.calls.length === 2);
+    expect(concluded(env)).toHaveLength(1);
   });
 });
