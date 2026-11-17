@@ -1299,7 +1299,8 @@ export class ExecutionCommands {
         // A child's question wants an answer, not a yes: only a rejection carries words to a runner.
         const said = located.task.type === 'delegated' ? reason : undefined;
         const note = [said, raise === undefined ? undefined : `Your budget was raised by ${raise} tokens.`].filter(Boolean).join(' ') || undefined;
-        const by = actorAuthority(actor.kind);
+        // The runner is told who answered (ADR-0025): a person's control on a child's task runs under a subplanner's authority but is still a person's word.
+        const by = actor.kind === 'subplanner' && actor.person ? 'user' : actorAuthority(actor.kind);
         if (approve) this.controls.approveCheckpoint(located.task.id, note, by);
         else this.controls.rejectCheckpoint(located.task.id, reason, by);
         const told = actor.kind === 'user' ? 'your reason' : 'the reason';
