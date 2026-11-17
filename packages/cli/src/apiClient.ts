@@ -914,6 +914,11 @@ export class ApiClient {
     });
   }
 
+  /** Ends the session's {@link streamExecution}, which resolves as at a completion: its caller stopped waiting for one. */
+  endExecutionStream(sessionId: string): void {
+    this.executionStreams.get(sessionId)?.();
+  }
+
   /**
    * Every broadcast of one session for as long as the caller holds it. Unlike
    * `streamExecution`, a run's end does not end it: the next run may be one

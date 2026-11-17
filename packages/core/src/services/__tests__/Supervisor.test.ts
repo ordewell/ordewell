@@ -231,7 +231,7 @@ describe('Supervisor', () => {
       run: () => run, deliver: vi.fn(async () => undefined), pump: vi.fn(), saveState: vi.fn(), stoppedByUser: () => false, digestReader: () => ({ describe: describeTask, blockedBy: () => [] }),
       // Nothing left to wait for: what is held goes at the window, as the tests here want it to (WakePolicy.test.ts holds the rest).
       wakeFacts: () => ({ nothingCanStart: true, cohortDone: new Set<string>(), blocksWork: new Set<string>(), blocksAny: new Set<string>(), requestAt: null }), readBudget: () => 12, retryLimit: () => 2,
-      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), dropToWatch: vi.fn(), notice: vi.fn(),
+      restartPlanner: vi.fn(), abandonTurn: vi.fn(), goUnsupervised: vi.fn(), wakeUpEnded: vi.fn(), inputsWait: () => true, dropToWatch: vi.fn(), notice: vi.fn(),
     };
   }
 
