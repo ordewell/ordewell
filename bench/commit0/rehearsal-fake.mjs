@@ -58,7 +58,7 @@ const server = http.createServer((req, res) => {
     heard({
       url: req.url, model: request.model, stream: request.stream, toolChoice: request.tool_choice ?? null,
       tools: (request.tools ?? []).map((t) => t.function?.name ?? t.name),
-      messages: (request.messages ?? []).map((m) => ({ role: m.role, content: String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')).slice(0, 4000), toolCalls: m.tool_calls?.map((c) => c.function?.name) })),
+      messages: (request.messages ?? []).map((m) => ({ role: m.role, content: String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')), toolCalls: m.tool_calls?.map((c) => c.function?.name) })),
       turn,
     });
     if (request.stream === false) {

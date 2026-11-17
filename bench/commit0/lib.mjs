@@ -1970,12 +1970,12 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
  * (a run's unpriced calls, or a call outside the batch on the same key). When
  * runs overlapped, no run's own key delta exists, and each says so.
  */
-export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, startedAt, endedAt, runs }) {
+export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, startedAt, endedAt, runs }) {
   const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
   const keyDeltaUsd = keyBeforeUsd != null && keyAfterUsd != null ? round6(keyAfterUsd - keyBeforeUsd) : null;
   return {
-    dryRun, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
+    dryRun, rehearsal, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
     keyBeforeUsd: keyBeforeUsd ?? null,
     keyAfterUsd: keyAfterUsd ?? null,
     keyDeltaUsd,
@@ -1988,6 +1988,9 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
     runs,
   };
 }
+
+/** Where a run's directory goes under the bench data directory: a rehearsal's and a dry run's never sit beside a paid run's. */
+export const runsDirName = ({ dryRun, rehearse }) => (dryRun ? 'dry-runs' : rehearse ? 'rehearsals' : 'runs');
 
 /** The runs of a batch, library by library and arm by arm; a library named twice would give two runs one name. */
 export function batchPlan({ libs, arms, seed }) {

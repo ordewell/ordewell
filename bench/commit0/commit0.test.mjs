@@ -1402,7 +1402,7 @@ test('ADV F-c: a signal to a batch stops its queued runs, not only the running o
   try {
     fs.mkdirSync(path.join(copy, 'commit0'), { recursive: true });
     fs.mkdirSync(path.join(copy, 'lib'));
-    for (const f of ['batch.mjs', 'lib.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, 'commit0', f));
+    for (const f of ['batch.mjs', 'lib.mjs', 'rehearsal.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, 'commit0', f));
     fs.copyFileSync(path.join(here, '..', 'lib', 'data-dir.mjs'), path.join(copy, 'lib', 'data-dir.mjs'));
     const starts = path.join(root, 'starts.log');
     fs.writeFileSync(path.join(copy, 'commit0', 'drive.mjs'), [
@@ -1670,14 +1670,31 @@ test('the planner plays the plan once; after it the conversation is the supervis
   assert.deepEqual(json.tasks[1].dependencies, [json.tasks[0].id]);
   assert.match(json.tasks[1].prompt, /\[rehearsal:after\]/);
 
-  const wake = (content) => R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: 'the goal' }, { role: 'assistant', content: plan.content }, { role: 'user', content }] }, state, playCtx);
-  const failed = wake('Task #1 "Implement the library" failed: the rehearsal fails this task on purpose.');
+  // As core's wake-up turn shows the plan: one line per task, its status in brackets, under protocol text that names checkpoints and failures.
+  const line = (n, title, status) => `#${n} id=${json.tasks[n - 1].id} "${title}" [${status}] type:AI runner:openrouter autonomy:AFK slice:AFK deps:[]`;
+  const protocol = 'Answer a checkpoint with answer_checkpoint; a failed task blocks what depends on it.';
+  const planBlock = (...lines) => `<current_plan>\n${lines.join('\n')}\n</current_plan>\n${protocol}`;
+  const history = [{ role: 'user', content: 'the goal' }, { role: 'assistant', content: plan.content }];
+  const wake = (content, after = []) => R.turnFor('b-retry', { tools: [], messages: [...history, { role: 'user', content }, ...after] }, state, playCtx);
+  assert.equal(wake(planBlock(line(1, 'Implement the library', 'in_progress'), line(2, 'Note the rehearsal', 'approved'))).toolCall, undefined,
+    'the protocol\'s own words are no event: nothing is failed or waiting');
+  const failed = wake(planBlock(line(1, 'Implement the library', 'failed'), line(2, 'Note the rehearsal', 'approved')));
   assert.equal(failed.role, 'supervisor');
-  assert.deepEqual([failed.toolCall.name, failed.toolCall.args.task, failed.toolCall.args.from], ['retry_task', '#1', 'session'], 'an unchanged retry after a failure is refused unless it resumes the session');
-  assert.equal(wake('Task #1 failed again').toolCall, undefined, 'a rule plays once');
-  assert.equal(wake('Task #2 waits at a checkpoint: may I follow the tests?').toolCall.name, 'answer_checkpoint');
-  const closing = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: 'x' }, { role: 'assistant', tool_calls: [{}] }, { role: 'tool', content: 'retried' }] }, state, playCtx);
-  assert.equal(closing.content, 'Done.');
+  assert.deepEqual([failed.toolCall.name, failed.toolCall.args.task, failed.toolCall.args.from], ['retry_task', '#1', 'fresh'], 'a fresh attempt opens a new runner conversation, which the fake counts as attempt 2');
+  assert.ok(failed.toolCall.args.message, 'its note is the change the identical-retry guard lets through');
+  const retried = [{ role: 'assistant', tool_calls: [{}] }, { role: 'tool', content: 'retried' }];
+  assert.equal(wake(planBlock(line(1, 'Implement the library', 'failed')), retried).content, 'Done.', 'after the tool\'s answer, with nothing else to play, it closes in prose');
+  assert.equal(wake(planBlock(line(1, 'Implement the library', 'failed'))).toolCall, undefined, 'a rule plays once');
+  const asked = wake(planBlock(line(1, 'Implement the library', 'completed'), line(2, 'Note the rehearsal', 'awaiting_user')));
+  assert.deepEqual([asked.toolCall.name, asked.toolCall.args.task, asked.toolCall.args.answer], ['answer_checkpoint', '#2', 'approve']);
+
+  // A wake that holds both plays both: the second after the first's answer, in the same turn.
+  const both = R.createState();
+  both.planned = true;
+  const two = planBlock(line(1, 'Implement the library', 'failed'), line(2, 'Note the rehearsal', 'awaiting_user'));
+  const first = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }] }, both, playCtx);
+  const second = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }, ...retried] }, both, playCtx);
+  assert.deepEqual([first.toolCall?.name, second.toolCall?.name].sort(), ['answer_checkpoint', 'retry_task']);
   // Left alone, a failure stays failed.
   const leave = R.createState();
   leave.planned = true;
@@ -1719,6 +1736,34 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.deepEqual(R.judgePlayed('a-failed', [last], playCtx), []);
   assert.match(R.judgePlayed('a-failed', [{ ...last, round: 0, toolCall: { name: 'shell' } }], playCtx).join(), /never played/);
   assert.match(R.judgePlayed('b-retry', [], playCtx).join(), /supervisor never played retry_task/);
+});
+
+test('judgeBatch holds the rehearsal\'s batch.json to its one run, marked a rehearsal and never a paid batch', () => {
+  const record = L.batchRecord({
+    keyBeforeUsd: null, keyAfterUsd: null, budgetUsd: null, stoppedByBudget: null, jobs: 1, overlapped: false, seed: 's', dryRun: false,
+    rehearsal: 'a-done', startedAt: 't0', endedAt: 't1',
+    runs: [{ lib: 'tlslite-ng', arm: 'A', exit: 0, signal: null, skipped: null, resultDir: '/r/x', recordedUsd: 0.001, valid: true }],
+  });
+  const want = { lib: 'tlslite-ng', arm: 'A', rehearsal: 'a-done' };
+  assert.deepEqual(R.judgeBatch(record, want), []);
+  assert.deepEqual(R.judgeBatch(null, want), ['no batch.json']);
+  assert.match(R.judgeBatch({ ...record, rehearsal: null }, want).join(), /not marked as rehearsal a-done/);
+  assert.match(R.judgeBatch({ ...record, runs: [{ ...record.runs[0], resultDir: null }] }, want).join(), /no result directory/);
+  assert.match(R.judgeBatch({ ...record, runs: [] }, want).join(), /1 run of tlslite-ng A, not 0 /);
+  assert.match(R.judgeBatch({ ...record, runs: [{ ...record.runs[0], skipped: 'cancelled' }] }, want).join(), /skipped its run: cancelled/);
+  assert.match(R.judgeBatch({ ...record, keyBeforeUsd: 3 }, want).join(), /read the key/);
+  assert.equal(L.runsDirName({ dryRun: false, rehearse: 'a-done' }), 'rehearsals');
+  assert.equal(L.runsDirName({ dryRun: true }), 'dry-runs');
+  assert.equal(L.runsDirName({ dryRun: false, rehearse: null }), 'runs');
+});
+
+test('a batch passes a rehearsal and its windows on to every run, and a rehearsal batch needs no budget', () => {
+  const b = L.parseBatchArgs(['--rehearse', 'a-done', '--libs', 'libs.json', '--arm', 'A', '--settle-min', '1', '--poll-sec', '5', '--wall-min', '25']);
+  assert.equal(b.rehearse, 'a-done');
+  assert.equal(b.run, false);
+  assert.equal(b.budgetUsd, null);
+  assert.deepEqual(b.driveArgs.filter((a) => a.startsWith('--')), ['--rehearse', '--libs', '--settle-min', '--poll-sec', '--wall-min']);
+  assert.throws(() => L.parseBatchArgs(['--rehearse', 'a-done', '--run', '--libs', 'libs.json']), /pass --dry-run/);
 });
 
 // The rehearsal itself: real Docker, a real image, minutes per scenario. Only when asked:

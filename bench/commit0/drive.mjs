@@ -1456,7 +1456,7 @@ async function main() {
     if (!opts.dryRun && !LIVE) return;
   }
   const dataDir = checkedBenchDir('commit0');
-  const runsDir = opts.batchDir ?? path.join(dataDir, opts.dryRun ? 'dry-runs' : opts.rehearse ? 'rehearsals' : 'runs');
+  const runsDir = opts.batchDir ?? path.join(dataDir, L.runsDirName(opts));
   fs.mkdirSync(runsDir, { recursive: true });
   const libs = loadLibraries();
   console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);

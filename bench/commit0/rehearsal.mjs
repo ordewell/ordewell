@@ -89,7 +89,15 @@ export function rehearsalPlan(tasks) {
   };
 }
 
-const RETRY = { tool: 'retry_task', args: { task: '#1', from: 'session', message: 'The rehearsal retries this once: make the edits again and report done.' } };
+// Fresh, so the attempt opens a new runner conversation the fake counts as attempt 2; a session retry would continue attempt 1's.
+/**
+ * A task's line in the plan a wake-up turn shows (`#2 id=… "title" [awaiting_user] …`):
+ * the turn's protocol text names checkpoints and failures too, so only a
+ * task's own status is an event. A checkpoint leaves its task awaiting_user.
+ */
+export const taskIs = (n, status) => new RegExp(`^#${n} id=\\S+ "[^"\\n]*" \\[${status}\\]`, 'm');
+
+const RETRY = { tool: 'retry_task', args: { task: '#1', from: 'fresh', message: 'The rehearsal retries this once: make the edits again and report done.' } };
 const APPROVE = { tool: 'answer_checkpoint', args: { task: '#2', answer: 'approve', reason: 'Follow the tests.' } };
 const FAILS_ON_PURPOSE = 'The rehearsal fails this task on purpose.';
 const LEFT_PLAN = [
@@ -128,8 +136,7 @@ export const SCENARIOS = Object.freeze({
       edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)], [...editSteps(ctx), done('Implement the library')]],
       after: [[checkpoint('Two docstrings disagree with the tests: may I follow the tests?'), note('commit0-rehearsal-note.md'), done('Note the rehearsal')]],
     }),
-    // In order, each played once: the checkpoint comes after the retry, but a wake that holds both answers it first.
-    supervisor: [{ when: /checkpoint/i, step: APPROVE }, { when: /fail/i, step: RETRY }],
+    supervisor: [{ when: taskIs(1, 'failed'), step: RETRY }, { when: taskIs(2, 'awaiting_user'), step: APPROVE }],
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['edit', 'after'],
     supervised: ['retry_task', 'answer_checkpoint'],
@@ -204,16 +211,18 @@ export function roleOf(request, planned = false) {
 }
 
 /**
- * The supervisor's turn: after a tool's result it closes in prose; otherwise
- * the first rule not yet played whose `when` matches the newest user message
- * plays its step, once. Anything else is left alone, as `b-leave` needs.
+ * The supervisor's turn: the first rule not yet played whose `when` matches
+ * the newest user message (the wake-up) plays its step, once; after a tool's
+ * answer the next such rule plays, so one wake that holds two events answers
+ * both, and with none left it closes in prose. Anything else is left alone,
+ * as `b-leave` needs.
  */
 export function supervisorTurn(rules, messages, state) {
   const last = messages.at(-1);
-  if (!last || last.role === 'tool') return { content: 'Done.' };
+  if (!last) return { content: 'Done.' };
   const said = text([...messages].reverse().find((m) => m.role === 'user'));
   const i = (rules ?? []).findIndex((r, n) => !state.supervised.includes(n) && r.when.test(said));
-  if (i === -1) return { content: 'Nothing to do: the run goes on.' };
+  if (i === -1) return { content: last.role === 'tool' ? 'Done.' : 'Nothing to do: the run goes on.' };
   state.supervised.push(i);
   return { toolCall: { name: rules[i].step.tool, args: rules[i].step.args }, rule: i };
 }
@@ -329,6 +338,23 @@ export function judgePlayed(name, turns, ctx) {
   for (const tool of s.supervised ?? []) {
     if (!turns.some((t) => t.role === 'supervisor' && t.toolCall?.name === tool)) f.push(`the supervisor never played ${tool}`);
   }
+  return f;
+}
+
+/**
+ * The failures of a scenario's batch.json: the batch ran its one run to a
+ * result, says it was this rehearsal, and never read the key, which on a
+ * rehearsal is the fake's placeholder.
+ */
+export function judgeBatch(record, { lib, arm, rehearsal }) {
+  if (!record) return ['no batch.json'];
+  const f = [];
+  if (record.rehearsal !== rehearsal) f.push(`batch.json is not marked as rehearsal ${rehearsal} (${JSON.stringify(record.rehearsal ?? null)})`);
+  if (record.keyBeforeUsd !== null || record.keyAfterUsd !== null) f.push('the batch read the key\'s usage: a rehearsal has no key to read');
+  const runs = (record.runs ?? []).filter((r) => r.lib === lib && r.arm === arm);
+  if (runs.length !== 1 || record.runs.length !== 1) return [...f, `batch.json wants 1 run of ${lib} ${arm}, not ${runs.length} (of ${record.runs?.length ?? 0} in all)`];
+  if (runs[0].skipped) f.push(`the batch skipped its run: ${runs[0].skipped}`);
+  if (!runs[0].resultDir) f.push('the batch found no result directory for its run');
   return f;
 }
 

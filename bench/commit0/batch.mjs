@@ -8,6 +8,7 @@
 //
 //   node bench/commit0/batch.mjs --dry-run --libs <libraries.json> --jobs 2
 //   node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <p> --batch-budget-usd <usd>
+//   node bench/commit0/batch.mjs --rehearse <scenario> --libs <libraries.json> --arm A   (rehearse.mjs starts these)
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -15,11 +16,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { checkedBenchDir } from '../lib/data-dir.mjs';
 import * as L from './lib.mjs';
+import * as R from './rehearsal.mjs';
 
 const DRIVE = path.join(import.meta.dirname, 'drive.mjs');
 const POLL_MS = 30_000;
 
-const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run) --libs <file> [options]
+const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run | --rehearse <scenario>) --libs <file> [options]
 
   --jobs <n>               runs at once (default ${L.JOBS}); refused when n × --cpus exceeds the host's CPUs
                            or n × --memory exceeds ${L.BATCH_MEMORY_SHARE * 100}% of its memory
@@ -30,11 +32,13 @@ const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run) --libs <fi
   --seed <label>           a label for this repetition, in every run's result.json and directory name
   --sweep                  sweep boxes and networks of drivers no longer running before the batch
 
-Passed to every run: --dry-run, --run, --libs, --provider-pin, --cap-usd, --parallel, --cpus,
---memory, --stall-min, --ordewell-root, --allow-stale-dist, --keep (node bench/commit0/drive.mjs --help).
+Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap-usd, --parallel, --cpus,
+--memory, --stall-min, --settle-min, --no-start-min, --poll-sec, --wall-min, --ordewell-root,
+--allow-stale-dist, --keep (node bench/commit0/drive.mjs --help).
 
 The batch takes the key's lock once; its runs and batch.json go in one directory under the
-bench data directory, and their results are appended to results.jsonl once every run has ended.`;
+bench data directory, and their results are appended to results.jsonl once every run has ended;
+a dry run's and a rehearsal's never are.`;
 
 const opts = (() => {
   try {
@@ -122,14 +126,16 @@ async function main() {
   const runs = L.batchPlan({ libs: names, arms: L.armsOf(opts.arm).map((a) => a.id), seed: opts.seed });
   if (runs.length === 0) throw new Error('no run in the batch');
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
+  const realKeys = opts.rehearse ? R.realKeysIn(process.env) : [];
+  if (realKeys.length) throw new Error(`a rehearsal never runs with a real key in the environment: unset ${realKeys.join(', ')}`);
 
   const dataDir = checkedBenchDir('commit0');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const batchDir = path.join(dataDir, opts.dryRun ? 'dry-runs' : 'runs', `batch-${stamp.slice(0, 19)}${opts.seed ? `-${opts.seed}` : ''}`.toLowerCase());
+  const batchDir = path.join(dataDir, L.runsDirName(opts), `batch-${stamp.slice(0, 19)}${opts.seed ? `-${opts.seed}` : ''}`.toLowerCase());
   fs.mkdirSync(batchDir, { recursive: true });
   const overlapped = opts.jobs > 1 && runs.length > 1;
   const key = process.env.OPENROUTER_API_KEY;
-  console.log(`Commit0 batch: ${opts.dryRun ? 'DRY RUN, no model call' : 'RUN, spending on the key'}; ${runs.length} runs, ${Math.min(opts.jobs, runs.length)} at once (${opts.cpus} CPUs, ${opts.memory} each); budget ${opts.budgetUsd === null ? 'none' : `$${opts.budgetUsd}`}; in ${batchDir}`);
+  console.log(`Commit0 batch: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}; ${runs.length} runs, ${Math.min(opts.jobs, runs.length)} at once (${opts.cpus} CPUs, ${opts.memory} each); budget ${opts.budgetUsd === null ? 'none' : `$${opts.budgetUsd}`}; in ${batchDir}`);
 
   // One lock for the whole batch: its runs share the key with each other and with nothing else.
   const release = opts.run ? L.lockKey(dataDir) : () => {};
@@ -204,11 +210,11 @@ async function main() {
   }
   const record = L.batchRecord({
     keyBeforeUsd, keyAfterUsd, budgetUsd: opts.budgetUsd, stoppedByBudget, jobs: opts.jobs, overlapped,
-    seed: opts.seed, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(), runs: reported,
+    seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, startedAt, endedAt: new Date().toISOString(), runs: reported,
   });
   fs.writeFileSync(path.join(batchDir, 'batch.json'), `${JSON.stringify(record, null, 2)}\n`);
-  // Appended here, one after another, so concurrent runs never interleave a line.
-  if (!opts.dryRun) {
+  // Appended here, one after another, so concurrent runs never interleave a line; only a paid run's are results.
+  if (opts.run) {
     for (const r of results) fs.appendFileSync(path.join(dataDir, 'results.jsonl'), `${JSON.stringify(r)}\n`);
   }
 
