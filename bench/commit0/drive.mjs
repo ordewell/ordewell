@@ -9,25 +9,36 @@
 //   node bench/commit0/drive.mjs --dry-run --fixture --image <image>
 //   node bench/commit0/drive.mjs --dry-run --libs <libraries.json>
 //   node bench/commit0/drive.mjs --run --libs <libraries.json> --provider-pin <provider>
+//   node bench/commit0/drive.mjs --sweep
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { REPO_ROOT, checkedBenchDir } from '../lib/data-dir.mjs';
 import * as L from './lib.mjs';
 
-const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run) [options]
+const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) [options]
 
-  --dry-run            set up the box and run every check; no model call, no key in the box
-  --run                run the arms: spends on the OpenRouter key in OPENROUTER_API_KEY
-  --libs <file>        the libraries, as libraries.example.json shows
-  --only <a,b>         only these libraries of --libs
-  --fixture            a synthetic library built in --image, to prove the checks (dry run only)
-  --image <image>      the image for --fixture
-  --arm A|B|both       which arms (default both)
-  --provider-pin <p>   the OpenRouter provider the key is pinned to, recorded in every result
-  --keep               leave the box and its network up after a dry run, for a look inside
+  --dry-run              set up the box and run every check; no model call, no key in the box
+  --run                  run the arms: spends on the OpenRouter key in OPENROUTER_API_KEY
+  --sweep                remove the boxes and networks of drivers no longer running, then exit
+                         (with --dry-run or --run: sweep first, then go on)
+  --libs <file>          the libraries, as libraries.example.json shows
+  --only <a,b>           only these libraries of --libs
+  --fixture              a synthetic library built in --image, to prove the checks (dry run only)
+  --image <image>        the image for --fixture
+  --arm A|B|both         which arms (default both)
+  --provider-pin <p>     the OpenRouter provider the key is pinned to, recorded in every result
+  --cap-usd <usd>        the spend cap, the same for both arms (default ${L.CAP_USD})
+  --parallel <n>         arm B's ORDEWELL_MAX_PARALLEL (default ${L.PARALLEL}); arm A runs one task
+  --cpus <n>             the box's CPU quota (default ${L.CPUS})
+  --memory <size>        the box's memory quota, swap held to it (default ${L.MEMORY})
+  --stall-min <min>      stop a run that waits this long on a person with nothing running (default ${L.STALL_MIN})
+  --ordewell-root <dir>  the built Ordewell tree to pack into the box (default: the tree this driver is in)
+  --allow-stale-dist     run a dist older than that tree's sources; the result says so and is not valid
+  --keep                 leave the box and its network up after a dry run, for a look inside
 
+Both arms share one wall-clock cap of ${L.WALL_CAP_MS / 3_600_000} h and the spend cap.
 Run data goes under ${'$'}ORDEWELL_BENCH_DIR or ~/.local/share/ordewell-bench/commit0, never the repository.`;
 
 const LABEL = 'commit0-bench=1';
@@ -36,6 +47,11 @@ const ORDEWELL_IN_BOX = '/opt/ordewell';
 const BOX_HOME = '/root';
 const POLL_MS = 30_000;
 const MERGE_TIMEOUT_MS = 15 * 60 * 1000;
+const STOP_TIMEOUT_MS = 2 * 60 * 1000;
+/** How long a stopped run's attempts get to end before the followers are signalled. */
+const DRAIN_MS = 3 * 60 * 1000;
+const LEFTOVER_WAIT_MS = 60_000;
+const DISTS = Object.freeze(['packages/core/dist/index.js', 'packages/web/dist/server/main.js', 'packages/cli/dist/main.js']);
 
 const opts = (() => {
   try {
@@ -49,6 +65,8 @@ if (opts.help) {
   console.log(HELP);
   process.exit(0);
 }
+
+const ORDEWELL_ROOT = opts.ordewellRoot ?? REPO_ROOT;
 
 /**
  * What every child of this process sees. A dry run drops the key from it, so
@@ -80,6 +98,7 @@ function exec(cmd, args, { input, timeoutMs, log, cwd } = {}) {
 }
 
 const docker = (args, o) => exec('docker', args, o);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- Output -----------------------------------------------------------------
 
@@ -97,43 +116,151 @@ function check(scope, name, ok, detail, { expectedFailure = false, unverified = 
 class Abort extends Error {}
 const must = (ok, why) => { if (!ok) throw new Abort(why); };
 
+// --- Cleanup ----------------------------------------------------------------
+
+/** The boxes this driver has up, so a signal or a crash takes them down with it. */
+const openSandboxes = new Set();
+
+function removeSandboxSync(sb) {
+  spawnSync('docker', ['rm', '-f', sb.box, sb.proxy], { env: hostEnv, stdio: 'ignore' });
+  spawnSync('docker', ['network', 'rm', sb.network], { env: hostEnv, stdio: 'ignore' });
+  openSandboxes.delete(sb);
+}
+
+let exiting = false;
+/** A box left up keeps its daemon spending on the key, so the driver never leaves without taking its own down. */
+function bailOut(why, code) {
+  if (exiting) return;
+  exiting = true;
+  if (openSandboxes.size) console.error(`\n[commit0] ${why}: removing ${[...openSandboxes].map((sb) => sb.box).join(', ')} and their networks`);
+  for (const sb of [...openSandboxes]) removeSandboxSync(sb);
+  process.exit(code);
+}
+
+process.on('SIGINT', () => bailOut('interrupted', 130));
+process.on('SIGTERM', () => bailOut('terminated', 143));
+process.on('uncaughtException', (err) => { console.error(err); bailOut('uncaught error', 1); });
+process.on('unhandledRejection', (err) => { console.error(err); bailOut('unhandled rejection', 1); });
+
+/**
+ * `--sweep`: the labelled containers and networks whose driver, on this host,
+ * is no longer running. `onlyNames` narrows it to a dry run's own probes.
+ */
+async function sweep({ onlyNames = null } = {}) {
+  const list = async (args, kind) => (await docker(args)).stdout.split('\n').filter(Boolean).map((line) => {
+    const [name, driver = ''] = line.split('\t');
+    return { kind, name, driver };
+  });
+  const format = (field) => `${field}\t{{.Label "${L.DRIVER_LABEL}"}}`;
+  let items = [
+    ...(await list(['ps', '-a', '--filter', `label=${LABEL}`, '--format', format('{{.Names}}')], 'container')),
+    ...(await list(['network', 'ls', '--filter', `label=${LABEL}`, '--format', format('{{.Name}}')], 'network')),
+  ];
+  if (onlyNames) items = items.filter((i) => onlyNames.includes(i.name));
+  const { remove, keep } = L.sweepTargets(items);
+  const removed = [];
+  const failed = [];
+  // Containers first: a network still in use cannot be removed.
+  for (const item of [...remove.filter((i) => i.kind === 'container'), ...remove.filter((i) => i.kind === 'network')]) {
+    const r = await docker(item.kind === 'container' ? ['rm', '-f', item.name] : ['network', 'rm', item.name]);
+    (r.code === 0 ? removed : failed).push({ ...item, ...(r.code === 0 ? {} : { error: r.stderr.trim() }) });
+  }
+  return { removed, failed, keep };
+}
+
+function printSweep(s) {
+  for (const i of s.removed) console.log(`  removed ${i.kind} ${i.name} (driver ${i.driver}, not running)`);
+  for (const i of s.failed) console.log(`  could not remove ${i.kind} ${i.name}: ${i.error}`);
+  for (const i of s.keep) console.log(`  kept ${i.kind} ${i.name}: ${i.why}`);
+  if (!s.removed.length && !s.failed.length && !s.keep.length) console.log('  nothing labelled commit0-bench');
+}
+
+/** Proves the sweep on probes of its own: one of a dead driver, removed; one of a live driver, kept. */
+async function checkSweep(image) {
+  const dead = spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' }).pid;
+  const deadDriver = `${L.driverId().split('/')[0]}/${dead}`;
+  const tag = `commit0-sweep-probe-${process.pid}`;
+  const names = { dead: `${tag}-dead`, live: `${tag}-live`, net: `${tag}-net` };
+  const labels = (driver) => ['--label', LABEL, '--label', `${L.DRIVER_LABEL}=${driver}`];
+  const made = [
+    await docker(['create', '--name', names.dead, ...labels(deadDriver), '--entrypoint', 'true', image]),
+    await docker(['create', '--name', names.live, ...labels(L.driverId()), '--entrypoint', 'true', image]),
+    await docker(['network', 'create', '--internal', ...labels(deadDriver), names.net]),
+  ];
+  try {
+    if (made.some((r) => r.code !== 0) || L.pidAlive(dead)) {
+      return check('preflight', '--sweep', false, made.find((r) => r.code !== 0)?.stderr.trim() || `pid ${dead} is alive again`);
+    }
+    const s = await sweep({ onlyNames: Object.values(names) });
+    const removed = s.removed.map((i) => i.name).sort();
+    const kept = s.keep.map((i) => i.name);
+    const ok = removed.join() === [names.dead, names.net].sort().join() && kept.join() === names.live && s.failed.length === 0;
+    return check('preflight', '--sweep', ok, ok
+      ? `removed a container and a network of dead driver ${deadDriver}; kept the container of this live driver`
+      : [`removed: ${removed.join(', ') || 'nothing'}`, `kept: ${s.keep.map((i) => `${i.name} (${i.why})`).join(', ') || 'nothing'}`, ...s.failed.map((i) => `${i.name}: ${i.error}`)]);
+  } finally {
+    await docker(['rm', '-f', names.dead, names.live]);
+    await docker(['network', 'rm', names.net]);
+  }
+}
+
 // --- Preflight --------------------------------------------------------------
 
 async function git(...args) {
-  return exec('git', ['-C', REPO_ROOT, ...args]);
+  return exec('git', ['-C', ORDEWELL_ROOT, ...args]);
 }
 
+/**
+ * The tree whose dist is packed: its HEAD is the sha the result records, so
+ * it must hold no tracked change and its dist must be newer than its sources.
+ * The driver builds nothing: a build is the user's to run, in that tree.
+ */
 async function preflight() {
   const head = await git('rev-parse', 'HEAD');
+  must(check('preflight', 'ordewell tree', head.code === 0, head.code === 0 ? ORDEWELL_ROOT : `${ORDEWELL_ROOT} is not a git tree: ${head.stderr.trim()}`), 'no ordewell tree');
   const sha = head.stdout.trim();
   const ancestor = await git('merge-base', '--is-ancestor', L.PR177_MERGE, 'HEAD');
   const containsPr177 = ancestor.code === 0;
   check('preflight', 'ordewell checkout', containsPr177, `${sha}, ${containsPr177 ? 'contains' : 'does not contain'} the PR 177 merge ${L.PR177_MERGE.slice(0, 12)}`);
   const dirty = (await git('status', '--porcelain', '--untracked-files=no')).stdout.trim();
-  check('preflight', 'checkout clean', dirty === '' || opts.dryRun, dirty === '' ? 'no tracked change' : `tracked changes: the run would not be the commit it names${opts.dryRun ? ' (a dry run goes on)' : ''}`);
-  const dists = ['packages/core/dist/index.js', 'packages/web/dist/server/main.js', 'packages/cli/dist/main.js'];
-  const missing = dists.filter((d) => !fs.existsSync(path.join(REPO_ROOT, d)));
-  check('preflight', 'built', missing.length === 0, missing.length ? `missing ${missing.join(', ')}: run npm run build` : 'core, web and cli dist present');
+  check('preflight', 'checkout clean', dirty === '', dirty === '' ? 'no tracked change' : [`tracked changes: the run would not be the commit it names; commit them first`, ...dirty.split('\n').slice(0, 5)]);
+  const missing = DISTS.filter((d) => !fs.existsSync(path.join(ORDEWELL_ROOT, d)));
+  check('preflight', 'built', missing.length === 0, missing.length ? `missing ${missing.join(', ')}: run npm run build in ${ORDEWELL_ROOT}` : 'core, web and cli dist present');
+  const freshness = await distFreshness();
+  check('preflight', 'dist fresh', freshness.ok, freshness.allowed ? `${freshness.detail}: allowed by --allow-stale-dist, so no result is valid` : freshness.stale ? `${freshness.detail}: run npm run build in ${ORDEWELL_ROOT}, or pass --allow-stale-dist` : freshness.detail);
   const ver = await docker(['version', '--format', '{{.Server.Version}}']);
   check('preflight', 'docker', ver.code === 0, ver.code === 0 ? `engine ${ver.stdout.trim()}` : ver.stderr.trim());
-  must(containsPr177 && missing.length === 0 && ver.code === 0 && (dirty === '' || opts.dryRun), 'preflight failed');
-  const runtime = await prepareRuntime(sha, dirty !== '');
-  return { sha, containsPr177, dirty: dirty !== '', runtime };
+  must(containsPr177 && dirty === '' && missing.length === 0 && freshness.ok && ver.code === 0, 'preflight failed');
+  const runtime = await prepareRuntime(sha, freshness.stamp);
+  return { sha, root: ORDEWELL_ROOT, containsPr177, freshness, staleDistAllowed: freshness.allowed, runtime };
+}
+
+/** The packed dist's age against the tracked sources it is built from. */
+async function distFreshness() {
+  const listed = await git('ls-files', '-z', '--', ...L.FRESHNESS_SOURCES);
+  const stat = (rel) => {
+    try { return { path: rel, mtimeMs: fs.statSync(path.join(ORDEWELL_ROOT, rel)).mtimeMs }; } catch { return null; }
+  };
+  const sources = listed.stdout.split('\0').filter(Boolean).map(stat).filter(Boolean);
+  const dists = DISTS.map(stat).filter(Boolean);
+  const verdict = L.distFreshness({ dists: dists.length === DISTS.length ? dists : [], sources, allowStale: opts.allowStaleDist });
+  const stamp = dists.length ? Math.trunc(Math.max(...dists.map((d) => d.mtimeMs))).toString(36) : 'none';
+  return { ...verdict, sources: sources.length, stamp };
 }
 
 /**
- * The Ordewell the box runs: core, web and cli packed from this checkout as a
+ * The Ordewell the box runs: core, web and cli packed from the tree as a
  * release would pack them, installed with the lockfile's versions of their
- * dependencies, outside the repository. The checkout's own node_modules will
+ * dependencies, outside the repository. The tree's own node_modules will
  * not do: an Ordewell worktree's is links into another checkout, which mean
  * nothing inside the box and need not hold this commit's dependencies.
+ * Keyed by the sha and the dist's build time, so a rebuild is packed afresh.
  */
-async function prepareRuntime(sha, dirty) {
-  const dir = path.join(checkedBenchDir('commit0', 'runtime'), dirty ? `${sha}-dirty` : sha);
+async function prepareRuntime(sha, distStamp) {
+  const dir = path.join(checkedBenchDir('commit0', 'runtime'), `${sha}-${distStamp}`);
   const coreEntry = path.join(dir, 'node_modules', '@ordewell', 'core', 'dist', 'index.js');
   const loads = async () => (await exec(process.execPath, ['-e', `if (typeof require(${JSON.stringify(coreEntry)}).fetchAllProviderModels !== 'function') process.exit(1)`])).code === 0;
-  // A dirty checkout's dist may have moved since, so only a clean commit's runtime is reused.
-  if (!dirty && fs.existsSync(coreEntry) && (await loads())) {
+  if (fs.existsSync(coreEntry) && (await loads())) {
     check('preflight', 'runtime', true, `${dir} (packed earlier from ${sha.slice(0, 12)})`);
     return dir;
   }
@@ -141,14 +268,14 @@ async function prepareRuntime(sha, dirty) {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(path.join(tmp, 'tarballs'), { recursive: true });
   const packed = await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', path.join(tmp, 'tarballs'),
-    '-w', 'packages/core', '-w', 'packages/web', '-w', 'packages/cli'], { cwd: REPO_ROOT });
+    '-w', 'packages/core', '-w', 'packages/web', '-w', 'packages/cli'], { cwd: ORDEWELL_ROOT });
   let tarballs = [];
   try { tarballs = JSON.parse(packed.stdout).map((t) => ({ name: t.name, file: t.filename })); } catch { /* reported below */ }
   must(check('preflight', 'runtime packed', packed.code === 0 && tarballs.length === 3, packed.code === 0 ? tarballs.map((t) => t.file).join(', ') : packed.stderr.trim().split('\n').slice(-4)), 'npm pack failed');
-  const lock = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package-lock.json'), 'utf8'));
+  const lock = JSON.parse(fs.readFileSync(path.join(ORDEWELL_ROOT, 'package-lock.json'), 'utf8'));
   const overrides = {};
   for (const p of ['core', 'web', 'cli']) {
-    const deps = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', p, 'package.json'), 'utf8')).dependencies ?? {};
+    const deps = JSON.parse(fs.readFileSync(path.join(ORDEWELL_ROOT, 'packages', p, 'package.json'), 'utf8')).dependencies ?? {};
     for (const name of Object.keys(deps)) {
       const version = lock.packages?.[`node_modules/${name}`]?.version;
       if (!name.startsWith('@ordewell/') && version) overrides[name] = version;
@@ -172,16 +299,20 @@ async function prepareRuntime(sha, dirty) {
 
 /**
  * One library's sandbox for one arm: an internal network, the gateway on it
- * and the bridge, and the box on it alone. The box runs the image's own
- * python and git, the host's node and the runtime packed from the checkout,
- * mounted read-only, so the Ordewell it runs is the commit the record names.
+ * and the bridge, and the box on it alone, under the arm's CPU and memory
+ * quota (D4). The box runs the image's own python and git, the host's node
+ * and the runtime packed from the tree, mounted read-only, so the Ordewell it
+ * runs is the commit the record names. Everything carries this driver's id.
  */
-async function openSandbox(lib, runId, runtime) {
+async function openSandbox(lib, runId, runtime, settings) {
   const name = `commit0-${runId}`;
+  const driver = L.driverId();
+  const labels = ['--label', LABEL, '--label', `${L.DRIVER_LABEL}=${driver}`];
   const sb = { name, network: `${name}-net`, proxy: `${name}-egress`, box: `${name}-box`, proxyUrl: null };
   const close = async () => {
     await docker(['rm', '-f', sb.box, sb.proxy]);
     await docker(['network', 'rm', sb.network]);
+    openSandboxes.delete(sb);
   };
   sb.close = close;
   const node = fs.realpathSync(process.execPath);
@@ -192,21 +323,22 @@ async function openSandbox(lib, runId, runtime) {
   const imageEnv = JSON.parse(image.stdout || '[]');
   const imagePath = imageEnv.find((e) => e.startsWith('PATH='))?.slice(5) ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
-  const made = await docker(['network', 'create', '--internal', '--label', LABEL, sb.network]);
+  openSandboxes.add(sb);
+  const made = await docker(['network', 'create', '--internal', ...labels, sb.network]);
   must(made.code === 0, `network: ${made.stderr.trim()}`);
   try {
-    const source = fs.readFileSync(path.join(REPO_ROOT, 'packages/core/src/services/container/egressSidecar.ts'), 'utf8');
+    const source = fs.readFileSync(path.join(ORDEWELL_ROOT, 'packages/core/src/services/container/egressSidecar.ts'), 'utf8');
     const entry = L.extractEgressEntry(source);
     const egress = JSON.stringify({ port: L.EGRESS_PORT, allow: L.EGRESS_ALLOW });
     // `-i` holds its stdin open: the sidecar ends when its stdin does, as core runs it.
-    const px = await docker(['run', '-d', '-i', '--name', sb.proxy, '--label', LABEL, '--network', sb.network, ...nodeMount,
+    const px = await docker(['run', '-d', '-i', '--name', sb.proxy, ...labels, '--network', sb.network, ...nodeMount,
       '--entrypoint', NODE_IN_BOX, '-e', `ORDEWELL_EGRESS=${egress}`, lib.image, '-e', entry]);
     must(px.code === 0, `gateway: ${px.stderr.trim()}`);
     let ready = false;
     for (let i = 0; i < 40 && !ready; i++) {
       const logs = await docker(['logs', sb.proxy]);
       ready = /^ready \d+$/m.test(logs.stdout);
-      if (!ready) await new Promise((r) => setTimeout(r, 250));
+      if (!ready) await sleep(250);
     }
     must(check(lib.name, 'gateway', ready, ready ? `allows ${L.EGRESS_ALLOW.join(', ')} on 443 and nothing else` : 'did not report ready'), 'gateway did not start');
     const joined = await docker(['network', 'connect', 'bridge', sb.proxy]);
@@ -232,6 +364,7 @@ async function openSandbox(lib, runId, runtime) {
     if (opts.run) envArgs.push('-e', 'OPENROUTER_API_KEY');
     const mounts = ['-v', `${runtime}:${ORDEWELL_IN_BOX}:ro`];
     const box = await docker(['run', '-d', '--init', '--name', sb.box, '--label', LABEL, '--network', sb.network, '--user', '0:0',
+      ...L.boxRunArgs({ cpus: settings.cpus, memory: settings.memory, parallel: settings.parallel, driver }),
       ...nodeMount, ...mounts, ...envArgs, '--entrypoint', 'sleep', lib.image, 'infinity']);
     must(box.code === 0, `box: ${box.stderr.trim()}`);
     const wrapper = `#!/bin/sh\nexec ${NODE_IN_BOX} ${ORDEWELL_IN_BOX}/node_modules/@ordewell/cli/dist/main.js "$@"\n`;
@@ -257,6 +390,17 @@ async function openSandbox(lib, runId, runtime) {
 
 function inBox(sb, argv, { workdir, env = {}, input, timeoutMs, log } = {}) {
   return docker(['exec', ...(input === undefined ? [] : ['-i']), ...(workdir ? ['-w', workdir] : []), ...Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]), sb.box, ...argv], { input, timeoutMs, log });
+}
+
+/** The box's quota as the engine holds it (D4). */
+async function checkQuota(lib, sb, settings) {
+  const r = await docker(['inspect', '-f', '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}', sb.box]);
+  const [nanoCpus, memory, swap] = r.stdout.trim().split(/\s+/).map(Number);
+  const want = { nanoCpus: Math.round(settings.cpus * 1e9), memory: L.dockerBytes(settings.memory) };
+  const ok = r.code === 0 && nanoCpus === want.nanoCpus && memory === want.memory && swap === want.memory;
+  return check(lib.name, 'box quota', ok, ok
+    ? `${settings.cpus} CPUs, ${settings.memory} of memory and no swap beyond it`
+    : `the engine holds ${nanoCpus / 1e9} CPUs, ${memory} bytes, swap ${swap}; wanted ${settings.cpus}, ${want.memory}, ${want.memory}`);
 }
 
 // --- Checks -----------------------------------------------------------------
@@ -290,7 +434,7 @@ async function checkWindow(lib, sb) {
   const r = await inBox(sb, [NODE_IN_BOX, '-e', L.WINDOW_PROBE_JS, L.PROVIDER_MODEL], { timeoutMs: 60_000 });
   let probe;
   try { probe = JSON.parse(r.stdout); } catch { probe = { listed: 0, models: [], errors: { probe: r.stderr.trim().slice(-500) } }; }
-  const table = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages/core/src/services/modelDetailsSnapshot.json'), 'utf8'));
+  const table = JSON.parse(fs.readFileSync(path.join(ORDEWELL_ROOT, 'packages/core/src/services/modelDetailsSnapshot.json'), 'utf8'));
   const listed = L.listedWindow(probe.models);
   const snapshot = L.snapshotWindow(table);
   const verdict = L.judgeWindow({ listed, snapshot });
@@ -433,8 +577,8 @@ async function evaluate(lib, sb, log) {
 
 // --- Arms -------------------------------------------------------------------
 
-async function writeSettings(sb) {
-  const r = await inBox(sb, ['sh', '-c', `mkdir -p ${BOX_HOME}/.ordewell && cat > ${BOX_HOME}/.ordewell/settings.json`], { input: JSON.stringify(L.boxSettings(), null, 2) });
+async function writeSettings(sb, arm, settings) {
+  const r = await inBox(sb, ['sh', '-c', `mkdir -p ${BOX_HOME}/.ordewell && cat > ${BOX_HOME}/.ordewell/settings.json`], { input: JSON.stringify(L.boxSettings(arm, settings), null, 2) });
   return r.code === 0;
 }
 
@@ -448,30 +592,229 @@ async function readPlan(lib, sb, sessionId) {
   try { return JSON.parse(r.stdout); } catch { return null; }
 }
 
+async function lastSessionId(lib, sb) {
+  const last = await inBox(sb, ['cat', path.posix.join(lib.workdir, '.ordewell', 'last-session.json')]);
+  try { return JSON.parse(last.stdout).sessionId ?? null; } catch { return null; }
+}
+
+/** Asks the box's daemon what a session opened with, and judges it against the arm's settings. */
+async function checkSettingsReadback(lib, sb, arm, settings, sessionId) {
+  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.SETTINGS_PROBE_JS, lib.workdir, sessionId], { timeoutMs: 60_000 });
+  let response;
+  try { response = JSON.parse(r.stdout); } catch { response = { error: (r.stderr || r.stdout).trim().slice(-300) || `exit ${r.code}` }; }
+  const v = L.judgeSettingsReadback(settings, response);
+  return check(lib.name, `arm ${arm.id} daemon reads the settings back`, v.ok, v.ok
+    ? `supervisor ${v.read.supervisorLevel}, autorun ${v.read.autorun}, automatic merging ${v.read.mergeAtGatesAutomatically}, up to ${v.read.maxParallel} at once`
+    : v.failures);
+}
+
+/**
+ * The scan for Ordewell processes in the box: every process whose command line
+ * names the runtime. The pattern is split in the script so the scan's own
+ * shell never matches it.
+ */
+const ORDEWELL_PS_SH = `for p in /proc/[0-9]*; do pid=\${p#/proc/}; [ "$pid" = "$$" ] && continue; c=$(tr '\\0' ' ' < "$p/cmdline" 2>/dev/null) || continue; case "$c" in *"${ORDEWELL_IN_BOX.slice(0, 9)}""${ORDEWELL_IN_BOX.slice(9)}/"*) echo "$pid $c";; esac; done`;
+
+async function ordewellProcesses(sb) {
+  const r = await inBox(sb, ['sh', '-c', ORDEWELL_PS_SH]);
+  return r.stdout.split('\n').filter(Boolean).map((line) => ({ pid: Number(line.split(' ')[0]), cmd: line.slice(line.indexOf(' ') + 1).trim() }));
+}
+
+/**
+ * Waits for the box to hold no Ordewell process, killing what outlives the
+ * wait, so nothing spends on the key after the closing reading.
+ */
+async function confirmNoOrdewell(lib, sb) {
+  const deadline = Date.now() + LEFTOVER_WAIT_MS;
+  let left = await ordewellProcesses(sb);
+  while (left.length && Date.now() < deadline) {
+    await sleep(3000);
+    left = await ordewellProcesses(sb);
+  }
+  const killed = left;
+  if (killed.length) {
+    await inBox(sb, ['sh', '-c', `kill -9 ${killed.map((p) => p.pid).join(' ')} 2>/dev/null; true`]);
+    await sleep(1000);
+    left = await ordewellProcesses(sb);
+  }
+  check(lib.name, 'no Ordewell process left', left.length === 0, left.length
+    ? left.map((p) => `still running: ${p.pid} ${p.cmd.slice(0, 160)}`)
+    : killed.length ? [`killed what outlived the stop by ${LEFTOVER_WAIT_MS / 1000} s:`, ...killed.map((p) => `${p.pid} ${p.cmd.slice(0, 160)}`)] : 'the daemon and every follower ended');
+  return { killed, left };
+}
+
+/** A step in the box whose pid is written down, so the stop can signal it, and only it. */
+function startStep(lib, sb, name, argv, timeoutMs, log) {
+  log.write(`\n[commit0] $ ${argv.join(' ')}\n`);
+  const pidFile = `/tmp/commit0-${name}.pid`;
+  const promise = inBox(sb, ['sh', '-c', `echo $$ > ${pidFile}; exec "$@"`, 'sh', ...argv], { workdir: lib.workdir, log, timeoutMs });
+  const step = { name, pidFile, done: false, result: null };
+  step.promise = promise.then((r) => { step.done = true; step.result = r; return r; });
+  return step;
+}
+
+async function signalStep(sb, step, signal) {
+  await inBox(sb, ['sh', '-c', `test -s ${step.pidFile} && kill -${signal} "$(cat ${step.pidFile})" 2>/dev/null; true`]);
+}
+
+/**
+ * The one way a run ends, on a cap, a stall, a settled run or an abort: ask
+ * the daemon to stop the session and wait for its attempts to end; end the
+ * `plan` and `run` followers, never `merge`; merge what landed when asked
+ * (D3); stop the daemon; and confirm nothing of Ordewell is left before the
+ * closing spend reading. `ordewell run` may already have exited, at any
+ * status (D5): its exit is recorded, never judged.
+ */
+async function stopRun(lib, sb, { sessionId, followers = [], merge = false, log }) {
+  const ws = ['--workspace', lib.workdir];
+  const out = { stop: null, drained: null, merge: null, server: null, leftovers: null };
+  const record = (r) => ({ exit: r.code, timedOut: r.timedOut });
+  if (sessionId) {
+    log.write(`\n[commit0] $ ordewell stop --session-id ${sessionId}\n`);
+    out.stop = record(await inBox(sb, ['ordewell', 'stop', '--session-id', sessionId, ...ws], { workdir: lib.workdir, log, timeoutMs: STOP_TIMEOUT_MS }));
+    const deadline = Date.now() + DRAIN_MS;
+    for (;;) {
+      const plan = await readPlan(lib, sb, sessionId);
+      out.drained = !L.allTasks(plan).some((t) => t.status === 'in_progress');
+      if (out.drained || Date.now() >= deadline) break;
+      await sleep(5000);
+    }
+  }
+  for (const step of followers.filter((s) => !s.done)) {
+    await signalStep(sb, step, 'TERM');
+    await Promise.race([step.promise, sleep(30_000)]);
+    if (!step.done) await signalStep(sb, step, 'KILL');
+    await step.promise;
+  }
+  if (merge && sessionId) {
+    const m = startStep(lib, sb, 'merge', ['ordewell', 'merge', '--session-id', sessionId, '--yes', ...ws], MERGE_TIMEOUT_MS, log);
+    out.merge = record(await m.promise);
+    check(lib.name, 'merge after the stop', !out.merge.timedOut, out.merge.timedOut ? `still merging after ${MERGE_TIMEOUT_MS / 60_000} min` : `exit ${out.merge.exit}`);
+  }
+  log.write('\n[commit0] $ ordewell stop --server\n');
+  out.server = record(await inBox(sb, ['ordewell', 'stop', '--server'], { log, timeoutMs: STOP_TIMEOUT_MS }));
+  out.leftovers = await confirmNoOrdewell(lib, sb);
+  return out;
+}
+
 /** The arm in a dry run: everything it does before its first model call. */
-async function dryArm(lib, sb, arm) {
-  check(lib.name, `arm ${arm.id} settings`, await writeSettings(sb), `${BOX_HOME}/.ordewell/settings.json: ${JSON.stringify(L.boxSettings())}`);
-  if (arm.id === 'A') {
-    const sessionId = await createArmASession(lib, sb);
-    const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
-    const verdict = L.judgePlan(plan);
-    check(lib.name, 'arm A session', Boolean(sessionId) && verdict.ok, sessionId
-      ? [`session ${sessionId}: ${plan?.tasks?.length ?? 0} task on ${plan?.tasks?.[0]?.assignedRunner} with ${plan?.tasks?.[0]?.assignedModel?.modelId} in mode ${plan?.tasks?.[0]?.taskMode}, plan ${plan?.status}`, ...verdict.failures]
-      : 'core could not save the session');
+async function dryArm(lib, sb, arm, settings, runDir) {
+  check(lib.name, `arm ${arm.id} settings written`, await writeSettings(sb, arm, settings), `${BOX_HOME}/.ordewell/settings.json: ${JSON.stringify(L.boxSettings(arm, settings))}`);
+  await checkQuota(lib, sb, settings);
+  // B's planner turn is a model call, so B's settings are read back on a session written as A's is.
+  const sessionId = await createArmASession(lib, sb);
+  const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
+  const verdict = L.judgePlan(plan);
+  check(lib.name, arm.id === 'A' ? 'arm A session' : 'arm B probe session', Boolean(sessionId) && verdict.ok, sessionId
+    ? [`session ${sessionId}: ${plan?.tasks?.length ?? 0} task on ${plan?.tasks?.[0]?.assignedRunner} with ${plan?.tasks?.[0]?.assignedModel?.modelId} in mode ${plan?.tasks?.[0]?.taskMode}, plan ${plan?.status}`, ...verdict.failures]
+    : 'core could not save the session');
+  const log = fs.createWriteStream(path.join(runDir, 'ordewell.log'));
+  try {
     if (sessionId) {
       // Starts the daemon in the box and reads the plan through it; status calls no model.
-      const st = await inBox(sb, ['ordewell', 'status', '--session-id', sessionId, '--workspace', lib.workdir], { workdir: lib.workdir, timeoutMs: 120_000 });
-      check(lib.name, 'arm A daemon reads it', st.code === 0, st.code === 0 ? st.stdout.trim().split('\n').slice(0, 4) : `exit ${st.code}: ${(st.stderr || st.stdout).trim().split('\n').slice(-4).join(' | ')}`);
+      const st = await inBox(sb, ['ordewell', 'status', '--session-id', sessionId, '--workspace', lib.workdir], { workdir: lib.workdir, timeoutMs: 120_000, log });
+      check(lib.name, `arm ${arm.id} daemon reads it`, st.code === 0, st.code === 0 ? st.stdout.trim().split('\n').slice(0, 4) : `exit ${st.code}: ${(st.stderr || st.stdout).trim().split('\n').slice(-4).join(' | ')}`);
+      await checkSettingsReadback(lib, sb, arm, settings, sessionId);
     }
-    const cmds = L.armCommands(arm, { workspace: lib.workdir, goal: L.goalText(lib), sessionId: sessionId ?? '<session>' }).slice(1);
-    check(lib.name, 'arm A run and merge', true, cmds.map((c) => c.join(' ')), { unverified: true });
-  } else {
-    const cmds = L.armCommands(arm, { workspace: lib.workdir, goal: L.goalText(lib) });
-    check(lib.name, 'arm B plan, run and merge', true, [
-      'not run: the planner turn is a model call',
-      ...cmds.map((c) => c.map((a) => (a === L.goalText(lib) ? JSON.stringify(a) : a)).join(' ')),
-    ], { unverified: true });
+    await checkChooser(lib, sb);
+    // The stop path on an idle session: stop, no follower, no merge, the daemon down, nothing left.
+    await stopRun(lib, sb, { sessionId, followers: [], merge: false, log });
+  } finally {
+    log.end();
   }
+  const cmds = L.armCommands(arm, { workspace: lib.workdir, goal: L.goalText(lib), sessionId: sessionId ?? '<session>' });
+  check(lib.name, `arm ${arm.id} ${arm.id === 'A' ? 'run and merge' : 'plan, run and merge'}`, true, [
+    'not run: each is a model call, or merges what one made',
+    ...(arm.id === 'A' ? cmds.slice(1) : cmds).map((c) => c.map((a) => (a === L.goalText(lib) ? JSON.stringify(a) : a)).join(' ')),
+  ], { unverified: true });
+}
+
+/**
+ * A worktree layout as a stopped run leaves it, built in the box with git:
+ * the patch chooser must find each task's work where it is, never in the
+ * integration worktree, and the patch it writes must apply to the flat commit
+ * with the venv left out.
+ */
+const CHOOSER_SH = String.raw`
+set -eu
+R=/tmp/commit0-chooser
+rm -rf "$R" "$R-tmp" "$R-a" "$R-b"; mkdir -p "$R/pkg"; cd "$R"
+git init -q -b commit0-base
+printf 'a = 1\n' > pkg/a.py; printf 'b = 1\n' > pkg/b.py
+printf '/.venv\n' >> .git/info/exclude
+git add -A; git commit -qm flat
+FLAT=$(git rev-parse HEAD)
+W=.ordewell/worktrees/run1
+git worktree add -q -b ordewell/run1/integration "$W/integration"
+(cd "$W/integration" && printf 'merged = 1\n' > pkg/merged.py && git add -A && git commit -qm merged)
+git worktree add -q -b ordewell/run1/1-one "$W/1-one"
+(cd "$W/1-one" && printf 'one = 1\n' > pkg/one.py && git add -A && git commit -qm one && printf 'a = 2\n' > pkg/a.py && printf 'new = 1\n' > pkg/new.py && mkdir .venv && printf junk > .venv/junk)
+mk() { git branch "$1" "$FLAT"; git worktree add -q "$R-tmp" "$1"; (cd "$R-tmp" && printf '%s\n' "$2" > pkg/two.py && git add -A && git commit -qm "$1"); git worktree remove --force "$R-tmp"; }
+mk ordewell/run1/2-two branch
+mk ordewell-preserved/run1/2-two older
+mk ordewell-preserved/run1/2-two-2 newest
+git worktree add -q -b ordewell/run1/4-four "$W/4-four"
+(cd "$W/4-four" && printf 'b = 4\n' > pkg/b.py)
+echo "$FLAT"
+`;
+
+async function checkChooser(lib, sb) {
+  const made = await inBox(sb, ['sh', '-c', CHOOSER_SH]);
+  if (made.code !== 0) return check(lib.name, 'patch chooser', false, `the layout could not be built: ${made.stderr.trim().split('\n').slice(-3).join(' | ')}`);
+  const root = '/tmp/commit0-chooser';
+  const flatCommit = made.stdout.trim().split('\n').pop();
+  const w = (name) => `${root}/.ordewell/worktrees/run1/${name}`;
+  const rec = (taskId, name, status, worktree = w(name)) => ({ taskId, branch: `ordewell/run1/${name}`, workspace: w(name), status, repos: { '.': { worktree } } });
+  const plan = {
+    tasks: [
+      { id: 't1', order: 1, title: 'one', status: 'failed' },
+      { id: 't2', order: 2, title: 'two', status: 'failed' },
+      { id: 't3', order: 3, title: 'three', status: 'completed' },
+      { id: 't4', order: 4, title: 'four', status: 'completed', subtasks: [{ id: 't4a', title: 'four, a', status: 'failed' }] },
+      { id: 't5', order: 5, title: 'five', status: 'blocked' },
+    ],
+    isolation: {
+      run: { id: 'run1', workspaceRoot: root, repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration' }] },
+      tasks: {
+        t1: rec('t1', '1-one', 'active'),
+        t2: rec('t2', '2-two', 'kept'),
+        t3: rec('t3', '3-three', 'merged'),
+        t4: rec('t4', '4-four', 'kept'),
+        t5: rec('t5', '5-five', 'active', w('integration')),
+      },
+    },
+  };
+  const wt = await inBox(sb, ['git', 'worktree', 'list', '--porcelain'], { workdir: root });
+  const br = await inBox(sb, ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], { workdir: root });
+  const chosen = L.choosePatches({ plan, worktrees: L.parseWorktrees(wt.stdout), branches: br.stdout.split('\n').filter(Boolean) });
+  const got = Object.fromEntries(chosen.map((c) => [c.taskId, c.landed ? 'landed' : c.source ? (c.source.path ?? c.source.ref) : 'none']));
+  const want = { t1: w('1-one'), t2: 'ordewell-preserved/run1/2-two-2', t3: 'landed', t4: w('4-four'), t5: 'none' };
+  const failures = Object.keys(want).filter((k) => got[k] !== want[k]).map((k) => `${k}: chose ${got[k]}, not ${want[k]}`);
+  const a = L.scoringPlan(L.ARMS.A, chosen);
+  const b = L.scoringPlan(L.ARMS.B, chosen);
+  if (a.scoredFrom !== 'task-worktree' || a.apply?.taskId !== 't1') failures.push(`arm A scores ${a.scoredFrom} from ${a.apply?.taskId ?? 'nothing'}, not the task worktree of t1`);
+  if (b.scoredFrom !== 'merged' || b.diagnostic.map((c) => c.taskId).join() !== 't1,t2,t4') failures.push(`arm B scores ${b.scoredFrom} and keeps ${b.diagnostic.map((c) => c.taskId).join(', ')} for diagnosis, not merged and t1, t2, t4`);
+  // Each chosen patch applied to a clean checkout of the flat commit, as the scoring applies it.
+  const scratch = { ...lib, flatCommit };
+  const applied = async (source, dir, expect) => {
+    const script = [
+      `${L.taskPatchScript(scratch, source)} > ${dir}.patch`,
+      `git worktree add -q --detach ${dir} ${flatCommit}`,
+      `cd ${dir} && ${L.applyPatchCommand(`${dir}.patch`)}`,
+      ...expect.map(([file, text]) => `grep -qxF ${L.shellQuote(text)} ${L.shellQuote(file)}`),
+      'test ! -e .venv',
+    ].join(' && ');
+    const r = await inBox(sb, ['sh', '-c', script], { workdir: root });
+    if (r.code !== 0) failures.push(`the patch from ${source.path ?? source.ref} did not apply as expected: ${r.stderr.trim().split('\n').slice(-2).join(' | ') || `exit ${r.code}`}`);
+  };
+  const by = Object.fromEntries(chosen.map((c) => [c.taskId, c]));
+  if (by.t1?.source) await applied(by.t1.source, `${root}-a`, [['pkg/one.py', 'one = 1'], ['pkg/a.py', 'a = 2'], ['pkg/new.py', 'new = 1']]);
+  if (by.t2?.source) await applied(by.t2.source, `${root}-b`, [['pkg/two.py', 'newest']]);
+  await inBox(sb, ['rm', '-rf', root, `${root}-a`, `${root}-b`, `${root}-a.patch`, `${root}-b.patch`]);
+  return check(lib.name, 'patch chooser', failures.length === 0, failures.length ? failures : [
+    'a failed task: its own worktree, committed and uncommitted work, no venv; a gone worktree: the newest preserved branch;',
+    'an open subtask: not landed; a record on the integration worktree: nothing; A applies its task, B keeps three for diagnosis',
+  ]);
 }
 
 async function keySpent() {
@@ -490,7 +833,7 @@ async function keySpent() {
 async function settledKeySpent() {
   let last = await keySpent();
   for (let i = 0; i < 8; i++) {
-    await new Promise((r) => setTimeout(r, 15_000));
+    await sleep(15_000);
     const now = await keySpent();
     if (now !== null && now === last) return now;
     last = now;
@@ -504,80 +847,129 @@ async function transcriptSummary(sb) {
 }
 
 /**
- * The arm for real, under its caps. Ordewell holds no spend cap of its own,
- * so a watchdog reads the key every poll and stops the run once either cap
- * is met; a stop lands between polls, so set the key's own limit to the cap too.
- * It also stops a run that makes no model call for L.NO_START_MS, counting
- * only the calls since the run began, so B's planner turn is not one.
+ * The arm for real, under the one cap both arms share (D1). Ordewell holds no
+ * spend cap of its own, so every poll reads the key and the transcripts and
+ * stops the run once the cap is met; a stop lands between polls, so set the
+ * key's own limit to the cap too. A run also ends when it has made no model
+ * call L.NO_START_MS in, when a person has been waited on for --stall-min
+ * with nothing running, or when it has settled: never on `ordewell run`'s
+ * exit (D5). Every end goes through stopRun.
  */
-async function realArm(lib, sb, arm, runDir) {
-  must(await writeSettings(sb), 'settings');
+async function realArm(lib, sb, arm, settings, runDir) {
+  must(await writeSettings(sb, arm, settings), 'settings');
   const log = fs.createWriteStream(path.join(runDir, 'ordewell.log'));
   const started = Date.now();
   const before = await keySpent();
-  let sessionId = null;
-  let current = null;
-  let stopped = null;
-  let run = null;
-  const watchdog = setInterval(async () => {
-    if (stopped) return;
-    const now = await keySpent();
-    const transcripts = await transcriptSummary(sb);
-    const decision = L.capDecision({
-      elapsedMs: Date.now() - started,
-      keySpentUsd: now !== null && before !== null ? now - before : null,
-      transcriptSpentUsd: transcripts.spendUsd,
-      capUsd: arm.capUsd,
-    });
-    if (decision.stop) {
-      stopped = { why: decision.why, atMs: Date.now() - started, spentUsd: decision.spentUsd };
-      log.write(`\n[commit0] cap met (${decision.why}, $${decision.spentUsd}): stopping\n`);
-    } else if (run) {
-      const stuck = L.startDecision({ sinceRunMs: Date.now() - run.startedAt, usageLines: transcripts.usageLines - run.usageLines, plan: await readPlan(lib, sb, sessionId) });
-      if (!stuck.stop || stopped) return;
-      stopped = { why: stuck.why, atMs: Date.now() - started, spentUsd: decision.spentUsd, detail: stuck.detail };
-      log.write(`\n[commit0] ${stuck.detail}: stopping\n`);
-    } else return;
-    if (sessionId) await inBox(sb, ['ordewell', 'stop', '--session-id', sessionId, '--workspace', lib.workdir], { timeoutMs: 60_000 });
-    setTimeout(async () => {
-      if (!current) return;
-      await inBox(sb, ['sh', '-c', 'pkill -f /opt/ordewell/node_modules || true']);
-    }, 60_000);
-  }, POLL_MS);
-  const step = async (argv, timeoutMs) => {
-    log.write(`\n[commit0] $ ${argv.join(' ')}\n`);
-    current = inBox(sb, argv, { workdir: lib.workdir, log, timeoutMs });
-    const r = await current;
-    current = null;
-    return r;
-  };
+  const stallMs = opts.stallMin * 60_000;
   const steps = {};
+  const followers = [];
+  let sessionId = null;
+  let runStart = null;
+  let stopped = null;
+  let stalled = null;
+  let endMs = null;
+  let stall = { sinceMs: null };
+  let settle = null;
+  let aborted = false;
+
+  /** One look at the run; returns why it is over, or null. */
+  const poll = async () => {
+    const nowMs = Date.now();
+    const key = await keySpent();
+    const transcripts = await transcriptSummary(sb);
+    const cap = L.capDecision({
+      elapsedMs: nowMs - started,
+      keySpentUsd: key !== null && before !== null ? key - before : null,
+      transcriptSpentUsd: transcripts.spendUsd,
+      capUsd: settings.capUsd,
+      wallCapMs: settings.wallCapMs,
+    });
+    if (cap.stop) {
+      stopped = { why: cap.why, atMs: nowMs - started, spentUsd: cap.spentUsd };
+      return `capped by ${cap.why} at $${cap.spentUsd}`;
+    }
+    if (!sessionId && arm.id === 'B') sessionId = await lastSessionId(lib, sb);
+    if (!runStart || !sessionId) return null;
+    const plan = await readPlan(lib, sb, sessionId);
+    const start = L.startDecision({ sinceRunMs: nowMs - runStart.atMs, usageLines: transcripts.usageLines - runStart.usageLines, plan });
+    if (start.stop) {
+      stopped = { why: start.why, atMs: nowMs - started, spentUsd: cap.spentUsd, detail: start.detail };
+      return start.detail;
+    }
+    const s = L.stallDecision({ plan, nowMs, sinceMs: stall.sinceMs, stallMs });
+    stall = s;
+    if (s.stalled) {
+      stalled = s.stalled;
+      return `stalled: "${s.stalled.task.title}" waits on ${s.stalled.waiting} for ${Math.round(s.stalled.sinceMs / 60_000)} min with nothing running`;
+    }
+    const d = L.settleDecision({ plan, fingerprint: L.planFingerprint(plan, transcripts.usageLines), nowMs, state: settle });
+    settle = d.state;
+    if (d.settled) {
+      endMs = d.state.sinceMs;
+      return 'settled: nothing running, nobody waited on, nothing moved';
+    }
+    return null;
+  };
+
+  /** Polls until the run is over, or `until` (a step) ends first. */
+  const watch = async (until) => {
+    for (;;) {
+      const done = until ? await Promise.race([until.promise.then(() => true), sleep(POLL_MS).then(() => false)]) : (await sleep(POLL_MS), false);
+      if (done) return null;
+      const why = await poll();
+      if (why) {
+        log.write(`\n[commit0] ${why}: stopping\n`);
+        console.log(`  ${why}: stopping`);
+        return why;
+      }
+    }
+  };
+
+  let closing = null;
   try {
     if (arm.id === 'A') {
       sessionId = await createArmASession(lib, sb);
       must(sessionId, 'arm A session');
     } else {
-      steps.plan = await step(['ordewell', 'plan', '--goal', L.goalText(lib), '--runner', L.RUNNER, '--no-chat', '--yes', '--workspace', lib.workdir], L.WALL_CAP_MS);
-      const last = await inBox(sb, ['cat', path.posix.join(lib.workdir, '.ordewell', 'last-session.json')]);
-      try { sessionId = JSON.parse(last.stdout).sessionId; } catch { sessionId = null; }
-      must(sessionId && !stopped, `the planner left no session (exit ${steps.plan.code})`);
+      const plan = startStep(lib, sb, 'plan', ['ordewell', 'plan', '--goal', L.goalText(lib), '--runner', L.RUNNER, '--no-chat', '--yes', '--workspace', lib.workdir], settings.wallCapMs, log);
+      followers.push(plan);
+      // The caps hold from the planner's first call; the start, stall and settle rules wait for the run, which the planner's calls are not.
+      const why = await watch(plan);
+      if (plan.done) steps.plan = { exit: plan.result.code, timedOut: plan.result.timedOut };
+      sessionId = sessionId ?? (await lastSessionId(lib, sb));
+      must(sessionId || why, `the planner left no session (exit ${steps.plan?.exit})`);
     }
-    const plan = await readPlan(lib, sb, sessionId);
-    const planCheck = L.judgePlan(plan);
-    steps.planCheck = planCheck;
-    fs.writeFileSync(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2));
-    must(check(lib.name, `arm ${arm.id} plan`, planCheck.ok, planCheck.ok ? `${plan.tasks.length} tasks, all on ordewell with ${L.MODEL_ID}, in ${[...new Set(plan.tasks.map((t) => t.taskMode))].join(', ')}` : planCheck.failures), 'the plan breaks the protocol');
-    if (!stopped) run = { startedAt: Date.now(), usageLines: (await transcriptSummary(sb)).usageLines };
-    if (!stopped) steps.run = await step(['ordewell', 'run', '--session-id', sessionId, '--workspace', lib.workdir], Math.max(1, L.WALL_CAP_MS - (Date.now() - started)));
-    // A run that never started has nothing to merge, and its result is the failure, not a score.
-    if (stopped?.why !== 'no-start') steps.merge = await step(['ordewell', 'merge', '--session-id', sessionId, '--yes', '--workspace', lib.workdir], MERGE_TIMEOUT_MS);
+    if (sessionId && !stopped && !stalled && !endMs) {
+      const plan = await readPlan(lib, sb, sessionId);
+      const planCheck = L.judgePlan(plan);
+      steps.planCheck = planCheck;
+      fs.writeFileSync(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2));
+      must(check(lib.name, `arm ${arm.id} plan`, planCheck.ok, planCheck.ok ? `${plan.tasks.length} tasks, all on ${L.RUNNER} with ${L.MODEL_ID}, in ${[...new Set(plan.tasks.map((t) => t.taskMode))].join(', ')}` : planCheck.failures), 'the plan breaks the protocol');
+      runStart = { atMs: Date.now(), usageLines: (await transcriptSummary(sb)).usageLines };
+      followers.push(startStep(lib, sb, 'run', ['ordewell', 'run', '--session-id', sessionId, '--workspace', lib.workdir], Math.max(1, settings.wallCapMs - (Date.now() - started)), log));
+      await watch(null);
+    }
+  } catch (err) {
+    aborted = true;
+    throw err;
   } finally {
-    clearInterval(watchdog);
+    endMs = endMs ?? Date.now();
+    // A run that never started has nothing to merge, and its result is the failure, not a score.
+    closing = await stopRun(lib, sb, { sessionId, followers, merge: !aborted && stopped?.why !== 'no-start', log });
+    for (const f of followers) if (f.done) steps[f.name] = { exit: f.result.code, timedOut: f.result.timedOut };
+    if (closing.merge) steps.merge = closing.merge;
     log.end();
   }
-  const wallClockMs = Date.now() - started;
   const after = before === null ? null : await settledKeySpent();
-  return { sessionId, steps: Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, v && 'code' in v ? { exit: v.code, timedOut: v.timedOut } : v])), wallClockMs, stopped, billed: before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null };
+  return {
+    sessionId,
+    steps,
+    closing: { stop: closing.stop, drained: closing.drained, server: closing.server, killed: closing.leftovers.killed.map((p) => p.cmd) },
+    wallClockMs: (stopped ? started + stopped.atMs : endMs) - started,
+    stopped,
+    stalled,
+    billed: before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null,
+  };
 }
 
 /**
@@ -596,28 +988,43 @@ async function restoreTests(lib, sb) {
 }
 
 /**
- * arm.patch from the workspace diff. A run that ended blocked or at its cap
- * never merged, so its work is still in the task's worktree: when the workspace
- * holds none, the patch is taken there, new files included, so a truncated run
- * leaves its partial work on record instead of an empty patch.
+ * What the eval scores (D2, D3), and every patch on record. A's unlanded
+ * task is applied to the workspace from its own worktree or preserved branch;
+ * B's unlanded work is written out for diagnosis and never applied. arm.patch
+ * is the workspace's diff once that is done: the diff that is scored.
  */
-async function writeArmPatch(lib, sb, runDir, truncated) {
-  const patch = async (workdir, intent) => {
-    const script = intent ? `git add -N -- . ${L.shellQuote(`:(exclude,literal)${L.VENV_DIR}`)} && ${L.armPatchScript(lib)}` : L.armPatchScript(lib);
-    return inBox(sb, ['sh', '-c', `${script} > /tmp/arm.patch; test -s /tmp/arm.patch`], { workdir });
+async function prepareScoring(lib, sb, arm, sessionId, runDir) {
+  const o = { workdir: lib.workdir };
+  const plan = sessionId ? await readPlan(lib, sb, sessionId) : null;
+  const wt = await inBox(sb, ['git', 'worktree', 'list', '--porcelain'], o);
+  const br = await inBox(sb, ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads'], o);
+  const chosen = L.choosePatches({ plan, worktrees: L.parseWorktrees(wt.stdout), branches: br.stdout.split('\n').filter(Boolean) });
+  const scoring = L.scoringPlan(arm, chosen);
+  const patches = [];
+  const write = async (c, file, scored) => {
+    const r = await inBox(sb, ['sh', '-c', `${L.taskPatchScript(lib, c.source)} > /tmp/${file}`], o);
+    await copyOut(sb, `/tmp/${file}`, path.join(runDir, file));
+    patches.push({ file, taskId: c.taskId, order: c.order, source: c.source, scored, ...(r.code === 0 ? {} : { error: r.stderr.trim().slice(-300) }) });
+    return r.code === 0;
   };
-  let landed = (await patch(lib.workdir, false)).code === 0;
-  if (!landed && truncated) {
-    const list = await inBox(sb, ['git', 'worktree', 'list', '--porcelain'], { workdir: lib.workdir });
-    for (const wt of L.otherWorktrees(list.stdout, lib.workdir)) {
-      if ((await patch(wt, true)).code !== 0) continue;
-      console.log(`  truncated run: arm.patch taken from the task worktree ${wt}`);
-      landed = true;
-      break;
-    }
+  let scoredFrom = scoring.scoredFrom;
+  if (scoring.apply) {
+    const c = scoring.apply;
+    const file = `task-${c.order ?? c.taskId}.patch`;
+    const made = await write(c, file, true);
+    const applied = made && (await inBox(sb, ['sh', '-c', L.applyPatchCommand(`/tmp/${file}`)], o));
+    const ok = Boolean(applied) && applied.code === 0;
+    check(lib.name, `arm ${arm.id} task work applied`, ok, ok
+      ? `task ${c.order} did not land: its work from ${c.source.kind} ${c.source.path ?? c.source.ref} is applied to the workspace`
+      : `the patch from ${c.source.path ?? c.source.ref} did not apply: ${(applied?.stderr ?? patches.at(-1).error ?? '').trim().split('\n').slice(-2).join(' | ')}`);
+    if (!ok) scoredFrom = 'merged';
+    await restoreTests(lib, sb);
   }
-  if (!landed) await inBox(sb, ['sh', '-c', ': > /tmp/arm.patch']);
+  for (const c of scoring.diagnostic) await write(c, `unlanded-${c.order ?? c.taskId}.patch`, false);
+  const arm_ = await inBox(sb, ['sh', '-c', `${L.armPatchScript(lib)} > /tmp/arm.patch`], o);
   await copyOut(sb, '/tmp/arm.patch', path.join(runDir, 'arm.patch'));
+  patches.unshift({ file: 'arm.patch', taskId: null, order: null, source: { kind: 'workspace', path: lib.workdir }, scored: true, ...(arm_.code === 0 ? {} : { error: arm_.stderr.trim().slice(-300) }) });
+  return { plan, chosen, scoredFrom, patches };
 }
 
 async function copyOut(sb, from, to) {
@@ -637,18 +1044,19 @@ function readTranscripts(home) {
 
 // --- One library, one arm ---------------------------------------------------
 
-async function runOne(lib, arm, ordewell, runsDir) {
+async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
+  const settings = L.armSettings(arm, opts);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const runId = `${stamp.slice(0, 19)}-${lib.name}-${arm.id}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const runDir = path.join(runsDir, runId);
   fs.mkdirSync(runDir, { recursive: true });
-  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${arm.capUsd}, ${L.WALL_CAP_MS / 3_600_000} h) -> ${runDir}`);
+  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
   const startedAt = new Date().toISOString();
   const first = checks.length;
   let sb = null;
-  const record = { window: { window: null }, egress: null, leak: null, network: null, tests: null, baseline: null, arm: null, transcripts: null, testsModified: null };
+  const record = { window: { window: null }, egress: null, leak: null, network: null, tests: null, baseline: null, baselineEval: null, arm: null, transcripts: null, testsModified: null, scoring: null };
   try {
-    sb = await openSandbox(lib, runId, ordewell.runtime);
+    sb = await openSandbox(lib, runId, ordewell.runtime, settings);
     record.egress = await checkEgress(lib, sb);
     record.window = await checkWindow(lib, sb);
     must(record.egress.ok && record.window.ok, 'the window or egress check failed: nothing runs');
@@ -661,20 +1069,24 @@ async function runOne(lib, arm, ordewell, runsDir) {
     must(record.leak.ok, 'the reference implementation is reachable: nothing runs');
     record.network = await collect(lib, sb, reference);
     must(record.network.ok, 'a dependency is missing from the image');
-    record.baseline = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
-    check(lib.name, 'baseline on the stubs', record.baseline.passed !== undefined, [`${record.baseline.passed ?? '?'} passed, ${record.baseline.failed ?? '?'} failed, ${record.baseline.errors ?? 0} errors of ${record.network.collected} collected (exit ${record.baseline.exit})`, ...(record.baseline.collectionError ? [`the stubs break collection: ${record.baseline.collectionError}`] : [])]);
+    const base = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
+    const br = L.baselineRecord(base);
+    record.baselineEval = base;
+    record.baseline = br.baseline ?? { collected: (base.passed ?? 0) + (base.failed ?? 0) + (base.errors ?? 0) + (base.skipped ?? 0), passed: base.passed, failed: base.failed, errors: base.errors, exit: base.exit, timedOut: base.timedOut };
+    check(lib.name, 'baseline on the stubs', br.ok, br.baseline
+      ? `collected 0 at the stubs (exit ${base.exit}): ${br.baseline.reason}; the library's own, recorded as the baseline`
+      : br.ok ? `${base.passed} passed, ${base.failed} failed, ${base.errors ?? 0} errors of ${record.network.collected} collected (exit ${base.exit})` : `no summary (exit ${base.exit}${base.timedOut ? ', timed out' : ''})`);
     if (opts.dryRun) {
-      for (const a of [arm]) await dryArm(lib, sb, a);
+      await dryArm(lib, sb, arm, settings, runDir);
     } else {
-      record.arm = await realArm(lib, sb, arm, runDir);
+      record.arm = await realArm(lib, sb, arm, settings, runDir);
       if (record.arm.stopped?.why === 'no-start') {
         check(lib.name, `arm ${arm.id} run started`, false, record.arm.stopped.detail);
         throw new Abort(`the run never started: ${record.arm.stopped.detail}`);
       }
       record.testsModified = await restoreTests(lib, sb);
-      const plan = record.arm.sessionId ? await readPlan(lib, sb, record.arm.sessionId) : null;
-      record.truncated = L.judgeLanding({ stopped: record.arm.stopped, plan, runExit: record.arm.steps?.run?.exit });
-      await writeArmPatch(lib, sb, runDir, record.truncated.truncated);
+      record.scoring = await prepareScoring(lib, sb, arm, record.arm.sessionId, runDir);
+      record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.scoring.plan });
       const venv = await inBox(sb, ['sh', '-c', L.venvIntactScript(lib)]);
       must(check(lib.name, 'eval on the image\'s venv', venv.code === 0, venv.code === 0 ? `${L.VENV_DIR} is the image's directory, untracked` : venv.stderr.trim()), 'the arm replaced the venv: the eval cannot run');
       const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
@@ -689,22 +1101,33 @@ async function runOne(lib, arm, ordewell, runsDir) {
       await copyOut(sb, `${BOX_HOME}/.ordewell`, path.join(runDir, 'ordewell-home'));
       await copyOut(sb, path.posix.join(lib.workdir, '.ordewell'), path.join(runDir, 'workspace-ordewell'));
       record.transcripts = readTranscripts(path.join(runDir, 'ordewell-home'));
-      if (opts.keep && opts.dryRun) console.log(`  kept: docker exec -it ${sb.box} sh; clean up with: docker rm -f ${sb.box} ${sb.proxy}; docker network rm ${sb.network}`);
-      else await sb.close();
+      if (opts.keep && opts.dryRun) {
+        openSandboxes.delete(sb);
+        console.log(`  kept: docker exec -it ${sb.box} sh; clean up with: docker rm -f ${sb.box} ${sb.proxy}; docker network rm ${sb.network}`);
+      } else await sb.close();
     }
   }
+  const armChecks = checks.slice(first);
+  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, dryRun: opts.dryRun });
   const result = {
     ...L.resultRecord({
-      lib, arm, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,
-      tests: record.tests, wallClockMs: record.arm?.wallClockMs, spend: record.arm?.billed ?? (record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
-      transcripts: record.transcripts, stopped: record.arm?.stopped, truncated: record.truncated, providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
+      lib, arm, settings, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,
+      tests: record.tests, baseline: record.baseline, wallClockMs: record.arm?.wallClockMs,
+      spend: record.arm?.billed ?? (record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
+      transcripts: record.transcripts, stopped: record.arm?.stopped, stalled: record.arm?.stalled, truncated: record.truncated,
+      scoredFrom: record.scoring?.scoredFrom, patches: record.scoring?.patches, validity,
+      providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
     }),
+    ordewellRoot: ordewell.root,
+    distFreshness: { stale: ordewell.freshness.stale, allowed: ordewell.freshness.allowed, detail: ordewell.freshness.detail },
     sessionId: record.arm?.sessionId ?? null,
     steps: record.arm?.steps ?? null,
+    closing: record.arm?.closing ?? null,
+    tasks: record.scoring?.chosen ?? null,
     testsModified: record.testsModified,
-    baseline: record.baseline,
+    baselineEval: record.baselineEval,
     aborted: record.aborted ?? null,
-    checks: checks.slice(first),
+    checks: armChecks,
   };
   fs.writeFileSync(path.join(runDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
   if (!opts.dryRun) fs.appendFileSync(path.join(path.dirname(runsDir), 'results.jsonl'), `${JSON.stringify(result)}\n`);
@@ -728,19 +1151,26 @@ function loadLibraries() {
 }
 
 async function main() {
+  if (opts.sweep) {
+    console.log('Commit0 sweep: labelled containers and networks of drivers no longer running');
+    printSweep(await sweep());
+    if (!opts.dryRun && !opts.run) return;
+  }
   const dataDir = checkedBenchDir('commit0');
   const runsDir = path.join(dataDir, opts.dryRun ? 'dry-runs' : 'runs');
   fs.mkdirSync(runsDir, { recursive: true });
   const libs = loadLibraries();
-  console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; data in ${dataDir}`);
+  console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
   const release = opts.run ? L.lockKey(dataDir) : () => {};
   if (opts.run) process.on('exit', release);
   const results = [];
   try {
     const ordewell = await preflight();
+    if (opts.dryRun) await checkSweep(libs[0].image);
+    const preflightChecks = checks.filter((c) => c.scope === 'preflight');
     for (const lib of libs) {
-      for (const arm of L.armsOf(opts.arm)) results.push(await runOne({ ...lib }, arm, ordewell, runsDir));
+      for (const arm of L.armsOf(opts.arm)) results.push(await runOne({ ...lib }, arm, ordewell, runsDir, preflightChecks));
     }
   } catch (err) {
     if (!(err instanceof Abort)) throw err;
@@ -748,14 +1178,15 @@ async function main() {
   } finally {
     release();
   }
-  const failed = checks.filter((c) => !c.ok && !c.unverified);
+  const failed = checks.filter(L.failedCheck);
   const unverified = checks.filter((c) => c.unverified);
-  console.log(`\n${checks.length} checks: ${checks.length - failed.length - unverified.length} ok, ${failed.length} failed, ${unverified.length} unverified`);
-  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, ${r.tests ? `${r.tests.passed}/${r.tests.collected} passed` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
+  const expected = checks.filter((c) => c.expectedFailure && !c.ok);
+  console.log(`\n${checks.length} checks: ${checks.length - failed.length - unverified.length - expected.length} ok, ${failed.length} failed, ${unverified.length} unverified${expected.length ? `, ${expected.length} failed as expected` : ''}`);
+  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, ${r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
   process.exitCode = failed.length || results.some((r) => r.aborted) ? 1 : 0;
 }
 
 main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
+  bailOut('error', 1);
 });
