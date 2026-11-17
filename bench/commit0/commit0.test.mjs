@@ -210,7 +210,14 @@ test('what crosses into the eval box: the arm\'s source, never its tests, test c
     ['a pyproject.toml edit keeps the reference\'s and is recorded', { 'pyproject.toml': '[tool.pytest.ini_options]\naddopts = "-p no:python"\n' }, { excluded: [['pyproject.toml', "test configuration: the reference's is kept whole"]], inspect: true }],
     ['a .venv write is excluded', { '.venv': null }, { excluded: [['.venv', "the image's venv"]] }],
     ['git metadata and Ordewell\'s data are excluded', { '.git': null, '.ordewell': null }, { excluded: [['.git', 'git metadata'], ['.ordewell', "Ordewell's session data"]] }],
-    ['bytecode is excluded', { 'tinylib/__pycache__': null, 'tinylib/core.pyc': 'x' }, { excluded: [['tinylib/__pycache__', 'bytecode']], copy: ['tinylib/core.pyc'] }],
+    ['a pytest.ini, hidden or not, and a pytest.toml are excluded and recorded', { 'pytest.ini': 'x\n', '.pytest.ini': 'x\n', 'pytest.toml': 'x\n', 'tinylib/.pytest.toml': 'x\n' }, {
+      excluded: ['pytest.ini', '.pytest.ini', 'pytest.toml', 'tinylib/.pytest.toml'].map((p) => [p, "test configuration: the reference's is kept"]), inspect: true }],
+    ['bytecode is excluded, in __pycache__ or beside its source', { 'tinylib/__pycache__': null, 'tinylib/core.pyc': 'x', 'tinylib/old.pyo': 'x' }, {
+      excluded: [['tinylib/__pycache__', 'bytecode'], ['tinylib/core.pyc', 'bytecode'], ['tinylib/old.pyo', 'bytecode']] }],
+    ['a compiled module is excluded', { 'tinylib/_ext.cpython-312-x86_64-linux-gnu.so': 'x', 'tinylib/_win.pyd': 'x' }, {
+      excluded: [['tinylib/_ext.cpython-312-x86_64-linux-gnu.so', 'a compiled module'], ['tinylib/_win.pyd', 'a compiled module']] }],
+    ['git metadata is excluded at any depth', { 'vendor/x/.git/config': 'x\n', 'vendor/y/.git': 'gitdir: /elsewhere\n' }, {
+      excluded: [['vendor/x/.git/config', 'git metadata'], ['vendor/y/.git', 'git metadata']] }],
     ['a top-level pytest/ package is excluded and flagged', { 'pytest/__init__.py': 'x\n', 'pytest/__main__.py': 'x\n' }, {
       excluded: [['pytest/__init__.py', 'a new top-level module shadowing pytest, which the eval imports'], ['pytest/__main__.py', 'a new top-level module shadowing pytest, which the eval imports']], inspect: true }],
     ['a top-level module shadowing the standard library is excluded and flagged', { 'argparse.py': 'x\n' }, { excluded: [['argparse.py', 'a new top-level module shadowing argparse, which the eval imports']], inspect: true }],
@@ -258,9 +265,10 @@ test('treeManifest hashes the arm\'s files as git does, so an untouched file sta
     put('.venv/lib/site-packages/pkg/conftest.py');
     put('.ordewell/worktrees/t1/tinylib/x.py');
     put('tinylib/__pycache__/core.cpython-312.pyc');
+    put('tinylib/core.pyc'); put('tinylib/_ext.so'); put('vendor/x/.git/config');
     const got = L.selectScoredFiles({ lib: lib(), base, final: L.treeManifest(dir) });
     assert.deepEqual(got.copy, ['tinylib/__init__.py', 'tinylib/run.sh']);
-    assert.deepEqual(got.excluded.map((e) => e.path).sort(), ['.git', '.ordewell', '.venv', 'setup.cfg', 'tinylib/__pycache__']);
+    assert.deepEqual(got.excluded.map((e) => e.path).sort(), ['.git', '.ordewell', '.venv', 'setup.cfg', 'tinylib/__pycache__', 'tinylib/_ext.so', 'tinylib/core.pyc', 'vendor/x/.git']);
     assert.deepEqual(got.needsInspection, ["setup.cfg: test configuration: the reference's is kept whole"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

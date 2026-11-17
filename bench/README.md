@@ -249,9 +249,11 @@ then puts in only the files under the workdir that differ from that commit,
 and removes the non-test files the arm deleted (`selectScoredFiles`). It
 leaves out, each recorded in `excluded` with why: the tests under `testDir`
 (`test_*.py`, `*_test.py`, `tests/` and `unit_tests/`); test configuration
-(`conftest.py`, `pytest.ini` and `tox.ini` anywhere; `setup.cfg` and
-`pyproject.toml` are kept whole as the reference has them); `.git`, `.venv`,
-`.ordewell`, `__pycache__` and other caches; a link out of the workdir; and a
+(`conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`
+and `tox.ini` anywhere; `setup.cfg` and `pyproject.toml` are kept whole as the
+reference has them); `.git` at any depth, `.venv`, `.ordewell`, bytecode
+(`__pycache__`, `*.pyc`, `*.pyo`), compiled modules (`*.so`, `*.pyd`) and other
+caches; a link out of the workdir; and a
 new top-level module, at the workdir root or beside a src layout's package,
 named like something the eval imports (`pytest`, `_pytest`, `pluggy`, the
 timeout plugin, a stdlib module). An edit to test configuration or such a

@@ -583,7 +583,7 @@ export function removeWrittenScript(mark) {
  * or options that load one. The two packaging files also hold the library's
  * build metadata, so they are kept whole, never merged.
  */
-const PYTEST_CONFIG = new Set(['conftest.py', 'pytest.ini', 'tox.ini']);
+const PYTEST_CONFIG = new Set(['conftest.py', 'pytest.ini', '.pytest.ini', 'pytest.toml', '.pytest.toml', 'tox.ini']);
 const PACKAGING_CONFIG = new Set(['pyproject.toml', 'setup.cfg']);
 
 /** Directories in the workdir that are not the arm's: the image's venv and Ordewell's own state. */
@@ -604,14 +604,19 @@ export function isTestPath(lib, p) {
   return /^test_.*\.py$/.test(base) || /_test\.py$/.test(base) || parts.some((d) => d === 'tests' || d === 'unit_tests');
 }
 
-/** Why no file under this workdir path is the arm's work, for a path that is one of those directories; null otherwise. */
+/**
+ * Why nothing at or under this workdir path is the arm's source, for one of
+ * those directories or files; null otherwise. Bytecode and a compiled module
+ * import ahead of, or instead of, the source beside them.
+ */
 function prunedReason(p) {
   const parts = p.split('/');
   const name = parts.at(-1);
-  if (parts.length === 1 && name === '.git') return 'git metadata';
+  if (name === '.git') return 'git metadata';
   if (parts.length === 1 && name === VENV_DIR) return "the image's venv";
   if (parts.length === 1 && name === '.ordewell') return "Ordewell's session data";
-  if (name === '__pycache__') return 'bytecode';
+  if (name === '__pycache__' || /\.py[co]$/.test(name)) return 'bytecode';
+  if (/\.(so|pyd)$/.test(name)) return 'a compiled module';
   if (name === '.pytest_cache' || name === '.hypothesis') return "a test tool's cache";
   if (/\.(egg|dist)-info$/.test(name)) return "the image's install metadata";
   return null;
@@ -702,8 +707,10 @@ export function selectScoredFiles({ lib, base, final, stdlib = [] }) {
     excluded.push({ path: p, reason });
     if (inspect) needsInspection.push(`${p}: ${reason}`);
   };
+  const prunedAt = (p) => p.split('/').map((_, i, a) => prunedReason(a.slice(0, i + 1).join('/'))).find(Boolean);
   for (const [p, f] of final) {
-    if (f.pruned) { exclude(p, { reason: prunedReason(p) }); continue; }
+    const pruned = prunedAt(p);
+    if (pruned) { exclude(p, { reason: pruned }); continue; }
     const b = base.get(p);
     if (b && b.mode === f.mode && b.oid === f.oid) continue;
     const why = notScored(p, f, Boolean(b));
@@ -711,7 +718,7 @@ export function selectScoredFiles({ lib, base, final, stdlib = [] }) {
     else copy.push(p);
   }
   for (const p of base.keys()) {
-    if (final.has(p) || p.split('/').some((_, i, a) => prunedReason(a.slice(0, i + 1).join('/')))) continue;
+    if (final.has(p) || prunedAt(p)) continue;
     const why = notScored(p, null, true);
     if (why) exclude(p, { ...why, reason: `deleted: ${why.reason}` });
     else remove.push(p);
