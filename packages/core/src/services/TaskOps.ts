@@ -221,6 +221,8 @@ export interface ApplyTaskOpsResult {
   adjustments?: AssignmentAdjustment[];
   /** On ok, the id of the task each batch handle names. */
   handles?: ReadonlyMap<string, string>;
+  /** On ok, for each task a merge or split built, the ids of the plan's tasks it was built from. */
+  builtFrom?: ReadonlyMap<string, readonly string[]>;
 }
 
 function refused(tasks: readonly Task[], refusals: OpRefusal[]): ApplyTaskOpsResult {
@@ -256,6 +258,9 @@ export function applyTaskOps(
   const errors: OpRefusal[] = [];
   const summary: string[] = [];
   const adjustments: AssignmentAdjustment[] = [];
+  const builtFrom = new Map<string, readonly string[]>();
+  // A task built earlier in this batch stands for the plan's tasks it was built from.
+  const sourcesOf = (ids: readonly string[]) => [...new Set(ids.flatMap((id) => builtFrom.get(id) ?? [id]))];
 
   // Batch handles: planner-chosen names for a task an add/merge/split op is
   // about to create, so a later op in the same batch can reference it before
@@ -505,6 +510,7 @@ export function applyTaskOps(
         const mergedTask: Task = { ...built.task, dependencies: [...new Set([...ids, ...stated])] };
         const mergedId = mergedTask.id;
         tasks = PlanGraph.replace(tasks, idSet, [mergedTask], mergedId);
+        builtFrom.set(mergedId, sourcesOf([...idSet]));
         if (op.handle) handleId.set(op.handle, mergedId);
         summary.push(`Merged ${toMerge.length} tasks into "${spec.title}"${droppedSubtasksNote(toMerge)}`);
         break;
@@ -571,6 +577,7 @@ export function applyTaskOps(
         if (buildError) break;
         const tailId = newTasks[newTasks.length - 1].id;
         tasks = PlanGraph.replace(tasks, [target.id], newTasks, tailId);
+        for (const part of newTasks) builtFrom.set(part.id, sourcesOf([target.id]));
         if (op.handle) handleId.set(op.handle, tailId);
         summary.push(`Split "${target.title}" into ${newTasks.length} tasks${droppedSubtasksNote([target])}`);
         break;
@@ -630,5 +637,5 @@ export function applyTaskOps(
     told.add(key);
     return true;
   });
-  return { ok: true, tasks, errors: [], refusals: [], summary, handles: handleId, adjustments: standingAdjustments };
+  return { ok: true, tasks, errors: [], refusals: [], summary, handles: handleId, adjustments: standingAdjustments, builtFrom };
 }

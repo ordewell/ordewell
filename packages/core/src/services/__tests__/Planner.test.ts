@@ -160,6 +160,26 @@ describe('Planner', () => {
       ]);
     });
 
+    it('lands the plan without a skill nothing provides, and warns that it was removed', async () => {
+      const aiService = fakeAiService();
+      (aiService.generatePlanDirect as import("vitest").Mock).mockResolvedValue([
+        createTask({ id: 't1', order: 1, title: 'Fix the build', prompt: 'p' }),
+        createTask({ id: 't2', order: 2, title: 'Add feature', prompt: 'p', skills: ['python'], subtasks: [createTask({ id: 't2a', order: 1, title: 'Part', prompt: 'p', skills: ['rust'] })] }),
+        createTask({ id: 't3', order: 3, title: 'Docs', prompt: 'p' }),
+      ]);
+
+      const plan = await generate(aiService);
+
+      expect(plan.tasks.map((t) => t.title)).toEqual(['Fix the build', 'Add feature', 'Docs']);
+      expect(plan.tasks[1].skills ?? []).toEqual([]);
+      expect(plan.tasks[1].subtasks?.[0].skills ?? []).toEqual([]);
+      expect(plan.skillWarnings).toEqual([
+        'Task "Add feature": skill "python" is not an installed task skill, and no task it depends on creates it, so it was removed from the task\'s skills.',
+        'Task "Part": skill "rust" is not an installed task skill, and no task it depends on creates it, so it was removed from the task\'s skills.',
+      ]);
+      expect(aiService.generatePlanDirect).toHaveBeenCalledOnce();
+    });
+
     it('lands nothing when stopped during the skill check', async () => {
       const aiService = fakeAiService();
       const controller = new AbortController();

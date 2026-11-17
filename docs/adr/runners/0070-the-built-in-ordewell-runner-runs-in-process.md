@@ -185,13 +185,14 @@ is one runner per API provider, under the provider's own id and name.**
   read-only task is read-only whatever level it was planned at.
 - **Lifecycle.** An attempt makes at most the step limit's model calls
   (`ordewellStepLimit` in the settings file, default 200); the last is told so and
-  forced to `task_complete`. Before it the model is told twice, once it has
-  used 80% of the calls and once at 95% (each rounded down), with a message
+  forced to `task_complete`. Before it the model is told up to twice, once it
+  has used 80% of the calls and once at 95% (each rounded down), with a message
   appended to the conversation, never a rewritten system prompt: bring the part
   in hand to a committed state, then, at 95%, start nothing new and report what
   is done and what remains. Each goes out at most once an attempt, none while a
   report stands and none on the last call, and two falling due together send
-  only the later. The repeat guard nudges the third identical tool call
+  only the later; so a limit of 5 or less sends neither, and one of 6 to 20 only
+  the 80% one, its 95% share falling on the last call. The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
   limit pauses the attempt, and a resume reads the transcript back; one with no

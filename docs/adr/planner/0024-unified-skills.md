@@ -127,7 +127,10 @@ shadowed rather than dropped silently.
   A planner left free to invent a name would otherwise attach it everywhere and
   fail the run at its first task. Only new submissions and edits are checked:
   a saved plan that already names such a skill still loads, and an edit leaves
-  a skill already standing on a task alone. A planner skill on a task is
+  a skill already standing on a task alone, on a task a merge or split builds
+  from it too. A one-shot plan has no conversation to send a refusal back
+  through, so as it lands such a name is taken off its task with a warning
+  rather than costing the whole plan. A planner skill on a task is
   refused. At spawn the name is resolved in the task's worktree plus global (in
   a repo group also the group root's folder, read from the main checkout;
   without worktrees, the workspace instead of the worktree); if any does not
@@ -223,4 +226,4 @@ server).
 - 2026-10-17 — ADR-0021 folded in (*Built-in seeds refresh*).
 - 2026-10-21 — amended: the `diagnose` and `explore` built-ins are model-invocable planner skills.
 - 2026-11-10 — amended: skill bodies are capped at 2,000 words.
-- 2026-11-17 — amended: a missing skill name is refused at submit unless a task it depends on writes it; the spawn failure says how to fix it.
+- 2026-11-17 — amended: a missing skill name is refused at submit unless a task it depends on writes it (dropped with a warning from a one-shot plan); the spawn failure says how to fix it.
