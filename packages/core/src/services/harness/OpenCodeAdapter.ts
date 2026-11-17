@@ -322,6 +322,11 @@ export class OpenCodeAdapter extends ProcessLifecycle implements TaskModeAgentAd
   private sessionId: string | null = null;
   /** Where a task's context compacts, when Ordewell set it (ADR-0057 R4): the start a number of `taskCompactAt` mapped to. */
   compactWindowTokens?: number;
+
+  /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
+  get compactStartTokens(): number | undefined {
+    return this.compactWindowTokens;
+  }
   private planner: PlannerStartOptions | null = null;
   private task: TaskStartOptions | null = null;
   /** The last assistant message already settled — the baseline {@link recoverReply} measures a new reply against. */

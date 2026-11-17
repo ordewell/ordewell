@@ -385,6 +385,10 @@ export class StructuredSession extends AbstractRunnerSession {
     return this.adapter?.compactWindowTokens;
   }
 
+  get compactStartTokens(): number | undefined {
+    return this.adapter?.compactStartTokens;
+  }
+
   /** A runner's model reports through `task_complete`; only a script task's session ends on its exit status (ADR-0035). */
   onScriptExit(): void {}
 

@@ -101,39 +101,10 @@ and completion evidence.
   next needs. Only running time counts: a wait on input, a checkpoint or an
   approval holds the clock, and is left out of a passed task's running time
   too, and a usage limit ends the attempt. An automatic
-  compaction of the task's own runner session flags it, whatever the time; a
-  manual one and a subagent's context do not. Ordewell sets the window a
-  Claude Code task compacts at (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, never for a
-  planner) from the `taskCompactAt` setting, which
-  `ORDEWELL_TASK_COMPACT_AT` overrides. `auto`, the default, sets none,
-  so the CLI compacts near the model's own window: a summary loses detail and
-  the prompt cache, and a task re-reads what it had read, so compaction is a
-  guard on capacity, and a task outgrowing its brief is the supervisor's to
-  notice. Haiku is the exception: it charges several times its base prices
-  over a 100k-token prompt, so its window is set for compaction to start just
-  under that step. The CLI starts compacting a fixed buffer below the window,
-  not a share of it (about 32k, inferred from recorded sessions), and the
-  Haiku window is chosen from that. A number is the size at which compaction
-  starts, whatever the model: the window is that plus the buffer, held to the CLI's
-  100k to 1M with a log line when it moves; `off` sets nothing, Haiku's included. A
-  value that is none of these refuses the task's start, saying what is accepted.
-  The setting is one for every runner, so a number means a context size, not a
-  Claude window. A model whose own window
-  is smaller than the one set is no reason to set less: the CLI compacts at
-  the smaller of the two. Under a window below 200k tokens a compaction is
-  routine: it flags from the attempt's third, then at the 6th, 12th and so on,
-  since a task compacts a few times in ordinary work there. At 200k or more,
-  or where Ordewell sets none and the runner compacts near its model's own
-  window, every compaction flags. A large context flags too, before any
-  compaction: once the task's context first reaches 40% of its effective
-  window, the smaller of the model's window and a compaction window Ordewell
-  set, and never below 150k tokens, then again at each doubling of that size
-  while it stays below the effective window, once per size and never after the
-  attempt ends. Quality falls with a context's length well before its window
-  is full, though no measurement gives a point, so both numbers are a
-  judgement (`CONTEXT_SHARE`, `CONTEXT_FLOOR_TOKENS`); and the remedy is a
-  fresh session with a handoff, which is the supervisor's to start, not a
-  summary. The runner is told nothing. It reads the context as the flag's own
+  compaction of the task's own runner session flags it, whatever the time, and
+  so does a large context before any compaction; a manual compaction and a
+  subagent's context do not. C4 holds when a task compacts, which compactions
+  are routine, and what counts as a large context. The runner is told nothing. It reads the context as the flag's own
   facts do, so it applies to every runner that reports its context and its
   model's window, and stays silent while either is unknown: Claude Code states
   its window on a turn's last line, so a first long turn on a model the
@@ -147,11 +118,7 @@ and completion evidence.
   the usage meter's rules: a compaction that states no size, or a change of
   model or source, leaves the context unknown until the next call measures it,
   never the old size, and a new model is not measured against the old one's
-  window. The task's context meter reads the same way, and where a compaction
-  window below the model's is in force it reads against where compaction
-  starts under it, the window less the CLI's buffer (`ctx 61k (52% · compacts
-  at 118k)`), so a compaction there does not come as a surprise; with none in
-  force it reads against the model's window as before (`ctx 61k (6%)`). A
+  window. The task's context meter reads the same way (C4 says against what). A
   script task has its `timeoutMs` and
   a delegated task its `budget.wallClockMs`, so neither has this clock; a
   delegated task's children do. Nothing is re-flagged after a restart: a plan
@@ -201,6 +168,73 @@ and completion evidence.
   the `task_complete` call settles the task (W1). Nor does it hold one back: a
   `task_complete` call made while it is still queued settles the task, as it
   would without it (ADR-0023 D6).
+- **When a task compacts is one rule for every harness (C4).** A runner
+  compacts its own context (Claude Code's auto-compact, Codex's
+  auto-compaction, OpenCode's summarize-on-overflow, an ACP agent's own
+  policy, the built-in runner's `Compactor`), and compaction is a guard on
+  capacity, not a quality tool: a summary loses detail and the prompt cache,
+  and a task re-reads what it had read. So by default no task is made to
+  compact before its harness would near the model's own window, and a task that
+  outgrows its brief is the supervisor's to notice, not the summary's to
+  absorb. One setting, `taskCompactAt` in the global `settings.json`, which
+  `ORDEWELL_TASK_COMPACT_AT` overrides when it is not blank, takes `auto`, the
+  default; `off`; or a whole number of tokens above zero, the context size at
+  which compaction starts, whatever the harness or model. Any other value
+  refuses the task's start, saying what is accepted. A planner never reads it.
+  Each harness is given the setting through the one control it has; the
+  per-harness table is in
+  [planners-and-runners.md](../../planners-and-runners.md#when-a-tasks-context-compacts):
+  - **Claude Code** takes a window, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; its CLI
+    starts compacting a fixed buffer below it (32,000 tokens, inferred from
+    recorded sessions), so a number is sent as that plus the buffer, held to the
+    CLI's 100,000 to 1,000,000 with a log line when it moves. `auto` sets none,
+    except for Haiku, which charges several times its base prices over a
+    100,000-token prompt: its window is set for compaction to start just under
+    that step. `off` sets none, Haiku's included.
+  - **Codex** takes `model_auto_compact_token_limit` (scope `total`) at
+    `thread/start`, **OpenCode** `compaction.reserved` (the model's window less
+    the number, held to 16,000 from either end with a warning, and nothing set
+    for a model whose window is unknown, with a warning), each for a number
+    only; `auto` and `off` set nothing.
+  - **An ACP agent** exposes nothing to set, so a number is warned about, once,
+    as one that cannot be honoured, and nothing is passed; `auto` and `off` are silent. Its
+    compactions are inferred from a sharp fall in its reported context.
+  - **The built-in runner** reads the setting itself: a number is clamped to
+    what its guard allows (the window less its reserve), with a line in the
+    task's log when it moves; `off` is not honoured, since without compaction
+    the runner would run into its provider's limit, so it compacts as `auto`
+    does, and says so in the log (ADR-0070).
+
+  What Ordewell sets is kept on the session as `compactWindowTokens`, the
+  window in force, and, where the setting itself is the start (Codex, OpenCode,
+  the built-in runner), as `compactStartTokens`; Claude Code's start is
+  inferred from its window as the window less the buffer. The context meter
+  reads against where compaction starts when a window is in force (`ctx 61k
+  (52% · compacts at 118k)`) and against the model's window otherwise (`ctx 61k
+  (6%)`). A model whose own window is smaller than the one set is no reason to
+  set less: the harness compacts at the smaller of the two.
+
+  An automatic compaction is reported on every harness as the same
+  `compaction` event, and three things follow from it alike: the meter resets
+  to the compacted size (a compaction that states no size leaves the context
+  unknown until the next call measures it), C3's reminder of the brief is
+  queued once, and the running-long clock counts it. Under a window in force
+  below 200,000 tokens a compaction is routine and flags from the attempt's
+  third, then the 6th, 12th and so on, since a task compacts a few times in
+  ordinary work there; at 200,000 or more, or where Ordewell sets none and the
+  harness compacts near its model's own window, every compaction flags.
+  A large context flags too, before any compaction: once the task's context
+  first reaches 40% of its effective window, the smaller of the model's window
+  and a window Ordewell set, and never below 150,000 tokens, then again at each
+  doubling of that size while it stays below the effective window, once per
+  size and never after the attempt ends. Quality falls with a context's
+  length well before its window is full, though no measurement gives a point,
+  so both numbers are a judgement (`CONTEXT_SHARE`, `CONTEXT_FLOOR_TOKENS`); and
+  the remedy is a fresh session with a handoff, which is the supervisor's to
+  start (ADR-0057 R4), not a summary. The flag applies to every runner that
+  reports its context and its model's window and stays silent on that count
+  while either is unknown. `RunningLong.ts` and `taskCompactWindow.ts` hold it;
+  the pinning test is `compactionPerHarness.test.ts`.
 - **Talking to a task (M1).** Ordewell owns the message queue. A message sent
   while a turn runs is handed to the runner at once and reaches the model at
   the runner's next step boundary — after the tool call in flight, inside the
@@ -557,6 +591,15 @@ transport is retained for take-over.
   structured contract (`IRunnerSession`).
 - **Raw JSON to `onOutput`.** Rejected: tool results would flood the bounded
   output buffer; full-fidelity consumers read events instead.
+- **A fixed compaction window for every Claude Code task.** Shipped on
+  2026-10-31 (a 150,000-token window) so that no task grew a long context.
+  Reversed: a compaction costs the detail and the cache, the setting reached
+  one harness only, and a task that outgrows its brief is better handed on by
+  the supervisor than summarized. A user who wants it back sets a number.
+- **One setting per harness.** A number of tokens means the same on all of
+  them, and a user asking "where does my task compact" has one place to look;
+  the harness-specific units (a window plus a buffer, a reserve) stay in the
+  adapters (C4).
 - **No reminder; a turn without the call always waits for input.** The
   earlier rule. Runs stalled on tasks whose work was done and reported, until
   a person typed "call task_complete" (#105).
@@ -693,3 +736,4 @@ transport is retained for take-over.
 - 2026-11-17 — C2: the built-in runner carries the contract in its system prompt too ([ADR-0070](0070-the-built-in-ordewell-runner-runs-in-process.md)).
 - 2026-11-17 — W1: a Claude Code task's compaction window is the `taskCompactAt` setting (`auto`: none, except Haiku's, set to compact just under its price step; a number, where compaction starts; `off`), no longer a fixed 150k; a compaction is routine only under a window below 200k.
 - 2026-11-17 — W1: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, flags running long; the context meter reads against where compaction starts under a compaction window in force.
+- 2026-11-17 — C4: when a task compacts is stated once for every harness: one `taskCompactAt` setting (`auto`, a number, `off`), what each harness is given, `compactStartTokens` for the meter, and the running-long and reminder effects; W1 refers to it.

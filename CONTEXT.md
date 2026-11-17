@@ -740,6 +740,21 @@ plan.
 *Avoid:* "notes" or "memory", which say nothing of what it holds or that a
 checkpoint carries it; "summary", which is the paraphrase it exists to avoid.
 
+**Task compaction start** (`taskCompactAt`, ADR-0018 C4) — where a task runner
+starts compacting its own context, one setting for every harness: `auto` (the
+default: the harness's own start near the model's true window, and for Haiku on
+Claude Code just under its 100,000-token price step), a number of tokens, or
+`off`. Saved in `settings.json`; `ORDEWELL_TASK_COMPACT_AT` wins when set. Each
+runner maps a number onto what it offers and says so in its log when it must
+move it; a planner never reads it, and the built-in runner does not honour `off`.
+A runner reports the start it works to (`compactStartTokens`) and the window in
+force (`compactWindowTokens`: the start plus Claude Code's 32,000-token buffer
+there, the start itself elsewhere); the context meter's "compacts at" reads the
+start. Compaction is a capacity guard, not a quality tool: a task grown large is
+flagged by *Running long*, not compacted early.
+*Avoid:* "compaction window" for the start (the window is the model's), "auto
+compact" for the setting.
+
 **Compaction event** (`planner_compaction`, carrying a `PlannerCompaction`) —
 one phase of a planner compaction as surfaces are told it (ADR-0017 C1):
 `started`, then `ended` with an outcome (condensed, pruned, unchanged, stopped,
@@ -1131,8 +1146,9 @@ approval" is derived from the task's pending approvals.
 whose running time passed max(30 min, 3× the longest running time of an AI
 task that passed in its plan), doubled after each flag, whose own runner session
 compacted its context by itself, or whose context first reached 40% of its effective
-window (the smaller of the model's and a compaction window in force), never below
-150k tokens, and again at each doubling of that below the window. Time waiting on a
+window (the smaller of the model's and a compaction window in force; see *Task
+compaction start*), never below 150k tokens, and again at each doubling of that
+below the window. Time waiting on a
 person is left out of the running time. It
 carries the running time, the threshold and the task it came from, the live
 and peak context, the model's window and the compactions so far. The
@@ -1808,8 +1824,8 @@ one in any session; it is in no settings panel. Only Claude Code's task runner
 narrows its setup (`--setting-sources`, `ENABLE_CLAUDEAI_MCP_SERVERS`, and for a
 read-only task `--strict-mcp-config` and `--disable-slash-commands`); the others
 ignore it. A
-Claude task runner's context also compacts at a fixed window of its own
-(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`), which a planner's never does.
+task runner's compaction start is the *Task compaction start*, which a planner's
+never is.
 *Avoid:* "lean mode", "safe mode" (that is a Claude Code flag of another kind).
 
 **Task attempt** (`TaskAttempt`, inside `Attempts`) — one run of one

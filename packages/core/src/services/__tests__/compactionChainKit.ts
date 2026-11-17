@@ -9,23 +9,31 @@ import { fakeConfig, FakeRunnerSession } from '../../testing';
 import { fakeNotification } from './sessionTestKit';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { AgentEvent } from '../harness/AgentAdapter';
+import type { CompactionPoint } from '../../models/Usage';
 
 /**
  * What a harness adapter reported for one automatic compaction, carried
  * through what a StructuredRunner session passes on unchanged (its events and
- * the adapter's compactWindowTokens) to the two readers that act on it: the
- * reminder of the brief (Attempts) and the running-long clock (VerdictEngine).
+ * the adapter's compactWindowTokens and compactStartTokens) to the readers that
+ * act on it: the reminder of the brief (Attempts), the running-long clock
+ * (VerdictEngine) and the context meter's stored start. Returns that stored
+ * `{ windowTokens, startsAtTokens }`, or undefined where no window is in force.
  */
-export async function expectCompactionChain(adapterEvents: readonly AgentEvent[], compactWindowTokens: number | undefined): Promise<void> {
+export async function expectCompactionChain(
+  adapterEvents: readonly AgentEvent[],
+  compactWindowTokens: number | undefined,
+  compactStartTokens?: number,
+): Promise<CompactionPoint | undefined> {
   const compaction = adapterEvents.find((e): e is Extract<AgentEvent, { type: 'compaction' }> => e.type === 'compaction' && e.trigger === 'auto');
   expect(compaction).toBeDefined();
-  if (!compaction) return;
+  if (!compaction) return undefined;
 
   const sessions: FakeRunnerSession[] = [];
   const runner = {
     spawn: vi.fn(async (): Promise<IRunnerSession> => {
       const session = new FakeRunnerSession(`s${sessions.length + 1}`, 't1', 'native-t1');
       session.compactWindowTokens = compactWindowTokens;
+      session.compactStartTokens = compactStartTokens;
       sessions.push(session);
       return session;
     }),
@@ -44,6 +52,7 @@ export async function expectCompactionChain(adapterEvents: readonly AgentEvent[]
   });
   orchestrator.loadPlan([createTask({ id: 't1', order: 1, title: 'Parse JSON', prompt: 'Parse objects and arrays.' })]);
   await orchestrator.forceStartTask('t1');
+  const meter = orchestrator.storeInstance.get('t1')!.attemptUsage!.at(-1)!.compaction;
   sessions[0].emitEvent(compaction);
   const reminders = sessions[0].queued().filter((m) => m.from === 'ordewell');
   expect(reminders).toHaveLength(1);
@@ -66,4 +75,5 @@ export async function expectCompactionChain(adapterEvents: readonly AgentEvent[]
     ...(compactWindowTokens === undefined ? {} : { compactionWindow: compactWindowTokens }),
   })]);
   engine.reset();
+  return meter;
 }

@@ -11,12 +11,13 @@ import { runningLongThreshold } from '../RunningLong';
 
 const MINUTE = 60_000;
 
-function setup(compactWindowTokens?: number) {
+function setup(compactWindowTokens?: number, compactStartTokens?: number) {
   const sessions: FakeRunnerSession[] = [];
   const runner = {
     spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
       const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId, `native-${o.taskId}`);
       session.compactWindowTokens = compactWindowTokens;
+      session.compactStartTokens = compactStartTokens;
       sessions.push(session);
       return session;
     }),
@@ -74,6 +75,13 @@ describe('an attempt\'s compaction window (ADR-0018 W1)', () => {
     h.orchestrator.loadPlan([plan()]);
     await h.orchestrator.forceStartTask('t1');
     expect(h.task('t1').attemptUsage!.at(-1)!.compaction).toEqual({ windowTokens: 150_000, startsAtTokens: 118_000 });
+  });
+
+  it('reads against the start a runner reports, not the window less a CLI buffer (ADR-0018 C4)', async () => {
+    const h = setup(100_000, 100_000);
+    h.orchestrator.loadPlan([plan()]);
+    await h.orchestrator.forceStartTask('t1');
+    expect(h.task('t1').attemptUsage!.at(-1)!.compaction).toEqual({ windowTokens: 100_000, startsAtTokens: 100_000 });
   });
 
   it('is absent where Ordewell set none', async () => {
