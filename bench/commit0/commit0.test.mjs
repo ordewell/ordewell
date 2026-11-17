@@ -1314,3 +1314,104 @@ test('ADV F-d: a paid batch whose key cannot be read when it begins is refused, 
   await assert.rejects(L.startingKeyUsage({ read: async () => { reads++; return null; }, waitMs: 0, tries: 4 }), /could not be read[\s\S]*budget/);
   assert.equal(reads, 4);
 });
+
+test('ADV2 F-a: a pytest package the arm adds at the workdir root, which `python -m pytest` imports instead of the real one, is removed before the eval', () => {
+  // The default testCmd is `/testbed/.venv/bin/python -m pytest`, and `python -m`
+  // puts the working directory first on sys.path: /testbed/pytest/__main__.py runs
+  // in place of pytest and prints whatever summary it likes. isTestPath does not
+  // match it, so restoreTests leaves it, and a summary of `<collected> passed`
+  // passes the outcomes <= collected check.
+  const l = lib();
+  assert.equal(l.testCmd, '/testbed/.venv/bin/python -m pytest');
+  const forged = L.parseEvaluation(0, 'tests/test_a.py .....\n============ 5 passed in 0.01s ============\n');
+  const v = L.judgeValidity({ aborted: null, checks: [], tests: { ...forged, collected: 5 }, freshness: { stale: false } });
+  assert.equal(v.valid, true, 'precondition: a forged summary within the reference count is valid');
+  const plan = L.testRestorePlan(l, '', 'pytest/__init__.py\0pytest/__main__.py\0_pytest/runner.py\0pluggy/__init__.py\0');
+  assert.deepEqual(plan.remove.sort(), ['_pytest/runner.py', 'pluggy/__init__.py', 'pytest/__init__.py', 'pytest/__main__.py'],
+    'a module at the workdir root that shadows the eval\'s own pytest is left in place');
+});
+
+test('ADV2 F-a: an added root module that shadows a stdlib module pytest imports is found by the probe and removed', { skip: process.platform === 'win32' }, () => {
+  // pytest imports argparse at start; under `python -m` an argparse.py at the
+  // workdir root runs instead, and no fixed list names every such module.
+  let python;
+  try { python = execFileSync('sh', ['-c', 'command -v python3'], { encoding: 'utf8' }).trim(); } catch { return; }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-shadow-'));
+  try {
+    fs.mkdirSync(path.join(dir, '.venv', 'bin'), { recursive: true });
+    fs.symlinkSync(python, path.join(dir, '.venv', 'bin', 'python'));
+    fs.writeFileSync(path.join(dir, 'argparse.py'), 'raise SystemExit("forged")\n');
+    const l = { ...lib(), workdir: dir };
+    const untracked = 'argparse.py\0commit0_new_module/__init__.py\0notes.txt\0';
+    assert.deepEqual(L.addedRootModules('', untracked), ['argparse', 'commit0_new_module']);
+    const argv = L.shadowProbeArgs(l, L.addedRootModules('', untracked));
+    const printed = execFileSync(argv[0], argv.slice(1), { cwd: dir, encoding: 'utf8' }).split('\n').filter(Boolean);
+    assert.deepEqual(printed, ['argparse']);
+    assert.deepEqual(L.testRestorePlan(l, '', untracked, printed).remove, ['argparse.py']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ADV2 F-b: a file the arm writes into the image\'s .venv or its interpreter, or above the workdir, is tampering; bytecode anywhere is deleted', () => {
+  // The box runs as root (drive.mjs openSandbox --user 0:0) and testRestoreArgs
+  // excludes .venv: a .pth or a pytest11 entry point planted in site-packages
+  // loads into the eval. `docker diff` lists, from outside the box, every path
+  // the box changed against the image. tlslite-ng's venv links its python
+  // into /root/.local/share/uv, so the home is the arm's but that is not.
+  const prefix = '/root/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu';
+  const diff = [
+    'C /root',
+    'A /root/.ordewell',
+    'A /root/.ordewell/settings.json',
+    'C /testbed',
+    'A /testbed/tlslite/new.py',
+    'C /testbed/.venv',
+    'C /testbed/.venv/lib/python3.12/site-packages',
+    'A /testbed/.venv/lib/python3.12/site-packages/zz_hook.pth',
+    'C /testbed/.venv/lib/python3.12/site-packages/_pytest',
+    'A /testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__',
+    'A /testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__/runner.cpython-312.pyc',
+    'D /testbed/.venv/lib/python3.12/site-packages/pluggy/_hooks.py',
+    `C ${prefix}/lib/python3.12`,
+    `A ${prefix}/lib/python3.12/sitecustomize.py`,
+    `A ${prefix}/lib/python3.12/zoneinfo/__pycache__/_common.cpython-312.pyc`,
+    'A /pytest.ini',
+    'A /testbed/pytest.pyc',
+    'C /tmp',
+    'A /tmp/arm.patch',
+    'C /etc',
+    'C /etc/gitconfig',
+    'C /usr/local/bin',
+    'A /usr/local/bin/ordewell',
+    'C /opt',
+    'A /opt/commit0-bench',
+    'A /opt/commit0-bench/commit0_test_timeout.py',
+    '',
+  ].join('\n');
+  const r = L.boxChanges(diff, { workdir: '/testbed', home: '/root', basePrefix: prefix });
+  assert.deepEqual(r.tampered.sort(), [
+    '/pytest.ini',
+    `${prefix}/lib/python3.12/sitecustomize.py`,
+    '/testbed/.venv/lib/python3.12/site-packages/pluggy/_hooks.py',
+    '/testbed/.venv/lib/python3.12/site-packages/zz_hook.pth',
+  ]);
+  assert.deepEqual(r.bytecode.sort(), [
+    `${prefix}/lib/python3.12/zoneinfo/__pycache__/_common.cpython-312.pyc`,
+    '/testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__',
+    '/testbed/.venv/lib/python3.12/site-packages/_pytest/__pycache__/runner.cpython-312.pyc',
+    '/testbed/pytest.pyc',
+  ]);
+  assert.deepEqual(L.boxChanges('C /root\nA /root/.cache\nA /root/.cache/x\n', { workdir: '/testbed', home: '/root', basePrefix: prefix }), { tampered: [], bytecode: [] });
+  // What the dry run on wentingzhao/tlslite-ng:v0 showed: docker lists each mount point it made.
+  const mounts = 'C /usr\nC /usr/sbin\nA /usr/sbin/docker-init\nA /opt/node\nA /opt/node/bin\nA /opt/node/bin/node\nA /opt/ordewell\n';
+  assert.deepEqual(L.boxChanges(mounts, { workdir: '/testbed', home: '/root', basePrefix: prefix }).tampered.length, 3);
+  assert.deepEqual(L.boxChanges(mounts, { workdir: '/testbed', home: '/root', basePrefix: prefix, mounts: ['/usr/sbin/docker-init', '/opt/node/bin/node', '/opt/ordewell'] }), { tampered: [], bytecode: [] });
+});
+
+test('the interpreter prefix a venv runs on is read from its pyvenv.cfg', () => {
+  assert.equal(L.venvBasePrefix('home = /root/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu/bin\nimplementation = CPython\n'),
+    '/root/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu');
+  assert.equal(L.venvBasePrefix('home=/usr/bin\n'), '/usr');
+  assert.equal(L.venvBasePrefix('implementation = CPython\n'), null);
+});
