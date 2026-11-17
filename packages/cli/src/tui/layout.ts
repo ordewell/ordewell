@@ -133,14 +133,21 @@ export function footerHints(state: TuiState): string[] {
     : 'esc ×2 stop planning';
   // Send now is the composer's key, so it is named only where the composer
   // owns it: the chat pane, with a turn in flight.
-  // A task's composer queues its text behind the running step; ctrl-s is the
-  // other way to send it, named while there is text it would send.
+  // A running task's chat names it as the planner chat does, in the same words
+  // and place, whatever the composer holds (ADR-0023 F1): the header's line is
+  // cut at the width, so it is no place for the one key a person looks for.
+  // Not at a checkpoint, where a message is refused and enter replies.
   const tv = state.taskView;
   const script = scriptTaskView(state);
-  const taskSends = !!tv && !script && !state.child && tv.view.working && !!state.editor.text.trim() && !continuesTask(findTask(state.tasks, tv.taskId));
+  const viewed = tv ? findTask(state.tasks, tv.taskId) : undefined;
+  const taskTurn = !!tv && !script && !state.child && tv.view.working && !continuesTask(viewed)
+    && !(viewed?.status === 'awaiting_user' && viewed.awaitingReason === 'checkpoint');
+  // A subplanner's turn has no interrupt (ADR-0055 D3), so its log offers no ctrl-s.
+  const taskForces = taskTurn && viewed?.type !== 'delegated';
   // The queue goes with it, so the hint says so while there is one.
-  const sendNowHint = (planning && held) || (taskSends && newestRemovable(tv) >= 0) ? 'ctrl-s send all now'
-    : planning || taskSends ? 'ctrl-s send now'
+  const sendNowHint = (planning && held) || (taskForces && newestRemovable(tv) >= 0) ? 'ctrl-s send all now'
+    : planning || taskForces ? 'ctrl-s send now'
+    : taskTurn ? 'enter sends at its next step'
     : null;
   // Below the root, a held message is what Esc takes before it goes up a plan.
   const childHolds = !!state.child && !tv && state.queuedPrompts.length > 0;
@@ -342,11 +349,12 @@ function taskHeaderLines(state: TuiState, tv: NonNullable<TuiState['taskView']>,
         ? ['enter reply', 'ctrl-y approve', 'ctrl-g reject', 'ctrl-x stop runner']
         : header.resumes
           ? ['ctrl-x don\'t resume']
-          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued', ...(takesBack ? [] : ['ctrl-s send now'])];
+          : [...(runnerStoppable(state) ? ['ctrl-x stop runner'] : []), 'ctrl-r remove queued'];
   if (approval && waitingCheckpoint(task)) hint.push('then the checkpoint');
   const index = tv.attempts.indexOf(tv.attempt);
   if (tv.attempts.length > 1) hint.push(`alt←/→ attempt ${index >= 0 ? index + 1 : 1}/${tv.attempts.length}`);
-  hint.push(...(takesBack ? ['esc takes back the newest', 'ctrl-s sends all now'] : ['esc back']));
+  // Send now is the footer's to name, where the planner chat names its own.
+  hint.push(takesBack ? 'esc takes back the newest' : 'esc back');
   return [
     style.accent(truncate(parts.join(' · '), cols)),
     tv.notice ? style.red(truncate(tv.notice, cols)) : style.grey(truncate(hint.join(' · '), cols)),
