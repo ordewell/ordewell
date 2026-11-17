@@ -59,7 +59,7 @@ export function retryDelay(
   if (error.kind !== 'transient' && error.kind !== 'rate-limited') return undefined;
   if (error.network) {
     if (elapsedMs >= policy.networkWindowMs) return undefined;
-  } else if (attempt >= policy.maxAttempts) {
+  } else if (attempt >= Math.min(policy.maxAttempts, error.maxAttempts ?? Infinity)) {
     return undefined;
   }
   const backoff = Math.min(policy.initialDelayMs * 2 ** (attempt - 1), policy.maxDelayMs);
