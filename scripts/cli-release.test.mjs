@@ -419,7 +419,7 @@ describe('the cli and release-assets jobs in release.yml', () => {
     assert.match(cli, /needs: github-release/);
     assert.match(cli, /uses: \.\/\.github\/workflows\/cli-build\.yml/);
     assert.match(cli, /attach: true/);
-    assert.match(cli, /tag: \$\{\{ github\.ref_name \}\}/);
+    assert.match(cli, /tag: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
     assert.match(cli, /permissions:\n\s+contents: write/);
   });
 

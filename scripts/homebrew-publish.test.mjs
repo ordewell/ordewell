@@ -151,11 +151,14 @@ describe('the brew install check of release.yml and homebrew-publish.yml', () =>
 
   it('is the same steps in both, installing with scripts/verify-brew-install.sh the version of the tag', () => {
     const [[, released], [, manually]] = verifies;
-    assert.deepEqual(released.steps, manually.steps);
+    const releaseSteps = structuredClone(released.steps);
+    assert.equal(releaseSteps[0].with.ref, '${{ inputs.tag || github.ref }}');
+    delete releaseSteps[0].with.ref;
+    assert.deepEqual(releaseSteps, manually.steps);
     assert.deepEqual(released.steps.map(({ name, uses }) => name ?? uses.split('@')[0]), ['actions/checkout', 'Install ordewell with brew and test it']);
-    assert.deepEqual(released.steps[0].with, { 'persist-credentials': false });
+    assert.deepEqual(released.steps[0].with, { ref: '${{ inputs.tag || github.ref }}', 'persist-credentials': false });
     assert.equal(released.steps[1].run, 'scripts/verify-brew-install.sh "${TAG#v}"');
-    assert.deepEqual(released.env, { TAG: '${{ github.ref_name }}' });
+    assert.deepEqual(released.env, { TAG: '${{ inputs.tag || github.ref_name }}' });
     assert.deepEqual(manually.env, { TAG: '${{ inputs.tag }}' });
   });
 

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-18
+
+### Fixed
+
+- The built-in runner continues a reply cut off at the model's output limit
+  instead of ending the turn as if it had finished.
+- A provider error that an aggregator such as OpenRouter wraps keeps the
+  upstream's reason, so a rate limit or server error is retried and a context
+  overflow is compacted.
+- A run idle behind a task on hold wakes the supervisor at Act once, with
+  which task holds the rest and who put it on hold.
+
 ## [0.14.0] - 2026-11-17
 
 ### Added

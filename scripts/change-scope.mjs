@@ -448,7 +448,7 @@ export function uncommittedPaths(root = '.') {
  * that commit. gh's filters are not taken on trust; each field is checked
  * here, so a run of another commit, branch, event or outcome proves nothing.
  */
-function mainProof(sha, findMainRuns) {
+export function mainProof(sha, findMainRuns) {
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) return { why: `no full commit SHA to look up (${sha || 'none'})` };
   let runs;
   try {

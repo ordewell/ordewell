@@ -197,7 +197,7 @@ describe('the desktop job in release.yml', () => {
     assert.match(desktop, /needs: github-release/);
     assert.match(desktop, /uses: \.\/\.github\/workflows\/desktop-build\.yml/);
     assert.match(desktop, /attach: true/);
-    assert.match(desktop, /tag: \$\{\{ github\.ref_name \}\}/);
+    assert.match(desktop, /tag: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
   });
 
   it('passes the signing secrets by name and nothing else, never inheriting the publishing tokens', () => {

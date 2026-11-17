@@ -107,9 +107,13 @@ jobs:
     # Nothing here may reach ordewell.ai (ADR-0048); the daemon smoke starts.
     env:
       ORDEWELL_NO_VERSION_CHECK: '1'
+      # Vite's renderer bundle can exceed Node's default heap on hosted Macs.
+      NODE_OPTIONS: --max-old-space-size=4096
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Use Node.js 22.x
         uses: actions/setup-node@v7
@@ -216,7 +220,16 @@ jobs:
         run: npm run desktop:package
 
       - name: Verify the installers and the unpacked app
-        run: node scripts/desktop-package-check.mjs
+        shell: bash
+        run: |
+          # A PowerShell 7 parent adds its modules to PSModulePath; Windows
+          # PowerShell 5 then finds an incompatible Security module. Let the
+          # verifier's native PowerShell initialize its own module paths.
+          if [ "$RUNNER_OS" = 'Windows' ]; then
+            env -u PSModulePath powershell -NoProfile -NonInteractive -Command \
+              '$ErrorActionPreference = "Stop"; Import-Module Microsoft.PowerShell.Security; Get-Command Get-AuthenticodeSignature | Out-Null'
+          fi
+          env -u PSModulePath node scripts/desktop-package-check.mjs
 
       # What the packaging decided about signing, which release.yml's
       # package-manager jobs read: a Homebrew cask is published only for a
