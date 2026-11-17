@@ -160,7 +160,8 @@ node bench/commit0/drive.mjs --sweep
   nothing moved for five minutes).
 
 A run stalls when, for `--stall-min` minutes (default 15), no attempt runs and
-a task waits on a person (a checkpoint, an input or an approval). It is
+a task waits on a person (a checkpoint, an input, an approval or an open user
+task, which nobody in the bench does). It is
 recorded as `stalled: {task, waiting, question, sinceMs}`, stopped and scored:
 a result, not an abort. Every end goes the same way: `ordewell stop` for the
 session, waited for; the `plan` and `run` followers ended, never a `merge`;
@@ -229,16 +230,19 @@ since `docker exec` puts it on no PATH. The driver ignores `/.venv` in the
 workspace's `.git/info/exclude`, so an agent's own `git add -A` never commits the
 link core's worktree bootstrap makes to it; every patch leaves `.venv` out, and
 the eval refuses to run if the arm replaced or tracked it. After an arm, the tests under
-`testDir` (`test_*.py`, `conftest.py`, `tests/` and `unit_tests/`) are put back
-as the base had them, and nothing else there, since a `testDir` may lie inside
+`testDir` (`test_*.py`, `*_test.py`, `tests/` and `unit_tests/`) and every
+`conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg` and `tox.ini` in the
+workspace (outside `.venv` and `.ordewell`), ignored files included, are put
+back as the base had them, and nothing else, since a `testDir` may lie inside
 the source. The baseline and the scored eval bound each test at 120 s (a pytest
 plugin the driver writes to `/opt/commit0-bench`, since the images carry no
 pytest-timeout) and the whole run at 1800 s, so a stub that spins fails its one
 test instead of losing the count.
 
 `result.json` records, beyond the counts: `valid` and `invalidReasons` (an
-abort, a failed check, an eval that timed out or gave no summary, an allowed
-stale dist); the arm's `supervisorLevel`, `autorun`, `automerge`, `parallel`,
+abort, a failed check, an eval that timed out or gave no summary, more test
+outcomes than the reference collected, a stop by the batch budget, which cut
+this arm short of its pair's cap, an allowed stale dist); the arm's `supervisorLevel`, `autorun`, `automerge`, `parallel`,
 `cpus`, `memory`, `capUsd` and `wallCapMs`; `tests.exit` and `tests.timedOut`;
 `stopped` and `stalled`; `scoredFrom` (`merged` or `task-worktree`) and
 `patches`, each with the worktree or branch it came from and whether it was
@@ -278,7 +282,11 @@ start when `--jobs` times `--cpus` exceeds the host's CPUs or `--jobs` times
 `--memory` exceeds 80% of its memory. A run that fails leaves the others
 running. Each run's spend cap acts on what Ordewell recorded for its session
 (`recordedUsd`: the planner's turns, the supervisor's and every attempt's).
-When the batch budget is met, every run stops through its own stop path. The
+A paid batch reads the key's usage before its first run, retrying, and
+refuses to start when it cannot, since the budget measures from that reading.
+When the batch budget is met, every run stops through its own stop path. On
+SIGINT or SIGTERM the batch passes the signal to its running runs and starts
+none of those still queued. The
 runs and `batch.json` go in `runs/batch-<time>[-<seed>]/`. `batch.json` holds
 the key's usage before and after, the recorded sum and the gap. When runs
 overlapped, a run's `billedUsd` is null and `billedSource` says why; a run

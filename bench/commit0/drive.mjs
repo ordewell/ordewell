@@ -987,14 +987,15 @@ async function realArm(lib, sb, arm, settings, runDir) {
 }
 
 /**
- * The tests as the dataset wrote them, whatever the arm did to them, and
- * whether it did. Only the tests: networkx's testDir is its srcDir, so
- * restoring the whole directory would undo the arm's work.
+ * The tests and pytest's config as the dataset wrote them, whatever the arm
+ * did to them, and whether it did. Only those: networkx's testDir is its
+ * srcDir, so restoring the whole directory would undo the arm's work.
  */
 async function restoreTests(lib, sb) {
   const o = { workdir: lib.workdir };
-  const diff = await inBox(sb, ['git', 'diff', '--name-status', '-z', '--no-renames', lib.flatCommit, '--', lib.testDir], o);
-  const untracked = await inBox(sb, ['git', 'ls-files', '-z', '--others', '--exclude-standard', '--', lib.testDir], o);
+  const args = L.testRestoreArgs(lib);
+  const diff = await inBox(sb, args.diff, o);
+  const untracked = await inBox(sb, args.untracked, o);
   const plan = L.testRestorePlan(lib, diff.stdout, untracked.stdout);
   if (plan.checkout.length) await inBox(sb, ['git', 'checkout', '-q', lib.flatCommit, '--', ...plan.checkout], o);
   if (plan.remove.length) await inBox(sb, ['rm', '-f', '--', ...plan.remove], o);
@@ -1126,7 +1127,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const recorded = plan ? L.recordedSpend(plan) : null;
   const sessionId = record.arm?.sessionId ?? null;
   const metrics = plan && sessionId ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
-  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, dryRun: opts.dryRun });
+  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun });
   const result = {
     ...L.resultRecord({
       lib, arm, settings, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,

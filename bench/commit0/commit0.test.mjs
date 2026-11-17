@@ -3,7 +3,7 @@
 // proved by the dry run, which needs an engine (bench/README.md, "Commit0").
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -188,6 +188,40 @@ test('flattenScript and the leak probe on a real repository', { skip: !(hasGit &
     assert.equal(after.reference, 'absent');
     assert.equal(g('show', 'HEAD:tinylib/__init__.py'), 'def f():\n    raise NotImplementedError');
     assert.equal(g('rev-parse', '--abbrev-ref', 'HEAD'), 'commit0-base');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the test restore, on a real repository, finds what pytest loads wherever the arm put it', { skip: !hasGit && 'needs git' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+  try {
+    const g = (...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' });
+    const put = (p, text = 'x\n') => {
+      fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true });
+      fs.writeFileSync(path.join(dir, p), text);
+    };
+    g('init', '-q', '-b', 'main');
+    put('.gitignore', '.venv/\n.ordewell/\n');
+    put('tinylib/__init__.py'); put('tinylib/tests/test_a.py'); put('setup.cfg', '[metadata]\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    // networkx's shape: testDir is srcDir.
+    const l = lib({ workdir: dir, testDir: 'tinylib', flatCommit: g('rev-parse', 'HEAD').trim() });
+    // The arm's work, and what it must not keep for the eval.
+    put('tinylib/__init__.py', 'def f(): return 1\n');
+    put('setup.cfg', '[tool:pytest]\naddopts = -p evil\n');
+    put('conftest.py', 'hook\n');
+    put('tinylib/easy_test.py');
+    put('.gitignore', '.venv/\n.ordewell/\nhidden/\n');
+    put('hidden/conftest.py');
+    // Not the arm's: the image's venv and Ordewell's own worktrees.
+    put('.venv/lib/site-packages/pkg/conftest.py');
+    put('.ordewell/worktrees/t1/tests/test_a.py');
+    const args = L.testRestoreArgs(l);
+    const run = (argv) => execFileSync(argv[0], argv.slice(1), { cwd: dir, encoding: 'utf8' });
+    const plan = L.testRestorePlan(l, run(args.diff), run(args.untracked));
+    assert.deepEqual(plan.checkout, ['setup.cfg']);
+    assert.deepEqual(plan.remove.sort(), ['conftest.py', 'hidden/conftest.py', 'tinylib/easy_test.py']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -703,7 +737,7 @@ test('--sweep removes only what a dead driver on this host left', () => {
   ]);
 });
 
-test('waitingOnPerson finds a task waiting on a checkpoint, an input or an approval, and none while an attempt runs', () => {
+test('waitingOnPerson finds a task waiting on a checkpoint, an input, an approval or a user task, and none while an attempt runs', () => {
   const t = (o) => ({ id: o.id ?? 't', title: o.title ?? 'T', type: 'ai', ...o });
   assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'checkpoint' }), t({ id: 'u', status: 'in_progress' })] }), null, 'an attempt running is not a stall');
   assert.deepEqual(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'checkpoint', parkedQuestion: 'ok?' })] }), { task: { id: 't', title: 'T' }, waiting: 'checkpoint', question: 'ok?' });
@@ -712,7 +746,10 @@ test('waitingOnPerson finds a task waiting on a checkpoint, an input or an appro
   assert.equal(L.waitingOnPerson({ approved: true, approvedTasks: [], tasks: [t({ status: 'pending' })] }).waiting, 'approval');
   assert.equal(L.waitingOnPerson({ approved: true, approvedTasks: ['t'], tasks: [t({ status: 'pending' })] }), null, 'already approved');
   assert.equal(L.waitingOnPerson({ approved: false, tasks: [t({ status: 'pending' })] }), null, 'a plan never approved singles nothing out');
-  assert.equal(L.waitingOnPerson({ approved: true, tasks: [t({ status: 'pending', type: 'user' })] }), null);
+  // A user task needs no approval, but nobody in the bench does it: the run waits on it.
+  assert.equal(L.waitingOnPerson({ approved: true, tasks: [t({ status: 'pending', type: 'user' })] }).waiting, 'user-task');
+  assert.equal(L.waitingOnPerson({ approved: true, tasks: [t({ status: 'completed', type: 'user' })] }), null, 'a user task done');
+  assert.equal(L.waitingOnPerson({ approved: false, tasks: [t({ status: 'pending', type: 'user' })] }), null, 'a plan never approved runs nothing');
   assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'awaiting_user', awaitingReason: 'usage-limit' })] }), null, 'a usage limit waits on the clock');
   assert.equal(L.waitingOnPerson({ tasks: [t({ status: 'completed', subtasks: [t({ id: 's', status: 'awaiting_user', awaitingReason: 'input' })] })] }).task.id, 's');
   assert.equal(L.waitingOnPerson(null), null);
@@ -1183,4 +1220,97 @@ test('batch.mjs refuses a batch that does not fit the host before it starts anyt
   assert.ok(out, 'the batch started');
   assert.equal(out.status, 2);
   assert.match(out.stderr, /does not fit this host[\s\S]*lower --jobs or --cpus/);
+});
+
+test('ADV F-c: a signal to a batch stops its queued runs, not only the running one', { skip: process.platform === 'win32' && 'POSIX signals' }, async () => {
+  // A copy of the batch beside a drive.mjs that records its start and waits to be signalled.
+  // data-dir.mjs refuses run data inside the tree two levels above it, so the copy sits a level below root.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-signal-'));
+  const copy = path.join(root, 'tree', 'bench');
+  try {
+    fs.mkdirSync(path.join(copy, 'commit0'), { recursive: true });
+    fs.mkdirSync(path.join(copy, 'lib'));
+    for (const f of ['batch.mjs', 'lib.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, 'commit0', f));
+    fs.copyFileSync(path.join(here, '..', 'lib', 'data-dir.mjs'), path.join(copy, 'lib', 'data-dir.mjs'));
+    const starts = path.join(root, 'starts.log');
+    fs.writeFileSync(path.join(copy, 'commit0', 'drive.mjs'), [
+      "import fs from 'node:fs';",
+      `fs.appendFileSync(${JSON.stringify(starts)}, process.argv[process.argv.indexOf('--only') + 1] + '\\n');`,
+      "process.on('SIGINT', () => process.exit(130));",
+      'setTimeout(() => {}, 20_000);',
+    ].join('\n'));
+    const libs = path.join(root, 'libs.json');
+    fs.writeFileSync(libs, JSON.stringify(['a', 'b', 'c'].map((name) => ({ name, image: 'x', srcDir: name, testDir: 'tests', importName: name, distName: name, baseCommit: 'abc1234' }))));
+    const bench = path.join(root, 'data');
+    const child = spawn(process.execPath, [path.join(copy, 'commit0', 'batch.mjs'), '--dry-run', '--libs', libs, '--jobs', '1', '--cpus', '1', '--memory', '1g', '--arm', 'A'], {
+      stdio: 'ignore', env: { ...process.env, NODE_OPTIONS: '', ORDEWELL_BENCH_DIR: bench },
+    });
+    const exited = new Promise((resolve) => child.on('close', (code) => resolve(code)));
+    const started = () => (fs.existsSync(starts) ? fs.readFileSync(starts, 'utf8').split('\n').filter(Boolean) : []);
+    for (const until = Date.now() + 10_000; started().length === 0 && Date.now() < until;) await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(started(), ['a']);
+    child.kill('SIGINT');
+    assert.notEqual(await exited, 0);
+    assert.deepEqual(started(), ['a'], 'a queued run started after the signal');
+    const [dir] = fs.readdirSync(path.join(bench, 'commit0', 'dry-runs'));
+    const batch = JSON.parse(fs.readFileSync(path.join(bench, 'commit0', 'dry-runs', dir, 'batch.json'), 'utf8'));
+    assert.deepEqual(batch.runs.map((r) => [r.lib, r.skipped === null ? null : 'skipped']), [['a', null], ['b', 'skipped'], ['c', 'skipped']]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- Adversarial review, round 1: each reproduces a problem it confirmed, and failed before the fix. ---
+
+test('ADV F-a: a run cut short by the batch budget is not a valid comparison', () => {
+  // drive.mjs:899 records stopped = { why: 'batch-budget' } and scores the run;
+  // drive.mjs:1129 calls judgeValidity without `stopped`, so nothing marks it.
+  const v = L.judgeValidity({ aborted: null, checks: [], tests: { passed: 3, collected: 10 }, freshness: { stale: false }, stopped: { why: 'batch-budget', atMs: 1_800_000 } });
+  assert.equal(v.valid, false, 'a batch-budget stop gave this arm a cap the other arm did not get');
+});
+
+test('ADV F-b1: an added *_test.py under a testDir that is the srcDir is removed before the eval', () => {
+  // pytest collects *_test.py by default; networkx's testDir is its srcDir.
+  const nx = lib({ name: 'networkx', srcDir: 'networkx', testDir: 'networkx' });
+  const plan = L.testRestorePlan(nx, '', 'networkx/algorithms/easy_test.py\0');
+  assert.deepEqual(plan.remove, ['networkx/algorithms/easy_test.py']);
+});
+
+test('ADV F-b2: a conftest.py the arm adds at the repository root is removed before the eval', () => {
+  // restoreTests (drive.mjs:994) lists changes with `-- lib.testDir` only, and
+  // isTestPath refuses any path outside testDir, yet pytest loads /testbed/conftest.py
+  // for `pytest tests`: a root conftest can rewrite every report to passed.
+  assert.equal(L.isTestPath(lib(), 'conftest.py'), true);
+});
+
+test('ADV F-b3: more passed than the reference collected is not a valid score', () => {
+  const v = L.judgeValidity({ aborted: null, checks: [], tests: { passed: 12, failed: 0, errors: 0, skipped: 0, collected: 10 }, freshness: { stale: false } });
+  assert.equal(v.valid, false, '12 of 10 passed was reported valid');
+});
+
+test('ADV F-f: a user task left pending at the end of an arm-B plan stalls rather than settles', () => {
+  const plan = { approved: true, approvedTasks: ['t1', 't2'], tasks: [
+    { id: 't1', title: 'implement', type: 'ai', status: 'completed', attempted: true },
+    { id: 't2', title: 'confirm with the maintainer', type: 'user', status: 'pending' },
+  ] };
+  const stallMs = 15 * 60_000;
+  const first = L.stallDecision({ plan, nowMs: 0, sinceMs: null, stallMs });
+  const later = L.stallDecision({ plan, nowMs: stallMs, sinceMs: first.sinceMs, stallMs });
+  const fp = L.planFingerprint(plan, 5);
+  const s0 = L.settleDecision({ plan, fingerprint: fp, nowMs: 0, state: null });
+  const s1 = L.settleDecision({ plan, fingerprint: fp, nowMs: L.SETTLE_MS, state: s0.state });
+  assert.equal(s1.settled, false, 'the run settles at 5 min as if nobody were waited on');
+  assert.ok(later.stalled, 'the run never stalls on the pending user task');
+});
+
+test('ADV F-d: a paid batch whose key cannot be read when it begins is refused, since its budget could never stop it', async () => {
+  // budgetDecision has no spend without the usage at the start, and batch.mjs read it once.
+  assert.equal(L.budgetDecision({ keyBeforeUsd: null, keyNowUsd: 500, budgetUsd: 20 }).stop, false);
+  let reads = 0;
+  const flaky = async () => (++reads < 3 ? null : 41.5);
+  assert.equal(await L.startingKeyUsage({ read: flaky, waitMs: 0 }), 41.5, 'a read that fails twice is retried');
+  assert.equal(reads, 3);
+  reads = 0;
+  await assert.rejects(L.startingKeyUsage({ read: async () => { reads++; return null; }, waitMs: 0, tries: 4 }), /could not be read[\s\S]*budget/);
+  assert.equal(reads, 4);
 });
