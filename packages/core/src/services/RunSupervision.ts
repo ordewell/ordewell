@@ -365,6 +365,18 @@ export class RunSupervision {
     return this.supervisor.turn(reply, signal, authority).finally(() => this.conclude());
   }
 
+  /**
+   * A user's turn that carries the supervisor's inputs: once it lands, the
+   * retry those inputs were owed is answered, and the run's end may stand.
+   * A failure leaves the inputs waiting for a wake-up turn of their own.
+   */
+  async carry<T>(turn: Promise<T>): Promise<T> {
+    const landed = await turn;
+    this.supervisor.carried();
+    this.conclude();
+    return landed;
+  }
+
   /** The command seam's loop guard: a supervisor's call checked against what this run remembers. */
   readonly guard: LoopGuard = (actor, command: ExecutionCommand, target: GuardTarget | undefined) =>
     (actor.kind === 'supervisor' ? this.guards.check(command, target, [...this.host.tasks()], this.retryLimit()) : null);
