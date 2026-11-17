@@ -32,6 +32,12 @@ describe('retryDelay', () => {
     expect(retryDelay(transient(), DEFAULT_RETRY_POLICY.maxAttempts, 0)).toBeUndefined();
   });
 
+  it('stops sooner for a failure that asks for fewer attempts than the policy allows', () => {
+    const doubtful = new ModelError({ kind: 'transient', message: 'Provider returned error', status: 400, maxAttempts: 3 });
+    expect(retryDelay(doubtful, 2, 0, DEFAULT_RETRY_POLICY, MIDDLE)).toBe(4000);
+    expect(retryDelay(doubtful, 3, 0, DEFAULT_RETRY_POLICY, MIDDLE)).toBeUndefined();
+  });
+
   it('keeps retrying an unreachable provider until its window closes, past the attempt bound', () => {
     expect(retryDelay(unreachable(), 40, 299_000, DEFAULT_RETRY_POLICY, MIDDLE)).toBe(10000 * (1 + 0.2 * (2 * 0.5 - 1)));
     expect(retryDelay(unreachable(), 40, 300_000)).toBeUndefined();

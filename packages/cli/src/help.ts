@@ -134,11 +134,18 @@ Run options:
   --workspace /path   Workspace directory (default: cwd)
   --stash             Stash a dirty tree and continue in the task's worktree
   --without-isolation Run the plan in your checkout; tasks share it
+  --unattended        Return, exit 3, when the run waits on a person (a checkpoint,
+                      an input, an approval, a task on hold) that nobody unattended
+                      answers: at Act once the supervisor's turn on it left it
+                      standing, below Act at once. The run stays in the daemon as
+                      it is: nothing is answered, stopped or skipped
   It returns once the run's end stands: with the supervisor at Act, after the
   closing turn it is woken to, following the run on if that turn continues it.
+  Without --unattended, a wait on a person is waited out, however long.
   Exit status: 0 when every task completed or was skipped, 2 when a task failed
-  or is blocked, 1 when the command itself failed (no daemon, a lost connection,
-  a refused start). A stopped run exits 0.
+  or is blocked, 3 with --unattended when the run waits on a person, 1 when the
+  command itself failed (no daemon, a lost connection, a refused start). A
+  stopped run exits 0.
 
 Status options:
   --session-id <id>   Show full detail for one session

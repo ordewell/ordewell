@@ -1,3 +1,5 @@
+import { redactAgentText } from '../../utils/redactSecrets';
+
 /**
  * What went wrong with a model request, in the terms a caller acts on:
  * `transient` and `rate-limited` are worth retrying, `usage-limit` waits for a
@@ -26,6 +28,8 @@ export interface ModelErrorInit {
   resetsAt?: number;
   /** `transient`: the provider could not be reached at all, which earns a longer retry window. */
   network?: boolean;
+  /** `transient`: fewer attempts in all than the retry policy's, for a failure only possibly transient. */
+  maxAttempts?: number;
   cause?: unknown;
 }
 
@@ -37,6 +41,7 @@ export class ModelError extends Error {
   readonly retryAfterMs?: number;
   readonly resetsAt?: number;
   readonly network?: boolean;
+  readonly maxAttempts?: number;
 
   constructor(init: ModelErrorInit) {
     super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -48,6 +53,7 @@ export class ModelError extends Error {
     if (init.retryAfterMs !== undefined) this.retryAfterMs = init.retryAfterMs;
     if (init.resetsAt !== undefined) this.resetsAt = init.resetsAt;
     if (init.network) this.network = true;
+    if (init.maxAttempts !== undefined) this.maxAttempts = init.maxAttempts;
   }
 }
 
@@ -66,6 +72,12 @@ export interface HttpFailure {
   param?: string | null;
   /** The request never reached the provider: refused, unresolved, reset. */
   network?: boolean;
+  /**
+   * An aggregator's error `metadata` (OpenRouter's): the upstream provider it
+   * wrapped, by `provider_name`, its verbatim body in `raw`, and the canonical
+   * `error_type` and upstream `provider_code`.
+   */
+  metadata?: unknown;
   timeout?: boolean;
   /** Overrides what the headers say, for a provider that puts the delay in its body (Gemini's RetryInfo). */
   retryAfterMs?: number;
@@ -90,49 +102,226 @@ const OVERFLOW_CODES = new Set(['context_length_exceeded', 'context_window_excee
 
 // Only for a refusal with no code at all: many compatible servers answer an
 // overflow with a bare 400 whose message alone says so: OpenAI's wording echoed,
-// and xAI's, LM Studio's and llama.cpp's own.
-const OVERFLOW_WORDING = /maximum context length|context length exceeded|context window|prompt is too long|maximum prompt length|greater than the context length|exceeds the available context size/i;
+// and xAI's, LM Studio's and llama.cpp's own, and Google's as an aggregator relays it.
+const OVERFLOW_WORDING = /maximum context length|context length exceeded|context window|prompt is too long|maximum prompt length|greater than the context length|exceeds the available context size|input token count.*exceeds/i;
 
 /**
  * Classify a failed exchange from its status, its provider code and its
  * headers. A message is read only where no code exists to read instead.
+ *
+ * An aggregator's refusal that wraps an upstream provider's failure is classed
+ * by what the upstream said (ADR-0070): a bare "Provider returned error"
+ * 400 is as often the upstream's outage as a fault in the request.
  */
 export function classifyHttpFailure(failure: HttpFailure, now: number = Date.now()): ModelError {
+  const upstream = readUpstream(failure.metadata);
   const base = {
-    message: failure.message,
+    message: upstream ? withUpstream(failure.message, upstream) : failure.message,
     cause: failure.cause,
     ...(failure.code !== undefined && failure.code !== null ? { code: String(failure.code) } : {}),
     ...(failure.param ? { param: failure.param } : {}),
   };
-  const code = base.code;
-  const type = failure.type ?? undefined;
   // A mid-stream error carries no status, but OpenRouter puts the HTTP one in its code.
-  const status = failure.status ?? (typeof failure.code === 'number' && failure.code >= 400 && failure.code < 600 ? failure.code : undefined);
-  const withStatus = status === undefined ? base : { ...base, status };
-
-  if (status === undefined) {
-    if (failure.network) return new ModelError({ ...withStatus, kind: 'transient', network: true });
-    if (failure.timeout || (failure.type && SERVER_TYPES.has(failure.type))) return new ModelError({ ...withStatus, kind: 'transient' });
-    return new ModelError({ ...withStatus, kind: 'fatal' });
-  }
+  const status = failure.status ?? (typeof failure.code === 'number' && isHttpError(failure.code) ? failure.code : undefined);
+  const init = status === undefined ? base : { ...base, status };
   const headers = headerReader(failure.headers);
-  if (isQuota(code, type)) return usageLimit(withStatus, headers, now);
-  if (OVERFLOW_CODES.has(code ?? '') || (status === 400 && code === undefined && OVERFLOW_WORDING.test(failure.message))) {
-    return new ModelError({ ...withStatus, kind: 'context-overflow' });
+  const outer: Reading = { status, code: base.code, type: failure.type ?? undefined, message: failure.message };
+
+  // The aggregator's own verdicts (a key, credits, moderation, its rate limit) stand as it gave them.
+  if (upstream && (status === undefined || status === 400 || status >= 500)) {
+    const reading = upstreamReading(upstream, status);
+    if (reading) return classify(reading, init, failure, headers, now);
+    // Nothing to class it by: likely the upstream's fault, so worth a few tries, not a full retry budget.
+    if (status === undefined || status === 400) return new ModelError({ ...init, kind: 'transient', maxAttempts: UNEXPLAINED_WRAPPER_ATTEMPTS });
   }
-  if (status === 413) return new ModelError({ ...withStatus, kind: 'context-overflow' });
-  if (status === 401 || status === 403) return new ModelError({ ...withStatus, kind: 'auth' });
-  if (status === 402) return usageLimit(withStatus, headers, now);
+  if (status === undefined) {
+    if (failure.network) return new ModelError({ ...init, kind: 'transient', network: true });
+    if (failure.timeout || (outer.type && SERVER_TYPES.has(outer.type))) return new ModelError({ ...init, kind: 'transient' });
+    return new ModelError({ ...init, kind: 'fatal' });
+  }
+  return classify(outer, init, failure, headers, now);
+}
+
+/** The fields a failure is classed by: the exchange's own, or the upstream's an aggregator wrapped. */
+interface Reading {
+  status: number | undefined;
+  code?: string;
+  type?: string;
+  message: string;
+}
+
+function classify(reading: Reading, init: Omit<ModelErrorInit, 'kind'>, failure: HttpFailure, headers: HeaderReader, now: number): ModelError {
+  const { status, code, type } = reading;
+  if (isQuota(code, type)) return usageLimit(init, headers, now);
+  if (readsAsOverflow(reading)) return new ModelError({ ...init, kind: 'context-overflow' });
+  if (status === undefined) return new ModelError({ ...init, kind: 'fatal' });
+  if (status === 413) return new ModelError({ ...init, kind: 'context-overflow' });
+  if (status === 401 || status === 403) return new ModelError({ ...init, kind: 'auth' });
+  if (status === 402) return usageLimit(init, headers, now);
   if (status === 429) {
     const retryAfterMs = failure.retryAfterMs ?? retryAfterFromHeaders(headers, now);
-    return new ModelError({ ...withStatus, kind: 'rate-limited', ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) });
+    return new ModelError({ ...init, kind: 'rate-limited', ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) });
   }
   if (status === 408 || status === 409 || status >= 500) {
     const retryAfterMs = failure.retryAfterMs ?? retryAfterFromHeaders(headers, now);
-    return new ModelError({ ...withStatus, kind: 'transient', ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) });
+    return new ModelError({ ...init, kind: 'transient', ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) });
   }
-  if (status >= 400) return new ModelError({ ...withStatus, kind: 'bad-request' });
-  return new ModelError({ ...withStatus, kind: 'fatal' });
+  if (status >= 400) return new ModelError({ ...init, kind: 'bad-request' });
+  return new ModelError({ ...init, kind: 'fatal' });
+}
+
+// Codes that name only the class of a refusal, or repeat its status (OpenRouter's
+// numeric code), and so say less than the message does.
+const GENERIC_CODES = new Set(['invalid_request_error', 'invalid_request', 'bad_request']);
+
+function readsAsOverflow({ status, code, message }: Reading): boolean {
+  if (code !== undefined && OVERFLOW_CODES.has(code)) return true;
+  const saysNothing = code === undefined || code === String(status) || GENERIC_CODES.has(code);
+  return status === 400 && saysNothing && OVERFLOW_WORDING.test(message);
+}
+
+function isHttpError(n: number): boolean {
+  return Number.isInteger(n) && n >= 400 && n < 600;
+}
+
+/** Retries of an aggregator's refusal that gave no upstream reason: attempts in all, the first included. */
+const UNEXPLAINED_WRAPPER_ATTEMPTS = 3;
+
+/** What an aggregator's body says of the upstream provider's own failure. */
+interface Upstream {
+  provider?: string;
+  message?: string;
+  status?: number;
+  code?: string;
+  type?: string;
+  /** OpenRouter's canonical `error_type`. */
+  errorType?: string;
+}
+
+// OpenRouter's canonical error types, by the status its documentation gives
+// each. `unmapped` (an upstream error it could not place) is left out: it says
+// nothing to class by.
+const ERROR_TYPE_STATUS: Readonly<Record<string, number>> = {
+  context_length_exceeded: 400,
+  max_tokens_exceeded: 400,
+  token_limit_exceeded: 400,
+  string_too_long: 400,
+  invalid_request: 400,
+  invalid_prompt: 400,
+  invalid_image: 400,
+  image_too_large: 400,
+  image_too_small: 400,
+  unsupported_image_format: 400,
+  image_download_failed: 400,
+  authentication: 401,
+  payment_required: 402,
+  permission_denied: 403,
+  content_policy_violation: 403,
+  refusal: 403,
+  not_found: 404,
+  image_not_found: 404,
+  precondition_failed: 412,
+  payload_too_large: 413,
+  unprocessable: 422,
+  rate_limit_exceeded: 429,
+  server: 500,
+  provider_unavailable: 502,
+  provider_overloaded: 503,
+  timeout: 504,
+};
+
+// Upstream error types and codes that carry no status but say which way it failed.
+const RATE_TYPES = new Set(['rate_limit_error', 'rate_limit_exceeded', 'rate_limited', 'RESOURCE_EXHAUSTED']);
+const UPSTREAM_SERVER_TYPES = new Set([...SERVER_TYPES, 'UNAVAILABLE', 'INTERNAL', 'DEADLINE_EXCEEDED']);
+
+/**
+ * The upstream's failure as a reading to class by, or `undefined` when it gave
+ * no status, code, type or overflow wording. A reason the upstream gave without
+ * a status takes the wrapper's.
+ */
+function upstreamReading(upstream: Upstream, wrapperStatus: number | undefined): Reading | undefined {
+  const message = upstream.message ?? '';
+  // Either may name the class: OpenAI's rate limit puts it in the code, beside a type of "requests" or "tokens".
+  const named = [upstream.type, upstream.code].filter((n): n is string => n !== undefined);
+  const status = upstream.status
+    ?? (upstream.errorType !== undefined ? ERROR_TYPE_STATUS[upstream.errorType] : undefined)
+    ?? (named.some((n) => UPSTREAM_SERVER_TYPES.has(n)) ? 503 : undefined)
+    ?? (named.some((n) => RATE_TYPES.has(n)) ? 429 : undefined);
+  const code = upstream.errorType === 'context_length_exceeded' ? upstream.errorType : upstream.code;
+  const reading: Reading = { status: status ?? wrapperStatus, message, ...(code !== undefined ? { code } : {}), ...(upstream.type !== undefined ? { type: upstream.type } : {}) };
+  const explained = status !== undefined || code !== undefined || upstream.type !== undefined || readsAsOverflow({ ...reading, status: 400 });
+  return explained ? reading : undefined;
+}
+
+function readUpstream(metadata: unknown): Upstream | undefined {
+  if (!isRecord(metadata)) return undefined;
+  const upstream: Upstream = {};
+  const provider = text(metadata.provider_name);
+  if (provider) upstream.provider = provider;
+  const errorType = text(metadata.error_type);
+  if (errorType) upstream.errorType = errorType;
+  readCode(upstream, metadata.provider_code);
+  const raw = parseRaw(metadata.raw);
+  // OpenAI's and Google's bodies nest the error under `error`; Anthropic's too, beside a `type` of "error".
+  const error = isRecord(raw) && isRecord(raw.error) ? raw.error : raw;
+  if (typeof error === 'string') {
+    upstream.message = error;
+  } else if (isRecord(error)) {
+    upstream.message = text(error.message) ?? text(error.detail) ?? JSON.stringify(error);
+    readCode(upstream, error.code);
+    // Google's `status` is a name ("UNAVAILABLE"); some servers give the HTTP one there.
+    if (typeof error.status === 'number' && isHttpError(error.status)) upstream.status ??= error.status;
+    const type = text(error.type) ?? text(error.status);
+    if (type) upstream.type = type;
+  }
+  if (upstream.message !== undefined) upstream.message = upstream.message.trim() || undefined;
+  if (upstream.message === undefined) delete upstream.message;
+  return Object.keys(upstream).length > 0 ? upstream : undefined;
+}
+
+function readCode(upstream: Upstream, code: unknown): void {
+  if (typeof code === 'number') {
+    if (isHttpError(code)) upstream.status ??= code;
+  } else if (typeof code === 'string' && code) {
+    upstream.code ??= code;
+  }
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+/** `raw` is the upstream's body, usually as the JSON text it sent, sometimes parsed already. */
+function parseRaw(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+// Enough of an upstream's message to tell what it refused, not its whole echo of the request.
+const UPSTREAM_DETAIL_CHARS = 400;
+
+/**
+ * The aggregator's own words, then the upstream's: "Provider returned error"
+ * alone tells a reader nothing. The upstream's message may echo the request,
+ * so it is redacted whole before it is cut, as a runner's error text is.
+ */
+function withUpstream(message: string, upstream: Upstream): string {
+  if (upstream.provider === undefined && upstream.message === undefined) return message;
+  const detail = upstream.message === undefined ? undefined : bounded(redactAgentText(upstream.message.replace(/\s+/g, ' ')));
+  const from = upstream.provider ?? 'upstream';
+  return detail === undefined ? `${message} (from ${from})` : `${message} (${from}: ${detail})`;
+}
+
+function bounded(value: string): string {
+  return value.length <= UPSTREAM_DETAIL_CHARS ? value : `${value.slice(0, UPSTREAM_DETAIL_CHARS)}…`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isQuota(code: string | undefined, type: string | undefined): boolean {

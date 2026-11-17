@@ -8,6 +8,23 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`ordewell run --unattended`** returns with exit status 3 when the run waits
+  on a person nobody unattended will answer (a checkpoint, an input, an
+  approval or a task on hold): at Act once the supervisor's turn on it left it
+  standing, below Act at once. It prints what waits; the run stays as it is.
+
+### Fixed
+
+- **A run idle behind a task on hold no longer waits unseen.** When nothing is
+  running and nothing can start, and what holds the rest is a task on hold or
+  one waiting on a person, the supervisor at Act is woken once for that set of
+  holds, told which task holds how many others and who put it on hold.
+  `ordewell run` prints a line for a task on hold with the commands that
+  release it, and the supervisor is told that a task it stops blocks what
+  depends on it until it is retried or skipped.
+
 ## [0.14.0] - 2026-11-17
 
 ### Added

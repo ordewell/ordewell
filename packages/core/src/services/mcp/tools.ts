@@ -711,7 +711,7 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
   tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting at its merge gate, or one the user has not approved; in Guarded the user is asked first, and with autorun on in Full nobody is. Nothing starts after it on its own: run_plan is what starts the rest. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
     oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),
-  tool('stop_task', 'Stop one running task: it goes back to not started and stays held, through a run_plan too, until it is retried or force started, and its open approvals are denied.',
+  tool('stop_task', 'Stop one running task: its open approvals are denied, and it goes back to not started and stays held, through a run_plan too, blocking every task that depends on it, until it is retried, force started or skipped. After changing its prompt with edit_plan, retry it in the same reply.',
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_run', 'Stop every running task and the run. The plan is kept.',
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
