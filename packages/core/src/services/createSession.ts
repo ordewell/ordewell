@@ -990,10 +990,11 @@ export class Session {
         const reply = (turnSignal: AbortSignal | undefined, wakeUp?: WakeUpTurn) => this.conversation.reply(prompt, {
           signal: turnSignal, onCommit: taken, wakeUps: prompt.wakeUps, asides: prompt.asides, forced: prompt.forced, ...(wakeUp ? { wakeUp } : {}), ...(prompt.recovery ? { recovery: prompt.recovery } : {}),
         });
-        // Wake-ups that ride with a user's message are context for the user's turn.
+        // Wake-ups that ride with a user's message are context for the user's turn, which answers them, a failed one's retry included.
+        const carries = prompt.wakeUps.length > (prompt.asides?.length ?? 0);
         const { landed, effects } = await this.openTurn(() => (prompt.source === 'supervisor'
           ? this.supervision.wakeUp(reply, signal, prompt.authority)
-          : reply(signal)));
+          : carries ? this.supervision.carry(reply(signal)) : reply(signal)));
         // A report turn for a task the user's turn started acts as their turns do, autorun included (ADR-0037, R3).
         if (prompt.source !== 'supervisor' || prompt.authority === 'user') this.autorunSubmitted(effects);
         return landed;

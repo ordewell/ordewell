@@ -81,6 +81,27 @@ describe('a closing turn that failed, whose retry the planner gate refused', () 
   });
 });
 
+describe('a closing turn that failed, whose retry rode with a user\'s message', () => {
+  it('concludes once that turn answered both', async () => {
+    const env = await failedRun('act');
+    await until(() => env.planner.calls.length === 1);
+    // Another client sends a message while the closing turn runs.
+    const answered = env.session.continueConversation('how is it going?');
+    await settled();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).toContain('how is it going?');
+    expect(env.planner.calls[1].message).toContain('the import is wrong');
+
+    env.planner.calls[1].finish(prose('Task 1 failed: the import is wrong.'));
+    await answered;
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].summary).toMatchObject({ total: 1, completed: 0, failed: 1 });
+  });
+});
+
 describe.each(['watch', 'off'] as const)('a run concluded at %s', (level) => {
   it('concludes as the run ends: no turn may continue it', async () => {
     const env = await failedRun(level);

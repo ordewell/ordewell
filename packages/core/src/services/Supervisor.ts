@@ -459,6 +459,14 @@ export class Supervisor {
   }
 
   /**
+   * A user's turn took the supervisor's inputs with it and landed: the planner
+   * answered them, a failed wake-up's retry included, so none is owed.
+   */
+  carried(): void {
+    this.failures = 0;
+  }
+
+  /**
    * The planner gate refused the turn that would retry a failed wake-up: a
    * planner that cannot plan, a spend cap met. Nothing calls {@link turn} again
    * until a person acts, so the retry has failed, and the run goes on
