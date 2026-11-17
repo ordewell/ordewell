@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.13.4] - 2026-11-17
+
 ### Added
 
 - **A built-in runner on every provider you have a key for.** It runs a task
@@ -37,6 +39,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   against a live provider, and says why a run failed.
 - **An empty planner composer suggests `/key-set`** while no provider key is
   set, on surfaces that tell it so.
+- **`ordewell run` says how the run ended and exits 2 when tasks failed or are
+  blocked.** At Act it returns only after the supervisor's closing turn, which
+  may continue the run, and it prints the level, the supervisor's actions and
+  who can answer each wait. A run a Stop parked, or whose closing-turn retry
+  was refused or rode with your message, now ends instead of hanging, and the
+  wait is bounded without counting a turn of yours it waits behind.
+- **One setting, `taskCompactAt`, says where a task's context starts
+  compacting,** for every runner: `"auto"` (the default), a number of tokens, or
+  `"off"`. Set it in `~/.ordewell/settings.json` or with
+  `ORDEWELL_TASK_COMPACT_AT`. Each runner maps it onto its own control: Claude
+  Code, Codex, OpenCode, ACP and the built-in runner. The context meter reads
+  against where compaction starts.
+- **`/model` is an alias of `/planner`** in the terminal and the chat.
+- **A running task's footer names `ctrl-s` Send now** whenever its turn is in
+  flight, as the planner chat does.
+- **The supervisor is woken when a task's context grows large,** before it
+  compacts, so it can hand the work off instead of letting a summary carry it.
+- **Any folder is a workspace.** The desktop app, the terminal and VS Code open
+  an existing folder with no git repository or project file straight away, with
+  nothing to confirm; the terminal no longer asks to initialize it. Without git
+  its tasks run in the folder itself, and the isolation notice says so.
 
 ### Changed
 
@@ -68,6 +91,31 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   follow a provider's Retry-After, and a usage limit waits until its reset
   time. Gemini moved to `@google/genai` and no longer sends a fixed
   temperature or topP.
+- **Claude Code tasks no longer compact early.** They used to compact at a
+  fixed 150k tokens, every few minutes on an ordinary task, and read the same
+  files again. By default they now compact near the model's own window (Haiku
+  just under the prompt size where its prices rise); `taskCompactAt` moves it.
+- **Plan validation refuses a task skill nothing provides.** A skill name that
+  is not an installed task skill stands only when a task it depends on writes
+  `.ordewell/skills/<name>`; a start that fails on a missing skill says how to
+  fix it. A one-shot plan lands with an invented name dropped and a warning,
+  and a merged or split task keeps the skill it already had.
+- **Subtasks wait for their parent's dependencies.** A subtask no longer starts,
+  or passes, while a prerequisite of its parent failed; it is blocked as the
+  parent is.
+- **The planner is taught to verify each slice as it runs,** not to leave user
+  tasks nobody is there to do in a plan that runs unattended, and not to invent
+  skill names.
+- **Unattended tasks are told when to checkpoint,** on every runner: only before
+  an effect that cannot be undone or reaches outside the workspace, or for what
+  only a person has. The reply says whether you or the supervisor answered.
+- **The built-in runner keeps working through a large brief** to a committed
+  report: it is told its step budget and warned at 80% and 95% of it. A model
+  Ordewell has no details for no longer compacts at 16k; its window is taken
+  from `ordewellContextWindows`, the catalog or the provider's listing, or an
+  assumed 128,000 that its log names as assumed.
+- **Contributors:** `bench/commit0` drives the built-in runner on Commit0, and a
+  script test accepts EACCES as the reason a command cannot start.
 
 ### Fixed
 
@@ -91,6 +139,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   base URL the provider is configured with, so a gateway's key is no longer
   refused. A Perplexity key, which has no model list to check it against, is
   saved without checking instead of being asked for again.
+- **A task's worktree no longer commits the links Ordewell put there.** A rule
+  like `.venv/` matches a directory, not the symlink a task worktree holds in
+  its place, so a task's own `git add -A` committed the link and it merged back.
+- **A checkpoint answered by you in a child plan says so.** The reply to the
+  task named the supervisor, not you.
+- **The planner's chat-completions requests honour `HTTPS_PROXY` and
+  `NODE_USE_ENV_PROXY`,** as the built-in runner's did.
+- **The Git view and text search work on git older than 2.36 and 2.38,** which
+  used to fail the whole Git sidebar and every text search.
+- **`desktop:dev` and `desktop:package` say to run `npm install`** when
+  `node_modules` is behind the lockfile, instead of failing on a missing module.
+- **Contributors:** the desktop end-to-end test runs on a Wayland desktop
+  through X11 where XWayland is available.
 
 ## [0.13.3] - 2026-11-15
 
@@ -4530,7 +4591,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.3...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.4...HEAD
+[0.13.4]: https://github.com/ordewell/ordewell/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/ordewell/ordewell/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/ordewell/ordewell/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/ordewell/ordewell/compare/v0.13.0...v0.13.1

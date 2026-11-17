@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.4] - 2026-11-17
+
 ### Added
 
 - **A built-in runner on every provider you have a key for.** It runs a task
@@ -24,6 +26,12 @@
 - **Model details from models.dev.** The context size, prices and capabilities
   of a model show for every provider, in the runner's model list and in the
   planner's model picker.
+- **`/model` is an alias of `/planner` in the chat.**
+- **Any folder is a workspace.** The extension plans in a folder with no git
+  repository or project file; its tasks run in the folder itself.
+- **One setting, `taskCompactAt`, says where a task's context starts
+  compacting** for every runner (`"auto"`, a number of tokens or `"off"`), in
+  `~/.ordewell/settings.json` or `ORDEWELL_TASK_COMPACT_AT`.
 
 ### Changed
 
@@ -45,6 +53,10 @@
   setting now applies to API planners. Retries follow a provider's
   Retry-After, and a usage limit waits until its reset time. Gemini no longer
   sends a fixed temperature or topP.
+- **Claude Code tasks no longer compact early,** at a fixed 150k tokens; by
+  default they compact near the model's own window.
+- **Plan validation refuses a task skill nothing provides,** and subtasks wait
+  for their parent's dependencies.
 
 ### Fixed
 
@@ -52,6 +64,11 @@
   configured with, so a gateway's key is no longer refused. A Perplexity key,
   which has no model list to check it against, is saved without checking
   instead of being asked for again.
+- **A task's worktree no longer commits the links Ordewell put there.**
+- **A Claude Code planner starts on Windows,** and VS Code keys set with
+  `/key-set` reach the built-in runner without entering the extension host's
+  environment.
+- **A checkpoint answered by you in a child plan says so** to the task.
 
 ## [0.13.3] - 2026-11-15
 
@@ -1660,7 +1677,15 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.12.3...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.4...HEAD
+[0.13.4]: https://github.com/ordewell/ordewell/compare/v0.13.3...v0.13.4
+[0.13.3]: https://github.com/ordewell/ordewell/compare/v0.13.2...v0.13.3
+[0.13.2]: https://github.com/ordewell/ordewell/compare/v0.13.1...v0.13.2
+[0.13.1]: https://github.com/ordewell/ordewell/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/ordewell/ordewell/compare/v0.12.6...v0.13.0
+[0.12.6]: https://github.com/ordewell/ordewell/compare/v0.12.5...v0.12.6
+[0.12.5]: https://github.com/ordewell/ordewell/compare/v0.12.4...v0.12.5
+[0.12.4]: https://github.com/ordewell/ordewell/compare/v0.12.3...v0.12.4
 [0.12.3]: https://github.com/ordewell/ordewell/compare/v0.12.2...v0.12.3
 [0.12.2]: https://github.com/ordewell/ordewell/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/ordewell/ordewell/compare/v0.12.0...v0.12.1
