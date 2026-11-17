@@ -98,6 +98,7 @@ const EMPTY_PREFS: Prefs = {
   keepRunningInTray: false,
   reopenProjects: true,
   openProjects: [],
+  versionCheck: true,
   settingsAdvancedOpen: false,
   editorCommand: '',
 };

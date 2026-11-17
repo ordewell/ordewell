@@ -176,7 +176,7 @@ left, where VS Code users look for it.
 
   Everything else is in `⋯`: Retry failed, Clean up, Discard run, New session,
   Close session, Take over…, Open in editor, Reveal in Finder or Explorer,
-  Reset layout.
+  Reset layout, Check for updates….
 
   The same action may also appear where the decision is made: Approve plan at
   the foot of the plan's approval card, Review & Merge all on the run diff.
@@ -187,9 +187,35 @@ left, where VS Code users look for it.
     *joined :port* while a session is joined ([W16](#w16-a-session-another-host-holds));
   - the lease holder of the open session;
   - the runners, each with its name and whether it is signed in;
-  - the account usage limits (`AccountLimitRows`).
+  - the account usage limits (`AccountLimitRows`);
+  - while a newer Ordewell is known, `↑ 1.3.0 available` (`↑ 1.3.0 · 42%`
+    while it downloads, `↑ 1.3.0 ready` once it has), which brings the update
+    banner back.
 
   Each item opens its detail.
+- **A newer version.** The daily version check (ADR-0048) runs in main, on by
+  default, and names a newer version on every launch while one is known: a
+  banner across the window, "Ordewell 1.3.0 is available. You have 1.2.0.",
+  and the status bar item above. Later hides the banner for that version; the
+  item stays until no newer version is known, whatever another surface's
+  once-a-day line has done. The banner's actions depend on the build
+  (ADR-0063 H9):
+  - *A signed build* shows Update, which downloads the release with its
+    progress in the banner, then Restart to update. Restarting stops what
+    quitting stops, so with a live run or a busy terminal it asks first and
+    names what ends.
+  - *An unsigned build, the AppImage and the deb* show Download, which opens
+    `https://ordewell.ai/download` in the browser. So does a signed build
+    whose download failed, beside its error.
+  - Every banner has What's new, the GitHub Release of that version (tag
+    `v1.3.0`), and Later.
+
+  Check for updates…, in the app menu on macOS, the Help menu elsewhere and
+  `⋯`, asks now: a signed build its release feed, any other build the version
+  check, which pings only once the machine's day is up. It ends in the update
+  banner or one that says "You're up to date", or that checking is off and
+  where. The first launch on a machine shows the version check's notice as a
+  banner, with OK and Turn off, and sends nothing until a later launch.
 - **Command palette.** Cmd/Ctrl+K lists every command with its shortcut. It
   also quick-opens tasks (`#3`), files, branches and sessions.
 
@@ -2168,8 +2194,9 @@ This app, then Advanced. Every field in a card takes the `inset` surface.
   (`settingsAdvancedOpen`), so it comes back as it was left. It holds
   "Planned-with line in commits", "Wake-up reads" (only while the supervisor is
   on) and the Experimental group, for settings that are not ready for everyone.
-  The desktop never runs the daily version check (it runs in the CLI and VS
-  Code), so there is no toggle for it.
+  "Check for new versions", the daily version check's switch (ADR-0048), is
+  in This app rather than here: it is on by default, and an off switch belongs
+  where a person looks for it.
 - **Subplanners.** The Experimental group's one switch, its label followed by a
   neutral `Badge` reading "Experimental" (amber is Needs you's), and a one-line
   hint. It is on while the tree budget is above 0. Turning it on asks inline, in a
@@ -2581,7 +2608,8 @@ table; the renderer never gives a URL, a header or a method.
 | `terminal.openLink(url)` | Opens an `http:` or `https:` address the terminal printed; any other scheme is refused in main |
 | `clipboard.readText()` / `clipboard.writeText(text)` | Plain text for the terminal and Copy SHA. The session grants the page no web clipboard permission, so this is its only route. The preload asks only during a key press or click, and main answers only the focused window, for a string within a cap |
 | `prefs.get()` / `prefs.set(key, value)` | App-local preferences: window bounds, theme, and the [layout](#persistence-and-reset-layout) per workspace |
-| `update.state()` | "disabled" in a build that is not signed (macOS: and notarized); see ADR-0063 H9 |
+| `update.state()` / `update.onChange(cb)` | The running and the newer version, whether this build installs (`install`, signed) or sends the person to the download page (`download`), the updater's phase and progress, and the version check's first-launch notice; see ADR-0063 H9 |
+| `update.check()` / `update.download()` / `update.restart()` / `update.dismissNotice()` | Check for updates…, Update, Restart to update (which asks first about live work, as quitting does), and the notice's OK |
 
 Joining a session another daemon holds ([W16](#w16-a-session-another-host-holds))
 means main reads that daemon's token and sends that session's calls and frames
@@ -2829,7 +2857,8 @@ them.
    - `desktop-build.yml` builds them on macOS, Windows and Linux for a pull
      request, by hand and for a release; `release.yml` calls it to attach them
      to the GitHub Release.
-   - Auto-update is wired, and baked on only for a signed build (ADR-0063 H9).
+   - In-app update is wired, baked on only for a signed build, and runs only
+     when the person asks (ADR-0063 H9).
    - The build is in `scripts/ci.mjs` and `change-scope.mjs`.
 
    Done: a tag build produces the seven installers. node-pty's native rebuild

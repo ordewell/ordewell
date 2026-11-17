@@ -346,6 +346,13 @@ function SettingsTab({ host }: { host: DaemonHost }): JSX.Element {
           hint="Open the projects that were open when the app last quit."
           onChange={(reopenProjects) => { void savePref('reopenProjects', reopenProjects); }}
         />
+        <Toggle
+          label="Check for new versions"
+          // On unless turned off: a prefs file from before the toggle has no key (ADR-0048).
+          checked={prefs?.versionCheck ?? true}
+          hint="Once a day, ask ordewell.ai whether a newer version is out, sending this app's version and a random install ID."
+          onChange={(versionCheck) => { void savePref('versionCheck', versionCheck); }}
+        />
       </section>
 
       <section className="settings-section" aria-labelledby="settings-advanced">

@@ -162,7 +162,11 @@ holds the token.**
   build that is signed with a Developer ID and notarized, and for a Windows
   build that is signed; never on Linux. With no credentials the build is
   exactly the unsigned one (ad hoc on macOS, without the hardened runtime), with
-  updates off. The feed stays GitHub Releases with prereleases ignored.
+  updates off. The feed stays GitHub Releases with prereleases ignored. Even a
+  signed build asks the feed only when the person does, from the update
+  banner or Check for updates…, so the daily version check (ADR-0048) stays
+  the one request the app makes unasked; a build without updates sends the
+  person to the download page instead (see [Signing and updates](#signing-and-updates)).
   The secrets reach the build only on the release path, so a pull request, a
   manual run or a fork never signs or notarizes.
 
@@ -288,6 +292,32 @@ The AppImage could update itself, but nothing would check who built the update:
 electron-updater verifies only the sha512 that `latest-linux.yml` lists, and
 that file is fetched from the same release as the AppImage. Linux updates stay
 off, and the deb never updates itself; the system's package manager owns it.
+
+What the person sees follows from the same baked decision. Main's
+`UpdateService` joins the version check's newer version and the updater's
+phase into one state for every window, and the renderer shows it as the update
+banner and a status bar item (docs/desktop/design.md, *A newer version*):
+
+- **A signed build** never checks at launch. Update checks the feed and
+  downloads, with its progress in the banner and the status bar; once the
+  download is complete, Restart to update quits, installs it silently and
+  starts the new version, and quitting any other way installs it too
+  (`autoInstallOnAppQuit` is set only then). Restarting stops what quitting
+  stops, so it asks first, as quitting does (H5): an owned daemon's live runs
+  are named and stop with their running tasks, an attached daemon's go on, and
+  a terminal's process ends. A failed check or download shows its error with
+  Update again and Download beside it.
+- **Any other build** (unsigned, the AppImage, the deb, or a signed build that
+  lapsed) shows Download, which opens `https://ordewell.ai/download` in the
+  browser. The Homebrew cask is not singled out: the cask installs a signed
+  build, which updates itself, and an install's method cannot be read reliably
+  from the app.
+- **Check for updates…**, in the app menu on macOS, the Help menu elsewhere and
+  the title bar's `⋯`, asks a signed build's feed whatever the version check's
+  toggle says, since the person asked and the request goes to GitHub, not
+  ordewell.ai; any other build runs the version check once more, which pings
+  only once the machine's day is up. Either ends in the update banner, "You're
+  up to date", or a banner naming why checking is off.
 
 The entitlements grant only what V8 needs to JIT, in main, the renderer
 helpers and the daemon's utility process; node-pty's `spawn-helper` needs
@@ -467,6 +497,14 @@ allows script only from the app's own bundle, with no inline script.
   signed; the running app can only trust what it was built with. Updates
   were first held off by a constant in `updater.ts` until signing existed;
   the baked decision replaces it.
+- **Check the feed at every launch.** First chosen, then dropped: it made a
+  second request the person never asked for, to GitHub, beside the version
+  check's one, and a request at launch is one the notice does not mention.
+  The version check already names a newer version at launch; the feed is
+  needed only to download it.
+- **Download in the background once a newer version is known.** Rejected: it
+  spends the person's bandwidth unasked, and the restart is still theirs to
+  choose, so a download they start costs them only the wait the progress shows.
 - **Updates for the AppImage.** Rejected: the only check is a hash from the
   same release, so it proves the download is intact, not who made it.
 - **No cloud-HSM route, with Azure Artifact Signing and a certificate file
@@ -573,3 +611,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-09 — H3, H5: a live run is read from the session list's run activity; restart is refused for runs this daemon holds or `live` work, and an owned quit stops only the runs it holds, naming another host's as going on.
 - 2026-11-13 — H6: a launch opens the folder it names or, with `--new-window`, the welcome window, and a second launch hands its arguments to the running app; a plain first launch reopens last session's project windows.
 - 2026-11-13 — H3: the contract is also raised when a client needs a route, or a value on one, that an older daemon lacks or refuses.
+- 2026-11-17 — H9: no update check at launch; the update banner offers Update, then Restart to update after a confirm about live work, on a signed build and Download elsewhere, and Check for updates… asks on demand.

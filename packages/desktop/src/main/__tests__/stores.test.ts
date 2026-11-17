@@ -250,6 +250,18 @@ describe('prefs', () => {
     expect(validPref('reopenProjects', 'no')).toBeUndefined();
   });
 
+  it('checks for new versions unless the person turned it off, in a file with no such key or a fresh one', () => {
+    const file = join(dir, 'prefs.json');
+    expect(new PrefsStore(file).get().versionCheck).toBe(true);
+    writeFileSync(file, JSON.stringify({ theme: 'light' }));
+    expect(new PrefsStore(file).get().versionCheck).toBe(true);
+    writeFileSync(file, JSON.stringify({ versionCheck: 'off' }));
+    expect(new PrefsStore(file).get().versionCheck).toBe(true);
+    expect(validPref('versionCheck', false)).toEqual({ versionCheck: false });
+    new PrefsStore(file).set({ versionCheck: false });
+    expect(new PrefsStore(file).get().versionCheck).toBe(false);
+  });
+
   it('keeps last session\'s project windows across a write of anything else, and never takes them from a page', () => {
     const one = join(dir, 'one');
     const two = join(dir, 'two');

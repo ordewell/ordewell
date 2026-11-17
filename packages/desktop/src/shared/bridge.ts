@@ -164,6 +164,11 @@ export interface Prefs {
    * prefs file only: a page can never set it, since it names a program to run.
    */
   editorCommand: string;
+  /**
+   * Settings' "Check for new versions": the daily version check (ADR-0048).
+   * On unless the person turns it off; the environment's off switches win.
+   */
+  versionCheck: boolean;
 }
 
 /** One OS notification. The id is how the same wait is shown once, however often a view re-reads it. */
@@ -192,10 +197,40 @@ export interface ShellTarget {
   line?: number;
 }
 
+/** Where an in-app update stands. Every step past `idle` is one the person started. */
+export type UpdaterStatus =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'up-to-date' }
+  | { phase: 'available'; version: string }
+  | { phase: 'downloading'; version: string; percent: number }
+  | { phase: 'ready'; version: string }
+  | { phase: 'error'; message: string };
+
+/**
+ * What the app knows about a newer version (ADR-0048, ADR-0063 H9). `install`
+ * is a signed build that updates itself when asked; `download` sends the
+ * person to the download page, as an unsigned or Linux build must.
+ */
 export interface UpdateState {
-  /** `disabled` until installers are signed (ADR-0063): the app never fetches an update on its own. */
-  state: 'disabled' | 'checking';
+  /** The running version. */
+  current: string;
+  method: 'install' | 'download';
+  /** The newer version known, from the daily check or from an update check the person ran; absent while none is. */
+  latest?: string;
+  /** The in-app update's progress; `idle` on a `download` build. */
+  updater: UpdaterStatus;
+  /** The version check's one-time notice, until a window has shown it and the person has seen it. */
+  notice?: string;
 }
+
+/** How "Check for updates…" ended. */
+export type UpdateCheckOutcome =
+  | { kind: 'available'; latest: string }
+  | { kind: 'up-to-date' }
+  /** The version check is off, by the Settings toggle or an environment variable. */
+  | { kind: 'off'; reason: 'setting' | 'environment' }
+  | { kind: 'failed'; message: string };
 
 /** Where a terminal opens: a repo of the window's workspace, and the scope the view is in. */
 export interface TerminalOpenSpec {
@@ -230,7 +265,7 @@ export interface TerminalDelivery {
 export type Unsubscribe = () => void;
 
 /** The frame commands (renderer/frame/commands.ts) the application menu offers; the menu names no other. */
-export type MenuCommand = 'layout.reset' | 'terminal.toggle';
+export type MenuCommand = 'layout.reset' | 'terminal.toggle' | 'update.check';
 
 /**
  * What a project window has going that switching it to another folder would
@@ -305,6 +340,18 @@ export interface OrdewellBridge {
   };
   update: {
     state(): Promise<UpdateState>;
+    onChange(cb: (state: UpdateState) => void): Unsubscribe;
+    /** "Check for updates…": the updater on a signed build, one version check otherwise. */
+    check(): Promise<UpdateCheckOutcome>;
+    /** [Update] on a signed build: checks if need be, then downloads, with progress on `onChange`. */
+    download(): Promise<void>;
+    /**
+     * [Restart to update]: asks first while a run or a shell is live, naming
+     * what stops. False when the person kept working or nothing is downloaded.
+     */
+    restart(): Promise<boolean>;
+    /** The one-time notice has been seen. */
+    dismissNotice(): Promise<void>;
   };
   /**
    * What the OS shows attention with: a desktop notification for a new wait or
@@ -383,6 +430,10 @@ export const CHANNELS = {
   prefsGet: 'ordewell:prefs.get',
   prefsSet: 'ordewell:prefs.set',
   updateState: 'ordewell:update.state',
+  updateCheck: 'ordewell:update.check',
+  updateDownload: 'ordewell:update.download',
+  updateRestart: 'ordewell:update.restart',
+  updateDismissNotice: 'ordewell:update.dismissNotice',
   notifyShow: 'ordewell:notify.show',
   notifySetBadge: 'ordewell:notify.setBadge',
   shellOpenInEditor: 'ordewell:shell.openInEditor',
@@ -406,6 +457,7 @@ export const EVENTS = {
   notifyClick: 'ordewell:event.notifyClick',
   menuCommand: 'ordewell:event.menuCommand',
   recentsChanged: 'ordewell:event.recentsChanged',
+  updateChange: 'ordewell:event.updateChange',
 } as const;
 
 /** What `daemonSubscribe` takes: a session's socket, or one of its child plans'. */
