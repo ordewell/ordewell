@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`brew install ordewell/tap/ordewell` works on Homebrew 7 again.** The tap
+  no longer maps `ordewell` to the desktop cask in `cask_renames.json`: Homebrew
+  loaded that cask while it resolved the formula and refused it from a tap
+  nobody had trusted, so the install failed. The cask also drops the
+  `verified:` URL parameter Homebrew 7 warns about. The tap itself was fixed
+  for 0.14.1 already; this keeps a later release from bringing it back, and the
+  release now installs the desktop cask on macOS to prove it.
+
 ## [0.14.1] - 2026-11-18
 
 ### Added

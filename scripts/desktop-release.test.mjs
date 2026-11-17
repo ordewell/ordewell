@@ -672,7 +672,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
     }
   });
 
-  it('publishes the formula and no cask with the switch off, and leaves the tap\'s old cask and its rename alone', { skip: posixOnly }, () => {
+  it('publishes the formula and no cask with the switch off, and drops a cask answering to ordewell', { skip: posixOnly }, () => {
     const space = workspace({ desktop: false, tap: ['Casks/ordewell.rb'] });
     try {
       const results = simulate({});
@@ -682,7 +682,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
       assert.match(readFileSync(join(tap, 'Formula', 'ordewell.rb'), 'utf8'), new RegExp(`/ordewell-${VERSION.replace(/\./g, '\\.')}-linux-x64\\.tar\\.gz"`));
       assert.ok(!existsSync(join(tap, 'Casks', 'ordewell-desktop.rb')), 'a cask was published for a release without the desktop app');
-      assert.ok(existsSync(join(tap, 'Casks', 'ordewell.rb')), 'the old cask went before its successor exists');
+      assert.ok(!existsSync(join(tap, 'Casks', 'ordewell.rb')), 'a cask answering to the formula\'s name stayed');
       assert.ok(!existsSync(join(tap, 'cask_renames.json')));
       assert.ok(!existsSync(join(space.work, 'rendered', 'homebrew', 'Casks')), 'the cask was rendered');
       assert.ok(space.calls().some(([tool, , , verb]) => tool === 'git' && verb === 'push'));
@@ -785,12 +785,12 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
         assert.ok(space.config().every(({ config }) => config.length === 0), 'the ssh path set an http header');
         assert.ok(!space.calls().flat().some((arg) => arg.includes('fake deploy key')), 'the key was on a command line');
         assert.ok(!printed.some(({ stdout, stderr }) => `${stdout}${stderr}`.includes('fake deploy key')), 'the key was printed');
-        // The shared rest of the step: the cask and its rename as with the token.
+        // The shared rest of the step: the cask, and no old cask or rename, as with the token.
         const tap = space.pushed;
         assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
         assert.ok(existsSync(join(tap, 'Casks', 'ordewell-desktop.rb')));
         assert.ok(!existsSync(join(tap, 'Casks', 'ordewell.rb')));
-        assert.deepEqual(JSON.parse(readFileSync(join(tap, 'cask_renames.json'), 'utf8')), { ordewell: 'ordewell-desktop' });
+        assert.ok(!existsSync(join(tap, 'cask_renames.json')));
         assert.equal(pushes(space).length, 1);
         assert.deepEqual(notices(printed), []);
       } finally {
@@ -815,7 +815,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
     });
   });
 
-  it('publishes the cask from a notarized build with the switch on, and renames the old cask', { skip: posixOnly }, () => {
+  it('publishes the cask from a notarized build with the switch on, and drops the old cask without a rename', { skip: posixOnly }, () => {
     const space = workspace({ desktop: true, tap: ['Casks/ordewell.rb'] });
     try {
       const results = simulate({ vars: { ORDEWELL_RELEASE_DESKTOP: 'true' } });
@@ -825,7 +825,7 @@ describe('the ORDEWELL_RELEASE_DESKTOP switch in release.yml (ADR-0065 C10)', ()
       assert.ok(existsSync(join(tap, 'Formula', 'ordewell.rb')));
       assert.match(readFileSync(join(tap, 'Casks', 'ordewell-desktop.rb'), 'utf8'), new RegExp(`version "${VERSION.replace(/\./g, '\\.')}"`));
       assert.ok(!existsSync(join(tap, 'Casks', 'ordewell.rb')));
-      assert.deepEqual(JSON.parse(readFileSync(join(tap, 'cask_renames.json'), 'utf8')), { ordewell: 'ordewell-desktop' });
+      assert.ok(!existsSync(join(tap, 'cask_renames.json')), 'a rename from the formula\'s name fails its install on an untrusted tap');
       assert.deepEqual(notices(printed), []);
     } finally {
       space.done();

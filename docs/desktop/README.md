@@ -96,8 +96,8 @@ protected instead is that the file matches the checksum the release published.
 ### Homebrew and winget
 
 Two package managers install the same release, once it has published there
-(the cask is named `ordewell-desktop`; an earlier cask called `ordewell` moves
-to it on `brew upgrade`):
+(the cask is named `ordewell-desktop`; `ordewell` is the command-line
+formula):
 
 ```bash
 brew install --cask ordewell/tap/ordewell-desktop

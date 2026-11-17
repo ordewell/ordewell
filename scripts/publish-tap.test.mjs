@@ -215,21 +215,23 @@ exec '${realGit}' "$@"
   });
 
   describe('the cask (ADR-0065 C8)', () => {
-    it('adds ordewell-desktop with --cask, drops the old ordewell cask and maps it in cask_renames.json, keeping other renames', async () => {
-      setUp({ 'Casks/ordewell.rb': 'old\n', 'cask_renames.json': '{\n  "other": "another"\n}\n' });
+    it('adds ordewell-desktop with --cask and drops a cask answering to ordewell, its file and its rename, keeping other renames', async () => {
+      setUp({ 'Casks/ordewell.rb': 'old\n', 'cask_renames.json': '{\n  "other": "another",\n  "ordewell": "ordewell-desktop"\n}\n' });
       const out = await publish([render('1.2.3', { cask: true }), '1.2.3', '--cask'], { HOMEBREW_TAP_TOKEN: TOKEN });
       assert.equal(out.status, 0, out.stderr);
       assert.deepEqual(tapFiles(), ['Casks/ordewell-desktop.rb', 'Formula/ordewell.rb', 'cask_renames.json']);
       assert.equal(tapFile('Casks/ordewell-desktop.rb'), desktopCask('1.2.3'));
-      assert.deepEqual(JSON.parse(tapFile('cask_renames.json')), { other: 'another', ordewell: 'ordewell-desktop' });
+      assert.deepEqual(JSON.parse(tapFile('cask_renames.json')), { other: 'another' });
       assert.equal(commits(), 2, 'the formula, the cask and the rename went in more than one commit');
     });
 
-    it('leaves the old cask and writes no rename without --cask, before ordewell-desktop exists', async () => {
-      setUp({ 'Casks/ordewell.rb': 'old\n' });
+    it('drops a cask answering to ordewell without --cask too, and the renames file it empties', async () => {
+      // Homebrew 7 loads such a cask while it resolves `brew install ordewell/tap/ordewell`
+      // and refuses it from an untrusted tap, failing the formula's own install.
+      setUp({ 'Casks/ordewell.rb': 'old\n', 'cask_renames.json': '{\n  "ordewell": "ordewell-desktop"\n}\n' });
       const out = await publish([render('1.2.3', { cask: true }), '1.2.3'], { HOMEBREW_TAP_TOKEN: TOKEN });
       assert.equal(out.status, 0, out.stderr);
-      assert.deepEqual(tapFiles(), ['Casks/ordewell.rb', 'Formula/ordewell.rb']);
+      assert.deepEqual(tapFiles(), ['Formula/ordewell.rb']);
     });
 
     it('keeps a published ordewell-desktop cask as it is when only the formula is re-published', async () => {
@@ -238,8 +240,7 @@ exec '${realGit}' "$@"
       assert.equal(out.status, 0, out.stderr);
       assert.equal(tapFile('Formula/ordewell.rb'), formula('1.2.3'));
       assert.equal(tapFile('Casks/ordewell-desktop.rb'), desktopCask('1.2.2'));
-      assert.deepEqual(JSON.parse(tapFile('cask_renames.json')), { ordewell: 'ordewell-desktop' });
-      assert.equal(tapGit('diff', '--name-only', 'main~1', 'main').trim(), 'Formula/ordewell.rb');
+      assert.equal(tapGit('diff', '--name-only', 'main~1', 'main').trim(), 'Formula/ordewell.rb\ncask_renames.json');
     });
   });
 

@@ -14,8 +14,7 @@ cask "ordewell-desktop" do
   sha256 arm:   "{{sha256_mac_arm64}}",
          intel: "{{sha256_mac_x64}}"
 
-  url "https://github.com/ordewell/ordewell/releases/download/v#{version}/Ordewell-#{version}-mac-#{arch}.dmg",
-      verified: "github.com/ordewell/ordewell/"
+  url "https://github.com/ordewell/ordewell/releases/download/v#{version}/Ordewell-#{version}-mac-#{arch}.dmg"
   name "Ordewell"
   desc "Turn one goal into an ordered plan of coding-agent tasks"
   homepage "https://ordewell.ai/"

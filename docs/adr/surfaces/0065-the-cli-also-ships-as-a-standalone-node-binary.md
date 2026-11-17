@@ -155,16 +155,17 @@ is already served by `npm`.
   `BIN_NAME` of the desktop installer), and still publishes only from a
   notarized build, as
   [ADR-0063 H11](0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)
-  says. The cask was `ordewell` before: once `ordewell-desktop` is in the tap,
-  the same commit removes `Casks/ordewell.rb` and maps `ordewell` to
-  `ordewell-desktop` in the tap's `cask_renames.json`, so an installed cask
-  moves to the new name on upgrade. That happens with the first release that
-  carries the desktop app (C10); until then the tap's cask is left as it is.
-  `scripts/publish-tap.sh` writes the tap, the rename included, for the
+  says. No cask answers to `ordewell`: every publish removes a
+  `Casks/ordewell.rb` and an `ordewell` entry in the tap's `cask_renames.json`.
+  Homebrew loads such a cask while it resolves `brew install
+  ordewell/tap/ordewell`, and Homebrew 7 refuses a cask from a tap nobody
+  trusted, so the formula's own install would fail. No `ordewell` cask was
+  ever published, so no installed cask needs that rename to move.
+  `scripts/publish-tap.sh` writes the tap for the
   `homebrew` job and for `homebrew-publish.yml`, which publishes a release's
   formula again by hand and never a cask. After either, the formula is proved
   by `brew install ordewell/tap/ordewell` on a macOS and a Linux runner of each
-  architecture, as ADR-0063 H11 says.
+  architecture, and the cask on the macOS ones, as ADR-0063 H11 says.
 
 - **The update notice names how this copy was installed (C9).** The line
   [ADR-0048](../platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md)
@@ -320,3 +321,4 @@ their unit tests run under plain Node.
 - 2026-11-06 — C8: one script publishes the tap from the release and from the manual re-publish `homebrew-publish.yml`, and brew installs the formula on macOS and Linux after each (ADR-0063 H11).
 - 2026-11-07 — C7, C10: `cli.sh --help` leaves out `--desktop` until a release carries the app, and the message for a release without it is plainer.
 - 2026-11-17 — C7, C10: `cli.sh --help` lists `--desktop` again, and the install text is back in the desktop guide; only the owner's switch, credentials and tag remain.
+- 2026-11-18 — C8: no cask answers to `ordewell`, the `cask_renames.json` entry included, since Homebrew 7 refused it from an untrusted tap and failed the formula's install.
