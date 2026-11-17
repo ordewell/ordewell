@@ -22,6 +22,7 @@ import { awaitAttach, MCP_ATTACH_TIMEOUT_MS, type AttachState, type OrdewellTool
 import { claudeLocalServers } from './claudeRepoConfig';
 import { readOnlyTaskPolicy, readOnlyTask } from './plannerPermissions';
 import { isCredentialVariable } from './credentialEnv';
+import { claudeCompactWindowOf } from '../taskCompactWindow';
 import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
 import { UsageRecordBuilder, type CallUsage } from './usageBuilder';
@@ -129,31 +130,28 @@ const SETTINGS_FILE = 'settings.json';
 const SYSTEM_PROMPT_FILE = 'system-prompt.md';
 const NO_MCP_SERVERS_FILE = 'no-mcp-servers.json';
 
-/**
- * Where a task's own context compacts. The 1M window of the large models
- * would otherwise never trigger the CLI's auto-compaction, and past this size
- * each call re-reads a long prefix for little new information. Compaction
- * starts somewhat below the window (the CLI keeps a buffer for its summary).
- * The completion contract rides in the system prompt, where a summary cannot
- * drop it. A planner is left alone: its conversation is the user's. The
- * variable, which an older CLI ignores, is read by 2.1.314 (`--autocompact`
- * is the same setting as a flag); a plain integer, because a `k` suffix is
- * only read by newer ones.
- */
-const TASK_COMPACT_WINDOW_TOKENS = 150_000;
-const TASK_ENV = { ...NO_AUTO_MEMORY, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(TASK_COMPACT_WINDOW_TOKENS) };
-
 /** Connectors come from the account and no setting source governs them, hence the variable; a CLI that ignores it costs tokens and breaks nothing. */
 const NO_CONNECTORS = { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' };
 
 /**
- * A `minimal` task runner's context (`taskRunnerConfig`). Its setting sources
- * ({@link settingSources}) leave out the user's servers, skills, commands,
- * settings and instructions and keep the repository's, which is the toolchain
- * a task was started to use (ADR-0028), so a task must not lose them to save
- * tokens.
+ * A task's environment. Its context compacts at `window`
+ * ({@link claudeCompactWindowOf}); the completion contract rides in the system
+ * prompt, where a summary cannot drop it. The variable, which an older CLI
+ * ignores, is read by 2.1.314 (`--autocompact` is the same setting as a flag);
+ * a plain integer, because a `k` suffix is only read by newer ones. A
+ * `minimal` runner (`taskRunnerConfig`) also goes without connectors: its
+ * setting sources ({@link settingSources}) leave out the user's servers,
+ * skills, commands, settings and instructions and keep the repository's, which
+ * is the toolchain a task was started to use (ADR-0028), so a task must not
+ * lose them to save tokens.
  */
-const MINIMAL_TASK_ENV = { ...TASK_ENV, ...NO_CONNECTORS };
+function taskEnv(window: number | undefined, minimal: boolean): Record<string, string> {
+  return {
+    ...NO_AUTO_MEMORY,
+    ...(window === undefined ? {} : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window) }),
+    ...(minimal ? NO_CONNECTORS : {}),
+  };
+}
 
 /**
  * A read-only task loads nothing of the repository's in any case (ADR-0046),
@@ -658,7 +656,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * hands it the whole command as one argument (ADR-0036 N2).
    */
   override async start(opts: AgentStartOptions): Promise<void> {
-    this.compactWindowTokens = opts.kind === 'task' ? TASK_COMPACT_WINDOW_TOKENS : undefined;
+    this.compactWindowTokens = opts.kind === 'task' ? claudeCompactWindowOf(opts.model) : undefined;
     this.nativeShell = await this.ownNativeShell(opts);
     await super.start(opts);
   }
@@ -807,7 +805,7 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
         ...this.ordewellServerArgs(handed, opts.mcp, readOnly ? 'readOnlyTask' : 'task'),
       );
     }
-    return { command: 'claude', args, env: minimal ? MINIMAL_TASK_ENV : TASK_ENV, files: handed.paths };
+    return { command: 'claude', args, env: taskEnv(this.compactWindowTokens, minimal), files: handed.paths };
   }
 
   /**

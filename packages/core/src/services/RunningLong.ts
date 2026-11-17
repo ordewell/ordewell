@@ -62,7 +62,7 @@ export interface RunningLongFacts {
   contextWindow?: number;
   /** No catalog or listing stated `contextWindow`: the built-in runner assumed it (ADR-0070). */
   contextWindowAssumed?: true;
-  /** Where Ordewell set the runner to compact its context, when it did: a compaction there is routine. */
+  /** Where Ordewell set the runner to compact its context, when it did: under {@link ROUTINE_WINDOW_BELOW} a compaction there is routine. */
   compactionWindow?: number;
   /** The most the context has held this attempt: the saved usage keeps only the last. */
   peakContextTokens?: number;
@@ -74,13 +74,19 @@ export interface RunningLongFacts {
 export type RunningLongEvent = RunningLongFacts & { attempt: number };
 
 /**
- * Compactions of a runner that Ordewell set a window for are routine, and
- * flagged from the third, then each time their count doubles: the 3rd, 6th,
- * 12th (ADR-0057 R4). Past that window each call re-reads a long prefix for
- * little new information, so a task compacts a few times in the course of
- * ordinary work.
+ * Compactions of a runner that Ordewell set a small window for are routine,
+ * and flagged from the third, then each time their count doubles: the 3rd,
+ * 6th, 12th (ADR-0057 R4). Under such a window a task compacts a few times in
+ * the course of ordinary work.
  */
 export const ROUTINE_COMPACTIONS = 3;
+
+/**
+ * The window from which a compaction is not routine but news, as one at the
+ * model's own window is: an ordinarily sized task never fills it, so one that
+ * did has outgrown its brief (ADR-0057 R4).
+ */
+export const ROUTINE_WINDOW_BELOW = 200_000;
 
 /** The longest delay a timer keeps: Node fires a longer one at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -145,8 +151,13 @@ export class RunningLongClock {
     this.measure();
     if (trigger !== 'auto') return;
     this.compactions += 1;
-    if (this.compactWindow() !== undefined && !this.beyondRoutine()) return;
+    if (this.routine() && !this.beyondRoutine()) return;
     this.flag(this.facts('compaction', this.due()));
+  }
+
+  private routine(): boolean {
+    const window = this.compactWindow();
+    return window !== undefined && window < ROUTINE_WINDOW_BELOW;
   }
 
   /** The 3rd compaction, the 6th, the 12th: the first that is no longer routine, then each doubling. */

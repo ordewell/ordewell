@@ -138,7 +138,7 @@ test("extractEgressEntry finds core's gateway program", () => {
   assert.throws(() => L.extractEgressEntry('nothing here'), /core moved it/);
 });
 
-const cleanProbe = { commits: 1, objectCommits: 1, reference: 'absent', alternates: false, resolves: ['/testbed/tinylib/__init__.py'], resolvesOutside: [], installedOutside: [], archives: [] };
+const cleanProbe = { commits: 1, objectCommits: 1, reference: 'absent', alternates: false, resolves: ['/testbed/tinylib/__init__.py'], resolvesOutside: [], installedOutside: [], archives: [], untracked: [] };
 
 test('judgeLeak passes a flattened repository and names every way out', () => {
   assert.deepEqual(L.judgeLeak(cleanProbe), { ok: true, failures: [] });
@@ -905,4 +905,282 @@ test('resultRecord records the arm\'s settings, the eval exit, the stop, the sta
   assert.deepEqual([r.valid, r.invalidReasons], [false, ['eval timed out']]);
   assert.deepEqual(r.baseline, { collected: 0, reason: 'r' });
   assert.equal(r.staleDistAllowed, false);
+});
+
+// --- Spend, batches and run metrics -----------------------------------------
+
+const usd = (n) => ({ totals: { inputTokens: 10, reportedCost: { USD: n } } });
+const attempt = (n, cost, over = {}) => ({ attempt: n, runner: 'openrouter', startedAt: '2026-01-01T00:00:00.000Z', wallTimeMs: 0, byModel: [], ...usd(cost), ...over });
+
+test('recordedSpend sums the planner\'s turns, wake-ups included, and every attempt, subtasks too', () => {
+  const plan = {
+    plannerUsage: usd(0.25),
+    tasks: [
+      { id: 'a', attemptUsage: [attempt(1, 0.5)], subtasks: [{ id: 'a1', attemptUsage: [attempt(1, 0.0625), attempt(2, 0.0625)] }] },
+      { id: 'b', attemptUsage: [] },
+    ],
+  };
+  assert.deepEqual(L.recordedSpend(plan), { usd: 0.875, plannerUsd: 0.25, attemptsUsd: 0.625, attempts: 3, unpriced: 0 });
+  // A call the provider priced at nothing still counts as known; one with no price is counted apart, never guessed.
+  assert.deepEqual(L.recordedSpend({ tasks: [{ id: 'a', attemptUsage: [attempt(1, 0.5), { ...attempt(2, 0), totals: { inputTokens: 5 } }] }] }),
+    { usd: 0.5, plannerUsd: null, attemptsUsd: 0.5, attempts: 2, unpriced: 1 });
+  assert.equal(L.recordedSpend(null).usd, null);
+  assert.equal(L.recordedSpend({ plannerUsage: { totals: {} }, tasks: [] }).usd, null);
+});
+
+test('capDecision acts on the recorded spend, and on the key\'s only for a run alone on it', () => {
+  assert.deepEqual(L.capDecision({ elapsedMs: 0, recordedSpentUsd: 8, keySpentUsd: 1, transcriptSpentUsd: 1, capUsd: 8 }), { stop: true, why: 'spend', spentUsd: 8 });
+  assert.equal(L.capDecision({ elapsedMs: 0, recordedSpentUsd: 1, keySpentUsd: 9, capUsd: 8 }).stop, true);
+  // Overlapping runs share the key: its delta is every run's, so it never stops one of them.
+  assert.equal(L.capDecision({ elapsedMs: 0, recordedSpentUsd: 1, keySpentUsd: null, transcriptSpentUsd: 2, capUsd: 8 }).stop, false);
+});
+
+test('budgetDecision stops the batch once the key\'s delta reaches the budget, and never on an unread key', () => {
+  assert.deepEqual(L.budgetDecision({ keyBeforeUsd: 10, keyNowUsd: 29.99, budgetUsd: 20 }), { stop: false, spentUsd: 19.99 });
+  assert.deepEqual(L.budgetDecision({ keyBeforeUsd: 10, keyNowUsd: 30, budgetUsd: 20 }), { stop: true, spentUsd: 20 });
+  assert.deepEqual(L.budgetDecision({ keyBeforeUsd: 10, keyNowUsd: null, budgetUsd: 20 }), { stop: false, spentUsd: null });
+  assert.deepEqual(L.budgetDecision({ keyBeforeUsd: 10, keyNowUsd: 30, budgetUsd: null }), { stop: false, spentUsd: 20 });
+});
+
+test('capacityCheck refuses more cpus than the host has, or more than 80% of its memory', () => {
+  const host = { hostCpus: 20, hostMemBytes: 32 * 2 ** 30 };
+  assert.equal(L.capacityCheck({ jobs: 2, cpus: 8, memory: '12g', ...host }).ok, true);
+  const cpu = L.capacityCheck({ jobs: 3, cpus: 8, memory: '4g', ...host });
+  assert.equal(cpu.ok, false);
+  assert.match(cpu.failures[0], /3 runs × 8 cpus = 24 cpus, the host has 20/);
+  const mem = L.capacityCheck({ jobs: 2, cpus: 2, memory: '13g', ...host });
+  assert.equal(mem.ok, false);
+  assert.match(mem.failures[0], /80%/);
+  assert.equal(L.capacityCheck({ jobs: 2, cpus: 8, memory: '12.8g', ...host }).ok, true, '25.6g is exactly 80% of 32g');
+});
+
+test('runIdFor makes each run\'s directory, container and network names unique within a batch, seed included', () => {
+  const stamp = '2026-11-17T10:00:00.000Z';
+  const ids = [];
+  for (const libName of ['tlslite-ng', 'networkx']) for (const arm of ['A', 'B']) for (const seed of [null, 's1']) ids.push(L.runIdFor({ stamp, lib: libName, arm, seed }));
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(L.runIdFor({ stamp, lib: 'networkx', arm: 'B', seed: 'Seed 1' }), '2026-11-17t10-00-00-networkx-b-seed-1');
+  assert.equal(L.runIdFor({ stamp, lib: 'networkx', arm: 'B', seed: null }), '2026-11-17t10-00-00-networkx-b');
+  for (const id of ids) assert.match(`commit0-${id}-egress`, /^[a-z0-9][a-z0-9_.-]+$/, 'a docker name');
+  // Two processes in one second carry the same stamp: the batch plan says no pair repeats.
+  assert.throws(() => L.batchPlan({ libs: ['x', 'x'], arms: ['A'], seed: null }), /twice/);
+  assert.deepEqual(L.batchPlan({ libs: ['x', 'y'], arms: ['A', 'B'], seed: 's' }).map((r) => `${r.lib}-${r.arm}`), ['x-A', 'x-B', 'y-A', 'y-B']);
+});
+
+test('parseBatchArgs: --jobs 2 by default, a budget required to spend, the shared options passed to each run', () => {
+  const d = L.parseBatchArgs(['--dry-run', '--libs', 'l.json']);
+  assert.equal(d.jobs, 2);
+  assert.equal(d.budgetUsd, null);
+  assert.deepEqual(d.driveArgs, ['--dry-run', '--libs', path.resolve('l.json')]);
+  assert.throws(() => L.parseBatchArgs(['--run', '--libs', 'l.json', '--provider-pin', 'p']), /--batch-budget-usd/);
+  const r = L.parseBatchArgs(['--run', '--libs', 'l.json', '--provider-pin', 'p', '--batch-budget-usd', '30', '--jobs', '3', '--cpus', '4', '--seed', 's2', '--only', 'a,b', '--arm', 'B']);
+  assert.equal(r.jobs, 3);
+  assert.equal(r.budgetUsd, 30);
+  assert.equal(r.seed, 's2');
+  assert.deepEqual(r.only, ['a', 'b']);
+  assert.equal(r.arm, 'B');
+  assert.deepEqual(r.driveArgs, ['--run', '--libs', path.resolve('l.json'), '--provider-pin', 'p', '--cpus', '4']);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--jobs', '0']), /--jobs/);
+  assert.throws(() => L.parseBatchArgs(['--dry-run']), /--libs/);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--batch-dir', 'x']), /unknown argument/);
+});
+
+test('parseArgs takes a seed, and the batch\'s own --batch-dir and --batch-shared', () => {
+  const a = L.parseArgs(['--dry-run', '--libs', 'l.json']);
+  assert.equal(a.seed, null);
+  assert.equal(a.batchDir, null);
+  assert.equal(a.batchShared, false);
+  const b = L.parseArgs(['--dry-run', '--libs', 'l.json', '--seed', 's1', '--batch-dir', 'bd', '--batch-shared']);
+  assert.equal(b.seed, 's1');
+  assert.equal(b.batchDir, path.resolve('bd'));
+  assert.equal(b.batchShared, true);
+  assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'l.json', '--batch-shared']), /--batch-dir/);
+});
+
+test('planShape: the longest dependency chain and the widest level', () => {
+  const t = (id, dependencies = []) => ({ id, dependencies, status: 'pending' });
+  // a → b → d, a → c, e alone: levels {a, e}, {b, c}, {d}.
+  assert.deepEqual(L.planShape({ tasks: [t('a'), t('b', ['a']), t('c', ['a']), t('d', ['b']), t('e')] }), { longestChain: 3, widestLevel: 2 });
+  assert.deepEqual(L.planShape({ tasks: [t('a')] }), { longestChain: 1, widestLevel: 1 });
+  assert.deepEqual(L.planShape({ tasks: [] }), { longestChain: null, widestLevel: null });
+  // A cycle or a dependency on no task is not a shape to guess.
+  assert.deepEqual(L.planShape({ tasks: [t('a', ['b']), t('b', ['a'])] }), { longestChain: null, widestLevel: null });
+});
+
+test('meanConcurrency is the attempts\' running time over the time any ran, and null with one unended', () => {
+  const at = (s, e) => ({ startedAt: new Date(s * 1000).toISOString(), endedAt: e === null ? undefined : new Date(e * 1000).toISOString() });
+  assert.equal(L.meanConcurrency([at(0, 10), at(0, 10)]), 2);
+  // 0-10 and 5-15 cover 15 s with 20 s of attempts; 20-30 adds 10 of each.
+  assert.equal(L.meanConcurrency([at(0, 10), at(5, 15), at(20, 30)]), 1.2);
+  assert.equal(L.meanConcurrency([at(0, 10), at(5, null)]), null);
+  assert.equal(L.meanConcurrency([]), null);
+});
+
+test('runMetrics reads the tasks, checkpoints, the supervisor and each attempt from the session, and guesses nothing', () => {
+  const call = (id, name, args) => ({ type: 'tool_call', id, name, args: JSON.stringify(args) });
+  const result = (id, output) => ({ type: 'tool_result', id, output, success: true });
+  const plan = {
+    tasks: [
+      { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', dependencies: [], verdict: { outcome: 'pass', reported: 'done' },
+        attemptUsage: [attempt(1, 0.1, { runningMs: 1000, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:00:10.000Z' }), attempt(2, 0.1, { runningMs: 500, startedAt: '2026-01-01T00:00:10.000Z', endedAt: '2026-01-01T00:00:20.000Z' })] },
+      { id: 't2', order: 2, title: 'two', type: 'ai', autonomy: 'HITL', status: 'failed', dependencies: ['t1'], verdict: { outcome: 'fail', reported: 'blocked' },
+        attemptUsage: [attempt(1, 0.1, { startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T00:00:10.000Z' })] },
+      { id: 't3', order: 3, title: 'three', type: 'user', status: 'skipped', dependencies: [] },
+      { id: 't4', order: 4, title: 'four', type: 'ai', sliceType: 'HITL', status: 'failed', dependencies: ['t2'], verdict: { outcome: 'fail', reported: 'failed' }, attemptUsage: [] },
+    ],
+    conversationHistory: [
+      { role: 'user', kind: 'wake_up', content: 'digest', timestamp: 'x' },
+      { role: 'assistant', kind: 'execution', content: '', timestamp: 'y', execution: { command: 'continue', actor: 'supervisor', task: { id: 't2', ref: '#2', title: 'two' }, outcome: 'done', at: 'y' } },
+      { role: 'assistant', kind: 'execution', content: '', timestamp: 'z', execution: { command: 'merge', actor: 'user', outcome: 'done', at: 'z' } },
+      { role: 'user', kind: 'wake_up', content: 'digest', timestamp: 'w' },
+    ],
+  };
+  const logs = {
+    t1: {
+      1: [call('c1', 'read_file', {}), call('c2', 'mcp__ordewell__checkpoint', { question: 'May I?' }), result('c2', 'approved: the supervisor said yes for the user — continue'), { type: 'runner_ended' }],
+      2: [call('c3', 'bash', {}), call('c4', 'mcp__ordewell__task_complete', { status: 'done', summary: 's' }), result('c4', 'ok')],
+    },
+    t2: { 1: [call('c5', 'checkpoint', { question: 'Where is upstream?' }), result('c5', 'rejected: the user said no — not here'), call('c6', 'task_complete', { status: 'blocked' }), result('c6', 'ok')] },
+  };
+  const m = L.runMetrics(plan, logs);
+  assert.deepEqual(m.tasks, { total: 4, passed: 1, failed: 1, blocked: 1, skipped: 1, open: 0, hitl: 2, user: 1 });
+  assert.deepEqual(m.checkpoints, [
+    { taskId: 't1', attempt: 1, question: 'May I?', answeredBy: 'supervisor', answer: 'approved' },
+    { taskId: 't2', attempt: 1, question: 'Where is upstream?', answeredBy: 'user', answer: 'rejected' },
+  ]);
+  assert.equal(m.supervisor.wakeUps, 2);
+  assert.deepEqual(m.supervisor.actions, [{ command: 'continue', task: '#2', outcome: 'done', at: 'y' }]);
+  assert.deepEqual(m.perTask[0], { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', runningMs: 1500, steps: 4,
+    attempts: [{ attempt: 1, ended: 'ended without task_complete', steps: 2, runningMs: 1000 }, { attempt: 2, ended: 'done', steps: 2, runningMs: 500 }] });
+  assert.equal(m.perTask[1].runningMs, null, 'an attempt with no running clock is not guessed');
+  assert.equal(m.perTask[1].attempts[0].ended, 'blocked');
+  assert.equal(m.perTask[3].steps, null);
+  assert.deepEqual(m.plan, { longestChain: 3, widestLevel: 2 });
+  assert.equal(m.meanConcurrentAttempts, 1.5);
+  // Without the logs, what only they hold is null.
+  const bare = L.runMetrics(plan, null);
+  assert.equal(bare.checkpoints, null);
+  assert.equal(bare.perTask[0].steps, null);
+  assert.equal(bare.perTask[0].attempts[0].ended, null);
+  assert.equal(L.runMetrics(null, null), null);
+});
+
+test('readTaskLogs reads each attempt\'s log from a copied-out session', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'c0-logs-'));
+  try {
+    const tasks = path.join(dir, 'sessions', 'sess-1', 'tasks');
+    fs.mkdirSync(path.join(tasks, 't1'), { recursive: true });
+    fs.writeFileSync(path.join(tasks, 't1', '1.jsonl'), `${JSON.stringify({ type: 'runner_ended' })}\nnot json\n`);
+    fs.writeFileSync(path.join(tasks, 't1', '2.output.txt'), 'x');
+    // An id that is no plain segment sits under core's idSegment encoding.
+    const odd = 'a/b';
+    fs.mkdirSync(path.join(tasks, `~${Buffer.from(odd).toString('hex')}`), { recursive: true });
+    fs.writeFileSync(path.join(tasks, `~${Buffer.from(odd).toString('hex')}`, '1.jsonl'), '{"type":"turn_end","reason":"done"}\n');
+    const logs = L.readTaskLogs(dir, 'sess-1', { tasks: [{ id: 't1' }, { id: odd }, { id: 'none' }] });
+    assert.deepEqual(logs, { t1: { 1: [{ type: 'runner_ended' }] }, [odd]: { 1: [{ type: 'turn_end', reason: 'done' }] }, none: {} });
+    assert.equal(L.readTaskLogs(path.join(dir, 'missing'), 'sess-1', { tasks: [] }), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the goal puts the original implementation off limits, in the one text both arms get', () => {
+  assert.match(L.goalText(lib()), /The original implementation is off limits: do not look for it in caches, compiled files, installed packages or on the network; write it from the docstrings and the tests\./);
+});
+
+test('every patch the driver writes leaves out __pycache__ and .pyc', () => {
+  for (const script of [L.taskPatchScript(lib(), { worktree: '/w' }), L.armPatchScript(lib())]) {
+    assert.match(script, /:\(exclude,glob\)\*\*\/__pycache__\/\*\*/);
+    assert.match(script, /:\(exclude,glob\)\*\*\/\*\.pyc/);
+  }
+});
+
+test('judgeLeak fails an untracked or ignored file that carries the implementation', () => {
+  const clean = { commits: 1, objectCommits: 1, reference: 'absent', alternates: false, resolvesOutside: [], installedOutside: [], archives: [], untracked: [] };
+  assert.equal(L.judgeLeak(clean).ok, true);
+  const hit = L.judgeLeak({ ...clean, untracked: ['tinylib/__pycache__/core.cpython-312.pyc'] });
+  assert.equal(hit.ok, false);
+  assert.match(hit.failures[0], /untracked or ignored file tinylib\/__pycache__\/core\.cpython-312\.pyc/);
+  assert.deepEqual(L.leakKinds({ ...clean, untracked: ['x.pyc'] }), ['untracked']);
+  assert.equal(L.judgeLeak({ ...clean, untracked: null }).ok, false, 'an unreadable status is no pass');
+});
+
+test('the leak probe scans untracked and ignored files, and the cleanup leaves only the venv', { skip: !(hasGit && hasPython && process.platform !== 'win32') && 'needs git, python3 and sh' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+  try {
+    const g = (...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8' }).trim();
+    g('init', '-q', '-b', 'main');
+    fs.mkdirSync(path.join(dir, 'tinylib'));
+    fs.writeFileSync(path.join(dir, 'tinylib', '__init__.py'), 'def f():\n    raise NotImplementedError\n');
+    fs.writeFileSync(path.join(dir, '.gitignore'), '__pycache__/\nbuild/\n');
+    g('add', '-A'); g('commit', '-qm', 'stubs');
+    const l = lib({ workdir: dir, baseCommit: g('rev-parse', 'HEAD'), python: 'python3' });
+    execFileSync('sh', ['-c', L.flattenScript(l)]);
+    execFileSync('sh', ['-c', L.workspaceIgnoreScript(l)]);
+    // What a reference collection and an image leave: bytecode of the implementation, a build tree, a stray copy.
+    fs.mkdirSync(path.join(dir, 'tinylib', '__pycache__'));
+    fs.writeFileSync(path.join(dir, 'tinylib', '__pycache__', '__init__.cpython-312.pyc'), 'compiled');
+    fs.mkdirSync(path.join(dir, 'build', 'lib', 'tinylib'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'build', 'lib', 'tinylib', '__init__.py'), 'def f():\n    return 1\n');
+    fs.writeFileSync(path.join(dir, 'tinylib', 'orig.py'), 'def f():\n    return 1\n');
+    fs.mkdirSync(path.join(dir, '.venv', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.venv', 'lib', 'keep.pyc'), 'the image\'s venv');
+    fs.mkdirSync(path.join(dir, 'tinylib.egg-info'));
+    fs.writeFileSync(path.join(dir, 'tinylib.egg-info', 'PKG-INFO'), 'Name: tinylib\n');
+    const probe = () => JSON.parse(execFileSync('python3', ['-c', L.LEAK_PROBE_PY, dir, 'tinylib', 'tinylib-unlikely-dist', '-', dir], { cwd: '/', encoding: 'utf8' }).trim().split('\n').pop());
+    assert.deepEqual(probe().untracked, ['build/lib/tinylib/__init__.py', 'tinylib/__pycache__/__init__.cpython-312.pyc', 'tinylib/orig.py']);
+    const removed = execFileSync('sh', ['-c', L.leftoverCleanupScript(l)], { encoding: 'utf8' });
+    assert.match(removed, /tinylib\/__pycache__/);
+    const after = probe();
+    assert.deepEqual(after.untracked, []);
+    assert.equal(L.judgeLeak({ ...after, commits: 1, objectCommits: 1 }).ok, true);
+    assert.ok(fs.existsSync(path.join(dir, '.venv', 'lib', 'keep.pyc')), 'the venv stays');
+    assert.ok(fs.existsSync(path.join(dir, 'tinylib.egg-info', 'PKG-INFO')), 'an editable install\'s metadata stays: it holds no module');
+    assert.equal(g('status', '--porcelain', '--untracked-files=no'), '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('batchRecord sets the key\'s delta against the recorded sum, and marks per-run key figures unavailable when runs overlapped', () => {
+  const runs = [
+    { lib: 'a', arm: 'A', recordedUsd: 1.25 },
+    { lib: 'a', arm: 'B', recordedUsd: 2.5 },
+    { lib: 'b', arm: 'A', recordedUsd: null },
+  ];
+  const r = L.batchRecord({ keyBeforeUsd: 10, keyAfterUsd: 14, budgetUsd: 20, stoppedByBudget: null, jobs: 2, overlapped: true, runs });
+  assert.equal(r.keyDeltaUsd, 4);
+  assert.equal(r.recordedSumUsd, 3.75);
+  assert.equal(r.gapUsd, 0.25);
+  assert.deepEqual(r.unrecordedRuns, ['b A']);
+  assert.match(r.perRunKeyBilled, /not available/);
+  const dry = L.batchRecord({ keyBeforeUsd: null, keyAfterUsd: null, jobs: 2, overlapped: false, runs: [] });
+  assert.equal(dry.keyDeltaUsd, null);
+  assert.equal(dry.gapUsd, null);
+  assert.doesNotMatch(dry.perRunKeyBilled, /not available/);
+});
+
+test('keyUsage reads the key\'s usage, and null without a key or on any failure', async () => {
+  const ok = async () => ({ ok: true, json: async () => ({ data: { usage: 3.5 } }) });
+  assert.equal(await L.keyUsage('k', ok), 3.5);
+  assert.equal(await L.keyUsage('', ok), null);
+  assert.equal(await L.keyUsage('k', async () => ({ ok: false })), null);
+  assert.equal(await L.keyUsage('k', async () => { throw new Error('offline'); }), null);
+  const seq = [1, 2, 2];
+  assert.equal(await L.settledKeyUsage('k', { read: async () => seq.shift(), waitMs: 0 }), 2);
+});
+
+test('batch.mjs refuses a batch that does not fit the host before it starts anything', () => {
+  const libs = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-batch-')), 'libs.json');
+  fs.writeFileSync(libs, JSON.stringify([{ name: 'tinylib', image: 'x', srcDir: 'tinylib', testDir: 'tests', importName: 'tinylib', distName: 'tinylib', baseCommit: 'abc1234' }]));
+  const jobs = String(os.cpus().length + 1);
+  let out = null;
+  try {
+    execFileSync(process.execPath, [path.join(here, 'batch.mjs'), '--dry-run', '--libs', libs, '--jobs', jobs, '--cpus', '1'], { encoding: 'utf8', stdio: 'pipe', env: { ...process.env, NODE_OPTIONS: '' } });
+  } catch (err) {
+    out = err;
+  }
+  assert.ok(out, 'the batch started');
+  assert.equal(out.status, 2);
+  assert.match(out.stderr, /does not fit this host[\s\S]*lower --jobs or --cpus/);
 });

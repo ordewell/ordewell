@@ -343,7 +343,7 @@ describe('answer_checkpoint', () => {
       const env = await atCheckpoint();
 
       expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'approve' }, ACT)).toEqual({ ok: true, message: 'Approved the checkpoint of task #1 "Task t1": it goes on.' });
-      await expect(env.answer).resolves.toEqual({ kind: 'continue' });
+      await expect(env.answer).resolves.toEqual({ kind: 'continue', by: 'supervisor' });
       expect(env.timeline().at(-1)).toMatchObject({
         record: { command: 'answer_checkpoint', actor: 'supervisor', level: 'act', outcome: 'done', task: { id: 't1', ref: '#1' } },
         text: 'Approved the checkpoint of task #1 "Task t1": by supervisor.',
@@ -355,7 +355,7 @@ describe('answer_checkpoint', () => {
 
       expect(await env.run({ command: 'answer_checkpoint', task: 't1', answer: 'reject', reason: 'the table is read by the billing job' }, ACT))
         .toEqual({ ok: true, message: 'Rejected the checkpoint of task #1 "Task t1": the runner is told the reason.' });
-      await expect(env.answer).resolves.toEqual({ kind: 'rejected', reason: 'the table is read by the billing job' });
+      await expect(env.answer).resolves.toEqual({ kind: 'rejected', reason: 'the table is read by the billing job', by: 'supervisor' });
       expect(env.timeline().at(-1)).toMatchObject({
         record: { actor: 'supervisor', level: 'act', outcome: 'done', detail: 'the table is read by the billing job' },
         text: 'Rejected the checkpoint of task #1 "Task t1": by supervisor: "the table is read by the billing job"',
