@@ -530,7 +530,8 @@ export class RunSupervision {
     if (plan?.plannerContextPause) return 'the planner is paused on its context, and waits for you to retry its compaction or stop it';
     if (plan?.plannerResend?.at) return 'the planner hit its usage limit, and its turn goes again once the limit resets';
     if (plan?.plannerResend) return 'the planner hit its usage limit, and its turn waits for your next message';
-    if (this.host.wakeUpsParked()) return 'you stopped the planner\'s turn it waited behind, and it goes with your next message';
+    // A wake still gathering unparks them as it is delivered (a Stop earlier in the run parked them), and its turn takes them along.
+    if (this.host.wakeUpsParked() && !this.supervisor.wakeOwed) return 'you stopped the planner\'s turn it waited behind, and it goes with your next message';
     return undefined;
   }
 
