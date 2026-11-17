@@ -1,4 +1,4 @@
-import type { Task, Verdict, VerificationCheck } from '../models/Task';
+import type { Task, TurnAuthority, Verdict, VerificationCheck } from '../models/Task';
 import type { IRunnerSession, ScriptExit, ScriptFullOutput, ScriptStatus } from '../interfaces/IRunner';
 import type { CheckpointAnswer, TaskCompleteArgs } from './mcp/tools';
 import { RUNNING_LONG_FLOOR_MS, RunningLongClock, type RunningLongFacts, type RunningLongThreshold } from './RunningLong';
@@ -26,6 +26,12 @@ export interface VerdictEngineOptions {
  */
 export const IDLE_TIMEOUT_MS = 10 * 60_000;
 
+
+
+/** An answer names its answerer only when it was not the user, whom {@link CheckpointAnswer} assumes. */
+function answeredBy(by: TurnAuthority): { by?: TurnAuthority } {
+  return by === 'user' ? {} : { by };
+}
 
 export class VerdictEngine {
   private pendingVerdicts = new Map<string, Verdict>();
@@ -191,16 +197,16 @@ export class VerdictEngine {
     return this.checkpointQuestions.get(taskId);
   }
 
-  approveCheckpoint(taskId: string, note?: string): void {
+  approveCheckpoint(taskId: string, note?: string, by: TurnAuthority = 'user'): void {
     this.checkpointQuestions.delete(taskId);
     this.resumeIdle(taskId);
-    this.toolCheckpoints.get(taskId)?.({ kind: 'continue', ...(note ? { note } : {}) });
+    this.toolCheckpoints.get(taskId)?.({ kind: 'continue', ...(note ? { note } : {}), ...answeredBy(by) });
   }
 
-  rejectCheckpoint(taskId: string, reason: string): void {
+  rejectCheckpoint(taskId: string, reason: string, by: TurnAuthority = 'user'): void {
     this.checkpointQuestions.delete(taskId);
     this.resumeIdle(taskId);
-    this.toolCheckpoints.get(taskId)?.({ kind: 'rejected', reason });
+    this.toolCheckpoints.get(taskId)?.({ kind: 'rejected', reason, ...answeredBy(by) });
   }
 
   /**

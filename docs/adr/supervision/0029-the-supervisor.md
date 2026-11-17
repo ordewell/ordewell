@@ -310,7 +310,8 @@ narrow (deny), or hand the decision to a person.
 a checkpoint asks a person to approve its work before it goes on, and the
 answer is the user's judgement unless they let the supervisor act. In a
 wake-up turn at Act the supervisor approves it, so the task goes on, or rejects
-it with a reason, which the runner is told and acts on; a rejection without a
+it with a reason, which the runner is told and acts on; either way the runner's
+reply names the supervisor as answering for the user (ADR-0025). A rejection without a
 reason is refused, since the runner would be left with nothing to act on. A
 planner turn in the user's own turn is refused: the user is in the conversation
 and answers it themselves, by their surface's control for it
@@ -785,3 +786,4 @@ until #30 exists.
 - 2026-11-09 — a refusal of the user's own action names the action and the user's surface's control for it rather than a card or button, and a refused `merge_all` with automatic merging on says the merge happens by itself ([ADR-0030](0030-global-run-settings.md)).
 - 2026-11-14 — below Act, a wake-up's reply that leaves nothing to run is listed as a `planner` escalation until the user writes; Watch still changes nothing ([ADR-0053](0053-what-waits-on-a-person-is-derived-and-answered-in-one-call.md)).
 - 2026-11-14 — a task running long, or whose runner compacted on its own, is an attention event, held as a quiet task's is (ADR-0018 W1).
+- 2026-11-17 — the supervisor's checkpoint answer reaches the runner as its own, "the supervisor said yes for the user" or "no" with the reason, not as the user's (ADR-0025).

@@ -49,7 +49,18 @@ own handlers called in this process.**
   even with code zero, cannot imply completion. Manual Mark complete remains
   the user's explicit override.
 - Checkpoints use only `checkpoint({question})`; the call remains open until
-  answered or withdrawn. No completion or checkpoint text markers are parsed.
+  answered or withdrawn, and its result says who answered: `approved: the user
+  said yes — continue`, or `rejected: the user said no — <reason>`, with "the
+  supervisor said … for the user" when the supervisor answered at Act
+  (ADR-0029). No completion or checkpoint text markers are parsed.
+- A checkpoint stops its task, and every task waiting on it, until someone
+  answers. So an unattended (AFK) task is told, first in its first message on
+  every runner, the built-in one included, to decide what its brief and the
+  repository let it decide, record those decisions as assumptions, and ask only
+  before an unauthorised effect that cannot be undone or reaches outside the
+  workspace, or for what only a person has; the tool's description says the
+  same in one sentence. A HITL task is told instead when to ask and how to read
+  the reply.
 - `IRunner` and `IRunnerSession` are the single runner contracts. Events,
   messages, interrupt, approvals, native session id and task tools are mandatory
   session methods. Mid-turn steering remains an optional adapter feature;
@@ -263,3 +274,4 @@ tmux; the TUI remains unverified on native Windows (ADR-0010).
 - 2026-11-05 — a coding-agent planner on an ACP runner that attaches on its first turn sends its goal or message as the check, its turn discarded unheard and failed when the server was not contacted before it ended (ADR-0060 R5).
 - 2026-11-14 — the built-in `ordewell` runner joins the structured connectors; its tools are the token's handlers called in-process, and its completion is still a token-bound `task_complete` (ADR-0070).
 - 2026-11-16 — the built-in runner's connector is one per API provider, under the provider's id (ADR-0070).
+- 2026-11-17 — a checkpoint's result names who answered, the user or the supervisor for them; an AFK task's first message and the tool's description say when to ask.
