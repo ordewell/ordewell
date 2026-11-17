@@ -97,6 +97,8 @@ export interface LoopOptions {
    * so the attempt ends on a report rather than mid-edit; none is no limit.
    */
   stepLimit?: number;
+  /** Where compaction starts, from a `taskCompactAt` number held within bounds; the capacity guard alone when absent. */
+  compactAt?: number;
   /**
    * The policy a step whose stream failed part way is sent again under; the
    * client's `withRetry` should share it, as it retries the failures before any
@@ -170,6 +172,7 @@ export class OrdewellLoop {
       fallbackSystem: options.system,
       record: (entry) => this.record(entry),
       emit: (event) => this.emit(event),
+      ...(options.compactAt !== undefined ? { startAt: options.compactAt } : {}),
     });
   }
 
