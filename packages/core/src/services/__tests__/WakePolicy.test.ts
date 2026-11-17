@@ -285,6 +285,12 @@ describe('wakeDue (ADR-0057 R4)', () => {
     expect(wakeDue([event(kind, 500, 't1')], none, DEBOUNCE)).toEqual({ at: 500 + DEBOUNCE, reason: 'at_once' });
   });
 
+  it('a failure or hold a turn left standing goes with no merge window: that turn is its context', () => {
+    expect(wakeDue([event('failure_standing', 500, 't1')], none, DEBOUNCE)).toEqual({ at: 500, reason: 'at_once' });
+    expect(wakeDue([event('task_idle', 5, 't2'), event('failure_standing', 900, 't1')], none, DEBOUNCE)).toEqual({ at: 900, reason: 'at_once' });
+    expect(wakeDue([event('waiting_input', 0, 't2'), event('failure_standing', 900, 't1')], none, DEBOUNCE)).toEqual({ at: 900, reason: 'at_once' });
+  });
+
   it('a run\'s end goes with no merge window, with what was held', () => {
     expect(wakeDue([event('task_idle', 5, 't1'), event('run_finished', 900)], none, DEBOUNCE)).toEqual({ at: 5, reason: 'run_ended' });
   });

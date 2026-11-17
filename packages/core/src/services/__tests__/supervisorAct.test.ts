@@ -328,7 +328,7 @@ describe('the loop guards', () => {
     expect(taskOf(env.session, 't1')!.retryNote).toEqual({ by: 'supervisor', text: 'Import from ./lib, not ../lib.' });
     env.planner.calls[0].finish(prose('Retried task 1 with a note.'));
     await until(() => env.run.spawnedIds().length === 2);
-    expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('## The supervisor\'s note for this attempt\n\nThe last attempt at this task failed, and the supervisor retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\nImport from ./lib, not ../lib.');
+    expect(env.run.runner.spawn.mock.calls[1][0].prompt).toContain('## The supervisor\'s note for this attempt\n\nThe last attempt at this task ended without passing, and the supervisor retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\nImport from ./lib, not ../lib.');
   });
 
   it('refuses the same note again once the attempt it was given failed', async () => {

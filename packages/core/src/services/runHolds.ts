@@ -1,5 +1,6 @@
 import { flattenTasks, type AwaitingReason, type ConversationMessage, type Task } from '../models/Task';
 import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
+import { repeatingChecks } from './blocking';
 import type { StartWait } from './readiness';
 
 /**
@@ -71,7 +72,8 @@ export function standingBlock(plan: readonly Task[], waits: ReadonlyMap<string, 
   const tasks = flattenTasks([...plan]);
   const task = tasks.find((t) => t.id === taskId);
   if (!task) return undefined;
-  const block = task.status === 'failed' ? { kind: 'failed' as const } : holdOf(task, waits);
+  // A loop's check between rounds is stored as failed but is no failure: its loop goes on (ADR-0045 L3).
+  const block = task.status !== 'failed' ? holdOf(task, waits) : repeatingChecks(tasks).has(taskId) ? undefined : { kind: 'failed' as const };
   return block ? { taskId, block, holdsBack: holdsBackIn(tasks)(taskId) } : undefined;
 }
 

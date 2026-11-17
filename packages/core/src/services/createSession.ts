@@ -81,7 +81,7 @@ import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './Planner
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { takeUserActions } from '../utils/userActionLog';
-import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, wakeUpReply, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, wakeUpReply, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId, type RetryNote } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { describeHeld, describeLost, SessionHeldError, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
@@ -1249,7 +1249,7 @@ export class Session {
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor), this.failuresLeftBy(actor)),
       joinRun: (approved, left) => this.joinRun(approved, left),
-      startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
+      startTask: (taskId, actor, note) => this.startOneTask(taskId, runOrigin(actor), note),
       stopTask: (taskId, actor) => {
         // Before it ends: its release can outlast a held event's timer, which must find the stop.
         if (actorAuthority(actor.kind) === 'user') this.supervision.taskStoppedByUser(taskId);
@@ -2718,9 +2718,10 @@ export class Session {
     return said;
   }
 
-  private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {
+  private async startOneTask(taskId: string, origin: RunOrigin, note?: RetryNote): Promise<void> {
     if (!this.plan) return;
     this.requireTask(taskId);
+    if (note) this.store.setRetryNote(taskId, note);
     await this.controls.forceStartTask(taskId, origin);
   }
 

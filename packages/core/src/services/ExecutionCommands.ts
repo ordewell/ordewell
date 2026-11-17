@@ -211,7 +211,8 @@ export interface ExecutionHost {
    * `left` still wait. Answers the line that says so.
    */
   joinRun(approved: number, left: number): Promise<string>;
-  startTask(taskId: string, actor: ExecutionActor): Promise<void>;
+  /** `note` is a model's note for the attempt it starts, a stopped task's (ADR-0029). */
+  startTask(taskId: string, actor: ExecutionActor, note?: RetryNote): Promise<void>;
   /** `actor` is who stopped it: the user's stop holds the supervisor back from it (ADR-0029). */
   stopTask(taskId: string, actor: ExecutionActor): Promise<void>;
   /** `actor` is who stopped it: the user's Stop stands the supervisor down (ADR-0029). */
@@ -1044,10 +1045,12 @@ export class ExecutionCommands {
     const nextRound = start.kind === 'own' ? undefined : start.wait;
     const settled = !nextRound && (task.status === 'failed' || task.status === 'awaiting_user' || task.status === 'skipped');
     const note = noteOf(actor, message);
+    // A stop leaves its task pending on hold, not failed: its next start is the attempt the note is for.
+    const stoppedAttempt = !settled && !nextRound && !!waitOf(this.orchestrator.startWaits(task), 'on-hold');
     if (note) {
       const unread = task.type === 'script' || task.type === 'delegated'
         ? `${capitalize(label)} is a ${task.type === 'script' ? 'script' : 'delegated task'}, which reads no note: change it with edit_plan, then retry it without a message.`
-        : !settled ? `${capitalize(label)} has not failed or stopped, so there is no attempt to retry with a note: change its prompt with edit_plan instead.` : null;
+        : !settled && !stoppedAttempt ? `${capitalize(label)} has not failed or stopped, so there is no attempt to retry with a note: change its prompt with edit_plan instead.` : null;
       if (unread) return { refusal: unread };
     }
     if (how === 'run' && settled) {
@@ -1081,7 +1084,7 @@ export class ExecutionCommands {
         if (settled) await this.controls.retryTask(task.id, runOrigin(actor), note);
         // A Stop while the retry let go of the old worktree withdrew the start that would follow it.
         if (stopped()) throw new Error(STOPPED_BEFORE_START);
-        if (!this.running(task.id) && !(settled && this.orchestrator.isScheduling)) await this.host.startTask(task.id, actor);
+        if (!this.running(task.id) && !(settled && this.orchestrator.isScheduling)) await this.host.startTask(task.id, actor, ...(note && !settled ? [note] : []));
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         const verb = how === 'run' || nextRound ? 'Started' : 'Retrying';
         return {

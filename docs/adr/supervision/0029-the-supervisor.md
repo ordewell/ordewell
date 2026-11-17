@@ -541,11 +541,11 @@ accepted. Each tripped guard also posts a supervisor message to the user.
 
 **A retry's note.** A fresh `retry_task` from the supervisor, or from a
 planner turn, may carry a `message`: a note for that attempt, saying what to
-do differently. It is stored with the attempt (`retryNote`), shown in the
-task's log as the attempt's, and given to the runner with its brief under a
-heading that names it the supervisor's (or the planner's) note for this
-attempt, with the task's prompt unchanged. The next attempt starts without
-it. A user's retry reads no message, a session retry has no new attempt to
+do differently: for a task that failed or waits on a person, or one stopped
+and on hold, whose next start is the attempt it is for. It is stored with the
+attempt (`retryNote`) and given to the runner with its brief under a heading
+that names it the supervisor's (or the planner's) note for this attempt, with
+the task's prompt unchanged. The next attempt starts without it. A user's retry reads no message, a session retry has no new attempt to
 carry one, and a script or delegated task has no brief to carry it, so a note
 there is refused. An `edit_plan` that changes the prompt of a failed or held
 task answers that the task still stands that way and needs `retry_task` to
@@ -839,3 +839,4 @@ until #30 exists.
 - 2026-11-17 — `run_concluded` is derived from state in `RunSupervision.settle()` and judged again on every change to it, a planner held on a limit concludes with `supervisorHeld`, and `ordewell run` waits at most `CLOSING_TURN_BOUND_MS` per end. Seen in review: a Stop of the closing turn's retry left the end open forever.
 - 2026-11-17 — a Stop that parks the closing turn behind the user's next message concludes the run with `supervisorHeld`, and `ordewell run`'s bound does not count a user's planner turn the closing turn waits behind.
 - 2026-11-17 — a fresh `retry_task` from a model may carry a note for the new attempt, which the runner reads with its brief and the identical-retry guard counts as a change; the guard's refusal names that, and an edit to a failed or held task's prompt answers that it still needs `retry_task`. Seen live: an Act supervisor refused an identical retry edited the prompt and ended its turn, leaving twelve tasks held.
+- 2026-11-17 — a stopped task on hold takes a note on its next start too, and the note is given to the runner only, not claimed as shown in the log.

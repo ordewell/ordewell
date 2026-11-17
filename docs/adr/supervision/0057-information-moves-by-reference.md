@@ -189,7 +189,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   not idle. When a wake-up turn at Act ends and a task it was woken for is still failed, on hold
   or waiting on a person (a usage limit apart), was not stopped by the user, and tasks not yet
   done need it, `RunSupervision` raises it for that task as the turn ends, without waiting for the
-  run to go idle, which another task still running can put off for good. Its line says the task
+  run to go idle, which another task still running can put off for good. A loop's check between
+  rounds is stored as failed but is no failure ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3), so it raises
+  none. It goes with no merge window, as `run_finished` does: the turn that left it standing is its
+  context, and `ordewell run --unattended` judges a person's wait still standing shortly after a
+  turn, so a wake that waited out the window came after the follower had left. Its line says the task
   still stands that way after the turn, how many tasks wait on it, and the calls that release it.
   It is raised once per task for each failure or hold, keyed by the task with how it stands and
   why: a turn that leaves it standing again is not woken a third time, and a turn woken for
@@ -493,3 +497,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-17 — R4, R5: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, raises `running_long`, held as the others are; its line names the size it passed against the window.
 - 2026-11-17 — R4: `run_held`, the run idle behind a task on hold or one waiting on a person, wakes as a person needed does, once per distinct set of holds, naming each hold, who put it there and what it holds back.
 - 2026-11-17 — R4: `failure_standing`, a task a wake-up turn at Act left failed or held with work waiting on it, wakes the supervisor once more as the turn ends, once per task for each failure or hold, while `run_held` stays the backstop for an idle run.
+- 2026-11-17 — R4: `failure_standing` goes with no merge window, and a loop's check between rounds raises none.
