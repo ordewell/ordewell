@@ -178,6 +178,24 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
       expect(flags.map((f) => [f.reason, f.compactions, f.compactionWindow])).toEqual([['duration', 2, 150_000]]);
     });
 
+    it('raises one at the first compaction where the window it sets is 200000 or more, naming that window', () => {
+      const { session, flags } = watched();
+      session.compactWindowTokens = 400_000;
+
+      compact(session, 1);
+
+      expect(flags.map((f) => [f.reason, f.compactions, f.compactionWindow])).toEqual([['compaction', 1, 400_000]]);
+    });
+
+    it('keeps a window just under 200000 routine', () => {
+      const { session, flags } = watched();
+      session.compactWindowTokens = 199_999;
+
+      compact(session, 2);
+
+      expect(flags).toEqual([]);
+    });
+
     it('raises one at the first compaction where it sets no window', () => {
       const { session, flags } = watched();
 

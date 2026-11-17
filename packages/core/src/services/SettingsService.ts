@@ -124,6 +124,14 @@ export interface UserSettings {
    */
   taskRunnerConfig?: TaskRunnerConfig;
   /**
+   * Where a Claude Code task's context compacts: `auto`, `off` or a number
+   * of tokens (`taskCompactWindowOf`). Absent means `auto`, unless
+   * `ORDEWELL_TASK_COMPACT_WINDOW` says otherwise. Kept as written, since a
+   * value it cannot use must refuse a task, not fall back to another window.
+   * Set in the file only: no surface offers it.
+   */
+  taskCompactWindow?: string | number;
+  /**
    * Run tasks in containers (ADR-0059 L5), as `containerSettings` reads it:
    * absent means local worktrees. Kept as written, since one it cannot use must
    * refuse a task, not fall back to the host. Only a checkout's surfaces offer
@@ -507,6 +515,9 @@ export class SettingsService {
     if (streamTimeouts !== undefined) settings.ordewellStreamTimeouts = streamTimeouts;
     if (raw.taskRunnerConfig === 'user' || raw.taskRunnerConfig === 'minimal') {
       settings.taskRunnerConfig = raw.taskRunnerConfig;
+    }
+    if (typeof raw.taskCompactWindow === 'string' || typeof raw.taskCompactWindow === 'number') {
+      settings.taskCompactWindow = raw.taskCompactWindow;
     }
     if (raw.containers !== undefined) {
       // Ignored, not refused, in a published build (ADR-0059 L5): the user hears it once, so nobody thinks tasks are isolated when they run on the host.
