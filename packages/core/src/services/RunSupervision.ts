@@ -15,7 +15,7 @@ import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { reportEnded, researchReport, runUpdateReport } from './taskReport';
 import { researchReportTo } from './ResearchTasks';
-import { heldBy, runHeldDetail, runHolds, runHoldsKey } from './runHolds';
+import { heldBy, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey } from './runHolds';
 import { taskRefOf } from './TaskRefs';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
@@ -115,6 +115,8 @@ export class RunSupervision {
   private endOwed = false;
   /** The holds the run stood idle behind when the supervisor last had a turn on it (ADR-0057 R4); see {@link runIdle}. */
   private holdsSeen: string | undefined;
+  /** Each task the supervisor was woken for again after its turn left it failed or held, by how it stood then (ADR-0057 R4); see {@link failuresStanding}. */
+  private readonly standingWoken = new Map<string, string>();
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -138,9 +140,10 @@ export class RunSupervision {
       restartPlanner: () => host.restartPlanner(),
       abandonTurn: () => host.abandonTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),
-      wakeUpEnded: () => {
+      wakeUpEnded: (tasks) => {
         if (!this.supervisor.awaitsRunEnd) this.handOver();
         this.settle();
+        this.failuresStanding(tasks ?? []);
         this.runIdle();
       },
       inputsWait: () => (host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor' && !t.rides),
@@ -189,6 +192,7 @@ export class RunSupervision {
     if (origin === 'user') {
       this.supervisor.userStarted();
       this.holdsSeen = undefined;
+      this.standingWoken.clear();
     }
     this.running = true;
     this.changedAfterRun = false;
@@ -285,6 +289,8 @@ export class RunSupervision {
     const repeating = repeatingChecks([...this.host.tasks()]);
     this.reportStoppedLoops(repeating, task.id);
     if (repeating.has(task.id)) return;
+    // Settling again is a new failure, if it failed: its turn may be woken for it once more (ADR-0057 R4).
+    this.standingWoken.delete(task.id);
     this.guards.settled(task);
     const to = this.reportAddress(task);
     if (to && reportEnded(task)) {
@@ -377,6 +383,37 @@ export class RunSupervision {
       taskIds: idle.holds.map((h) => h.taskId),
       detail: runHeldDetail(idle.holds, describe, (taskId) => heldBy(history, taskId)),
     });
+  }
+
+  /**
+   * A wake-up turn at Act ended and left a task it was woken for failed or
+   * held, with work waiting on it (ADR-0057 R4): the supervisor is woken once
+   * more for it now, while other tasks still run, rather than when the run
+   * goes idle, which may be never. Once per task for each failure or hold, so
+   * a turn that leaves it standing again is not woken a third time; the wake
+   * goes through {@link observe}, so the wake-up rate guard counts it. A run
+   * idle behind its holds is {@link runIdle}'s, the backstop, and a task the
+   * user stopped waits for them (ADR-0029).
+   */
+  private failuresStanding(tasks: readonly string[]): void {
+    const plan = this.host.tasks();
+    const waits = this.host.startWaits();
+    for (const [taskId, key] of this.standingWoken) {
+      const now = standingBlock(plan, waits, taskId);
+      if (!now || standingKey(now) !== key) this.standingWoken.delete(taskId);
+    }
+    if (!this.running || this.level !== 'act' || this.idleHolds()) return;
+    // A turn that failed is retried with the same inputs, which see the task as it stands.
+    if ((this.host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor')) return;
+    const { describe } = this.digestReader();
+    for (const taskId of new Set(tasks)) {
+      const standing = standingBlock(plan, waits, taskId);
+      if (!standing || standing.holdsBack === 0 || this.guards.allStopped([taskId])) continue;
+      const key = standingKey(standing);
+      if (this.standingWoken.get(taskId) === key) continue;
+      this.standingWoken.set(taskId, key);
+      this.supervisor.observe({ kind: 'failure_standing', taskId, detail: standingDetail(standing, describe) });
+    }
   }
 
   /** The holds the run stands idle behind now, and their key; undefined when it is not idle behind any. */
@@ -488,6 +525,7 @@ export class RunSupervision {
     this.changedAfterRun = false;
     this.endOwed = false;
     this.holdsSeen = undefined;
+    this.standingWoken.clear();
     this.guards.forget();
   }
 

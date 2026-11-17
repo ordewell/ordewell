@@ -216,8 +216,8 @@ const oneTaskInput = z.object({ task: taskRef });
 const retryTaskInput = z.object({
   task: taskRef,
   from: z.enum(['fresh', 'session'])
-    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now (change the prompt with edit_plan first). "session": continue the runner\'s saved session with "message"; for a completed or failed task, or one paused on a usage limit.'),
-  message: z.string().optional().describe('What the runner should do next. Required with "session", except to resume a task paused on a usage limit.'),
+    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now, with "message" as your note for it if you pass one. "session": continue the runner\'s saved session with "message"; for a completed or failed task, or one paused on a usage limit.'),
+  message: z.string().optional().describe('With "session": what the runner should do next, required except to resume a task paused on a usage limit. With "fresh": your note for the new attempt, saying what to do differently; the runner gets it with its brief, marked as your note for this attempt, and it is a change, so a retry the identical-retry guard refuses goes through with a new note.'),
 });
 
 const skipTaskInput = z.object({
@@ -715,7 +715,7 @@ export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_run', 'Stop every running task and the run. The plan is kept.',
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
-  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset. In Guarded the user is asked first. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
+  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what a fresh attempt is told, pass a message, your note for that attempt, which the runner reads with its brief: one call, and a change the identical-retry guard accepts. Or edit its prompt with edit_plan and call retry_task in the same reply: an edit alone starts nothing. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset. In Guarded the user is asked first. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
   tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
     skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),

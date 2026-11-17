@@ -32,6 +32,7 @@ export type RunEventKind =
   | 'start_refused'
   | 'run_finished'
   | 'run_held'
+  | 'failure_standing'
   | 'task_report';
 
 export type RunEvent = {

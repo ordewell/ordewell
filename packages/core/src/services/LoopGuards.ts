@@ -62,6 +62,8 @@ export interface AttemptShape {
    * and from a shape saved before script tasks.
    */
   script?: { commands: readonly (readonly string[])[] | null; script: string | null; timeoutMs: number };
+  /** A model's note for the attempt (ADR-0029): new text is a change, as a new prompt is. Absent when it had none. */
+  note?: string;
 }
 
 export function attemptShape(task: Readonly<Task>): AttemptShape {
@@ -74,6 +76,7 @@ export function attemptShape(task: Readonly<Task>): AttemptShape {
     ...(task.type === 'script'
       ? { script: { commands: task.commands ?? null, script: task.script ?? null, timeoutMs: task.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS } }
       : {}),
+    ...(task.type !== 'script' && task.retryNote ? { note: task.retryNote.text } : {}),
   };
 }
 
@@ -122,10 +125,14 @@ export function retryLimit(task: GuardedTask, retried: number, limit: number, as
 
 /** A retry after a failure, with what the failed attempt was told and who ran it unchanged, is refused. */
 export function identicalRetry(task: GuardedTask, failedWith: AttemptShape | undefined, now: AttemptShape): GuardTrip | null {
-  if (!failedWith || stable(failedWith) !== stable(now)) return null;
+  if (!failedWith) return null;
+  // Dropping the failed attempt's note changes nothing it was told: only new text is a change.
+  const { note: failedNote, ...withoutNote } = failedWith;
+  if (stable(now.note === undefined ? withoutNote : failedWith) !== stable(now)) return null;
+  const same = now.note !== undefined && now.note === failedNote ? 'prompt, model and note' : 'prompt and model';
   const refusal = now.script
-    ? `Refused: ${named(task)} failed with this same body and time limit, and an unchanged retry would run the same commands. Change something or escalate: edit its "commands", "script" or "timeoutMs" with edit_plan, then retry; or tell the user.`
-    : `Refused: ${named(task)} failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: edit its prompt with edit_plan, or move it to another model or runner, then retry; or tell the user.`;
+    ? `Refused: ${named(task)} failed with this same body and time limit, and an unchanged retry would run the same commands. Change something or escalate: edit its "commands", "script" or "timeoutMs" with edit_plan and call retry_task again in this same reply, since an edit alone starts nothing; or tell the user.`
+    : `Refused: ${named(task)} failed with this same ${same}, and an unchanged retry would fail the same way. Change something or escalate: call retry_task from "fresh" again with a message, your note to the new attempt saying what to do differently; or edit its prompt with edit_plan, or move it to another model or runner, and call retry_task again in this same reply, since an edit alone starts nothing; or tell the user.`;
   return {
     key: `identical-retry:${task.id}`,
     refusal,
@@ -254,10 +261,13 @@ export class SupervisionMemory {
     // Whatever command asks for it, a start of a check between rounds is its loop's next round (ADR-0045 L7).
     if (target && betweenRounds(target.task)) return null;
     const from = command.command === 'retry_task' ? command.from : undefined;
+    // The attempt a call would start carries the call's note, or none: a retry clears the last one's (ADR-0029).
+    const text = command.command === 'retry_task' && from !== 'session' ? command.message?.trim() : undefined;
+    const retryNote = text ? { by: 'supervisor' as const, text } : undefined;
     for (const { task, ref, unchangedCounts } of this.retried(command.command, from, target, tasks)) {
       const guarded = { id: task.id, ref, title: task.title };
       const trip = retryLimit(guarded, this.retries.get(task.id) ?? 0, limit, 'retry', this.skips.get(task.id) ?? 0)
-        ?? (unchangedCounts ? identicalRetry(guarded, this.failedWith.get(task.id), attemptShape(task)) : null);
+        ?? (unchangedCounts ? identicalRetry(guarded, this.failedWith.get(task.id), attemptShape({ ...task, retryNote })) : null);
       if (trip) return trip;
     }
     return null;

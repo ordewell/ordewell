@@ -1,4 +1,4 @@
-import type { Task, TaskOutputSummary, TaskSkillSnapshot } from '../models/Task';
+import type { RetryNote, Task, TaskOutputSummary, TaskSkillSnapshot } from '../models/Task';
 import { flattenTasksWithParents } from '../models/Task';
 import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolation';
 import { TASK_COMPLETE_TOOL } from './mcp/tools';
@@ -316,12 +316,20 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
 
   if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE);
 
+  // Near the brief it corrects, and marked as whose it is: the runner reads it as a correction to how, not a new task (ADR-0029).
+  if (task.retryNote) blocks.push(renderRetryNote(task.retryNote));
+
   if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
 
   // Last, against the check's own words: past its dependencies' handoffs, the block a runner reads just before its task is the one it acts on.
   if (task.type === 'ai' && task.loop) blocks.push(renderLoopVerdict(task.loop, opts?.loop?.round));
 
   return `${blocks.join('\n\n')}\n\n${basePrompt}`;
+}
+
+function renderRetryNote(note: RetryNote): string {
+  const who = note.by === 'supervisor' ? 'supervisor' : 'planner';
+  return `## The ${who}'s note for this attempt\n\nThe last attempt at this task failed, and the ${who} retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\n${note.text}`;
 }
 
 /**
