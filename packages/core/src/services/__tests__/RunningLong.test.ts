@@ -121,18 +121,18 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
   it('flags each automatic compaction of its own session once, whatever the time, and not a manual one or a subagent\'s usage', () => {
     const { session, flags } = watched();
 
-    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 150_000, contextWindow: 200_000 } });
-    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 190_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 120_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 140_000, contextWindow: 200_000 } });
     session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 199_000, subagentId: 'sub-1' } });
     vi.advanceTimersByTime(5 * MINUTE);
-    session.emitEvent({ type: 'compaction', trigger: 'auto', preTokens: 190_000, postTokens: 30_000 });
+    session.emitEvent({ type: 'compaction', trigger: 'auto', preTokens: 140_000, postTokens: 30_000 });
     session.emitEvent({ type: 'compaction', trigger: 'manual' });
     session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 32_000, contextWindow: 200_000 } });
     vi.advanceTimersByTime(1);
 
     expect(flags).toEqual([{
       taskId: 't1', reason: 'compaction', elapsedMs: 5 * MINUTE, thresholdMs: 30 * MINUTE, compactions: 1,
-      contextTokens: 30_000, contextWindow: 200_000, peakContextTokens: 190_000,
+      contextTokens: 30_000, contextWindow: 200_000, peakContextTokens: 140_000,
     }]);
   });
 
@@ -215,35 +215,135 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     });
   });
 
+  describe('whose context grows large (ADR-0057 R4)', () => {
+    const call = (session: FakeRunnerSession, contextTokens: number, contextWindow?: number) =>
+      session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens, ...(contextWindow ? { contextWindow } : {}) } });
+
+    it('on a 1M window raises one at 400k and one more at 800k, and none at 1600k, past the window', () => {
+      const { session, flags } = watched();
+
+      call(session, 399_999, 1_000_000);
+      expect(flags).toEqual([]);
+      call(session, 412_000, 1_000_000);
+      call(session, 600_000, 1_000_000);
+      call(session, 810_000, 1_000_000);
+      call(session, 990_000, 1_000_000);
+
+      expect(flags).toEqual([
+        { taskId: 't1', reason: 'context', elapsedMs: 0, thresholdMs: 30 * MINUTE, contextThreshold: 400_000, compactions: 0, contextTokens: 412_000, contextWindow: 1_000_000, peakContextTokens: 412_000 },
+        { taskId: 't1', reason: 'context', elapsedMs: 0, thresholdMs: 30 * MINUTE, contextThreshold: 800_000, compactions: 0, contextTokens: 810_000, contextWindow: 1_000_000, peakContextTokens: 810_000 },
+      ]);
+    });
+
+    it('on a 200k window raises one at the 150k floor, not at 40% of it, and none after: 300k is past the window', () => {
+      const { session, flags } = watched();
+
+      call(session, 80_000, 200_000);
+      call(session, 149_999, 200_000);
+      expect(flags).toEqual([]);
+      call(session, 150_000, 200_000);
+      call(session, 199_000, 200_000);
+
+      expect(flags.map((f) => [f.reason, f.contextThreshold, f.contextTokens])).toEqual([['context', 150_000, 150_000]]);
+    });
+
+    it('measures against a compaction window in force where it is smaller than the model\'s: 300k on a 1M model starts at 150k', () => {
+      const { session, flags } = watched();
+      session.compactWindowTokens = 300_000;
+
+      call(session, 149_000, 1_000_000);
+      expect(flags).toEqual([]);
+      call(session, 160_000, 1_000_000);
+      call(session, 290_000, 1_000_000);
+
+      expect(flags.map((f) => [f.reason, f.contextThreshold, f.compactionWindow, f.contextWindow])).toEqual([['context', 150_000, 300_000, 1_000_000]]);
+    });
+
+    it('never raises one under a compaction window below the floor, as Haiku\'s', () => {
+      const { session, flags } = watched();
+      session.compactWindowTokens = 125_000;
+
+      call(session, 120_000, 200_000);
+
+      expect(flags).toEqual([]);
+    });
+
+    it('raises one per crossing: a call that jumps past two thresholds raises one, naming the higher', () => {
+      const { session, flags } = watched();
+
+      call(session, 850_000, 1_000_000);
+      call(session, 900_000, 1_000_000);
+
+      expect(flags.map((f) => f.contextThreshold)).toEqual([800_000]);
+    });
+
+    it('does not raise one again when the context falls under a threshold it passed and reaches it again', () => {
+      const { session, flags } = watched();
+
+      call(session, 450_000, 1_000_000);
+      session.emitEvent({ type: 'compaction', trigger: 'manual', postTokens: 40_000 });
+      call(session, 450_000, 1_000_000);
+
+      expect(flags.map((f) => [f.reason, f.contextThreshold])).toEqual([['context', 400_000]]);
+    });
+
+    it('never raises one while the model\'s window is unknown, a compaction window or none; time still flags', () => {
+      const { session, flags } = watched();
+      session.compactWindowTokens = 300_000;
+
+      call(session, 900_000);
+      vi.advanceTimersByTime(30 * MINUTE);
+
+      expect(flags.map((f) => f.reason)).toEqual(['duration']);
+    });
+
+    it('does not count a subagent\'s context', () => {
+      const { session, flags } = watched();
+
+      session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'haiku', contextTokens: 190_000, contextWindow: 200_000, subagentId: 'sub-1' } });
+
+      expect(flags).toEqual([]);
+    });
+
+    it('raises none once the attempt has a verdict, whatever its runner reports as it winds down', () => {
+      const { session, flags } = watched();
+
+      session.emitExit(0);
+      call(session, 900_000, 1_000_000);
+
+      expect(flags).toEqual([]);
+    });
+  });
+
   it('carries the live context, its peak and the compactions so far on a later duration flag', () => {
     const { session, flags } = watched();
 
-    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 180_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 140_000, contextWindow: 200_000 } });
     session.emitEvent({ type: 'compaction', trigger: 'auto' });
     session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 40_000, contextWindow: 200_000 } });
     vi.advanceTimersByTime(30 * MINUTE);
 
     expect(flags[1]).toEqual({
       taskId: 't1', reason: 'duration', elapsedMs: 30 * MINUTE, thresholdMs: 30 * MINUTE, compactions: 1,
-      contextTokens: 40_000, contextWindow: 200_000, peakContextTokens: 180_000,
+      contextTokens: 40_000, contextWindow: 200_000, peakContextTokens: 140_000,
     });
   });
 
   it('leaves the live context unknown after a compaction that states no size, as Codex and OpenCode report one', () => {
     const { session, flags } = watched();
 
-    session.emitEvent({ type: 'usage', record: { source: 'codex', model: 'gpt-5', contextTokens: 190_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'codex', model: 'gpt-5', contextTokens: 140_000, contextWindow: 200_000 } });
     session.emitEvent({ type: 'compaction', trigger: 'auto' });
     session.emitEvent({ type: 'usage', record: { source: 'codex', compacted: true } });
     vi.advanceTimersByTime(30 * MINUTE);
 
-    expect(flags.map((f) => [f.reason, f.contextTokens, f.peakContextTokens])).toEqual([['compaction', undefined, 190_000], ['duration', undefined, 190_000]]);
+    expect(flags.map((f) => [f.reason, f.contextTokens, f.peakContextTokens])).toEqual([['compaction', undefined, 140_000], ['duration', undefined, 140_000]]);
   });
 
   it('does not measure a new model\'s context against the window of the model before it', () => {
     const { session, flags } = watched();
 
-    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus-1m', contextTokens: 600_000, contextWindow: 1_000_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus-1m', contextTokens: 300_000, contextWindow: 1_000_000 } });
     session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'sonnet', contextTokens: 150_000 } });
     vi.advanceTimersByTime(30 * MINUTE);
 
@@ -254,7 +354,7 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
   it('sets no peak against the window of a model it was not measured on', () => {
     const { session, flags } = watched();
 
-    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 150_000, contextWindow: 200_000 } });
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens: 140_000, contextWindow: 200_000 } });
     session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus-1m', contextWindow: 1_000_000 } });
     vi.advanceTimersByTime(30 * MINUTE);
 

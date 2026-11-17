@@ -50,6 +50,7 @@ import type { BudgetHold, NodeBudget } from './TreeLedger';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import { recordRunnerAuth, signedOutFromFailure } from './runnerAuth';
 import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
+import { compactionStartOf } from './taskCompactWindow';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
@@ -921,6 +922,9 @@ export class Attempts {
 
   /** Follow a running attempt's session: its usage, its verdict, its turns and what its runner switches to. */
   private watch(task: Task, attempt: TaskAttempt, session: IRunnerSession): void {
+    // Where its runner compacts, for the context meter to read against (ADR-0018 W1).
+    const window = session.compactWindowTokens;
+    if (window !== undefined) this.deps.store.setAttemptCompaction(task.id, attempt.attempt, { windowTokens: window, startsAtTokens: compactionStartOf(window) });
     // Attached before the verifier, so the summary of the call that settles
     // the attempt is captured before its verdict asks for the final text.
     session.onEvent((event) => {

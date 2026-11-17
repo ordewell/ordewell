@@ -105,8 +105,8 @@ export function attachingLabel(task: { status: string; attaching?: 1 | 2 }): str
 }
 
 /**
- * That a running attempt has run long or its runner's context compacted on
- * its own (ADR-0018 W1); null otherwise. Advice, as a quiet task's flag is:
+ * That a running attempt has run long, its runner's context compacted on
+ * its own or grew large (ADR-0018 W1); null otherwise. Advice, as a quiet task's flag is:
  * the task still runs, and nothing about it was decided.
  */
 export function runningLongLabel(task: { status: string; runningLong?: { compactions: number } | null }): string | null {

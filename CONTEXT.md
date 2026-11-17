@@ -1129,8 +1129,11 @@ approval" is derived from the task's pending approvals.
 
 **Running long** (ADR-0018, W1) — the advisory flag on an AI task's attempt
 whose running time passed max(30 min, 3× the longest running time of an AI
-task that passed in its plan), doubled after each flag, or whose own runner session
-compacted its context by itself. Time waiting on a person is left out, of both. It
+task that passed in its plan), doubled after each flag, whose own runner session
+compacted its context by itself, or whose context first reached 40% of its effective
+window (the smaller of the model's and a compaction window in force), never below
+150k tokens, and again at each doubling of that below the window. Time waiting on a
+person is left out of the running time. It
 carries the running time, the threshold and the task it came from, the live
 and peak context, the model's window and the compactions so far. The
 supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or

@@ -110,6 +110,12 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     expect(taskRowView(subject({ status: 'in_progress', runningLong: flag(0) })).status).toBe('running');
   });
 
+  it('shows a flag its context raised as it shows the others', () => {
+    const context = { reason: 'context' as const, elapsedMs: 600_000, thresholdMs: 1_800_000, contextThreshold: 400_000, contextTokens: 412_000, contextWindow: 1_000_000, compactions: 0, attempt: 1 };
+
+    expect(taskRowView(subject({ status: 'in_progress', runningLong: context })).runningLong).toBe('Running long');
+  });
+
   it('says nothing without a flag, or once the task has left its attempt', () => {
     expect(taskRowView(subject({ status: 'in_progress' })).runningLong).toBeNull();
     expect(taskRowView(subject({ status: 'completed', runningLong: flag(2) })).runningLong).toBeNull();

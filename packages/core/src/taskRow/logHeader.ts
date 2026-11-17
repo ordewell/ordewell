@@ -3,7 +3,7 @@ import type { TaskLogFollow } from '../conversation/taskLogFollow';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { AwaitingReason } from '../models/Task';
 import type { RepairWait } from '../interfaces/IWorktreeIsolation';
-import { plannerContextFill, taskUsageSummary, usageText, type AttemptUsage, type ContextFill } from '../models/Usage';
+import { attemptContextFill, taskUsageSummary, usageText, type AttemptUsage, type ContextFill } from '../models/Usage';
 import { approvalLabel, awaitingLabel, repairWaitLabel, resumeLabel, skippedLabel, STALLED_LABEL, taskStatusKind, type TaskStatusKind } from './status';
 
 /**
@@ -125,7 +125,7 @@ function usageOf(task: TaskLogHeaderTask, follow: TaskLogFollow, attempt: number
   }
   const onScreen = attempts.find((a) => a.attempt === attempt);
   const own = onScreen
-    ? usageRow(usageText({ totals: onScreen.totals, contextFill: plannerContextFill(onScreen) }), plannerContextFill(onScreen))
+    ? usageRow(usageText({ totals: onScreen.totals, contextFill: attemptContextFill(onScreen) }), attemptContextFill(onScreen))
     : loggedUsage(follow.view);
   const rows: TaskLogHeaderUsage[] = [];
   if (own) rows.push(onScreen ? { ...own, text: `attempt ${onScreen.attempt}: ${own.text}` } : own);

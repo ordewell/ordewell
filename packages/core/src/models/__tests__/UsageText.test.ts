@@ -81,6 +81,14 @@ describe('the context meter', () => {
     const none = { usedTokens: 100, windowTokens: 200_000, autoCompaction: { off: 'unknown_window' as const, model: '' } };
     expect(contextMeterTitle(none)).toBe('100 of 200,000 tokens. Automatic compaction is off: no planner model is selected; /compact still condenses the conversation.');
   });
+
+  it('reads against where compaction starts when a compaction window is in force', () => {
+    const fill = { usedTokens: 61_143, windowTokens: 200_000, compaction: { windowTokens: 150_000, startsAtTokens: 118_000 } };
+    expect(contextMeterText(fill)).toBe('ctx 61k (52% · compacts at 118k)');
+    expect(contextMeterTitle(fill)).toBe('61,143 of 118,000 tokens before its runner compacts, under a compaction window of 150,000 tokens; the model\'s window is 200,000 tokens');
+    const unknown = { usedTokens: 61_143, compaction: { windowTokens: 150_000, startsAtTokens: 118_000 } };
+    expect(contextMeterTitle(unknown)).toBe('61,143 of 118,000 tokens before its runner compacts, under a compaction window of 150,000 tokens');
+  });
 });
 
 describe('the usage line', () => {
@@ -194,6 +202,15 @@ describe('a task', () => {
     const first = attempt(1, 'claude-code', { source: 'claude-code', model: 'opus', inputTokens: 100, reportedCost: { amount: 1.5, currency: 'USD' }, contextWindow: 1000 });
     const second = attempt(2, 'claude-code', { source: 'claude-code', model: 'sonnet', inputTokens: 50, reportedCost: { amount: 0.25, currency: 'USD' } });
     expect(usageText(taskUsageSummary(createTask({ attemptUsage: [first, second] })))).toBe('ctx 50 · $1.75');
+  });
+
+  it('carries the compaction start of a window in force below its model\'s, and reads as before without one', () => {
+    const used = attempt(1, 'claude-code', { source: 'claude-code', model: 'sonnet', inputTokens: 61_143, contextWindow: 200_000 });
+    const under = (windowTokens: number) => taskUsageSummary(createTask({ attemptUsage: [{ ...used, compaction: { windowTokens, startsAtTokens: windowTokens - 32_000 } }] }));
+    expect(usageText(under(150_000))).toBe('ctx 61k (52% · compacts at 118k)');
+    // A window at or past the model's own is not the one it compacts under.
+    expect(usageText(under(200_000))).toBe('ctx 61k (31%)');
+    expect(usageText(taskUsageSummary(createTask({ attemptUsage: [used] })))).toBe('ctx 61k (31%)');
   });
 });
 
