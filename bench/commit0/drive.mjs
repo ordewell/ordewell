@@ -593,7 +593,7 @@ async function collect(lib, sb, reference) {
 
 async function evaluate(lib, sb, log) {
   // Written afresh for every count, so nothing an arm did to it carries into the score.
-  const plugin = await inBox(sb, ['sh', '-c', `mkdir -p ${L.shellQuote(L.TEST_TIMEOUT_PLUGIN_DIR)} && cat > ${L.shellQuote(`${L.TEST_TIMEOUT_PLUGIN_DIR}/${L.TEST_TIMEOUT_PLUGIN}.py`)}`], { input: L.TEST_TIMEOUT_PLUGIN_PY });
+  const plugin = await inBox(sb, ['sh', '-c', `rm -rf ${L.shellQuote(L.TEST_TIMEOUT_PLUGIN_DIR)} && mkdir -p ${L.shellQuote(L.TEST_TIMEOUT_PLUGIN_DIR)} && cat > ${L.shellQuote(`${L.TEST_TIMEOUT_PLUGIN_DIR}/${L.TEST_TIMEOUT_PLUGIN}.py`)}`], { input: L.TEST_TIMEOUT_PLUGIN_PY });
   must(check(lib.name, 'per-test timeout', plugin.code === 0, plugin.code === 0 ? `each test fails past ${L.TEST_TIMEOUT_S} s, the run past ${L.EVAL_TIMEOUT_S} s` : plugin.stderr.trim()), 'the timeout plugin cannot be written');
   const r = await inBox(sb, ['sh', '-c', L.evalCommand(lib)], { workdir: lib.workdir, timeoutMs: (L.EVAL_TIMEOUT_S + 60) * 1000, log });
   const summary = L.parseEvaluation(r.code, r.stdout + r.stderr);
@@ -996,10 +996,40 @@ async function restoreTests(lib, sb) {
   const args = L.testRestoreArgs(lib);
   const diff = await inBox(sb, args.diff, o);
   const untracked = await inBox(sb, args.untracked, o);
-  const plan = L.testRestorePlan(lib, diff.stdout, untracked.stdout);
+  const added = L.addedRootModules(diff.stdout, untracked.stdout);
+  const probe = added.length ? await inBox(sb, L.shadowProbeArgs(lib, added), { workdir: '/' }) : null;
+  must(!probe || probe.code === 0, `the shadow probe failed: ${probe?.stderr.trim().split('\n').slice(-2).join(' | ')}`);
+  const plan = L.testRestorePlan(lib, diff.stdout, untracked.stdout, probe ? probe.stdout.split('\n').filter(Boolean) : []);
   if (plan.checkout.length) await inBox(sb, ['git', 'checkout', '-q', lib.flatCommit, '--', ...plan.checkout], o);
   if (plan.remove.length) await inBox(sb, ['rm', '-f', '--', ...plan.remove], o);
   return plan.checkout.length + plan.remove.length > 0;
+}
+
+/**
+ * Whether the eval runs on the image's own Python: the venv not a link and
+ * untracked, and nothing the box changed outside the workdir's own work
+ * (L.boxChanges, read by `docker diff` from outside the box). Bytecode the box
+ * wrote is deleted first, wherever it lies.
+ */
+async function checkBoxIntact(lib, sb) {
+  const name = 'eval on the image\'s venv and interpreter';
+  const venv = await inBox(sb, ['sh', '-c', L.venvIntactScript(lib)]);
+  if (venv.code !== 0) return check(lib.name, name, false, venv.stderr.trim());
+  const cfg = await inBox(sb, ['cat', path.posix.join(lib.workdir, L.VENV_DIR, 'pyvenv.cfg')]);
+  const basePrefix = cfg.code === 0 ? L.venvBasePrefix(cfg.stdout) : null;
+  if (!basePrefix) return check(lib.name, name, false, `no interpreter named in ${L.VENV_DIR}/pyvenv.cfg: ${cfg.stderr.trim()}`);
+  const diff = await docker(['diff', sb.box]);
+  if (diff.code !== 0) return check(lib.name, name, false, `docker diff: ${diff.stderr.trim()}`);
+  const mounts = [NODE_IN_BOX, ORDEWELL_IN_BOX, '/usr/sbin/docker-init'];
+  const changes = L.boxChanges(diff.stdout, { workdir: lib.workdir, home: BOX_HOME, basePrefix, mounts });
+  if (changes.bytecode.length) {
+    const rm = await inBox(sb, ['rm', '-rf', '--', ...changes.bytecode]);
+    if (rm.code !== 0) return check(lib.name, name, false, `the box's bytecode could not be removed: ${rm.stderr.trim()}`);
+  }
+  const ok = changes.tampered.length === 0;
+  return check(lib.name, name, ok, ok
+    ? `${L.VENV_DIR} is the image's, untracked; nothing outside the workdir's work changed (on ${basePrefix}); ${changes.bytecode.length} bytecode paths the box wrote removed`
+    : `the box changed ${changes.tampered.length} paths the eval may load: ${changes.tampered.slice(0, 8).join(', ')}${changes.tampered.length > 8 ? ', ...' : ''}`);
 }
 
 /**
@@ -1093,6 +1123,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       : br.ok ? `${base.passed} passed, ${base.failed} failed, ${base.errors ?? 0} errors of ${record.network.collected} collected (exit ${base.exit})` : `no summary (exit ${base.exit}${base.timedOut ? ', timed out' : ''})`);
     if (opts.dryRun) {
       await dryArm(lib, sb, arm, settings, runDir);
+      await checkBoxIntact(lib, sb);
     } else {
       record.arm = await realArm(lib, sb, arm, settings, runDir);
       if (record.arm.stopped?.why === 'no-start') {
@@ -1102,8 +1133,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       record.testsModified = await restoreTests(lib, sb);
       record.scoring = await prepareScoring(lib, sb, arm, record.arm.sessionId, runDir);
       record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.scoring.plan });
-      const venv = await inBox(sb, ['sh', '-c', L.venvIntactScript(lib)]);
-      must(check(lib.name, 'eval on the image\'s venv', venv.code === 0, venv.code === 0 ? `${L.VENV_DIR} is the image's directory, untracked` : venv.stderr.trim()), 'the arm replaced the venv: the eval cannot run');
+      must(await checkBoxIntact(lib, sb), 'the arm changed what the eval loads: the eval cannot run');
       const evaluated = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'tests.log')));
       record.tests = { ...evaluated, collected: record.network.collected };
     }

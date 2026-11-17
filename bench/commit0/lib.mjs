@@ -348,6 +348,49 @@ export function venvIntactScript(lib) {
   ].join('\n');
 }
 
+/** The prefix of the interpreter a venv runs on, from its pyvenv.cfg's `home` (that prefix's bin); null without one. */
+export function venvBasePrefix(cfg) {
+  const home = /^home\s*=\s*(.+?)\s*$/m.exec(cfg)?.[1];
+  return home ? path.posix.dirname(home.replace(/\/+$/, '')) : null;
+}
+
+/** Where the box may write outside the workdir and its home: what the driver itself puts there, and scratch. */
+const BOX_WRITABLE = () => ['/tmp', '/var/tmp', TEST_TIMEOUT_PLUGIN_DIR];
+const BOX_WRITTEN = ['/usr/local/bin/ordewell', '/etc/gitconfig'];
+
+/**
+ * What the box changed that the eval could load, from `docker diff` against
+ * the image, which nothing in the box can rewrite: `tampered`, every path the
+ * box added, changed or deleted in the image's venv, in the interpreter it
+ * runs on (basePrefix, which may lie under the home) or anywhere else outside
+ * the workdir, the home and scratch, the box's read-only mount points
+ * (`mounts`, which docker lists as added) aside; and `bytecode`, every .pyc or
+ * __pycache__ the box wrote anywhere, deleted before the eval since Python
+ * loads one whose header matches its source without reading the source. The
+ * arm's own work, tests included, is the workdir's and testRestorePlan's.
+ */
+export function boxChanges(diffText, { workdir, home, basePrefix, mounts = [] }) {
+  const under = (p, dir) => p === dir || p.startsWith(`${dir.replace(/\/+$/, '')}/`);
+  const entries = diffText.split('\n').map((l) => /^([ACD]) (\/.*)$/.exec(l)).filter(Boolean).map(([, kind, p]) => ({ kind, p }));
+  const paths = entries.map((e) => e.p);
+  const isBytecode = (p) => p.endsWith('.pyc') || p.split('/').includes('__pycache__');
+  const venv = path.posix.join(workdir, VENV_DIR);
+  const tampered = [];
+  const bytecode = [];
+  for (const { kind, p } of entries) {
+    if (isBytecode(p)) {
+      if (kind !== 'D') bytecode.push(p);
+      continue;
+    }
+    // A directory is listed because something under it is; that entry is judged instead.
+    if (paths.some((q) => q.startsWith(`${p}/`))) continue;
+    const protectedPath = under(p, venv) || (basePrefix && under(p, basePrefix));
+    const allowed = under(p, workdir) || under(p, home) || BOX_WRITABLE().some((d) => under(p, d)) || BOX_WRITTEN.includes(p) || mounts.includes(p);
+    if (protectedPath || !allowed) tampered.push(p);
+  }
+  return { tampered, bytecode };
+}
+
 // --- The reference implementation -------------------------------------------
 
 /**
@@ -622,11 +665,46 @@ export function testRestoreArgs(lib) {
   };
 }
 
+/** The top-level module a workdir path would be imported as from the workdir root; null for none. */
+function rootModuleName(p) {
+  const [first, ...rest] = p.split('/');
+  if (NOT_THE_ARMS.includes(first)) return null;
+  const name = rest.length ? first : first.split('.')[0];
+  if (!rest.length && !/\.(py|pyc|pyw|so|pyd)$/.test(first)) return null;
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : null;
+}
+
+/** The arm's additions, from testRestoreArgs' output: diff status A, or untracked. */
+function addedPaths(nameStatusZ, untrackedZ) {
+  const added = [];
+  const f = nameStatusZ.split('\0');
+  for (let i = 0; i + 1 < f.length; i += 2) if (f[i] === 'A') added.push(f[i + 1]);
+  for (const p of untrackedZ.split('\0')) if (p) added.push(p);
+  return added;
+}
+
+/** The names of the top-level modules and packages the arm added at the workdir root, for shadowProbeArgs. */
+export function addedRootModules(nameStatusZ, untrackedZ) {
+  return [...new Set(addedPaths(nameStatusZ, untrackedZ).map(rootModuleName).filter(Boolean))].sort();
+}
+
+/**
+ * The venv's interpreter, isolated (-I: no workdir, no PYTHONPATH, no user
+ * site) and writing no bytecode, printing each name it can import without the
+ * workdir: an added root module that would shadow it under `python -m`.
+ */
+export const SHADOW_PROBE_PY = 'import importlib.util as u, sys\nfor n in sys.argv[1:]:\n    if u.find_spec(n) is not None: print(n)\n';
+export function shadowProbeArgs(lib, names) {
+  return [`${lib.workdir.replace(/\/+$/, '')}/${VENV_DIR}/bin/python`, '-I', '-B', '-c', SHADOW_PROBE_PY, ...names];
+}
+
 /**
  * What to put back, from testRestoreArgs' output: a changed or deleted test
- * checked out from the base, an added one removed.
+ * checked out from the base, an added one removed, and so is everything the
+ * arm added at the workdir root under the name of one of the eval's modules
+ * (EVAL_TOOL_MODULES, and `shadowing`, the names shadowProbeArgs printed).
  */
-export function testRestorePlan(lib, nameStatusZ, untrackedZ) {
+export function testRestorePlan(lib, nameStatusZ, untrackedZ, shadowing = []) {
   const checkout = [];
   const remove = [];
   const f = nameStatusZ.split('\0');
@@ -636,6 +714,8 @@ export function testRestorePlan(lib, nameStatusZ, untrackedZ) {
     (status === 'A' ? remove : checkout).push(p);
   }
   for (const p of untrackedZ.split('\0')) if (p && isTestPath(lib, p)) remove.push(p);
+  const shadows = new Set([...EVAL_TOOL_MODULES, ...shadowing]);
+  for (const p of addedPaths(nameStatusZ, untrackedZ)) if (shadows.has(rootModuleName(p)) && !remove.includes(p)) remove.push(p);
   return { checkout, remove };
 }
 
@@ -673,6 +753,15 @@ export const TEST_TIMEOUT_S = 120;
 /** Where the box holds the timeout plugin: outside the workspace, so no arm's patch carries it. */
 export const TEST_TIMEOUT_PLUGIN_DIR = '/opt/commit0-bench';
 export const TEST_TIMEOUT_PLUGIN = 'commit0_test_timeout';
+
+/**
+ * The eval's own modules: pytest and what it imports, the timeout plugin, and
+ * what `site` runs at start. testCmd's `python -m` puts the workdir first on
+ * sys.path, so one of these the arm adds at the workdir root runs in place of
+ * the eval's and prints whatever summary it likes. Any other name is
+ * shadowProbeArgs' to judge in the box, stdlib included.
+ */
+export const EVAL_TOOL_MODULES = Object.freeze(['pytest', '_pytest', 'pluggy', 'iniconfig', 'packaging', 'py', TEST_TIMEOUT_PLUGIN, 'sitecustomize', 'usercustomize']);
 
 /**
  * The per-test timeout, as a pytest plugin, since Commit0's images carry no

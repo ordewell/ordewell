@@ -234,7 +234,14 @@ the eval refuses to run if the arm replaced or tracked it. After an arm, the tes
 `conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg` and `tox.ini` in the
 workspace (outside `.venv` and `.ordewell`), ignored files included, are put
 back as the base had them, and nothing else, since a `testDir` may lie inside
-the source. The baseline and the scored eval bound each test at 120 s (a pytest
+the source. A module or package the arm added at the workspace root under a
+name the venv's Python imports from elsewhere (`pytest`, `pluggy`, a stdlib
+module: `python -m` puts the workspace first on `sys.path`) is removed too.
+Before the eval, `docker diff` on the box, which nothing inside it can rewrite,
+must show no change in `.venv`, in the interpreter its `pyvenv.cfg` names, or
+anywhere outside the workspace, the box's home and scratch (a `.pth` in
+site-packages, a `/pytest.ini`): any such change fails the check, and the run
+is invalid. Bytecode the box wrote anywhere is deleted first. The baseline and the scored eval bound each test at 120 s (a pytest
 plugin the driver writes to `/opt/commit0-bench`, since the images carry no
 pytest-timeout) and the whole run at 1800 s, so a stub that spins fails its one
 test instead of losing the count.
