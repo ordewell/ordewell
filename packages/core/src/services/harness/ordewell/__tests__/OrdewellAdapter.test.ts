@@ -162,6 +162,39 @@ describe('OrdewellAdapter', () => {
     await expect(unnamed.adapter.start(taskOptions({ model: 'openai_compatible:qwen3:8b' }))).rejects.toThrow(/No Custom endpoint is set for the built-in runner: set OPENAI_COMPATIBLE_BASE_URL/);
   });
 
+  it('says once, at the attempt\'s start, that it assumed the model\'s window and how to set it', async () => {
+    const { adapter } = adapterWith([[{ type: 'text-delta', text: 'One.' }, STOP], [{ type: 'text-delta', text: 'Two.' }, STOP]]);
+    await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+    const first: AgentEvent[] = [];
+    await adapter.send('Go.', (event) => first.push(event));
+    expect(first[0]).toEqual({
+      type: 'command_output',
+      text: 'No catalog or provider listing states openrouter:acme/unknown\'s context window: assuming 128,000 tokens. '
+        + 'Set it in the settings file as "ordewellContextWindows": { "openrouter:acme/unknown": <tokens> }.',
+    });
+    const second: AgentEvent[] = [];
+    await adapter.send('Again.', (event) => second.push(event));
+    expect(eventsOf(second, 'command_output')).toEqual([]);
+  });
+
+  it('takes a model\'s window from the settings file\'s ordewellContextWindows, and says nothing of an assumed one', async () => {
+    const settingsFile = path.join(tempDir(), 'settings.json');
+    await writeFile(settingsFile, JSON.stringify({ ordewellContextWindows: { 'openrouter:acme/unknown': 64_000 } }));
+    const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile });
+    try {
+      const { adapter } = adapterWith([[{ type: 'text-delta', text: 'One.' }, { type: 'usage', usage: { inputTokens: 10, outputTokens: 2 } }, STOP]]);
+      await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+      const events: AgentEvent[] = [];
+      await adapter.send('Go.', (event) => events.push(event));
+      expect(eventsOf(events, 'command_output')).toEqual([]);
+      const record = eventsOf(events, 'usage').at(-1)?.record;
+      expect(record?.contextWindow).toBe(64_000);
+      expect(record?.contextWindowAssumed).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
   it('runs a turn in-process: no process, attached at once, the provider\'s key and base URL, and a session id', async () => {
     const { adapter, clients } = adapterWith(
       [[{ type: 'text-delta', text: 'Hi.' }, STOP]],
@@ -483,7 +516,7 @@ describe('OrdewellAdapter lifecycle', () => {
 
   it('abandons a stream quiet past the settings file\'s timeout and sends the step again, noting it in the task log', async () => {
     const settingsFile = path.join(tempDir(), 'settings.json');
-    await writeFile(settingsFile, JSON.stringify({ ordewellStreamTimeouts: { firstEventSeconds: 1, idleSeconds: 1 } }));
+    await writeFile(settingsFile, JSON.stringify({ ordewellStreamTimeouts: { firstEventSeconds: 1, idleSeconds: 1 }, ordewellContextWindows: { 'openrouter:mock/test': 128_000 } }));
     const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile });
     const chunk = (delta: object, finish: string | null = null) =>
       `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 1, model: 'mock/test', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;

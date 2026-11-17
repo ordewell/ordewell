@@ -488,8 +488,9 @@ export class OrdewellLoop {
       ...(usage.cacheReadTokens !== undefined ? { cachedInputTokens: usage.cacheReadTokens } : {}),
       // Only the provider's own figure (ADR-0070): no price table makes one up.
       ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
-      // Always: compaction acts on this window, so the meter must read the same one, a default included.
-      contextWindow: model.contextWindow,
+      // Always: compaction acts on this window, so the meter must read the same one, an assumed one or one an overflow shrank included.
+      contextWindow: this.compactor.contextWindow,
+      ...(this.compactor.windowAssumed ? { contextWindowAssumed: true } : {}),
       // The prompt plus the reply it produced is what the next prompt starts from.
       ...(usage.inputTokens !== undefined ? { contextTokens: usage.inputTokens + (usage.outputTokens ?? 0) } : {}),
     };

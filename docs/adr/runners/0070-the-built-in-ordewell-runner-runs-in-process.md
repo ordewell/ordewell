@@ -74,7 +74,18 @@ is one runner per API provider, under the provider's own id and name.**
   ids a plan, a transcript and the model catalog hold mean the same on every
   runner. One `ModelInfo` shape carries the context window, the reply cap,
   prices per million tokens, tool and reasoning support, and which of those a
-  catalog stated (`known`); what none stated takes a conservative default.
+  catalog stated (`known`); what none stated takes a default, the window as below.
+- **A model's context window** comes from, in order: the settings file's
+  `ordewellContextWindows`, which maps a `<provider>:<model>` id to its window
+  in tokens and wins over any other source; the catalog (models.dev or the
+  snapshot); the provider's own model listing where it states one
+  (`context_length`, `context_window`, `max_context_length` or `max_model_len`,
+  or Gemini's `inputTokenLimit`), fetched once a session through the runner's
+  own fetch, a failure falling through; and else an assumed 128,000 tokens. An
+  assumed window is too large for some models and too small for others, so it
+  is named as assumed in the context meter and the running-long facts, and the
+  attempt's first log line says how to set it; the overflow path below is what
+  catches a model whose true window is smaller.
 - **The one id it had before** (`ordewell`, unreleased) is moved as it is read:
   a task on it runs on the runner its model's provider names, its session with
   it; a plan's runner set names those runners instead, and keeps the old id
@@ -122,8 +133,8 @@ is one runner per API provider, under the provider's own id and name.**
   ([ADR-0025](0025-structured-only-runners.md)). The loop ending a turn, or the
   model saying it is done, proves nothing.
 - **Context is managed by the runner** (`compaction.ts`), to spend fewer tokens without losing the task:
-  - **Fill.** Every step reports its usage with the model's context window, a
-    defaulted one included, since compaction acts on the same figure, and with
+  - **Fill.** Every step reports its usage with the window compaction acts on,
+    an assumed one (flagged so) or one an overflow shrank included, and with
     the prompt plus reply as `contextTokens`, so `ContextWindowFill` reads the
     meter. A compaction resets it to the compacted size.
   - **Trigger.** Before each request the next prompt is estimated: the provider's
@@ -150,7 +161,11 @@ is one runner per API provider, under the provider's own id and name.**
   - **Overflow.** When the provider refuses a request as too long (a context
     overflow), the same step is retried from a conversation compacted to 0.85,
     0.7, 0.5 and then 0.35 of the window, the tail shrinking with it, before the
-    refusal fails the step.
+    refusal fails the step. The window that let the request through stays in
+    force for the rest of the attempt, so later steps compact before the size
+    that was refused. An overflow is read from the provider's code (OpenAI,
+    Groq and compatible servers), Anthropic's and Gemini's own wording, any 413,
+    and on a bare 400 the wording OpenAI, xAI, LM Studio and llama.cpp use.
   - **Cache hints.** Every request marks breakpoints after the tool list, after
     the system prompt and at the last message. The tool list and the system prompt
     are fixed for the attempt (the prompt is read back from the transcript, never
@@ -332,3 +347,7 @@ comes from that call.
 - 2026-11-17 — the prompt says how a long brief is worked through and the step
   budget, carries every runner's completion contract, and the loop sends the 80%
   and 95% budget notices.
+- 2026-11-17 — a model no catalog describes takes its window from the
+  `ordewellContextWindows` setting or its provider's listing, else an assumed
+  128,000 tokens named as assumed; an overflow's smaller window holds for the
+  attempt.

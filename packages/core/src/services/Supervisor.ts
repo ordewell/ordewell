@@ -848,7 +848,7 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
   const modelWindow = facts.contextWindow ? tokens(facts.contextWindow) : undefined;
   const window = facts.compactionWindow
     ? ` of a ${tokens(facts.compactionWindow)} compaction window${modelWindow ? ` (model window ${modelWindow})` : ''}`
-    : modelWindow ? ` of ${modelWindow}` : '';
+    : modelWindow ? ` of ${facts.contextWindowAssumed ? 'an assumed ' : ''}${modelWindow}` : '';
   const unit = facts.compactionWindow ? '' : ' tokens';
   // A compaction that states no size (Codex, OpenCode) leaves the live context unknown, but the peak still says it ran full.
   const context = facts.contextTokens !== undefined
