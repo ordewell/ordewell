@@ -285,14 +285,45 @@ function unprovidedMessage(task: Pick<Task, 'title'>, name: string): string {
  * The skills a change leaves on a task that nothing installed or upstream
  * provides, less those the plan already held before it: a saved plan from
  * before this rule still loads and can still be edited, and an edit answers
- * only for what it brought.
+ * only for what it brought. A task a merge or split built holds what stood on
+ * a task it was built from, as `builtFrom` maps it.
  */
-export function unprovidedSkills(before: readonly Task[], after: readonly Task[], lookup: Pick<SkillLookup, 'findSkill'>): { taskId: string; message: string }[] {
-  const key = (task: Task, name: string) => `${task.id}\u0000${name}`;
-  const standing = new Set(unprovided(before, lookup).map(({ task, name }) => key(task, name)));
+export function unprovidedSkills(
+  before: readonly Task[],
+  after: readonly Task[],
+  lookup: Pick<SkillLookup, 'findSkill'>,
+  builtFrom: ReadonlyMap<string, readonly string[]> = new Map(),
+): { taskId: string; message: string }[] {
+  const key = (id: string, name: string) => `${id}\u0000${name}`;
+  const standing = new Set(unprovided(before, lookup).map(({ task, name }) => key(task.id, name)));
   return unprovided(after, lookup)
-    .filter(({ task, name }) => !standing.has(key(task, name)))
+    .filter(({ task, name }) => !(builtFrom.get(task.id) ?? [task.id]).some((id) => standing.has(key(id, name))))
     .map(({ task, name }) => ({ taskId: task.id, message: unprovidedMessage(task, name) }));
+}
+
+/**
+ * A one-shot plan with the names {@link unprovidedSkills} would refuse taken
+ * off its tasks, subtasks included, each said in a warning. A one-shot planner
+ * has no conversation to send a refusal back through, and one invented name
+ * must not cost the whole plan; the name is not accepted, only dropped.
+ */
+export function withoutUnprovidedSkills(tasks: readonly Task[], lookup: Pick<SkillLookup, 'findSkill'>): { tasks: Task[]; warnings: string[] } {
+  const found = unprovided(tasks, lookup);
+  if (found.length === 0) return { tasks: [...tasks], warnings: [] };
+  const drop = new Map<Task, Set<string>>();
+  for (const { task, name } of found) drop.set(task, new Set([...(drop.get(task) ?? []), name]));
+  const strip = (list: readonly Task[]): Task[] => list.map((task) => {
+    const names = drop.get(task);
+    return {
+      ...task,
+      ...(names ? { skills: (task.skills ?? []).filter((name) => !names.has(name)) } : {}),
+      ...(task.subtasks ? { subtasks: strip(task.subtasks) } : {}),
+    };
+  });
+  return {
+    tasks: strip(tasks),
+    warnings: found.map(({ task, name }) => `Task "${task.title}": skill "${name}" is not an installed task skill, and no task it depends on creates it, so it was removed from the task's skills.`),
+  };
 }
 
 /** Why a task cannot start with the skills it names; the runner is never spawned without them. */

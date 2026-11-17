@@ -264,6 +264,37 @@ describe('an edit, as it commits', () => {
     expect(removed.tasks[0].skills ?? []).toEqual([]);
   });
 
+  it('lets a merge or split carry an unknown skill already standing on the saved task, even through a later op of the batch', async () => {
+    const saved = [
+      createTask({ ...plan()[0], skills: ['python'] }),
+      createTask({ id: 't2', order: 2, title: 'Ship', prompt: 'ship', assignedRunner: 'claude-code' }),
+    ];
+    const { check } = fakeSession(saved);
+
+    const merged = passed(await check.check({ kind: 'ops', ops: [{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'Build and ship', prompt: 'p' } }] }, 'land'));
+    const split = passed(await check.check({ kind: 'ops', ops: [{ op: 'split', taskId: '#1', parts: [{ title: 'Build A', prompt: 'p' }, { title: 'Build B', prompt: 'p' }] }] }, 'land'));
+    const chained = passed(await check.check({ kind: 'ops', ops: [
+      { op: 'split', taskId: '#1', handle: 'tail', parts: [{ title: 'Build A', prompt: 'p' }, { title: 'Build B', prompt: 'p' }] },
+      { op: 'merge', taskIds: ['tail', '#2'], merged: { title: 'Build B and ship', prompt: 'p' } },
+    ] }, 'land'));
+
+    expect(merged.tasks.map((t) => [t.title, t.skills])).toEqual([['Build and ship', ['python']]]);
+    expect(split.tasks.map((t) => [t.title, t.skills])).toEqual([['Build A', ['python']], ['Build B', ['python']], ['Ship', undefined]]);
+    expect(chained.tasks.map((t) => [t.title, t.skills])).toEqual([['Build A', ['python']], ['Build B and ship', ['python']]]);
+  });
+
+  it('still refuses an unknown skill a merge brings that none of the merged tasks held', async () => {
+    const saved = [
+      createTask({ ...plan()[0], skills: ['python'] }),
+      createTask({ id: 't2', order: 2, title: 'Ship', prompt: 'ship', assignedRunner: 'claude-code' }),
+    ];
+    const { check } = fakeSession(saved);
+
+    const refused = await check.check({ kind: 'ops', ops: [{ op: 'merge', taskIds: ['#1', '#2'], merged: { title: 'Build and ship', prompt: 'p', skills: ['python', 'rust'] } }] }, 'land');
+
+    expect(refused.ok ? [] : refused.errors.map(planChangeErrorText)).toEqual([expect.stringMatching(/^Task "Build and ship": skill "rust" is not an installed task skill/)]);
+  });
+
   it('refuses what the guard refuses, after the applier passed it', async () => {
     const { live, check } = fakeSession(plan());
     live.guard = () => 'the supervisor has changed this task too often';

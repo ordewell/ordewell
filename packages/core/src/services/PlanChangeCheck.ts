@@ -224,7 +224,7 @@ export class PlanChangeCheck {
     const { before, runners, catalog } = normal;
     const skillErrors: PlanChangeError[] = skills.errors.map((e) => ({ ...e, field: 'skills' }));
     // A skill nothing installed or upstream provides would fail its task at start, its dependents with it (ADR-0024).
-    const unprovided = (after: readonly Task[]): PlanChangeError[] => (lookup ? unprovidedSkills(before, after, lookup).map((e) => ({ ...e, field: 'skills' })) : []);
+    const unprovided = (after: readonly Task[], builtFrom?: ReadonlyMap<string, readonly string[]>): PlanChangeError[] => (lookup ? unprovidedSkills(before, after, lookup, builtFrom).map((e) => ({ ...e, field: 'skills' })) : []);
 
     if (normal.kind === 'plan') {
       const { tasks } = normal;
@@ -246,7 +246,7 @@ export class PlanChangeCheck {
     if (skillErrors.length > 0) return this.refused(change, skillErrors);
     const { applied } = normal;
     if (!applied.ok) return this.refused(change, applied.refusals);
-    const unprovidedErrors = unprovided(applied.tasks);
+    const unprovidedErrors = unprovided(applied.tasks, applied.builtFrom);
     if (unprovidedErrors.length > 0) return this.refused(change, unprovidedErrors);
     const ungranted = [...this.ungranted(before, applied.tasks), ...this.pastMandate(before, applied.tasks)];
     if (ungranted.length > 0) return this.refused(change, ungranted);
