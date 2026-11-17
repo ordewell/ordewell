@@ -169,20 +169,34 @@ describe('VersionCheck', () => {
     });
 
     it.each([
+      // A cold server answers 204 before it knows the latest version: no news, not news of none.
       ['a 204', reply(204)],
-      ['an answer naming the running version', reply(200, '{"latest":"0.10.12"}')],
       ['an answer naming no version', reply(200, '{}')],
-    ])('is forgotten after %s, so a later start names nothing', async (_, answer) => {
+      ['an answer naming an older version than the one remembered', reply(200, '{"latest":"0.10.13"}')],
+    ])('is kept through %s, so a later start still names it', async (_, answer) => {
       seenNotice(DAY);
       fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
       await start({ fetch: fakeFetch(answer).fetch }).check.settled();
-      expect(readState()).not.toHaveProperty('latest');
-      expect(readState()).not.toHaveProperty('latestAt');
+      expect(readState()).toMatchObject({ latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' });
 
       now += 60 * 60_000;
       const { check, updates } = start({ fetch: fakeFetch(reply(204)).fetch });
       await check.settled();
-      expect(updates).toEqual([]);
+      expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+    });
+
+    it('is kept for older copies on the machine when a copy already running it pings', async () => {
+      seenNotice(DAY);
+      // A source build at 0.11.0 takes the day's ping; the 0.10.12 binary beside it starts later.
+      const newer = start({ version: '0.11.0', fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch });
+      await newer.check.settled();
+      expect(newer.updates).toEqual([]);
+      expect(readState()).toMatchObject({ latest: '0.11.0', latestAt: '2026-10-23T09:00:00.000Z' });
+
+      now += 60 * 60_000;
+      const older = start({ fetch: fakeFetch(reply(204)).fetch });
+      await older.check.settled();
+      expect(older.updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
     });
 
     it.each([
@@ -258,6 +272,18 @@ describe('VersionCheck', () => {
         const { check, updates } = start({ updateLine: 'daily', fetch: fakeFetch(reply(200, '{"latest":"0.11.0"}')).fetch });
         await check.settled();
         expect(updates).toEqual([line]);
+        expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([]);
+      });
+
+      it('keeps the record of a line named by the start that also pings', async () => {
+        seenNotice(DAY);
+        fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: '2026-10-22T09:00:00.000Z' }));
+        const first = start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch });
+        await first.check.settled();
+        expect(first.updates).toEqual([line]);
+        expect(readState()).toMatchObject({ updateShownAt: '2026-10-23T09:00:00.000Z', lastCheckAt: '2026-10-23T09:00:00.000Z' });
+
+        now += 60 * 60_000;
         expect(start({ updateLine: 'daily', fetch: fakeFetch(reply(204)).fetch }).updates).toEqual([]);
       });
 
@@ -431,6 +457,46 @@ describe('VersionCheck', () => {
       expect(net.calls).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(DAY / 2);
       expect(net.calls).toHaveLength(2);
+    });
+
+    it('names, within the hour, a newer version another process wrote to the shared file', async () => {
+      seenNotice(60_000);
+      const net = fakeFetch(reply(204));
+      const { updates } = start({ fetch: net.fetch, ...clock });
+      expect(updates).toEqual([]);
+
+      // A headless command took the day's ping and was told of 0.11.0.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), latest: '0.11.0', latestAt: new Date(Date.now()).toISOString() }));
+      await vi.advanceTimersByTimeAsync(50 * 60_000);
+      expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+      expect(net.calls).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(updates).toHaveLength(1);
+    });
+
+    it('never pings from the process that showed the notice, yet names a version another process learns', async () => {
+      const net = fakeFetch(reply(204));
+      const { notices, updates } = start({ fetch: net.fetch, ...clock });
+      await vi.advanceTimersByTimeAsync(DAY);
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), lastCheckAt: new Date(Date.now()).toISOString(), latest: '0.11.0', latestAt: new Date(Date.now()).toISOString() }));
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(updates).toEqual(['Ordewell 0.11.0 is out (you have 0.10.12) — npm i -g ordewell']);
+      expect(notices).toEqual([NOTICE]);
+      expect(net.calls).toEqual([]);
+    });
+
+    it('names nothing once stopped, though an answer in flight is still remembered', async () => {
+      seenNotice();
+      let answer!: () => void;
+      const net = fakeFetch(() => new Promise((resolve) => { answer = () => resolve({ status: 200, text: async () => '{"latest":"0.11.0"}' }); }));
+      const { check, updates } = start({ fetch: net.fetch, ...clock });
+      check.stop();
+      answer();
+      await check.settled();
+      expect(updates).toEqual([]);
+      expect(readState()).toMatchObject({ latest: '0.11.0' });
     });
 
     it('never pings from the process that showed the notice', async () => {

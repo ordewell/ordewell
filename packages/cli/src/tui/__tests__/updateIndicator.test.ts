@@ -76,4 +76,13 @@ describe('a known update in the reducer', () => {
     state = reduced(state, { type: 'sessionStarted', sessionId: 's-1', goal: 'a goal' });
     expect(state.knownUpdate).toEqual({ latest: '0.14.0', line: LINE });
   });
+
+  it('survives loading another session and the transcript it brings, which drop the transcript line', () => {
+    let state = reduced(initialState({ rows: 24, cols: 80, ...inChat }), { type: 'updateKnown', latest: '0.14.0', line: LINE });
+    state = reduced(state, { type: 'sessionLoaded', sessionId: 's-2', goal: 'another goal' });
+    expect(state.knownUpdate).toEqual({ latest: '0.14.0', line: LINE });
+    // Its plan and transcript, restored next, put the welcome out of the way: the status row still names the version.
+    const restored = { ...state, ...inChat };
+    expect(marked(render(restored).map(stripAnsi))).toContain('↑ 0.14.0 available · /update');
+  });
 });

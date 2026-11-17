@@ -7,8 +7,8 @@ import { upgradeCommand } from '../utils/seaRuntime';
 
 /**
  * The daily version check (ADR-0048): one ping a day that counts installs
- * under an install ID replaced every 30 days, and may answer with a newer
- * version, which the state file keeps until an answer says otherwise.
+ * under an install ID replaced every 30 days, and may answer with the latest
+ * version, which the state file keeps until an answer names a newer one.
  */
 
 export const VERSION_CHECK_URL = 'https://ordewell.ai/api/v1/ping';
@@ -71,7 +71,7 @@ export interface VersionCheckOptions {
 export interface VersionCheck {
   /** Settles once no ping is in flight. Never rejects. */
   settled(): Promise<void>;
-  /** Stops the daily re-check. */
+  /** Stops the hourly re-check; nothing is named after it, not even an answer already on its way. */
   stop(): void;
 }
 
@@ -82,9 +82,11 @@ interface State {
   noticeShownAt?: string;
   lastCheckAt?: string;
   /**
-   * The newer version the last answer named, kept so that every start can
-   * name it, not just the one start a day that pings. Cleared by an answer
-   * that names none.
+   * The latest version an answer named, kept so that every start can name it,
+   * not just the one start a day that pings, and every copy on the machine
+   * compares it with its own version: an answer to a copy already running it
+   * is still news to an older one. Replaced only by a newer one, never
+   * cleared: no news (a 204, a cold server) says nothing about it.
    */
   latest?: string;
   /** When {@link State.latest} was learned. */
@@ -173,18 +175,17 @@ function compareVersions(a: string, b: string): number | null {
 const isNewer = (latest: string, version: string): boolean => (compareVersions(latest, version) ?? 0) > 0;
 
 /**
- * What an answer says: a newer version, or null for no news, which a 204 is
- * and so is a 200 whose JSON object names nothing newer. Undefined for no
- * answer at all (any other status, or a body that is not a JSON object),
- * which leaves the version already known as it was.
+ * The latest version an answer names, as given, whether or not it is newer
+ * than the copy that asked. Undefined for anything else (a 204, any other
+ * status, a body that is not a JSON object naming a version), all of which
+ * leave the version already known as it was.
  */
-async function readAnswer(response: Awaited<ReturnType<PingFetch>>, version: string): Promise<string | null | undefined> {
-  if (response.status === 204) return null;
+async function readAnswer(response: Awaited<ReturnType<PingFetch>>): Promise<string | undefined> {
   if (response.status !== 200) return undefined;
   const body: unknown = JSON.parse(await response.text());
   if (!body || typeof body !== 'object') return undefined;
   const { latest } = body as { latest?: unknown };
-  return typeof latest === 'string' && isNewer(latest, version) ? latest : null;
+  return typeof latest === 'string' && SEMVER.test(latest) ? latest : undefined;
 }
 
 const truthy = (value: string | undefined): boolean => /^(1|true|yes)$/i.test(value?.trim() ?? '');
@@ -194,9 +195,10 @@ const OFF: VersionCheck = { settled: async () => {}, stop: () => {} };
 /**
  * Starts the check for this process: the one-time notice on the first start
  * on a machine; otherwise the update line for a newer version an earlier
- * answer named, a ping if a day has passed since the last one, and the same
- * test again on an unref'd timer for as long as the process lives. Never
- * throws and never waits on the network.
+ * answer named, and a ping if a day has passed since the last one. Both are
+ * asked again every hour on an unref'd timer for as long as the process lives,
+ * so a version another process on the machine learned is named here too.
+ * Never throws and never waits on the network.
  */
 export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   const env = options.env ?? process.env;
@@ -207,6 +209,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   const file = join(options.stateDir ?? globalDataDir(), STATE_FILE);
   let inFlight: Promise<void> = Promise.resolve();
   let pinging = false;
+  let stopped = false;
 
   /** The version this process last named, so that a ping repeating it does not repeat the line. */
   let named: string | undefined;
@@ -219,7 +222,7 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
   };
 
   const showUpdate = (latest: string): void => {
-    if (!options.onUpdate || latest === named) return;
+    if (stopped || !options.onUpdate || latest === named || !isNewer(latest, options.version)) return;
     if (options.updateLine === 'daily') {
       const state = readState(file);
       // As for the notice: a line that cannot be recorded would be shown on every start.
@@ -246,21 +249,30 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
         signal: abort.signal,
         redirect: 'manual',
       });
-      const latest = await readAnswer(response, version);
+      const latest = await readAnswer(response);
       if (latest === undefined) return;
       // Read again: another process may have written the file while this ping was out.
       const state = readState(file);
-      delete state.latest;
-      delete state.latestAt;
-      writeState(file, latest ? { ...state, latest, latestAt: new Date(now()).toISOString() } : state);
-      if (latest) showUpdate(latest);
+      // An older answer than the one remembered is a stale cache or a slower
+      // server, not a withdrawn release: keep the newer one.
+      if (state.latest && isNewer(state.latest, latest)) return;
+      writeState(file, { ...state, latest, latestAt: new Date(now()).toISOString() });
+      showUpdate(latest);
     } finally {
       clearTimeout(timer);
     }
   };
 
-  const check = (): void => {
-    if (pinging) return;
+  /**
+   * The hourly question. The file is read every time, not just when the day is
+   * up: another process may have taken the day's ping and learned a newer
+   * version this one has yet to name.
+   */
+  const check = (mayPing: boolean): void => {
+    const remembered = readState(file).latest;
+    if (remembered) showUpdate(remembered);
+    if (!mayPing || pinging) return;
+    // Read again: a once-a-day line has just recorded itself in the file.
     const state = readState(file);
     if (!state.installId) return;
     if (lessThanADayAgo(state.lastCheckAt)) return;
@@ -269,6 +281,18 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
     if (!writeState(file, { ...state, lastCheckAt: new Date(now()).toISOString() })) return;
     pinging = true;
     inFlight = ping(options.version, state.installId).catch(() => {}).finally(() => { pinging = false; });
+  };
+
+  const recheckEveryHour = (mayPing: boolean): VersionCheck => {
+    const timer = setInterval(() => check(mayPing), RECHECK_MS);
+    timer.unref?.();
+    return {
+      settled: () => inFlight,
+      stop: () => {
+        stopped = true;
+        clearInterval(timer);
+      },
+    };
   };
 
   const state = rotateInstallId(file, readState(file), now());
@@ -285,19 +309,18 @@ export function startVersionCheck(options: VersionCheckOptions): VersionCheck {
       installIdAt: state.installId && state.installIdAt ? state.installIdAt : new Date(now()).toISOString(),
       noticeShownAt: new Date(now()).toISOString(),
     });
-    // Nothing is sent from this process, timer included: the off switches are
-    // read once at start, so only a later start can honour one the notice
-    // just told the user about.
+    if (!recorded) return OFF;
     try {
-      if (recorded) options.onNotice(VERSION_CHECK_NOTICE);
+      options.onNotice(VERSION_CHECK_NOTICE);
     } catch {
       // A closed stderr is the caller's problem, not a reason to fail its start.
     }
-    return OFF;
+    // Nothing is sent from this process, timer included: the off switches are
+    // read once at start, so only a later start can honour one the notice
+    // just told the user about. It still reads the file, which sends nothing,
+    // so a version a later start learns is named here too.
+    return recheckEveryHour(false);
   }
-  if (state.latest && isNewer(state.latest, options.version)) showUpdate(state.latest);
-  check();
-  const timer = setInterval(check, RECHECK_MS);
-  timer.unref?.();
-  return { settled: () => inFlight, stop: () => clearInterval(timer) };
+  check(true);
+  return recheckEveryHour(true);
 }
