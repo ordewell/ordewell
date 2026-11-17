@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupervisorLevel } from '../../models/Execution';
 import type { SessionMessage } from '../SessionMessage';
-import { ctx, NOW, prose, settled, supervised, task, until, type Env } from './supervisorTestKit';
+import { WAKE_UP_RATE } from '../LoopGuards';
+import { CLOSING_TURN_BOUND_MS, WAKE_DEBOUNCE_MS } from '../Supervisor';
+import { PlannerContextExhaustedError } from '../plannerContextBudget';
+import { changeSettings, ctx, LIMIT, NOW, plan, prose, RESUME_AT, settled, supervised, task, until, waitForInput, type Env } from './supervisorTestKit';
 
 /**
  * `run_concluded` (ADR-0029): the run's end as a follower that cannot answer
@@ -21,8 +24,8 @@ afterEach(() => {
 const ends = (env: Env) => env.messages.filter((m) => m.type === 'execution_complete' || m.type === 'run_concluded').map((m) => m.type);
 const concluded = (env: Env) => env.messages.filter((m): m is Extract<SessionMessage, { type: 'run_concluded' }> => m.type === 'run_concluded');
 
-async function failedRun(level: SupervisorLevel): Promise<Env> {
-  const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: level } });
+async function failedRun(level: SupervisorLevel, options: Parameters<typeof supervised>[1] = {}): Promise<Env> {
+  const env = await supervised([task('t1', 1)], { ...options, settings: { supervisorLevel: level } });
   env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
   await until(() => env.messages.some((m) => m.type === 'execution_complete'));
   return env;
@@ -106,6 +109,190 @@ describe.each(['watch', 'off'] as const)('a run concluded at %s', (level) => {
   it('concludes as the run ends: no turn may continue it', async () => {
     const env = await failedRun(level);
 
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+});
+
+describe('a closing turn that failed, whose retry the user stopped', () => {
+  it('concludes: the Stop dropped the retry, so none is owed', async () => {
+    const env = await failedRun('act');
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+
+    env.session.abortPlannerTurn();
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(env.planner.calls).toHaveLength(2);
+  });
+});
+
+/**
+ * Every way the closing turn's wait can end (ADR-0029): each concludes the
+ * run, once, with no turn of the supervisor's in flight or owed.
+ */
+describe('the closing turn\'s wait at Act ends on every path', () => {
+  /** A failed run at Act whose closing turn is in flight. */
+  async function closing(options: Parameters<typeof supervised>[1] = {}): Promise<Env> {
+    const env = await failedRun('act', options);
+    await until(() => env.planner.calls.length === 1);
+    expect(ends(env)).toEqual(['execution_complete']);
+    return env;
+  }
+
+  it('concludes when the user stops the closing turn on its first attempt', async () => {
+    const env = await closing();
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(env.planner.calls).toHaveLength(1);
+  });
+
+  it('concludes when its retry is stopped, and a later failed turn is tried twice again', async () => {
+    const env = await closing();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+    env.session.abortPlannerTurn();
+    await until(() => concluded(env).length > 0);
+
+    // The Stop ended the streak: the next run's failed closing turn is retried, not the second strike.
+    expect(await env.session.execute({ command: 'retry_task', task: 't1', from: 'session', message: 'fix the import' }, { kind: 'user' })).toMatchObject({ ok: true });
+    await until(() => env.run.spawnedIds().length === 2);
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'still wrong' });
+    await until(() => env.planner.calls.length === 3);
+    env.planner.calls[2].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 4);
+    expect(env.session.planState!.runSettings?.unsupervised).toBeUndefined();
+    env.planner.calls[3].finish(prose('Task 1 needs you.'));
+    await until(() => concluded(env).length === 2);
+  });
+
+  it('concludes when the plan is replaced, which discards the closing turn', async () => {
+    const env = await closing();
+
+    env.session.loadPlan(plan([task('n1', 1)], { status: 'draft' }), 'something else', process.cwd());
+    await settled();
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].summary).toMatchObject({ total: 1, failed: 1 });
+  });
+
+  it('concludes when the session closes during the wait', async () => {
+    const env = await closing();
+
+    env.session.destroy();
+    await settled();
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes, unsupervised, when the planner cannot be restarted for the retry', async () => {
+    const env = await closing();
+    env.planner.aiService.restart.mockImplementation(() => { throw new Error('the planner binary is gone'); });
+
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => concluded(env).length > 0);
+
+    expect(env.planner.calls).toHaveLength(1);
+    expect(env.session.planState!.runSettings?.unsupervised).toMatch(/could not be restarted \(the planner binary is gone\)/);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes, unsupervised, when the retry fails too', async () => {
+    const env = await closing();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.planner.calls[1].fail(new Error('planner exited with code 1'));
+    await until(() => concluded(env).length > 0);
+
+    expect(env.session.planState!.runSettings?.unsupervised).toMatch(/failed twice/);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes within the bound when the planner backend never answers, even a Stop', async () => {
+    const env = await closing();
+    env.planner.state.ignoresStop = true;
+
+    await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS);
+
+    expect(env.planner.calls).toHaveLength(2);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(env.session.planState!.runSettings?.unsupervised).toMatch(/failed twice/);
+  });
+
+  // The finished run keeps the level it ran at (ADR-0030): the turn already
+  // open goes on at Act, and the wait ends with it.
+  it.each(['watch', 'off'] as const)('concludes with the closing turn when the user sets the supervisor to %s during the wait', async (level) => {
+    const env = await closing();
+
+    changeSettings(env, { supervisorLevel: level });
+    await settled();
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.planner.calls[0].finish(prose('Noted.'));
+    await until(() => concluded(env).length > 0);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes, saying why, when the closing turn hits the planner\'s usage limit, not hours later at its reset', async () => {
+    const env = await closing({ config: { aiProvider: 'claude-code' } });
+
+    env.planner.calls[0].finish({ kind: 'message', text: LIMIT, researchLog: [], failed: true });
+    await until(() => concluded(env).length > 0);
+
+    expect(Date.now()).toBeLessThan(Date.parse(RESUME_AT));
+    expect(env.session.planState!.plannerResend).toBeDefined();
+    expect(concluded(env)[0].supervisorHeld).toMatch(/usage limit/);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes, saying why, when the closing turn pauses the planner on its context', async () => {
+    const env = await closing();
+
+    env.planner.calls[0].fail(new PlannerContextExhaustedError('m', true, { done: [] }));
+    await until(() => concluded(env).length > 0);
+
+    expect(env.session.planState!.plannerContextPause).toBeDefined();
+    expect(concluded(env)[0].supervisorHeld).toMatch(/paused on its context/);
+  });
+
+  it('concludes once the closing turn is over, with a user\'s message that arrived meanwhile still being answered', async () => {
+    const env = await closing();
+    const answered = env.session.continueConversation('how is it going?');
+    await settled();
+
+    env.planner.calls[0].finish(prose('Task 1 needs you.'));
+    await until(() => env.planner.calls.length === 2);
+    await until(() => concluded(env).length > 0);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+
+    env.planner.calls[1].finish(prose('It ended with task 1 failed.'));
+    await answered;
+    expect(concluded(env)).toHaveLength(1);
+  });
+
+  it('concludes when the wake-up rate guard drops the closing turn to Watch', async () => {
+    const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: 'act' } });
+    for (let i = 0; i < WAKE_UP_RATE.max; i++) {
+      waitForInput(env.run.of('t1'));
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+      await until(() => env.planner.calls.length === i + 1);
+      env.planner.calls[i].finish(prose('Answered task 1.'));
+      await settled();
+      await env.session.execute({ command: 'message_task', task: 't1', text: 'carry on' }, { kind: 'user' });
+    }
+
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await until(() => env.planner.calls.length === WAKE_UP_RATE.max + 1);
+
+    expect(env.session.planState!.runSettings!.supervisorLevel).toBe('watch');
     expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
   });
 });

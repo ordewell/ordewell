@@ -1,7 +1,7 @@
 import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
+import { CLOSING_TURN_BOUND_MS, handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect, headlessSignedOut } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -129,6 +129,13 @@ async function followRun(
 ): Promise<ExecutionSummary | null> {
   let level = startLevel;
   let concluded: ExecutionSummary | null = null;
+  // At Act the follower waits on the supervisor's closing turn, never past
+  // the longest the daemon lets that turn keep the end open (ADR-0029): a
+  // daemon that never says so leaves the tasks' outcomes as the answer.
+  let ended: ExecutionSummary | null = null;
+  let closingBound: ReturnType<typeof setTimeout> | undefined;
+  let noteOverdue: () => void = () => {};
+  const overdue = new Promise<'overdue'>((resolve) => { noteOverdue = () => resolve('overdue'); });
   const refs = new Map<string, string>();
   const supervisorTurns = new Set<string>();
   const waitsSaid = new Set<string>();
@@ -205,6 +212,8 @@ async function followRun(
       process.stderr.write(`· ${event.text}\n`);
     }
     if (event.type === 'task_started') {
+      // The closing turn continued the run: its next end starts the bound afresh.
+      clearTimeout(closingBound);
       process.stderr.write(`· ${taskStartedNotice(event.title, event.runner)}\n`);
     }
     if (event.type === 'checkpoint') {
@@ -239,9 +248,17 @@ async function followRun(
       );
       // The stream goes on to `run_concluded`, which at Act follows the turn this waits for.
       if (level === 'act') process.stderr.write('· The run ended: waiting for the supervisor\'s closing turn, which may continue it.\n');
+      ended = summary;
+      clearTimeout(closingBound);
+      if (level === 'act') closingBound = setTimeout(noteOverdue, CLOSING_TURN_BOUND_MS);
     }
-    if (event.type === 'run_concluded') concluded = event.summary;
+    if (event.type === 'run_concluded') {
+      clearTimeout(closingBound);
+      concluded = event.summary;
+      if (event.supervisorHeld) process.stderr.write(`· The supervisor could not take its closing turn: ${event.supervisorHeld}.\n`);
+    }
     if (event.type === 'execution_stopped') {
+      clearTimeout(closingBound);
       console.log('\nExecution stopped.');
     }
     if (event.type === 'notice') console.error(`· ${headlessSignedOut(event.message)}`);
@@ -272,7 +289,13 @@ async function followRun(
   await start();
   // The stream outlives a block, which has no completion coming; the choice
   // below opens the next one, and that ends this.
-  const outcome = await Promise.race([stream, blockedSeen]).catch(streamFailed);
+  const outcome = await Promise.race([stream, blockedSeen, overdue]).catch(streamFailed);
+  clearTimeout(closingBound);
+  if (outcome === 'overdue') {
+    api.endExecutionStream(sessionId);
+    process.stderr.write('· The supervisor\'s closing turn did not conclude in time: the run is no longer followed, and its tasks\' outcomes stand as they ended. `ordewell status` shows where it stands.\n');
+    return ended;
+  }
   if (outcome === 'lost') {
     console.error('Lost the connection to the daemon: the run is no longer being followed, but the daemon may still be running it. `ordewell status` shows where it stands.');
     process.exit(1);

@@ -374,8 +374,8 @@ export class SessionEventRelay implements StatusGate {
     this.broadcast({ type: 'execution_complete', summary: executionSummary(this.store.allTasks) });
   }
 
-  runConcluded(): void {
-    this.broadcast({ type: 'run_concluded', summary: executionSummary(this.store.allTasks) });
+  runConcluded(supervisorHeld?: string): void {
+    this.broadcast({ type: 'run_concluded', summary: executionSummary(this.store.allTasks), ...(supervisorHeld ? { supervisorHeld } : {}) });
   }
 
   /** `turnId`: the planner turn whose commit this is, when one is. */

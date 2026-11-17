@@ -970,10 +970,15 @@ export class Session {
       mayWake: () => this.supervision.mayWake(),
       mayReport: () => this.supervision.mayReport(),
       stoppedByUser: (tasks) => this.supervision.stoppedByUser(tasks),
-      persist: () => this.saves.after(),
+      // Every change to the waiting inputs is saved or announced, or ends a turn: each may be what a run's conclusion waited on (ADR-0029).
+      persist: () => {
+        this.saves.after();
+        this.supervision.settle();
+      },
       announce: () => {
         this.saves.after();
         this.announcePlan();
+        this.supervision.settle();
       },
       interrupt: () => { this.conversation.stopTurn('force_send'); },
       holdStarts: () => this.orchestrator.holdStarts(),
@@ -981,6 +986,7 @@ export class Session {
       turnSettled: () => {
         this.gate.settled();
         this.events.waitsMayHaveChanged(this.plan);
+        this.supervision.settle();
       },
       // A start queued behind its dependencies waited for the turn too, with or without a run.
       resumeStarts: async () => {
@@ -1029,7 +1035,7 @@ export class Session {
         const handoff = this.owedHandoff();
         if (handoff) this.broadcast({ type: 'isolation_handoff', ...handoff });
       },
-      runConcluded: () => this.events.runConcluded(),
+      runConcluded: (held) => this.events.runConcluded(held),
       // Async so a failed save rejects, as a turn's failure does: the input already waits on the plan, and a Stop that took must not throw.
       deliver: async (digest, report, idle, tasks) => this.turns.enqueue({ source: 'supervisor', text: digest, ...(report ? { report } : {}), ...(idle ? { idle } : {}), ...(tasks ? { tasks } : {}) }),
       pump: () => this.turns.pump(),

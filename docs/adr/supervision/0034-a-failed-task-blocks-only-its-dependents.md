@@ -101,7 +101,8 @@ starting as usual.
   is finished.
   A follower that cannot answer, such as `ordewell run`, takes the end as the
   outcome only at `run_concluded`, once an Act supervisor's closing turn could
-  no longer continue the run (ADR-0029), and exits non-zero when a task
+  no longer continue the run, or when its bounded wait for that runs out
+  (ADR-0029), and exits non-zero when a task
   failed or is blocked.
   A task waiting on the user, on hold, at a merge gate or on a usage limit
   keeps the run open, as before.
@@ -199,3 +200,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-11-14 — Mark complete of a task in a run that ended on a failure continues that run, as a retry or a skip does.
 - 2026-11-17 — a follower that cannot answer takes the run's end from `run_concluded`, after any closing turn, and `ordewell run` exits 2 on a failed or blocked task ([ADR-0029](0029-the-supervisor.md)).
 - 2026-11-17 — a subtask is held to every ancestor's dependencies, for the blocked rule and the start rule alike, the merge gate included; it was held to its own alone.
+- 2026-11-17 — `ordewell run`'s wait for `run_concluded` is bounded by the supervisor's own limits ([ADR-0029](0029-the-supervisor.md)).
