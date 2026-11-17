@@ -172,6 +172,20 @@ describe('chat-completions adapter: streams', () => {
     expect(err).toMatchObject({ kind: 'transient' });
   });
 
+  it('completes the whole tool calls of a reply cut off at the length limit, and not the one cut short', async () => {
+    const chunk = (delta: object, finish: string | null = null) =>
+      `data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', created: 1, model: 'm', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+    const body = [
+      chunk({ tool_calls: [{ index: 0, id: 'call_whole', type: 'function', function: { name: 'grep', arguments: '{"pattern":"TODO"}' } }] }),
+      chunk({ tool_calls: [{ index: 1, id: 'call_cut', type: 'function', function: { name: 'read_file', arguments: '{"path":"src/a' } }] }),
+      chunk({}, 'length'),
+      'data: [DONE]\n\n',
+    ].join('');
+    const events = await collect(clientFor('openrouter', replay(sse(body))), { ...BASE_REQUEST, tools: TOOLS });
+    expect(ofType(events, 'tool-call-complete').map((e) => [e.call.id, e.call.arguments])).toEqual([['call_whole', { pattern: 'TODO' }]]);
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' });
+  });
+
   it('stops with the signal\'s own reason', async () => {
     const controller = new AbortController();
     const reason = new Error('stopped by the user');

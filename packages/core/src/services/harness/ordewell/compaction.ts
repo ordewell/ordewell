@@ -392,6 +392,15 @@ export class Compactor {
     return startAt === undefined ? undefined : Math.min(startAt, compactionThreshold(this.effectiveWindow));
   }
 
+  /**
+   * The most a reply may take (ADR-0070): the model's own output limit, held to
+   * the room the window keeps above the compaction threshold, so a prompt the
+   * guard let through and its reply still fit the window together.
+   */
+  get replyTokens(): number {
+    return Math.min(this.options.model.maxOutputTokens, this.effectiveWindow - compactionThreshold(this.effectiveWindow));
+  }
+
   /** The window in force is the assumed one: no setting, catalog or listing stated it and no overflow has measured it. */
   get windowAssumed(): boolean {
     return this.options.model.contextWindowSource === 'assumed' && this.effectiveWindow === this.options.model.contextWindow;

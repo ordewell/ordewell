@@ -100,3 +100,35 @@ describe('a model\'s context window', () => {
     expect(info.contextWindow).toBe(131_072);
   });
 });
+
+describe('a model\'s output limit', () => {
+  it('comes from the catalog when the listing states none', async () => {
+    const info = await lookupModelInfo('openrouter:acme/catalogued', ENV, {
+      fetchImpl: failing,
+      details: details({ openrouter: { 'acme/catalogued': { contextWindow: 1_048_576, maxOutputTokens: 943_718 } } }),
+    });
+    expect(info.maxOutputTokens).toBe(943_718);
+    expect(info.known.maxOutputTokens).toBe(true);
+  });
+
+  it('is the lower of the catalog\'s and the listing\'s when both state one', async () => {
+    const { fetchImpl } = listing([{ id: 'acme/both', name: 'Both', context_length: 200_000, top_provider: { max_completion_tokens: 32_000 } }]);
+    const both = await lookupModelInfo('openrouter:acme/both', ENV, {
+      fetchImpl,
+      details: details({ openrouter: { 'acme/both': { contextWindow: 200_000, maxOutputTokens: 64_000 } } }),
+    });
+    expect(both.maxOutputTokens).toBe(32_000);
+    resetModelListings();
+    const lower = await lookupModelInfo('openrouter:acme/both', ENV, {
+      fetchImpl,
+      details: details({ openrouter: { 'acme/both': { contextWindow: 200_000, maxOutputTokens: 16_384 } } }),
+    });
+    expect(lower.maxOutputTokens).toBe(16_384);
+  });
+
+  it('keeps the 4,096-token default when nothing states it', async () => {
+    const info = await lookupModelInfo('openrouter:acme/unknown', ENV, { fetchImpl: failing, details: details() });
+    expect(info.maxOutputTokens).toBe(4_096);
+    expect(info.known.maxOutputTokens).toBe(false);
+  });
+});

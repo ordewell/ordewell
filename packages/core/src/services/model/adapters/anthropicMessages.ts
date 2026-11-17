@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { classifyHttpFailure, headerReader, ModelError, retryAfterFromHeaders } from '../ModelError';
+import { cameThroughWhole } from './cutShort';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -438,7 +439,12 @@ async function* readStream(events: AsyncIterable<StreamEvent>, signal?: AbortSig
     throw new ModelError({ kind: 'transient', message: 'The stream ended before the model finished its reply.' });
   }
 
-  const ordered = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, b]) => b);
+  const cutOff = finish(stopReason, false) === 'length';
+  // A call the limit cut short leaves the blocks too, so the replayed turn never names one that has no result.
+  const ordered = [...blocks.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, b]) => b)
+    .filter((b) => !cutOff || b.kind !== 'tool_use' || cameThroughWhole(toolCall(b)));
   const calls = ordered.filter((b) => b.kind === 'tool_use');
   for (const call of calls) yield { type: 'tool-call-complete', call: toolCall(call) };
   const reported = modelUsage(usage);
