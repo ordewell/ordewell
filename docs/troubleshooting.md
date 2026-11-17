@@ -452,32 +452,22 @@ turn automatic compaction off, set `"plannerAutoCompaction": false` in the
 global `settings.json` (`~/.ordewell/settings.json`). A harness planner (Claude
 Code, Codex, OpenCode) compacts its own context, and is not affected.
 
-## A Claude Code task compacts its context
+## A task compacts its context
 
-A Claude Code task's log shows its context compacted, or the supervisor says a
-task is running long after a compaction.
+A task's log shows its context compacted, or the supervisor says a task is
+running long after a compaction.
 
-Claude Code compacts a task's context on its own: it replaces the conversation
-with a summary, after which the task may read again what it had read. Ordewell
-chooses where from `taskCompactAt` in the global `settings.json`
-(`~/.ordewell/settings.json`), or `ORDEWELL_TASK_COMPACT_AT`, which wins when
-set. It names one point for every runner, and each runner maps it onto what
-it offers; Claude Code does today:
-
-- `"auto"`, the default, leaves a Claude Code task to compact near the model's
-  own context window. A Haiku task is the exception: it compacts just under the
-  prompt size above which Haiku's prices rise.
-- A whole number of tokens above zero is the context size at which a task's
-  compaction starts. A runner that cannot start there uses the nearest size it
-  can, and logs one line saying so; Claude Code's is any size from 68000 to
-  968000.
-- `"off"` sets nothing for any task, Haiku's included.
-
-A value that is none of these (not a number, zero or negative) stops a task from
-starting, with a message saying what is accepted. The setting does not touch a
-planner. Under a
-window below 200000 tokens a task compacts a few times in ordinary work, so the
-supervisor hears of it from the third compaction; otherwise from the first.
+A runner compacts a task's context on its own: it replaces the conversation with
+a summary, after which the task may read again what it had read, and Ordewell
+reminds it of its brief. This is a capacity guard, so by default it starts near the
+model's own window (Haiku on Claude Code just under the prompt size above which
+Haiku's prices rise). To move the start, set `taskCompactAt` in the global
+`settings.json` (`~/.ordewell/settings.json`) or `ORDEWELL_TASK_COMPACT_AT`, which
+wins when set: `"auto"`, a whole number of tokens above zero, or `"off"`. A value
+that is none of these stops a task from starting, with a message saying what is
+accepted. What each runner does with it, and what you see, is the table in
+[When a task's context compacts](planners-and-runners.md#when-a-tasks-context-compacts).
+The setting does not touch a planner.
 
 ## A task waits for your approval
 

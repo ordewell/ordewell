@@ -144,6 +144,12 @@ is one runner per API provider, under the provider's own id and name.**
     of the window and at least 16k tokens, the conversation is compacted. The
     threshold is never under half the window, so a window under about 32k does not
     compact on every step. Estimates count four characters to a token.
+    Where the `taskCompactAt` setting names a start, compaction begins there
+    instead, never above that guard and never below 32k or the guard if that is
+    lower; `off` is not honoured here, since a runner that never compacted would
+    run into its provider's limit, and the task's log says so
+    ([ADR-0018](0018-structured-runner-transport.md) C4 states the rule for every
+    harness, this runner's included).
   - **Summary.** A separate call, with no tools, writes the messages between the
     kept head and tail under fixed headings: Objective, Requirements, Decisions,
     Work State (Completed, Active, Blocked), Next Move, Relevant Files, Important

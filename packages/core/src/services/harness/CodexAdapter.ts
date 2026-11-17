@@ -456,6 +456,11 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   /** Where a task's context compacts, when Ordewell set it (ADR-0057 R4): a planner's conversation is the user's. */
   compactWindowTokens?: number;
 
+  /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
+  get compactStartTokens(): number | undefined {
+    return this.compactWindowTokens;
+  }
+
   protected spawnSpec(opts: AgentStartOptions): SpawnSpec {
     this.startOpts = opts;
     this.compactLimit = opts.kind === 'task' ? codexCompactLimit(taskCompactAtOf()) : undefined;

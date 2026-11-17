@@ -924,7 +924,7 @@ export class Attempts {
   private watch(task: Task, attempt: TaskAttempt, session: IRunnerSession): void {
     // Where its runner compacts, for the context meter to read against (ADR-0018 W1).
     const window = session.compactWindowTokens;
-    if (window !== undefined) this.deps.store.setAttemptCompaction(task.id, attempt.attempt, { windowTokens: window, startsAtTokens: compactionStartOf(window) });
+    if (window !== undefined) this.deps.store.setAttemptCompaction(task.id, attempt.attempt, { windowTokens: window, startsAtTokens: session.compactStartTokens ?? compactionStartOf(window) });
     // Attached before the verifier, so the summary of the call that settles
     // the attempt is captured before its verdict asks for the final text.
     session.onEvent((event) => {

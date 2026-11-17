@@ -172,17 +172,12 @@ is no sibling chat, lock tool, wait tool or broadcast.**
     it, from the start of the request: the turn's opening stands for that, which can only make a
     wake early. A prefix already cold has nothing to save, so the age then runs from the event.
 
-  A `running_long` event raised by a compaction is rationed by where the window comes from
-  ([ADR-0018](../runners/0018-structured-runner-transport.md) W1). Where Ordewell sets a window below
-  200k tokens for a task to compact at (Claude Code's on Haiku, or a `taskCompactAt` set that
-  low), a compaction is routine, and the event comes from the attempt's third, then its 6th, 12th and
-  so on. At a larger window an ordinarily sized task never compacts, and where Ordewell sets none, as
-  `auto` does for every model but Haiku, the runner compacts near its model's own window: both are rare
-  enough to say so from the first. The time-based event is unrelated, and so is one raised by the
-  task's context first reaching 40% of the smaller of its model's window and the compaction window
-  in force, never below 150k tokens, then each doubling of that below the window: it comes before a
-  compaction, so the supervisor can have the runner commit and report, or split the task, while its
-  context is still sound. All three are held, batched and counted against the rate guard alike;
+  A `running_long` event is raised by a task's running time, by an automatic compaction of its own
+  runner session, or by its context growing large; which compactions count as routine, and where a
+  large context starts, is one rule for every harness
+  ([ADR-0018](../runners/0018-structured-runner-transport.md) C4). A flagged context comes before
+  a compaction, so the supervisor can have the runner commit and report, or split the task, while
+  its context is still sound. All three are held, batched and counted against the rate guard alike;
   their line says which raised it.
 
   A pass is not held: it wakes nothing and starts no clock, and rides along in the next wake, as it

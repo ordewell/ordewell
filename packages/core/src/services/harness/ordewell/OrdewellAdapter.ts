@@ -101,6 +101,11 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
    */
   compactWindowTokens?: number;
 
+  /** The setting is the start itself here, so the meter reads against it (ADR-0018 C4). */
+  get compactStartTokens(): number | undefined {
+    return this.compactWindowTokens;
+  }
+
   constructor(private readonly provider: AiProvider, private readonly deps: AgentProcessDeps, private readonly options: OrdewellAdapterOptions = {}) {
     this.agentId = provider;
     // The session's own, when it passes one, so its event redaction knows the keys too (ADR-0061).

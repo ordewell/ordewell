@@ -96,6 +96,51 @@ The planner gives each AI task a runner, a model, a thinking effort and a mode, 
 you can change any of them before the run. A model an API planner can use is not
 thereby one a runner offers: pick a task's model from its runner's choices.
 
+## When a task's context compacts
+
+Compaction is a capacity guard, not a quality tool: a runner replaces its
+conversation with a summary so the task can go on, and the task may read again
+what it had read. So by default Ordewell makes no task compact before its
+harness would near the model's true window. The one exception is Haiku on Claude
+Code, which compacts just under the prompt size above which Haiku's prices rise.
+
+One setting, `taskCompactAt`, names where compaction starts for every runner. It
+lives in the global `settings.json` (`~/.ordewell/settings.json`);
+`ORDEWELL_TASK_COMPACT_AT` wins when it is set. Each runner maps it onto what it
+offers, and a planner never reads it.
+
+- `"auto"`, the default, leaves compaction where the runner puts it.
+- A whole number of tokens above zero is the context size at which compaction
+  starts. A runner that cannot start exactly there uses the nearest size it can
+  and logs one line saying so.
+- `"off"` sets nothing. The built-in runner cannot go without compaction (its
+  conversation would outgrow the model), so it compacts as `auto` does and says so
+  in the task's log.
+
+Any other value (not a number, zero or negative) stops a task from starting, with
+a message saying what is accepted.
+
+| Harness | Default start (`auto`) | A number N | `off` | What you see |
+| --- | --- | --- | --- | --- |
+| Claude Code | The CLI's own, near the model's window; Haiku just under 100,000 tokens (window 125,000, start 93,000) | Sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to N + 32,000, N held to 68,000–968,000 (a log line if it moves) | Sets none, Haiku's included | Meter `compacts at` the window less 32,000; a `compaction` line in the task log; the running-long badge |
+| Codex | Its own | Sets `model_auto_compact_token_limit` to N (scope total) when the thread starts | Sets nothing | Meter `compacts at N`; the log line; the badge |
+| OpenCode 1.x and 2.x | Its own | Sets `compaction.reserved` to the window less N, N held to 16,000 up to the window less 16,000; nothing, with a warning, when the model's window is unknown; 1.x applies it only to models with an input limit | Sets nothing | Meter `compacts at N`; the log line; the badge |
+| ACP runners | The agent's own | Nothing to set: one warning that it cannot be honoured | Nothing | No `compacts at` (no window known); a compaction is inferred from a sharp fall in the reported context and logged; the badge |
+| Built-in runner | The model's window less the runner's reserve (108,800 under the assumed 128,000) | Start N, held to between 32,000 (or the default, if lower) and the default (a log line if it moves) | Not honoured: compacts as `auto` does, with a line in the task log | Meter `compacts at N` (or the default); the `compaction` line; the badge |
+
+Whatever the harness, a compaction does the same three things. The runner gets a
+reminder of its brief, once. The supervisor's running-long count goes up: under a
+window below 200,000 tokens a task compacts a few times in ordinary work, so
+the badge shows from the third compaction, otherwise from the first. And the
+context meter resets to the size the runner left, or to nothing until its next
+call.
+
+A task whose context grows large is flagged on its own, without compacting: at the
+larger of 150,000 tokens and 40% of its effective window, then at each doubling.
+The decision is recorded in
+[ADR-0018](adr/runners/0018-structured-runner-transport.md) (rule C4), and
+`compactionPerHarness.test.ts` in core pins the table above to the code.
+
 ## The built-in runner
 
 The built-in runner is a coding-agent loop that runs inside Ordewell itself and
