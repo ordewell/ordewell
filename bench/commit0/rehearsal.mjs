@@ -147,7 +147,11 @@ export const SCENARIOS = Object.freeze({
     plan: () => rehearsalPlan(LEFT_PLAN),
     attempts: (ctx) => ({ edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)]], after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]] }),
     supervisor: [],
-    expect: { truncated: true, truncatedWhy: /^settled with 2 tasks open/, stoppedWhy: null, stalled: true, notComplete: true, tasks: { failed: 1, completed: 0 } },
+    // Nothing landed: arm B scores merged work, which the failed task's never became.
+    expect: {
+      scoredFrom: 'merged', truncated: true, truncatedWhy: /^settled with 2 tasks open/, stoppedWhy: null, stalled: true, heldOpen: 2,
+      notComplete: true, passedAtBaseline: true, tasks: { failed: 1, completed: 0 },
+    },
     playedOut: ['edit'],
   },
   'b-cap': {
@@ -373,6 +377,7 @@ export function judgeRehearsal(name, result) {
   if (e.truncatedWhy) want(e.truncatedWhy.test(result.truncated?.why ?? ''), `truncated because "${result.truncated?.why}", wanted ${e.truncatedWhy}`);
   if ('stoppedWhy' in e) want((result.stopped?.why ?? null) === e.stoppedWhy, `stopped by ${result.stopped?.why ?? 'nothing'}, wanted ${e.stoppedWhy ?? 'nothing'}`);
   if ('stalled' in e) want(Boolean(result.stalled) === e.stalled, `stalled is ${JSON.stringify(result.stalled ?? null)}, wanted ${e.stalled ? 'a record' : 'none'}`);
+  if (e.heldOpen !== undefined) want((result.stalled?.open ?? []).length === e.heldOpen, `${(result.stalled?.open ?? []).length} task(s) held open, wanted ${e.heldOpen} (${JSON.stringify(result.stalled?.open ?? null)})`);
   if (e.mergeExit !== undefined) want(result.steps?.merge?.exit === e.mergeExit, `the merge step ${JSON.stringify(result.steps?.merge ?? null)}, wanted exit ${e.mergeExit}`);
   if (e.tasks) {
     const got = taskCounts(result.tasks);
@@ -384,6 +389,11 @@ export function judgeRehearsal(name, result) {
     const base = result.baseline?.passed ?? 0;
     want(passed !== null && passed > base, `${passed} passed, not above the baseline's ${base}`);
     want(!(result.tests?.collectionErrors ?? []).some((c) => String(c).includes(REHEARSAL_MODULE)), `a collection error names ${REHEARSAL_MODULE}: the new module was not scored`);
+  }
+  if (e.passedAtBaseline) {
+    const passed = result.tests?.passed ?? null;
+    const base = result.baseline?.passed ?? null;
+    want(passed !== null && passed === base, `${passed} passed, not the baseline's ${base}: work that never landed was scored`);
   }
   if (e.testExcluded) {
     want((result.excluded ?? []).some((x) => /test/.test(x.path ?? '') && /test/.test(x.reason ?? '')), `no test file in excluded (${JSON.stringify(result.excluded ?? null)}): the edited test was scored`);

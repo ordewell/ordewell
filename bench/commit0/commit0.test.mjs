@@ -1728,6 +1728,14 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.match(R.judgeRehearsal('a-failed', { ...passing, truncated: { truncated: true, why: 'cap: wall-clock' }, stopped: { why: 'wall-clock' } }).join('; '), /cap: wall-clock.*stopped by wall-clock/);
   assert.match(R.judgeRehearsal('a-done', { ...passing, scoredFrom: 'merged', truncated: { truncated: false }, tasks: [{ status: 'completed' }], steps: { run: { exit: 0, ended: 'by the stop' } } }).join(), /not by itself/);
   assert.match(R.judgeRehearsal('b-leave', { ...passing, truncated: { truncated: true, why: 'settled with 2 tasks open' }, stalled: {}, tasks: [{ status: 'completed' }, { status: 'completed' }] }).join(), /every task is completed/);
+  const held = { status: 'failed', held: 'nothing ready', reason: 'failed' };
+  const leftAlone = {
+    ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
+    stalled: { why: 'settled', open: [held, { status: 'approved', held: 'nothing ready', reason: 'depends on 1 (failed)' }] }, tasks: [{ status: 'failed' }, { status: 'approved' }],
+  };
+  assert.deepEqual(R.judgeRehearsal('b-leave', leftAlone), []);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, tests: { passed: 1653 } }).join(), /1653 passed, not the baseline's 11: work that never landed was scored/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, stalled: { why: 'settled', open: [held] } }).join(), /1 task\(s\) held open, wanted 2/);
   assert.match(R.judgeRehearsal('b-cap', { ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'cap: spend' }, stopped: { why: 'spend' }, tasks: [{ status: 'completed' }], steps: { run: { ended: 'by itself' }, merge: { exit: 0 } } }).join(), /driver had to stop it/);
   assert.deepEqual(R.judgeRehearsal('a-done', null), ['no result.json']);
 
