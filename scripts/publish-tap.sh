@@ -102,21 +102,23 @@ if [ "$cask" = true ]; then
   cp "$desktop_cask" "$tap/Casks/ordewell-desktop.rb"
   git -C "$tap" add Casks/ordewell-desktop.rb
 fi
-# The cask was `ordewell` until the formula took the name (ADR-0065 C8): once
-# `ordewell-desktop` is in the tap the old file goes, and cask_renames.json, at
-# the tap's root as Homebrew reads it, moves an installed `ordewell` cask to
-# `ordewell-desktop` on upgrade. The rename waits for the new cask, since
-# Homebrew needs its target to exist in the same tap.
-if [ -f "$tap/Casks/ordewell-desktop.rb" ]; then
-  git -C "$tap" rm --quiet --ignore-unmatch Casks/ordewell.rb
+# The formula's name must lead to the formula alone (ADR-0065 C8). A cask
+# that answers to `ordewell`, a Casks/ordewell.rb or a cask_renames.json entry
+# from `ordewell`, makes Homebrew load that cask while it resolves
+# `brew install ordewell/tap/ordewell`, and Homebrew 7 refuses a cask from a tap
+# nobody trusted: the formula's own install fails. So any such cask goes.
+git -C "$tap" rm --quiet --ignore-unmatch Casks/ordewell.rb
+if [ -f "$tap/cask_renames.json" ]; then
   node -e '
     const fs = require("fs");
     const file = process.argv[1];
-    const renames = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-    renames.ordewell = "ordewell-desktop";
-    fs.writeFileSync(file, JSON.stringify(renames, null, 2) + "\n");
+    const renames = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!Object.hasOwn(renames, "ordewell")) process.exit(0);
+    delete renames.ordewell;
+    if (Object.keys(renames).length) fs.writeFileSync(file, JSON.stringify(renames, null, 2) + "\n");
+    else fs.rmSync(file);
   ' "$tap/cask_renames.json"
-  git -C "$tap" add cask_renames.json
+  git -C "$tap" add -A cask_renames.json
 fi
 if git -C "$tap" diff --cached --quiet; then
   echo "the tap already carries Ordewell ${version}"

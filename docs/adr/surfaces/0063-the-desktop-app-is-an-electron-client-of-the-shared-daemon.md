@@ -255,7 +255,10 @@ holds the token.**
   `macos-15-intel`, `ubuntu-latest`, `ubuntu-24.04-arm`), with
   `scripts/verify-brew-install.sh`: `brew install ordewell/tap/ordewell`, then
   `ordewell --version` must print the release's version and `brew test
-  ordewell` must pass. It also runs `brew audit --formula` and prints what that
+  ordewell` must pass. On the macOS runners, when the tap's cask is the
+  release's, `brew install --cask ordewell/tap/ordewell-desktop` follows, the
+  app's version must be the release's and Gatekeeper must accept it, and the
+  cask is uninstalled. It also runs `brew audit --formula` and prints what that
   reports as a warning, which fails nothing, since the audit judges how the
   formula is written and not what a user installs. It holds no credential. A
   release whose formula did not reach the tap is published again by hand with
@@ -612,3 +615,4 @@ allows script only from the app's own bundle, with no inline script.
 - 2026-11-13 — H6: a launch opens the folder it names or, with `--new-window`, the welcome window, and a second launch hands its arguments to the running app; a plain first launch reopens last session's project windows.
 - 2026-11-13 — H3: the contract is also raised when a client needs a route, or a value on one, that an older daemon lacks or refuses.
 - 2026-11-17 — H9: no update check at launch; the update banner offers Update, then Restart to update after a confirm about live work, on a signed build and Download elsewhere, and Check for updates… asks on demand.
+- 2026-11-18 — H11: `homebrew-verify` also installs the release's cask on the macOS runners and checks its version and Gatekeeper.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install ordewell from ordewell/homebrew-tap the way a user does and prove it
 # is the release just published (ADR-0063 H11, ADR-0065 C8): `brew install`,
-# then `ordewell --version` against <version>, then the formula's own test.
+# then `ordewell --version` against <version>, then the formula's own test,
+# then on macOS the desktop cask when the tap carries this release's.
 # The homebrew-verify jobs of release.yml and homebrew-publish.yml run it, on a
 # runner of each platform the formula has an archive for. It reads the tap the
 # way anyone can, so it holds no credential.
@@ -75,6 +76,30 @@ if [ "$reported" != "$version" ]; then
 fi
 echo "brew installed ordewell $reported"
 brew test ordewell
+
+# The cask, on macOS, installed the way a user does, after the formula and on
+# its own trust (Homebrew 7 trusts what a fully qualified install names). Only
+# a notarized build publishes it, so a tap whose cask is another release's, or
+# none, has nothing of this one to prove. The app must be this release's and
+# one Gatekeeper accepts. ORDEWELL_BREW_APPDIR stands in for /Applications in
+# the tests alone.
+if [ "$(uname -s)" = Darwin ]; then
+  cask_file="$(brew --repository ordewell/tap)/Casks/ordewell-desktop.rb"
+  if [ -f "$cask_file" ] && grep -qx "  version \"$version\"" "$cask_file"; then
+    brew install --cask ordewell/tap/ordewell-desktop
+    app="${ORDEWELL_BREW_APPDIR:-/Applications}/Ordewell.app"
+    bundled=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
+    if [ "$bundled" != "$version" ]; then
+      echo "brew installed Ordewell.app $bundled, not the published $version" >&2
+      exit 1
+    fi
+    spctl --assess --type execute -vv "$app"
+    echo "brew installed Ordewell.app $bundled"
+    brew uninstall --cask ordewell/tap/ordewell-desktop
+  else
+    echo "the tap carries no ordewell-desktop $version cask, so there is no cask to install"
+  fi
+fi
 
 # Every line audit reports is printed. It fails nothing: audit's findings on a
 # third-party tap are about how the formula is written, which the next release
