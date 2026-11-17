@@ -43,6 +43,19 @@ function leftovers() {
   return { containers: ids('container'), networks: ids('network') };
 }
 
+/** The turns the fake played, from its request log. */
+function turnsOf(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).turn).filter(Boolean);
+}
+
+/** The context the fake was started with, for reading its scripts back: only the step tools matter here. */
+function playCtx(file, name) {
+  const lib = JSON.parse(fs.readFileSync(file, 'utf8')).libraries.find((l) => l.name === name) ?? {};
+  const trim = (d) => String(d ?? '').replace(/^\.\//, '').replace(/\/+$/, '');
+  return { src: trim(lib.srcDir), tests: trim(lib.testDir), longSec: 0 };
+}
+
 function drive(argv, logFile) {
   return new Promise((resolve) => {
     const out = fs.openSync(logFile, 'a');
@@ -65,6 +78,7 @@ for (const name of names) {
   const runDir = fs.readdirSync(rehearsals).find((d) => d.includes(seed) && fs.existsSync(path.join(rehearsals, d, 'result.json')));
   const result = runDir ? JSON.parse(fs.readFileSync(path.join(rehearsals, runDir, 'result.json'), 'utf8')) : null;
   const failures = R.judgeRehearsal(name, result);
+  if (runDir) failures.push(...R.judgePlayed(name, turnsOf(path.join(rehearsals, runDir, 'rehearsal-requests.jsonl')), playCtx(libs, only)));
   const left = leftovers();
   const stray = [...left.containers.filter((c) => !before.containers.includes(c)), ...left.networks.filter((n) => !before.networks.includes(n))];
   if (stray.length) failures.push(`left behind: ${stray.join(', ')}`);

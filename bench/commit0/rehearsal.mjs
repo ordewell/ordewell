@@ -74,6 +74,17 @@ export const SCENARIOS = Object.freeze({
     about: 'arm A: its one task makes the edits and reports done; `ordewell run` returns by itself',
     attempts: (ctx) => ({ A: [[...editSteps(ctx), done('Implement the library')]] }),
     expect: { valid: true, runExit: 0, truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 } },
+    playedOut: ['A'],
+  },
+  'a-failed': {
+    arm: 'A',
+    about: 'arm A: one shell command outlasts the settle window, then the edits, then the task reports failed; scored from its unlanded worktree',
+    attempts: (ctx) => ({ A: [[longStep(ctx.longSec), ...editSteps(ctx), failed('The rehearsal fails this task on purpose.')]] }),
+    expect: {
+      valid: true, scoredFrom: 'task-worktree', truncated: true, truncatedWhy: /^settled with 1 task open: 1 nothing ready/,
+      stoppedWhy: null, passedAboveBaseline: true, testExcluded: true, tasks: { failed: 1 },
+    },
+    playedOut: ['A'],
   },
 });
 
@@ -204,6 +215,26 @@ export function taskCounts(tasks) {
   const by = {};
   for (const t of tasks ?? []) by[t.status] = (by[t.status] ?? 0) + 1;
   return by;
+}
+
+/**
+ * Whether the fake played every step of the attempts `playedOut` names, from
+ * its request log: an attempt the driver stopped mid-step never reaches its
+ * last one. Returns the failures.
+ */
+export function judgePlayed(name, turns, ctx) {
+  const s = scenario(name);
+  const scripts = s.attempts(ctx);
+  const f = [];
+  for (const key of s.playedOut ?? []) {
+    const attempts = scripts[key] ?? [];
+    attempts.forEach((steps, i) => {
+      const last = steps.length - 1;
+      const reached = turns.some((t) => t.role === 'runner' && t.key === key && t.attempt === i + 1 && t.round === last && t.toolCall?.name === steps[last].tool);
+      if (!reached) f.push(`task ${key}, attempt ${i + 1}: its last scripted step (${steps[last].tool}) was never played`);
+    });
+  }
+  return f;
 }
 
 /** The failures of one scenario's result.json against its expectations; empty when it passed. */
