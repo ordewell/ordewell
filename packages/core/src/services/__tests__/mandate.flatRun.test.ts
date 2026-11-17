@@ -36,7 +36,7 @@ const USERS_CONTROLS: Partial<Record<ExecutionCommandName, Consent>> = {
   mark_not_done: usersOwn('mark a task not done', '/uncomplete <id>'),
   revert_task: usersOwn('revert a task', '/revert <id>'),
   interrupt_task: usersOwn('interrupt a running task', 'ctrl-x in the task\'s view (/open <id>)'),
-  force_send_queued: usersOwn('force send a queued message', 'ctrl-s on the queued message'),
+  force_send_queued: usersOwn('force send a queued message', 'ctrl-s in the task\'s view (/open <id>)'),
   remove_queued: usersOwn('take back a queued message', 'ctrl-r on the queued message in the task\'s view (/open <id>)'),
   cancel_resume: usersOwn('cancel a scheduled resume', 'the c key on the task in the plan'),
   approve_review: usersOwn('approve the review', '/approve'),

@@ -43,7 +43,7 @@ describe('naming ctrl-x while the runner works', () => {
   });
 
   it('leads the header keys with it, so truncation drops the others first', () => {
-    expect(headerKeys(opened())).toMatch(/^ctrl-x stop runner · ctrl-r remove queued · ctrl-s send now/);
+    expect(headerKeys(opened())).toMatch(/^ctrl-x stop runner · ctrl-r remove queued · esc back/);
   });
 
   it.each([

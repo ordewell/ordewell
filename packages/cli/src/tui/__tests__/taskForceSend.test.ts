@@ -118,15 +118,16 @@ describe('what the task view shows for force send', () => {
     expect(out).toContain('other work.');
   });
 
-  it('names ctrl-s in the header next to interrupt', () => {
+  it('names ctrl-s in the footer, as the planner chat does, and not in the header', () => {
     const out = plain(opened());
-    expect(out).toContain('ctrl-x stop runner · ctrl-r remove queued · ctrl-s send now');
-    expect(out).toContain('esc back');
+    expect(out).toContain('ctrl-x stop runner · ctrl-r remove queued · esc back');
+    expect(footerHints(opened())).toContain('ctrl-s send now');
   });
 
-  it('names Esc and send-all in the header while a message can be taken back, as the planner chat does', () => {
+  it('names Esc in the header while a message can be taken back, and send-all in the footer, as the planner chat does', () => {
     const out = plain(opened(log(queued, null)));
-    expect(out).toContain('esc takes back the newest · ctrl-s sends all now');
+    expect(out).toContain('ctrl-r remove queued · esc takes back the newest');
+    expect(footerHints(opened(log(queued, null)))).toContain('ctrl-s send all now');
     expect(out).not.toContain('esc back');
     const handed = plain(opened(log([...queued, { type: 'message_handed_over', messageId: 'm1' }, { type: 'message_handed_over', messageId: 'm2' }], null)));
     expect(handed).toContain('esc back');
@@ -148,12 +149,12 @@ describe('what the task view shows for force send', () => {
     expect(out).not.toContain('handed over');
   });
 
-  it('keeps the send-all hint off the queue while the composer holds text, and names it in the footer', () => {
+  it('keeps the send-all hint off the queue while the composer holds text; the footer names it either way', () => {
     const out = plain(withDraft(opened(log(queued, null)), 'one more'));
     expect(out).toMatch(/also tests · queued · esc takes back(?! ·)/);
     expect(footerHints(withDraft(opened(log(queued, null)), 'one more'))).toContain('ctrl-s send all now');
     expect(footerHints(withDraft(opened(), 'one more'))).toContain('ctrl-s send now');
-    expect(footerHints(opened(log(queued, null))).join(' ')).not.toContain('ctrl-s');
+    expect(footerHints(opened(log(queued, null)))).toContain('ctrl-s send all now');
   });
 
   it('shows a forced message first, as sending now', () => {
