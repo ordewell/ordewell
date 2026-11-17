@@ -622,6 +622,12 @@ async function readPlan(lib, sb, sessionId) {
   try { return JSON.parse(r.stdout); } catch { return null; }
 }
 
+/** The daemon's run view of a session (core's RunView), the one place a scheduler's hold is kept; null when it cannot be read. */
+async function readRunView(lib, sb, sessionId) {
+  const r = await inBox(sb, ['ordewell', 'status', '--session-id', sessionId, '--workspace', lib.workdir, '--json'], { workdir: lib.workdir, timeoutMs: 120_000 });
+  try { return JSON.parse(r.stdout).run ?? null; } catch { return null; }
+}
+
 async function lastSessionId(lib, sb) {
   const last = await inBox(sb, ['cat', path.posix.join(lib.workdir, '.ordewell', 'last-session.json')]);
   try { return JSON.parse(last.stdout).sessionId ?? null; } catch { return null; }
@@ -760,72 +766,35 @@ async function dryArm(lib, sb, arm, settings, runDir) {
 }
 
 /**
- * A worktree layout as a stopped run leaves it, built in the box with git and
- * read on the host as the scoring reads an arm's: the chooser must find each
- * task's work where it is, never in the integration worktree, and its files
- * must come out whole, from a worktree or a preserved branch.
+ * A worktree layout as a stopped run leaves it, built in the box by core's
+ * isolation (L.CHOOSER_JS) and read on the host as the scoring reads an arm's:
+ * the chooser must find each task's work where core recorded it, never in the
+ * integration worktree, and its files must come out whole, from a worktree or
+ * a preserved branch.
  */
-const CHOOSER_SH = String.raw`
-set -eu
-R=/tmp/commit0-chooser
-rm -rf "$R" "$R-tmp"; mkdir -p "$R/pkg"; cd "$R"
-git init -q -b commit0-base
-printf 'a = 1\n' > pkg/a.py; printf 'b = 1\n' > pkg/b.py
-printf '/.venv\n' >> .git/info/exclude
-git add -A; git commit -qm flat
-FLAT=$(git rev-parse HEAD)
-W=.ordewell/worktrees/run1
-git worktree add -q -b ordewell/run1/integration "$W/integration"
-(cd "$W/integration" && printf 'merged = 1\n' > pkg/merged.py && git add -A && git commit -qm merged)
-git worktree add -q -b ordewell/run1/1-one "$W/1-one"
-(cd "$W/1-one" && printf 'one = 1\n' > pkg/one.py && git add -A && git commit -qm one && printf 'a = 2\n' > pkg/a.py && printf 'new = 1\n' > pkg/new.py && mkdir .venv && printf junk > .venv/junk)
-mk() { git branch "$1" "$FLAT"; git worktree add -q "$R-tmp" "$1"; (cd "$R-tmp" && printf '%s\n' "$2" > pkg/two.py && git add -A && git commit -qm "$1"); git worktree remove --force "$R-tmp"; }
-mk ordewell/run1/2-two branch
-mk ordewell-preserved/run1/2-two older
-mk ordewell-preserved/run1/2-two-2 newest
-git worktree add -q -b ordewell/run1/4-four "$W/4-four"
-(cd "$W/4-four" && printf 'b = 4\n' > pkg/b.py)
-`;
-
 async function checkChooser(lib, sb) {
   const root = '/tmp/commit0-chooser';
-  const made = await inBox(sb, ['sh', '-c', CHOOSER_SH]);
-  if (made.code !== 0) return check(lib.name, 'patch chooser', false, `the layout could not be built: ${made.stderr.trim().split('\n').slice(-3).join(' | ')}`);
+  const made = await inBox(sb, [NODE_IN_BOX, '-e', L.CHOOSER_JS, root], { timeoutMs: 120_000 });
+  let plan = null;
+  try { plan = JSON.parse(made.stdout); } catch { /* reported below */ }
+  if (made.code !== 0 || !plan) return check(lib.name, 'patch chooser', false, `core could not build the layout: ${(made.stderr || made.stdout).trim().split('\n').slice(-3).join(' | ')}`);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-chooser-'));
   const failures = [];
   try {
     const copy = path.join(tmp, 'copy');
     if (!(await copyOut(sb, root, copy))) failures.push('the layout could not be copied out');
-    const w = (name) => `${root}/.ordewell/worktrees/run1/${name}`;
-    const rec = (taskId, name, status, worktree = w(name)) => ({ taskId, branch: `ordewell/run1/${name}`, workspace: w(name), status, repos: { '.': { worktree } } });
-    const plan = {
-      tasks: [
-        { id: 't1', order: 1, title: 'one', status: 'failed' },
-        { id: 't2', order: 2, title: 'two', status: 'failed' },
-        { id: 't3', order: 3, title: 'three', status: 'completed' },
-        { id: 't4', order: 4, title: 'four', status: 'completed', subtasks: [{ id: 't4a', title: 'four, a', status: 'failed' }] },
-        { id: 't5', order: 5, title: 'five', status: 'blocked' },
-      ],
-      isolation: {
-        run: { id: 'run1', workspaceRoot: root, repos: [{ path: '.', integrationBranch: 'ordewell/run1/integration' }] },
-        tasks: {
-          t1: rec('t1', '1-one', 'active'),
-          t2: rec('t2', '2-two', 'kept'),
-          t3: rec('t3', '3-three', 'merged'),
-          t4: rec('t4', '4-four', 'kept'),
-          t5: rec('t5', '5-five', 'active', w('integration')),
-        },
-      },
-    };
+    const runId = plan.isolation?.run?.id;
+    const w = (name) => `${root}/.ordewell/worktrees/${runId}/${name}`;
+    const ids = Object.fromEntries((plan.tasks ?? []).map((t) => [`t${t.order}`, t.id]));
     const layout = L.readGitLayout(copy, root);
-    const chosen = L.choosePatches({ plan, worktrees: layout.worktrees, branches: [...layout.branches.keys()] });
-    const got = Object.fromEntries(chosen.map((c) => [c.taskId, c.landed ? 'landed' : c.source ? (c.source.path ?? c.source.ref) : 'none']));
-    const want = { t1: w('1-one'), t2: 'ordewell-preserved/run1/2-two-2', t3: 'landed', t4: w('4-four'), t5: 'none' };
+    const chosen = L.choosePatches({ plan, worktrees: layout.worktrees, branches: [...layout.branches.keys()], tips: layout.branches });
+    const got = Object.fromEntries(chosen.map((c) => [`t${c.order}`, c.landed ? 'landed' : c.source ? (c.source.path ?? c.source.ref) : 'none']));
+    const want = { t1: w('1-one'), t2: `ordewell-preserved/${runId}/2-two-2`, t3: 'landed', t4: w('4-four'), t5: 'none' };
     failures.push(...Object.keys(want).filter((k) => got[k] !== want[k]).map((k) => `${k}: chose ${got[k]}, not ${want[k]}`));
     const a = L.scoringPlan(L.ARMS.A, chosen);
     const b = L.scoringPlan(L.ARMS.B, chosen);
-    if (a.scoredFrom !== 'task-worktree' || a.apply?.taskId !== 't1') failures.push(`arm A scores ${a.scoredFrom} from ${a.apply?.taskId ?? 'nothing'}, not the task worktree of t1`);
-    if (b.scoredFrom !== 'merged' || b.diagnostic.map((c) => c.taskId).join() !== 't1,t2,t4') failures.push(`arm B scores ${b.scoredFrom} and keeps ${b.diagnostic.map((c) => c.taskId).join(', ')} for diagnosis, not merged and t1, t2, t4`);
+    if (a.scoredFrom !== 'task-worktree' || a.apply?.taskId !== ids.t1) failures.push(`arm A scores ${a.scoredFrom} from task ${a.apply?.order ?? 'nothing'}, not the task worktree of t1`);
+    if (b.scoredFrom !== 'merged' || b.diagnostic.map((c) => `t${c.order}`).join() !== 't1,t2,t4') failures.push(`arm B scores ${b.scoredFrom} and keeps ${b.diagnostic.map((c) => `t${c.order}`).join(', ')} for diagnosis, not merged and t1, t2, t4`);
     // The files each source yields on the host, as the scoring reads them.
     const expect = (dir, files) => {
       for (const [file, text] of files) {
@@ -837,7 +806,7 @@ async function checkChooser(lib, sb) {
     const one = L.hostPathOf(copy, root, w('1-one'));
     expect(one, [['pkg/one.py', 'one = 1'], ['pkg/a.py', 'a = 2'], ['pkg/new.py', 'new = 1']]);
     if (!L.treeManifest(one).get(L.VENV_DIR)?.pruned) failures.push('the worktree\'s venv is read as the arm\'s work');
-    const sha = layout.branches.get('ordewell-preserved/run1/2-two-2');
+    const sha = layout.branches.get(`ordewell-preserved/${runId}/2-two-2`);
     if (sha) expect(materialize(path.join(copy, '.git'), sha, path.join(tmp, 't2')), [['pkg/two.py', 'newest'], ['pkg/a.py', 'a = 1']]);
     else failures.push('the preserved branch is not read from the copy');
   } catch (err) {
@@ -847,7 +816,8 @@ async function checkChooser(lib, sb) {
     await inBox(sb, ['rm', '-rf', root]);
   }
   return check(lib.name, 'patch chooser', failures.length === 0, failures.length ? failures : [
-    'read on the host from the copied files: a failed task\'s own worktree, committed and uncommitted work, its venv left out;',
+    `core's isolation in the box (run ${plan.isolation.run.id}), its records at plan.isolation.run.tasks, read on the host from the copied files:`,
+    'a failed task\'s kept worktree, committed and uncommitted work, its venv left out;',
     'a gone worktree: the newest preserved branch, its files whole; an open subtask: not landed; the integration worktree: nothing',
   ]);
 }
@@ -926,6 +896,12 @@ async function realArm(lib, sb, arm, settings, runDir) {
     settle = d.state;
     if (d.settled) {
       endMs = d.state.sinceMs;
+      // A run that settles with tasks open stopped short: the record says what was open and what held each (D5).
+      stalled = L.settledStall({ plan, run: await readRunView(lib, sb, sessionId), quietMs: nowMs - d.state.sinceMs });
+      if (stalled) {
+        const by = L.judgeLanding({ stopped: null, stalled, plan }).why;
+        return `settled: nothing running, nobody waited on, nothing moved, ${by.replace(/^settled /, '')}`;
+      }
       return 'settled: nothing running, nobody waited on, nothing moved';
     }
     return null;
@@ -1058,10 +1034,14 @@ function materialize(gitDir, sha, out) {
  * and always for B, the workspace Ordewell merged into. B's unlanded work stays
  * in the copy, for diagnosis, and is never scored.
  */
-function filesToScore(lib, arm, copy, plan) {
+function chooseFromCopy(lib, arm, copy, plan) {
   const layout = L.readGitLayout(copy, lib.workdir);
-  const chosen = L.choosePatches({ plan, worktrees: layout.worktrees, branches: [...layout.branches.keys()] });
-  const s = L.scoringPlan(arm, chosen);
+  const chosen = L.choosePatches({ plan, worktrees: layout.worktrees, branches: [...layout.branches.keys()], tips: layout.branches });
+  return { layout, chosen, s: L.scoringPlan(arm, chosen) };
+}
+
+function filesToScore(lib, arm, copy, plan) {
+  const { layout, chosen, s } = chooseFromCopy(lib, arm, copy, plan);
   let dir = copy;
   let scoredFrom = s.scoredFrom;
   if (s.apply) {
@@ -1082,7 +1062,32 @@ function filesToScore(lib, arm, copy, plan) {
     { file: 'arm.patch', taskId: s.apply?.taskId ?? null, order: s.apply?.order ?? null, source: dir === copy ? { kind: 'workspace', path: lib.workdir } : s.apply.source, scored: true },
     ...s.diagnostic.map((c) => ({ file: null, taskId: c.taskId, order: c.order, source: c.source, scored: false, kept: 'arm-workdir' })),
   ];
-  return { dir, scoredFrom, chosen, patches };
+  // Judged after any fall back to the merged workspace, so arm A scored on the stubs is never valid.
+  const source = L.judgeScoredSource({ arm, chosen, scoredFrom });
+  check(lib.name, `arm ${arm.id} scored from its work`, source.ok, source.ok ? `scored from ${scoredFrom}` : source.failures);
+  return { dir, scoredFrom, chosen, patches, source };
+}
+
+/**
+ * The dry run's fixture task with its worktree hidden from the driver: the
+ * work has no source left, and the run must be judged invalid for it.
+ */
+function checkHiddenWorktree(lib, arm, copy, plan) {
+  const { s } = chooseFromCopy(lib, arm, copy, plan);
+  const wt = s.apply?.source?.kind === 'worktree' ? L.hostPathOf(copy, lib.workdir, s.apply.source.path) : null;
+  if (!wt) return check(lib.name, 'a hidden task worktree fails the run', false, 'the fixture task\'s worktree was not chosen, so it cannot be hidden');
+  const aside = `${wt}.hidden`;
+  fs.renameSync(wt, aside);
+  try {
+    const hidden = chooseFromCopy(lib, arm, copy, plan);
+    const source = L.judgeScoredSource({ arm, chosen: hidden.chosen, scoredFrom: hidden.s.scoredFrom });
+    const validity = L.judgeValidity({ aborted: null, checks: [], tests: { passed: 1 }, freshness: { stale: false }, scoring: source });
+    const failed = !source.ok && source.failures.some((f) => /did not land and no source for its work was found/.test(f)) && validity.invalidReasons.some((r) => r.startsWith('arm A scored without its work'));
+    return check(lib.name, 'a hidden task worktree fails the run', failed, failed ? validity.invalidReasons.filter((r) => r.startsWith('arm A scored'))
+      : `with ${s.apply.source.path} hidden the run is still judged ${validity.valid ? 'valid' : `invalid only for: ${validity.invalidReasons.join('; ')}`}`);
+  } finally {
+    fs.renameSync(aside, wt);
+  }
 }
 
 /**
@@ -1177,29 +1182,52 @@ async function exportReferenceFiles(lib, sb, runDir) {
  * What the dry run's fixture arm does in the arm's box: the reference's
  * source, a module added inside the library and imported, a test edited to
  * pass one more, and git configuration that would run on the driver's git.
+ * Arm A's is the work of a task core's isolation cut a worktree for and kept
+ * unlanded (L.FIXTURE_TASK_JS), as a failed task leaves it; arm B's is in the
+ * workspace, where its merge leaves it.
  */
-async function fixtureArm(lib, sb, refFiles) {
-  const put = await onHost('docker cp - "$1" < "$2"', [`${sb.box}:${lib.workdir}`, refFiles]);
+async function fixtureArm(lib, sb, refFiles, arm) {
+  let at = lib.workdir;
+  let sessionId = null;
+  if (arm.id === 'A') {
+    const prep = await inBox(sb, [NODE_IN_BOX, '-e', L.FIXTURE_TASK_JS, 'prepare', lib.workdir, L.goalText(lib)], { timeoutMs: 120_000 });
+    let made = null;
+    try { made = JSON.parse(prep.stdout); } catch { /* reported below */ }
+    must(check(lib.name, 'fixture task worktree', Boolean(made?.cwd), made?.cwd ? `core's isolation cut ${made.cwd} for session ${made.sessionId}` : (prep.stderr || prep.stdout).trim().split('\n').slice(-3)), 'core could not cut the fixture task\'s worktree');
+    [at, sessionId] = [made.cwd, made.sessionId];
+  }
+  const put = await onHost('docker cp - "$1" < "$2"', [`${sb.box}:${at}`, refFiles]);
   const src = srcDirOf(lib);
-  const script = [
+  const work = [
     'set -eu',
     `T=$(git ls-files -- ${L.shellQuote(lib.testDir)} | grep -E '(^|/)test_[^/]*\\.py$' | head -n 1)`,
     `printf '\\n\\ndef ${DRY_TEST}():\\n    pass\\n' >> "$T"`,
     `printf 'VALUE = 1\\n' > ${L.shellQuote(`${src}/${DRY_MODULE}.py`)}`,
     `printf '\\nfrom . import ${DRY_MODULE}\\n' >> ${L.shellQuote(`${src}/__init__.py`)}`,
-    'mkdir -p .git/info && printf \'* filter=commit0\\n\' >> .git/info/attributes',
+    'echo "$T"',
+  ].join('\n');
+  // Set last, after core's git has run, so only a git the driver runs could set them off.
+  const config = [
+    'set -eu',
+    'I="$(git rev-parse --git-common-dir)/info" && mkdir -p "$I" && printf \'* filter=commit0\\n\' >> "$I/attributes"',
     `git config filter.commit0.smudge 'touch ${DRY_MARKS[0]}; cat'`,
     `git config filter.commit0.clean 'touch ${DRY_MARKS[0]}; cat'`,
     `printf '#!/bin/sh\\ntouch ${DRY_MARKS[1]}\\n' > /tmp/commit0-fsmonitor && chmod +x /tmp/commit0-fsmonitor`,
     'git config core.fsmonitor /tmp/commit0-fsmonitor',
-    'echo "$T"',
   ].join('\n');
-  const r = put.code === 0 ? await inBox(sb, ['sh', '-c', script], { workdir: lib.workdir }) : put;
+  let r = put.code === 0 ? await inBox(sb, ['sh', '-c', work], { workdir: at }) : put;
   const test = r.stdout.trim();
+  let plan = null;
+  if (r.code === 0 && sessionId) {
+    const rel = await inBox(sb, [NODE_IN_BOX, '-e', L.FIXTURE_TASK_JS, 'release', lib.workdir, sessionId], { timeoutMs: 120_000 });
+    try { plan = JSON.parse(rel.stdout); } catch { /* reported below */ }
+    if (!plan) r = { code: rel.code || 1, stderr: `core could not keep the fixture task's worktree: ${(rel.stderr || rel.stdout).trim()}` };
+  }
+  if (r.code === 0) r = { ...(await inBox(sb, ['sh', '-c', config], { workdir: at })), stdout: r.stdout };
   must(check(lib.name, 'fixture arm', r.code === 0 && Boolean(test), r.code === 0
-    ? `the reference's source, ${src}/${DRY_MODULE}.py imported by ${src}/__init__.py, ${test} edited, a smudge and clean filter and core.fsmonitor set`
+    ? `${sessionId ? `in task 1's kept worktree ${at}, uncommitted, the task failed: ` : ''}the reference's source, ${src}/${DRY_MODULE}.py imported by ${src}/__init__.py, ${test} edited, a smudge and clean filter and core.fsmonitor set`
     : r.stderr.trim()), 'the fixture arm failed');
-  return { module: `${src}/${DRY_MODULE}.py`, init: `${src}/__init__.py`, test };
+  return { module: `${src}/${DRY_MODULE}.py`, init: `${src}/__init__.py`, test, plan };
 }
 
 /** Whether the fresh eval counted the fixture arm's source and nothing else of its box. */
@@ -1273,7 +1301,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     let fixture = null;
     if (opts.dryRun) {
       await dryArm(lib, sb, arm, settings, runDir);
-      fixture = await fixtureArm(lib, sb, refFiles);
+      fixture = await fixtureArm(lib, sb, refFiles, arm);
     } else {
       record.arm = await realArm(lib, sb, arm, settings, runDir);
       if (record.arm.stopped?.why === 'no-start') {
@@ -1283,7 +1311,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.arm.finalPlan });
     }
     const copy = await copyArmWorkdir(lib, sb, path.join(runDir, 'arm-workdir'));
-    record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? null);
+    record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? fixture?.plan ?? null);
+    if (fixture?.plan) checkHiddenWorktree(lib, arm, copy, fixture.plan);
     const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline) : null;
     record.scoring = await scoreInFreshBox(lib, record.files.dir, { runId, settings, runDir, inspect });
     if (record.scoring.patchError) record.files.patches[0].error = record.scoring.patchError;
@@ -1308,7 +1337,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const recorded = plan ? L.recordedSpend(plan) : null;
   const sessionId = record.arm?.sessionId ?? null;
   const metrics = plan && sessionId ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
-  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun });
+  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun, scoring: record.files?.source });
   const result = {
     ...L.resultRecord({
       lib, arm, settings, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,
@@ -1320,6 +1349,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,
+    // Whether arm A's score came from its own work, and if not, which task's work had no source.
+    scoredSource: record.files?.source ?? null,
     // What Ordewell recorded for the session: the planner's turns, the supervisor's and every attempt's, as the providers priced them.
     recordedUsd: recorded?.usd ?? null,
     recorded,

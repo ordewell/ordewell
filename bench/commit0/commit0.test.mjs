@@ -7,7 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as L from './lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -868,40 +868,101 @@ test('settleDecision ends a run once no attempt runs, no person is waited on and
   assert.notEqual(L.planFingerprint(done, 3), L.planFingerprint(done, 4), 'a model call moves it');
 });
 
-test('choosePatches takes each task\'s own worktree, never the integration one, then its preserved branch', () => {
-  const runRoot = '/testbed/.ordewell/worktrees/r1';
+test('settledStall records each open task and what held it, and the run that settled with it open is truncated with that reason', () => {
   const plan = {
-    isolation: {
-      run: { id: 'r1', workspaceRoot: '/testbed', repos: [{ path: '.', integrationBranch: 'ordewell/r1/integration' }] },
-      tasks: {
-        a: { taskId: 'a', order: 1, branch: 'ordewell/r1/1-a', workspace: `${runRoot}/1-a`, status: 'kept', repos: { '.': { worktree: `${runRoot}/1-a` } } },
-        b: { taskId: 'b', order: 2, branch: 'ordewell/r1/2-b', workspace: `${runRoot}/2-b`, status: 'kept', repos: { '.': { worktree: `${runRoot}/2-b` } } },
-        c: { taskId: 'c', order: 3, branch: 'ordewell/r1/3-c', workspace: `${runRoot}/3-c`, status: 'merged', repos: { '.': {} } },
-        d: { taskId: 'd', order: 4, branch: 'ordewell/r1/4-d', workspace: `${runRoot}/integration`, status: 'active', repos: { '.': { worktree: `${runRoot}/integration` } } },
-      },
-    },
+    approved: true,
+    approvedTasks: ['a', 'b', 'c', 'd', 'e', 's'],
     tasks: [
-      { id: 'a', order: 1, title: 'A', type: 'ai', status: 'failed' },
-      { id: 'b', order: 2, title: 'B', type: 'ai', status: 'awaiting_user' },
-      { id: 'c', order: 3, title: 'C', type: 'ai', status: 'completed' },
-      { id: 'd', order: 4, title: 'D', type: 'ai', status: 'completed', subtasks: [{ id: 'd1', status: 'failed' }] },
-      { id: 's', order: 5, title: 'S', type: 'script', status: 'failed' },
+      { id: 'a', order: 1, title: 'A', type: 'ai', status: 'completed', attempted: true },
+      { id: 'b', order: 2, title: 'B', type: 'ai', status: 'failed', attempted: true, dependencies: ['a'] },
+      { id: 'c', order: 3, title: 'C', type: 'ai', status: 'pending', dependencies: ['b'] },
+      { id: 'd', order: 4, title: 'D', type: 'ai', status: 'awaiting_user', awaitingReason: 'conflict', attempted: true },
+      { id: 'e', order: 5, title: 'E', type: 'ai', status: 'pending', dependencies: ['a'] },
+      { id: 'f', order: 6, title: 'F', type: 'ai', status: 'pending', dependencies: [] },
+      { id: 'g', order: 7, title: 'G', type: 'ai', status: 'skipped' },
     ],
   };
-  const worktrees = [
-    { path: '/testbed', branch: 'commit0-base' },
-    { path: `${runRoot}/integration`, branch: 'ordewell/r1/integration' },
-    { path: `${runRoot}/1-a`, branch: 'ordewell/r1/1-a' },
-  ];
-  const branches = ['commit0-base', 'ordewell/r1/integration', 'ordewell-preserved/r1/2-b', 'ordewell-preserved/r1/2-b-2', 'ordewell/r1/4-d'];
-  const got = L.choosePatches({ plan, worktrees, branches });
-  assert.deepEqual(got.map((p) => [p.taskId, p.landed, p.source]), [
-    ['a', false, { kind: 'worktree', path: `${runRoot}/1-a` }],
-    ['b', false, { kind: 'branch', ref: 'ordewell-preserved/r1/2-b-2' }],
-    ['c', true, null],
-    ['d', false, { kind: 'branch', ref: 'ordewell/r1/4-d' }],
-  ], 'the newest preserved branch; an open subtask leaves its task unlanded; the integration worktree is never a source');
-  assert.deepEqual(L.choosePatches({ plan: { tasks: [{ id: 'x', title: 'X', status: 'failed' }] }, worktrees, branches }).map((p) => p.source), [null]);
+  // The daemon's run view (RunTask in core's SessionMessage.ts) is where a hold lives: the saved plan keeps none.
+  const run = { tasks: [{ id: 'e', holdReason: 'Its runner did not connect twice', subtasks: [] }, { id: 'f', waitsForApproval: true, subtasks: [] }] };
+  const s = L.settledStall({ plan, run, quietMs: 300_000 });
+  assert.deepEqual(s, {
+    why: 'settled', quietMs: 300_000, runView: true,
+    open: [
+      { id: 'b', order: 2, title: 'B', status: 'failed', held: 'nothing ready', reason: 'failed' },
+      { id: 'c', order: 3, title: 'C', status: 'pending', held: 'nothing ready', reason: 'depends on 2 (failed)' },
+      { id: 'd', order: 4, title: 'D', status: 'awaiting_user', held: 'waiting on a person', reason: 'conflict' },
+      { id: 'e', order: 5, title: 'E', status: 'pending', held: 'on hold', reason: 'Its runner did not connect twice' },
+      { id: 'f', order: 6, title: 'F', status: 'pending', held: 'waiting on a person', reason: 'approval' },
+    ],
+  });
+  const noView = L.settledStall({ plan, run: null, quietMs: 1 });
+  assert.equal(noView.runView, false, 'without the daemon\'s view a hold cannot be told, and the record says so');
+  assert.deepEqual(noView.open.find((t) => t.id === 'e'), { id: 'e', order: 5, title: 'E', status: 'pending', held: 'nothing ready', reason: 'ready, not started' });
+  assert.equal(L.settledStall({ plan: { tasks: [plan.tasks[0]] }, run, quietMs: 1 }), null, 'a run that settled with every task closed did not stall');
+  assert.deepEqual(L.judgeLanding({ stopped: null, stalled: s, plan }), { truncated: true, why: 'settled with 5 tasks open: 2 nothing ready, 1 on hold, 2 waiting on a person' });
+});
+
+// Built by core itself, never written by hand: a hand-written plan put `tasks`
+// beside `run`, the chooser read it there, and a paid run scored arm A on the
+// stubs while its kept worktree held the work.
+const coreUrl = pathToFileURL(path.join(repo, 'packages', 'core', 'dist', 'index.mjs')).href;
+const hasCore = fs.existsSync(fileURLToPath(coreUrl));
+
+/** A git repository whose isolation run core started: one task kept, one preserved twice, one merged, one never started. */
+async function coreIsolationFixture() {
+  const core = await import(coreUrl);
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-iso-')));
+  const git = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' });
+  git('init', '-q', '-b', 'commit0-base');
+  git('config', 'user.email', 'bench@example.invalid');
+  git('config', 'user.name', 'bench');
+  fs.writeFileSync(path.join(dir, 'lib.py'), 'stub\n');
+  git('add', '.');
+  git('commit', '-qm', 'base');
+  const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', worktreeSetupCommand: '', workspaceRepos: [], worktreeLinks: [] }, noHooks: true });
+  const run = await iso.startRun(dir);
+  const mk = (title, order, status) => ({ ...core.createTask({ title, description: title, type: 'ai', order }), status });
+  const [a, b, c, d] = [mk('Implement A', 1, 'failed'), mk('Implement B', 2, 'awaiting_user'), mk('Implement C', 3, 'completed'), mk('Implement D', 4, 'pending')];
+  const work = async (t, text) => {
+    const { cwd } = await iso.prepare(t, run);
+    fs.writeFileSync(path.join(cwd, 'lib.py'), text);
+  };
+  await work(a, 'a\n');
+  await iso.release(run, a.id, { keep: true });
+  for (const n of [1, 2]) {
+    await work(b, `b${n}\n`);
+    await iso.release(run, b.id, { keep: false });
+  }
+  await work(c, 'c\n');
+  await iso.integrate(c, run);
+  const plan = { tasks: [a, b, c, d, { ...mk('Script', 5, 'failed'), type: 'script' }], isolation: { run, resolvers: {} } };
+  return { dir, run, plan, tasks: { a, b, c, d } };
+}
+
+test('choosePatches reads core\'s records: a kept worktree, else the newest preserved branch, never the integration worktree', { skip: !(hasGit && hasCore) && 'needs git and the built core (npm run build -w packages/core)' }, async () => {
+  const { dir, run, plan, tasks: { a, b, c, d } } = await coreIsolationFixture();
+  try {
+    const { worktrees, branches } = L.readGitLayout(dir, dir);
+    const got = L.choosePatches({ plan, worktrees, branches: [...branches.keys()] });
+    assert.deepEqual(got.map((p) => [p.taskId, p.isolation, p.landed, p.source]), [
+      [a.id, 'kept', false, { kind: 'worktree', path: run.tasks[a.id].workspace }],
+      [b.id, null, false, { kind: 'branch', ref: `ordewell-preserved/${run.id}/2-implement-b-2` }],
+      [c.id, 'merged', true, null],
+      [d.id, null, false, null],
+    ], 'a released task\'s record is gone, so its preserved branch is found by the order its name starts with');
+    const open = structuredClone(plan);
+    open.tasks[2].subtasks = [{ id: 'c1', status: 'failed' }];
+    assert.equal(L.choosePatches({ plan: open, worktrees, branches: [...branches.keys()] })[2].landed, false, 'an open subtask leaves its task unlanded');
+    assert.deepEqual(L.choosePatches({ plan: { tasks: [{ id: 'x', title: 'X', status: 'failed' }] }, worktrees, branches: [] }).map((p) => p.source), [null]);
+    // The kept worktree hidden: its branch is still at the base, since the work in it was never committed, so it is no source.
+    fs.rmSync(run.tasks[a.id].workspace, { recursive: true, force: true });
+    const hidden = L.readGitLayout(dir, dir);
+    const lost = L.choosePatches({ plan, worktrees: hidden.worktrees, branches: [...hidden.branches.keys()], tips: hidden.branches });
+    assert.equal(lost[0].source, null, 'a task branch at its base holds none of the task\'s work');
+    assert.match(L.judgeScoredSource({ arm: L.ARMS.A, chosen: lost.slice(0, 1), scoredFrom: L.scoringPlan(L.ARMS.A, lost.slice(0, 1)).scoredFrom }).failures[0], /did not land and no source for its work was found/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('readGitLayout reads a copied repository\'s worktrees and branches from its files, running no git', () => {
@@ -938,6 +999,25 @@ test('the score\'s source per arm: A from its worktree when its task did not lan
   assert.deepEqual(L.scoringPlan(L.ARMS.A, [{ ...unlanded[0], landed: true, source: null }]), { scoredFrom: 'merged', apply: null, diagnostic: [] });
   const b = [unlanded[0], { taskId: 'c', order: 3, landed: true, source: null }, { taskId: 'd', order: 4, landed: false, source: null }];
   assert.deepEqual(L.scoringPlan(L.ARMS.B, b), { scoredFrom: 'merged', apply: null, diagnostic: [unlanded[0]] });
+});
+
+test('judgeScoredSource fails arm A when an unlanded task\'s work has no source, or when it is scored on the merged workspace with its task open', () => {
+  const task = { taskId: 'a', order: 1, title: 'Implement', status: 'failed', isolation: 'kept', landed: false, source: { kind: 'worktree', path: '/w/1-a' } };
+  const judge = (chosen, arm = L.ARMS.A) => L.judgeScoredSource({ arm, chosen, scoredFrom: L.scoringPlan(arm, chosen).scoredFrom });
+  assert.deepEqual(judge([task]), { ok: true, failures: [] });
+  assert.deepEqual(judge([{ ...task, status: 'completed', isolation: 'merged', landed: true, source: null }]), { ok: true, failures: [] }, 'landed work is in the workspace');
+  const lost = judge([{ ...task, isolation: null, source: null }]);
+  assert.equal(lost.ok, false);
+  assert.deepEqual(lost.failures, [
+    'task 1 "Implement" (failed, isolation record: none) did not land and no source for its work was found',
+    'scored from the merged workspace while task 1 "Implement" is failed',
+  ]);
+  // A worktree the chooser found but the driver could not read falls back to the workspace (filesToScore).
+  assert.deepEqual(L.judgeScoredSource({ arm: L.ARMS.A, chosen: [task], scoredFrom: 'merged' }).failures, ['scored from the merged workspace while task 1 "Implement" is failed']);
+  assert.deepEqual(L.judgeScoredSource({ arm: L.ARMS.A, chosen: [], scoredFrom: 'merged' }).failures, ['the plan holds no task to score']);
+  assert.deepEqual(judge([{ ...task, source: null }], L.ARMS.B), { ok: true, failures: [] }, 'arm B is scored on what merged by design (D3)');
+  const v = L.judgeValidity({ checks: [], tests: { passed: 1, exit: 0 }, freshness: { stale: false }, scoring: lost });
+  assert.deepEqual(v.invalidReasons, lost.failures.map((f) => `arm A scored without its work: ${f}`));
 });
 
 test('distFreshness refuses a dist older than the newest tracked source, unless allowed', () => {

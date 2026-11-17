@@ -925,6 +925,89 @@ process.stdout.write(JSON.stringify(loaded ? loaded.plan : null));
 `;
 
 /**
+ * A worktree layout as a stopped run leaves it, made by core's own isolation
+ * in the box, so a change in where core records a task's work breaks the dry
+ * run and not a paid one. Prints the saved session's plan as core reloads it.
+ */
+export const CHOOSER_JS = String.raw`
+const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
+const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const [root] = process.argv.slice(1);
+const git = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+const put = (dir, file, text) => { fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); fs.writeFileSync(path.join(dir, file), text); };
+(async () => {
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  git(root, 'init', '-q', '-b', 'commit0-base');
+  git(root, 'config', 'user.email', 'commit0@example.invalid');
+  git(root, 'config', 'user.name', 'commit0');
+  put(root, 'pkg/a.py', 'a = 1\n');
+  put(root, 'pkg/b.py', 'b = 1\n');
+  fs.appendFileSync(path.join(root, '.git', 'info', 'exclude'), '/.venv\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-qm', 'flat');
+  const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', worktreeSetupCommand: '', workspaceRepos: [], worktreeLinks: [] }, noHooks: true });
+  const run = await iso.startRun(root);
+  const mk = (order, title, status) => ({ ...core.createTask({ order, title, description: title }), status });
+  const [t1, t2, t3, t4, t5] = [mk(1, 'one', 'failed'), mk(2, 'two', 'failed'), mk(3, 'three', 'completed'), mk(4, 'four', 'completed'), mk(5, 'five', 'blocked')];
+  t4.subtasks = [{ ...core.createTask({ order: 1, title: 'four, a', description: 'four, a' }), status: 'failed' }];
+  let cwd = (await iso.prepare(t1, run)).cwd;
+  put(cwd, 'pkg/one.py', 'one = 1\n');
+  git(cwd, 'add', '-A');
+  git(cwd, 'commit', '-qm', 'one');
+  put(cwd, 'pkg/a.py', 'a = 2\n');
+  put(cwd, 'pkg/new.py', 'new = 1\n');
+  put(cwd, '.venv/junk', 'junk');
+  await iso.release(run, t1.id, { keep: true });
+  for (const text of ['older', 'newest']) {
+    cwd = (await iso.prepare(t2, run)).cwd;
+    put(cwd, 'pkg/two.py', text + '\n');
+    await iso.release(run, t2.id, { keep: false });
+  }
+  cwd = (await iso.prepare(t3, run)).cwd;
+  put(cwd, 'pkg/merged.py', 'merged = 1\n');
+  await iso.integrate(t3, run);
+  cwd = (await iso.prepare(t4, run)).cwd;
+  put(cwd, 'pkg/b.py', 'b = 4\n');
+  await iso.release(run, t4.id, { keep: true });
+  const now = new Date().toISOString();
+  const meta = core.saveSession({ tasks: [t1, t2, t3, t4, t5], generatedAt: now, status: 'approved', runners: [], lastUpdated: now, isolation: { run, resolvers: {} } }, 'chooser', root);
+  process.stdout.write(JSON.stringify(core.loadSession(meta.id, root).plan));
+})().catch((err) => { process.stderr.write(String(err && err.stack || err)); process.exit(1); });
+`;
+
+/**
+ * The dry run's fixture arm A, through core's isolation as a run leaves it:
+ * 'prepare' cuts the task's worktree and prints it, 'release' keeps it with
+ * the work left uncommitted in it, the task failed, the session saved.
+ */
+export const FIXTURE_TASK_JS = String.raw`
+const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
+const [phase, workspace, arg] = process.argv.slice(1);
+const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', worktreeSetupCommand: '', workspaceRepos: [], worktreeLinks: [] }, noHooks: true });
+(async () => {
+  const now = new Date().toISOString();
+  if (phase === 'prepare') {
+    const run = await iso.startRun(workspace);
+    const task = { ...core.createTask({ order: 1, title: 'Implement the library so its tests pass', description: arg, prompt: arg }), status: 'in_progress' };
+    const { cwd } = await iso.prepare(task, run);
+    const plan = { tasks: [task], generatedAt: now, status: 'approved', runners: [], lastUpdated: now, isolation: { run, resolvers: {} } };
+    process.stdout.write(JSON.stringify({ sessionId: core.saveSession(plan, arg, workspace).id, cwd }));
+    return;
+  }
+  const loaded = core.loadSession(arg, workspace);
+  const plan = loaded.plan;
+  await iso.release(plan.isolation.run, plan.tasks[0].id, { keep: true });
+  plan.tasks[0].status = 'failed';
+  plan.lastUpdated = now;
+  core.saveSession(plan, loaded.meta.goal, workspace, arg);
+  process.stdout.write(JSON.stringify(core.loadSession(arg, workspace).plan));
+})().catch((err) => { process.stderr.write(String(err && err.stack || err)); process.exit(1); });
+`;
+
+/**
  * What an arm runs under, as result.json records it. A is one agent alone
  * (D2): no supervisor to answer for it, nothing started or merged on its
  * behalf, one task at a time. B is Ordewell as its user runs it (D3).
@@ -1237,6 +1320,42 @@ export function settleDecision({ plan, fingerprint, nowMs, state, settleMs = SET
   return { settled: nowMs - next.sinceMs >= settleMs, state: next };
 }
 
+/**
+ * What a run the settle detector ended still had open, each task with what
+ * held it: `on hold` (the scheduler's hold, which only the daemon's run view
+ * carries: core keeps holds in memory, never in the saved plan), `waiting on a
+ * person`, or `nothing ready` (failed, or behind a dependency that did not
+ * complete). `runView` says whether holds could be read at all. Null when
+ * every task closed, since such a run did not stall.
+ */
+export function settledStall({ plan, run, quietMs }) {
+  const view = new Map();
+  const index = (tasks) => { for (const t of tasks ?? []) { view.set(t.id, t); index(t.subtasks); } };
+  index(run?.tasks);
+  const tasks = allTasks(plan);
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const approved = plan?.approved === true;
+  const record = plan?.approvedTasks ?? [];
+  const heldBy = (t) => {
+    const v = view.get(t.id);
+    if (v?.holdReason) return ['on hold', v.holdReason];
+    if (t.status === 'awaiting_user') return t.awaitingReason === 'usage-limit' ? ['on hold', 'usage-limit'] : ['waiting on a person', t.awaitingReason ?? 'awaiting_user'];
+    if (v?.awaitingApproval) return ['waiting on a person', `${v.awaitingApproval} runner request${v.awaitingApproval === 1 ? '' : 's'}`];
+    if (t.type === 'user') return ['waiting on a person', 'user-task'];
+    const pending = t.status === 'pending' || t.status === 'approved';
+    if (v?.waitsForApproval || (pending && approved && !record.includes(t.id))) return ['waiting on a person', 'approval'];
+    if (t.status === 'failed') return ['nothing ready', 'failed'];
+    const unmet = (t.dependencies ?? []).map((id) => byId.get(id)).filter((d) => d && isOpen(d));
+    if (unmet.length) return ['nothing ready', `depends on ${unmet.map((d) => `${d.order ?? d.id} (${d.status})`).join(', ')}`];
+    return ['nothing ready', pending ? 'ready, not started' : t.status];
+  };
+  const open = tasks.filter(isOpen).map((t) => {
+    const [held, reason] = heldBy(t);
+    return { id: t.id, order: t.order ?? null, title: t.title ?? null, status: t.status, held, reason };
+  });
+  return open.length ? { why: 'settled', quietMs, runView: Boolean(run?.tasks), open } : null;
+}
+
 // --- Choosing what is scored --------------------------------------------------
 
 /**
@@ -1276,10 +1395,13 @@ export function hostPathOf(root, workdir, boxPath) {
  * Each top-level AI task, whether its work landed, and where its work is if
  * not: its own worktree while git still lists it, never the run's integration
  * worktree; else the newest `ordewell-preserved/<run>/<name>[-N]` branch that
- * core's preserve() left; else its own branch. A task whose subtask is open,
- * or whose isolation never merged, has not landed.
+ * core's preserve() left; else its own branch, unless `tips` (name to sha) shows it still at its base. A task whose subtask is open,
+ * or whose isolation never merged, has not landed. Core keeps the records at
+ * `plan.isolation.run.tasks` (PlanIsolation in IWorktreeIsolation.ts), and a
+ * release that preserves drops the record, so a preserved branch is then found
+ * by the `<order>-` every name of core's starts with.
  */
-export function choosePatches({ plan, worktrees, branches }) {
+export function choosePatches({ plan, worktrees, branches, tips = null }) {
   const iso = plan?.isolation;
   const runId = iso?.run?.id ?? null;
   const integrationBranches = new Set((iso?.run?.repos ?? []).map((r) => r.integrationBranch).filter(Boolean));
@@ -1293,7 +1415,7 @@ export function choosePatches({ plan, worktrees, branches }) {
   const out = [];
   for (const t of plan?.tasks ?? []) {
     if ((t.type ?? 'ai') !== 'ai') continue;
-    const rec = iso?.tasks?.[t.id];
+    const rec = iso?.run?.tasks?.[t.id];
     // A merged record's worktree is gone and its work is on the integration branch; a released one drops its record.
     const landed = isClosed(t) && (!rec || rec.status === 'merged');
     let source = null;
@@ -1301,12 +1423,10 @@ export function choosePatches({ plan, worktrees, branches }) {
       const wt = rec?.repos?.['.']?.worktree ?? rec?.workspace;
       if (wt && listed.has(path.posix.normalize(wt)) && !isIntegration(wt)) source = { kind: 'worktree', path: wt };
       else {
-        const name = rec?.workspace ? path.posix.basename(rec.workspace) : null;
-        const preserved = name && runId ? branches.filter((b) => b === `ordewell-preserved/${runId}/${name}` || new RegExp(`^ordewell-preserved/${escapeRe(runId)}/${escapeRe(name)}-(\\d+)$`).test(b)) : [];
-        const n = (b) => Number(/-(\d+)$/.exec(b.slice(`ordewell-preserved/${runId}/${name}`.length))?.[1] ?? 1);
-        preserved.sort((a, b) => n(b) - n(a));
-        if (preserved.length) source = { kind: 'branch', ref: preserved[0] };
-        else if (rec?.branch && branchSet.has(rec.branch) && !integrationBranches.has(rec.branch)) source = { kind: 'branch', ref: rec.branch };
+        const preserved = runId ? newestPreserved(branches, runId, rec?.workspace ? path.posix.basename(rec.workspace) : null, t.order) : null;
+        if (preserved) source = { kind: 'branch', ref: preserved };
+        // A task branch still at the base its worktree was cut from holds none of the task's work: its edits were never committed.
+        else if (rec?.branch && branchSet.has(rec.branch) && !integrationBranches.has(rec.branch) && !(tips && tips.get(rec.branch) === rec.repos?.['.']?.baseRef)) source = { kind: 'branch', ref: rec.branch };
       }
     }
     out.push({ taskId: t.id, order: t.order ?? null, title: t.title, status: t.status, isolation: rec?.status ?? null, landed, source });
@@ -1315,6 +1435,18 @@ export function choosePatches({ plan, worktrees, branches }) {
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// core's preservedBranch() names a second keep of the same name `<name>-2`,
+// then `-3`: the highest suffix is the newest.
+function newestPreserved(branches, runId, name, order) {
+  const prefix = `ordewell-preserved/${runId}/`;
+  const names = branches.filter((b) => b.startsWith(prefix)).map((b) => b.slice(prefix.length));
+  const base = name ?? (Number.isInteger(order) ? names.filter((n) => n.startsWith(`${order}-`)).sort((x, y) => x.length - y.length)[0] : null);
+  if (!base) return null;
+  const n = (b) => (b === base ? 1 : Number(new RegExp(`^${escapeRe(base)}-(\\d+)$`).exec(b)?.[1] ?? NaN));
+  const kept = names.filter((b) => Number.isFinite(n(b))).sort((x, y) => n(y) - n(x));
+  return kept.length ? prefix + kept[0] : null;
+}
 
 /**
  * What an arm is scored on. A (D2) on its working tree's final state: an
@@ -1331,12 +1463,38 @@ export function scoringPlan(arm, chosen) {
 }
 
 /**
+ * Whether arm A was scored on its work (D2). Its task's work is in a kept
+ * worktree or a preserved branch until it lands, so an unlanded task whose
+ * work was found nowhere, or a score of the merged workspace while the task
+ * is open, scores the stubs: the comparison is void, never a low score.
+ */
+export function judgeScoredSource({ arm, chosen, scoredFrom }) {
+  if (arm.id !== 'A') return { ok: true, failures: [] };
+  const failures = [];
+  const name = (c) => `task ${c.order ?? '?'} "${c.title ?? c.taskId}"`;
+  if (!chosen.length) failures.push('the plan holds no task to score');
+  for (const c of chosen) {
+    if (!c.landed && !c.source) failures.push(`${name(c)} (${c.status}, isolation record: ${c.isolation ?? 'none'}) did not land and no source for its work was found`);
+  }
+  if (scoredFrom === 'merged') {
+    for (const c of chosen) if (c.status !== 'completed') failures.push(`scored from the merged workspace while ${name(c)} is ${c.status}`);
+  }
+  return { ok: failures.length === 0, failures };
+}
+
+/**
  * Whether a run's work is partial: stopped at a cap, stalled, or leaving a
  * task (or a subtask) not completed. Judged on the session's tasks, never on
  * `ordewell run`'s exit (D5).
  */
 export function judgeLanding({ stopped, stalled, plan }) {
   if (stopped) return { truncated: true, why: `cap: ${stopped.why}` };
+  if (stalled?.why === 'settled') {
+    const by = {};
+    for (const t of stalled.open) by[t.held] = (by[t.held] ?? 0) + 1;
+    const n = stalled.open.length;
+    return { truncated: true, why: `settled with ${n} task${n === 1 ? '' : 's'} open: ${Object.keys(by).sort().map((k) => `${by[k]} ${k}`).join(', ')}` };
+  }
   if (stalled) return { truncated: true, why: `stalled: waiting on ${stalled.waiting}` };
   if (!plan) return { truncated: true, why: 'blocked: no plan to read' };
   const open = (plan.tasks ?? []).filter((t) => !isClosed(t)).length;
@@ -1367,9 +1525,10 @@ export function distFreshness({ dists, sources, allowStale = false }) {
 export const failedCheck = (c) => !c.ok && !c.unverified && !c.expectedFailure;
 
 /** Every reason a result is not one to compare. */
-export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false }) {
+export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false, scoring = null }) {
   const reasons = [];
   if (aborted) reasons.push(`aborted: ${aborted}`);
+  for (const f of scoring?.failures ?? []) reasons.push(`arm A scored without its work: ${f}`);
   for (const c of checks ?? []) if (failedCheck(c)) reasons.push(`failed check: ${c.scope}: ${c.name}`);
   // The batch stops every run at one instant, so this arm got less time and spend than its pair (D1).
   if (stopped?.why === 'batch-budget') reasons.push('stopped by the batch budget');
