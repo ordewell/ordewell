@@ -457,3 +457,26 @@ describe('a passed task whose landing git refused', () => {
     expect(text).not.toMatch(/conflict/i);
   });
 });
+
+describe('a task that failed before its runner started', () => {
+  it('wakes the supervisor with why and what to do, which its output summary holds: no verdict was reached', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    const why = 'Task "Task t1" did not start: skill "python" not found: create .ordewell/skills/python/SKILL.md, or remove "python" from the task\'s skills with edit_plan, then retry the task';
+    tasks[0] = {
+      ...tasks[0],
+      status: 'failed',
+      skills: ['python'],
+      outputSummary: { reviewReason: `${why} (searched /g).`, logTail: '', capturedAt: '2026-10-13T01:00:00Z' },
+    };
+    // As in a plan whose every task named the skill: the failure holds its dependents back, so its line is not cut to a ride-along's.
+    tasks.push({ ...task('t2', 2), dependencies: ['t1'] });
+
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain(why);
+  });
+});

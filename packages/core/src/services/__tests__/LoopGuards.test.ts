@@ -52,6 +52,11 @@ describe('no identical retry', () => {
     expect(identicalRetry(t3, attemptShape(task('t3')), attemptShape(task('t3', change)))).toBeNull();
   });
 
+  it('lets a retry through once a skill that was not found is removed', () => {
+    const failed = attemptShape(task('t3', { skills: ['python'] }));
+    expect(identicalRetry(t3, failed, attemptShape(task('t3', { skills: [] })))).toBeNull();
+  });
+
   it('has nothing to compare before a failure', () => {
     expect(identicalRetry(t3, undefined, attemptShape(task('t3')))).toBeNull();
   });

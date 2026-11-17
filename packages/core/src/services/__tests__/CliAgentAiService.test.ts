@@ -2334,7 +2334,10 @@ describe('CliAgentAiService — one-shot plan generation', () => {
   it('refuses a submission attaching a planner skill in the agent\'s turn, and warns about names it cannot attach', async () => {
     const plannerSkill = { name: 'grilling', appliesTo: 'planner', path: '/home/u/.ordewell/skills/grilling/SKILL.md' } as SkillInfo;
     const taskSkills: SkillLookup = { findSkill: (name) => (name === 'grilling' ? plannerSkill : undefined), searchedDirs: () => [] };
-    const nested = (skills: unknown[]) => [{ ...(planTasks() as Record<string, unknown>[])[0], subtasks: [{ id: 's1', order: 1, title: 'Sub', description: 'd', type: 'ai', skills }] }];
+    const base = (planTasks() as Record<string, unknown>[])[0];
+    // "later" is not installed: it stands only because a task the subtask's parent depends on writes it.
+    const writer = { ...base, id: 'writer', order: 1, title: 'Write the skill', prompt: 'Write .ordewell/skills/later/SKILL.md' };
+    const nested = (skills: unknown[]) => [writer, { ...base, order: 2, dependencies: ['writer'], subtasks: [{ id: 's1', order: 1, title: 'Sub', description: 'd', type: 'ai', skills }] }];
     const mcp = fakeMcpServer();
     const answers: McpToolReply[] = [];
     const { svc } = service('claude-code', [
@@ -2353,7 +2356,22 @@ describe('CliAgentAiService — one-shot plan generation', () => {
       ],
       next: expect.any(String),
     });
-    expect(tasks[0].subtasks[0].skills).toEqual(['later']);
+    expect(tasks[1].subtasks[0].skills).toEqual(['later']);
+  });
+
+  it('refuses a one-shot submission attaching a skill nothing provides, saying how to fix it', async () => {
+    const taskSkills: SkillLookup = { findSkill: () => undefined, searchedDirs: () => [] };
+    const mcp = fakeMcpServer();
+    const answers: McpToolReply[] = [];
+    const invented = [{ ...(planTasks() as Record<string, unknown>[])[0], skills: ['python'] }];
+    const { svc } = service('claude-code', [
+      submitting(mcp, invented, claudeSays('Submitted.'), answers),
+      submitting(mcp, planTasks(), claudeSays('Submitted again.'), answers),
+    ], {}, {}, mcp);
+
+    await svc.generatePlanDirect('Plan', ['claude-code'], {}, undefined, undefined, undefined, undefined, { autonomousDefault: true, isolatedExecution: false, taskSkills });
+
+    expect(answers[0]).toEqual({ isError: true, text: expect.stringContaining('Task "Add the thing": skill "python" is not an installed task skill, and no task it depends on creates it. Remove "python" from its skills, or add a task whose prompt says to write .ordewell/skills/python/SKILL.md and make Task "Add the thing" depend on it.') });
   });
 
   it('surfaces a one-shot agent failure instead of returning an empty plan', async () => {

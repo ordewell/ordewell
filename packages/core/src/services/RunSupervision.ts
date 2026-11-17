@@ -501,7 +501,9 @@ export class RunSupervision {
     const taskId = task.id;
     if (task.status === 'completed') return { kind: 'task_passed', taskId };
     if (task.status === 'failed') {
-      const detail = `${outOfRoundsNote(task)} ${task.verdict?.reason ?? ''}`.trim();
+      // A task that failed before its runner started has no verdict; its output summary says why, and what to do.
+      const why = task.verdict ? task.verdict.reason : task.outputSummary?.reviewReason ?? '';
+      const detail = `${outOfRoundsNote(task)} ${why}`.trim();
       return { kind: 'task_failed', taskId, ...(detail ? { detail } : {}) };
     }
     if (task.status !== 'awaiting_user') return null;
