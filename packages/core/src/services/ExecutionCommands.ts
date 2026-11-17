@@ -12,6 +12,7 @@ import type { ApprovalRecord } from './ApprovalRecord';
 import type { RunControls } from './SessionSaves';
 import { runOrigin } from './RunSupervision';
 import { waitOf, type StartWait } from './readiness';
+import { heldDependencies } from './blocking';
 import { escalationAct, type Escalation } from './escalations';
 import { checkStart, type CheckStart } from './LoopRounds';
 import { mergeBesideOpsConfirmation, mergePastChecksConfirmation } from './mergeWording';
@@ -1088,9 +1089,16 @@ export class ExecutionCommands {
     const unmet = (waitOf(waits, 'dependencies') ?? waitOf(waits, 'queued'))?.waiting.flatMap((id) => this.located(id, tasks) ?? []) ?? [];
     if (unmet.length > 0) {
       const one = unmet.length === 1;
-      // Work reached through a skip is not a dependency the caller can see on the task.
-      const behindSkip = unmet.some((dep) => !task.dependencies.includes(dep.task.id)) ? ': skipping a task does not skip the work behind it' : '';
-      return `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished${behindSkip}. It can start once ${one ? 'it has' : 'they have'}.`;
+      // A subtask is held to its ancestors' dependencies (ADR-0034), which the caller sees on the ancestor, not on it.
+      const holders = new Map(heldDependencies(tasks ?? this.host.tasks() ?? [])(task).map((dep) => [dep.id, dep.holder]));
+      const through = (dep: Located): string => {
+        const holder = holders.get(dep.task.id);
+        const ancestor = holder === undefined || holder === task.id ? undefined : this.located(holder, tasks);
+        return ancestor ? `; ${describe(ancestor)} depends on it` : '';
+      };
+      // Work reached through a skip is not a dependency the caller can see on the task or its ancestors.
+      const behindSkip = unmet.some((dep) => !holders.has(dep.task.id)) ? ': skipping a task does not skip the work behind it' : '';
+      return `${capitalize(label)} depends on ${unmet.map((dep) => `${describe(dep)} (${depState(dep.task)}${through(dep)})`).join(', ')}, which ${one ? 'has' : 'have'} not finished${behindSkip}. It can start once ${one ? 'it has' : 'they have'}.`;
     }
     // Judged whatever the task's status: a retry of a failed ops task acts on the checkout as a first start does.
     const gate = (waitOf(waits, 'merge-gate')?.unmerged ?? []).flatMap((id) => this.located(id, tasks) ?? []);

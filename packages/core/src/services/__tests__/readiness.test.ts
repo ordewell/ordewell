@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { planBlocks } from '../blocking';
 import { selectReadyTasks, startWaits, unmetDependencies, mergeGate, type ReadinessInput, type Readiness, type StartWait } from '../readiness';
-import { createTask, type Task } from '../../models/Task';
+import { createTask, flattenTasks, type Task } from '../../models/Task';
 import type { IsolationTaskRecord, IsolationTaskStatus } from '../../interfaces/IWorktreeIsolation';
 
 function storeOf(tasks: Task[]) {
@@ -446,6 +447,102 @@ describe('the start rule', () => {
       expect(startWaits(deploy, rule)).toEqual([{ kind: 'merge-gate', unmerged: ['f1', 'f2'] }]);
       expect(startWaits(deploy, rule, { queued: false })).toEqual([]);
       expect(startWaits(deploy, rule, { queued: true, pastGate: ['f1'] })).toEqual([{ kind: 'merge-gate', unmerged: ['f2'] }]);
+    });
+  });
+});
+
+describe('a subtask, held to its ancestors\' dependencies (ADR-0034)', () => {
+  const foundation = (status: Task['status'] = 'pending') => createTask({ id: 'f1', order: 1, title: 'Foundation', prompt: 'x', status });
+  const sub = createTask({ id: 's21', order: 1, title: 'Sub', prompt: 'x' });
+  const parent = createTask({ id: 'p2', order: 2, title: 'Parent', prompt: 'x', dependencies: ['f1'], subtasks: [sub] });
+  const plan = (status?: Task['status']) => flattenTasks([foundation(status), parent]);
+
+  it('waits while its parent\'s dependency has not finished', () => {
+    const readiness = selectReadyTasks(input(plan()));
+    expect(readiness.ready.map((t) => t.id)).toEqual(['f1']);
+    expect(why(readiness, 's21')).toEqual([{ kind: 'dependencies', waiting: ['f1'] }]);
+  });
+
+  it('is blocked while its parent\'s dependency is failed, as its parent is', () => {
+    const tasks = plan('failed');
+    expect(selectReadyTasks(input(tasks)).ready).toEqual([]);
+    expect(planBlocks(tasks).blocked.get('p2')).toEqual(['f1']);
+    expect(planBlocks(tasks).blocked.get('s21')).toEqual(['f1']);
+    expect(why(selectReadyTasks(input(tasks)), 's21')).toEqual([{ kind: 'blocked', failed: ['f1'] }, { kind: 'dependencies', waiting: ['f1'] }]);
+  });
+
+  it('starts once that dependency completed', () => {
+    expect(selectReadyTasks(input(plan('completed'))).ready.map((t) => t.id).sort()).toEqual(['p2', 's21']);
+  });
+
+  it('starts once that dependency is skipped, or the user marked it complete', () => {
+    for (const status of ['skipped', 'completed'] as const) {
+      expect(planBlocks(plan(status)).blocked.has('s21')).toBe(false);
+      expect(selectReadyTasks(input(plan(status))).ready.map((t) => t.id)).toContain('s21');
+    }
+  });
+
+  it('keeps its own dependencies as well', () => {
+    const own = createTask({ id: 'o9', order: 9, title: 'Own', prompt: 'x' });
+    const subOn = createTask({ id: 's21', order: 1, title: 'Sub', prompt: 'x', dependencies: ['o9'] });
+    const tasks = flattenTasks([foundation('completed'), own, { ...parent, subtasks: [subOn] }]);
+    expect(why(selectReadyTasks(input(tasks)), 's21')).toEqual([{ kind: 'dependencies', waiting: ['o9'] }]);
+  });
+
+  it('is not released by a skip of its parent: the skip passes over the parent alone', () => {
+    const tasks = flattenTasks([foundation('failed'), { ...parent, status: 'skipped' }]);
+    expect(planBlocks(tasks).blocked.get('s21')).toEqual(['f1']);
+    expect(selectReadyTasks(input(tasks)).ready).toEqual([]);
+  });
+
+  it('waits behind a read-only parent\'s dependency as behind any other', () => {
+    const tasks = flattenTasks([foundation(), { ...parent, readOnly: true, taskMode: 'plan' }]);
+    expect(why(selectReadyTasks(input(tasks)), 's21')).toEqual([{ kind: 'dependencies', waiting: ['f1'] }]);
+  });
+
+  it('goes past its parent\'s failed dependency on the user\'s force start', () => {
+    const tasks = plan('failed');
+    expect(startWaits(sub, input(tasks), { queued: false })).toEqual([]);
+  });
+
+  it('does not inherit a dependency of its parent that itself waits on the parent\'s subtree, which would wait on itself', () => {
+    const x = createTask({ id: 'x', order: 1, title: 'X', prompt: 'x', dependencies: ['s21'] });
+    const tasks = flattenTasks([x, { ...parent, dependencies: ['x'] }]);
+    expect(selectReadyTasks(input(tasks)).ready.map((t) => t.id)).toEqual(['s21']);
+  });
+
+  describe('under an ops parent, whose subtasks run as ops tasks with it (ADR-0020)', () => {
+    const opsParent = { ...parent, ops: true };
+    const done = flattenTasks([foundation('completed'), opsParent]);
+    // The plan store reads ops from a subtask's top-level task.
+    const opsStore = (tasks: Task[]) => ({ ...storeOf(tasks), isOps: (id: string) => id === 'p2' || id === 's21' });
+    const unmergedF1 = runsOf({ f1: record('f1', 'merged') });
+
+    it('waits at the merge gate its parent waits at, the parent\'s dependencies among its ancestors', () => {
+      const rule = input(done, { store: opsStore(done), runs: unmergedF1 });
+      expect(why(selectReadyTasks(rule), 'p2')).toEqual([{ kind: 'merge-gate', unmerged: ['f1'] }]);
+      expect(why(selectReadyTasks(rule), 's21')).toEqual([{ kind: 'merge-gate', unmerged: ['f1'] }]);
+    });
+
+    it('is not gated under a change parent, which runs in a worktree cut from the integration branch', () => {
+      const change = flattenTasks([foundation('completed'), parent]);
+      expect(selectReadyTasks(input(change, { runs: unmergedF1 })).ready.map((t) => t.id).sort()).toEqual(['p2', 's21']);
+    });
+  });
+
+  describe('two levels deep', () => {
+    const leaf = createTask({ id: 'l', order: 1, title: 'Leaf', prompt: 'x' });
+    const middle = createTask({ id: 'm', order: 1, title: 'Middle', prompt: 'x', subtasks: [leaf] });
+    const top = createTask({ id: 't', order: 2, title: 'Top', prompt: 'x', dependencies: ['f1'], subtasks: [middle] });
+    const deep = (status?: Task['status']) => flattenTasks([foundation(status), top]);
+
+    it('waits on its grandparent\'s dependency', () => {
+      expect(why(selectReadyTasks(input(deep())), 'l')).toEqual([{ kind: 'dependencies', waiting: ['f1'] }]);
+    });
+
+    it('is blocked by its grandparent\'s failed dependency', () => {
+      expect(planBlocks(deep('failed')).blocked.get('l')).toEqual(['f1']);
+      expect(why(selectReadyTasks(input(deep('failed'))), 'l')).toContainEqual({ kind: 'blocked', failed: ['f1'] });
     });
   });
 });

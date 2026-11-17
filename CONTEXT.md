@@ -1874,10 +1874,14 @@ for input); how one ended goes to `settle`, never applied where it ended.
 `TaskRowView.blockedBy`) — a task not started yet whose dependency failed or is
 itself blocked (ADR-0034). The scheduler never starts it, its own dependents are
 blocked with it, and every surface shows it "blocked by #N", naming the failed
-tasks it waits on. Independent work keeps starting: a failure stops only what
+tasks it waits on. A subtask is part of its parent's work, so it is held to
+the dependencies of every ancestor as well as its own (`heldDependencies`), and
+is blocked when its parent is; the plan does not copy those edges onto it, and
+a *Skip* of the parent passes over the parent alone, releasing none of its
+subtasks. Independent work keeps starting: a failure stops only what
 depends on it. Nothing is stored — there is no `blocked` task status; the rule reads statuses and
-dependencies, and a plan file saved with one loads it as pending — so a retry of the failed task that passes, or a *Skip* of it, unblocks its
-dependents, which then start. A run with nothing running and only failed and blocked tasks left ends,
+dependencies, and a plan file saved with one loads it as pending — so a retry of the failed task that passes, a *Skip* of it or a Mark complete unblocks its
+dependents, its dependents' subtasks among them, which then start. A run with nothing running and only failed and blocked tasks left ends,
 counting completed, failed and blocked; a retry of a task in it continues that
 run (`TaskOrchestrator.awaitsResume`), and a planner edit made meanwhile is
 reconciled into it rather than reloaded over it, leaving the failed task failed:
@@ -1899,7 +1903,7 @@ a task added to resolve its conflict has that conflict (`resolver`, ADR-0015);
 it has no prompt; it is outside the user's approval record; it is on hold, with
 that reason shown on every surface; it is blocked; it is in a *Loop*'s body
 whose check has not failed this round
-(`loop-check`, "runs if #X fails"); its dependencies are not met, or, queued
+(`loop-check`, "runs if #X fails"); its dependencies, or an ancestor's, are not met, or, queued
 by a force start, are still under way; a Merge all is under way and it is an ops task; its runner
 waits on a usage limit's reset; a planner turn holds new starts; it is at its
 *Merge gate*; it is a user task. One pure function over the plan, the holds
@@ -1910,7 +1914,10 @@ force start reads it as forced: past a hold, a failure, a usage limit and the
 gate the user confirmed. The claim is separate: it checks only what can change
 at the last moment. A loop's check *between rounds* waits `repeating` in place
 of "it has started": its loop starts it again, or, with nothing left to run it,
-a start of it does.
+a start of it does. A subtask waits for every ancestor's dependencies as for
+its own, so an ops subtask waits at the merge gate its ops parent waits at; an
+ancestor's dependency that itself waits on that ancestor's subtree is not
+inherited, since the subtask would wait on itself.
 *Avoid:* "readiness gate" for one of its reasons, and "gate" for any reason but
 the *Merge gate*.
 
