@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-18
+
 ### Changed
 
 - **A plan whose dependencies run in one long chain is reviewed once by its
@@ -18,6 +20,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   says what changed. A conversation planner is asked the same in `submit_plan`'s answer,
   and only its own next submission changes the plan. The one-shot prompt also
   says that filling in an interface that already exists is no reason to wait.
+
+### Fixed
+
+- **A plan saved by an earlier version no longer lets a copy remove its
+  worktrees.** An isolation run saved by 0.14.1 or earlier records no session.
+  Such a run is now adopted only by the session whose own file holds it, and
+  only when no other session's file holds the same run, since a copy, such as
+  the plan a VS Code window reload restores under a fresh id, may carry a stale
+  record of it. When several files hold the run, nothing is removed: the
+  session says so, drops the record and starts clean.
+- **Reading a saved session no longer opens every other session.** Fetching a
+  session the daemon does not hold, reading its git state or a task's diff, the
+  landing check and branch listings, and the VS Code `/sessions` pick read the
+  session as it was saved, without working out whose a pre-upgrade run is. Only
+  a load that adopts a session still does, and it now reads its own file once.
 
 ## [0.14.2] - 2026-11-18
 
@@ -4757,7 +4774,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/ordewell/ordewell/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ordewell/ordewell/compare/v0.13.4...v0.14.0
