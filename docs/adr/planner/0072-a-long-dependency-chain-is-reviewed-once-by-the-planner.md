@@ -83,16 +83,22 @@ question is put depends on how the plan arrives.
   never count), and no other such task waits for it. A change task the closing
   check waits for that itself waits for every slice only implements one more
   module, so it is a slice of the last level, unless it is the only candidate.
+  Change tasks after every other one that are not ordered against each other,
+  fewer than a fan-out (a closing check and its docs, say), are the closing
+  check and the tasks beside it, not slices: the closing check is chosen among
+  them as among any candidates, and the others get no note.
   The shape's faults (opening tasks in series, no opening task, no closing
   check) are recorded in the research log and asked of no one. After R1, at no
   call, a wide plan with a closing check gets a fixed `Plan shape:` note
   appended to each role's brief, on the plan R1 kept. The opening task's note
   says to stay short and to end its report with a module map, and lists every
-  task with the paths its brief names. A slice reads that map with `read` and
+  task with the paths its brief names, read before any note Ordewell appended,
+  since a `Plan revision:` note names other tasks by title. A slice reads that map with `read` and
   `include_report`. A slice's note says its own scope is its done criterion: a
-  test that fails only because a sibling's code has not landed, or that the
+  test that fails only because a sibling's code has not landed yet, or that the
   repository does not let it derive, is listed as a finding and does not stop
-  it ending done, and `failed` is for code in its scope not being in place. Its
+  it ending done, a sibling's work is taken in once it has landed, as the
+  runner's note on work landing beside it says, and `failed` is for code in its scope not being in place. Its
   table gives each task one line with the first path its brief names, at most
   `SLICE_TABLE_MAX` characters, then how many more there are and where: the
   opening task's module map, or, with no opening task, that a module its brief
@@ -211,3 +217,4 @@ conversation's as they stand.
 - 2026-11-18 — R5: a wide one-shot plan's fan-out faults ride on R1's call, its reply may add the task a fault asks for, and each role's brief gets a `Plan shape:` note; R1's revision note lets a slice take in landed work.
 - 2026-11-18 — R5: a read-only check counts as the closing check only through a loop whose body edits; an added restoring task waits for what every slice waited for; R1's revision note has a slice name the tests it leaves in findings.
 - 2026-11-19 — R5: the fault questions and the tasks a reply could add are dropped after failing their measurement; R1 asks the chain question only, the notes go to the closing check no other waits for and the first opening task, and a slice's table is bounded.
+- 2026-11-19 — R5: a slice takes in a sibling's work once it has landed; a closing check with a task beside it is the closing check; a revision note's titles are no brief's paths.

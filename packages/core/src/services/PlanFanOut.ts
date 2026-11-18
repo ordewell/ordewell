@@ -77,6 +77,8 @@ function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: 
  * script that is not a loop's check never count, since a script after
  * everything may be a push. The closing check is the closer no other waits
  * for; a change task it waits for is a slice too, unless it is the only one.
+ * With no task after every slice, fewer change tasks than a fan-out that wait
+ * for every other one are the closing check and the tasks beside it.
  */
 export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const g = graph(tasks);
@@ -86,15 +88,24 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const change = tasks.filter((t) => t.type === 'ai' && !t.readOnly && !runsAsOps(t) && !t.research && !t.loop && !body.has(t.id));
   const ordered = (a: Task, b: Task) => anc(a).has(b.id) || anc(b).has(a.id);
   const spine = new Set(change.filter((t) => change.every((o) => o === t || ordered(t, o))));
-  const parallel = change.filter((t) => !spine.has(t));
+  let parallel = change.filter((t) => !spine.has(t));
   if (parallel.length < 2) return NONE;
   const byLevel = (a: Task, b: Task) => g.level.get(a.id)! - g.level.get(b.id)!;
-  const gates = [...spine].filter((t) => parallel.every((s) => anc(s).has(t.id))).sort(byLevel);
   const fixer = new Set(tasks.filter((t) => t.type === 'ai' && !t.readOnly).map((t) => t.id));
-  const closes = (t: Task) => !body.has(t.id) && t.type !== 'user' && !t.ops
+  const closes = (after: readonly Task[]) => (t: Task) => !body.has(t.id) && t.type !== 'user' && !t.ops
     && (fixer.has(t.id) || (t.loop?.body ?? []).some((id) => fixer.has(id)))
-    && parallel.every((s) => anc(t).has(s.id));
-  const candidates = tasks.filter(closes).sort(byLevel);
+    && after.every((s) => anc(t).has(s.id));
+  // A closing check with a change task beside it (its docs, say) is not ordered
+  // against that task, so both read as slices and nothing waits for every slice.
+  // Fewer tasks than a fan-out that wait for every other one are the closing check
+  // and what runs beside it; as many are the plan's last level of slices.
+  if (!tasks.some(closes(parallel))) {
+    const ends = parallel.filter((t) => !parallel.some((o) => anc(o).has(t.id)));
+    const rest = parallel.filter((t) => !ends.includes(t));
+    if (ends.length < FAN_OUT_MIN && rest.length > 0 && ends.every(closes(rest))) parallel = rest;
+  }
+  const gates = [...spine].filter((t) => parallel.every((s) => anc(s).has(t.id))).sort(byLevel);
+  const candidates = tasks.filter(closes(parallel)).sort(byLevel);
   // The closing check is the candidate nothing else after the slices waits for, the
   // deepest if several. A change task it waits for only implements one more module
   // after them, so it is a slice of the last level, told as the others are.
@@ -129,9 +140,12 @@ const MAX_PATHS = 6;
 
 const NOTED = 'Plan shape:';
 
-/** From the brief as the planner wrote it: a note already appended names every task's paths. */
+/** Where the notes Ordewell appends begin: this module's, and the chain review's, which names tasks by title. */
+const APPENDED = /Plan (?:shape|revision):/;
+
+/** From the brief as the planner wrote it: a note already appended names other tasks' paths. */
 function namedPaths(t: Task): string[] {
-  return [...new Set((t.prompt ?? '').split(NOTED)[0].match(PATH) ?? [])].slice(0, MAX_PATHS);
+  return [...new Set((t.prompt ?? '').split(APPENDED)[0].match(PATH) ?? [])].slice(0, MAX_PATHS);
 }
 
 function ownershipTable(shape: FanOutShape): string {
@@ -183,7 +197,7 @@ export function sliceNote(shape: FanOutShape): string {
   return [
     `Plan shape: this task is one of ${shape.slices.length} slices${gate ? ` that start once ${ref(gate)} has landed` : ''}, and ${ref(closer)} runs the whole test suite once every slice has ended.${gate ? ` Read the module map at the end of ${ref(gate)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
     sliceTable(shape),
-    `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed in your worktree, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are ${ref(closer)}'s. Do not write, stub or shim another slice's code to make them pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
+    `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are ${ref(closer)}'s. Take in another slice's work once it has landed. Do not write, stub or shim another slice's code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
   ].join('\n');
 }
 

@@ -44,15 +44,22 @@ export function fanOutShape(plan) {
   const change = tasks.filter((t) => (t.type ?? 'ai') === 'ai' && !t.readOnly && !runsAsOps(t) && !t.research && !t.loop && !body.has(t.id));
   const ordered = (a, b) => anc.get(a.id).has(b.id) || anc.get(b.id).has(a.id);
   const spine = new Set(change.filter((t) => change.every((o) => o === t || ordered(t, o))));
-  const parallel = change.filter((t) => !spine.has(t));
+  let parallel = change.filter((t) => !spine.has(t));
   const levels = tasks.length ? Math.max(...level.values()) : null;
   if (parallel.length < 2) return { ...none, levels };
   const byLevel = (a, b) => level.get(a.id) - level.get(b.id);
-  const gates = [...spine].filter((t) => parallel.every((s) => anc.get(s.id).has(t.id))).sort(byLevel);
-  const edits = (t) => (t?.type ?? 'ai') === 'ai' && !t.readOnly;
-  const candidates = tasks.filter((t) => !body.has(t.id) && t.type !== 'user' && !t.ops
+  const edits = (t) => Boolean(t) && (t.type ?? 'ai') === 'ai' && !t.readOnly;
+  const closes = (after) => (t) => !body.has(t.id) && t.type !== 'user' && !t.ops
     && (edits(t) || (t.loop?.body ?? []).some((id) => edits(byId.get(id))))
-    && parallel.every((s) => anc.get(t.id).has(s.id))).sort(byLevel);
+    && after.every((s) => anc.get(t.id).has(s.id));
+  // As core: fewer change tasks than a fan-out after every other one are the closing check and what runs beside it.
+  if (!tasks.some(closes(parallel))) {
+    const ends = parallel.filter((t) => !parallel.some((o) => anc.get(o.id).has(t.id)));
+    const rest = parallel.filter((t) => !ends.includes(t));
+    if (ends.length < FAN_OUT_MIN && rest.length > 0 && ends.every(closes(rest))) parallel = rest;
+  }
+  const gates = [...spine].filter((t) => parallel.every((s) => anc.get(s.id).has(t.id))).sort(byLevel);
+  const candidates = tasks.filter(closes(parallel)).sort(byLevel);
   // As core: the closing check is the candidate no other waits for, and a change task it waits for is a slice of the last level.
   const last = candidates.filter((c) => !candidates.some((o) => anc.get(o.id).has(c.id)));
   const closer = last[last.length - 1];
