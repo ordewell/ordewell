@@ -1,5 +1,5 @@
 import { taskServedModel } from './accountLimits';
-import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { firstGrapheme, nextBoundary, pad, palette, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerCardLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
@@ -451,7 +451,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
  * the selected chat's business, but it must stay visible whichever chat is. The
  * plan pane's title takes the longest one that fits its width.
  */
-export function runHints(state: TuiState): string[] {
+export function runHints(state: Pick<TuiState, 'status' | 'tasks' | 'runMerge' | 'child'>): string[] {
   if (state.status === 'starting') return ['starting…', 'starting'];
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
@@ -1128,9 +1128,10 @@ export interface LineSpan {
  * so at offset `n` the visible body is `lines[1 + n .. n + rows - 1]`.
  */
 export interface PlanLayout {
-  lines: string[];
+  /** Shared by every caller that lays out the same plan (see the caches below): read only. */
+  readonly lines: readonly string[];
   /** One span per plan row, in row order — rows are one to many lines tall. */
-  rowSpans: LineSpan[];
+  readonly rowSpans: readonly LineSpan[];
   /** What the viewport must keep on screen: the open prompt's caret line, else the selected row. */
   anchor: LineSpan;
   /** Rows the pane is painted at, header included. */
@@ -1138,7 +1139,101 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
+// ── Plan pane caches ──
+//
+// A frame used to lay out every row of the plan and then show the few that fit:
+// at a few hundred tasks that was most of a core, five times a second, to paint
+// rows that had not changed. The pane is a pure function of the state fields
+// below and its width (ADR-0006), so it is cached on exactly those: the whole
+// pane by their identity, and each row by what that row reads. A cache may
+// change what a frame costs and nothing it shows.
+
+/**
+ * Every field of the state the plan pane reads. The layout below is typed to
+ * see only these, so reading another one is a type error rather than a stale
+ * frame: add it here and it joins the key.
+ */
+const PLAN_INPUTS = [
+  'tasks', 'expandedTaskId', 'selectedTask', 'focus', 'spinnerFrame', 'taskEditor', 'runners', 'allowlist', 'models',
+  'modesByRunner', 'childTree', 'sessionId', 'status', 'runMerge', 'child',
+] as const;
+type PlanInputs = Pick<TuiState, (typeof PLAN_INPUTS)[number]>;
+
+/** The paint switches the pane's rows are written with: a test or a setting can flip them under the same state. */
+const paintKey = (): string => `${+style.enabled}${+style.attributes}${+palette.truecolor}`;
+
+/** The pane with no row count: its lines do not depend on how many of them fit. */
+type PlanBody = Omit<PlanLayout, 'rows' | 'maxScroll'>;
+
+interface BodyEntry {
+  tasks: TuiState['tasks'];
+  inputs: unknown[];
+  cols: number;
+  paint: string;
+  body: PlanBody;
+}
+
+/**
+ * The last few panes laid out. A key lays the pane out in the reducer, to keep
+ * the selection in view, and again in the frame it paints; a stacked body
+ * measures it once more to split the rows. All of them see the same inputs.
+ */
+const bodies: BodyEntry[] = [];
+const BODIES_HELD = 3;
+
+interface RowEntry {
+  task: TaskView;
+  parent: TaskView | null;
+  /** The plan it was laid out in: its dependency and loop references are read off it. */
+  tasks: TuiState['tasks'];
+  context: unknown[];
+  selected: boolean;
+  /** The prompt editor, for the expanded row only: it is the one that draws it. */
+  editor: TuiState['taskEditor'] | undefined;
+  /** The spinner frame drawn, for a running row only. */
+  spinner: number | undefined;
+  paint: string;
+  lines: TaskLines;
+}
+
+/** Rows by width, parent and task id. Rows of tasks gone from the plan go oldest first. */
+const rowCache = new Map<string, RowEntry>();
+const ROWS_HELD = 4096;
+
+/** Switches for tests that compare frames with the caches cold, warm and off. */
+export const planRowCache = {
+  enabled: true,
+  clear(): void {
+    rowCache.clear();
+    bodies.length = 0;
+  },
+};
+
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
+  const body = planBody(state, cols);
+  return { ...body, rows, maxScroll: Math.max(0, body.lines.length - rows) };
+}
+
+function planBody(state: PlanInputs, cols: number): PlanBody {
+  if (!planRowCache.enabled) return layPlanBody(state, cols);
+  const inputs = PLAN_INPUTS.map((field) => state[field]);
+  const paint = paintKey();
+  const at = bodies.findIndex((entry) => entry.cols === cols && entry.paint === paint && entry.inputs.every((value, i) => value === inputs[i]));
+  if (at >= 0) return bodies[at].body;
+  const body = layPlanBody(state, cols);
+  // A plan the pane no longer shows is let go of, task views and all: the
+  // memo is for one plan read at several widths, and the rows laid out just
+  // now replaced every entry of this plan that was still current.
+  if (bodies[0] && bodies[0].tasks !== state.tasks) {
+    bodies.length = 0;
+    for (const [key, entry] of rowCache) if (entry.tasks !== state.tasks) rowCache.delete(key);
+  }
+  bodies.unshift({ tasks: state.tasks, inputs, cols, paint, body });
+  bodies.length = Math.min(bodies.length, BODIES_HELD);
+  return body;
+}
+
+function layPlanBody(state: PlanInputs, cols: number): PlanBody {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = tasksTotalText(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
@@ -1156,6 +1251,10 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   }
   const firstRowLine = lines.length;
 
+  // Before the runners load, every task would read as on a runner that is off.
+  const runnerScope = state.runners.length > 0
+    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist, models: modelsByRunnerOf(state.models) }
+    : undefined;
   const rowSpans: LineSpan[] = [];
   // An expanded task starts its editor at the end of its prompt. For a long
   // prompt, keeping only the task heading visible makes edits appear to do
@@ -1165,17 +1264,51 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     // A blank line between top-level tasks; a subtask stays tight to its parent.
     if (i > 0 && !row.parent) lines.push('');
     const taskStart = lines.length;
-    const renderedTask = taskLines(state, row, i, cols);
+    const renderedTask = cachedTaskLines(state, row, i, cols, runnerScope);
     if (row.task.id === state.expandedTaskId && renderedTask.editorLine !== undefined) {
       editorLine = taskStart + renderedTask.editorLine;
     }
-    lines.push(...renderedTask.lines);
+    for (const line of renderedTask.lines) lines.push(line);
     rowSpans.push({ start: taskStart, end: lines.length - 1 });
   });
 
   const selected = rowSpans[state.selectedTask] ?? { start: firstRowLine, end: firstRowLine };
   const anchor = editorLine === undefined ? selected : { start: editorLine, end: editorLine };
-  return { lines, rowSpans, anchor, rows, maxScroll: Math.max(0, lines.length - rows) };
+  return { lines, rowSpans, anchor };
+}
+
+/**
+ * One row's lines, laid out again only when something it reads changed: its
+ * task and parent, the whole plan (which its dependency and loop references
+ * are read off), the runner settings its warnings come from, the child tree
+ * a delegated row counts questions in, and its own selection, expansion,
+ * editor and spinner.
+ */
+function cachedTaskLines(state: PlanInputs, planRow: PlanRow, index: number, cols: number, runnerScope: RunnerScope | undefined): TaskLines {
+  if (!planRowCache.enabled) return taskLines(state, planRow, index, cols, runnerScope);
+  const { task, parent } = planRow;
+  const context = [state.modesByRunner, state.runners, state.allowlist, state.models, state.childTree, state.sessionId];
+  const selected = state.focus === 'plan' && index === state.selectedTask;
+  const editor = state.expandedTaskId === task.id ? state.taskEditor : undefined;
+  const frame = state.spinnerFrame % SPINNER.length;
+  const paint = paintKey();
+  const key = `${cols}\u0000${parent?.id ?? ''}\u0000${task.id}`;
+  const held = rowCache.get(key);
+  if (
+    held && held.task === task && held.parent === parent && held.tasks === state.tasks && held.selected === selected && held.editor === editor
+    && (held.spinner === undefined || held.spinner === frame) && held.paint === paint
+    && held.context.every((value, i) => value === context[i])
+  ) {
+    return held.lines;
+  }
+  const lines = taskLines(state, planRow, index, cols, runnerScope);
+  rowCache.delete(key);
+  rowCache.set(key, { task, parent, tasks: state.tasks, context, selected, editor, spinner: lines.spins ? frame : undefined, paint, lines });
+  if (rowCache.size > ROWS_HELD) {
+    const oldest = rowCache.keys().next().value;
+    if (oldest !== undefined) rowCache.delete(oldest);
+  }
+  return lines;
 }
 
 const clampOffset = (layout: PlanLayout, offset: number): number =>
@@ -1268,21 +1401,26 @@ function modelsByRunnerOf(models: readonly ModelView[]): Record<string, Discover
 }
 
 interface TaskLines {
-  lines: string[];
+  readonly lines: readonly string[];
   /** The zero-based line within `lines` containing the prompt editor caret. */
   editorLine?: number;
+  /** Whether a spinner frame is drawn in it, so the next frame draws it again. */
+  spins: boolean;
 }
 
-function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: number): TaskLines {
+interface RunnerScope {
+  enabledRunners: string[];
+  allowlist: TuiState['allowlist'];
+  models: Record<string, DiscoveredModel[]>;
+}
+
+function taskLines(state: PlanInputs, planRow: PlanRow, index: number, cols: number, runnerScope: RunnerScope | undefined): TaskLines {
   const { task, parent } = planRow;
-  // Before the runners load, every task would read as on a runner that is off.
-  const runnerScope = state.runners.length > 0
-    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist, models: modelsByRunnerOf(state.models) }
-    : undefined;
   const row = taskRowView(task, { parent, tasks: state.tasks, modes: modesForTask(state.modesByRunner, task), runnerScope });
   const selected = state.focus === 'plan' && index === state.selectedTask;
   const expanded = state.expandedTaskId === task.id;
   const rawIcon = row.status === 'running' ? SPINNER[state.spinnerFrame % SPINNER.length] : STATUS_ICON[row.status];
+  const spins = row.status === 'running';
   const icon = STATUS_PAINT[row.status](rawIcon);
   const kind = row.running
     ? style.yellow('RUN')
@@ -1472,7 +1610,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     // A script's body is the planner's to write: there is no editor to save or cancel.
     if (row.kind === 'script') {
       lines.push(style.grey(`${bodyPad}esc collapse · f start · D deps · d remove`));
-      return { lines, editorLine };
+      return { lines, editorLine, spins };
     }
     // Two lines: the assignment keys plus the edit verbs no longer fit the plan
     // pane on one, and a truncated hint hides the keys it exists to teach. They
@@ -1482,7 +1620,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     lines.push(style.grey(truncate(`${bodyPad}then R runner · o model · e effort · M mode · D deps · K skills`, cols)));
   }
 
-  return { lines, editorLine };
+  return { lines, editorLine, spins };
 }
 
 /**

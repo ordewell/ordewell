@@ -92,9 +92,66 @@ export function paintOnly(line: string): string {
  * Terminals render CJK, emoji and similar glyphs two columns wide. Getting this
  * wrong shifts every column to the right of it, so layout measures with this
  * rather than `String.length`.
+ *
+ * It answers as string-width does, but asks it only about what is not plain
+ * text: a frame measures every row it paints, and string-width walks each one
+ * grapheme by grapheme through its emoji and east-asian tables.
  */
 export function width(text: string): number {
-  return stringWidth(stripAnsi(text));
+  const plain = text.includes('\x1b') ? stripAnsi(text) : text;
+  if (NARROW_RUN.test(plain)) return plain.length;
+  // string-width strips a C1 CSI and what follows it; counted by length, that would be columns.
+  if (plain.includes('\x9b')) return stringWidth(plain);
+  return mixedWidth(plain);
+}
+
+/**
+ * Code points string-width measures as one column that never join a neighbour
+ * into a grapheme cluster: printable ASCII, Latin-1 and general punctuation,
+ * less the few it measures otherwise (soft hyphen, ©, ®, ‼, ⁉).
+ */
+const NARROW = '\x20-\x7e\u00a0-\u00a8\u00aa-\u00ac\u00af-\u00ff\u2010-\u2027\u2030-\u203b\u203d-\u2048\u204a-\u205e';
+const NARROW_RUN = new RegExp(`^[${NARROW}]*$`);
+const NARROW_RUNS = new RegExp(`[${NARROW}]{3,}`, 'g');
+
+/**
+ * Plain runs counted by their length, the rest measured by string-width. Each
+ * measured piece keeps the plain character on either side of it: a keycap's
+ * `#`, a letter under a combining mark, or one after a prepended mark belongs
+ * to the cluster beside it, while two plain characters in a row never share one.
+ */
+function mixedWidth(plain: string): number {
+  let total = 0;
+  let from = 0;
+  for (const run of plain.matchAll(NARROW_RUNS)) {
+    const start = run.index === 0 ? 0 : run.index + 1;
+    const end = run.index + run[0].length === plain.length ? plain.length : run.index + run[0].length - 1;
+    if (end <= start) continue;
+    total += pieceWidth(plain.slice(from, start)) + end - start;
+    from = end;
+  }
+  return total + pieceWidth(plain.slice(from));
+}
+
+/**
+ * The pieces left between plain runs are few and short (a status glyph and its
+ * spaces, the pane divider), and string-width costs more to call than to run
+ * on them: it builds its emoji pattern afresh on every call.
+ */
+const pieceWidths = new Map<string, number>();
+const PIECE_MAX = 16;
+const PIECES_HELD = 2048;
+
+function pieceWidth(piece: string): number {
+  if (piece === '') return 0;
+  if (piece.length > PIECE_MAX || !measureCache.enabled) return stringWidth(piece);
+  let known = pieceWidths.get(piece);
+  if (known === undefined) {
+    if (pieceWidths.size >= PIECES_HELD) pieceWidths.clear();
+    known = stringWidth(piece);
+    pieceWidths.set(piece, known);
+  }
+  return known;
 }
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
@@ -239,34 +296,65 @@ function chopWord(piece: string, max: number): string[] {
  * newline break consumes one source character; a hard split consumes none —
  * `cursorPosition` needs that distinction to place the caret after a chop.
  *
- * A small LRU cache collapses redundant wraps within a frame and across
- * spinner ticks. A single render wraps 6+ different texts (each task title,
- * the chat editor, the expanded prompt); the old single-slot memo evicted
- * each on the next call, so nothing was ever reused. Task titles and the
- * prompt editor text are immutable across a spinner tick, so a modest Map
- * lets every wrap hit the cache between frames — which is what makes
- * scrolling an expanded task feel instant.
+ * A memo collapses redundant wraps within a frame and across frames: every
+ * task title, status line and chat block is wrapped again on each paint, and
+ * the text rarely changed. It is bounded by the text it holds rather than by a
+ * count of entries: a plan of hundreds of tasks wraps hundreds of short titles,
+ * which a count small enough to bound a pasted blob evicted on every frame.
+ * Least recently used goes first (a `Map` keeps insertion order).
  */
-const wrapMemo = new Map<string, WrapLine[]>();
-const WRAP_MEMO_MAX = 64;
+const wrapped = new Map<string, WrapLine[]>();
+/** UTF-16 units of source text held, each counted twice: once in its key, once in its lines. */
+const WRAP_MEMO_UNITS = 1 << 20;
+let wrappedUnits = 0;
+
+/** Switches for tests that compare frames with the measuring memos cold, warm and off. */
+export const measureCache = {
+  enabled: true,
+  clear(): void {
+    wrapped.clear();
+    wrappedUnits = 0;
+    pieceWidths.clear();
+  },
+};
 
 export function wrapLines(text: string, max: number): WrapLine[] {
+  if (!measureCache.enabled) return computeWrapLines(text, max);
   const key = `${max}\u0000${text}`;
-  const cached = wrapMemo.get(key);
+  const cached = wrapped.get(key);
   if (cached) {
-    // Move to most-recently-used position (Map preserves insertion order).
-    wrapMemo.delete(key);
-    wrapMemo.set(key, cached);
+    wrapped.delete(key);
+    wrapped.set(key, cached);
     return cached;
   }
   const result = computeWrapLines(text, max);
-  if (wrapMemo.size >= WRAP_MEMO_MAX) {
-    const oldest = wrapMemo.keys().next().value;
-    if (oldest !== undefined) wrapMemo.delete(oldest);
+  const units = 2 * key.length;
+  if (units > WRAP_MEMO_UNITS) return result;
+  wrappedUnits += units;
+  for (const oldest of wrapped.keys()) {
+    if (wrappedUnits <= WRAP_MEMO_UNITS) break;
+    wrapped.delete(oldest);
+    wrappedUnits -= 2 * oldest.length;
   }
-  wrapMemo.set(key, result);
+  wrapped.set(key, result);
   return result;
 }
+
+/**
+ * Whether a code unit at a word's edge keeps to its own grapheme cluster when a
+ * space is set beside it, so the joined line measures the two widths plus one.
+ * A mark or a joiner at a word's start would join the space before it, and a
+ * prepended mark (U+0600) at its end the space after it; these ranges hold
+ * neither: Latin, CJK ideographs, kana, Hangul syllables, fullwidth forms.
+ * Anything else is measured whole, which is never wrong, only slower.
+ */
+const plainEdge = (code: number): boolean =>
+  code < 0x300
+  || (code >= 0x3041 && code <= 0x3096)
+  || (code >= 0x30a1 && code <= 0x30fa)
+  || (code >= 0x4e00 && code <= 0x9fff)
+  || (code >= 0xac00 && code <= 0xd7a3)
+  || (code >= 0xff01 && code <= 0xff5e);
 
 function computeWrapLines(text: string, max: number): WrapLine[] {
   if (max <= 0) return [{ line: '', start: 0 }];
@@ -274,38 +362,65 @@ function computeWrapLines(text: string, max: number): WrapLine[] {
   const out: WrapLine[] = [];
   let pos = 0; // source offset of the current paragraph's first character
   for (const paragraph of text.split('\n')) {
+    // The running width answers for the line only while its end and the next
+    // word's start are plain (see `plainEdge`). An escape is measured by
+    // stripping, and a cut-off one swallows what follows it, so a painted
+    // paragraph is measured whole.
+    const painted = paragraph.includes('\x1b');
+    // A line of plain text is the source between its first and last word, so
+    // it is cut out once as it is emitted rather than grown word by word: a
+    // line built of joins is held in the memo as a chain of every word in it.
+    // A painted one is built, since a hard split re-opens its colour.
     let current = '';
     let currentStart = pos;
+    let currentEnd = pos;
+    let currentWidth = 0;
+    const line = (): string => (painted ? current : text.slice(currentStart, currentEnd));
     let first = true;
+    let plainEnd = true;
     let wordPos = pos; // source offset of the current word's first character
     for (const word of paragraph.split(' ')) {
       let piece = word;
       let pieceStart = wordPos;
-      if (width(piece) > max) {
+      let pieceWidth = width(piece);
+      if (pieceWidth > max) {
         const chunks = chopWord(piece, max);
         for (let ci = 0; ci < chunks.length - 1; ci++) {
           const head = chunks[ci];
-          if (!first) { out.push({ line: current, start: currentStart }); current = ''; }
+          if (!first) {
+            out.push({ line: line(), start: currentStart });
+            current = '';
+            currentEnd = currentStart;
+          }
           out.push({ line: head, start: pieceStart });
           pieceStart += head.length;
           first = true;
         }
         piece = chunks[chunks.length - 1];
+        pieceWidth = width(piece);
       }
-      const candidate = first ? piece : `${current} ${piece}`;
-      const candidateStart = first ? pieceStart : currentStart;
-      first = false;
-      if (width(candidate) > max) {
-        out.push({ line: current, start: currentStart });
+      const pieceEnd = wordPos + word.length;
+      const candidateWidth = first
+        ? pieceWidth
+        : !painted && plainEnd && (piece === '' || plainEdge(piece.charCodeAt(0)))
+          ? currentWidth + 1 + pieceWidth
+          : width(painted ? `${current} ${piece}` : text.slice(currentStart, pieceEnd));
+      if (piece !== '') plainEnd = plainEdge(piece.charCodeAt(piece.length - 1));
+      if (candidateWidth > max) {
+        out.push({ line: line(), start: currentStart });
         current = piece;
         currentStart = pieceStart;
+        currentWidth = pieceWidth;
       } else {
-        current = candidate;
-        currentStart = candidateStart;
+        if (painted) current = first ? piece : `${current} ${piece}`;
+        if (first) currentStart = pieceStart;
+        currentWidth = candidateWidth;
       }
-      wordPos += word.length + 1;
+      currentEnd = pieceEnd;
+      first = false;
+      wordPos = pieceEnd + 1;
     }
-    out.push({ line: current, start: currentStart });
+    out.push({ line: line(), start: currentStart });
     pos += paragraph.length + 1;
   }
   return out.length > 0 ? out : [{ line: '', start: 0 }];

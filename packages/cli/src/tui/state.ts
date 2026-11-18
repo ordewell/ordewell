@@ -719,7 +719,7 @@ export interface PlanRow {
  * under the cursor (and its prompt editor) would vanish the moment right opens
  * it. Only one level nests: a subtask's own children are never shown.
  */
-export function planRows(state: TuiState): PlanRow[] {
+export function planRows(state: Pick<TuiState, 'tasks' | 'expandedTaskId'>): PlanRow[] {
   const rows: PlanRow[] = [];
   for (const task of state.tasks) {
     rows.push({ task, parent: null });
