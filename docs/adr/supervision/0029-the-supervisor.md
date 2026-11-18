@@ -175,7 +175,12 @@ must not take that end as the run's outcome. So the session also sends
 `run_concluded`, carrying the same summary, once no supervisor's turn can
 continue the run: below Act at once, after `execution_complete`; at Act once
 the run has ended, no wake-up turn is in flight or waiting, and no retry is
-owed. That is a judgement of state, not a call made where a turn happens to
+owed. A closing turn that leaves a task failed or held with work waiting on it
+owes one more wake for it ([ADR-0057](0057-information-moves-by-reference.md)
+R4's `failure_standing`), and that wake's turn counts as the closing turn's.
+What it left is judged once the closing turn and any retry of it are over,
+whichever turn ends it, and the user's Stop of the closing turn or of its retry
+is their answer to it: no wake follows. That is a judgement of state, not a call made where a turn happens to
 end: `RunSupervision.settle()` makes it, and every change to any part of it
 runs it again (a turn settling, the planner's inputs persisted or dropped by a
 Stop, a discard, the level changing, the failure that leaves the run
@@ -840,3 +845,5 @@ until #30 exists.
 - 2026-11-17 — a Stop that parks the closing turn behind the user's next message concludes the run with `supervisorHeld`, and `ordewell run`'s bound does not count a user's planner turn the closing turn waits behind.
 - 2026-11-17 — a fresh `retry_task` from a model may carry a note for the new attempt, which the runner reads with its brief and the identical-retry guard counts as a change; the guard's refusal names that, and an edit to a failed or held task's prompt answers that it still needs `retry_task`. Seen live: an Act supervisor refused an identical retry edited the prompt and ended its turn, leaving twelve tasks held.
 - 2026-11-17 — a stopped task on hold takes a note on its next start too, and the note is given to the runner only, not claimed as shown in the log.
+- 2026-11-18 — the wake a closing turn owes for a task it left failed or held with work waiting holds `run_concluded` until its turn is over, so `ordewell run` waits for it too.
+- 2026-11-18 — what a closing turn left standing is judged once its retry is over too, so a closing turn that failed once still owes the wake, and the user's Stop of the closing turn or its retry owes none.

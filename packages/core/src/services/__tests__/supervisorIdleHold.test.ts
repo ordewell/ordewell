@@ -202,6 +202,45 @@ describe('a blocking failure a turn left standing, at Act', () => {
 });
 
 /**
+ * The run's end at Act, with a failed task the rest wait on: the closing turn
+ * that leaves it failed is woken once more for it, as a turn during the run
+ * is (ADR-0057 R4), and the run's end stands only once that turn is over.
+ */
+describe('a blocking failure the closing turn left standing, at Act', () => {
+  /** Task 1 failed with tasks 2 and 3 waiting on it, so the run ended, and the supervisor is in its closing turn. */
+  async function closingOnFailure(): Promise<Env> {
+    const env = await supervised(
+      [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] })],
+      { settings: { supervisorLevel: 'act' } },
+    );
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+    await until(() => env.planner.calls.length === 1);
+    return env;
+  }
+
+  /** The closing turn rewrites task 1 and ends, retrying and skipping nothing. */
+  async function editsOnly(env: Env): Promise<void> {
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    expect(edit.isError, edit.text).toBeFalsy();
+    env.planner.calls[0].finish(prose('Rewrote task 1.'));
+    await settled();
+  }
+
+  const CLOSING = 'Task #1 "Task t1" is still failed after your turn, and 2 tasks wait on it. The run has ended, and an edit starts nothing: nothing runs until you release it. Release it: call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply; or skip_task it with your reason; or tell the user.';
+
+  it('wakes the supervisor once more after a closing turn that edited the task and did not retry it', async () => {
+    const env = await closingOnFailure();
+
+    await editsOnly(env);
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+
+    expect(env.planner.calls[1].message).toContain(`- ${CLOSING}`);
+  });
+});
+
+/**
  * A task the supervisor stopped is on hold, not failed: the wake after its turn
  * tells it to retry with a note, so a note retry of it is accepted (ADR-0029).
  */

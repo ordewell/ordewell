@@ -1940,6 +1940,112 @@ function checkpointAnswer(output) {
 }
 
 /**
+ * What woke the supervisor, from the bullet of a wake-up's digest that names
+ * it (core's attentionLine, services/Supervisor.ts; the lines a run update
+ * holds before its "Since the last update:" passes). The first pattern that
+ * fits wins, so the specific lines come before a bare "failed". Unknown text
+ * is 'other', never dropped.
+ */
+const TRIGGERS = [
+  ['run_held', /^- the run is idle: nothing is running/],
+  ['run_finished', /^- the run finished/],
+  ['failure_standing', /^- Task \S+ .* is still .* after your turn/],
+  ['task_report', /, whose result you asked for, has ended\./],
+  ['waiting_input', / is waiting for input/],
+  ['waiting_approval', / is waiting for approval/],
+  ['approval_denied', /asked for something nobody here may allow/],
+  ['task_idle', / has gone quiet/],
+  ['running_long', / (has run long|runner compacted its context)|context reached its threshold/],
+  ['landing_conflict', / but its work conflicts and could not land/],
+  ['landing_failed', / passed, but git refused to land/],
+  ['auto_merge_stopped', /^- automatic Merge all /],
+  ['start_refused', /^- work could not start/],
+  ['usage_limit', /usage limit paused/],
+  ['task_failed', /^- task \S+ ".*?" failed\b/],
+];
+
+/** A task's ref in a digest bullet ("task #2", "Task #1.1"), or null. */
+const refIn = (line) => /\b[Tt]ask (#\d+(?:\.\d+)*)/.exec(line)?.[1] ?? null;
+
+/**
+ * The triggers one wake-up's digest names: a bullet each, with the task it is
+ * about. `closing` marks the wake core raises for a failure the supervisor's
+ * own closing turn left standing at the run's end.
+ */
+export function wakeTriggers(digest) {
+  const asks = String(digest ?? '').split('\nSince the last update:\n')[0];
+  const lines = asks.split('\n').filter((l) => l.startsWith('- '));
+  return lines.map((line) => {
+    const kind = TRIGGERS.find(([, re]) => re.test(line))?.[0] ?? 'other';
+    const ended = kind === 'failure_standing' && /The run has ended, and an edit starts nothing/.test(line);
+    return { kind, task: kind === 'run_held' || kind === 'run_finished' ? null : refIn(line), ...(ended ? { closing: true } : {}) };
+  });
+}
+
+/** The plan-edit ops a supervisor's "Tasks updated:" entry lists, a line each. */
+const PLAN_OP = /^- (Updated|Added|Removed|Reordered|Merged|Split|Re-armed)\b[^"]*(?:"([^"]*)")?/;
+
+/**
+ * Everything the supervisor did and was woken for, from the session's
+ * conversation history. An act is one of:
+ *  - a call at the command seam it made (kind of the command: retry_task,
+ *    skip_task, stop_task, stop_run, message_task, answer_checkpoint,
+ *    answer_approval, merge_all, ...), refused or declined ones included,
+ *    with their `outcome`;
+ *  - `plan_edit`, one per op of an edit_plan it landed (the history keeps
+ *    those as a 'supervisor' entry that starts "Tasks updated:", not as a
+ *    call), its `op` and the task by title;
+ *  - `message`, what it said to the user in prose.
+ * Each carries its time and the task it names (`#n`, or null) and the task's
+ * title. `wakes` groups the wake-up digests of one turn (they share a
+ * timestamp) with what triggered it; `wakeUps` counts the digests. Null
+ * where the session holds no history.
+ */
+export function supervisorRecord(plan) {
+  const history = Array.isArray(plan?.conversationHistory) ? plan.conversationHistory : null;
+  if (!history) return { wakeUps: null, wakes: null, wakesBy: null, actions: null, actionsBy: null };
+  const tasks = allTasks(plan);
+  const refOfTitle = (title) => {
+    const hits = tasks.filter((t) => t.title === title);
+    return hits.length === 1 && hits[0].order !== undefined && hits[0].order !== null ? `#${hits[0].order}` : null;
+  };
+  const wakes = [];
+  const actions = [];
+  for (const m of history) {
+    if (m.kind === 'wake_up') {
+      const at = m.timestamp ?? null;
+      let wake = wakes.find((w) => w.at === at);
+      if (!wake) wakes.push(wake = { at, updates: 0, triggers: [] });
+      wake.updates++;
+      wake.triggers.push(...wakeTriggers(m.content));
+    } else if (m.kind === 'execution' && m.execution?.actor === 'supervisor') {
+      const x = m.execution;
+      actions.push({
+        kind: x.command, command: x.command, task: x.task?.ref ?? null, title: x.task?.title ?? null, outcome: x.outcome, at: x.at,
+        ...(x.detail ? { detail: String(x.detail).slice(0, 300) } : {}),
+      });
+    } else if (m.kind === 'supervisor' && String(m.content).startsWith('Tasks updated:')) {
+      const ops = String(m.content).split('\n').filter((l) => l.startsWith('- '));
+      for (const line of ops) {
+        const hit = PLAN_OP.exec(line);
+        const title = hit?.[2] ?? null;
+        actions.push({ kind: 'plan_edit', op: hit ? hit[1].toLowerCase() : 'other', task: title ? refOfTitle(title) : null, title, outcome: 'done', at: m.timestamp ?? null });
+      }
+    } else if (m.kind === 'supervisor') {
+      actions.push({ kind: 'message', task: null, title: null, outcome: 'done', at: m.timestamp ?? null });
+    }
+  }
+  const by = (items, key) => items.reduce((acc, i) => { acc[key(i)] = (acc[key(i)] ?? 0) + 1; return acc; }, {});
+  return {
+    wakeUps: wakes.reduce((n, w) => n + w.updates, 0),
+    wakes,
+    wakesBy: by(wakes.flatMap((w) => w.triggers), (t) => t.kind),
+    actions,
+    actionsBy: by(actions, (a) => a.kind),
+  };
+}
+
+/**
  * What explains a run's result, read from its session: the plan as core saved
  * it and, when the session's task logs were copied out, each attempt's log
  * (readTaskLogs). A figure the session does not hold is null, never guessed.
@@ -1992,16 +2098,10 @@ export function runMetrics(plan, taskLogs) {
     };
   });
 
-  const history = Array.isArray(plan.conversationHistory) ? plan.conversationHistory : null;
-  const supervisor = {
-    wakeUps: history ? history.filter((m) => m.kind === 'wake_up').length : null,
-    actions: history ? history.filter((m) => m.kind === 'execution' && m.execution?.actor === 'supervisor')
-      .map(({ execution: x }) => ({ command: x.command, task: x.task?.ref ?? null, outcome: x.outcome, at: x.at })) : null,
-  };
   return {
     tasks: counts,
     checkpoints,
-    supervisor,
+    supervisor: supervisorRecord(plan),
     perTask,
     plan: planShape(plan),
     meanConcurrentAttempts: meanConcurrency(tasks.flatMap((t) => t.attemptUsage ?? [])),

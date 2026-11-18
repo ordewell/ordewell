@@ -232,8 +232,14 @@ paid run, and again after any change to `drive.mjs`, `lib.mjs` or `batch.mjs`:
 ```bash
 npm run build
 node bench/commit0/drive.mjs --sweep
-node bench/commit0/rehearse.mjs --libs <libraries.json> [--only tlslite-ng] [--scenario a-done,b-cap]
+node bench/commit0/rehearse.mjs --libs <libraries.json> [--only tlslite-ng] [--scenario a-done,b-cap] [--ordewell-root <dir>]
 ```
+
+`--ordewell-root` is `batch.mjs`'s: the driver refuses a tree with tracked changes
+(this one, while you edit the bench), so name a clean checkout of the commit,
+built, to pack into the box. A rehearsal's leftover check counts only the boxes
+and networks that carry its own seed, so another driver running on the host
+is never mistaken for its stray.
 
 Each scenario goes through `batch.mjs` and `drive.mjs` as a paid run does: both
 arms really run, through the same code, on the library's image. Only the model
@@ -260,8 +266,9 @@ or network of the bench is left behind:
 | `a-done` | A | the task makes the edits and reports done | valid; `ordewell run` returned by itself with exit 0; not truncated; 1 task completed; more passed than the baseline; the test edit excluded |
 | `a-failed` | A | one shell command runs past the settle window, then the edits, then the task reports failed | not stopped while the command ran; settled with 1 task open; scored from the task's unlanded worktree; more passed than the baseline; the test edit excluded |
 | `a-stall` | A | the task makes the edits, then asks a checkpoint that nobody answers | ended by the stall rule (`stalled: waiting on checkpoint`), not by a cap; never complete; the attempt cut short; scored from the task's unlanded worktree; more passed than the baseline |
-| `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint` |
-| `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it | ended by the settle rule with both tasks held open, which the stall record names, since nobody is waited on; never complete; scored from merged work, at the baseline, since nothing landed |
+| `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint`; `metrics.supervisor` counts exactly those two acts and no wake for a failure the closing turn left |
+| `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it, at the closing turn and again at the second wake core raises for the failure left standing | ended by the settle rule with both tasks held open, which the stall record names, since nobody is waited on; never complete; scored from merged work, at the baseline, since nothing landed; the supervisor said it left the task; `metrics.supervisor` holds no act but words, and exactly one wake for the failure the closing turn left (never a third) |
+| `b-edit-retry` | B | task 1 fails; the supervisor's closing turn edits it (a reply with task ops, as the built-in planner has no `edit_plan` tool) and retries nothing; the second wake, for the failure left standing, retries it; the run goes on to its end | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; `metrics.supervisor` counts `plan_edit` then `retry_task`, the retry after the closing wake, and one wake for the failure left standing |
 | `b-plan` | B, `--plan-only` | the planner returns a six-task plan with a research task, three changes, an ops task and a script that checks a loop; nothing else is scripted | marked `planOnly` and never valid; the shape the plan has (6 tasks, chain of 4, widest level 2, 6 edges, one gate, one loop check); a priced planner and a planning time; no `run` or `merge` step, no score, no tests; `plan.json` and `plan-saved.json` in the run's directory and no `arm-workdir/`; the fake heard no runner and no supervisor; `plans.jsonl` did not grow |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
 
@@ -274,6 +281,29 @@ Only a paid run can show what a real model does with the goal: how long its
 attempts take, its usage and how OpenRouter bills it, the key's usage and the
 batch budget's stop, provider routing, and whether a stream stalls or a call is
 refused.
+
+### What a run records of the supervisor
+
+`metrics.supervisor` in `result.json` is read from the session's conversation
+history (`supervisorRecord` in `lib.mjs`):
+
+- `actions`: every act the supervisor made, each with `kind`, the `task` it
+  names (`#n`, or null) and its `title`, its `outcome` (`done`, `refused` or
+  `declined`) and `at`. A `kind` is a call at the command seam (`retry_task`,
+  `skip_task`, `stop_task`, `stop_run`, `message_task`, `answer_checkpoint`,
+  `answer_approval`, `merge_all`, and the rest), `plan_edit` (one per op of an
+  edit it landed, with its `op`: the history keeps an edit as a "Tasks
+  updated" entry, not as a call) or `message` (what it said to the user in
+  prose, which every wake-up turn ends with). `actionsBy` counts them by kind.
+- `wakes`: one entry per wake-up turn (digests delivered together share a
+  timestamp), with `at`, `updates` (its digests) and `triggers`, each the
+  `kind` of a line the digest names (`task_failed`, `run_finished`,
+  `failure_standing`, `waiting_input`, ...; `other` for text the harness does
+  not know) and its `task`. A `failure_standing` carries `closing: true` when
+  it is the wake core raises for a failure the supervisor's closing turn left.
+  `wakesBy` counts the triggers by kind; `wakeUps` counts every digest.
+
+A session with no history leaves all of them null, never zero.
 
 ### Plan-only
 

@@ -60,8 +60,8 @@ async function daemon(level: SupervisorLevel, script: Event[]) {
 /** What a test does while `ordewell run` follows: the daemon's hands, and what the follower wrote so far. */
 type During = (hands: Awaited<ReturnType<typeof daemon>> & { out: () => string; returned: () => boolean }) => Promise<void>;
 
-/** Runs `ordewell run` to its return: what it wrote, and what the daemon had sent by then. */
-async function run(level: SupervisorLevel, script: Event[], during?: During) {
+/** Runs `ordewell run`, with `args`, to its return: what it wrote, and what the daemon had sent by then. */
+async function run(level: SupervisorLevel, script: Event[], during?: During, args: string[] = []) {
   const hands = await daemon(level, script);
   const { api, sent, close } = hands;
   const written: string[] = [];
@@ -70,7 +70,7 @@ async function run(level: SupervisorLevel, script: Event[], during?: During) {
   const error = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { written.push(`${args.join(' ')}\n`); });
   try {
     let returned = false;
-    const following = handleRun(['--session-id', 's1'], api).finally(() => { returned = true; });
+    const following = handleRun(['--session-id', 's1', ...args], api).finally(() => { returned = true; });
     await during?.({ ...hands, out: () => written.join(''), returned: () => returned });
     await following;
     return { out: written.join(''), sentAtReturn: [...sent], exitCode: process.exitCode };
@@ -132,6 +132,55 @@ describe('ordewell run at Act', () => {
     ]);
 
     expect(out).toContain('· The supervisor edited the plan.\n');
+  });
+});
+
+/**
+ * A closing turn that leaves a failed task standing with work waiting on it
+ * owes one more supervisor turn for it (ADR-0057 R4), and the daemon concludes
+ * the run only once that turn is over.
+ */
+describe('ordewell run at Act, after a closing turn that left a blocking failure standing', () => {
+  const closingTurn: Event[] = [
+    snapshot('act'),
+    complete(0, 1),
+    { type: 'planner_turn_started', turnId: 'w1', supervisor: true },
+    { type: 'planner_message', content: 'Rewrote task #1.', timestamp: AT, turnId: 'w1', supervisor: true },
+    { type: 'planner_turn_ended', turnId: 'w1', outcome: 'task_ops' } as Event,
+    { type: 'planner_turn_started', turnId: 'w2', supervisor: true },
+  ];
+
+  it.each([[[]], [['--unattended']]])('follows the turn it owes and returns after it with the failed status (args %j)', async (args) => {
+    const { out, sentAtReturn, exitCode } = await run('act', [
+      ...closingTurn,
+      { type: 'planner_message', content: 'Task #1 needs you.', timestamp: AT, turnId: 'w2', supervisor: true },
+      { type: 'planner_turn_ended', turnId: 'w2', outcome: 'message' } as Event,
+      concluded(0, 1),
+    ], undefined, args);
+
+    expect(sentAtReturn.at(-1)).toBe('run_concluded');
+    expect(out).toContain('· Supervisor: Rewrote task #1.\n');
+    expect(out).toContain('· Supervisor: Task #1 needs you.\n');
+    expect(out).not.toContain(OVERDUE);
+    expect(exitCode).toBe(RUN_FAILED_EXIT);
+  });
+
+  it('follows the run that turn continued with a retry to its next end, with status 0', async () => {
+    const { out, sentAtReturn, exitCode } = await run('act', [
+      ...closingTurn,
+      retried,
+      { type: 'planner_turn_ended', turnId: 'w2', outcome: 'task_ops' } as Event,
+      { type: 'task_started', taskId: t1.id, order: 1, title: t1.title, runner: 'claude-code' } as Event,
+      complete(2, 0),
+      { type: 'planner_turn_started', turnId: 'w3', supervisor: true },
+      { type: 'planner_turn_ended', turnId: 'w3', outcome: 'message' } as Event,
+      concluded(2, 0),
+    ]);
+
+    expect(sentAtReturn.at(-1)).toBe('run_concluded');
+    expect(out).toContain('· Retried task #1 "Fix the import": by supervisor.\n');
+    expect(out.match(/\nDone\./g)).toHaveLength(2);
+    expect(exitCode ?? 0).toBe(0);
   });
 });
 
@@ -319,6 +368,26 @@ describe('ordewell run when the closing turn never concludes', () => {
       await heard(out, WAITING);
       await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS - 1_000);
       push({ type: 'planner_turn_ended', turnId: 'u1', outcome: 'message' });
+      for (let i = 0; i < 20; i++) await realTurn();
+
+      await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS - 1);
+      for (let i = 0; i < 20; i++) await realTurn();
+      expect(returned()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(out.split(OVERDUE)).toHaveLength(2);
+    expect(exitCode).toBe(RUN_FAILED_EXIT);
+  });
+
+  it('gives the turn a closing turn owes for a failure it left standing a bound of its own, and returns past it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { out, exitCode } = await run('act', [snapshot('act'), complete(0, 1), { type: 'planner_turn_started', turnId: 'w1', supervisor: true }], async ({ out, push, returned }) => {
+      await heard(out, WAITING);
+      push({ type: 'planner_turn_ended', turnId: 'w1', outcome: 'task_ops' } as Event);
+      for (let i = 0; i < 20; i++) await realTurn();
+      await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS - 1_000);
+      push({ type: 'planner_turn_started', turnId: 'w2', supervisor: true });
       for (let i = 0; i < 20; i++) await realTurn();
 
       await vi.advanceTimersByTimeAsync(CLOSING_TURN_BOUND_MS - 1);

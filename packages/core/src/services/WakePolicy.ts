@@ -51,6 +51,8 @@ export type RunEvent = {
   report?: TaskReportEvent;
   /** `running_long` only: how long the attempt has run against what, and its context (ADR-0018 W1). */
   runningLong?: RunningLongEvent;
+  /** `failure_standing` only: owed by the turn on the run's end, so that end stands only once this one's turn is over (ADR-0029). */
+  closing?: true;
 };
 
 /** What a digest says between a task and its report, which a surface finds the report by to draw it apart from the update's other lines. */

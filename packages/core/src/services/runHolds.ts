@@ -92,16 +92,18 @@ export function standingWords(block: StandingBlock['block']): string {
 /**
  * The supervisor's line for a task its wake-up turn left failed or held with
  * work waiting on it (ADR-0057 R4): what still stands, what waits, and the
- * calls that release it.
+ * calls that release it. `ended`: the turn was on the run's end, so nothing
+ * runs until the supervisor releases the task.
  */
-export function standingDetail({ taskId, block, holdsBack }: StandingBlock, describe: (taskId: string) => string): string {
+export function standingDetail({ taskId, block, holdsBack }: StandingBlock, describe: (taskId: string) => string, ended = false): string {
   const waiting = `${holdsBack} ${holdsBack === 1 ? 'task waits' : 'tasks wait'} on it`;
   const release = block.kind === 'waiting' && block.reason === 'checkpoint'
     ? 'answer it with answer_checkpoint'
     : block.kind === 'waiting'
       ? 'message_task its runner with what to do next, or call retry_task from "fresh" with a message, your note on what to do differently'
       : 'call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply';
-  return `Task ${describe(taskId)} is still ${standingWords(block)} after your turn, and ${waiting}. Release it: ${release}; or skip_task it with your reason; or tell the user.`;
+  const over = ended ? ' The run has ended, and an edit starts nothing: nothing runs until you release it.' : '';
+  return `Task ${describe(taskId)} is still ${standingWords(block)} after your turn, and ${waiting}.${over} Release it: ${release}; or skip_task it with your reason; or tell the user.`;
 }
 
 /** One key per distinct set of holds: the same tasks, held the same way. */

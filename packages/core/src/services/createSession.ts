@@ -2144,6 +2144,8 @@ export class Session {
    * there was neither.
    */
   abortPlannerTurn(): boolean {
+    // Before any turn it stops ends: its end must find the closing turn answered.
+    this.supervision.plannerStopping();
     // The queue first, while the stopped turn still holds the conversation: its release must find nothing of the user's to open.
     const queued = this.turns.stopQueued();
     const inFlight = this.conversation.stopTurn();
