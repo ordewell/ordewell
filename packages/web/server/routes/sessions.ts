@@ -2,8 +2,8 @@ import { Hono } from 'hono';
 import { OrchestratorPool, getSessionList, removeSession } from '../pool/orchestratorPool';
 import {
   listTaskLogAttempts,
-  loadSession,
   migratePlanState,
+  readSession,
   readTaskLog,
   surfacePlan,
   surfacePlanState,
@@ -69,7 +69,8 @@ export function sessionsRoute(pool: OrchestratorPool) {
       // A held session is answered from memory: its file is parsed whole (megabytes, for a long one) only for this read's meta and a plan this read then discards.
       const livePlan = live ? pool.getPlan(id) : null;
       const livePlanState = live ? pool.getPlanState(id) : null;
-      const saved = livePlan && livePlanState ? null : loadSession(id, ws);
+      // Read as saved, adopting nothing: naming a pre-upgrade run reads every session file, and only adopting asks whose it is (ADR-0013).
+      const saved = livePlan && livePlanState ? null : readSession(id, ws);
       if (!saved && !(livePlan && livePlanState)) return refuse(c, 404, 'Session not found', 'session_not_found');
       const run = live ? pool.runSnapshot(id) : null;
       const plannerTurnId = live ? pool.plannerTurnId(id) : undefined;

@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { loadSession, migratePlanState as migratePlanStateOf, type LegacyPlanState } from '@ordewell/core';
+import { readSession, migratePlanState as migratePlanStateOf, type LegacyPlanState } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 vi.mock('@ordewell/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ordewell/core')>()),
-  loadSession: vi.fn(),
+  readSession: vi.fn(),
 }));
 
-const readSaved = vi.mocked(loadSession);
+const readSaved = vi.mocked(readSession);
 
 // What a save writes for this plan: the file's meta is computed from the plan, so a live read can say the same.
 const plan = {

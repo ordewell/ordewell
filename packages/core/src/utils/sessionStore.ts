@@ -317,11 +317,16 @@ export function ownerOfSavedRun(plan: unknown, savedBy: string | undefined, base
   return ownerOnLoad(plan, savedBy, getSessionsDir(baseDir));
 }
 
-function ownerOnLoad(plan: unknown, savedBy: string | undefined, sessionsDir: string): string | undefined {
+/**
+ * `ownFile` is the file the plan was just read from, skipped unread. Only that
+ * file: one merely named like `savedBy`'s may be another session's whose id
+ * shares its first characters, so the rest are told apart by the id they hold.
+ */
+function ownerOnLoad(plan: unknown, savedBy: string | undefined, sessionsDir: string, ownFile?: string): string | undefined {
   const run = runOf(plan);
   if (!savedBy || !run || run.session !== undefined || typeof run.id !== 'string') return savedBy;
   if (!fs.existsSync(sessionsDir)) return savedBy;
-  for (const file of fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.json'))) {
+  for (const file of fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.json') && f !== ownFile)) {
     let other: { meta?: { id?: unknown }; plan?: unknown };
     try {
       other = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf-8')) as typeof other;
@@ -389,7 +394,7 @@ function loaded(sessionId: string, baseDir: string | undefined, logger: ILogger,
         logger.warn('sessionStore', `session file ${found.file}: ${REJECTION_MESSAGE}`);
         return null;
       }
-      const savedBy = naming ? ownerOnLoad(found.session.plan, sessionId, sessionsDir) : undefined;
+      const savedBy = naming ? ownerOnLoad(found.session.plan, sessionId, sessionsDir, found.file) : undefined;
       return settledOnLoad(found.session, researchLogPath(sessionId, baseDir), logger, savedBy);
     }
   } catch (err: unknown) {

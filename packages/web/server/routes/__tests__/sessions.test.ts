@@ -3,17 +3,17 @@ import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { createWorktreeIsolation, listChildSessions, listSessions, loadSession, openTaskLog, saveChildSession, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
+import { createWorktreeIsolation, listChildSessions, listSessions, readSession, openTaskLog, saveChildSession, saveSession, SessionHeldError, SessionNotFoundError } from '@ordewell/core';
 import { sessionsRoute } from '../sessions';
 import type { OrchestratorPool } from '../../pool/orchestratorPool';
 
 vi.mock('@ordewell/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ordewell/core')>()),
-  loadSession: vi.fn(),
+  readSession: vi.fn(),
   createWorktreeIsolation: vi.fn((await importOriginal<typeof import('@ordewell/core')>()).createWorktreeIsolation),
 }));
 
-const readSaved = vi.mocked(loadSession);
+const readSaved = vi.mocked(readSession);
 
 function fakePool(overrides: Partial<OrchestratorPool> = {}): OrchestratorPool {
   return {

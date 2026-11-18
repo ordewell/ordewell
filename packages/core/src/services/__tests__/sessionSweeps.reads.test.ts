@@ -99,4 +99,15 @@ describe('read-only sweeps over pre-upgrade sessions', () => {
 
     expect(mostReads()).toBeLessThanOrEqual(READS_PER_FILE);
   });
+
+  // Behind session-scope git reads, task diffs and the desktop Changes view: one session's record, read and never adopted.
+  it('reads no other session\'s file for one session\'s saved run', async () => {
+    const own = sessionFiles().find((f) => f.endsWith('_0000abcd.json'))!;
+
+    await expect(createWorkspaceReader({ config: { workspaceRepos: [] } }).taskDiff(workspace, 'session-0000abcdef', 'no-such-task', {}))
+      .rejects.toThrow('No task "no-such-task"');
+
+    expect(reads.byFile.get(own)).toBe(1);
+    expect(sessionFiles().filter((f) => f !== own && reads.byFile.has(f))).toEqual([]);
+  });
 });
