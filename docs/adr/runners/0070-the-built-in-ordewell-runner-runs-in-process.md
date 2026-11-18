@@ -135,6 +135,16 @@ is one runner per API provider, under the provider's own id and name.**
   completed turn the session would nudge and then wait on. A model that spent
   its whole output thinking otherwise ended its turn as if finished, was nudged,
   was cut off again, and its task waited for input with its dependents behind it.
+- **A tool call written as text is not a finished reply either.** A reply with
+  no tool call whose text, code spans and fences aside, opens a line with a
+  `<tool_call>` block whose JSON body names a tool offered in that request does
+  not end the turn: the text is never run, and the turn goes on with a note
+  that the call was written as text and must be made through the tool-calling
+  interface. Prose that only mentions or quotes the syntax, or names a tool the
+  request did not offer, is a finished reply. Three in a row (the cut-off
+  bound) fail the attempt through the runner's own `task_complete`, naming the
+  cause. The model fell back to this when its tool channel stopped answering,
+  and its task waited for input until the supervisor restarted it.
 - **One neutral tool set**: `read`, `edit`, `write`, `shell`, `grep`, `glob`,
   then the task tools as native tools, `task_complete` and `read_task` (the
   token's `read`, renamed because `read` reads files here). The list is fixed
@@ -426,3 +436,5 @@ comes from that call.
 - 2026-11-18 — through OpenRouter, a conversation's later calls ask first for
   the upstream that served the one before, fallbacks on, and each usage report
   names the upstream and the generation id.
+- 2026-11-18 — a reply that writes a tool call out as text continues the turn with a
+  correction, and three in a row fail the attempt.
