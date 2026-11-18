@@ -303,7 +303,13 @@ everything below applies per repo of the group.
   host holding the session's lease adopts it, continues its run or changes it
   in any way ([ADR-0049](0049-a-session-has-one-live-host.md)): a second host
   continuing the same run id names the same worktrees, and its prune and
-  `prepare` would remove a live host's.
+  `prepare` would remove a live host's. The lease is keyed by session id, so
+  the run names the session that minted it (`IsolationRun.session`), and a
+  session adopts only a run of its own: a copy of another session's plan opened
+  under a new id (a saved file a script loads, a second checkout on the same
+  state root) prunes, continues and discards nothing of that run, drops the
+  record and starts clean, as a fork does. A record saved before runs named
+  their session is taken by the first session that adopts it.
 - **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
   written from the orchestrator at persist time like `tasks`, and saved on every
   change to it rather than at the end of the run — the record is what lets a
@@ -573,3 +579,4 @@ literal git command lines or private fields.
 - 2026-11-08 — every exit of a spawn lets go of its workspace once, as its end decided: a cancel and a Stop keep the worktree, a removal does not.
 - 2026-11-09 — the terminal's command is `/merge`, as the other surfaces say
   "Merge all"; `/handoff` stays a deprecated alias.
+- 2026-11-18 — a run names the session that minted it, and a copy of a plan under another session id adopts none of its run: one pruned a live session's read-only worktree.

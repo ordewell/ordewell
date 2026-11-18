@@ -84,8 +84,9 @@ const DECISION_CLOSED = 'The isolation decision changed or closed before this at
 
 /**
  * What adopting a persisted run found: nothing to change, landed work git
- * shows the user has merged since, or a settled run that had nothing left to
- * hand over and was cleared up.
+ * shows the user has merged since or a record another session made, which is
+ * not taken over, or a settled run that had nothing left to hand over and was
+ * cleared up.
  */
 export type AdoptOutcome = 'unchanged' | 'changed' | 'cleared';
 
@@ -177,6 +178,12 @@ export interface IsolationRunControllerDeps {
   liveTasks: () => ReadonlySet<string>;
   /** What a task depends on now, directly or not, read as it lands: the plan may let go of that later, and a revert may not (ADR-0054). */
   landedOn: (taskId: string) => readonly string[];
+  /**
+   * The session this controller's runs belong to, as it saves under it
+   * (ADR-0049): the one each run it mints names. Absent or empty, a run names
+   * no session and every record is adopted as this one's.
+   */
+  sessionId?: () => string;
 }
 
 type SharedRootReason = Exclude<IsolationInactiveReason, 'dirty'>;
@@ -189,6 +196,8 @@ type RunDecision =
 const SHARED_ROOT_TAIL = 'tasks run in the workspace root without worktree isolation.';
 
 const NO_SEAT = 'A delegated task needs an isolated run, with a worktree of its own: this one has none, and a child plan never runs in the user\'s checkout.';
+
+const FOREIGN_RUN = 'This plan was copied from another session, whose worktrees and branches stay as they are for it: this session leaves them alone and starts a run of its own.';
 
 const PLAN_REPLACED_REVERT = 'Another plan was loaded while this revert was under way, so nothing was reverted.';
 
@@ -272,6 +281,7 @@ export class IsolationRunController {
   private readonly listener: IsolationRunListener;
   private readonly liveTasks: () => ReadonlySet<string>;
   private readonly landedOn: IsolationRunControllerDeps['landedOn'];
+  private readonly sessionId: () => string;
 
   private run: IsolationRun | null = null;
   /** See {@link mergedRun}. */
@@ -323,6 +333,7 @@ export class IsolationRunController {
     this.listener = deps.listener;
     this.liveTasks = deps.liveTasks;
     this.landedOn = deps.landedOn;
+    this.sessionId = deps.sessionId ?? (() => '');
   }
 
   /** What a child works through: this run's own, so a tree takes one admin lock (ADR-0055 D11). */
@@ -505,7 +516,9 @@ export class IsolationRunController {
    * asked which landed work the user has merged since the record was saved:
    * a settled run whose landed work is all in HEAD has nothing left to hand
    * over, so it is cleared up as Merge all would have, unless it still holds
-   * work that never landed (ADR-0013).
+   * work that never landed (ADR-0013). A run another session made is not
+   * taken over at all: it resolves `changed` with no run, for the caller to
+   * save the plan without that session's record.
    *
    * Deliberately not reported to the listener: adopting is not a change of the
    * session's own, and a host that adopts without persisting (VS Code's
@@ -517,11 +530,21 @@ export class IsolationRunController {
    */
   async adopt(state: PlanIsolation | null, mergedRun?: string): Promise<AdoptOutcome> {
     const adoption = ++this.adoptions;
-    this.run = state?.run ?? null;
-    this.resolvers = { ...(state?.resolvers ?? {}) };
+    const own = this.sessionId();
+    // A copy of another session's plan (a saved file loaded under a new id, a
+    // second checkout on the same state root) carries that session's run. Its
+    // worktrees are that session's, which may be running in them now: the lease
+    // that guards them is keyed by its id, not this one (ADR-0049), so nothing
+    // here may prune them. This session starts clean, as a fork does.
+    const foreign = !!state && !!own && state.run.session !== undefined && state.run.session !== own;
+    if (foreign) this.tell('info', FOREIGN_RUN);
+    this.run = foreign ? null : state?.run ?? null;
+    this.resolvers = foreign ? {} : { ...(state?.resolvers ?? {}) };
     this.merged = this.run ? null : mergedRun ?? null;
     const run = this.run;
-    if (!run) return 'unchanged';
+    if (!run) return foreign ? 'changed' : 'unchanged';
+    // A record saved before runs named their session is taken by its first adopter.
+    if (own && run.session === undefined) run.session = own;
     try {
       const pruned = await this.isolation.pruneOrphans(run);
       // Never silently: work kept back from the sweep has to be named, or the
@@ -1274,6 +1297,8 @@ export class IsolationRunController {
     if (this.run === previous) this.run = null;
     if (interrupted()) return false;
     const run = await this.isolation.startRun(root, this.stateRoot);
+    const own = this.sessionId();
+    if (own) run.session = own;
     if (interrupted()) {
       await this.isolation.discard(run, { integration: 'delete' }).catch(() => null);
       return false;
