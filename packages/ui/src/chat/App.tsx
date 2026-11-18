@@ -27,7 +27,7 @@ import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
 import { accountLimitsOf, compactionText, describeRunnerSignIn, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
-import { planSummaryLabel, nextDock } from './planDock';
+import { planSummaryLabel, nextDock, withRunStatus } from './planDock';
 import { OpenPatchContext } from './openPatch';
 import { useFollowOutput } from './followOutput';
 import { INBOX_OFF_NOTE, useInboxPrefs } from './inboxView';
@@ -928,14 +928,16 @@ export default function App({ layout = 'chat', selection, goal }: {
     return m;
   }, [runnerList]);
 
+  const liveTasks = useMemo(() => (plan ? withRunStatus(plan.tasks, run.tasks) : []), [plan, run.tasks]);
+
   const runningCount = useMemo(() =>
-    plan?.tasks.filter((t) => t.status === 'in_progress').length ?? 0,
-    [plan],
+    liveTasks.filter((t) => t.status === 'in_progress').length,
+    [liveTasks],
   );
 
   const doneCount = useMemo(() =>
-    plan?.tasks.filter((t) => t.status === 'completed').length ?? 0,
-    [plan],
+    liveTasks.filter((t) => t.status === 'completed').length,
+    [liveTasks],
   );
 
   /** The one usage block, drawn pinned below the conversation rather than scrolling in it. */
@@ -1084,7 +1086,7 @@ export default function App({ layout = 'chat', selection, goal }: {
             </svg>
           </span>
           <span className="plan-dock-title">Plan</span>
-          <span className="plan-dock-summary">{planSummaryLabel(plan.tasks)}</span>
+          <span className="plan-dock-summary">{planSummaryLabel(liveTasks)}</span>
           {runSettingsSummary(host.runSettings?.run, plan.runSettings, isExecuting, delegationOffered)}
           {/* A collapse is always honoured, including mid-run — so the bar has to
               say when a task is blocked on the user, or the approval would sit

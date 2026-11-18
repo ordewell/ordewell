@@ -645,9 +645,12 @@ function applySessionCue(cue: SessionCue, deps: PlanManagerDeps): void {
       return;
     case 'plan':
       adoptSessionPlan(deps);
-      chatProvider.showPlan(deps.getCurrentPlan(), cue.dock === 'run'
-        ? session.isExecuting ? 'running' : session.status === 'completed' ? 'completed' : 'draft'
-        : cue.dock);
+      if (cue.dock === 'run') {
+        // A status tick: the run view carries each task's status, so the plan goes again only if the dock's moved.
+        chatProvider.showPlanStatus(deps.getCurrentPlan(), session.isExecuting ? 'running' : session.status === 'completed' ? 'completed' : 'draft');
+      } else {
+        chatProvider.showPlan(deps.getCurrentPlan(), cue.dock);
+      }
       return;
     case 'settled':
       adoptSessionPlan(deps);

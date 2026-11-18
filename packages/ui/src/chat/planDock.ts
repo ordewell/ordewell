@@ -1,4 +1,4 @@
-import type { SurfaceTask } from '@ordewell/core';
+import type { RunTask, SurfaceTask } from '@ordewell/core';
 
 /**
  * The plan dock: the plan is a live, editable artifact, not a chat message, so
@@ -62,6 +62,20 @@ export function nextDock(expanded: boolean, event: DockEvent): boolean {
     case 'plan-progressed':
       return expanded;
   }
+}
+
+/**
+ * The plan's tasks with the status the run view holds for each. A host sends
+ * the whole plan when the plan changed, not on a status tick, so the plan's own
+ * copy of a status is as old as that message and the run view is the live one.
+ */
+export function withRunStatus(tasks: SurfaceTask[], run: readonly RunTask[]): SurfaceTask[] {
+  if (run.length === 0) return tasks;
+  const byId = new Map(run.map((t) => [t.id, t.status]));
+  return tasks.map((t) => {
+    const status = byId.get(t.id);
+    return status === undefined || status === t.status ? t : { ...t, status };
+  });
 }
 
 /**

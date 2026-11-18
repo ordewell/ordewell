@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type RunActivity, type RunView } from '@ordewell/core';
+import { DELEGATION_OFFERED, type AccountLimitSnapshot, type GlobalRunSettings, type IsolationPreview, surfacePlan, type AiProvider, type LegacyPlanState, type DiscoveredModel, type PlanStatus, type RunnerId, type SurfacePlan, type RunActivity, type RunView } from '@ordewell/core';
 import { SessionView, type SavedConversation } from '@ordewell/ui/host';
 import { renderWebviewHtml } from './webviewHtml';
 import type { ChatState, HostToWebview, ModelOption, PlannerBackend, RunnerMeta, RunnerModeMeta, WebviewToHost } from '@ordewell/ui/protocol';
@@ -31,6 +31,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * decided whether the user had approved it (ADR-0029).
    */
   private readonly dockStatus = new WeakMap<LegacyPlanState, PlanStatus>();
+  /**
+   * The plan this webview was last sent whole, and the status it was sent
+   * with, so a status tick can be told without building and posting the whole
+   * plan again. Dropped with the webview and with the chat it drew.
+   */
+  private shown?: { plan: LegacyPlanState; surface: SurfacePlan; status: PlanStatus };
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -54,6 +60,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     for (const d of this._viewDisposables) d.dispose();
     this._viewDisposables = [];
     this._view = undefined;
+    this.shown = undefined;
   }
 
   postMessage(msg: HostToWebview): void { this._view?.webview.postMessage(msg); }
@@ -75,7 +82,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   showPlan(plan: LegacyPlanState, status?: PlanStatus): void {
     if (status) this.dockStatus.set(plan, status);
-    this.postMessage({ type: 'planUpdated', plan: { ...surfacePlan(plan), status: this.dockStatus.get(plan) ?? plan.status } });
+    const surface = surfacePlan(plan);
+    const shown = this.dockStatus.get(plan) ?? plan.status;
+    this.shown = { plan, surface, status: shown };
+    this.postMessage({ type: 'planUpdated', plan: { ...surface, status: shown } });
+  }
+  /**
+   * A status tick: every task's status is on the run view, which the webview
+   * already folds, so the plan goes again only when what the dock shows of the
+   * plan itself moved (a run started or ended), or when the webview was never
+   * sent this plan. The plan is megabytes in a long session.
+   */
+  showPlanStatus(plan: LegacyPlanState, status: PlanStatus): void {
+    const sent = this.shown;
+    if (!sent || sent.plan !== plan) { this.showPlan(plan, status); return; }
+    this.dockStatus.set(plan, status);
+    if (sent.status === status) return;
+    sent.status = status;
+    this.postMessage({ type: 'planUpdated', plan: { ...sent.surface, status } });
   }
   /** What a webview that joined mid-run is owed: the run as folding every message would show it. */
   adoptRun(view: RunView): void { this.run.adopt(view); }
@@ -102,6 +126,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * conversation is rebuilt from what the session saved.
    */
   restoreChat(saved: SavedConversation): void {
+    this.shown = undefined;
     this.postMessage({ type: 'restoreChat' });
     this.conversation.reload(saved);
   }
