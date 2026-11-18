@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { loadState, saveState } from '../stateStore';
+import { saveSession } from '../sessionStore';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 
 describe('loadState', () => {
@@ -62,6 +63,14 @@ describe('loadState', () => {
     expect(loadState(tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
 
     saveState({ ...plan(), isolation }, tmpDir);
+    expect(loadState(tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+  });
+
+  it('names no session on a pre-upgrade run another session\'s file holds too', () => {
+    const isolation = { run: { id: 'runaaaa1', workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} }, resolvers: {} };
+    saveSession({ ...plan(), isolation: structuredClone(isolation) }, 'the original', tmpDir, 'session-aaaa0001');
+    saveSession({ ...plan(), isolation: structuredClone(isolation) }, 'a reload copy', tmpDir, 'session-yyyy0003');
+    saveState({ ...plan(), isolation: structuredClone(isolation) }, tmpDir, 'session-yyyy0003');
     expect(loadState(tmpDir)!.plan.isolation?.run.session).toBeUndefined();
   });
 

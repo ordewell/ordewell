@@ -199,7 +199,7 @@ const NO_SEAT = 'A delegated task needs an isolated run, with a worktree of its 
 
 const FOREIGN_RUN = 'This plan was copied from another session, whose worktrees and branches stay as they are for it: this session leaves them alone and starts a run of its own.';
 
-const UNNAMED_RUN = 'This plan holds a worktree run saved before runs named their session, and it did not come from this session\'s own file, so Ordewell could not tell which session made it: its worktrees and branches stay as they are, and this session starts a run of its own.';
+const UNNAMED_RUN = 'This plan holds a worktree run saved before runs named their session, and it did not come from this session\'s own file alone (another session\'s file may hold the same run), so Ordewell could not tell which session made it: its worktrees and branches stay as they are, and this session starts a run of its own.';
 
 const PLAN_REPLACED_REVERT = 'Another plan was loaded while this revert was under way, so nothing was reverted.';
 
@@ -538,9 +538,10 @@ export class IsolationRunController {
     // worktrees are that session's, which may be running in them now: the lease
     // that guards them is keyed by its id, not this one (ADR-0049), so nothing
     // here may prune them. This session starts clean, as a fork does. A record
-    // saved before runs named theirs is named by the file it is read from
-    // (`migratePlanStateIsolation`); one that still names none came from no
-    // session's file, so nothing shows it is this one's, and it is left alone too.
+    // saved before runs named theirs is named by the file it is read from when
+    // no other session's file holds it (`ownerOfSavedRun`); one that still names
+    // none came from no session's file or from one of several, so nothing shows
+    // it is this one's, and it is left alone too.
     const foreign = !!state && !!own && state.run.session !== own;
     if (foreign) this.tell('info', state.run.session === undefined ? UNNAMED_RUN : FOREIGN_RUN);
     this.run = foreign ? null : state?.run ?? null;

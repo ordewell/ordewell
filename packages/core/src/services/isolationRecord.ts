@@ -202,10 +202,9 @@ export function migratePlanIsolation(state: PlanIsolation | Adr0013PlanIsolation
 
 /**
  * Bring a loaded plan's isolation record, if any, to today's shape in place.
- * `savedBy` is the session whose own file the plan was read from: a record
- * saved before runs named their session is that session's, since a session
- * writes only its own run into its file and a copy of the file keeps its id
- * (ADR-0013). Without it nothing shows whose the record is, and it stays unnamed.
+ * `savedBy` is the session a record saved before runs named their session is
+ * shown to be, as the loader judged it (`ownerOfSavedRun`, ADR-0013). Without
+ * it nothing shows whose the record is, and it stays unnamed.
  */
 export function migratePlanStateIsolation(plan: { isolation?: PlanIsolation | Adr0013PlanIsolation }, savedBy?: string): void {
   if (!plan.isolation?.run) return;
