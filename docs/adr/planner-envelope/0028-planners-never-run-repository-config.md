@@ -274,6 +274,25 @@ planner (above and below), and Ordewell reads them itself:
   the repository's `.clinerules/` rules, and Ordewell has no reader for them,
   so a planner's or a read-only task's Cline has Ordewell's instructions alone.
 
+### Pi planners
+
+- **Its repository files off.** Pi 1.5.2 loads `.pi/settings.json`,
+  `.pi/extensions/` and `.pi/mcp.json` from the directory it starts in once
+  the user trusts that folder, saved or with `--approve`, and RPC mode skips
+  them while no decision is saved. A planner's Pi, and a read-only task's,
+  starts with `--no-approve`, which ignores them even where trust is saved,
+  and `--no-extensions`, which keeps every extension but Ordewell's own from
+  loading. Checked live with an extension and an MCP server command planted
+  there, each writing a marker: both ran on a trusted start and on
+  `--approve`, and neither on `--no-approve`, saved trust included, as the
+  checks posted on #78 record.
+- **Instructions as text.** A planner's Pi also starts with
+  `--no-context-files`, and Ordewell reads the context file Pi would at each
+  level from the repository root down (`AGENTS.override.md`, `AGENTS.md`,
+  `CLAUDE.md`), as text in its prompt. A read-only task's Pi reads them
+  itself: they are instructions and run nothing. No `.pi/mcp.json` server is
+  offered for approval.
+
 ### What the repository's config can do, and how the planner launch stops it
 
 | runner | item | can | planner launch |
@@ -312,6 +331,9 @@ planner (above and below), and Ordewell reads them itself:
 | Cursor | `.cursor/rules/`, `AGENTS.md` | text | started in a private directory; not read |
 | Cline | `.cline/hooks/`, `.clinerules/hooks/` | run commands | started in a private directory |
 | Cline | `.clinerules/` rules | text | started in a private directory; not read |
+| Pi | `.pi/extensions/`, `.pi/settings.json` | run code at start | `--no-approve`, `--no-extensions` |
+| Pi | `.pi/mcp.json` | start a command, reach a URL | `--no-approve` |
+| Pi | context files (`AGENTS.md`, `CLAUDE.md`) | text | `--no-context-files`; injected by Ordewell |
 
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
@@ -525,3 +547,4 @@ specifies.
 - 2026-11-04 — a Gemini CLI planner or read-only task starts in a private directory, out of reach of the repository's `.gemini/settings.json` (ADR-0060).
 - 2026-11-04 — a Cursor planner or read-only task starts in a private directory with a config home of its own, out of reach of the repository's `.cursor/` (ADR-0060).
 - 2026-11-05 — a Cline planner starts in a private directory too, out of reach of the repository's hooks (ADR-0060).
+- 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell (#78).

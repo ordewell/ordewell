@@ -906,8 +906,9 @@ the directive to attach.
 
 **Executor / Runner** — a coding agent that runs *one task* in its own session
 through a structured connector: either an external CLI (Claude Code, Codex,
-OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor over
-ACP) or the **Built-in runner**, which runs inside Ordewell and has no command.
+OpenCode, Pi, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor
+over ACP) or the **Built-in runner**, which runs inside Ordewell and has no
+command.
 `RunnerRegistry` holds their built-in manifests: identity, command (none for the
 built-in runner), model discovery and mode settings. External plugin manifests
 are ignored with one notice at host startup.
