@@ -127,12 +127,12 @@ describe('Pi\'s command line', () => {
     }
   });
 
-  it('starts a read-only task on Pi\'s read tools and Ordewell\'s, with nothing of the repository\'s or the user\'s that runs', async () => {
+  it('starts a read-only task on Pi\'s read tools and Ordewell\'s, with nothing of the repository\'s or the user\'s that runs, its context files read', async () => {
     const kit = silentSpawn(() => {});
     await started(kit, taskStart('plan', { runnerConfig: 'minimal' }));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--no-context-files', '--tools', 'read,grep,find,ls,mcp__ordewell__*', '--no-skills', '--no-prompt-templates', '--model', 'script/read-only']);
+    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', 'read,grep,find,ls,mcp__ordewell__*', '--no-skills', '--no-prompt-templates', '--model', 'script/read-only']);
     expect(files['ordewell.ts']).toContain('"asksReads":true');
     expect(files['instructions.md']).toContain('This task is read-only');
     expect(files['instructions.md']).toContain('`mcp__ordewell__read` reads a task\'s handoff, not a file');
@@ -144,7 +144,7 @@ describe('Pi\'s command line', () => {
     await started(kit, plannerStart({ model: 'ollama/qwen3:8b', effort: 'low', mcp: mcp({ hidden: ['web_search'] }) } as Partial<AgentStartOptions>));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--no-context-files', '--tools', 'read,grep,find,ls,mcp__ordewell__*', '--model', 'ollama/qwen3:8b', '--thinking', 'low']);
+    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', 'read,grep,find,ls,mcp__ordewell__*', '--no-context-files', '--model', 'ollama/qwen3:8b', '--thinking', 'low']);
     expect(files['instructions.md']).toMatch(/^PLAN\n\nYour Ordewell tools come from the `ordewell` MCP server: `mcp__ordewell__list_runners`/);
     expect(files['instructions.md']).toContain('read web pages with `mcp__ordewell__fetch`');
     expect(files['instructions.md']).not.toContain('web_search');

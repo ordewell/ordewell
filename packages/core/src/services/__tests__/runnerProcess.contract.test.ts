@@ -48,6 +48,8 @@ const REFUSED: Record<string, { deps: () => AgentProcessDeps; launches: number }
   // Claude Code takes its first message without a handshake, so its start is
   // only ever refused before anything is spawned.
   'claude-code': { deps: () => ({ ...baseDeps(fakeSpawn([]).spawn, noHttp), exists: () => false }), launches: 0 },
+  // Pi too: its first message opens its run, with no handshake before it.
+  pi: { deps: () => ({ ...baseDeps(fakeSpawn([]).spawn, noHttp), exists: () => false }), launches: 0 },
   codex: { deps: () => baseDeps(fakeSpawn([`${JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message: 'unsupported client' } })}\n`]).spawn, noHttp), launches: 1 },
   opencode: { deps: () => {
     const spawned = fakeSpawn([]);

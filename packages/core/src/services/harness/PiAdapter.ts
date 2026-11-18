@@ -4,7 +4,8 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { PermissionLedger } from './permissionLedger';
 import { readOnlyTask, readOnlyTaskPolicy } from './plannerPermissions';
-import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, MCP_CLIENT_TOOL_NAMES, type AttachState } from './ordewellBinding';
+import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
+import { PI_ORDEWELL } from './piOrdewell';
 import { piExtensionSource, piReadAsk } from './piExtension';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 import { UsageRecordBuilder } from './usageBuilder';
@@ -16,7 +17,7 @@ import { spawnedCommand } from '../../plugins/types';
 import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 
 /** What a restricted start may run: Pi's read tools and Ordewell's, none that writes or runs a command (ADR-0009, ADR-0046). */
-const RESTRICTED_TOOLS = ['read', 'grep', 'find', 'ls', `${MCP_CLIENT_TOOL_NAMES.toolName('')}*`];
+const RESTRICTED_TOOLS = ['read', 'grep', 'find', 'ls', `${PI_ORDEWELL.toolName('')}*`];
 
 /** Pi's dialogs that wait for an answer; the rest of its extension UI is fire-and-forget. */
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor']);
@@ -80,8 +81,9 @@ type PiDialog = { id: string; kind: 'read' | 'confirm' };
  * writable task runs Pi's own tools natively, with no per-tool approval, as
  * ADR-0001 lets a writable mode under Full and Guarded. A planner and a
  * read-only task start with Pi's read tools and Ordewell's alone, without the
- * user's extensions, the repository's `.pi` files or its context files
- * (ADR-0028), and with Ordewell's extension asking before every read: the
+ * user's extensions or the repository's `.pi` files (ADR-0028), a planner
+ * without its context files too, and with Ordewell's extension asking before
+ * every read: the
  * planner's envelope decides a planner's (ADR-0026), and
  * `decideReadOnlyTaskPermission` a read-only task's, with nobody asked
  * (ADR-0046). The extension also hands Pi the Ordewell server; Pi connects to
@@ -155,7 +157,9 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
       '-e', 'builtin:mcp',
       '-e', extension,
       '--append-system-prompt', prompt,
-      ...(this.restricted ? ['--no-approve', '--no-extensions', '--no-context-files', '--tools', RESTRICTED_TOOLS.join(',')] : []),
+      ...(this.restricted ? ['--no-approve', '--no-extensions', '--tools', RESTRICTED_TOOLS.join(',')] : []),
+      // A planner is given the repository's instruction files by Ordewell's reader, as text in its prompt (ADR-0028).
+      ...(started.kind === 'planner' ? ['--no-context-files'] : []),
       ...(started.runnerConfig === 'minimal' ? ['--no-skills', '--no-prompt-templates'] : []),
       ...(started.model ? ['--model', started.model] : []),
       ...(effort ? ['--thinking', effort] : []),
@@ -164,7 +168,7 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   }
 
   private instructions(started: AgentStartOptions & { mcp: McpClientConfig }): string {
-    const { toolName, toolNames } = MCP_CLIENT_TOOL_NAMES;
+    const { toolName, toolNames } = PI_ORDEWELL;
     const reads = 'Each read of your read, grep, find and ls tools asks Ordewell first, and one it does not allow fails with the reason.';
     if (started.kind === 'planner') {
       const { hidden = [], extraTools } = started.mcp;

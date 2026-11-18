@@ -545,7 +545,7 @@ describe('handlePlan', () => {
       handlePlan(['--goal', 'ship it', '--workspace', '/tmp'], { api: new ApiClient(srv.port) }),
     );
     expect(stderr).toContain(
-      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
+      'No planner is ready. Pick one with ordewell planner <id>: Claude Code, Codex, OpenCode, Pi, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor plan with no API key. ' +
       'To plan with OpenRouter instead, add OPENROUTER_API_KEY with ordewell key set openrouter <key>.',
     );
     expect(stderr).not.toContain('/planner');
