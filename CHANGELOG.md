@@ -8,8 +8,26 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`brew install ordewell/tap/ordewell` works on Homebrew 7 again.** The tap
+  no longer maps `ordewell` to the desktop cask in `cask_renames.json`: Homebrew
+  loaded that cask while it resolved the formula and refused it from a tap
+  nobody had trusted, so the install failed. The cask also drops the
+  `verified:` URL parameter Homebrew 7 warns about. The tap itself was fixed
+  for 0.14.1 already; this keeps a later release from bringing it back, and the
+  release now installs the desktop cask on macOS to prove it.
+
+## [0.14.1] - 2026-11-18
+
 ### Added
 
+- **Ordewell Desktop ships for macOS, Windows and Linux.** This is the first
+  release with the desktop installers: Apple silicon and Intel Macs, Windows
+  x64 and Linux x64, with checksums, a Homebrew cask and a winget submission.
+  macOS builds are signed with a Developer ID and notarized; Windows builds are
+  signed with SSL.com eSigner. Signed macOS and Windows builds support in-app
+  updates.
 - **`ordewell run --unattended`** returns with exit status 3 when the run waits
   on a person nobody unattended will answer (a checkpoint, an input, an
   approval or a task on hold): at Act once the supervisor's turn on it left it
@@ -17,6 +35,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **The built-in runner continues a reply cut off at the output limit.** A
+  model that spent its whole output budget, on thinking for one, used to end
+  its turn as if it had finished, and its task then waited for input with its
+  dependents stuck behind it. The step is now continued. A continued step
+  counts against the step limit and is compacted like any other, and a cut-off
+  on the last allowed call ends the attempt at the step limit. Nothing is
+  continued once `task_complete` has reported.
+- **A provider error an aggregator wraps keeps the upstream's reason.** When
+  OpenRouter, for one, wraps a provider's error, the error is classed by the
+  upstream's own type and code: a rate limit or server error gets the bounded
+  retry, and Google's wrapped "input token count exceeds" takes the
+  context-overflow path instead of failing as a plain 400. A key inside the
+  upstream's raw text is redacted from the message.
 - **A run idle behind a task on hold no longer waits unseen.** When nothing is
   running and nothing can start, and what holds the rest is a task on hold or
   one waiting on a person, the supervisor at Act is woken once for that set of
@@ -24,16 +55,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   `ordewell run` prints a line for a task on hold with the commands that
   release it, and the supervisor is told that a task it stops blocks what
   depends on it until it is retried or skipped.
+- **The release builds the desktop installers.** The macOS desktop build now
+  has a larger Node heap, and the Windows signature check runs Windows
+  PowerShell with its own modules instead of PowerShell 7's. Every Windows
+  build loads the signature cmdlet, so this failure is caught before a
+  release.
 
 ## [0.14.0] - 2026-11-17
 
+The 0.14.0 desktop installers were not published: the release workflow's macOS
+and Windows desktop builds failed. The npm packages, the VS Code extension and
+the CLI binaries for 0.14.0 were published. Ordewell Desktop's first installers
+are in 0.14.1.
+
 ### Added
 
-- **Ordewell Desktop ships for macOS, Windows and Linux.** The release carries
-  installers for Apple silicon and Intel Macs, Windows x64 and Linux x64,
-  with checksums, a Homebrew cask and a winget submission. macOS builds are
-  signed with a Developer ID and notarized; Windows builds are signed with
-  SSL.com eSigner. Signed macOS and Windows builds support in-app updates.
 - **The desktop app says when a newer version is out.** It runs the same daily
   version check as the CLI and VS Code, from the same `~/.ordewell/` file, so
   it sends nothing the machine did not already send: on its first launch it

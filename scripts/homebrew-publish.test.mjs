@@ -151,11 +151,14 @@ describe('the brew install check of release.yml and homebrew-publish.yml', () =>
 
   it('is the same steps in both, installing with scripts/verify-brew-install.sh the version of the tag', () => {
     const [[, released], [, manually]] = verifies;
-    assert.deepEqual(released.steps, manually.steps);
+    const releaseSteps = structuredClone(released.steps);
+    assert.equal(releaseSteps[0].with.ref, '${{ inputs.tag || github.ref }}');
+    delete releaseSteps[0].with.ref;
+    assert.deepEqual(releaseSteps, manually.steps);
     assert.deepEqual(released.steps.map(({ name, uses }) => name ?? uses.split('@')[0]), ['actions/checkout', 'Install ordewell with brew and test it']);
-    assert.deepEqual(released.steps[0].with, { 'persist-credentials': false });
+    assert.deepEqual(released.steps[0].with, { ref: '${{ inputs.tag || github.ref }}', 'persist-credentials': false });
     assert.equal(released.steps[1].run, 'scripts/verify-brew-install.sh "${TAG#v}"');
-    assert.deepEqual(released.env, { TAG: '${{ github.ref_name }}' });
+    assert.deepEqual(released.env, { TAG: '${{ inputs.tag || github.ref_name }}' });
     assert.deepEqual(manually.env, { TAG: '${{ inputs.tag }}' });
   });
 
@@ -178,26 +181,37 @@ describe('scripts/verify-brew-install.sh', { skip: posixOnly }, () => {
    * A fake brew on PATH whose prefix's bin is on PATH too, as `brew shellenv`
    * leaves it: `install` links an ordewell that prints `installed`.
    */
-  const run = (version, { installed = version, testFails = false, installFails = false, audit = '', shadow = false, githubPath = false } = {}) => {
+  const run = (version, { installed = version, testFails = false, installFails = false, audit = '', shadow = false, githubPath = false, os = 'Linux', cask, app = version, gatekeeper = true } = {}) => {
     const dir = join(root, String(count++));
     const fake = join(dir, 'fake');
     const prefix = join(dir, 'prefix');
     const other = join(dir, 'other');
     for (const at of [fake, join(prefix, 'bin'), other]) mkdirSync(at, { recursive: true });
     const log = join(dir, 'log');
+    const tap = join(dir, 'tap');
+    const apps = join(dir, 'Applications');
+    mkdirSync(join(tap, 'Casks'), { recursive: true });
+    if (cask) writeFileSync(join(tap, 'Casks', 'ordewell-desktop.rb'), `cask "ordewell-desktop" do\n  version "${cask}"\nend\n`);
     writeFileSync(join(fake, 'brew'), `#!/bin/sh
 printf '%s\\n' "$*" >> '${log}'
 case "$1" in
   --version) echo 'Homebrew 4.6.0' ;;
   --prefix) echo '${prefix}' ;;
+  --repository) [ "$2" = ordewell/tap ] && echo '${tap}' || exit 3 ;;
   update) ;;
-  install) ${installFails ? 'exit 1' : `printf '#!/bin/sh\\necho ${installed}\\n' > '${prefix}/bin/ordewell'; chmod +x '${prefix}/bin/ordewell'`} ;;
+  install) if [ "$2" = --cask ]; then mkdir -p '${apps}/Ordewell.app/Contents'; echo '${app}' > '${apps}/Ordewell.app/Contents/Info.plist'; else ${installFails ? 'exit 1' : `printf '#!/bin/sh\\necho ${installed}\\n' > '${prefix}/bin/ordewell'; chmod +x '${prefix}/bin/ordewell'`}; fi ;;
+  uninstall) rm -rf '${apps}/Ordewell.app' ;;
   test) ${testFails ? "echo 'Error: ordewell: failed' >&2; exit 1" : ':'} ;;
   audit) ${audit ? `cat '${join(dir, 'audit')}'; exit 1` : ':'} ;;
   *) exit 3 ;;
 esac
 `);
-    chmodSync(join(fake, 'brew'), 0o755);
+    // uname, plutil and spctl stand in for macOS's own: the plist the fake
+    // cask writes holds just its version, and Gatekeeper says what it is told.
+    writeFileSync(join(fake, 'uname'), `#!/bin/sh\necho ${os}\n`);
+    writeFileSync(join(fake, 'plutil'), `#!/bin/sh\nprintf '%s\\n' "plutil $*" >> '${log}'\nfor last; do :; done\ncat "$last"\n`);
+    writeFileSync(join(fake, 'spctl'), `#!/bin/sh\nprintf '%s\\n' "spctl $*" >> '${log}'\n${gatekeeper ? "echo 'accepted'" : "echo 'rejected' >&2; exit 3"}\n`);
+    for (const tool of ['brew', 'uname', 'plutil', 'spctl']) chmodSync(join(fake, tool), 0o755);
     if (audit) writeFileSync(join(dir, 'audit'), `${audit}\n`);
     if (shadow) {
       writeFileSync(join(other, 'ordewell'), `#!/bin/sh\necho ${version}\n`);
@@ -207,10 +221,10 @@ esac
     const path = [...(shadow ? [other] : []), join(prefix, 'bin'), fake, dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter);
     const out = spawnSync('bash', ['scripts/verify-brew-install.sh', ...[version].flat()], {
       encoding: 'utf8',
-      env: { PATH: path, HOME: dir, ...(githubPath ? { GITHUB_PATH: github } : {}) },
+      env: { PATH: path, HOME: dir, ORDEWELL_BREW_APPDIR: apps, ...(githubPath ? { GITHUB_PATH: github } : {}) },
     });
     const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
-    return { ...out, calls, github: existsSync(github) ? readFileSync(github, 'utf8') : null, fake };
+    return { ...out, calls, github: existsSync(github) ? readFileSync(github, 'utf8') : null, fake, apps };
   };
 
   it('installs from the tap, checks the version and runs the formula\'s test, in that order', () => {
@@ -250,6 +264,35 @@ esac
     const tested = run('1.2.3', { testFails: true });
     assert.notEqual(tested.status, 0);
     assert.ok(!tested.calls.some((call) => call.startsWith('audit')));
+  });
+
+  it('installs this release\'s cask on macOS after the formula, checks its version and Gatekeeper, then removes it', () => {
+    const out = run('1.2.3', { os: 'Darwin', cask: '1.2.3' });
+    assert.equal(out.status, 0, out.stderr);
+    const app = join(out.apps, 'Ordewell.app');
+    assert.deepEqual(out.calls, ['--version', 'update', 'install ordewell/tap/ordewell', '--prefix', 'test ordewell', '--repository ordewell/tap',
+      'install --cask ordewell/tap/ordewell-desktop', `plutil -extract CFBundleShortVersionString raw -o - ${join(app, 'Contents', 'Info.plist')}`,
+      `spctl --assess --type execute -vv ${app}`, 'uninstall --cask ordewell/tap/ordewell-desktop', 'audit --formula ordewell/tap/ordewell']);
+    assert.match(out.stdout, /^brew installed Ordewell\.app 1\.2\.3$/m);
+    assert.ok(!existsSync(app), 'the cask was left installed');
+  });
+
+  it('installs no cask on macOS when the tap\'s cask is another release\'s or missing, nor on Linux', () => {
+    for (const [os, cask] of [['Darwin', '1.2.2'], ['Darwin', undefined], ['Linux', '1.2.3']]) {
+      const out = run('1.2.3', { os, cask });
+      assert.equal(out.status, 0, out.stderr);
+      assert.ok(!out.calls.some((call) => call.includes('--cask')), `${os} ${cask}`);
+      if (os === 'Darwin') assert.match(out.stdout, /^the tap carries no ordewell-desktop 1\.2\.3 cask/m);
+    }
+  });
+
+  it('fails when the cask installs another version, or one Gatekeeper rejects', () => {
+    const stale = run('1.2.3', { os: 'Darwin', cask: '1.2.3', app: '1.2.2' });
+    assert.equal(stale.status, 1);
+    assert.match(stale.stderr, /brew installed Ordewell\.app 1\.2\.2, not the published 1\.2\.3/);
+    const rejected = run('1.2.3', { os: 'Darwin', cask: '1.2.3', gatekeeper: false });
+    assert.notEqual(rejected.status, 0);
+    assert.ok(!rejected.calls.some((call) => call.startsWith('audit')));
   });
 
   it('refuses anything but one x.y.z version, before brew runs', () => {
