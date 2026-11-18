@@ -612,7 +612,8 @@ waits for: the one that makes the project import and collect its tests (a
 **restoring task** when the review adds it). The **slices** are the change
 tasks not ordered against every other one, each done when the code in its own
 scope is in place. The **closing check** waits for every slice and runs the
-whole suite; a loop's check counts, an ops task or a push does not. Opening
+whole suite and can fix what fails: a loop's check counts when its body
+edits, an ops task, a push or a read-only check alone does not. Opening
 tasks in series, no opening task and no closing check are its faults, asked in
 the **Chain review**'s one call, whose reply may add the one restoring or
 closing task a fault asks for. A wide plan with a closing check gets a fixed
@@ -2306,8 +2307,9 @@ own branch, to use work a sibling landed after its worktree was cut (ADR-0013). 
 runner makes it, told when and with the message Ordewell writes,
 `Merge: <subject> (take in landed work)`; Ordewell never merges into a running
 worktree. It lands with the task, and the task's own work is read from its
-*fork point*, the newest integration commit its branch holds, so what it took in is
-never its diff. *Avoid:* "sync", "rebase onto main": it is a merge, and never a rebase.
+*fork point*, the newest integration commit its branch holds of those the run
+recorded, so what it took in is never its diff. What it took in counts as
+what it depends on when a revert asks. *Avoid:* "sync", "rebase onto main": it is a merge, and never a rebase.
 
 **Landing** — integrating one task under ADR-0014: its branch merged into the
 integration branch of every repo it changed, or of none. Only repos where the

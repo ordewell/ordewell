@@ -103,7 +103,8 @@ revert adds commits and rewrites nothing.
   Those merges go; such a record stays, `kept`, for the worktree only it names,
   and a conflict it held is over. Depends reads the plan and
   `IsolationRun.landedOn`, what each task depended on, directly or not, when its
-  worktree was cut and when it landed: a plan edit takes a link off while the
+  worktree was cut and when it landed, the landings it took in included
+  (ADR-0013): a plan edit takes a link off while the
   worktree stays cut from the work, and a task that leaves the plan takes its
   dependencies with it, and the plan's links through it, while its merges stay.
   So a dependent that left goes too, and one that stood on the work through a
@@ -126,7 +127,9 @@ revert adds commits and rewrites nothing.
   stops a clean-up. Live here also means Mark complete landing it, or paused on
   a usage limit, whose reset would resume it. A resolver at work on a conflict
   of a task that goes is refused the same way: its merge would land the attempt
-  the revert ends. Tasks that do not depend on the
+  the revert ends. So is a task at work whose branch took in a merge that
+  goes (ADR-0013): no plan edge says so, and git, in the revert's turn, does.
+  Tasks that do not depend on the
   work keep running: when one lands, a three-way merge from the tip it was cut
   from keeps the revert.
 - **All or nothing.** The tips are recorded as `IsolationRun.landing`, with
@@ -368,3 +371,4 @@ isolation and the fake both write through, so its rules run without git
 - 2026-10-31 — a run with no `carried` record refuses every revert and offers none; every run holds the record from its start, and a landing never adds it to a run without one.
 - 2026-11-01 — a revert of a delegated task takes its check back (ADR-0055 D8).
 - 2026-11-13 — the landing ledger's rules have unit tests of their own: they live in `LandingLedger`, which `FakeWorktreeIsolation` calls too.
+- 2026-11-18 — a take-in is dependence: a landing keeps what its task took in in `landedOn`, and a task at work whose branch took in a merge being reverted refuses the revert.

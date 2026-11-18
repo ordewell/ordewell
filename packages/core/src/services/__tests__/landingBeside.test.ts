@@ -76,17 +76,21 @@ describe('landsBeside: whether anything of the plan may land while a task runs',
     expect(landsBeside(a, [a, t('t2', { readOnly: true })], () => true)).toBe(true);
   });
 
-  it('does not count its own subtasks or its parent, but does a subtask of a sibling', () => {
-    const sub = t('t11');
+  // A subtask waits for its ancestors' dependencies, not for its ancestors (ADR-0034): the two start together.
+  it('counts its parent and its own subtasks, which run beside it, at every depth', () => {
+    const grandchild = t('t111');
+    const sub = t('t11', { subtasks: [grandchild] });
     const parent = t('t1', { subtasks: [sub] });
-    expect(landsBeside(parent, [parent], lands)).toBe(false);
-    expect(landsBeside(sub, [parent], lands)).toBe(false);
+    for (const at of [parent, sub, grandchild]) expect(landsBeside(at, [parent], lands)).toBe(true);
+    expect(landsBeside(t('t1', { subtasks: [t('t11', { status: 'completed' })] }), [t('t1', { subtasks: [t('t11', { status: 'completed' })] })], lands)).toBe(false);
     const other = t('t2', { subtasks: [t('t21')], status: 'completed' });
-    expect(landsBeside(parent, [parent, other], lands)).toBe(true);
+    expect(landsBeside(other.subtasks[0], [t('t1', { status: 'completed' }), other], lands)).toBe(false);
+    expect(landsBeside(t('t3'), [t('t3'), other], lands)).toBe(true);
   });
 
-  it('does not count a subtask of a task that waits for it', () => {
+  it('does not count a subtask of a task that waits for it, at any depth', () => {
     const a = t('t1');
-    expect(landsBeside(a, [a, t('t2', { dependencies: ['t1'], status: 'pending', subtasks: [t('t21')] })], lands)).toBe(false);
+    expect(landsBeside(a, [a, t('t2', { dependencies: ['t1'], subtasks: [t('t21', { subtasks: [t('t211')] })] })], lands)).toBe(false);
   });
+
 });

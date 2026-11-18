@@ -169,16 +169,20 @@ export interface LandingBeside {
   repos: readonly string[];
 }
 
-/** Every task of the plan that waits for `task`, directly or through others, a subtask of one among them. */
+/**
+ * Every task of the plan that waits for `task`, directly or through others, a
+ * subtask of one among them. A subtask is held to its ancestors' dependencies,
+ * not to its ancestors (ADR-0034), so `task`'s own subtasks do not wait for it.
+ */
 function waitingFor(task: Task, plan: readonly Task[]): Set<string> {
   const flat = flattenTasksWithParents(plan);
-  const waits = new Map(flat.map(({ task: t, parent }) => [t.id, [...t.dependencies, ...(parent ? [parent.id] : [])]]));
+  const waits = new Map(flat.map(({ task: t, parent }) => [t.id, { deps: t.dependencies, parent: parent?.id }]));
   const found = new Set<string>();
   let grew = true;
   while (grew) {
     grew = false;
-    for (const [id, deps] of waits) {
-      if (found.has(id) || !deps.some((d) => d === task.id || found.has(d))) continue;
+    for (const [id, { deps, parent }] of waits) {
+      if (found.has(id) || !(deps.some((d) => d === task.id || found.has(d)) || (parent !== undefined && found.has(parent)))) continue;
       found.add(id);
       grew = true;
     }
@@ -188,22 +192,18 @@ function waitingFor(task: Task, plan: readonly Task[]): Set<string> {
 
 /**
  * Whether work of the plan may land on the integration branch while `task`
- * runs: another task, not finished, whose work lands, that is not one of its
- * subtasks or its parent, and does not wait for it. Its ancestors landed
- * before it started, and what waits for it starts after it lands. Whether a
+ * runs: another task, not finished, whose work lands, that does not wait for
+ * it, its parent and its own subtasks included, which start with it
+ * (ADR-0034). Its dependencies landed before it started, and what waits for it
+ * starts after it lands. Whether a
  * task's work lands is `landsWork`'s, the caller's: a read-only task lands
  * nothing (ADR-0046), an ops task works in the checkout (ADR-0020), and which
  * a task is depends on the mode its runner tags read-only, which only the
  * caller knows.
  */
 export function landsBeside(task: Task, plan: readonly Task[], landsWork: (sibling: Task) => boolean): boolean {
-  const flat = flattenTasksWithParents(plan);
-  const own = new Set<string>();
-  const under = (t: Task): void => { for (const s of t.subtasks) { own.add(s.id); under(s); } };
-  under(task);
-  const parent = flat.find(({ task: t }) => t.id === task.id)?.parent?.id;
   const after = waitingFor(task, plan);
-  return flat.some(({ task: t }) => t.id !== task.id && t.id !== parent && !own.has(t.id) && !after.has(t.id)
+  return flattenTasksWithParents(plan).some(({ task: t }) => t.id !== task.id && !after.has(t.id)
     && t.status !== 'completed' && t.status !== 'skipped' && landsWork(t));
 }
 

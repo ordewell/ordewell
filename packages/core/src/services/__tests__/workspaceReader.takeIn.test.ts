@@ -81,6 +81,18 @@ describe.skipIf(!hasGit)('workspace reader: a task that took in landed work', ()
     expect(src.entries.map((e) => [e.name, e.status ?? null, e.taskId ?? null])).toEqual([['index.ts', null, null], ['lexer.ts', null, null], ['parser.ts', 'A', 't2']]);
   });
 
+  it('reads a task\'s changes past the take-in even when its runner moved the integration branch onto its own tip', async () => {
+    const { at, parser, run } = await tookIn();
+    const merged = git(parser, 'rev-parse', 'HEAD^2');
+    fs.writeFileSync(path.join(parser, 'src', 'guarded.ts'), 'x\n');
+    git(parser, 'add', '-A');
+    git(parser, 'commit', '-q', '-m', 'guarded');
+    git(parser, 'update-ref', `refs/heads/${run.repos[0].integrationBranch}`, 'HEAD');
+    const all = await reader.diff(at, {});
+    expect(all.from).toBe(merged);
+    expect(all.files.map((f) => f.path)).toEqual(['src/guarded.ts', 'src/parser.ts']);
+  });
+
   it('reads a pruned task\'s branch from its fork point too', async () => {
     const { at, parser, workspace } = await tookIn();
     const merged = git(parser, 'rev-parse', 'HEAD^2');

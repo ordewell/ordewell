@@ -75,8 +75,9 @@ question is put depends on how the plan arrives.
   task, a loop's check or in a loop's body. Its *opening tasks* are the change
   tasks every slice waits for, and its *slices* are the change tasks not
   ordered against every other one. Its *closing check* is a task that waits for
-  every slice and is not an ops task, a manual task or a script that may push
-  (a script counts only as a loop's check or read-only). It names three faults:
+  every slice and can fix what still fails: an AI task that edits, or a loop's
+  check whose body holds one. An ops task, a manual task, a script that may
+  push and a read-only check with no such loop never count. It names three faults:
   opening tasks in series, no opening task, and no closing check. A plan with a
   fault is asked R1's call even when its chain is short, with
   `shapeReviewMessage`: R1's chain question word for word when the chain
@@ -84,7 +85,8 @@ question is put depends on how the plan arrives.
   may also add, under `addTasks`, the one task a fault asks for, with the role
   it asks for (`restoring` for no opening task, `closing` for no closing check).
   Ordewell wires an added task (`applyShapeReview`). Every slice waits for a
-  restoring task, and a closing check waits for every slice. So does an ops,
+  restoring task, which waits for what every slice waited for (an install or a
+  manual step it is checked against), and a closing check waits for every slice. So does an ops,
   script or user task that waited for every slice, which then also waits for
   the added closing check. A task no fault asks for, a second one of a role, an
   unknown role or an id the plan has rejects the whole reply. The dependency
@@ -203,3 +205,4 @@ conversation's as they stand.
 - 2026-11-18 — R1: Ordewell refuses a reply that drops an ancestor of an ops, script or user task or a loop's check; the note names only dependencies no longer reached and reaches a delegated task's goal; a subtask entry is ignored.
 - 2026-11-18 — R1: the guard counts ancestors with the merge gate's walk, so a path through a subtask is held too.
 - 2026-11-18 — R5: a wide one-shot plan's fan-out faults ride on R1's call, its reply may add the task a fault asks for, and each role's brief gets a `Plan shape:` note; R1's revision note lets a slice take in landed work.
+- 2026-11-18 — R5: a read-only check counts as the closing check only through a loop whose body edits; an added restoring task waits for what every slice waited for; R1's revision note has a slice name the tests it leaves in findings.

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
+import { landingsIn } from './LandingLedger';
 import { stateRootOf } from './stateRoot';
 import { realPathOf } from '../utils/realPath';
 import type { HandoffPatch } from '../models/Handoff';
@@ -203,8 +204,12 @@ export interface ForkPointOf {
   start: string;
   /** Its work: `HEAD` in its live worktree, else its branch's tip. */
   head: string;
-  /** The run's integration branch in this repository. */
-  integrationBranch?: string;
+  /**
+   * The integration commits the run recorded in this repository, the merges
+   * that landed its tasks (`landingsIn`). Never the integration branch itself:
+   * a runner shares the repository's refs and can move it.
+   */
+  integrated?: readonly string[];
   /** The integration tip right after it landed here, once it has. */
   landedTip?: string;
 }
@@ -215,16 +220,25 @@ export interface ForkPointOf {
  * from, unless it merged the branch in since, taking in what landed beside it
  * or a repair's merge (ADR-0013, ADR-0015): that work is its siblings', and is
  * never read as its own. Once it landed, the branch holds its own landing, so
- * it is read against the tip that landing merged onto. The recorded starting
- * commit when git cannot say. The one reading for every view of a task's own
- * work: its diff, which a verdict checks, and the host's (ADR-0064).
+ * it is read against the tip that landing merged onto. Before it lands, the
+ * newest commit it holds of those the run recorded, and only one past where it
+ * was cut: a fork point read from a ref its runner can move would let it hide
+ * its own work from the verdict's protected-path check (ADR-0055 D7). The
+ * recorded starting commit when git cannot say. The one reading for every
+ * view of a task's own work: its diff, which a verdict checks, and the host's
+ * (ADR-0064).
  */
 export async function taskForkPoint(invoker: GitInvoker, cwd: string, common: readonly string[], of: ForkPointOf): Promise<string> {
-  const onto = of.landedTip ? `${of.landedTip}^1` : of.integrationBranch ? `refs/heads/${of.integrationBranch}` : null;
-  if (!onto) return of.start;
-  const found = await tryGit(invoker, cwd, [...common, 'merge-base', of.head, onto]);
+  const sha = /^[a-f0-9]{40,64}$/;
+  const onto = of.landedTip ? [`${of.landedTip}^1`] : (of.integrated ?? []).filter((commit) => sha.test(commit));
+  if (onto.length === 0) return of.start;
+  // With several commits after the first, git answers for the first against any of them: the newest it holds.
+  const found = await tryGit(invoker, cwd, [...common, 'merge-base', of.head, ...onto]);
   const base = found.ok ? found.stdout.trim() : '';
-  return /^[a-f0-9]{40,64}$/.test(base) ? base : of.start;
+  if (!sha.test(base) || base === of.start) return of.start;
+  if (of.landedTip) return base;
+  const past = await tryGit(invoker, cwd, [...common, 'merge-base', '--is-ancestor', of.start, base]);
+  return past.ok ? base : of.start;
 }
 
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
@@ -272,7 +286,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         target = [tip];
       }
       // A merged task's branch is in the integration branch, which no longer says where it began: a record from before landed tips were kept is read from its start.
-      const base = await taskForkPoint(reader, cwd, common, { start: entry.baseRef, head: live ? 'HEAD' : target[0], landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrationBranch: repo.integrationBranch }) });
+      const base = await taskForkPoint(reader, cwd, common, { start: entry.baseRef, head: live ? 'HEAD' : target[0], landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: landingsIn(run, repo.path).map(({ merge }) => merge) }) });
       const ordewells = (file: string) => entry.linked.some((linked) => file === linked || file.startsWith(`${linked}/`))
         || run.shared.some((shared) => repo.path === '.' && (file === shared || file.startsWith(`${shared}/`)));
       if (options.names) {

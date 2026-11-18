@@ -9,6 +9,7 @@ import { landingMessage } from '../landingMessage';
 import { renderLandingBeside } from '../promptAugment';
 import { hasGit, create, git, task, roots, repo, cleanEnv, integrationOf } from './gitWorktreeIsolationKit';
 import { nothingInTheWay } from './gitWorktreeRevertKit';
+import { revertScope } from '../taskRevert';
 
 afterEach(async () => {
   while (roots.length) await removeDir(roots.pop()!);
@@ -97,7 +98,83 @@ describe.skipIf(!hasGit)('WorktreeIsolation: work landing beside a running task'
     expect(landed.available && names(landed.text)).toEqual(['parser.py']);
   });
 
-  it('reverts a landed task that a sibling took in, leaving the sibling\'s own work (ADR-0054)', async () => {
+  // A take-in is no plan edge, yet the task's code stands on what it took in: a revert takes both, or waits for it (ADR-0054).
+  it('reverts a landed task that a sibling took in together with that sibling, which stands on it', async () => {
+    const dir = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(dir);
+    const [first, beside] = [task(1, 'Fill in the lexer'), task(2, 'Fill in the parser')];
+    const f = await iso.prepare(first, run);
+    const b = await iso.prepare(beside, run);
+    writeFileSync(join(f.cwd, 'lexer.py'), 'lex\n');
+    expect(await iso.integrate(first, run)).toBe('merged');
+    writeFileSync(join(b.cwd, 'parser.py'), 'import lexer\n');
+    git(b.cwd, 'add', '-A');
+    git(b.cwd, 'commit', '-q', '-m', 'Fill in the parser');
+    runTakeIn(renderLandingBeside({ integrationBranch: integrationOf(run), message: landingMessage('take-in', beside), repos: ['.'] }), b.cwd);
+    expect(await iso.integrate(beside, run)).toBe('merged');
+
+    const plan = [{ ...first, status: 'completed' as const }, { ...beside, status: 'completed' as const }];
+    const scope = revertScope(first.id, { tasks: plan, run, live: new Set(), resolvers: () => [] });
+    expect(scope).toEqual({ taskIds: [first.id, beside.id] });
+    expect(await iso.revert(run, scope.taskIds, nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
+    expect(git(dir, 'ls-tree', '--name-only', integrationOf(run)).split('\n')).toEqual(['README.md']);
+  });
+
+  it('does not take a landed sibling that took nothing in', async () => {
+    const dir = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(dir);
+    const [first, beside] = [task(1, 'Fill in the lexer'), task(2, 'Fill in the parser')];
+    const f = await iso.prepare(first, run);
+    const b = await iso.prepare(beside, run);
+    writeFileSync(join(f.cwd, 'lexer.py'), 'lex\n');
+    expect(await iso.integrate(first, run)).toBe('merged');
+    writeFileSync(join(b.cwd, 'parser.py'), 'parse\n');
+    expect(await iso.integrate(beside, run)).toBe('merged');
+    const plan = [{ ...first, status: 'completed' as const }, { ...beside, status: 'completed' as const }];
+    expect(revertScope(first.id, { tasks: plan, run, live: new Set(), resolvers: () => [] })).toEqual({ taskIds: [first.id] });
+  });
+
+  it('refuses to revert what a task still at work took in, and names it', async () => {
+    const dir = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(dir);
+    const [first, beside] = [task(1, 'Fill in the lexer'), task(2, 'Fill in the parser')];
+    const f = await iso.prepare(first, run);
+    const b = await iso.prepare(beside, run);
+    writeFileSync(join(f.cwd, 'lexer.py'), 'lex\n');
+    expect(await iso.integrate(first, run)).toBe('merged');
+    writeFileSync(join(b.cwd, 'parser.py'), 'import lexer\n');
+    git(b.cwd, 'add', '-A');
+    git(b.cwd, 'commit', '-q', '-m', 'Fill in the parser');
+    // Before it takes the lexer in, its tip holds none of it: nothing stands in the way.
+    expect(await iso.readLanded(run, [first.id])).toMatchObject({ ok: true });
+    runTakeIn(renderLandingBeside({ integrationBranch: integrationOf(run), message: landingMessage('take-in', beside), repos: ['.'] }), b.cwd);
+
+    const refused = 'Task "Fill in the parser" took in the work of task "Fill in the lexer" and is still at work on it, from a tip that holds this work. Nothing was reverted. Let it finish, or stop it, first.';
+    expect(await iso.readLanded(run, [first.id])).toEqual({ ok: false, reason: 'live-dependent', error: refused });
+    expect(await iso.revert(run, [first.id], nothingInTheWay)).toEqual({ outcome: 'refused', reason: refused });
+    expect(git(dir, 'ls-tree', '--name-only', integrationOf(run)).split('\n')).toEqual(['README.md', 'lexer.py']);
+  });
+});
+
+describe.skipIf(!hasGit)('WorktreeIsolation: a task\'s fork point is read from what the run recorded, never from a ref its runner can move', () => {
+  it('still reads the task\'s work when its runner points the integration branch at its own tip', async () => {
+    const dir = repo();
+    const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+    const run = await iso.startRun(dir);
+    const t = task(1, 'Touch the guarded file');
+    const w = await iso.prepare(t, run);
+    writeFileSync(join(w.cwd, 'guarded.txt'), 'x\n');
+    git(w.cwd, 'add', '-A');
+    git(w.cwd, 'commit', '-q', '-m', 'guarded');
+    git(w.cwd, 'update-ref', `refs/heads/${integrationOf(run)}`, 'HEAD');
+    const diff = await iso.taskDiff!(run, 'task-1', { names: true });
+    expect(diff.available && names(diff.text)).toEqual(['guarded.txt']);
+  });
+
+  it('starts past a take-in when the runner moved the branch after it, and never before where it was cut', async () => {
     const dir = repo();
     const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
     const run = await iso.startRun(dir);
@@ -110,10 +187,11 @@ describe.skipIf(!hasGit)('WorktreeIsolation: work landing beside a running task'
     git(b.cwd, 'add', '-A');
     git(b.cwd, 'commit', '-q', '-m', 'Fill in the parser');
     runTakeIn(renderLandingBeside({ integrationBranch: integrationOf(run), message: landingMessage('take-in', beside), repos: ['.'] }), b.cwd);
-    expect(await iso.integrate(beside, run)).toBe('merged');
-
-    expect(await iso.revert(run, [first.id], nothingInTheWay)).toMatchObject({ outcome: 'reverted' });
-    expect(git(dir, 'ls-tree', '--name-only', integrationOf(run)).split('\n')).toEqual(['README.md', 'parser.py']);
-    expect(run.tasks[beside.id].status).toBe('merged');
+    writeFileSync(join(b.cwd, 'guarded.txt'), 'x\n');
+    git(b.cwd, 'add', '-A');
+    git(b.cwd, 'commit', '-q', '-m', 'guarded');
+    git(b.cwd, 'update-ref', `refs/heads/${integrationOf(run)}`, 'HEAD');
+    const diff = await iso.taskDiff!(run, 'task-2', { names: true });
+    expect(diff.available && names(diff.text)).toEqual(['guarded.txt', 'parser.py']);
   });
 });

@@ -58,6 +58,18 @@ describe('fanOutShape', () => {
     expect(s.faults).toEqual([]);
   });
 
+  // A closing check fixes what still fails, so a task that cannot edit counts only with a loop whose body can.
+  it('takes a read-only check with no loop to fix for it as no closing check', () => {
+    for (const review of [
+      t('review', sliceIds(4), { readOnly: true, prompt: 'Review the library.' }),
+      createTask({ id: 'review', title: 'Run the suite', type: 'script', readOnly: true, commands: [['pytest']], dependencies: sliceIds(4), sliceType: 'AFK' }),
+    ]) {
+      const plan = [t('r', []), ...slices(4, ['r']), review];
+      expect(fanOutShape(plan).closers).toEqual([]);
+      expect(fanOutShape(plan).faults).toEqual(['no-closing']);
+    }
+  });
+
   it('does not count an ops task or a push after everything as a closing check', () => {
     const plan = [t('r', []), ...slices(4, ['r']), t('push', sliceIds(4), { ops: true })];
     expect(fanOutShape(plan).faults).toEqual(['no-closing']);
@@ -162,6 +174,27 @@ describe('applyShapeReview holds what a task acting on the checkout waits for', 
     if (!r.ok) throw new Error(r.error);
     expect(r.tasks.find((x) => x.id === 'push')!.dependencies).toEqual([...sliceIds(6), 'close']);
     expect(r.tasks.find((x) => x.id === 'close')!.dependencies).toEqual(sliceIds(6));
+  });
+
+  it('makes a restoring task it adds wait for what every slice waited for: an install or a manual step', () => {
+    for (const first of [
+      t('install', [], { ops: true, prompt: 'npm install' }),
+      t('setup', [], { type: 'user', prompt: undefined, description: 'Create the .env', sliceType: 'HITL', autonomy: 'HITL' }),
+    ]) {
+      const plan = [first, ...slices(4, [first.id]), t('close', sliceIds(4))];
+      expect(fanOutShape(plan).faults).toEqual(['no-opening']);
+      const r = applyShapeReview(plan, fanOutShape(plan), reply([], [restoring]), RUNNERS);
+      if (!r.ok) throw new Error(r.error);
+      expect(r.tasks.find((x) => x.id === 'restore')!.dependencies).toEqual([first.id]);
+      expect(r.tasks.find((x) => x.id === 's1')!.dependencies).toEqual([first.id, 'restore']);
+    }
+  });
+
+  it('makes a restoring task it adds wait for nothing when the slices share no wait', () => {
+    const plan = [t('a', [], { ops: true, prompt: 'npm install' }), ...slices(5, []).map((x, i) => (i === 0 ? { ...x, dependencies: ['a'] } : x)), t('close', sliceIds(5))];
+    const r = applyShapeReview(plan, fanOutShape(plan), reply([], [restoring]), RUNNERS);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.tasks.find((x) => x.id === 'restore')!.dependencies).toEqual([]);
   });
 
   it('refuses a reply that drops a slice the push waits for', () => {

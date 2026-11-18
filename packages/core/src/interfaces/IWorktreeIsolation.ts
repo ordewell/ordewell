@@ -549,7 +549,7 @@ export interface RevertCommand {
  */
 export type LandedWork =
   | { ok: true; tasks: IsolationRevertTask[]; inBranch: RevertCommand[] }
-  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'git'; error: string };
+  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'live-dependent' | 'git'; error: string };
 
 /** What {@link IWorktreeIsolation.revert} asks of its caller, in its turn. */
 export interface RevertWatch {

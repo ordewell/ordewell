@@ -61,6 +61,16 @@ describe('a change task in an isolated run is told of the work landing beside it
   });
 });
 
+describe('a parent and its subtask start together (ADR-0034), so each is told of the other', () => {
+  it('tells a parent and its subtask, at every depth', async () => {
+    const { orchestrator, spawn, promptOf } = setup();
+    orchestrator.loadPlan([task('t1', 1, { subtasks: [task('t11', 1, { subtasks: [task('t111', 1)] })] })]);
+    await orchestrator.approveReview();
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(3));
+    for (const id of ['t1', 't11', 't111']) expect(promptOf(id)).toContain('## Work landing beside yours');
+  });
+});
+
 describe('a sibling counts as read-only as its attempt does: by the mode it runs on (ADR-0046)', () => {
   const claude = (id: string, order: number, over: Partial<Task> = {}) =>
     task(id, order, { assignedRunner: 'claude-code', taskMode: 'bypassPermissions', ...over });

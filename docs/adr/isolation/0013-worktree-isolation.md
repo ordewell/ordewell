@@ -154,7 +154,8 @@ everything below applies per repo of the group.
   from the integration tip as its task starts, so a sibling that lands later
   is not in it. A change task with work of the plan that may land while it
   runs (another change, not finished, that neither it waits for nor waits for
-  it) is told, in its first message, the integration branch, how to list what
+  it, its parent and its own subtasks included, which start with it under
+  ADR-0034) is told, in its first message, the integration branch, how to list what
   landed since (`git log HEAD..<integration>`), and the exact merge that takes
   it in: `git merge --no-edit` of the integration branch with
   `Merge: <subject> (take in landed work)`, written by `landingMessage` like a
@@ -166,14 +167,19 @@ everything below applies per repo of the group.
   in findings. Ordewell never merges into a running worktree itself: the
   runner owns its tree for the attempt, and a merge under it would land
   mid-edit. A task's own work is read from its fork point, the newest
-  integration commit its branch holds (`taskForkPoint`), so what it took in, or
+  integration commit its branch holds of those the run recorded, its landings'
+  merges, and never one before where it was cut (`taskForkPoint`). The
+  integration branch itself is never read for it: a runner shares the
+  repository's refs and could move the branch onto its own tip to empty its
+  diff. So what it took in, or
   a repair merged in, is never its diff, nor what a verdict checks against
   protected paths, nor what the host shows as changed by the task (ADR-0064).
   The start-configuration hold still compares a worktree with the run's base
   (ADR-0028): runner configuration a task took in was no more consented to
-  than if it had never been merged. A take-in lands with the task like a repair's merge, and a
-  revert of the sibling it took in stays the revert of that sibling's landing
-  (ADR-0054).
+  than if it had never been merged. A take-in lands with the task like a repair's merge, and the
+  landings it took in are kept in `landedOn` as it lands, so a revert of the
+  sibling takes the task with it; while the task is at work, a revert of what
+  its branch took in is refused (ADR-0054).
 - **A landing can be taken back until it is merged.** One merge per task is what
   makes a landing undoable on its own. Until the user's branch holds it, the user
   can revert a task on the integration branches: a revert commit, never a
@@ -631,3 +637,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a pre-upgrade record is named after the file holding it only when no other session's file holds the same run: a VS Code reload copy was named after itself and pruned its original's live worktree.
 - 2026-11-18 — a sweep that only reads saved sessions leaves a pre-upgrade record unnamed: naming it in every load read every session file once per session.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
+- 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
