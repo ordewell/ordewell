@@ -98,7 +98,11 @@ and completion evidence.
   an AI task that passed in its plan (its attempt's, kept as it ends; an attempt
   saved before that has only its wall time), read again when the timer fires so a task
   that passed meanwhile can put it off, and each flag doubles the time the
-  next needs. Only running time counts: a wait on input, a checkpoint or an
+  next needs. An attempt that follows one of the same task that failed or was
+  stopped (the ending is kept on that attempt's usage as `outcome`) is first
+  flagged at the larger of 30 minutes and that attempt's running time instead:
+  a retry already had that long once, and a retry of a task that failed after
+  42 minutes ran 108 minutes before a plan-wide threshold flagged it. Only running time counts: a wait on input, a checkpoint or an
   approval holds the clock, and is left out of a passed task's running time
   too, and a usage limit ends the attempt. An automatic
   compaction of the task's own runner session flags it, whatever the time, and
@@ -759,3 +763,4 @@ transport is retained for take-over.
 - 2026-11-17 — W1: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, flags running long; the context meter reads against where compaction starts under a compaction window in force.
 - 2026-11-17 — C4: when a task compacts is stated once for every harness: one `taskCompactAt` setting (`auto`, a number, `off`), what each harness is given, `compactStartTokens` for the meter, and the running-long and reminder effects; W1 refers to it.
 - 2026-11-17 — C4: the running-long clock reads every harness's window as its start plus 32,000; Codex's number is held to 16,000 and 90% of its window; an inherited Claude Code window or OpenCode compaction room is dropped from a task's launch; OpenCode 1.x keeps no start for a model without an input limit; ACP infers compactions under small windows and after non-command slash messages; the built-in runner announces one compaction per step and reports the start in force.
+- 2026-11-18 — W1: an attempt that follows a failed or stopped attempt of the same task is first flagged at max(30 min, that attempt's running time), not at 3× the plan's longest pass; the flag names that attempt.

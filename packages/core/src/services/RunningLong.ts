@@ -1,5 +1,5 @@
 import { flattenTasks, type Task } from '../models/Task';
-import { addPlannerUsage, type PlannerUsage, type UsageRecord } from '../models/Usage';
+import { addPlannerUsage, type AttemptOutcome, type PlannerUsage, type UsageRecord } from '../models/Usage';
 
 /**
  * An attempt that has run this long is worth a look whatever its plan's
@@ -10,16 +10,24 @@ export const RUNNING_LONG_FLOOR_MS = 30 * 60_000;
 /** How many times the longest passed AI task's running time an attempt may run before it is flagged. */
 export const RUNNING_LONG_FACTOR = 3;
 
-/** How long an attempt may run before it is flagged, and the passed task that set it, when one did. */
+/** How long an attempt may run before it is flagged, and what set it, when the floor did not. */
 export interface RunningLongThreshold {
   ms: number;
   basis?: RunningLongBasis;
+  retryOf?: RunningLongRetry;
 }
 
 /** The AI task that passed in the longest running time, which the threshold is a multiple of. */
 export interface RunningLongBasis {
   taskId: string;
   runningMs: number;
+}
+
+/** The task's own attempt before this one, which failed or was stopped after running this long. */
+export interface RunningLongRetry {
+  attempt: number;
+  runningMs: number;
+  outcome: AttemptOutcome;
 }
 
 /**
@@ -30,10 +38,17 @@ export interface RunningLongBasis {
  * are left out, as the live clock leaves them out: a task that waited overnight
  * says nothing of how long the work takes either. An attempt saved before its
  * running time was kept has only its wall time.
+ *
+ * An attempt of `taskId` that follows one of its own that failed or was
+ * stopped is flagged at the larger of the floor and that attempt's running
+ * time instead: it has already had that long, and more of the same rarely
+ * ends differently.
  */
-export function runningLongThreshold(tasks: readonly Task[]): RunningLongThreshold {
+export function runningLongThreshold(tasks: readonly Task[], taskId?: string): RunningLongThreshold {
   let basis: RunningLongBasis | undefined;
+  let retryOf: RunningLongRetry | undefined;
   for (const task of flattenTasks(tasks)) {
+    if (task.id === taskId) retryOf = endedWithout(task);
     if (task.type !== 'ai' || task.status !== 'completed') continue;
     const attempts = task.attemptUsage ?? [];
     const last = attempts[attempts.length - 1];
@@ -41,8 +56,15 @@ export function runningLongThreshold(tasks: readonly Task[]): RunningLongThresho
     const runningMs = last.runningMs ?? last.wallTimeMs;
     if (!basis || runningMs > basis.runningMs) basis = { taskId: task.id, runningMs };
   }
+  if (retryOf) return retryOf.runningMs > RUNNING_LONG_FLOOR_MS ? { ms: retryOf.runningMs, retryOf } : { ms: RUNNING_LONG_FLOOR_MS };
   const scaled = basis ? basis.runningMs * RUNNING_LONG_FACTOR : 0;
   return basis && scaled > RUNNING_LONG_FLOOR_MS ? { ms: scaled, basis } : { ms: RUNNING_LONG_FLOOR_MS };
+}
+
+/** The task's latest ended attempt, when it ended failed or stopped: the live one has not ended. */
+function endedWithout(task: Task): RunningLongRetry | undefined {
+  const last = task.attemptUsage?.filter((usage) => usage.endedAt !== undefined).at(-1);
+  return last?.outcome ? { attempt: last.attempt, runningMs: last.runningMs ?? last.wallTimeMs, outcome: last.outcome } : undefined;
 }
 
 /**
@@ -57,6 +79,7 @@ export interface RunningLongFacts {
   /** The running time this flag was due at: the threshold, doubled for each duration flag before it. */
   thresholdMs: number;
   basis?: RunningLongBasis;
+  retryOf?: RunningLongRetry;
   /** On a context flag, the size it was due at: the context threshold, doubled for each context flag before it. */
   contextThreshold?: number;
   /** What the main model's context holds now, from the last usage record or compaction. */
@@ -248,12 +271,13 @@ export class RunningLongClock {
   }
 
   private facts(reason: RunningLongFacts['reason'], thresholdMs: number): RunningLongFacts {
-    const { basis } = this.threshold();
+    const { basis, retryOf } = this.threshold();
     return {
       reason,
       elapsedMs: this.runningMs(),
       thresholdMs,
       ...(basis ? { basis } : {}),
+      ...(retryOf ? { retryOf } : {}),
       ...(this.meter.lastPromptTokens !== undefined ? { contextTokens: this.meter.lastPromptTokens } : {}),
       ...(this.meter.contextWindow !== undefined ? { contextWindow: this.meter.contextWindow } : {}),
       ...(this.meter.contextWindow !== undefined && this.meter.contextWindowAssumed ? { contextWindowAssumed: true as const } : {}),

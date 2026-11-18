@@ -1466,6 +1466,11 @@ export class ExecutionCommands {
     if (this.orchestrator.awaitsCheckpoint(located.task.id)) {
       return { refusal: `${capitalize(label)} is at a checkpoint${actor.kind === 'user' ? ':' : ', which a message does not answer:'} ${this.voiceOf(actor).atCheckpoint}` };
     }
+    // A session's queue starts with its attempt, so a message sent just after a retry would be lost: the note is how to reach that attempt.
+    const { status } = located.task;
+    if (actor.kind !== 'user' && located.task.attempted && (status === 'pending' || status === 'approved') && !this.running(located.task.id)) {
+      return { refusal: `${capitalize(label)} has not started its next attempt yet, so there is no turn to message. Its runner reads retry_task's message with its brief: give a note there, in the retry.` };
+    }
     return {
       act: async () => {
         if (command.force) {

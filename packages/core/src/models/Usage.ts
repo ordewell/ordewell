@@ -360,7 +360,11 @@ export interface AttemptUsage extends PlannerUsage {
   runnerSessionCost?: RunnerSessionCost;
   /** The compaction window Ordewell set for its runner, absent where it set none. */
   compaction?: CompactionPoint;
+  /** It ended on a failed verdict or a stop: the next attempt's running-long threshold is its running time (ADR-0018 W1). */
+  outcome?: AttemptOutcome;
 }
+
+export type AttemptOutcome = 'failed' | 'stopped';
 
 export function startAttemptUsage(attempt: number, runner: string, startedAt: string): AttemptUsage {
   return { attempt, runner, startedAt, wallTimeMs: 0, totals: {}, byModel: [] };
