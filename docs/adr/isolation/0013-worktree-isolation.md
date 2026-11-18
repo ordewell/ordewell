@@ -168,7 +168,9 @@ everything below applies per repo of the group.
   runner owns its tree for the attempt, and a merge under it would land
   mid-edit. A task's own work is read from its fork point, the newest
   integration commit its branch holds of those the run recorded, its landings'
-  merges, and never one before where it was cut (`taskForkPoint`). The
+  merges and the commits its reverts made, and never one before where it was
+  cut (`taskForkPoint`): a take-in past a sibling's revert holds that commit,
+  and what the revert took out is not the task's own deletion. The
   integration branch itself is never read for it: a runner shares the
   repository's refs and could move the branch onto its own tip to empty its
   diff. So what it took in, or
@@ -638,3 +640,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a sweep that only reads saved sessions leaves a pre-upgrade record unnamed: naming it in every load read every session file once per session.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
+- 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
