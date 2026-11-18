@@ -309,7 +309,13 @@ everything below applies per repo of the group.
   under a new id (a saved file a script loads, a second checkout on the same
   state root) prunes, continues and discards nothing of that run, drops the
   record and starts clean, as a fork does. A record saved before runs named
-  their session is taken by the first session that adopts it.
+  their session is named, as it is read, after the session whose own file
+  (or restore state) holds it: a session writes only its own run there, and a
+  copy of that file keeps its id, so the session that saved it adopts it after
+  an upgrade and the stamp is saved with it. A record that still names no
+  session came from no session's file, nothing shows whose it is, and a
+  session with an id adopts none of it either: it removes nothing, says so and
+  starts clean.
 - **Persistence.** `LegacyPlanState.isolation` holds `{ run, resolvers }`,
   written from the orchestrator at persist time like `tasks`, and saved on every
   change to it rather than at the end of the run — the record is what lets a
@@ -580,3 +586,4 @@ literal git command lines or private fields.
 - 2026-11-09 — the terminal's command is `/merge`, as the other surfaces say
   "Merge all"; `/handoff` stays a deprecated alias.
 - 2026-11-18 — a run names the session that minted it, and a copy of a plan under another session id adopts none of its run: one pruned a live session's read-only worktree.
+- 2026-11-18 — a record saved before runs named their session is named after the session whose file holds it, not taken by its first adopter: a copy of a pre-upgrade plan still pruned its owner's worktrees.

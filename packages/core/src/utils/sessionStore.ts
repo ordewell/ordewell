@@ -308,7 +308,7 @@ function settledOnLoad(session: SessionData, researchLog: string, logger: ILogge
   const plan = session.plan as LegacyPlanState;
   restoreResearchLog(plan, session.meta.id, researchLog, logger);
   failInterruptedTasks(plan.tasks, new Date().toISOString());
-  migratePlanStateIsolation(plan);
+  migratePlanStateIsolation(plan, session.meta.id);
   settleOwedRepairs(plan);
   releaseMadeManual(plan.tasks);
   migrateLoadedTasks(plan.tasks);

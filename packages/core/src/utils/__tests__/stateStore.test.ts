@@ -56,6 +56,15 @@ describe('loadState', () => {
     expect(task.awaitingReason).toBeUndefined();
   });
 
+  it('names a run saved before runs named their session after the session the state was saved for', () => {
+    const isolation = { run: { id: 'runaaaa1', workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} }, resolvers: {} };
+    saveState({ ...plan(), isolation }, tmpDir, 'session-aaaa0001');
+    expect(loadState(tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
+
+    saveState({ ...plan(), isolation }, tmpDir);
+    expect(loadState(tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+  });
+
   it('gives back the session id the state was saved for, kept off the plan', () => {
     saveState(plan(), tmpDir, '2026-10-18T10-05-18_review_0328b893');
 

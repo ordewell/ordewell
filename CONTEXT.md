@@ -2535,7 +2535,9 @@ failed spawn — so the next one decides its own mode. The field belongs to one
 plan: a fork must not copy it. The record names the session that minted it
 (`session`), and a session that loads a copy of another's plan under its own id
 adopts none of it: it prunes nothing, keeps no record and starts clean. A record
-saved before runs named theirs is taken by the first session that adopts it.
+saved before runs named theirs is named after the session whose file holds it as
+that file is read; one that reaches a session still naming none is adopted by
+none.
 A record saved in the ADR-0013 shape (the refs on the run itself, one `worktree`
 per task) is converted to a group of one when plan state is loaded, so a session
 saved by 0.4.23 resumes and hands off as it would have.

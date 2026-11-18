@@ -33,11 +33,14 @@ function plan(tasks: Task[]): LegacyPlanState {
   return { tasks, generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
 }
 
+/** The session every setup is, and whose file the records it loads came from. */
+const OWN = 'session-old';
+
 function setup(isolation = new FakeWorktreeIsolation(), aiService?: Partial<IAiService>) {
   const messages: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const r = runner();
-  const session = makeSession({ runner: r.runner, isolation, aiService, broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n) });
+  const session = makeSession({ runner: r.runner, isolation, aiService, sessionId: OWN, broadcast: (m) => messages.push(m), onNotice: (n) => notices.push(n) });
   const pass = (t: Task) => r.sessions.find((s) => s.taskId === t.id)!.reportComplete({ status: 'done', summary: '' });
   const lastStatus = () => [...messages].reverse().find((m): m is Extract<SessionMessage, { type: 'status_update' }> => m.type === 'status_update');
   return { session, isolation, messages, notices, pass, lastStatus, ...r };
@@ -242,7 +245,7 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { dependencies: ['t1'] })]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
+          id: 'old', session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t1: { taskId: 't1', order: 1, title: 'Task t1', branch: 'ordewell/old/1-t1', workspace: '/wt/1', status: 'merged', repos: { '.': { worktree: '/wt/1', linked: [], changed: true } } } },
         },
@@ -279,7 +282,7 @@ describe('Session with worktree isolation', () => {
       const { session, isolation, spawn, pass, messages } = setup();
 
       const loaded = sessionStore.loadSession('session-legacy1', dir)!;
-      session.loadPlan(loaded.plan, loaded.meta.goal, '/repo');
+      session.loadPlan(loaded.plan, loaded.meta.goal, '/repo', { sessionId: loaded.meta.id });
       await vi.waitFor(() => expect(isolation.calls).toEqual([{ op: 'pruneOrphans' }]));
       await session.execute({ command: 'run_plan' }, { kind: 'user' });
 
@@ -308,7 +311,7 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'awaiting_user' }), task('t3', 3)]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
+          id: 'old', session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
           tasks: { t2: record('t2', 2, 'conflict'), t1: record('t1', 1, 'merged') },
         },
@@ -341,7 +344,7 @@ describe('Session with worktree isolation', () => {
       ...plan([task('t1', 1)]),
       isolation: {
         run: {
-          id: 'old', workspaceRoot: process.cwd(), shared: [], sharedRepos: [], tasks: {},
+          id: 'old', session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [], tasks: {},
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', integrationBranch: 'ordewell/old/integration' }],
         },
         resolvers: {},
@@ -364,7 +367,7 @@ describe('Session with worktree isolation', () => {
       ...plan(records.map((r) => task(r.taskId, r.order, { status: r.status === 'merged' ? 'completed' : 'failed' }))),
       isolation: {
         run: {
-          id, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
+          id, session: OWN, workspaceRoot: process.cwd(), shared: [], sharedRepos: [],
           repos: [{ path: '.', root: process.cwd(), baseRef: 'abc', baseBranch: 'main', integrationBranch: `ordewell/${id}/integration` }],
           tasks: Object.fromEntries(records.map((r) => [r.taskId, r])),
         },
