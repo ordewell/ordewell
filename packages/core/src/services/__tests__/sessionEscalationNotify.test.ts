@@ -104,7 +104,7 @@ describe('the notify command in a run', () => {
     env.run.mockClear();
 
     const reopened = env.build();
-    reopened.loadPlan(saved, 'goal', testWorkspace, { persist: false });
+    reopened.loadPlan(saved, 'goal', testWorkspace, { persist: false, sessionId: env.session.sessionId });
     expect(reopened.escalations().map((e) => e.kind)).toEqual(['merge-all']);
     await new Promise((resolve) => { setTimeout(resolve, 20); });
 
