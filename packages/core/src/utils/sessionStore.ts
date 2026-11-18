@@ -365,6 +365,21 @@ export function loadChildSession(place: ChildSessionPlace, logger: ILogger = def
 }
 
 export function loadSession(sessionId: string, baseDir?: string, logger: ILogger = defaultLogger): { meta: SessionMeta; plan: LegacyPlanState } | null {
+  return loaded(sessionId, baseDir, logger, true);
+}
+
+/**
+ * A session loaded for a reader that neither adopts nor saves it, as a sweep
+ * over every saved session does. A run saved before runs named their session
+ * stays unnamed: whose it is matters only to a session adopting it, and
+ * {@link ownerOfSavedRun} reads every session file to say, which a sweep would
+ * pay once per session, on every sweep, while those files stay unsaved (ADR-0013).
+ */
+export function readSession(sessionId: string, baseDir?: string, logger: ILogger = defaultLogger): { meta: SessionMeta; plan: LegacyPlanState } | null {
+  return loaded(sessionId, baseDir, logger, false);
+}
+
+function loaded(sessionId: string, baseDir: string | undefined, logger: ILogger, naming: boolean): { meta: SessionMeta; plan: LegacyPlanState } | null {
   const sessionsDir = getSessionsDir(baseDir);
   if (!fs.existsSync(sessionsDir)) return null;
   try {
@@ -374,7 +389,8 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
         logger.warn('sessionStore', `session file ${found.file}: ${REJECTION_MESSAGE}`);
         return null;
       }
-      return settledOnLoad(found.session, researchLogPath(sessionId, baseDir), logger, ownerOnLoad(found.session.plan, sessionId, sessionsDir));
+      const savedBy = naming ? ownerOnLoad(found.session.plan, sessionId, sessionsDir) : undefined;
+      return settledOnLoad(found.session, researchLogPath(sessionId, baseDir), logger, savedBy);
     }
   } catch (err: unknown) {
     logger.warn('sessionStore', `failed to list sessions directory while searching for ${sessionId}`, err);

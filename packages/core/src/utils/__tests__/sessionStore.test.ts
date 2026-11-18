@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsHelpers from '../fsHelpers';
-import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession } from '../sessionStore';
+import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession, readSession } from '../sessionStore';
 import { canContinue } from '../../services/continuation';
 import { createEmptyPlan, createTask, type ResearchLogEntry, type Task } from '../../models/Task';
 import * as fs from 'fs';
@@ -527,6 +527,16 @@ describe('sessionStore', () => {
 
       expect(loadSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
       expect(loadSession('session-bbbb0002', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
+    });
+
+    it('reads a run as saved for a reader that adopts nothing: a pre-upgrade one stays unnamed, a named one keeps its name', () => {
+      const run = (session?: string) => ({ id: 'runaaaa1', ...(session ? { session } : {}), workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} });
+      const plan = (session?: string) => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], isolation: { run: run(session), resolvers: {} } }) as Parameters<typeof saveSession>[0];
+      saveSession(plan(), 'mine', tmpDir, 'session-aaaa0001');
+      saveSession(plan('session-aaaa0001'), 'a copy', tmpDir, 'session-bbbb0002');
+
+      expect(readSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+      expect(readSession('session-bbbb0002', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
     });
 
     it('names no session on a pre-upgrade run another session\'s file holds too, whichever holder is loaded', () => {
