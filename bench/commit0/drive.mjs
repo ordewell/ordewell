@@ -10,6 +10,7 @@
 //   node bench/commit0/drive.mjs --dry-run --libs <libraries.json>
 //   node bench/commit0/drive.mjs --rehearse <scenario> --libs <libraries.json>   (rehearse.mjs runs them all)
 //   node bench/commit0/drive.mjs --run --libs <libraries.json> --provider-pin <provider>
+//   node bench/commit0/drive.mjs --run --plan-only --arm B --libs <libraries.json> --provider-pin <provider>   (arm B's plan alone)
 //   node bench/commit0/drive.mjs --sweep
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -33,6 +34,9 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --fixture              a synthetic library built in --image, to prove the checks (dry run only)
   --image <image>        the image for --fixture
   --arm A|B|both         which arms (default both)
+  --plan-only            make arm B's plan and record its shape, then stop: nothing runs, merges or is scored,
+                         so the result is never a scored one; arm A has no plan, so --arm A is refused and
+                         --arm both means B (with --run or --rehearse, not --dry-run)
   --provider-pin <p>     the OpenRouter provider the key is pinned to, recorded in every result
   --cap-usd <usd>        the spend cap, the same for both arms (default ${L.CAP_USD})
   --parallel <n>         arm B's ORDEWELL_MAX_PARALLEL (default ${L.PARALLEL}); arm A runs one task
@@ -905,6 +909,9 @@ async function realArm(lib, sb, arm, settings, runDir) {
   let stall = { sinceMs: null };
   let settle = null;
   let aborted = false;
+  let planStartMs = null;
+  let planEndMs = null;
+  let planned = null;
 
   /** One look at the run; returns why it is over, or null. */
   const poll = async () => {
@@ -978,7 +985,9 @@ async function realArm(lib, sb, arm, settings, runDir) {
       sessionId = await createArmASession(lib, sb);
       must(sessionId, 'arm A session');
     } else {
+      planStartMs = Date.now();
       const plan = startStep(lib, sb, 'plan', ['ordewell', 'plan', '--goal', L.goalText(lib), '--runner', L.RUNNER, '--no-chat', '--yes', '--workspace', lib.workdir], settings.wallCapMs, log);
+      plan.promise.then(() => { planEndMs = Date.now(); });
       followers.push(plan);
       // The caps hold from the planner's first call; the start, stall and settle rules wait for the run, which the planner's calls are not.
       const why = await watch(plan);
@@ -991,11 +1000,19 @@ async function realArm(lib, sb, arm, settings, runDir) {
       const plan = await readSaved(lib, sb, sessionId);
       const planCheck = L.judgePlan(plan);
       steps.planCheck = planCheck;
-      fs.writeFileSync(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2));
+      if (opts.planOnly) {
+        // plan.json reads without the session; the plan as core saved it, planner's conversation and all, goes beside it.
+        fs.writeFileSync(path.join(runDir, 'plan.json'), `${JSON.stringify(L.planDigest(plan), null, 2)}\n`);
+        fs.writeFileSync(path.join(runDir, 'plan-saved.json'), JSON.stringify(plan, null, 2));
+        planned = L.plannedRecord({ plan, planCheck, planningMs: planEndMs === null ? null : planEndMs - planStartMs });
+      } else fs.writeFileSync(path.join(runDir, 'plan.json'), JSON.stringify(plan, null, 2));
       must(check(lib.name, `arm ${arm.id} plan`, planCheck.ok, planCheck.ok ? `${plan.tasks.length} tasks, all on ${L.RUNNER} with ${L.MODEL_ID}, in ${[...new Set(plan.tasks.map((t) => t.taskMode))].join(', ')}` : planCheck.failures), 'the plan breaks the protocol');
-      runStart = { atMs: Date.now(), usageLines: (await transcriptSummary(sb)).usageLines };
-      followers.push(startStep(lib, sb, 'run', ['ordewell', 'run', '--session-id', sessionId, '--workspace', lib.workdir], Math.max(1, settings.wallCapMs - (Date.now() - started)), log));
-      await watch(null);
+      // A plan-only run ends here: nothing starts, so there is nothing to follow, merge or score.
+      if (!opts.planOnly) {
+        runStart = { atMs: Date.now(), usageLines: (await transcriptSummary(sb)).usageLines };
+        followers.push(startStep(lib, sb, 'run', ['ordewell', 'run', '--session-id', sessionId, '--workspace', lib.workdir], Math.max(1, settings.wallCapMs - (Date.now() - started)), log));
+        await watch(null);
+      }
     }
   } catch (err) {
     aborted = true;
@@ -1005,7 +1022,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
     // Recorded, never judged (D5): whether a follower returned by itself or was ended by the stop.
     const endedBeforeStop = new Set(followers.filter((f) => f.done).map((f) => f.name));
     // A run that never started has nothing to merge, and its result is the failure, not a score.
-    closing = await stopRun(lib, sb, { sessionId, followers, merge: !aborted && stopped?.why !== 'no-start', log });
+    closing = await stopRun(lib, sb, { sessionId, followers, merge: !aborted && !opts.planOnly && stopped?.why !== 'no-start', log });
     for (const f of followers) if (f.done) steps[f.name] = { exit: f.result.code, timedOut: f.result.timedOut, ended: endedBeforeStop.has(f.name) ? 'by itself' : 'by the stop' };
     if (closing.merge) steps.merge = closing.merge;
     log.end();
@@ -1024,6 +1041,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
       ? { billedUsd: null, source: 'not available: runs overlapped on the key; see the batch\'s batch.json' }
       : before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null,
     finalPlan,
+    planned,
   };
 }
 
@@ -1339,25 +1357,31 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     if (opts.fixture) {
       await prepareFixture(lib, sb);
     }
-    const reference = await collectReference(lib, sb);
-    must(reference.ok, 'the tests do not collect offline at the reference');
-    const refFiles = opts.dryRun || opts.rehearse ? await exportReferenceFiles(lib, sb, runDir) : null;
+    // What a plan-only run owes the score (the denominator, the baseline, the reference files) is not taken: it is never scored.
+    let reference = null;
+    if (!opts.planOnly) {
+      reference = await collectReference(lib, sb);
+      must(reference.ok, 'the tests do not collect offline at the reference');
+    }
+    const refFiles = !opts.planOnly && (opts.dryRun || opts.rehearse) ? await exportReferenceFiles(lib, sb, runDir) : null;
     record.leak = await flattenAndProbe(lib, sb);
     must(record.leak.ok, 'the reference implementation is reachable: nothing runs');
     // After the probe, which must still find the reference out of reach: the scripted agent's work is this tar.
-    if (opts.rehearse) {
+    if (opts.rehearse && !opts.planOnly) {
       const put = await onHost('docker cp "$2" "$1"', [`${sb.box}:${R.REFERENCE_TAR_IN_BOX}`, refFiles]);
       must(check(lib.name, 'reference source for the scripted agent', put.code === 0, put.code === 0 ? R.REFERENCE_TAR_IN_BOX : put.stderr.trim()), 'the reference files cannot be put in the box');
     }
-    record.network = await collect(lib, sb, reference);
-    must(record.network.ok, 'a dependency is missing from the image');
-    const base = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
-    const br = L.baselineRecord(base);
-    record.baselineEval = base;
-    record.baseline = br.baseline ?? { collected: (base.passed ?? 0) + (base.failed ?? 0) + (base.errors ?? 0) + (base.skipped ?? 0), passed: base.passed, failed: base.failed, errors: base.errors, exit: base.exit, timedOut: base.timedOut };
-    check(lib.name, 'baseline on the stubs', br.ok, br.baseline
-      ? `collected 0 at the stubs (exit ${base.exit}): ${br.baseline.reason}; the library's own, recorded as the baseline`
-      : br.ok ? `${base.passed} passed, ${base.failed} failed, ${base.errors ?? 0} errors of ${record.network.collected} collected (exit ${base.exit})` : `no summary (exit ${base.exit}${base.timedOut ? ', timed out' : ''})`);
+    if (!opts.planOnly) {
+      record.network = await collect(lib, sb, reference);
+      must(record.network.ok, 'a dependency is missing from the image');
+      const base = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
+      const br = L.baselineRecord(base);
+      record.baselineEval = base;
+      record.baseline = br.baseline ?? { collected: (base.passed ?? 0) + (base.failed ?? 0) + (base.errors ?? 0) + (base.skipped ?? 0), passed: base.passed, failed: base.failed, errors: base.errors, exit: base.exit, timedOut: base.timedOut };
+      check(lib.name, 'baseline on the stubs', br.ok, br.baseline
+        ? `collected 0 at the stubs (exit ${base.exit}): ${br.baseline.reason}; the library's own, recorded as the baseline`
+        : br.ok ? `${base.passed} passed, ${base.failed} failed, ${base.errors ?? 0} errors of ${record.network.collected} collected (exit ${base.exit})` : `no summary (exit ${base.exit}${base.timedOut ? ', timed out' : ''})`);
+    }
     let fixture = null;
     if (opts.dryRun) {
       await dryArm(lib, sb, arm, settings, runDir);
@@ -1368,15 +1392,17 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
         check(lib.name, `arm ${arm.id} run started`, false, record.arm.stopped.detail);
         throw new Abort(`the run never started: ${record.arm.stopped.detail}`);
       }
-      record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.arm.finalPlan });
+      if (!opts.planOnly) record.truncated = L.judgeLanding({ stopped: record.arm.stopped, stalled: record.arm.stalled, plan: record.arm.finalPlan });
     }
-    const copy = await copyArmWorkdir(lib, sb, path.join(runDir, 'arm-workdir'));
-    record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? fixture?.plan ?? null);
-    if (fixture?.plan) checkHiddenWorktree(lib, arm, copy, fixture.plan);
-    const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline) : null;
-    record.scoring = await scoreInFreshBox(lib, record.files.dir, { runId, settings, runDir, inspect });
-    if (record.scoring.patchError) record.files.patches[0].error = record.scoring.patchError;
-    record.tests = record.scoring.tests ? { ...record.scoring.tests, collected: record.network.collected } : null;
+    if (!opts.planOnly) {
+      const copy = await copyArmWorkdir(lib, sb, path.join(runDir, 'arm-workdir'));
+      record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? fixture?.plan ?? null);
+      if (fixture?.plan) checkHiddenWorktree(lib, arm, copy, fixture.plan);
+      const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline) : null;
+      record.scoring = await scoreInFreshBox(lib, record.files.dir, { runId, settings, runDir, inspect });
+      if (record.scoring.patchError) record.files.patches[0].error = record.scoring.patchError;
+      record.tests = record.scoring.tests ? { ...record.scoring.tests, collected: record.network.collected } : null;
+    }
   } catch (err) {
     if (!(err instanceof Abort)) throw err;
     console.log(`  stopped: ${err.message}`);
@@ -1397,16 +1423,18 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const plan = record.arm?.finalPlan ?? null;
   const recorded = plan ? L.recordedSpend(plan) : null;
   const sessionId = record.arm?.sessionId ?? null;
-  const metrics = plan && sessionId ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
-  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun, scoring: record.files?.source });
+  const metrics = plan && sessionId && !opts.planOnly ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
+  const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun, planOnly: opts.planOnly, scoring: record.files?.source });
   const result = {
     ...L.resultRecord({
       lib, arm, settings, window: record.window, ordewell, egress: record.egress, leak: record.leak, network: record.network,
       tests: record.tests, baseline: record.baseline, wallClockMs: record.arm?.wallClockMs,
-      spend: record.arm?.billed ?? (record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
+      spend: record.arm?.billed ?? (opts.planOnly
+        ? { billedUsd: null, source: 'plan-only: the key could not be read, and the planner writes no runner transcript; recordedUsd is the planner\'s spend as Ordewell recorded it' }
+        : record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
       transcripts: record.transcripts, stopped: record.arm?.stopped, stalled: record.arm?.stalled, truncated: record.truncated,
       scoredFrom: record.files?.scoredFrom, scoring: record.scoring, patches: record.files?.patches, validity,
-      providerPin: opts.providerPin, dryRun: opts.dryRun, startedAt, endedAt: new Date().toISOString(),
+      providerPin: opts.providerPin, dryRun: opts.dryRun, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(),
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,
@@ -1417,6 +1445,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     recordedUsd: recorded?.usd ?? null,
     recorded,
     metrics,
+    // A plan-only run's plan: its shape, the planner's spend and time (null for any other run, which has no such field).
+    ...(opts.planOnly ? { planned: record.arm?.planned ?? null } : {}),
     ordewellRoot: ordewell.root,
     distFreshness: { stale: ordewell.freshness.stale, allowed: ordewell.freshness.allowed, detail: ordewell.freshness.detail },
     sessionId,
@@ -1429,7 +1459,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   };
   fs.writeFileSync(path.join(runDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
   // A batch appends its runs' results itself, one at a time, once they have all ended.
-  if (opts.run && !opts.batchDir) fs.appendFileSync(path.join(path.dirname(runsDir), 'results.jsonl'), `${JSON.stringify(result)}\n`);
+  if (opts.run && !opts.batchDir) fs.appendFileSync(path.join(path.dirname(runsDir), L.resultsFileName(opts)), `${JSON.stringify(result)}\n`);
   return result;
 }
 
@@ -1459,7 +1489,7 @@ async function main() {
   const runsDir = opts.batchDir ?? path.join(dataDir, L.runsDirName(opts));
   fs.mkdirSync(runsDir, { recursive: true });
   const libs = loadLibraries();
-  console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);
+  console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}${opts.planOnly ? ', PLAN ONLY: arm B plans and nothing runs or is scored' : ''}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
   // A batch holds the key's lock for all its runs.
   const release = opts.run && !opts.batchDir ? L.lockKey(dataDir) : () => {};
@@ -1482,7 +1512,7 @@ async function main() {
   const unverified = checks.filter((c) => c.unverified);
   const expected = checks.filter((c) => c.expectedFailure && !c.ok);
   console.log(`\n${checks.length} checks: ${checks.length - failed.length - unverified.length - expected.length} ok, ${failed.length} failed, ${unverified.length} unverified${expected.length ? `, ${expected.length} failed as expected` : ''}`);
-  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, ${r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
+  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, ${r.planOnly ? L.describePlanned(r.planned) : r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
   process.exitCode = failed.length || results.some((r) => r.aborted) ? 1 : 0;
 }
 

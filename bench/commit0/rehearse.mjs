@@ -41,6 +41,8 @@ const dataDir = checkedBenchDir('commit0');
 const rehearsals = path.join(dataDir, 'rehearsals');
 const resultsFile = path.join(dataDir, 'results.jsonl');
 const resultsSize = () => (fs.existsSync(resultsFile) ? fs.statSync(resultsFile).size : 0);
+const plansFile = path.join(dataDir, 'plans.jsonl');
+const plansSize = () => (fs.existsSync(plansFile) ? fs.statSync(plansFile).size : 0);
 
 /** The bench's boxes and networks: this rehearsal's must all be gone when it ends. */
 function leftovers() {
@@ -84,12 +86,13 @@ const outcome = [];
 for (const name of names) {
   const s = R.scenario(name);
   const seed = `rehearsal-${name}-${Date.now().toString(36)}`;
-  const argv = ['--rehearse', name, '--libs', libs, '--only', only, '--arm', s.arm, '--seed', seed, '--jobs', '1', ...R.windowArgs(s)];
+  const argv = ['--rehearse', name, '--libs', libs, '--only', only, '--arm', s.arm, '--seed', seed, '--jobs', '1', ...(s.planOnly ? ['--plan-only'] : []), ...R.windowArgs(s)];
   fs.mkdirSync(rehearsals, { recursive: true });
   const log = path.join(rehearsals, `${seed}.log`);
   console.log(`\n== ${name}: ${s.about}\n   node bench/commit0/batch.mjs ${argv.join(' ')}\n   log: ${log}`);
   const startedAt = Date.now();
   const sizeBefore = resultsSize();
+  const plansBefore = plansSize();
   const exit = await batch(argv, log);
   const { runDir, batchRecord } = findBatch(seed);
   const result = runDir ? JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8')) : null;
@@ -97,6 +100,15 @@ for (const name of names) {
   failures.push(...R.judgeBatch(batchRecord, { lib: only, arm: s.arm, rehearsal: name }));
   if (resultsSize() !== sizeBefore) failures.push(`${resultsFile} grew: a rehearsal's result was appended to the paid runs' results`);
   if (runDir) failures.push(...R.judgePlayed(name, turnsOf(path.join(runDir, 'rehearsal-requests.jsonl')), playCtx(libs, only)));
+  if (runDir && s.planOnly) {
+    const digestFile = path.join(runDir, 'plan.json');
+    failures.push(...R.judgePlanOnlyDir({
+      names: fs.readdirSync(runDir),
+      digest: fs.existsSync(digestFile) ? JSON.parse(fs.readFileSync(digestFile, 'utf8')) : null,
+      expectedTitles: s.plan().tasks.map((t) => t.title),
+    }));
+    if (plansSize() !== plansBefore) failures.push('plans.jsonl grew: a rehearsal\'s plan was appended to the plan-only results');
+  }
   const left = leftovers();
   const stray = [...left.containers.filter((c) => !before.containers.includes(c)), ...left.networks.filter((n) => !before.networks.includes(n))];
   if (stray.length) failures.push(`left behind: ${stray.join(', ')}`);
