@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { monitorEventLoopDelay } from 'perf_hooks';
 import type { MessageBlock } from '@ordewell/core';
 import { createApp } from '../app';
@@ -8,10 +8,13 @@ import { patient } from '@ordewell/core/testing';
 
 const yieldMacrotask = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+// Attempted, here and in every status update: a task's chat opens only once an
+// attempt exists, and without one the view below never opens, so the huge
+// block changes nothing and paints nothing.
 function task(id: string, order: number): TaskView {
   return {
     id, order, title: `Task ${order}: make the ${id} route handle a long and winding request`, type: 'ai',
-    status: 'in_progress', dependencies: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits',
+    status: 'in_progress', attempted: true, dependencies: [], assignedRunner: 'claude-code', taskMode: 'acceptEdits',
     assignedModel: { modelId: 'claude-sonnet-4', modelLabel: 'Claude Sonnet 4' },
   };
 }
@@ -30,6 +33,7 @@ function longConversation(): TuiState['conversation'] {
 
 function harness(state: TuiState) {
   const frames: { rows: number; bytes: number; at: number }[] = [];
+  let lastFrame: string[] = [];
   let lastDispatch = 0;
   let blocked = 0;
   let drawTime = 0;
@@ -40,6 +44,7 @@ function harness(state: TuiState) {
       blocked += at - lastDispatch;
       const started = performance.now();
       frames.push({ rows: frame.length, bytes: frame.reduce((n, row) => n + row.length, 0), at });
+      lastFrame = frame;
       drawTime += performance.now() - started;
     },
     perform: async () => {},
@@ -48,6 +53,7 @@ function harness(state: TuiState) {
   return {
     app,
     frames,
+    lastFrame: () => lastFrame.join('\n'),
     dispatch(action: Action) {
       lastDispatch = performance.now();
       app.dispatch(action);
@@ -81,7 +87,7 @@ describe('repaint measurement', () => {
       if (i % 4 === 0) {
         flood.push({ type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_text_delta', turnId: 'turn', segmentId: 'seg', text: `token ${i} ` } });
       } else if (i % 4 === 1) {
-        flood.push({ type: 'runMessage', message: { type: 'status_update', tasks: Array.from({ length: 6 }, (_, n) => ({ id: `t${n + 1}`, status: 'in_progress', verdict: null })) }, sessionId: 's1' });
+        flood.push({ type: 'runMessage', message: { type: 'status_update', tasks: Array.from({ length: 6 }, (_, n) => ({ id: `t${n + 1}`, status: 'in_progress', attempted: true, verdict: null })) }, sessionId: 's1' });
       } else if (i % 4 === 2) {
         flood.push({ type: 'taskLog', sessionId: 's1', taskId: 't1', attempt: 1, events: [{ type: 'text_delta', text: `step ${i}\n` }] });
       } else {
@@ -106,6 +112,7 @@ describe('repaint measurement', () => {
     await yieldMacrotask();
     h.dispatch({ type: 'taskLog', sessionId: 's1', taskId: 't1', attempt: 1, events: [{ type: 'command', name: 'npm', args: 'test' }] });
     await yieldMacrotask();
+    expect(h.app.getState().taskView).toMatchObject({ taskId: 't1', loaded: true, attempt: 1 });
 
     const huge = Array.from({ length: 80_000 }, (_, i) => `  ✓ test case ${i} passes in the integration suite`).join('\n');
     const delay = monitorEventLoopDelay({ resolution: 5 });
@@ -113,6 +120,9 @@ describe('repaint measurement', () => {
     const beforeFrames = h.frames.length;
     const hugeStart = performance.now();
     h.dispatch({ type: 'taskLog', sessionId: 's1', taskId: 't1', attempt: 1, events: [{ type: 'command_output', text: huge }] });
+    // The block asks for a frame of its own: wait for that frame, not for a
+    // window a loaded machine may close before any timer in it has run.
+    await vi.waitFor(() => expect(h.lastFrame()).toContain('passes in the integration suite'));
     await new Promise((resolve) => setTimeout(resolve, 50));
     const hugeMs = performance.now() - hugeStart;
     delay.disable();
@@ -129,6 +139,7 @@ describe('repaint measurement', () => {
       h.dispatch({ type: 'taskLog', sessionId: 's1', taskId: 't1', attempt: 1, events: [{ type: 'command_output', text: chunk }] });
       await yieldMacrotask();
     }
+    await vi.waitFor(() => expect(h.frames.length).toBeGreaterThan(streamedBefore));
     await new Promise((resolve) => setTimeout(resolve, 50));
     const streamedMs = performance.now() - streamedStart;
     streamDelay.disable();
@@ -166,9 +177,9 @@ describe('repaint measurement', () => {
     // A huge block is laid out at its head, not parsed whole: neither its
     // arrival nor a stream of chunks may hold the loop for a noticeable time.
     expect(hugeFrames).toBeGreaterThan(0);
-    expect(delay.max / 1e6).toBeLessThan(1_000);
+    expect(delay.max / 1e6).toBeLessThan(patient(1_000));
     expect(streamedFrames).toBeGreaterThan(0);
-    expect(streamedMs).toBeLessThan(15_000);
-    expect(streamDelay.max / 1e6).toBeLessThan(1_000);
+    expect(streamedMs).toBeLessThan(patient(15_000));
+    expect(streamDelay.max / 1e6).toBeLessThan(patient(1_000));
   }, patient(60_000));
 });

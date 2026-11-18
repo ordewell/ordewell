@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { arg, captureConsole, core, countReaddirs, hostSession, loadAverage, makeTasks, ms, now, numbers, planOf, quietNotifications, table, tempWorkspace, timed } from './lib.mjs';
+import { arg, captureConsole, closeSession, core, countReaddirs, hostSession, loadAverage, makeTasks, ms, now, numbers, planOf, quietNotifications, removeDir, table, tempWorkspace, timed } from './lib.mjs';
 
 const { count: printed, say } = captureConsole();
 const readdirs = countReaddirs();
@@ -110,7 +110,7 @@ async function saves(i, n) {
     put(`saved file, ${name} (bytes)`, i, fs.statSync(path.join(dir, file)).size);
     put(`loadSession, ${name} (ms)`, i, (await timed(() => core.loadSession(id, workspace), 400, 5)).ms);
   }
-  fs.rmSync(workspace, { recursive: true, force: true });
+  removeDir(workspace);
 }
 
 async function view(i, n) {
@@ -142,7 +142,7 @@ async function view(i, n) {
   put('planner plan view, built (ms)', i, (await timed(() => { view = session.conversation.planView(); }, budget(n))).ms);
   put('plan block, whole, to a fresh planner context (bytes)', i, view.full.length);
   session.stopExecution();
-  session.destroy();
+  await closeSession(session);
   host.dropWorkspace();
 }
 
@@ -247,7 +247,7 @@ async function tree(i, n) {
   again.setRootLimit(limit + 1);
   await again.shutdown();
   put('first append after open (ms)', i, ms(first));
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeDir(dir);
 }
 
 const sections = [
