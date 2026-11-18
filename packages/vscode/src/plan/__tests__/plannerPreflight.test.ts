@@ -24,7 +24,7 @@ function config(aiProvider: PlannerBackendId, apiKey: string, planningModel: str
  * answered "API key not configured" instead of planning.
  */
 describe('plannerPreflightError', () => {
-  for (const provider of ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']) {
+  for (const provider of ['claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent']) {
     it(`lets ${provider} plan with no API key`, () => {
       expect(plannerPreflightError(config(provider, '', 'sonnet'), '/repo')).toBeNull();
     });

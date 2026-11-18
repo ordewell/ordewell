@@ -11,6 +11,7 @@ import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
 import { GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
+import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 import { CONNECTORS } from '../harness/connectors';
 import { recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import type { LaunchDeps } from '../../utils/launch';
@@ -198,7 +199,7 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('plans with exactly the runners whose connectors plan', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
-    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, CLINE_MANIFEST, GEMINI_CLI_MANIFEST, CURSOR_AGENT_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
+    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, PI_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, CLINE_MANIFEST, GEMINI_CLI_MANIFEST, CURSOR_AGENT_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
     const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec, launch: POSIX });
 
     const plannable: string[] = [];
