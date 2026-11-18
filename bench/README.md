@@ -181,6 +181,7 @@ labelled containers and networks whose driver on this host is no longer running.
 | `--stall-min <min>` | 15 | how long a person may be waited on with nothing running |
 | `--settle-min`, `--no-start-min`, `--poll-sec`, `--wall-min` | 5, 10, 30 s, 180 | the settle window, the no-start bound, the poll interval and the wall-clock cap, which a rehearsal shortens |
 | `--rehearse <scenario>` | | run the arms on the scripted fake provider (see Rehearsal) |
+| `--plan-only` | off | arm B's planning alone, then stop: nothing runs, merges or is scored (see Plan-only) |
 | `--ordewell-root <dir>` | this tree | the built tree packed into the box |
 | `--allow-stale-dist` | off | run a dist older than its sources; the result is not valid |
 | `--sweep` | | remove boxes of dead drivers; alone, nothing else runs |
@@ -261,6 +262,7 @@ or network of the bench is left behind:
 | `a-stall` | A | the task makes the edits, then asks a checkpoint that nobody answers | ended by the stall rule (`stalled: waiting on checkpoint`), not by a cap; never complete; the attempt cut short; scored from the task's unlanded worktree; more passed than the baseline |
 | `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint` |
 | `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it | ended by the settle rule with both tasks held open, which the stall record names, since nobody is waited on; never complete; scored from merged work, at the baseline, since nothing landed |
+| `b-plan` | B, `--plan-only` | the planner returns a six-task plan with a research task, three changes, an ops task and a script that checks a loop; nothing else is scripted | marked `planOnly` and never valid; the shape the plan has (6 tasks, chain of 4, widest level 2, 6 edges, one gate, one loop check); a priced planner and a planning time; no `run` or `merge` step, no score, no tests; `plan.json` and `plan-saved.json` in the run's directory and no `arm-workdir/`; the fake heard no runner and no supervisor; `plans.jsonl` did not grow |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
 
 `npm run test:bench` runs the scripts' own logic and never starts the Docker
@@ -272,6 +274,61 @@ Only a paid run can show what a real model does with the goal: how long its
 attempts take, its usage and how OpenRouter bills it, the key's usage and the
 batch budget's stop, provider routing, and whether a stream stalls or a call is
 refused.
+
+### Plan-only
+
+`--plan-only` measures the shape of the plans Ordewell makes for a few cents a
+plan, not a three-hour run. It runs arm B as far as its plan: the box, the key
+check, the egress check, the context window and the leak probe stay, then
+`ordewell plan --goal <the goal> --runner openrouter --no-chat --yes`. The plan is
+written and judged (every task on `openrouter`, the model and a mode the runner
+has), its shape is recorded, and the run stops: nothing is started, merged or
+scored. It skips the reference collection, the baseline, the copy of the arm's
+work, the choice of files to score and the fresh-container eval, so no test
+count or `scoredFrom` is in its result.
+
+```bash
+# one plan
+node bench/commit0/drive.mjs --run --plan-only --libs <libraries.json> --only <library> --provider-pin <provider>
+# a batch: several libraries, repeated seeds, two builds to compare
+node bench/commit0/batch.mjs --run --plan-only --libs <libraries.json> --provider-pin <provider> \
+  --batch-budget-usd <usd> --jobs 2 --seed 1 [--ordewell-root <another built tree>]
+```
+
+Arm A has no plan: `--arm A` with `--plan-only` is refused, and `--arm both` (the
+default) means B. It needs `--run` or `--rehearse`, not `--dry-run`. The spend
+cap still ends a planner that spends past it, the batch takes the key's lock
+and budget as it does for a scored batch, and the other options apply.
+
+A plan-only run goes in `plan-runs/` (a batch in `plan-runs/batch-<time>[-<seed>]/`),
+and its result in `plans.jsonl`, never `runs/` or `results.jsonl`. Its
+`result.json` is marked `planOnly: true` and is never valid: `valid` is false and
+`invalidReasons` says `plan-only: …`, so a filter on `valid` can never count it as
+a scored run. `tests`, `baseline`, `scoredFrom`, `tasks` and `metrics` are null, and
+`patches` is empty. `batch.json` carries `planOnly: true` too. The run's own
+fields, `recordedUsd` (the planner's spend as Ordewell recorded it) among them,
+hold as for any run, and `planned` holds its plan:
+
+| Field of `planned` | |
+| --- | --- |
+| `shape.tasks`, `shape.subtasks` | top-level tasks, and the subtasks under them |
+| `shape.kinds` | tasks by kind, each task once: `research`, `change`, `ops`, `script`, `user`, `delegated` |
+| `shape.loopChecks` | tasks that carry a loop, counted besides their kind (a check is a script or an AI task) |
+| `shape.longestChain`, `shape.levels` | the same number: a task's level is one more than its deepest dependency's |
+| `shape.chain` | the longest chain's task titles in order (of equal chains, the one whose last task the plan lists first) |
+| `shape.widestLevel` | the most tasks one level holds |
+| `shape.edges` | dependencies, each counted once |
+| `shape.gatedByOne`, `shape.gate` | whether one task is, directly or through others, a dependency of every other, and its title; false for one task |
+| `shape.valid`, `shape.problems` | false with the reasons when a task depends on no task, an id repeats or there is a cycle: the graph's fields are then null, the counts kept |
+| `plannerUsd` | the planner's spend as Ordewell recorded it (null when it recorded none) |
+| `planningMs` | how long `ordewell plan` ran |
+| `protocolOk`, `protocolFailures` | whether the plan passed the judge every plan passes |
+
+`plan.json` holds every top-level task's `title`, `brief` (its prompt, or its
+description), `dependencies` (ids) and `dependsOn` (titles), its kind, runner,
+model and mode, and its subtasks; `plan-saved.json` is the plan as core saved it.
+The shape is `lib.mjs`'s `planStructure`, one function for every plan, with
+tests for a chain, a fan-out, a root gate, a cycle and an unknown dependency.
 
 ### Running
 
@@ -368,6 +425,7 @@ node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <provi
 | `--jobs <n>` | 2 | runs at once |
 | `--batch-budget-usd <usd>` | required with `--run` | stop every run when the key's usage since the batch began reaches it |
 | `--only`, `--arm` | every library, both arms | which runs |
+| `--plan-only` | off | arm B's plan alone, for every run of the batch (see Plan-only) |
 | `--seed <label>` | none | kept in each `result.json` and run directory's name |
 | `--sweep` | | sweep before the batch |
 

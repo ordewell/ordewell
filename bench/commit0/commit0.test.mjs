@@ -1217,6 +1217,174 @@ test('planShape: the longest dependency chain and the widest level', () => {
   assert.deepEqual(L.planShape({ tasks: [t('a', ['b']), t('b', ['a'])] }), { longestChain: null, widestLevel: null });
 });
 
+// --- --plan-only: the shape of a plan -----------------------------------------
+
+const pt = (id, dependencies = [], over = {}) => ({ id, title: `Task ${id}`, description: `does ${id}`, type: 'ai', dependencies, subtasks: [], ...over });
+const titles = (...ids) => ids.map((i) => `Task ${i}`);
+
+test('planStructure: a chain has as many levels as tasks, one wide, and its first task gates the rest', () => {
+  const s = L.planStructure({ tasks: [pt('a'), pt('b', ['a']), pt('c', ['b']), pt('d', ['c'])] });
+  assert.deepEqual([s.tasks, s.levels, s.longestChain, s.widestLevel, s.edges, s.valid], [4, 4, 4, 1, 3, true]);
+  assert.deepEqual(s.chain, titles('a', 'b', 'c', 'd'));
+  assert.deepEqual([s.gatedByOne, s.gate], [true, 'Task a']);
+  assert.deepEqual(s.problems, []);
+});
+
+test('planStructure: a fan-out of independent tasks is one level, wide, with no gate and no edge', () => {
+  const s = L.planStructure({ tasks: [pt('a'), pt('b'), pt('c'), pt('d')] });
+  assert.deepEqual([s.levels, s.longestChain, s.widestLevel, s.edges, s.gatedByOne, s.gate], [1, 1, 4, 0, false, null]);
+  assert.deepEqual(s.chain, titles('a'), 'with every chain of one task equal, the first listed');
+  // One task fans out to three, which a last task joins: the root gates all, the widest level is the middle.
+  const diamond = L.planStructure({ tasks: [pt('r'), pt('x', ['r']), pt('y', ['r']), pt('z', ['r']), pt('j', ['x', 'y', 'z'])] });
+  assert.deepEqual([diamond.levels, diamond.widestLevel, diamond.edges, diamond.gate], [3, 3, 6, 'Task r']);
+  assert.deepEqual(diamond.chain, titles('r', 'x', 'j'), 'the first of equal chains');
+});
+
+test('planStructure: a root gate is the one task every other reaches, however indirectly', () => {
+  const gated = L.planStructure({ tasks: [pt('g'), pt('a', ['g']), pt('b', ['a']), pt('c', ['g'])] });
+  assert.deepEqual([gated.gatedByOne, gated.gate], [true, 'Task g']);
+  // Two roots: neither gates the other's branch.
+  const two = L.planStructure({ tasks: [pt('g'), pt('h'), pt('a', ['g', 'h'])] });
+  assert.deepEqual([two.gatedByOne, two.gate], [false, null]);
+  // A last task depends on everything yet gates nothing: it is a sink, not a root.
+  const sink = L.planStructure({ tasks: [pt('a'), pt('b'), pt('z', ['a', 'b'])] });
+  assert.equal(sink.gatedByOne, false);
+  assert.equal(L.planStructure({ tasks: [pt('only')] }).gatedByOne, false, 'a lone task gates no other');
+});
+
+test('planStructure counts a task once by kind, loop checks besides, subtasks apart, and a repeated dependency once', () => {
+  const s = L.planStructure({
+    tasks: [
+      pt('r', [], { research: true, readOnly: true }),
+      pt('c', ['r'], { subtasks: [pt('c1'), pt('c2', [], { subtasks: [pt('c3')] })] }),
+      pt('o', ['r'], { ops: true }),
+      pt('s', ['c'], { type: 'script', commands: [['pytest']], loop: { body: ['f'], maxRounds: 2 } }),
+      pt('f', ['s', 's']),
+      pt('u', [], { type: 'user' }),
+      pt('d', [], { type: 'delegated' }),
+    ],
+  });
+  assert.deepEqual(s.kinds, { research: 1, change: 2, ops: 1, script: 1, user: 1, delegated: 1 });
+  assert.equal(Object.values(s.kinds).reduce((a, b) => a + b, 0), s.tasks, 'the kinds sum to the tasks');
+  assert.equal(s.loopChecks, 1);
+  assert.equal(s.subtasks, 3);
+  assert.equal(s.edges, 4, 'r→c, r→o, c→s, s→f once, and none for the subtasks');
+  assert.deepEqual(s.chain, titles('r', 'c', 's', 'f'));
+});
+
+test('planStructure: a cycle, an unknown dependency, a repeated id or no task is a shape without a graph, never a crash', () => {
+  const cycle = L.planStructure({ tasks: [pt('a', ['b']), pt('b', ['a']), pt('c')] });
+  assert.equal(cycle.valid, false);
+  assert.match(cycle.problems.join(), /cycle/);
+  assert.deepEqual([cycle.levels, cycle.longestChain, cycle.chain, cycle.widestLevel, cycle.gatedByOne, cycle.gate], [null, null, null, null, null, null]);
+  assert.deepEqual([cycle.tasks, cycle.edges, cycle.kinds.change], [3, 2, 3], 'what needs no graph is still counted');
+  assert.match(L.planStructure({ tasks: [pt('a', ['a'])] }).problems.join(), /cycle/, 'a task cannot wait on itself');
+  const unknown = L.planStructure({ tasks: [pt('a', ['ghost'])] });
+  assert.equal(unknown.valid, false);
+  assert.match(unknown.problems.join(), /"Task a" depends on "ghost", which is no task/);
+  assert.match(L.planStructure({ tasks: [pt('a'), pt('a')] }).problems.join(), /two tasks have the id "a"/);
+  assert.deepEqual(L.planStructure({ tasks: [] }).problems, ['the plan holds no task']);
+  for (const odd of [null, undefined, {}, { tasks: 'no' }, { tasks: [null, 3, pt('x', 'not-a-list', { subtasks: 'no' })] }]) {
+    assert.doesNotThrow(() => L.planStructure(odd), JSON.stringify(odd));
+  }
+  assert.equal(L.planStructure({ tasks: [null, 3, pt('x', 'not-a-list', { subtasks: 'no' })] }).valid, true, 'what is not a task is left out');
+});
+
+test('planStructure reads a deep plan without the stack, and its shape agrees with planShape', () => {
+  const deep = Array.from({ length: 800 }, (_, i) => pt(`t${i}`, i ? [`t${i - 1}`] : []));
+  assert.equal(L.planStructure({ tasks: deep }).longestChain, 800);
+  const plan = { tasks: [pt('a'), pt('b', ['a']), pt('c', ['a']), pt('d', ['b']), pt('e')] };
+  const s = L.planStructure(plan);
+  assert.deepEqual({ longestChain: s.longestChain, widestLevel: s.widestLevel }, L.planShape(plan));
+});
+
+test('planDigest holds every task\'s title, brief and dependencies, by id and by title', () => {
+  const d = L.planDigest({ tasks: [pt('a', [], { prompt: 'Do a, thoroughly.' }), pt('b', ['a', 'zz'], { subtasks: [pt('b1')] })] });
+  assert.deepEqual(d.tasks.map((t) => [t.title, t.brief, t.dependencies, t.dependsOn, t.kind]), [
+    ['Task a', 'Do a, thoroughly.', [], [], 'change'],
+    ['Task b', 'does b', ['a', 'zz'], ['Task a', null], 'change'],
+  ]);
+  assert.equal(d.tasks[1].subtasks[0].title, 'Task b1');
+});
+
+test('describePlanned says the plan in one line, and what it could not say', () => {
+  const planned = L.plannedRecord({ plan: { plannerUsage: { totals: { reportedCost: { USD: 0.0123 } } }, tasks: [pt('a'), pt('b', ['a'])] }, planCheck: { ok: true, failures: [] }, planningMs: 41_400 });
+  assert.equal(planned.plannerUsd, 0.0123);
+  assert.equal(planned.planningMs, 41_400);
+  assert.match(L.describePlanned(planned), /^plan-only: 2 tasks \(2 change\), longest chain 2, widest level 1, 1 edges, all gated by "Task a"; planner \$0\.0123, 41 s$/);
+  assert.match(L.describePlanned(L.plannedRecord({ plan: { tasks: [pt('a', ['b'])] }, planningMs: null })), /no graph: "Task a" depends on "b", which is no task; planner spend not recorded$/);
+  assert.equal(L.describePlanned(null), 'no plan was recorded');
+});
+
+test('--plan-only: arm B alone, refused for arm A and for a dry run, and no plan-only run is a valid, scored or listed one', () => {
+  const o = L.parseArgs(['--run', '--plan-only', '--libs', 'x.json', '--provider-pin', 'p']);
+  assert.equal(o.planOnly, true);
+  assert.equal(o.arm, 'B', 'both arms means B: arm A has no plan');
+  assert.equal(L.parseArgs(['--run', '--plan-only', '--arm', 'B', '--libs', 'x.json', '--provider-pin', 'p']).arm, 'B');
+  assert.throws(() => L.parseArgs(['--run', '--plan-only', '--arm', 'A', '--libs', 'x.json', '--provider-pin', 'p']), /arm A.*no plan/);
+  assert.throws(() => L.parseArgs(['--plan-only', '--arm', 'a', '--rehearse', 'b-plan', '--libs', 'x.json']), /arm A.*no plan/);
+  assert.throws(() => L.parseArgs(['--dry-run', '--plan-only', '--libs', 'x.json']), /--plan-only.*--run or --rehearse/);
+  assert.equal(L.parseArgs(['--rehearse', 'b-plan', '--plan-only', '--libs', 'x.json']).planOnly, true);
+  assert.equal(L.parseArgs(['--dry-run', '--libs', 'x.json']).planOnly, false);
+  // Its runs and results sit apart from the scored ones.
+  assert.equal(L.runsDirName({ planOnly: true }), 'plan-runs');
+  assert.equal(L.runsDirName({ planOnly: true, rehearse: 'b-plan' }), 'rehearsals');
+  assert.equal(L.runsDirName({ planOnly: false }), 'runs');
+  assert.equal(L.resultsFileName({ planOnly: true }), 'plans.jsonl');
+  assert.equal(L.resultsFileName({ planOnly: false }), 'results.jsonl');
+  const v = L.judgeValidity({ aborted: null, checks: [], tests: null, freshness: { stale: false }, planOnly: true });
+  assert.equal(v.valid, false);
+  assert.deepEqual(v.invalidReasons, ['plan-only: the plan was made and nothing ran, so nothing was scored']);
+  const r = L.resultRecord({ lib: lib(), arm: L.ARMS.B, window: { window: 1 }, ordewell: { sha: 's' }, validity: v, planOnly: true, dryRun: false });
+  assert.deepEqual([r.planOnly, r.valid, r.tests, r.scoredFrom], [true, false, null, null]);
+  assert.equal(L.resultRecord({ lib: lib(), arm: L.ARMS.B, window: { window: 1 }, ordewell: { sha: 's' } }).planOnly, false);
+});
+
+test('a batch takes --plan-only for arm B alone, passes it on, refuses arm A, and marks its batch.json', () => {
+  const b = L.parseBatchArgs(['--run', '--plan-only', '--libs', 'l.json', '--provider-pin', 'p', '--batch-budget-usd', '2', '--jobs', '3', '--seed', 's2', '--ordewell-root', 'other']);
+  assert.equal(b.planOnly, true);
+  assert.equal(b.arm, 'B');
+  assert.equal(b.jobs, 3);
+  assert.ok(b.driveArgs.includes('--plan-only'));
+  assert.deepEqual(b.driveArgs.slice(b.driveArgs.indexOf('--ordewell-root'), b.driveArgs.indexOf('--ordewell-root') + 2), ['--ordewell-root', path.resolve('other')]);
+  assert.throws(() => L.parseBatchArgs(['--run', '--plan-only', '--arm', 'A', '--libs', 'l.json', '--provider-pin', 'p', '--batch-budget-usd', '2']), /arm A.*no plan/);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--plan-only', '--libs', 'l.json']), /--plan-only/);
+  assert.deepEqual(L.batchPlan({ libs: ['x', 'y'], arms: L.armsOf(b.arm).map((a) => a.id), seed: 's' }).map((r) => `${r.lib}-${r.arm}`), ['x-B', 'y-B']);
+  assert.equal(L.batchRecord({ jobs: 1, runs: [], planOnly: true }).planOnly, true);
+  assert.equal(L.batchRecord({ jobs: 1, runs: [] }).planOnly, false);
+  // Repeated seeds are repeated batches: each seed's runs have a name of their own.
+  assert.notEqual(L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'B', seed: '1' }), L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'B', seed: '2' }));
+});
+
+test('the b-plan scenario judges a plan-only result by the shape, the priced planner and the absence of any run', () => {
+  const s = R.scenario('b-plan');
+  const planned = { shape: structuredClone(s.expect.shape), plannerUsd: 0.0002, planningMs: 9000, protocolOk: true, protocolFailures: [] };
+  const good = {
+    planOnly: true, valid: false, invalidReasons: ['plan-only: the plan was made and nothing ran, so nothing was scored'],
+    tests: null, scoredFrom: null, tasks: null, patches: [], baseline: null, truncated: { truncated: false, why: null },
+    steps: { plan: { exit: 0 }, planCheck: { ok: true } }, closing: { stop: { exit: 0 } }, stopped: null, stalled: null,
+    planned, recordedUsd: 0.0002, metrics: null,
+  };
+  assert.deepEqual(R.judgeRehearsal('b-plan', good), []);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, steps: { ...good.steps, run: { exit: 0 } } }).join(), /a run or a merge step/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, tests: { passed: 1 } }).join(), /holds a score/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, valid: true }).join(), /not valid for being plan-only/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, planned: { ...planned, shape: { ...planned.shape, edges: 5 } } }).join(), /shape\.edges is 5, wanted 6/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, planned: { ...planned, plannerUsd: 0 } }).join(), /planner's spend is 0/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, planned: null }).join(), /no planned record/);
+  // The expectation is the shape the harness computes for the plan the fake serves.
+  assert.deepEqual(L.planStructure(s.plan()), s.expect.shape);
+  assert.deepEqual(L.planDigest(s.plan()).tasks.map((t) => t.kind), ['research', 'change', 'script', 'change', 'ops', 'change']);
+  const clean = { names: ['result.json', 'plan.json', 'plan-saved.json', 'ordewell.log'], digest: L.planDigest(s.plan()), expectedTitles: s.plan().tasks.map((t) => t.title) };
+  assert.deepEqual(R.judgePlanOnlyDir(clean), []);
+  assert.match(R.judgePlanOnlyDir({ ...clean, names: [...clean.names, 'arm-workdir', 'arm.patch'] }).join(), /arm-workdir.*arm\.patch/);
+  assert.match(R.judgePlanOnlyDir({ ...clean, names: ['result.json'] }).join(), /no plan\.json/);
+  // Nothing ran: the fake heard the planner alone.
+  assert.deepEqual(R.judgePlayed('b-plan', [{ role: 'planner' }], playCtx), []);
+  assert.match(R.judgePlayed('b-plan', [{ role: 'planner' }, { role: 'runner', key: 'edit' }], playCtx).join(), /runner turn was played/);
+  assert.match(R.judgePlayed('b-plan', [], playCtx).join(), /never heard the planner/);
+});
+
 test('meanConcurrency is the attempts\' running time over the time any ran, and null with one unended', () => {
   const at = (s, e) => ({ startedAt: new Date(s * 1000).toISOString(), endedAt: e === null ? undefined : new Date(e * 1000).toISOString() });
   assert.equal(L.meanConcurrency([at(0, 10), at(0, 10)]), 2);

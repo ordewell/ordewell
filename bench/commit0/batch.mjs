@@ -8,6 +8,7 @@
 //
 //   node bench/commit0/batch.mjs --dry-run --libs <libraries.json> --jobs 2
 //   node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <p> --batch-budget-usd <usd>
+//   node bench/commit0/batch.mjs --run --plan-only --libs <libraries.json> --provider-pin <p> --batch-budget-usd <usd> --seed 1   (arm B's plans alone)
 //   node bench/commit0/batch.mjs --rehearse <scenario> --libs <libraries.json> --arm A   (rehearse.mjs starts these)
 
 import { spawn } from 'node:child_process';
@@ -29,16 +30,19 @@ const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run | --rehears
                            (required with --run)
   --only <a,b>             only these libraries of --libs
   --arm A|B|both           which arms of each library (default both)
+  --plan-only              only arm B's planning: each run makes its plan, records its shape and stops, with
+                           nothing run, merged or scored (arm A has no plan: --arm A is refused, both means B).
+                           Its results go in plan-runs/ and plans.jsonl, never runs/ or results.jsonl
   --seed <label>           a label for this repetition, in every run's result.json and directory name
   --sweep                  sweep boxes and networks of drivers no longer running before the batch
 
 Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap-usd, --parallel, --cpus,
 --memory, --stall-min, --settle-min, --no-start-min, --poll-sec, --wall-min, --ordewell-root,
---allow-stale-dist, --keep (node bench/commit0/drive.mjs --help).
+--allow-stale-dist, --keep, --plan-only (node bench/commit0/drive.mjs --help).
 
 The batch takes the key's lock once; its runs and batch.json go in one directory under the
 bench data directory, and their results are appended to results.jsonl once every run has ended;
-a dry run's and a rehearsal's never are.`;
+a dry run's, a rehearsal's and a plan-only run's never are (a plan-only run's go to plans.jsonl).`;
 
 const opts = (() => {
   try {
@@ -135,7 +139,7 @@ async function main() {
   fs.mkdirSync(batchDir, { recursive: true });
   const overlapped = opts.jobs > 1 && runs.length > 1;
   const key = process.env.OPENROUTER_API_KEY;
-  console.log(`Commit0 batch: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}; ${runs.length} runs, ${Math.min(opts.jobs, runs.length)} at once (${opts.cpus} CPUs, ${opts.memory} each); budget ${opts.budgetUsd === null ? 'none' : `$${opts.budgetUsd}`}; in ${batchDir}`);
+  console.log(`Commit0 batch: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}${opts.planOnly ? ', PLAN ONLY: arm B plans, nothing runs or is scored' : ''}; ${runs.length} runs, ${Math.min(opts.jobs, runs.length)} at once (${opts.cpus} CPUs, ${opts.memory} each); budget ${opts.budgetUsd === null ? 'none' : `$${opts.budgetUsd}`}; in ${batchDir}`);
 
   // One lock for the whole batch: its runs share the key with each other and with nothing else.
   const release = opts.run ? L.lockKey(dataDir) : () => {};
@@ -206,21 +210,24 @@ async function main() {
       billedUsd: found?.result.billedUsd ?? null,
       billedSource: found?.result.billedSource ?? null,
       valid: found?.result.valid ?? null,
+      planOnly: found?.result.planOnly ?? null,
+      planned: found?.result.planned ?? null,
     });
   }
   const record = L.batchRecord({
     keyBeforeUsd, keyAfterUsd, budgetUsd: opts.budgetUsd, stoppedByBudget, jobs: opts.jobs, overlapped,
-    seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, startedAt, endedAt: new Date().toISOString(), runs: reported,
+    seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(), runs: reported,
   });
   fs.writeFileSync(path.join(batchDir, 'batch.json'), `${JSON.stringify(record, null, 2)}\n`);
-  // Appended here, one after another, so concurrent runs never interleave a line; only a paid run's are results.
+  // Appended here, one after another, so concurrent runs never interleave a line; only a paid run's are results,
+  // and a plan-only run's go to a file of their own, since none of them is scored.
   if (opts.run) {
-    for (const r of results) fs.appendFileSync(path.join(dataDir, 'results.jsonl'), `${JSON.stringify(r)}\n`);
+    for (const r of results) fs.appendFileSync(path.join(dataDir, L.resultsFileName(opts)), `${JSON.stringify(r)}\n`);
   }
 
   console.log(`\nbatch: ${reported.length} runs in ${batchDir}`);
   for (const r of reported) {
-    console.log(`  ${r.lib} ${r.arm}: ${r.skipped ?? `exit ${r.exit ?? r.signal}`}${r.recordedUsd !== null ? `, recorded $${r.recordedUsd}` : ''}${r.valid === null ? '' : r.valid ? ', valid' : ', not valid'}`);
+    console.log(`  ${r.lib} ${r.arm}: ${r.skipped ?? `exit ${r.exit ?? r.signal}`}${r.recordedUsd !== null ? `, recorded $${r.recordedUsd}` : ''}${r.planOnly ? `; ${L.describePlanned(r.planned)}` : r.valid === null ? '' : r.valid ? ', valid' : ', not valid'}`);
   }
   if (opts.run) console.log(`  key: $${record.keyDeltaUsd ?? '?'} spent; recorded $${record.recordedSumUsd ?? '?'}; gap $${record.gapUsd ?? '?'}${stoppedByBudget ? '; stopped by the batch budget' : ''}`);
   process.exitCode = reported.some((r) => r.exit !== 0) ? 1 : 0;
