@@ -60,12 +60,26 @@ export function editSteps({ src, tests }) {
 
 export const longStep = (sec) => shell(`sleep ${sec} && echo slept ${sec}s`, { timeout: (sec + 120) * 1000 });
 
-const done = (subject) => ({ tool: 'task_complete', args: { status: 'done', summary: `${subject}.`, commit: { subject } } });
+const done = (subject, extra = {}) => ({ tool: 'task_complete', args: { status: 'done', summary: `${subject}.`, commit: { subject }, ...extra } });
 const failed = (why) => ({ tool: 'task_complete', args: { status: 'failed', summary: why, reason: why } });
 
 const checkpoint = (question) => ({ tool: 'checkpoint', args: { question } });
 /** A file outside the library and its tests: work that lands without moving the score. */
 const note = (file) => ({ tool: 'write', args: { path: file, content: 'Written by the rehearsal.\n' } });
+
+/**
+ * The heading of the block a change task is told when siblings land work
+ * beside it (core's renderLandingBeside), and the merge command that block
+ * gives, as the sentence in it carries it: `take it in with \`<command>\``.
+ */
+export const LANDING_HEADING = '## Work landing beside yours';
+export const TAKE_IN = /take it in with `([^`]+)`/;
+/** The subject of the merge that command makes (core's takeInMessage). */
+export const TAKE_IN_SUBJECT = /^Merge: .+ \(take in landed work\)$/;
+/** A shell step whose command the fake reads out of the task's own first user message: its first capture. */
+const fromPrompt = (pattern) => ({ tool: 'shell', fromPrompt: pattern, exit0: true });
+const CONSUMER_NOTE = 'commit0-rehearsal-consumer.md';
+const CONSUMER_COMMIT = 'Note the rehearsal consumer';
 
 /** Deterministic task ids, so a plan and its dependencies read back the same on every run. */
 const taskId = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -225,15 +239,38 @@ export const SCENARIOS = Object.freeze({
     plan: () => rehearsalPlan(LEFT_PLAN),
     attempts: (ctx) => ({
       edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)], [...editSteps(ctx), done('Implement the library')]],
-      after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]],
+      after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal', { findings: [{ severity: 'info', title: 'The rehearsal ends this task done with a finding' }] })]],
     }),
     // Order matters: the closing turn's wake holds both texts, and each rule plays once, the edit first.
     supervisor: [{ when: taskIs(1, 'failed'), say: EDIT_REPLY }, { when: STILL_FAILED, step: RETRY }],
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['edit', 'after'],
+    // A task that ends done with a finding still lands: its note is in the merged work.
+    landed: ['commit0-rehearsal-note.md'],
     supervised: ['retry_task'],
     spoke: [/edits task #1 and retries nothing/],
     supervision: { acts: ['plan_edit', 'retry_task'], closingWakes: 1, retryAfterWake: true },
+  },
+  'b-take-in': {
+    arm: 'B',
+    about: 'arm B: two tasks side by side; the producer lands its edits while the consumer runs a long step, then the consumer takes that work in with the merge command its own first message gives, and lands too',
+    plan: () => rehearsalPlan([{ key: 'producer', title: 'Implement the library' }, { key: 'consumer', title: 'Build on the library' }]),
+    attempts: (ctx) => ({
+      producer: [[...editSteps(ctx), done('Implement the library')]],
+      // The consumer commits its own work first, as its message says to: with nothing of its own the merge would be a fast-forward and leave no merge commit to find.
+      consumer: [[
+        longStep(ctx.longSec),
+        note(CONSUMER_NOTE),
+        { ...shell(`git add ${CONSUMER_NOTE} && git commit -q -m '${CONSUMER_COMMIT}' && git log --oneline | head -n 3`), exit0: true },
+        fromPrompt(TAKE_IN),
+        // What the producer made is in the consumer's worktree now.
+        { ...shell(`test -f ${ctx.src}/${REHEARSAL_MODULE}.py && echo taken in`), exit0: true },
+        done('Build on the library'),
+      ]],
+    }),
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
+    playedOut: ['producer', 'consumer'],
+    takeIn: { key: 'consumer', ownSubject: CONSUMER_COMMIT, landed: 'Implement the library' },
   },
   'b-cap': {
     arm: 'B',
@@ -357,6 +394,13 @@ export function turnFor(name, request, state, ctx) {
     const steps = scripts[Math.min(attempt, scripts.length) - 1] ?? [];
     const step = steps[round];
     if (!step) return { content: 'Done.', costUsd: TURN_COST_USD, role, key, attempt, round };
+    if (step.fromPrompt) {
+      // The command is whatever the task's own first message gives; a message that gives none makes a step that fails, which the judge reads.
+      const first = messages.find((m) => m.role === 'user');
+      const command = step.fromPrompt.exec(text(first))?.[1] ?? null;
+      const args = { command: command ?? `echo 'the first message holds no command to run' >&2; exit 3` };
+      return { toolCall: { name: step.tool, args }, costUsd: TURN_COST_USD, role, key, attempt, round, fromPrompt: command };
+    }
     return { toolCall: { name: step.tool, args: step.args }, costUsd: step.costUsd ?? TURN_COST_USD, role, key, attempt, round };
   }
   if (role === 'supervisor') return { ...supervisorTurn(s.supervisor, messages, state), costUsd: TURN_COST_USD, role };
@@ -446,6 +490,55 @@ export function judgePlayed(name, turns, ctx) {
     if (!turns.some((t) => t.role === 'supervisor' && t.toolCall?.name === tool)) f.push(`the supervisor never played ${tool}`);
   }
   return f;
+}
+
+/** The exit code a shell tool's result ends with, or null. */
+const exitOf = (m) => { const hit = /\[exit code (-?\d+)\]\s*$/.exec(text(m)); return hit ? Number(hit[1]) : null; };
+
+/**
+ * The failures of a take-in scenario: from the fake's request log (each line
+ * { messages, turn }) the consumer's first message holds the heading and the
+ * command, and every step that must exit 0 did; and from `history` (the
+ * commits the merged work ends on, [{ sha, parents, subject }], or null when
+ * they could not be read) the take-in is a merge of the producer's landing
+ * into the consumer's own commit, and the consumer's landing holds it.
+ */
+export function judgeTakeIn(name, requests, ctx, history) {
+  const s = scenario(name);
+  if (!s.takeIn) return [];
+  const { key } = s.takeIn;
+  const f = [];
+  const mine = requests.filter((r) => r.turn?.role === 'runner' && r.turn.key === key && r.turn.attempt === 1);
+  const first = mine.find((r) => r.turn.round === 0);
+  const told = text((first?.messages ?? []).find((m) => m.role === 'user'));
+  if (!first) f.push(`task ${key} never made a request`);
+  else if (!told.includes(LANDING_HEADING)) f.push(`task ${key}'s first message holds no "${LANDING_HEADING}" block`);
+  const steps = s.attempts(ctx)[key]?.[0] ?? [];
+  steps.forEach((step, round) => {
+    if (!step.exit0) return;
+    const asked = mine.find((r) => r.turn.round === round);
+    const answered = mine.find((r) => r.turn.round === round + 1);
+    const label = step.fromPrompt ? 'the take-in command' : `step ${round + 1} (${step.args?.command})`;
+    if (step.fromPrompt && typeof asked?.turn.fromPrompt !== 'string') f.push(`task ${key}'s first message gives no command to take the work in with`);
+    else if (!answered) f.push(`${label}: no answer to it reached the fake`);
+    else if (exitOf((answered.messages ?? []).at(-1)) !== 0) f.push(`${label} exited ${exitOf((answered.messages ?? []).at(-1))}, wanted 0: ${text((answered.messages ?? []).at(-1)).slice(-300)}`);
+  });
+  if (!history) return [...f, 'the merged work\'s history could not be read from the arm\'s files'];
+  const bySha = new Map(history.map((c) => [c.sha, c]));
+  const take = history.find((c) => TAKE_IN_SUBJECT.test(c.subject) && c.parents.length === 2);
+  if (!take) {
+    return [...f, `the merged work holds no merge commit "Merge: ... (take in landed work)" (its subjects: ${history.slice(0, 12).map((c) => c.subject).join(' | ') || 'none'})`];
+  }
+  const [own, landed] = take.parents.map((sha) => bySha.get(sha)?.subject ?? '');
+  if (own !== s.takeIn.ownSubject) f.push(`the take-in's first parent is "${own}", wanted the consumer's own commit "${s.takeIn.ownSubject}"`);
+  if (!landed.includes(s.takeIn.landed)) f.push(`the take-in's second parent is "${landed}", wanted the landing of "${s.takeIn.landed}"`);
+  if (!history.some((c) => c.parents.includes(take.sha))) f.push('nothing in the merged work has the take-in as a parent: the consumer\'s landing does not hold it');
+  return f;
+}
+
+/** The failures of a scenario that names files its merged work must hold; `present` says whether one is there. */
+export function judgeLanded(name, present) {
+  return (scenario(name).landed ?? []).filter((file) => !present(file)).map((file) => `${file} never landed: a task that ended done with a finding must still land`);
 }
 
 /**
