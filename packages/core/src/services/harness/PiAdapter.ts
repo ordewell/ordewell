@@ -214,14 +214,17 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     const line = StdioAgentAdapter.parse<PiLine>(raw);
     if (!line) return;
     switch (line.type) {
-      case 'response':
-        if (line.command === 'prompt' && line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
+      case 'response': {
+        // Only the open turn's answers count: Pi may answer an earlier prompt's command late.
+        const open = this.settled !== null;
+        if (open && line.id === `turn-${this.turns}` && line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
         // A command Pi ran itself, as `/mcp`, needs no run and sends no
         // `agent_settled`, but one an extension defines may start a run of its
         // own, so Pi is asked whether one is going before the turn ends.
-        else if (line.command === 'prompt' && line.data?.disposition === 'handled' && !this.running) this.writeLine({ id: idleCheck(this.turns), type: 'get_state' });
-        else if (line.id === idleCheck(this.turns) && this.settled && !this.running && line.data?.isStreaming !== true) this.endTurn(emit, this.outcome.settle('completed'));
+        else if (open && line.id === `turn-${this.turns}` && line.data?.disposition === 'handled' && !this.running) this.writeLine({ id: idleCheck(this.turns), type: 'get_state' });
+        else if (open && line.id === idleCheck(this.turns) && !this.running && line.data?.isStreaming !== true) this.endTurn(emit, this.outcome.settle('completed'));
         return;
+      }
       case 'agent_start':
         this.running = true;
         return;
@@ -330,11 +333,16 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     this.settled = null;
   }
 
-  /** Pi's `abort`: the run stops and the session stays, and the turn ends at the `agent_settled` it answers with. */
+  /**
+   * Pi's `abort`: the run stops and the session stays, and the turn ends at
+   * the `agent_settled` it answers with. The queue goes first, or Pi would run
+   * a message queued behind the run after the turn ended interrupted.
+   */
   async interrupt(timeoutMs: number): Promise<boolean> {
     const settled = this.settled;
     if (!this.process || this.exited || !settled) return false;
     this.outcome.request();
+    this.writeLine({ type: 'clear_queue' });
     this.writeLine({ type: 'abort' });
     return settleWithin(settled.then(() => true), { timeoutMs, onTimeout: () => false, ended: this.processEnded, onEnded: () => false });
   }

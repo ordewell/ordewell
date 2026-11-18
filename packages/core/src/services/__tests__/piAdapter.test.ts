@@ -391,6 +391,23 @@ describe('Pi\'s dialogs and its other answers', () => {
     expect(next).toEqual([{ type: 'turn_end' }]);
   });
 
+  it('takes no late answer to an earlier turn\'s prompt for the open one\'s', async () => {
+    const { adapter, proc, say, turn } = await inTurn(taskStart('agent'));
+    say({ type: 'agent_start' });
+    say({ type: 'agent_settled', aborted: false });
+    await turn;
+    const next: AgentEvent[] = [];
+    const second = adapter.send('go on', (event) => next.push(event));
+    say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
+    say({ id: 'turn-1', type: 'response', command: 'prompt', success: false, error: 'late' });
+
+    expect(written(proc).map((line) => line.id ?? line.type)).toEqual(['turn-1', 'turn-2']);
+    expect(next).toEqual([]);
+    say({ type: 'agent_settled', aborted: false });
+    await second;
+    expect(next).toEqual([{ type: 'turn_end' }]);
+  });
+
   it('fails a turn whose prompt Pi refused', async () => {
     const { events, say, turn } = await inTurn(taskStart('agent'));
     say({ id: 'turn-1', type: 'response', command: 'prompt', success: false, error: 'Agent is already streaming' });
@@ -468,7 +485,7 @@ describe('a Pi task that keeps calling task_complete (#78)', () => {
       // What the orchestrator does with a verdict: the attempt is over, so its session stops.
       const stopped = session.stop();
       await until(() => proc.stdinEnded);
-      expect(written(proc).map((line) => line.type)).toEqual(['prompt', 'abort']);
+      expect(written(proc).map((line) => line.type)).toEqual(['prompt', 'clear_queue', 'abort']);
       await expect(client.callTool({ name: 'task_complete', arguments: { status: 'done', summary: 'Again.' } })).rejects.toThrow();
       proc.exit(0);
       await stopped;
