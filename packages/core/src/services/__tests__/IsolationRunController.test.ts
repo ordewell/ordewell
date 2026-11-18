@@ -187,13 +187,21 @@ describe('IsolationRunController', () => {
       expect(runs.planIsolation?.run.session).toBe('session-b');
     });
 
-    it('takes a record saved before runs named their session as its own', async () => {
+    it('asks git nothing of a record that names no session, holds none of it, and says why', async () => {
       const legacy = await savedBy();
       expect(legacy.run.session).toBeUndefined();
-      const { runs, isolation } = setup(new FakeWorktreeIsolation(), 'session-b');
-      await runs.adopt(legacy);
+      const { runs, isolation, notifications } = setup(new FakeWorktreeIsolation(), 'session-b');
+      expect(await runs.adopt(legacy)).toBe('changed');
+      expect(isolation.calls).toEqual([]);
+      expect(runs.planIsolation).toBeNull();
+      expect(notifications.info).toHaveBeenCalledWith(expect.stringContaining('could not tell which session'));
+    });
+
+    it('takes a record naming no session as its own when it has no id to tell', async () => {
+      const { runs, isolation } = setup(new FakeWorktreeIsolation());
+      await runs.adopt(await savedBy());
       expect(ops(isolation)).toContain('pruneOrphans');
-      expect(runs.planIsolation?.run.session).toBe('session-b');
+      expect(runs.planIsolation?.run.id).toBe('run1');
     });
   });
 

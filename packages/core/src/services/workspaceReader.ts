@@ -13,7 +13,7 @@ import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { savedPatchOf } from '../models/Handoff';
 import { runsAsOps, type LegacyPlanState, type Task } from '../models/Task';
 import { realPathOf } from '../utils/realPath';
-import { listSessions, loadSession } from '../utils/sessionStore';
+import { listSessions, loadSession, readSession } from '../utils/sessionStore';
 import { readTaskPatch } from '../utils/taskLogStore';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
@@ -821,7 +821,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
       landings: new Map<string, Array<{ sessionId: string; runId: string }>>(),
     };
     for (const meta of listSessions(workspace)) {
-      const run = loadSession(meta.id, workspace)?.plan.isolation?.run;
+      const run = readSession(meta.id, workspace)?.plan.isolation?.run;
       const entry = run?.repos.find((r) => r.path === repo);
       if (!run || !entry) continue;
       const of = { sessionId: meta.id, runId: run.id };

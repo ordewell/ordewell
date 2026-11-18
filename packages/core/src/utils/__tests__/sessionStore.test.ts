@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsHelpers from '../fsHelpers';
-import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession } from '../sessionStore';
+import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession, readSession } from '../sessionStore';
 import { canContinue } from '../../services/continuation';
 import { createEmptyPlan, createTask, type ResearchLogEntry, type Task } from '../../models/Task';
 import * as fs from 'fs';
@@ -511,12 +511,42 @@ describe('sessionStore', () => {
 
       expect(loadSession(meta.id, tmpDir)!.plan.isolation).toEqual({
         run: {
-          id: 'r1', workspaceRoot: app, shared: [], sharedRepos: [],
+          id: 'r1', session: meta.id, workspaceRoot: app, shared: [], sharedRepos: [],
           repos: [{ path: '.', root: app, baseRef: 'abc', baseBranch: 'main', integrationBranch: 'ordewell/r1/integration' }],
           tasks: { t1: { taskId: 't1', order: 1, title: 'T1', branch: 'ordewell/r1/1-t1', workspace: '/wt/1', status: 'kept', repos: { '.': { worktree: '/wt/1', linked: ['.env'] } } } },
         },
         resolvers: {},
       });
+    });
+
+    it('names a run saved before runs named their session after the session whose file holds it, and keeps one already named', () => {
+      const run = (session?: string) => ({ id: 'runaaaa1', ...(session ? { session } : {}), workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} });
+      const plan = (session?: string) => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], isolation: { run: run(session), resolvers: {} } }) as Parameters<typeof saveSession>[0];
+      saveSession(plan(), 'mine', tmpDir, 'session-aaaa0001');
+      saveSession(plan('session-aaaa0001'), 'a copy', tmpDir, 'session-bbbb0002');
+
+      expect(loadSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
+      expect(loadSession('session-bbbb0002', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
+    });
+
+    it('reads a run as saved for a reader that adopts nothing: a pre-upgrade one stays unnamed, a named one keeps its name', () => {
+      const run = (session?: string) => ({ id: 'runaaaa1', ...(session ? { session } : {}), workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} });
+      const plan = (session?: string) => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], isolation: { run: run(session), resolvers: {} } }) as Parameters<typeof saveSession>[0];
+      saveSession(plan(), 'mine', tmpDir, 'session-aaaa0001');
+      saveSession(plan('session-aaaa0001'), 'a copy', tmpDir, 'session-bbbb0002');
+
+      expect(readSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+      expect(readSession('session-bbbb0002', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
+    });
+
+    it('names no session on a pre-upgrade run another session\'s file holds too, whichever holder is loaded', () => {
+      const run = { id: 'runaaaa1', workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} };
+      const plan = () => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], isolation: { run: structuredClone(run), resolvers: {} } }) as Parameters<typeof saveSession>[0];
+      saveSession(plan(), 'mine', tmpDir, 'session-aaaa0001');
+      saveSession(plan(), 'a reload copy', tmpDir, 'session-yyyy0003');
+
+      expect(loadSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+      expect(loadSession('session-yyyy0003', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
     });
 
     it('returns null for old sessions with scalar runner at meta level', () => {

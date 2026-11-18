@@ -4,6 +4,7 @@ import { dropRetiredPlanFields, failInterruptedTasks, LegacyPlanState, migrateLo
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir, writeFileAtomic } from './fsHelpers';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
+import { ownerOfSavedRun } from './sessionStore';
 
 const STATE_FILE = 'state.json';
 
@@ -47,13 +48,16 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Sa
     const sessionId: unknown = parsed[SESSION_ID_KEY];
     delete parsed[SESSION_ID_KEY];
     const plan = parsed as LegacyPlanState;
+    const savedBy = typeof sessionId === 'string' && sessionId ? sessionId : undefined;
     failInterruptedTasks(plan.tasks, new Date().toISOString());
-    migratePlanStateIsolation(plan);
+    // The restore file is the plan of the session it names, written by that session,
+    // which may still have saved a copy of another's run into its own file.
+    migratePlanStateIsolation(plan, ownerOfSavedRun(plan, savedBy, dir));
     settleOwedRepairs(plan);
     releaseMadeManual(plan.tasks);
     migrateLoadedTasks(plan.tasks);
     dropRetiredPlanFields(plan);
-    return typeof sessionId === 'string' && sessionId ? { plan, sessionId } : { plan };
+    return savedBy ? { plan, sessionId: savedBy } : { plan };
   } catch (err: unknown) {
     logger.warn('stateStore', `failed to load state from ${statePath}; falling back to empty state`, err);
     return null;

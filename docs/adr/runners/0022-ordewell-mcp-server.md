@@ -230,7 +230,10 @@ planner tools are recorded here as an explicit entry against both:
   the input that asked for it, which the first commit takes as answered, so it
   is never sent again to be made twice. Committing grants nothing else: what
   it adds is approved only as ADR-0029 and ADR-0030 say, and the turn's start
-  hold lasts until the turn ends. Refusals are structured, naming the task and
+  hold lasts until the turn ends. An accepted `submit_plan` whose longest
+  dependency chain is long answers, once a turn, with a `review` for the planner
+  alone: never a refusal, and the plan stands as committed unless the planner
+  submits another ([ADR-0072](../planner/0072-a-long-dependency-chain-is-reviewed-once-by-the-planner.md) R3). Refusals are structured, naming the task and
   field or the op, and no caller reads them back out of their wording. The
   same tasks produce the same plan by either route, and the plan stays the
   source of truth (ADR-0001). A structural edit during a live run applies at
@@ -395,3 +398,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-05 — S1: Cline uses the server, from a settings file of its own, as a planner too (ADR-0060).
 - 2026-11-14 — S2: an in-process runner's direct calls to the token's handlers are its tools (ADR-0070).
 - 2026-11-17 — V3: the status's description says `blocked` is an outside obstacle, not work remaining.
+- 2026-11-18 — P2: an accepted `submit_plan` whose longest chain is long answers with a `review` for the planner, once a turn (ADR-0072 R3).

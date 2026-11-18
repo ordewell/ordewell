@@ -199,6 +199,8 @@ const NO_SEAT = 'A delegated task needs an isolated run, with a worktree of its 
 
 const FOREIGN_RUN = 'This plan was copied from another session, whose worktrees and branches stay as they are for it: this session leaves them alone and starts a run of its own.';
 
+const UNNAMED_RUN = 'This plan holds a worktree run saved before runs named their session, and it did not come from this session\'s own file alone (another session\'s file may hold the same run), so Ordewell could not tell which session made it: its worktrees and branches stay as they are, and this session starts a run of its own.';
+
 const PLAN_REPLACED_REVERT = 'Another plan was loaded while this revert was under way, so nothing was reverted.';
 
 /** Why a run fell back to the shared workspace root, as the one line the user is told. */
@@ -516,9 +518,9 @@ export class IsolationRunController {
    * asked which landed work the user has merged since the record was saved:
    * a settled run whose landed work is all in HEAD has nothing left to hand
    * over, so it is cleared up as Merge all would have, unless it still holds
-   * work that never landed (ADR-0013). A run another session made is not
-   * taken over at all: it resolves `changed` with no run, for the caller to
-   * save the plan without that session's record.
+   * work that never landed (ADR-0013). A run another session made, or one
+   * whose record names no session, is not taken over at all: it resolves
+   * `changed` with no run, for the caller to save the plan without that record.
    *
    * Deliberately not reported to the listener: adopting is not a change of the
    * session's own, and a host that adopts without persisting (VS Code's
@@ -535,16 +537,18 @@ export class IsolationRunController {
     // second checkout on the same state root) carries that session's run. Its
     // worktrees are that session's, which may be running in them now: the lease
     // that guards them is keyed by its id, not this one (ADR-0049), so nothing
-    // here may prune them. This session starts clean, as a fork does.
-    const foreign = !!state && !!own && state.run.session !== undefined && state.run.session !== own;
-    if (foreign) this.tell('info', FOREIGN_RUN);
+    // here may prune them. This session starts clean, as a fork does. A record
+    // saved before runs named theirs is named by the file it is read from when
+    // no other session's file holds it (`ownerOfSavedRun`); one that still names
+    // none came from no session's file or from one of several, so nothing shows
+    // it is this one's, and it is left alone too.
+    const foreign = !!state && !!own && state.run.session !== own;
+    if (foreign) this.tell('info', state.run.session === undefined ? UNNAMED_RUN : FOREIGN_RUN);
     this.run = foreign ? null : state?.run ?? null;
     this.resolvers = foreign ? {} : { ...(state?.resolvers ?? {}) };
     this.merged = this.run ? null : mergedRun ?? null;
     const run = this.run;
     if (!run) return foreign ? 'changed' : 'unchanged';
-    // A record saved before runs named their session is taken by its first adopter.
-    if (own && run.session === undefined) run.session = own;
     try {
       const pruned = await this.isolation.pruneOrphans(run);
       // Never silently: work kept back from the sweep has to be named, or the

@@ -2396,7 +2396,7 @@ describe('task_diff through the planner handler', () => {
         answers.push((await call(mcp!, 'task_diff', { task: '#1', repo: '.', path: 'a.txt', lines: 400, since: answers[2].nextOffset })).body as typeof answers[number]);
         return 'Read it.';
       } }), {}, { isolation: iso });
-      session.loadPlan({ tasks: [task], generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'], isolation: { run, resolvers: {} },
+      session.loadPlan({ tasks: [task], generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'], isolation: { run: { ...run, session: session.sessionId }, resolvers: {} },
         conversationHistory: [{ role: 'user', content: 'change files', timestamp: '2026-10-05T09:00:00Z' }],
       }, 'change files', workspace, { persist: false });
       await session.continueConversation('inspect the work');
@@ -2526,5 +2526,76 @@ describe('the plan block a harness planner is sent', () => {
     expect(messages[2]).toMatch(/<plan_changes>[^\n]*unchanged/);
     expect(messages[3]).not.toMatch(WHOLE);
     expect(messages[4]).toMatch(WHOLE);
+  });
+});
+
+// A plan chained along call order where the interfaces already exist: the planner is asked once a turn, and nothing is refused or rewritten.
+describe('the chain review submit_plan answers with', () => {
+  const context = { signal: new AbortController().signal };
+  const task = (id: string, dependencies: string[] = []) => createTask({ id, order: 1, title: `T ${id}`, type: 'ai', prompt: 'p', dependencies, assignedRunner: 'claude-code' });
+  const chain = [task('a'), task('b', ['a']), task('c', ['b']), task('d', ['c'])];
+  const fan = [task('a'), task('b', ['a']), task('c', ['a']), task('d', ['b', 'c'])];
+  const over = (checked: Task[][], turn = { id: 'turn-1' }) => {
+    const host = {
+      skills: () => [],
+      turnId: () => turn.id,
+      recordSkillLoad: () => false,
+      liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
+      checkPlan: async () => ({ ok: true as const, tasks: checked.shift()!, adjustments: [], warnings: [], summary: [], handles: new Map() }),
+      submitPlan: vi.fn(async () => ({ ok: true as const, summary: [], tasks: [] })),
+      editPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
+      tasks: () => [],
+      read: async <T>(_signature: string, answerRead: () => Promise<T>) => ({ status: 'answered' as const, value: await answerRead(), landNow: false }),
+      liveOutput: () => null,
+      lastAttempt: () => null,
+      taskLogAttempts: () => [],
+      taskLog: () => [],
+      taskDiff: async () => ({ available: false as const, reason: 'not available', cause: 'no-record' as const }),
+      runCommand: async () => ({ success: true, output: '', truncated: false }),
+      fetchUrl: async () => ({ success: true, output: '', truncated: false }),
+      webSearch: async () => undefined,
+      execute: async () => ({ ok: true as const, message: '' }),
+    };
+    return { host, handler: plannerToolHandler(host as unknown as PlannerToolsHost) };
+  };
+  const body = (reply: { text: string }) => JSON.parse(reply.text) as { ok: boolean; review?: string; next: string };
+  const submit = (handler: ReturnType<typeof plannerToolHandler>) => handler.submitPlan!({ tasks: [] } as unknown as SubmitPlanArgs, context).then(body);
+
+  it('commits a long chain as written and asks, edge by edge, for one more submission', async () => {
+    const { host, handler } = over([chain]);
+    const reply = await submit(handler);
+    expect(host.submitPlan).toHaveBeenCalledOnce();
+    expect(reply.ok).toBe(true);
+    expect(reply.review).toMatch(/^Its longest chain of dependencies is 4 tasks, which run one after another: "T a" \(a\) → "T b" \(b\) → "T c" \(c\) → "T d" \(d\)\. /);
+    expect(reply.review).toContain('a reproduction before its fix');
+    expect(reply.review).toContain('call submit_plan once more with the whole plan');
+    expect(reply.review).toMatch(/ Do not mention this review to the user\.$/);
+    expect(reply.next).toBe('The plan is committed: it is the current plan now, and the user is shown it. Do what review says, then tell them briefly what you submitted; do not repeat the plan as JSON.');
+  });
+
+  it('asks a planner nobody reads to review before its one line', async () => {
+    const { host, handler } = over([chain]);
+    (host as unknown as { unread: () => boolean }).unread = () => true;
+    expect((await submit(handler)).next).toBe('The plan is committed, and it starts as your turn ends. Do what review says, then end your turn now, with one line: nobody reads more.');
+  });
+
+  it('offers it from a chain of 4, not 3', async () => {
+    expect((await submit(over([chain.slice(0, 3)]).handler)).review).toBeUndefined();
+    expect((await submit(over([chain]).handler)).review).toMatch(/is 4 tasks/);
+  });
+
+  it('asks once a turn, and again in a later turn', async () => {
+    const turn = { id: 'turn-1' };
+    const { handler } = over([chain, chain, chain], turn);
+    expect((await submit(handler)).review).toBeDefined();
+    const again = await submit(handler);
+    expect(again.review).toBeUndefined();
+    expect(again.next).not.toContain('review');
+    turn.id = 'turn-2';
+    expect((await submit(handler)).review).toBeDefined();
+  });
+
+  it('says nothing of a shorter chain', async () => {
+    expect((await submit(over([fan]).handler)).review).toBeUndefined();
   });
 });

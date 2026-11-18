@@ -97,9 +97,12 @@ So the boundary is hardened rather than trusted:
   re-prompts the *same* model with a terse instruction to resend strict JSON, and only surfaces the
   error if the retry also fails.
 
-Nothing downstream asks a model to grade the plan or the work: a task's verdict comes from its
-runner's `task_complete` call, or from a script task's exit status, so there is no review response
-to be flaky in the first place.
+Nothing downstream asks a model to grade the work: a task's verdict comes from its runner's
+`task_complete` call, or from a script task's exit status, so there is no review response to be
+flaky in the first place. The one second look at a plan is the planner's own: a plan whose
+dependency chain is long is handed back to it once to review edge by edge, and a reply that does
+not parse, or does not shorten the chain, leaves the plan as it was
+([ADR-0072](adr/planner/0072-a-long-dependency-chain-is-reviewed-once-by-the-planner.md)).
 
 This is mundane plumbing, but it's the difference between a demo and something you'd point at your
 own repo. The structured seam is what makes everything else possible; it's also what you have to

@@ -6,7 +6,8 @@ import type { PlannerReadLimit } from './plannerReadLimit';
 import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
-import { generatePlanWithRepair, classifyPlannerReply } from './PlanRepair';
+import { generatePlanWithRepair, classifyPlannerReply, repairLoop } from './PlanRepair';
+import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain } from './PlanChainReview';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -23,7 +24,23 @@ import type { ConversationTurn, TurnRun } from './AiService';
 import type { UsageRecord } from '../models/Usage';
 import { abortScope } from '../utils/abortScope';
 import { withTurnBudgets, type TurnBudgets } from './PlannerBudgets';
-import { isModelError } from './model';
+import { isModelError, type EffortLevel } from './model';
+
+/** What a one-shot plan call reports besides its text. */
+export interface PlanTextReply {
+  usage?: UsageRecord;
+  cutOff: boolean;
+}
+
+/** How one plan-text call departs from the planner's own settings. */
+export interface PlanTextCall {
+  /** Takes the call's usage, for the planner's bill, and whether the reply was cut off at the output limit. */
+  onReply?: (reply: PlanTextReply) => void;
+  /** Replaces the planner's dial for this call. */
+  effort?: EffortLevel;
+  /** Asks for the longest reply the model serves, not the planner's usual allowance. */
+  largestReply?: boolean;
+}
 
 /**
  * Read-only, side-effect-free tools that can share a round. Deliberately a
@@ -223,6 +240,7 @@ export abstract class BaseAiService {
     onToken: (token: string) => void,
     onReasoning?: (token: string) => void,
     signal?: AbortSignal,
+    call?: PlanTextCall,
   ): Promise<string>;
 
   /**
@@ -708,6 +726,91 @@ export abstract class BaseAiService {
     return { tasks: null, researchLog, researchResults };
   }
 
+  /**
+   * One more call when the first valid plan's longest chain reaches
+   * CHAIN_REVIEW_MIN: the revision is kept only when it parses and its chain is
+   * shorter, so the review can shorten a plan and never lose one (ADR-0072 R1).
+   * A reply the output limit cut off is asked for once more, with the plan
+   * and the question alone, the least reasoning and the longest reply; after
+   * that the first plan stands.
+   */
+  protected async reviewLongChain(
+    tasks: Task[],
+    userDescription: string,
+    contextStr: string,
+    researchResults: string,
+    modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>>,
+    runners: RunnerId[],
+    onProgress: (progress: ResearchProgress) => void,
+    runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
+    signal?: AbortSignal,
+    modes: PlannerModes = DEFAULT_PLANNER_MODES,
+    log?: ResearchLogEntry[],
+  ): Promise<Task[]> {
+    const chain = longestChain(tasks);
+    const note = (content: string) => log?.push({ id: `cr-${Date.now()}`, type: 'system', content, timestamp: new Date().toISOString() });
+    if (chain.length < CHAIN_REVIEW_MIN) return tasks;
+    // The reply is a list of changes, not a plan, so it streams to no plan view.
+    // Low effort: each edge is a yes-or-no question, and a reasoning model left at
+    // its default can think past the output limit before it writes the list.
+    // 'low' is the bottom of Ordewell's effort ladder; each adapter maps it to the least its model takes.
+    const ask = async (prompt: string, hint: string | undefined, largestReply: boolean) => {
+      let cutOff = false;
+      let out = '';
+      const reply = await this.streamPlanText(
+        prompt,
+        hint,
+        () => {},
+        (reasoning) => onProgress({ type: 'thinking', text: reasoning }),
+        signal,
+        {
+          onReply: (r) => {
+            cutOff = r.cutOff;
+            if (r.usage?.outputTokens !== undefined) out = ` [reply ${r.usage.outputTokens} tokens out]`;
+            if (r.usage) onProgress({ type: 'usage', record: { ...r.usage, aggregate: true } });
+          },
+          effort: 'low',
+          largestReply,
+        },
+      );
+      return { applied: applyChainReview(tasks, reply, runners, runnerModes), cutOff, out };
+    };
+    type Asked = Awaited<ReturnType<typeof ask>>;
+    try {
+      const prompt = buildPlanWithResults(userDescription, contextStr, compactResearchResults(researchResults), modelsByRunner, runners, runnerModes, modes);
+      const { applied, cutOff, out } = await repairLoop<Asked, Asked>({
+        first: () => ask(prompt, chainReviewMessage(tasks, chain), false),
+        // Only a cut-off is asked again (ADR-0072 R2): an invalid reply the model finished would come back the same.
+        interpret: (r) => {
+          if (r.applied.ok || !r.cutOff) return { done: r };
+          // A function runs only when the re-ask follows, so a second cut-off is not noted as asked again.
+          const corrective = () => {
+            note(`chain review: ${chain.length}, reply cut off at the output limit${r.out}; asked once more with the plan alone`);
+            return chainReviewMessage(tasks, chain, true);
+          };
+          return { retry: { errors: [r.applied.error], corrective } };
+        },
+        resend: (alone) => ask(alone, undefined, true),
+        maxRepairs: 1,
+        onExhausted: ({ reply }) => reply,
+      });
+      if (!applied.ok) {
+        note(`chain review: ${chain.length}, first plan kept: ${cutOff ? 'reply cut off at the output limit; ' : ''}${applied.error}${out}`);
+        return tasks;
+      }
+      const after = longestChain(applied.tasks);
+      const kept = after.length > 0 && after.length < chain.length;
+      const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
+      const changed = applied.changes.map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}`);
+      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
+      return kept ? applied.tasks : tasks;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      note(`chain review: ${chain.length}, failed: ${err instanceof Error ? err.message : String(err)}`);
+      return tasks;
+    }
+  }
+
   protected async generatePlanFallback(
     userDescription: string,
     contextStr: string,
@@ -731,6 +834,7 @@ export abstract class BaseAiService {
         (token) => onProgress({ type: 'plan_token', planToken: token }),
         (reasoning) => onProgress({ type: 'thinking', text: reasoning }),
         signal,
+        { onReply: (r) => { if (r.usage) onProgress({ type: 'usage', record: { ...r.usage, aggregate: true } }); } },
       ),
       runners,
       2,

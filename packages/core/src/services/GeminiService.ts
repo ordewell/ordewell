@@ -16,11 +16,11 @@ import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
-import { BaseAiService, ResearchChat, ConversationTurnContext } from './BaseAiService';
+import { BaseAiService, ResearchChat, ConversationTurnContext, type PlanTextCall } from './BaseAiService';
 import { listsPost, plannerToolDefinitions } from './researchTools';
 import { condenseConversation, type ContextSummarizer } from './budgetedChat';
 import type { SummaryCall } from './contextSummary';
-import { TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
+import { TokenGauge, callBudget, largestReplyTokens, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
 import type { EffortLevel, ModelClient, ToolDefinition } from './model';
 import {
   ModelPlannerChat,
@@ -30,6 +30,7 @@ import {
   plannerRequest,
   promptAndAnswer,
   streamReply,
+  usageRecordOf,
   type ModelClientFactory,
   type ModelPlannerChatOptions,
   type PlannerMessage,
@@ -233,8 +234,9 @@ export class GeminiService extends BaseAiService implements IAiService {
     onToken: (token: string) => void,
     onReasoning?: (token: string) => void,
     signal?: AbortSignal,
+    call?: PlanTextCall,
   ): Promise<string> {
-    return this.emitPlan(prompt, repairHint, onToken, onReasoning, signal);
+    return this.emitPlan(prompt, repairHint, onToken, onReasoning, signal, call);
   }
 
   /**
@@ -242,9 +244,9 @@ export class GeminiService extends BaseAiService implements IAiService {
    * serves. The repair hint joins the prompt's turn; only the reply's text is
    * handed to the parser, its thoughts to the reasoning channel.
    */
-  private async emitPlan(prompt: string, repairHint: string | undefined, onToken: (token: string) => void, onReasoning?: (token: string) => void, signal?: AbortSignal): Promise<string> {
+  private async emitPlan(prompt: string, repairHint: string | undefined, onToken: (token: string) => void, onReasoning?: (token: string) => void, signal?: AbortSignal, call: PlanTextCall = {}): Promise<string> {
     const model = this.plannerModel();
-    const effort = this.effort();
+    const effort = call.effort ?? this.effort();
     const messages: PlannerMessage[] = [{ role: 'user', content: prompt }];
     if (repairHint) messages.push({ role: 'user', content: repairHint });
     const reply = await streamReply(
@@ -252,13 +254,14 @@ export class GeminiService extends BaseAiService implements IAiService {
       plannerRequest(messages, {
         model,
         tools: [],
-        maxOutputTokens: replyTokens(this.limitsOf(model), GEMINI_REPLY_TOKENS),
+        maxOutputTokens: (call.largestReply ? largestReplyTokens : replyTokens)(this.limitsOf(model), GEMINI_REPLY_TOKENS),
         mergeSameRole: true,
         ...(effort ? { effort } : {}),
       }),
       signal,
       { onText: onToken, ...(onReasoning ? { onThinking: onReasoning } : {}) },
     );
+    call.onReply?.({ usage: usageRecordOf('google', model, reply.usage, promptAndAnswer), cutOff: reply.finish === 'length' });
     return reply.text;
   }
 
@@ -290,9 +293,10 @@ export class GeminiService extends BaseAiService implements IAiService {
     });
 
     const result = await this.runResearchLoop(researchChat, firstMessage, fs, onProgress, runners, undefined, fetcher, userDescription, runnerModes, autonomousDefault, signal);
-    if (result.tasks) return { tasks: result.tasks, researchLog: result.researchLog, researchResults: result.researchResults };
+    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log);
+    if (result.tasks) return { tasks: await review(result.tasks, result.researchLog), researchLog: result.researchLog, researchResults: result.researchResults };
     const fallback = await this.generatePlanFallback(userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, result.researchLog, runnerModes, autonomousDefault, signal, modes);
-    return { tasks: fallback.tasks, researchLog: fallback.researchLog, researchResults: result.researchResults };
+    return { tasks: await review(fallback.tasks, fallback.researchLog), researchLog: fallback.researchLog, researchResults: result.researchResults };
   }
 
   async generatePlanDirect(

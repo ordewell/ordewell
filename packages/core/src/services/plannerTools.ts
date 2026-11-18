@@ -24,6 +24,7 @@ import type { TaskDiffRead, TaskDiffResult } from './taskDiffRead';
 import type { BashOptions, ToolOutcome } from '../interfaces/IFileSystem';
 import type { CommandOutcome, ExecutionCommand } from './ExecutionCommands';
 import { resolveTaskRef, taskRefOf } from './TaskRefs';
+import { chainReviewNote, longestChain, TOOL_CHAIN_REVIEW_MIN } from './PlanChainReview';
 
 /**
  * The session side of the planner's catalog and submission tools (ADR-0022):
@@ -122,6 +123,7 @@ export function runnersOf(tasks: readonly Task[]): RunnerId[] {
 }
 
 export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
+  const chainReviewed = new Set<string>();
   // Bound to the turn it was made in: a late call from a turn that ended has nobody's consent behind it.
   const execute = async (command: ExecutionCommand, signal?: AbortSignal): Promise<McpToolReply> => {
     if (host.turnId() === undefined) return { isError: true, text: JSON.stringify({ ok: false, outcome: 'refused', reason: 'No planning turn is open, so nothing was done.' }) };
@@ -224,14 +226,19 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }
       // What reading its JSON warned of, and what committing it did: a skill checked at both says so once.
       const warnings = [...new Set([...(checked.ok ? checked.warnings : []), ...outcome.warnings ?? []])];
+      // Offered once a turn, so the plan the review leads to is taken as written (ADR-0072 R3).
+      const chain = checked.ok && !chainReviewed.has(turn) ? longestChain(checked.tasks) : [];
+      const review = chain.length >= TOOL_CHAIN_REVIEW_MIN ? chainReviewNote(chain) : undefined;
+      if (review) chainReviewed.add(turn);
       return answer({
         ok: true,
         tasks: outcome.tasks,
         coerced: outcome.coerced ?? [],
         ...(warnings.length > 0 ? { warnings } : {}),
+        ...(review ? { review } : {}),
         next: host.unread?.()
-          ? 'The plan is committed, and it starts as your turn ends. End your turn now, with one line: nobody reads more.'
-          : 'The plan is committed: it is the current plan now, and the user is shown it. Tell them briefly what you submitted; do not repeat the plan as JSON.',
+          ? `The plan is committed, and it starts as your turn ends. ${review ? 'Do what review says, then end' : 'End'} your turn now, with one line: nobody reads more.`
+          : `The plan is committed: it is the current plan now, and the user is shown it. ${review ? 'Do what review says, then tell' : 'Tell'} them briefly what you submitted; do not repeat the plan as JSON.`,
       });
     },
 

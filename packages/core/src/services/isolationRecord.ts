@@ -200,9 +200,16 @@ export function migratePlanIsolation(state: PlanIsolation | Adr0013PlanIsolation
   return { run: { id: run.id, workspaceRoot: run.workspaceRoot, repos: [repo], shared: [], sharedRepos: [], tasks }, resolvers: resolvers ?? {} };
 }
 
-/** Bring a loaded plan's isolation record, if any, to today's shape in place. */
-export function migratePlanStateIsolation(plan: { isolation?: PlanIsolation | Adr0013PlanIsolation }): void {
-  if (plan.isolation?.run) plan.isolation = migratePlanIsolation(plan.isolation);
+/**
+ * Bring a loaded plan's isolation record, if any, to today's shape in place.
+ * `savedBy` is the session a record saved before runs named their session is
+ * shown to be, as the loader judged it (`ownerOfSavedRun`, ADR-0013). Without
+ * it nothing shows whose the record is, and it stays unnamed.
+ */
+export function migratePlanStateIsolation(plan: { isolation?: PlanIsolation | Adr0013PlanIsolation }, savedBy?: string): void {
+  if (!plan.isolation?.run) return;
+  plan.isolation = migratePlanIsolation(plan.isolation);
+  if (savedBy && plan.isolation.run.session === undefined) plan.isolation.run.session = savedBy;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

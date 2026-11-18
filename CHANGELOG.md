@@ -8,6 +8,17 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **A plan whose dependencies run in one long chain is reviewed once by its
+  planner.** A one-shot plan (`ordewell plan --no-chat`, unattended runs) may
+  cost one more planner call, which asks of each dependency whether the task
+  needs something that does not exist until the other one writes it; a revision
+  is kept only when it shortens the chain, and an API planner's research log
+  says what changed. A conversation planner is asked the same in `submit_plan`'s answer,
+  and only its own next submission changes the plan. The one-shot prompt also
+  says that filling in an interface that already exists is no reason to wait.
+
 ## [0.14.2] - 2026-11-18
 
 ### Added

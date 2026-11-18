@@ -568,7 +568,8 @@ like a normal chat session.
 **PlanRepair** — the one owner of "the model emitted something unusable —
 correct it and retry". `repairLoop` is the bounded driver (first reply →
 interpret → corrective re-send) behind plan generation
-(`generatePlanWithRepair`) and the Session's task-ops settlement;
+(`generatePlanWithRepair`), a **Chain review** cut off at the output limit,
+and the Session's task-ops settlement;
 `classifyPlannerReply` decides what a planner
 reply *is* (plan, task ops, a botched attempt at either, or prose) and owns
 the envelope keys (`PLAN_ENVELOPE_KEY`/`TASK_OPS_ENVELOPE_KEY`, defined in
@@ -594,6 +595,15 @@ rounds, or an agent's turn — is the caller's `send`.
 one — that turn is continued on the user's behalf, and its text stays in the
 reply; *Avoid:* counting a task-ops validation retry (the conversation's own
 `repairLoop`) against this budget — it is a separate, later loop.
+
+**Chain review** (`PlanChainReview.ts`, ADR-0072) — the planner asked once to
+review a plan whose longest dependency chain is long, edge by edge: does the
+dependent need something that does not exist until the other task writes it?
+A one-shot plan gets it as one more call before the plan is returned, whose
+reply is only the changed dependency lists, kept when valid and shorter; a
+plan through `submit_plan` gets it as the answer's `review`, and only the
+planner's own next `submit_plan` changes the plan. Never a refusal.
+*Avoid:* "plan review" (a review task in a plan is something else), "auto-fix".
 
 **Context compaction** (`contextCompaction.ts`, `budgetedChat.ts`,
 `contextSummary.ts`) — what an API planner does on its own to keep each call
@@ -2535,7 +2545,9 @@ failed spawn — so the next one decides its own mode. The field belongs to one
 plan: a fork must not copy it. The record names the session that minted it
 (`session`), and a session that loads a copy of another's plan under its own id
 adopts none of it: it prunes nothing, keeps no record and starts clean. A record
-saved before runs named theirs is taken by the first session that adopts it.
+saved before runs named theirs is named after the session whose file holds it as
+that file is read; one that reaches a session still naming none is adopted by
+none.
 A record saved in the ADR-0013 shape (the refs on the run itself, one `worktree`
 per task) is converted to a group of one when plan state is loaded, so a session
 saved by 0.4.23 resumes and hands off as it would have.
