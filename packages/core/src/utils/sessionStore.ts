@@ -5,7 +5,7 @@ import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateL
 import { migratePlanStateIsolation } from '../services/isolationRecord';
 import type { SessionMeta, SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
-import { ensureDir, ensureStateDirIgnored, writeFileAtomic } from './fsHelpers';
+import { ensureDir, ensureStateDirIgnored, getStateDir, writeFileAtomic } from './fsHelpers';
 import { mintSessionId } from './sessionId';
 import { getSessionsDir, idSegment } from './sessionDir';
 
@@ -53,26 +53,47 @@ function researchLogPath(sessionId: string, baseDir?: string, rootSessionId?: st
 const NO_RESEARCH_LOG: readonly ResearchLogEntry[] = [];
 
 /**
- * What each file last took, and how long it was: the plan replaces its log to
- * change it, so most saves find it here. Kept by file because a log object can
- * come back to a file that has held another since, as the one for no log does.
- * Weak so that a comparison does not keep a closed session's trace in memory.
+ * What each file last took, entry by entry, in order. A planner turn builds
+ * its log as a new array every time, so the array says nothing of whether
+ * anything was added; the entries do: the log is append-only, and one that is
+ * the same entries in the same order is what the file already holds. Kept by
+ * file because a log can come back to a file that has held another since, as
+ * the one for no log does. Weak so that a comparison does not keep a closed
+ * session's trace in memory; an entry that was collected is not the one in the
+ * log being saved, so it reads as a change and costs one write.
  */
-const writtenLogs = new Map<string, { log: WeakRef<readonly ResearchLogEntry[]>; length: number }>();
+const writtenLogs = new Map<string, WeakRef<ResearchLogEntry>[]>();
+
+function holdsSame(file: string, log: readonly ResearchLogEntry[]): boolean {
+  const written = writtenLogs.get(file);
+  return written !== undefined && written.length === log.length && written.every((ref, i) => ref.deref() === log[i]);
+}
 
 /**
  * A session's research trace is kept with its task logs, not in its file: it
  * changes only with a planner turn, and it can outweigh the rest of the plan,
  * on every save of a run. Written before the session file, and a trace only: a
  * crash between the two leaves it a step ahead of a plan that reads fine
- * without it.
+ * without it. What a write did not finish is not remembered, so the next save
+ * writes it again; the file itself is replaced whole or not at all.
  */
 function saveResearchLog(log: readonly ResearchLogEntry[], file: string): void {
-  const written = writtenLogs.get(file);
-  const unchanged = fs.existsSync(file) ? written?.log.deref() === log && written.length === log.length : log.length === 0;
-  if (unchanged) return;
+  if (fs.existsSync(file) ? holdsSame(file, log) : log.length === 0) return;
   writeFileAtomic(file, JSON.stringify(log));
-  writtenLogs.set(file, { log: new WeakRef(log), length: log.length });
+  writtenLogs.set(file, log.map((entry) => new WeakRef(entry)));
+}
+
+/**
+ * The state directories already checked for their ignore file in this process:
+ * it is written once and left alone, so a save need not read it again.
+ */
+const ignoredStateDirs = new Set<string>();
+
+function ensureStateDirIgnoredOnce(baseDir?: string): void {
+  const dir = getStateDir(baseDir);
+  if (ignoredStateDirs.has(dir)) return;
+  ensureStateDirIgnored(baseDir);
+  ignoredStateDirs.add(dir);
 }
 
 /** A file from before the log moved out holds its own, and the next save moves it. */
@@ -168,7 +189,7 @@ function sessionData(plan: LegacyPlanState, goal: string, id: string | undefined
 export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: string, id?: string): SessionMeta {
   const sessionsDir = getSessionsDir(baseDir);
   ensureDir(sessionsDir);
-  ensureStateDirIgnored(baseDir);
+  ensureStateDirIgnoredOnce(baseDir);
 
   const { meta, researchLog, session } = sessionData(plan, goal, id);
   saveResearchLog(researchLog, researchLogPath(meta.id, baseDir));
@@ -184,7 +205,7 @@ export function saveSession(plan: LegacyPlanState, goal: string, baseDir?: strin
 
 /** Saved beside the child's logs, in the root's directory; `listSessions` never sees it (ADR-0055 D11). */
 export function saveChildSession(plan: LegacyPlanState, goal: string, place: ChildSessionPlace): SessionMeta {
-  ensureStateDirIgnored(place.baseDir);
+  ensureStateDirIgnoredOnce(place.baseDir);
   const { meta, researchLog, session } = sessionData(plan, goal, place.sessionId);
   saveResearchLog(researchLog, researchLogPath(place.sessionId, place.baseDir, place.rootSessionId));
   writeFileAtomic(childSessionPath(place), JSON.stringify(session));
