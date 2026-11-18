@@ -35,6 +35,8 @@ describe('a route whose call throws', () => {
     discoverPlannerCatalogs: vi.fn(faultAsync),
     getSettings: vi.fn(fault),
     holds: vi.fn().mockReturnValue(true),
+    getPlan: vi.fn().mockReturnValue(null),
+    getPlanState: vi.fn().mockReturnValue(null),
     close: vi.fn(faultAsync),
     cancelPlanning: vi.fn(fault),
   } as unknown as OrchestratorPool;
