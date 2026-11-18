@@ -483,3 +483,86 @@ describe('a closing turn at Act that left a blocking failure standing', () => {
     expect(concluded(env)).toHaveLength(1);
   });
 });
+
+/**
+ * What the closing turn left standing is judged once neither it nor its retry
+ * is in flight or owed, whichever turn ends it (ADR-0057 R4), and the user's
+ * Stop of the planner on the way is their answer to it (ADR-0029).
+ */
+describe('the closing turn\'s wake for a blocking failure, whichever turn ends it', () => {
+  const STILL = 'Task #1 "Task t1" is still failed after your turn, and 1 task waits on it. The run has ended';
+
+  /** Task 1 failed with task 2 waiting on it, and the closing turn is in flight. */
+  async function closing(): Promise<Env> {
+    const env = await failedRun('act', {}, [task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    await until(() => env.planner.calls.length === 1);
+    expect(ends(env)).toEqual(['execution_complete']);
+    return env;
+  }
+
+  it('wakes it once more when the closing turn failed once and its retry left the failure standing', async () => {
+    const env = await closing();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Task 1 failed: the import is wrong.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toContain(STILL);
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.planner.calls[2].finish(prose('Task 1 needs you.'));
+    await until(() => concluded(env).length > 0);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(env.planner.calls).toHaveLength(3);
+    expect(concluded(env)).toHaveLength(1);
+  });
+
+  it('concludes, and wakes no turn, when the user stops the closing turn', async () => {
+    const env = await closing();
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await until(() => concluded(env).length > 0);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+    expect(env.planner.calls).toHaveLength(1);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes, and wakes no turn, when the user stops the retry of a closing turn that failed', async () => {
+    const env = await closing();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await until(() => concluded(env).length > 0);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+    expect(env.planner.calls).toHaveLength(2);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('still wakes it after the closing turn a user\'s message carried, when the Stop was of the user\'s own turn before it', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { settings: { supervisorLevel: 'act' } });
+    const answered = env.session.continueConversation('how is it going?').catch(() => {});
+    await until(() => env.planner.calls.length === 1);
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await vi.advanceTimersByTimeAsync(START_HOLD_TIMEOUT_MS + 10);
+    await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 10);
+    // The Stop is of the user's turn: the closing input waits for their next message.
+    env.session.abortPlannerTurn();
+    await answered;
+    await until(() => concluded(env).length > 0);
+
+    void env.session.continueConversation('carry on').catch(() => {});
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Task 1 failed: the import is wrong.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toContain(STILL);
+  });
+});
