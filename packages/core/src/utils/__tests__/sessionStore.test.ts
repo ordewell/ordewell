@@ -14,6 +14,19 @@ vi.mock('../fsHelpers', async (importOriginal) => {
   return { ...actual, writeFileAtomic: vi.fn(actual.writeFileAtomic), ensureStateDirIgnored: vi.fn(actual.ensureStateDirIgnored) };
 });
 
+const reads = vi.hoisted(() => ({ byFile: new Map<string, number>() }));
+
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return {
+    ...actual,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (typeof args[0] === 'string') reads.byFile.set(args[0], (reads.byFile.get(args[0]) ?? 0) + 1);
+      return actual.readFileSync(...args);
+    }) as typeof actual.readFileSync,
+  };
+});
+
 function fakeLogger(): { logger: ILogger; warns: string[] } {
   const warns: string[] = [];
   return {
@@ -547,6 +560,20 @@ describe('sessionStore', () => {
 
       expect(loadSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
       expect(loadSession('session-yyyy0003', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+    });
+
+    it('reads its own file once when it asks who else holds a pre-upgrade run, and every other session file once', () => {
+      const run = { id: 'runaaaa1', workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} };
+      const plan = () => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], isolation: { run: structuredClone(run), resolvers: {} } }) as Parameters<typeof saveSession>[0];
+      saveSession(plan(), 'mine', tmpDir, 'session-aaaa0001');
+      saveSession({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [] }, 'another', tmpDir, 'session-bbbb0002');
+      const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
+      const [own, other] = ['_aaaa0001.json', '_bbbb0002.json'].map((ending) => path.join(sessionsDir, fs.readdirSync(sessionsDir).find((f) => f.endsWith(ending))!));
+      reads.byFile.clear();
+
+      expect(loadSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
+      expect(reads.byFile.get(own)).toBe(1);
+      expect(reads.byFile.get(other)).toBe(1);
     });
 
     it('returns null for old sessions with scalar runner at meta level', () => {

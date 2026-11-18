@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { isApiProvider, listSessions, loadSession } from '@ordewell/core';
+import { isApiProvider, listSessions, readSession } from '@ordewell/core';
 import type { AiProvider, PlannerBackendId, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
 import type { ApiProvider } from '../adapters/SecretStore';
 import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProvider';
@@ -136,7 +136,8 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
       { placeHolder: 'Select a session to load' },
     );
     if (picked) {
-      const loaded = loadSession(picked.sessionId, workspace);
+      // Only a check that the file still loads: `loadSessionById` loads it again to adopt, and asks then whose a pre-upgrade run is (ADR-0013).
+      const loaded = readSession(picked.sessionId, workspace);
       if (!loaded) {
         vscode.window.showErrorMessage('Failed to load session.');
         return;

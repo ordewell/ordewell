@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as vscode from 'vscode';
-import { listSessions, loadSession } from '@ordewell/core';
+import { listSessions, readSession } from '@ordewell/core';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
 import { resolveSlashAlias, isBuiltinSlashCommand, slashHelp } from '@ordewell/ui/protocol';
 
 vi.mock('@ordewell/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@ordewell/core')>();
-  return { ...actual, listSessions: vi.fn(), loadSession: vi.fn() };
+  return { ...actual, listSessions: vi.fn(), readSession: vi.fn() };
 });
 
 const showQuickPick = vscode.window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
@@ -76,7 +76,7 @@ describe('/resume alias for /sessions (VS Code)', () => {
   it('loads the picked session through the same command path', async () => {
     vi.mocked(listSessions).mockReturnValue([SESSION] as never);
     showQuickPick.mockResolvedValue({ sessionId: 's1' });
-    vi.mocked(loadSession).mockReturnValue({ plan: {} } as never);
+    vi.mocked(readSession).mockReturnValue({ plan: {} } as never);
 
     await handleSlashCommand('/sessions', deps);
     await handleSlashCommand('/resume', deps);

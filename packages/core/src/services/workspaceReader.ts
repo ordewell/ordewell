@@ -13,7 +13,7 @@ import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { savedPatchOf } from '../models/Handoff';
 import { runsAsOps, type LegacyPlanState, type Task } from '../models/Task';
 import { realPathOf } from '../utils/realPath';
-import { listSessions, loadSession, readSession } from '../utils/sessionStore';
+import { listSessions, readSession } from '../utils/sessionStore';
 import { readTaskPatch } from '../utils/taskLogStore';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
@@ -277,9 +277,13 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     };
   }
 
-  /** A session's saved run, read from its record on disk without adopting the session (ADR-0064 R4). */
+  /**
+   * A session's saved run, read from its record on disk without adopting the
+   * session (ADR-0064 R4), so a pre-upgrade run stays unnamed: nothing here
+   * reads whose it is, and naming it reads every session file (ADR-0013).
+   */
   function savedRun(workspace: string, sessionId: string): { plan: LegacyPlanState; run: IsolationRun | undefined } {
-    const loaded = loadSession(sessionId, workspace);
+    const loaded = readSession(sessionId, workspace);
     if (!loaded) gone(`No session "${sessionId}" is saved in this workspace.`);
     return { plan: loaded.plan, run: loaded.plan.isolation?.run };
   }

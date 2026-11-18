@@ -13,7 +13,7 @@ import { workspacesRoute } from '../workspaces';
 vi.mock('@ordewell/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ordewell/core')>()),
   installedPlannerDetected: vi.fn(async () => undefined),
-  loadSession: vi.fn(() => { throw new Error('disk fault'); }),
+  readSession: vi.fn(() => { throw new Error('disk fault'); }),
   listTaskLogAttempts: vi.fn(() => { throw new Error('disk fault'); }),
   readTaskLog: vi.fn(() => { throw new Error('disk fault'); }),
 }));

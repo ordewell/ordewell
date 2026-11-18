@@ -1,7 +1,23 @@
 import { describe, it, expect, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { window, commands, __quickPicks, __resetQuickPicks } from '../../test/vscode.mock';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
-import type { DiscoveredModel } from '@ordewell/core';
+import { saveSession, type DiscoveredModel, type LegacyPlanState } from '@ordewell/core';
+
+const reads = vi.hoisted(() => ({ byFile: new Map<string, number>() }));
+
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return {
+    ...actual,
+    readFileSync: ((...args: Parameters<typeof actual.readFileSync>) => {
+      if (typeof args[0] === 'string') reads.byFile.set(args[0], (reads.byFile.get(args[0]) ?? 0) + 1);
+      return actual.readFileSync(...args);
+    }) as typeof actual.readFileSync,
+  };
+});
 
 function harnessModel(modelId: string, variantIds: string[] = []): DiscoveredModel {
   return { modelId, modelLabel: modelId, variants: variantIds.map((id) => ({ id, label: id })) };
@@ -35,6 +51,42 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     ...overrides,
   };
 }
+
+// The pick is only checked here before `ordewell.loadSessionById` loads it to
+// adopt: the check must not also ask whose a pre-upgrade run is, which reads
+// every session file (ADR-0013).
+describe('/sessions', () => {
+  it('reads no other session\'s file beyond listing it before handing the pick to the load', async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-slash-'));
+    try {
+      for (const id of ['session-aaaa0001', 'session-bbbb0002']) {
+        const run = { id: `run-${id}`, workspaceRoot: ws, repos: [], shared: [], sharedRepos: [], tasks: {} };
+        saveSession({ tasks: [], runners: ['claude-code'], status: 'draft', generatedAt: '2026-01-01T00:00:00Z', lastUpdated: '2026-01-01T00:00:00Z', isolation: { run, resolvers: {} } } as unknown as LegacyPlanState, id, ws, id);
+      }
+      const dir = path.join(ws, '.ordewell', 'sessions');
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => path.join(dir, f));
+      // A file saved before runs named their session holds none.
+      for (const file of files) {
+        const data = JSON.parse(fs.readFileSync(file, 'utf-8')) as { plan: { isolation: { run: { session?: string } } } };
+        delete data.plan.isolation.run.session;
+        fs.writeFileSync(file, JSON.stringify(data));
+      }
+      const other = files.find((f) => f.endsWith('_bbbb0002.json'))!;
+      vi.spyOn(process, 'cwd').mockReturnValue(ws);
+      (window.showQuickPick as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(async (items: Array<{ sessionId: string }>) => items.find((i) => i.sessionId === 'session-aaaa0001'));
+      (commands.executeCommand as unknown as ReturnType<typeof vi.fn>).mockClear();
+      reads.byFile.clear();
+
+      await handleSlashCommand('/sessions', makeDeps());
+
+      expect(commands.executeCommand).toHaveBeenCalledWith('ordewell.loadSessionById', 'session-aaaa0001');
+      expect(reads.byFile.get(other)).toBe(1);
+    } finally {
+      vi.mocked(process.cwd).mockRestore();
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('/planner', () => {
   const backend = { id: 'claude-code', label: 'Claude Code', kind: 'harness' as const, runner: 'claude-code', usable: true };
