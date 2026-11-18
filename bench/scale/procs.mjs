@@ -11,7 +11,7 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { captureConsole, core, hostSession, loadAverage, makeTasks, ms, now, numbers, planOf } from './lib.mjs';
+import { captureConsole, closeSession, core, hostSession, loadAverage, makeTasks, ms, now, numbers, planOf } from './lib.mjs';
 import { mcpServerWithoutPort } from './mcp.mjs';
 
 const { say } = captureConsole();
@@ -45,7 +45,7 @@ for (const count of numbers('sessions', '10,100,300')) {
   say(`| ${count} | ${spent.toFixed(1)} | ${(spent / count).toFixed(3)} | ${(lag.percentile(99) / 1e6).toFixed(0)} | ${(lag.max / 1e6).toFixed(0)} | ${Math.round((rss - baseRss) / 1024 / count)} | ${failed} |`);
   session.stopExecution();
   await new Promise((resolve) => setTimeout(resolve, 1500));
-  session.destroy();
+  await closeSession(session);
   host.dropWorkspace();
 }
 process.exit(0);

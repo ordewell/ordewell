@@ -9,7 +9,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { arg, captureConsole, core, ms, now, numbers, tempWorkspace, timed } from './lib.mjs';
+import { arg, captureConsole, core, ms, now, numbers, removeDir, tempWorkspace, timed } from './lib.mjs';
 
 const { say } = captureConsole();
 const attempts = numbers('attempts', '100,1000,10000');
@@ -33,7 +33,7 @@ for (const n of attempts) {
   const hit = await timed(() => core.listTaskLogAttempts(location, `t${n >> 1}`));
   const miss = await timed(() => core.listTaskLogAttempts(location, 'never-ran'));
   say(`| ${n} | ${open.toFixed(3)} | ${append.ms.toFixed(3)} | ${hit.ms.toFixed(4)} | ${miss.ms.toFixed(4)} |`);
-  fs.rmSync(baseDir, { recursive: true, force: true });
+  removeDir(baseDir);
 }
 
 say('\n## Reading one attempt: every reader reads the whole file, and nothing is cached');
@@ -53,5 +53,5 @@ for (const [name, bytes] of cases) {
   const render = await timed(() => core.renderTaskLog(events));
   say(`| ${name} | ${(body.length / 1024).toFixed(0)} KB | ${read.ms.toFixed(2)} | ${render.ms.toFixed(2)} |`);
 }
-fs.rmSync(baseDir, { recursive: true, force: true });
+removeDir(baseDir);
 process.exit(0);

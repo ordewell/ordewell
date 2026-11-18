@@ -459,10 +459,9 @@ async function point() {
   say(JSON.stringify(out));
   swarm.stop();
   await load.stop();
-  if (pool) pool.destroy(sessionId);
-  else session.destroy();
-  fs.rmSync(workspace, { recursive: true, force: true });
-  fs.rmSync(home, { recursive: true, force: true });
+  await lib.closeSession(session, pool ? () => pool.destroy(sessionId) : undefined);
+  lib.removeDir(workspace);
+  lib.removeDir(home);
   process.exit(0);
 }
 

@@ -31,7 +31,7 @@
     <img src="assets/readme/desktop-run-light.png" width="900" alt="The Ordewell desktop app showing a plan graph of six tasks in three stages. The three stage 1 tasks are running side by side, on Claude Code, Codex and GitHub Copilot CLI, each with its own model and effort; the later stages wait for them. The plan list sits on the right.">
   </picture>
   <br>
-  <sub>The Ordewell desktop app. The real app on a demo project, with scripted agents.</sub>
+  <sub>The Ordewell desktop app.</sub>
 </p>
 
 Ordewell is the best agent orchestrator for complex work. One goal becomes a plan
@@ -44,7 +44,7 @@ Use it in the [desktop app](#download-the-desktop-app), the
 [terminal](#install-the-terminal-app), [VS Code](#vs-code) or from the command
 line. Every one drives the same plans, runners and settings.
 
-This README describes 0.14.1. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.2. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Why Ordewell
@@ -78,7 +78,7 @@ for versions available to install and their release notes.
     <img src="assets/readme/desktop-plan-light.png" width="900" alt="The Ordewell desktop app with a plan ready for approval: the planner conversation in the middle, with Ask for changes and Approve plan buttons, and the six-task plan on the right, each task showing its agent, model and effort.">
   </picture>
   <br>
-  <sub>A plan waiting for approval. The real app on a demo project, with scripted agents.</sub>
+  <sub>A plan waiting for approval.</sub>
 </p>
 
 ## Features

@@ -368,6 +368,32 @@ export function tempWorkspace() {
   return fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'ordewell-scale-'));
 }
 
+/**
+ * Removes a scratch directory. Windows refuses to remove one a process still
+ * runs in or holds open (EBUSY, EPERM), and a handle can outlast the process
+ * that let it go by a moment, so the removal retries for a few seconds first.
+ */
+export function removeDir(dir) {
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
+/**
+ * Destroys a hosted Session and waits until all it started has gone. Destroy
+ * returns at once and lets a winding-down runner and the lease go later
+ * (`gone`). A load's adoption of its isolated run reads git in the workspace
+ * and is waited for by neither, so the wait ends only once no child process of
+ * this one is left: one running in the workspace keeps Windows from removing it.
+ * `destroy` is the pool's when it hosts the session.
+ */
+export async function closeSession(session, destroy = () => session.destroy()) {
+  destroy();
+  await session.gone;
+  const deadline = Date.now() + 30_000;
+  while (process.getActiveResourcesInfo().includes('ProcessWrap') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 /** Count the directory listings core makes: a status update can make one per task. */
 export function countReaddirs() {
   const real = fs.readdirSync;
@@ -434,7 +460,7 @@ export function hostSession({ runner, level = 'off', maxParallel = 3, broadcast 
     relayStatus(plan);
     stats.statusBuildMs += ms(t);
   };
-  return { session, stats, muted, workspace, dropWorkspace: () => fs.rmSync(workspace, { recursive: true, force: true }) };
+  return { session, stats, muted, workspace, dropWorkspace: () => removeDir(workspace) };
 }
 
 export function heapMb() {
