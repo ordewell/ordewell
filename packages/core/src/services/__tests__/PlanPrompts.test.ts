@@ -685,7 +685,7 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
   it('has task prompts name files from the workspace root, never by absolute path, when every task gets its own worktree', () => {
     for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
       expect(p).toMatch(/path from the workspace root, never by an absolute path/i);
-      expect(p).toMatch(/absolute path\b.*user's own checkout/i);
+      expect(p).toMatch(/absolute path .*user's own checkout/i);
     }
     for (const p of [conversation(false), oneShot(false)]) expect(p).not.toMatch(/never by an absolute path/i);
   });
@@ -706,32 +706,19 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
     }
   });
 
-  // Commit0's one-shot plans chained every module after the modules its tests call, though each stub already stated its signature.
-  it('keeps an edge only where the brief would otherwise guess, and counts an existing stub as created', () => {
-    for (const p of [conversation(false), conversation(LONE_REPO), oneShot(false), oneShot(LONE_REPO)]) {
-      expect(p).toContain('(an interface, a schema, a name, a behaviour) that nothing states yet: make that shared decision a small leading task');
-      expect(p).toContain('Filling in an existing stub or interface creates nothing to consume. Test each such edge: without it, would the brief guess a name, signature, schema, file or finding? If not, drop it.');
-    }
-  });
-
-  it('has the one-shot planner, which has no WHO EXPLORES, end parallel slices with one integration check', () => {
-    for (const p of [oneShot(false), oneShot(LONE_REPO)]) expect(p).toContain('- End a plan of parallel slices with one integration check that depends on them all and runs their tests together.');
-    expect(conversation(false)).not.toContain('End a plan of parallel slices');
-  });
-
   it('fans tasks that only add to a contract out from the task that fixes it, never chaining siblings', () => {
     for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO)]) {
       expect(p).toMatch(/Once a leading task fixes a contract the rest only add to \(a registry or layout where each addition is a new file\), each depends on it alone, never on its siblings\./);
       expect(p).toMatch(/make that shared decision a small leading task that fixes it, not the first layer of a chain\./);
-      expect(p).toMatch(/- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs\.$/m);
+      expect(p).toMatch(/- Keep one line of reasoning, or a small job, in one task: .* This never justifies chaining layers a contract task can decouple\./);
     }
   });
 
   // A plan whose tasks each passed delivered nothing: no task made the project build, so no test could be collected.
   it('has each task verify its own slice, behind a leading task that makes the project build', () => {
     for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO), conversation(false), oneShot(false)]) {
-      expect(p).toContain('- Each task verifies its own slice when it runs, with what exists then: what it needs from a parallel slice is left to the integration check.');
-      expect(p).toContain('If the project does not build, import or collect its tests as it stands, a leading task restores only that, nothing a slice owns, and the rest depend on it.');
+      expect(p).toContain('- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven.');
+      expect(p).toContain('If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.');
     }
   });
 
@@ -972,6 +959,7 @@ describe('the strategy step and the context rules (#108)', () => {
           'make the change easy, then make the easy change',
           'EXPAND-CONTRACT',
           '"userStoriesCovered" links a slice to the user stories it delivers',
+          'Reference specific files and patterns from your research in task prompts.',
           'must not each append to the same shared file',
           ...(isolated ? [] : ['specify different target files to avoid merge conflicts']),
         ];
@@ -996,7 +984,7 @@ describe('the strategy step and the context rules (#108)', () => {
     const p = prompt(false);
     expect(p).toContain('a numbered list of the plan\'s tasks in order');
     expect(p).toContain('For a build, each item is a vertical tracer-bullet slice');
-    expect(p).toContain('- Example, for a build: "1. Session schema (src/db/schema.ts), the contract 2 and 3 use');
+    expect(p).toContain('- Example, for a build: "1. Set up database schema');
   });
 });
 

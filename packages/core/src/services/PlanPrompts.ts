@@ -351,7 +351,7 @@ const ISOLATED_PARALLELISM_RULE =
 
 /** A task's copy of the workspace sits elsewhere, so an absolute path the planner researched points past it. */
 const ISOLATED_PATHS_RULE =
-  '- In a task\'s prompt, name every file by its path from the workspace root, never by an absolute path: that reaches the user\'s own checkout, not the task\'s copy, which holds the earlier tasks\' work.';
+  '- In a task\'s prompt, name every file by its path from the workspace root, never by an absolute path: each task works in its own copy of the workspace, and an absolute path into the workspace reaches the user\'s own checkout instead, where the earlier tasks\' work is not merged yet.';
 
 const OVERLAP_AVOIDANCE_RULE = '- For parallel tasks, specify different target files to avoid merge conflicts.';
 
@@ -386,12 +386,9 @@ function opsTaskSection(conversation: boolean): string[] {
  * A slice whose check cannot run yet passes unproven, and its errors surface
  * only once every slice has landed: a plan whose tasks each passed delivered
  * nothing, since no task made the project build and no test could be collected.
- * What a check needs from a parallel slice goes to the integration check, not
- * to an edge: read as an edge, it chained Commit0's plans along their import
- * graph, and an unbounded leading task gated every slice.
  */
 const VERIFIABLE_SLICE_RULE =
-  '- Each task verifies its own slice when it runs, with what exists then: what it needs from a parallel slice is left to the integration check. If the project does not build, import or collect its tests as it stands, a leading task restores only that, nothing a slice owns, and the rest depend on it.';
+  '- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven. If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.';
 
 /**
  * When slices run in parallel, for the conversation and the one-shot planner
@@ -402,19 +399,16 @@ const VERIFIABLE_SLICE_RULE =
  * the default is the conversation's DEFAULTS and {@link ONE_SHOT_PARALLEL_DEFAULT}.
  */
 export const PARALLELISM_RULE: readonly string[] = [
-  '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour) that nothing states yet: make that shared decision a small leading task that fixes it, not the first layer of a chain. A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel.',
+  '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a small leading task that fixes it, not the first layer of a chain. A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel.',
   '- Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own. A decision several tasks share (an interface, a name, a limit such as a size ceiling a test pins) is named in each brief that touches it, with the task that owns it.',
-  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Filling in an existing stub or interface creates nothing to consume. Test each such edge: without it, would the brief guess a name, signature, schema, file or finding? If not, drop it. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
-  '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs.',
+  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
+  '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs. This never justifies chaining layers a contract task can decouple.',
   '- Build shared verification once: where several tasks need the same kind of check (a test harness, fixtures, golden files), one early task builds it and each runs it on its own slice. Each such brief asks for the tests that prove its slice, not a suite of its own.',
   VERIFIABLE_SLICE_RULE,
 ];
 
 /** The one-shot planner has no DEFAULTS block to say this. */
 const ONE_SHOT_PARALLEL_DEFAULT = '- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.';
-
-/** The one-shot planner has no WHO EXPLORES to plan the integration step that VERIFIABLE_SLICE_RULE leaves cross-slice checks to. */
-const ONE_SHOT_INTEGRATION_CHECK = '- End a plan of parallel slices with one integration check that depends on them all and runs their tests together.';
 
 /** Even under worktree isolation, tasks appending to one shared file still race each other's merges. */
 const SHARED_APPEND_FILE_RULE =
@@ -691,7 +685,7 @@ function buildConversationBody(
         `- When you are ready to propose a plan, show a prose outline first, not ${tools ? 'submit_plan' : 'JSON'}: the user corrects an outline more cheaply than a plan.`,
       ]),
     '- Format: a numbered list of the plan\'s tasks in order, each with what it does and what it changes or reports. For a build, each item is a vertical tracer-bullet slice, with the files/layers it touches.',
-    '- Example, for a build: "1. Session schema (src/db/schema.ts), the contract 2 and 3 use\n2. Login route (src/routes/login.ts), after 1\n3. Logout route (src/routes/logout.ts), after 1"',
+    '- Example, for a build: "1. Set up database schema (src/db/schema.ts) — creates tables for users and sessions\n2. Add auth middleware (src/auth/middleware.ts) — validates JWTs on protected routes"',
     ...(autorun
       ? []
       : [
@@ -740,6 +734,7 @@ function buildConversationBody(
     '- If preparatory refactoring would make the feature easier, make it a leading task the dependent slices depend on ("make the change easy, then make the easy change").',
     '- Wide mechanical refactors (rename a shared symbol, retype a column) are the exception to vertical slicing: sequence them as EXPAND-CONTRACT — one task adds the new form beside the old, parallel migration tasks (each depending on it) move call sites in batches, and a final contract task depending on all migrations deletes the old form.',
     '- "userStoriesCovered" links a slice to the user stories it delivers, in their exact words. Leave it out when the goal states none.',
+    '- Reference specific files and patterns from your research in task prompts.',
     SHARED_APPEND_FILE_RULE,
     ...(variant.isolatedExecution ? [] : [OVERLAP_AVOIDANCE_RULE]),
     '',
@@ -882,7 +877,6 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   'DEPENDENCY & PARALLELISM RULES:',
   ONE_SHOT_PARALLEL_DEFAULT,
   ...PARALLELISM_RULE,
-  ONE_SHOT_INTEGRATION_CHECK,
   SHARED_APPEND_FILE_RULE,
   isolatedExecution ? ISOLATED_PARALLELISM_RULE : '- Slices that touch different areas of the codebase are naturally parallel.',
   ...(isolatedExecution ? [ISOLATED_PATHS_RULE] : []),

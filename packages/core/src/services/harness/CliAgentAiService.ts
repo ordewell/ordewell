@@ -12,7 +12,6 @@ import {
   type PlannerNativeSession,
 } from '../../models/Task';
 import { addUsage, type RunnerSessionCost, type UsageRecord, type UsageTotals } from '../../models/Usage';
-import { longChainNote } from '../../models/PlanShape';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
@@ -1301,8 +1300,6 @@ export class CliAgentAiService implements IAiService {
     let refused: string[] = [];
     // A call still waiting on the skill check when the session ends must not record a plan nobody reads.
     let ended = false;
-    // The resubmission is offered once, or a planner could be walked edge by edge, a turn each, until a serial plan's chain drops below the note's length.
-    let resubmitOffered = false;
     const refuse = (errors: string[]) => {
       refused = errors;
       return { text: errors.join('\n'), isError: true };
@@ -1321,18 +1318,11 @@ export class CliAgentAiService implements IAiService {
           if (!checked.ok) return refuse(checked.errors.map(planChangeErrorText));
           submitted = checked.tasks;
           refused = [];
-          // The conversation's advice too, for a plan nobody converses over: a later accepted call replaces `submitted`.
-          const shape = longChainNote(checked.tasks);
-          const offerResubmit = shape !== undefined && !resubmitOffered;
-          if (shape) resubmitOffered = true;
           return {
             text: JSON.stringify({
               ok: true,
               ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
-              ...(shape ? { shape } : {}),
-              next: offerResubmit
-                ? 'Plan recorded. If shape names a dependency that does neither, call submit_plan once more without it, which replaces this plan; otherwise end your turn now.'
-                : 'Plan recorded. End your turn now.',
+              next: 'Plan recorded. End your turn now.',
             }),
           };
         },

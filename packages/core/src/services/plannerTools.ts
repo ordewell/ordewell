@@ -1,5 +1,4 @@
 import { flattenTasks, type RunnerId, type SkillLoad, type Task } from '../models/Task';
-import { longChainNote } from '../models/PlanShape';
 import { skillTooLarge, type SkillInfo } from './SkillsService';
 import { modelInvocablePlannerSkills, snapshotSkill } from './skillInvocation';
 import { autonomyLevelLabel, readOnlyMode } from './ModeResolver';
@@ -225,18 +224,13 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
       }
       // What reading its JSON warned of, and what committing it did: a skill checked at both says so once.
       const warnings = [...new Set([...(checked.ok ? checked.warnings : []), ...outcome.warnings ?? []])];
-      // Advice for the planner alone, never a user's notice: a chain can be right, and only the planner can tell (the plan is the source of truth).
-      const shape = checked.ok ? longChainNote(checked.tasks) : undefined;
       return answer({
         ok: true,
         tasks: outcome.tasks,
         coerced: outcome.coerced ?? [],
         ...(warnings.length > 0 ? { warnings } : {}),
-        ...(shape ? { shape } : {}),
         next: host.unread?.()
-          ? shape
-            ? 'The plan is committed, and it starts as your turn ends. If shape names a dependency that does neither, remove it with one edit_plan call first; then end your turn now, with one line: nobody reads more.'
-            : 'The plan is committed, and it starts as your turn ends. End your turn now, with one line: nobody reads more.'
+          ? 'The plan is committed, and it starts as your turn ends. End your turn now, with one line: nobody reads more.'
           : 'The plan is committed: it is the current plan now, and the user is shown it. Tell them briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
@@ -354,12 +348,10 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     async editPlan({ ops }) {
       // The applier checks each op's fields one by one, so a loose shape is its to refuse.
       const taskOps = ops as unknown as TaskOp[];
-      const before = host.tasks();
       const turn = host.turnId();
       if (turn === undefined) return { isError: true, text: JSON.stringify({ ok: false, errors: [{ message: 'No planning turn is open to take the edit.' }] }) };
       const outcome = await host.editPlan(taskOps, turn);
       if (!outcome.ok) return { isError: true, text: JSON.stringify({ ok: false, errors: outcome.errors.map(opErrorReply) }) };
-      const shape = longChainNote(host.tasks(), before);
       return answer({
         ok: true,
         summary: outcome.summary,
@@ -367,7 +359,6 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         ...(outcome.handles ? { handles: outcome.handles } : {}),
         ...(outcome.coerced?.length ? { coerced: outcome.coerced } : {}),
         ...(outcome.warnings?.length ? { warnings: outcome.warnings } : {}),
-        ...(shape ? { shape } : {}),
         next: 'The edit is applied: the plan holds it now, and the user is shown what changed. A further edit_plan call is a batch of its own, against the plan as it is now. Tell the user briefly; do not repeat it as JSON.',
       });
     },
