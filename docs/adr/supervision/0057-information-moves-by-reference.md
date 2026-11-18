@@ -186,7 +186,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   ended its turn, the stop alone moving nothing, had left a run idle with no wake to come.
 
   `failure_standing` is a blocking failure a supervisor's own turn left standing while the run is
-  not idle. When a wake-up turn at Act ends and a task it was woken for is still failed, on hold
+  not idle, or once it has ended. When a wake-up turn at Act ends and a task it was woken for is still failed, on hold
   or waiting on a person (a usage limit apart), was not stopped by the user, and tasks not yet
   done need it, `RunSupervision` raises it for that task as the turn ends, without waiting for the
   run to go idle, which another task still running can put off for good. A loop's check between
@@ -202,6 +202,17 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   holds is `run_held`'s, which stays the backstop. An Act supervisor refused an identical retry
   had edited the prompt and ended its turn while another task ran: twelve tasks stayed held with
   no wake to come.
+
+  The closing turn, the one on `run_finished`, is held to the same rule, with no idle backstop
+  behind it: once the run has ended nothing else wakes the supervisor. Its turn was on the whole
+  run, so every task still failed or held with work waiting on it raises `failure_standing` as it
+  ends, under the same once-per-failure key, and the line adds that the run has ended and an edit
+  starts nothing until the task is released. That wake holds the run's end as the closing turn did
+  ([ADR-0029](0029-the-supervisor.md)): `run_concluded` waits for its turn too. A closing turn that
+  failed is judged once its retry is over, whether that retry is the supervisor's turn or a user's
+  turn that carried it, and one the user stopped, or whose retry they stopped, raises none. Below
+  Act none is raised. An Act supervisor on a small model edited the one failed task's prompt in its closing
+  turn and never retried it: thirty tasks behind it never ran, and `ordewell run` returned.
 
   A `running_long` event is raised by a task's running time, by an automatic compaction of its own
   runner session, or by its context growing large; which compactions count as routine, and where a
@@ -498,3 +509,5 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-17 — R4: `run_held`, the run idle behind a task on hold or one waiting on a person, wakes as a person needed does, once per distinct set of holds, naming each hold, who put it there and what it holds back.
 - 2026-11-17 — R4: `failure_standing`, a task a wake-up turn at Act left failed or held with work waiting on it, wakes the supervisor once more as the turn ends, once per task for each failure or hold, while `run_held` stays the backstop for an idle run.
 - 2026-11-17 — R4: `failure_standing` goes with no merge window, and a loop's check between rounds raises none.
+- 2026-11-18 — R4: the closing turn raises `failure_standing` too, for every task it left failed or held with work waiting, once per failure, and that wake holds `run_concluded` until its turn is over.
+- 2026-11-18 — R4: the closing turn's `failure_standing` is judged once its retry is over, and none is raised after the user's Stop of the closing turn or its retry.

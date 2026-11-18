@@ -17,7 +17,6 @@ import type { TaskOrchestrator } from '../TaskOrchestrator';
  * opens it in a new Session.
  */
 
-const SESSION = 'session-reload';
 const INTERRUPTED = 'It was interrupted when Ordewell stopped, and nothing is running it now.';
 
 let dir: string;
@@ -61,10 +60,12 @@ async function running(tasks: Task[], first: number, isolation?: FakeWorktreeIso
 
 /** The plan as the host that ran it left it on disk, read back and opened by a new host. */
 function reopened(from: ReturnType<typeof host>, isolation?: FakeWorktreeIsolation, config?: Partial<IConfig>) {
-  saveSession(from.session.planState!, 'goal', dir, SESSION);
+  const id = from.session.sessionId;
+  saveSession(from.session.planState!, 'goal', dir, id);
   from.session.destroy();
   const env = host(isolation, config);
-  env.session.loadPlan(loadSession(SESSION, dir)!.plan, 'goal', testWorkspace, { persist: false });
+  // Under the id it was saved by, as a resume loads it: another id is a copy, which adopts none of its run (ADR-0013).
+  env.session.loadPlan(loadSession(id, dir)!.plan, 'goal', testWorkspace, { persist: false, sessionId: id });
   return env;
 }
 

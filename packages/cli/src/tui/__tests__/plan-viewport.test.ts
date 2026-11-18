@@ -41,7 +41,7 @@ interface View {
   offset: number;
   top: number;
   bottom: number;
-  spans: { start: number; end: number }[];
+  spans: readonly { start: number; end: number }[];
 }
 
 function view(state: TuiState): View {

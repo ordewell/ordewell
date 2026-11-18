@@ -127,6 +127,26 @@ function storeItem(key: string, value: string): void {
   rememberedDockHeights.set(key, value);
 }
 
+/** The tasks with the status the run holds for each, subtasks included; a task the run does not know keeps its own. */
+function withRunStatus(tasks: Task[], run: readonly RunTask[]): Task[] {
+  const byId = new Map<string, RunTask>();
+  const index = (entries: readonly RunTask[]): void => entries.forEach((t) => { byId.set(t.id, t); index(t.subtasks); });
+  index(run);
+  const apply = (list: Task[]): Task[] => list.map((t) => {
+    const live = byId.get(t.id);
+    const subtasks = t.subtasks ? apply(t.subtasks) : t.subtasks;
+    return live || subtasks !== t.subtasks ? { ...t, ...(live ? { status: live.status } : {}), subtasks } : t;
+  });
+  return apply(tasks);
+}
+
+/** A saved session as its parts, each serialized so the next read tells which of them the holder changed. */
+interface SavedParts { goal: string; conversation: string; plan: string; run: string }
+
+function savedParts(saved: SessionResponse): SavedParts {
+  return { goal: saved.meta.goal, conversation: JSON.stringify(saved.conversation), plan: JSON.stringify(saved.plan), run: JSON.stringify(saved.run) };
+}
+
 /** What a host may replace in a test, or let the window supply in the app. */
 export interface DaemonHostOptions {
   detectionTimeoutMs?: number;
@@ -634,14 +654,19 @@ export class DaemonHost {
       const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
       if (superseded()) return;
       this.showReadOnly(sessionId, saved);
-      this.watch(sessionId, JSON.stringify(saved));
+      this.watch(sessionId, savedParts(saved));
     } catch (error) {
       if (!superseded()) this.showError(error);
     }
   }
 
-  /** Redraw a read-only view whenever the holder saves the session: it sends this window no frames. */
-  private watch(sessionId: string, seen: string): void {
+  /**
+   * Redraw a read-only view whenever the holder saves the session: it sends this
+   * window no frames. Each part is compared on its own and only the one that
+   * changed is drawn again: the plan with its conversation is megabytes in a
+   * long session, and a holder's save moves one of them far more often than both.
+   */
+  private watch(sessionId: string, seen: SavedParts): void {
     let last = seen;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -649,15 +674,14 @@ export class DaemonHost {
     const read = async (): Promise<void> => {
       try {
         const saved = await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
-        const now = JSON.stringify(saved);
         if (stopped) return;
-        if (now !== last) {
-          last = now;
-          if (saved.meta.goal !== this.snapshot.goal) this.update({ goal: saved.meta.goal });
-          if (saved.conversation) this.view.reload(saved.conversation);
-          this.showPlan(planOfSaved(saved.plan));
-          if (saved.run) this.emit({ type: 'runView', view: saved.run });
-        }
+        const now = savedParts(saved);
+        const before = last;
+        last = now;
+        if (now.goal !== before.goal && saved.meta.goal !== this.snapshot.goal) this.update({ goal: saved.meta.goal });
+        if (now.conversation !== before.conversation && saved.conversation) this.view.reload(saved.conversation);
+        if (now.plan !== before.plan) this.showPlan(planOfSaved(saved.plan));
+        if (now.run !== before.run && saved.run) this.emit({ type: 'runView', view: saved.run });
       } catch {
         // A file mid-write or a daemon away: the next read tells.
       }
@@ -1468,10 +1492,15 @@ export class DaemonHost {
     }
   }
 
-  /** The plan's own tasks, as the chat's cards were drawn from them: the run view's copy carries less. */
+  /**
+   * The plan's own tasks, as the chat's cards were drawn from them: the run
+   * view's copy carries less. The plan is read when it changed, not on a
+   * status tick, so each task's status is the run view's: what a person is
+   * asked about, and what their yes is held to, is the status it has now.
+   */
   private planTasks(): Task[] {
     // A surface plan's tasks are the plan's tasks as sent: the cast names them so (ui's App does the same).
-    return (this.snapshot.state.plan?.tasks ?? []) as Task[];
+    return withRunStatus((this.snapshot.state.plan?.tasks ?? []) as Task[], this.view.run.current.tasks);
   }
 
   private planTask(taskId: string): { tasks: Task[]; task: Task | undefined } {
@@ -1612,7 +1641,10 @@ export class DaemonHost {
         return;
       case 'plan':
         this.dock = cue.dock === 'draft' ? 'draft' : null;
-        this.refreshPlan();
+        // A status tick is in the run view already; the plan is read for what
+        // only the plan holds, and the plan-level status the dock draws is the
+        // one thing a tick can move (a run starting or going quiet).
+        if (cue.dock !== 'run' || this.planStatusMoved()) this.refreshPlan();
         return;
       case 'settled':
         this.dock = cue.dock === 'draft' ? 'draft' : null;
@@ -1626,6 +1658,12 @@ export class DaemonHost {
         void this.postTaskCommands(cue.taskId);
         return;
     }
+  }
+
+  /** Whether the run says the plan is running while the plan shown says it is not, or the reverse. An older daemon's run says nothing, so it is read. */
+  private planStatusMoved(): boolean {
+    const activity = this.view.run.current.activity;
+    return !activity || activity.scheduled !== (this.snapshot.state.plan?.status === 'running');
   }
 
   /**

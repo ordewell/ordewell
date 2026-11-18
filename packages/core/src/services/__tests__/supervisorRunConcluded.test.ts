@@ -25,8 +25,8 @@ afterEach(() => {
 const ends = (env: Env) => env.messages.filter((m) => m.type === 'execution_complete' || m.type === 'run_concluded').map((m) => m.type);
 const concluded = (env: Env) => env.messages.filter((m): m is Extract<SessionMessage, { type: 'run_concluded' }> => m.type === 'run_concluded');
 
-async function failedRun(level: SupervisorLevel, options: Parameters<typeof supervised>[1] = {}): Promise<Env> {
-  const env = await supervised([task('t1', 1)], { ...options, settings: { supervisorLevel: level } });
+async function failedRun(level: SupervisorLevel, options: Parameters<typeof supervised>[1] = {}, tasks = [task('t1', 1)]): Promise<Env> {
+  const env = await supervised(tasks, { ...options, settings: { supervisorLevel: level } });
   env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
   await until(() => env.messages.some((m) => m.type === 'execution_complete'));
   return env;
@@ -361,6 +361,10 @@ describe('a user\'s Stop earlier in the run, behind which a wake-up waits, at Ac
     expect(ends(env)).toEqual(['execution_complete']);
 
     env.planner.calls[1].finish(prose('Task 1 needs you: the import is wrong.'));
+    // It left task 1 failed with task 3 waiting on it: the supervisor is woken once more for that (ADR-0057 R4).
+    await until(() => env.planner.calls.length === 3);
+    expect(ends(env)).toEqual(['execution_complete']);
+    env.planner.calls[2].finish(prose('Task 1 still needs you.'));
     await until(() => concluded(env).length > 0);
     expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
     expect(concluded(env)[0].supervisorHeld).toBeUndefined();
@@ -388,5 +392,177 @@ describe('a user\'s Stop earlier in the run, behind which a wake-up waits, at Ac
     await vi.advanceTimersByTimeAsync(40 * 60_000);
     expect(env.planner.calls).toHaveLength(2);
     expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);
+  });
+});
+
+/**
+ * A closing turn at Act that left a failed task standing with work waiting on
+ * it wakes the supervisor once more for it (ADR-0057 R4): the run's end stands
+ * only once that turn is over too, and on every path it concludes, once.
+ */
+describe('a closing turn at Act that left a blocking failure standing', () => {
+  /** Task 1 failed with task 2 waiting on it, and the closing turn ended leaving it so: the supervisor is woken for it again. */
+  async function leftStanding(): Promise<Env> {
+    const env = await failedRun('act', {}, [task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].finish(prose('Task 1 failed: the import is wrong.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).toContain('Task #1 "Task t1" is still failed after your turn, and 1 task waits on it. The run has ended');
+    expect(ends(env)).toEqual(['execution_complete']);
+    return env;
+  }
+
+  it('concludes once the turn it woke is over, failed, and wakes it no third time', async () => {
+    const env = await leftStanding();
+
+    env.planner.calls[1].finish(prose('Task 1 needs you.'));
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].summary).toMatchObject({ total: 2, completed: 0, failed: 1, blocked: 1 });
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(env.planner.calls).toHaveLength(2);
+  });
+
+  it('follows the run that turn continued with a retry to its next end', async () => {
+    const env = await leftStanding();
+
+    expect((await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Import from ./lib.' }, ctx)).isError).toBeFalsy();
+    env.planner.calls[1].finish(prose('Retried task 1.'));
+    await until(() => env.run.spawnedIds().filter((id) => id === 't1').length === 2);
+    await settled();
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.run.spawnedIds().includes('t2'));
+    env.run.of('t2').reportComplete({ status: 'done', summary: '' });
+    await until(() => env.planner.calls.length === 3);
+    env.planner.calls[2].finish(prose('Both passed.'));
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'execution_complete', 'run_concluded']);
+    expect(concluded(env)[0].summary).toMatchObject({ total: 2, completed: 2, failed: 0, blocked: 0 });
+  });
+
+  it('concludes, unsupervised, when that turn fails and its retry fails too', async () => {
+    const env = await leftStanding();
+
+    env.planner.calls[1].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 3);
+    expect(ends(env)).toEqual(['execution_complete']);
+    env.planner.calls[2].fail(new Error('planner exited with code 1'));
+    await until(() => concluded(env).length > 0);
+
+    expect(env.session.planState!.runSettings?.unsupervised).toMatch(/failed twice/);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes when the user stops that turn, and wakes it no more', async () => {
+    const env = await leftStanding();
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await until(() => concluded(env).length > 0);
+
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(env.planner.calls).toHaveLength(2);
+  });
+
+  it('at Watch concludes as the run ends, and wakes no turn for the failure', async () => {
+    const env = await failedRun('watch', {}, [task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+    await until(() => env.planner.calls.length === 1);
+
+    env.planner.calls[0].finish(prose('Task 1 failed: the import is wrong.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+    expect(env.planner.calls).toHaveLength(1);
+    expect(concluded(env)).toHaveLength(1);
+  });
+});
+
+/**
+ * What the closing turn left standing is judged once neither it nor its retry
+ * is in flight or owed, whichever turn ends it (ADR-0057 R4), and the user's
+ * Stop of the planner on the way is their answer to it (ADR-0029).
+ */
+describe('the closing turn\'s wake for a blocking failure, whichever turn ends it', () => {
+  const STILL = 'Task #1 "Task t1" is still failed after your turn, and 1 task waits on it. The run has ended';
+
+  /** Task 1 failed with task 2 waiting on it, and the closing turn is in flight. */
+  async function closing(): Promise<Env> {
+    const env = await failedRun('act', {}, [task('t1', 1), task('t2', 2, { dependencies: ['t1'] })]);
+    await until(() => env.planner.calls.length === 1);
+    expect(ends(env)).toEqual(['execution_complete']);
+    return env;
+  }
+
+  it('wakes it once more when the closing turn failed once and its retry left the failure standing', async () => {
+    const env = await closing();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Task 1 failed: the import is wrong.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toContain(STILL);
+    expect(ends(env)).toEqual(['execution_complete']);
+
+    env.planner.calls[2].finish(prose('Task 1 needs you.'));
+    await until(() => concluded(env).length > 0);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+    expect(env.planner.calls).toHaveLength(3);
+    expect(concluded(env)).toHaveLength(1);
+  });
+
+  it('concludes, and wakes no turn, when the user stops the closing turn', async () => {
+    const env = await closing();
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await until(() => concluded(env).length > 0);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+    expect(env.planner.calls).toHaveLength(1);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('concludes, and wakes no turn, when the user stops the retry of a closing turn that failed', async () => {
+    const env = await closing();
+    env.planner.calls[0].fail(new Error('planner exited with code 1'));
+    await until(() => env.planner.calls.length === 2);
+
+    expect(env.session.abortPlannerTurn()).toBe(true);
+    await until(() => concluded(env).length > 0);
+    await vi.advanceTimersByTimeAsync(40 * 60_000);
+
+    expect(env.planner.calls).toHaveLength(2);
+    expect(ends(env)).toEqual(['execution_complete', 'run_concluded']);
+  });
+
+  it('still wakes it after the closing turn a user\'s message carried, when the Stop was of the user\'s own turn before it', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { settings: { supervisorLevel: 'act' } });
+    const answered = env.session.continueConversation('how is it going?').catch(() => {});
+    await until(() => env.planner.calls.length === 1);
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await vi.advanceTimersByTimeAsync(START_HOLD_TIMEOUT_MS + 10);
+    await until(() => env.messages.some((m) => m.type === 'execution_complete'));
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS + 10);
+    // The Stop is of the user's turn: the closing input waits for their next message.
+    env.session.abortPlannerTurn();
+    await answered;
+    await until(() => concluded(env).length > 0);
+
+    void env.session.continueConversation('carry on').catch(() => {});
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].finish(prose('Task 1 failed: the import is wrong.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toContain(STILL);
   });
 });

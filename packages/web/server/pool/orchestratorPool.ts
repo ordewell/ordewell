@@ -89,6 +89,7 @@ import {
 } from '@ordewell/core';
 import { ChildStreams } from './childStreams';
 import { StreamSequence } from './streamSequence';
+import { HeldOutput, SLOW_SOCKET_BYTES } from './heldOutput';
 import { WebConfig, type PlannerPick } from '../adapters/WebConfig';
 import { scanWorkspaces as scanWorkspacesImpl } from '../utils/workspaceScanner';
 import { saveCredentials } from '../utils/savedCredentials';
@@ -174,6 +175,7 @@ export class OrchestratorPool {
    */
   private readonly stream = randomUUID();
   private readonly sequence = new StreamSequence(this.stream);
+  private readonly heldOutput = new HeldOutput((sessionId, workspace, msg) => this.emit(sessionId, workspace, msg));
   private readonly childStreams = new ChildStreams(this.sequence, (ws, workspace) => this.hears(ws, workspace));
   private registry: CoreRunnerRegistry = new RunnerRegistry();
   private modelResolver: ModelResolver;
@@ -410,8 +412,27 @@ export class OrchestratorPool {
     return this.childStreams.position(rootId, childId);
   }
 
-  /** `workspace` is the one of the Session that speaks, which need not be the one holding the id by the time it does. */
+  /**
+   * `workspace` is the one of the Session that speaks, which need not be the one
+   * holding the id by the time it does.
+   *
+   * A socket that is not keeping up (a client whose event loop is busy) leaves
+   * its frames piling in the daemon, each one stamped and serialized for it. A
+   * frame cannot be dropped or merged once numbered without a client reading a
+   * gap and reloading, and a reload returns no task output, so what shrinks is
+   * decided before the number: a run of one task's output is told as one frame,
+   * for every socket (ADR-0063). Anything else of the session ends the run
+   * first, so output never passes or trails what followed it. Status updates
+   * are not merged here: each replaces what a client holds, but a client that
+   * folded the one before it can differ from one that never saw it.
+   */
   private broadcast(sessionId: string, workspace: string | undefined, msg: SessionMessage | SessionNotice): void {
+    if (msg.type === 'task_output' && this.heldOutput.hold(sessionId, workspace, msg, () => this.someSocketBehind(sessionId, workspace))) return;
+    this.heldOutput.flush(sessionId);
+    this.emit(sessionId, workspace, msg);
+  }
+
+  private emit(sessionId: string, workspace: string | undefined, msg: SessionMessage | SessionNotice): void {
     const monitor = workspace ? this.accountLimits.get(workspace) : undefined;
     if (msg.type === 'planner_usage') monitor?.invalidate();
     else if (msg.type === 'task_log' && msg.events.some((event) => event.type === 'turn_end')) {
@@ -420,6 +441,13 @@ export class OrchestratorPool {
       if (runner) monitor?.invalidate(runner);
     }
     this.send(sessionId, workspace, JSON.stringify({ ...msg, ...this.sequence.next(sessionId) } satisfies SessionFrame));
+  }
+
+  private someSocketBehind(sessionId: string, workspace: string | undefined): boolean {
+    for (const ws of this.clients.get(sessionId) ?? []) {
+      if (ws.readyState === ws.OPEN && this.hears(ws, workspace) && ws.bufferedAmount > SLOW_SOCKET_BYTES) return true;
+    }
+    return false;
   }
 
   hasSession(sessionId: string): boolean { return this.sessions.has(sessionId); }
@@ -1305,6 +1333,7 @@ export class OrchestratorPool {
 }
 
 export const scanWorkspaces = scanWorkspacesImpl;
+export { SLOW_SOCKET_BYTES };
 
 export function getSessionList(workspace: string) { return listSessions(workspace); }
 export function getSession(sessionId: string, workspace: string) { return loadSession(sessionId, workspace); }

@@ -1217,6 +1217,174 @@ test('planShape: the longest dependency chain and the widest level', () => {
   assert.deepEqual(L.planShape({ tasks: [t('a', ['b']), t('b', ['a'])] }), { longestChain: null, widestLevel: null });
 });
 
+// --- --plan-only: the shape of a plan -----------------------------------------
+
+const pt = (id, dependencies = [], over = {}) => ({ id, title: `Task ${id}`, description: `does ${id}`, type: 'ai', dependencies, subtasks: [], ...over });
+const titles = (...ids) => ids.map((i) => `Task ${i}`);
+
+test('planStructure: a chain has as many levels as tasks, one wide, and its first task gates the rest', () => {
+  const s = L.planStructure({ tasks: [pt('a'), pt('b', ['a']), pt('c', ['b']), pt('d', ['c'])] });
+  assert.deepEqual([s.tasks, s.levels, s.longestChain, s.widestLevel, s.edges, s.valid], [4, 4, 4, 1, 3, true]);
+  assert.deepEqual(s.chain, titles('a', 'b', 'c', 'd'));
+  assert.deepEqual([s.gatedByOne, s.gate], [true, 'Task a']);
+  assert.deepEqual(s.problems, []);
+});
+
+test('planStructure: a fan-out of independent tasks is one level, wide, with no gate and no edge', () => {
+  const s = L.planStructure({ tasks: [pt('a'), pt('b'), pt('c'), pt('d')] });
+  assert.deepEqual([s.levels, s.longestChain, s.widestLevel, s.edges, s.gatedByOne, s.gate], [1, 1, 4, 0, false, null]);
+  assert.deepEqual(s.chain, titles('a'), 'with every chain of one task equal, the first listed');
+  // One task fans out to three, which a last task joins: the root gates all, the widest level is the middle.
+  const diamond = L.planStructure({ tasks: [pt('r'), pt('x', ['r']), pt('y', ['r']), pt('z', ['r']), pt('j', ['x', 'y', 'z'])] });
+  assert.deepEqual([diamond.levels, diamond.widestLevel, diamond.edges, diamond.gate], [3, 3, 6, 'Task r']);
+  assert.deepEqual(diamond.chain, titles('r', 'x', 'j'), 'the first of equal chains');
+});
+
+test('planStructure: a root gate is the one task every other reaches, however indirectly', () => {
+  const gated = L.planStructure({ tasks: [pt('g'), pt('a', ['g']), pt('b', ['a']), pt('c', ['g'])] });
+  assert.deepEqual([gated.gatedByOne, gated.gate], [true, 'Task g']);
+  // Two roots: neither gates the other's branch.
+  const two = L.planStructure({ tasks: [pt('g'), pt('h'), pt('a', ['g', 'h'])] });
+  assert.deepEqual([two.gatedByOne, two.gate], [false, null]);
+  // A last task depends on everything yet gates nothing: it is a sink, not a root.
+  const sink = L.planStructure({ tasks: [pt('a'), pt('b'), pt('z', ['a', 'b'])] });
+  assert.equal(sink.gatedByOne, false);
+  assert.equal(L.planStructure({ tasks: [pt('only')] }).gatedByOne, false, 'a lone task gates no other');
+});
+
+test('planStructure counts a task once by kind, loop checks besides, subtasks apart, and a repeated dependency once', () => {
+  const s = L.planStructure({
+    tasks: [
+      pt('r', [], { research: true, readOnly: true }),
+      pt('c', ['r'], { subtasks: [pt('c1'), pt('c2', [], { subtasks: [pt('c3')] })] }),
+      pt('o', ['r'], { ops: true }),
+      pt('s', ['c'], { type: 'script', commands: [['pytest']], loop: { body: ['f'], maxRounds: 2 } }),
+      pt('f', ['s', 's']),
+      pt('u', [], { type: 'user' }),
+      pt('d', [], { type: 'delegated' }),
+    ],
+  });
+  assert.deepEqual(s.kinds, { research: 1, change: 2, ops: 1, script: 1, user: 1, delegated: 1 });
+  assert.equal(Object.values(s.kinds).reduce((a, b) => a + b, 0), s.tasks, 'the kinds sum to the tasks');
+  assert.equal(s.loopChecks, 1);
+  assert.equal(s.subtasks, 3);
+  assert.equal(s.edges, 4, 'r→c, r→o, c→s, s→f once, and none for the subtasks');
+  assert.deepEqual(s.chain, titles('r', 'c', 's', 'f'));
+});
+
+test('planStructure: a cycle, an unknown dependency, a repeated id or no task is a shape without a graph, never a crash', () => {
+  const cycle = L.planStructure({ tasks: [pt('a', ['b']), pt('b', ['a']), pt('c')] });
+  assert.equal(cycle.valid, false);
+  assert.match(cycle.problems.join(), /cycle/);
+  assert.deepEqual([cycle.levels, cycle.longestChain, cycle.chain, cycle.widestLevel, cycle.gatedByOne, cycle.gate], [null, null, null, null, null, null]);
+  assert.deepEqual([cycle.tasks, cycle.edges, cycle.kinds.change], [3, 2, 3], 'what needs no graph is still counted');
+  assert.match(L.planStructure({ tasks: [pt('a', ['a'])] }).problems.join(), /cycle/, 'a task cannot wait on itself');
+  const unknown = L.planStructure({ tasks: [pt('a', ['ghost'])] });
+  assert.equal(unknown.valid, false);
+  assert.match(unknown.problems.join(), /"Task a" depends on "ghost", which is no task/);
+  assert.match(L.planStructure({ tasks: [pt('a'), pt('a')] }).problems.join(), /two tasks have the id "a"/);
+  assert.deepEqual(L.planStructure({ tasks: [] }).problems, ['the plan holds no task']);
+  for (const odd of [null, undefined, {}, { tasks: 'no' }, { tasks: [null, 3, pt('x', 'not-a-list', { subtasks: 'no' })] }]) {
+    assert.doesNotThrow(() => L.planStructure(odd), JSON.stringify(odd));
+  }
+  assert.equal(L.planStructure({ tasks: [null, 3, pt('x', 'not-a-list', { subtasks: 'no' })] }).valid, true, 'what is not a task is left out');
+});
+
+test('planStructure reads a deep plan without the stack, and its shape agrees with planShape', () => {
+  const deep = Array.from({ length: 800 }, (_, i) => pt(`t${i}`, i ? [`t${i - 1}`] : []));
+  assert.equal(L.planStructure({ tasks: deep }).longestChain, 800);
+  const plan = { tasks: [pt('a'), pt('b', ['a']), pt('c', ['a']), pt('d', ['b']), pt('e')] };
+  const s = L.planStructure(plan);
+  assert.deepEqual({ longestChain: s.longestChain, widestLevel: s.widestLevel }, L.planShape(plan));
+});
+
+test('planDigest holds every task\'s title, brief and dependencies, by id and by title', () => {
+  const d = L.planDigest({ tasks: [pt('a', [], { prompt: 'Do a, thoroughly.' }), pt('b', ['a', 'zz'], { subtasks: [pt('b1')] })] });
+  assert.deepEqual(d.tasks.map((t) => [t.title, t.brief, t.dependencies, t.dependsOn, t.kind]), [
+    ['Task a', 'Do a, thoroughly.', [], [], 'change'],
+    ['Task b', 'does b', ['a', 'zz'], ['Task a', null], 'change'],
+  ]);
+  assert.equal(d.tasks[1].subtasks[0].title, 'Task b1');
+});
+
+test('describePlanned says the plan in one line, and what it could not say', () => {
+  const planned = L.plannedRecord({ plan: { plannerUsage: { totals: { reportedCost: { USD: 0.0123 } } }, tasks: [pt('a'), pt('b', ['a'])] }, planCheck: { ok: true, failures: [] }, planningMs: 41_400 });
+  assert.equal(planned.plannerUsd, 0.0123);
+  assert.equal(planned.planningMs, 41_400);
+  assert.match(L.describePlanned(planned), /^plan-only: 2 tasks \(2 change\), longest chain 2, widest level 1, 1 edges, all gated by "Task a"; planner \$0\.0123, 41 s$/);
+  assert.match(L.describePlanned(L.plannedRecord({ plan: { tasks: [pt('a', ['b'])] }, planningMs: null })), /no graph: "Task a" depends on "b", which is no task; planner spend not recorded$/);
+  assert.equal(L.describePlanned(null), 'no plan was recorded');
+});
+
+test('--plan-only: arm B alone, refused for arm A and for a dry run, and no plan-only run is a valid, scored or listed one', () => {
+  const o = L.parseArgs(['--run', '--plan-only', '--libs', 'x.json', '--provider-pin', 'p']);
+  assert.equal(o.planOnly, true);
+  assert.equal(o.arm, 'B', 'both arms means B: arm A has no plan');
+  assert.equal(L.parseArgs(['--run', '--plan-only', '--arm', 'B', '--libs', 'x.json', '--provider-pin', 'p']).arm, 'B');
+  assert.throws(() => L.parseArgs(['--run', '--plan-only', '--arm', 'A', '--libs', 'x.json', '--provider-pin', 'p']), /arm A.*no plan/);
+  assert.throws(() => L.parseArgs(['--plan-only', '--arm', 'a', '--rehearse', 'b-plan', '--libs', 'x.json']), /arm A.*no plan/);
+  assert.throws(() => L.parseArgs(['--dry-run', '--plan-only', '--libs', 'x.json']), /--plan-only.*--run or --rehearse/);
+  assert.equal(L.parseArgs(['--rehearse', 'b-plan', '--plan-only', '--libs', 'x.json']).planOnly, true);
+  assert.equal(L.parseArgs(['--dry-run', '--libs', 'x.json']).planOnly, false);
+  // Its runs and results sit apart from the scored ones.
+  assert.equal(L.runsDirName({ planOnly: true }), 'plan-runs');
+  assert.equal(L.runsDirName({ planOnly: true, rehearse: 'b-plan' }), 'rehearsals');
+  assert.equal(L.runsDirName({ planOnly: false }), 'runs');
+  assert.equal(L.resultsFileName({ planOnly: true }), 'plans.jsonl');
+  assert.equal(L.resultsFileName({ planOnly: false }), 'results.jsonl');
+  const v = L.judgeValidity({ aborted: null, checks: [], tests: null, freshness: { stale: false }, planOnly: true });
+  assert.equal(v.valid, false);
+  assert.deepEqual(v.invalidReasons, ['plan-only: the plan was made and nothing ran, so nothing was scored']);
+  const r = L.resultRecord({ lib: lib(), arm: L.ARMS.B, window: { window: 1 }, ordewell: { sha: 's' }, validity: v, planOnly: true, dryRun: false });
+  assert.deepEqual([r.planOnly, r.valid, r.tests, r.scoredFrom], [true, false, null, null]);
+  assert.equal(L.resultRecord({ lib: lib(), arm: L.ARMS.B, window: { window: 1 }, ordewell: { sha: 's' } }).planOnly, false);
+});
+
+test('a batch takes --plan-only for arm B alone, passes it on, refuses arm A, and marks its batch.json', () => {
+  const b = L.parseBatchArgs(['--run', '--plan-only', '--libs', 'l.json', '--provider-pin', 'p', '--batch-budget-usd', '2', '--jobs', '3', '--seed', 's2', '--ordewell-root', 'other']);
+  assert.equal(b.planOnly, true);
+  assert.equal(b.arm, 'B');
+  assert.equal(b.jobs, 3);
+  assert.ok(b.driveArgs.includes('--plan-only'));
+  assert.deepEqual(b.driveArgs.slice(b.driveArgs.indexOf('--ordewell-root'), b.driveArgs.indexOf('--ordewell-root') + 2), ['--ordewell-root', path.resolve('other')]);
+  assert.throws(() => L.parseBatchArgs(['--run', '--plan-only', '--arm', 'A', '--libs', 'l.json', '--provider-pin', 'p', '--batch-budget-usd', '2']), /arm A.*no plan/);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--plan-only', '--libs', 'l.json']), /--plan-only/);
+  assert.deepEqual(L.batchPlan({ libs: ['x', 'y'], arms: L.armsOf(b.arm).map((a) => a.id), seed: 's' }).map((r) => `${r.lib}-${r.arm}`), ['x-B', 'y-B']);
+  assert.equal(L.batchRecord({ jobs: 1, runs: [], planOnly: true }).planOnly, true);
+  assert.equal(L.batchRecord({ jobs: 1, runs: [] }).planOnly, false);
+  // Repeated seeds are repeated batches: each seed's runs have a name of their own.
+  assert.notEqual(L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'B', seed: '1' }), L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'B', seed: '2' }));
+});
+
+test('the b-plan scenario judges a plan-only result by the shape, the priced planner and the absence of any run', () => {
+  const s = R.scenario('b-plan');
+  const planned = { shape: structuredClone(s.expect.shape), plannerUsd: 0.0002, planningMs: 9000, protocolOk: true, protocolFailures: [] };
+  const good = {
+    planOnly: true, valid: false, invalidReasons: ['plan-only: the plan was made and nothing ran, so nothing was scored'],
+    tests: null, scoredFrom: null, tasks: null, patches: [], baseline: null, truncated: { truncated: false, why: null },
+    steps: { plan: { exit: 0 }, planCheck: { ok: true } }, closing: { stop: { exit: 0 } }, stopped: null, stalled: null,
+    planned, recordedUsd: 0.0002, metrics: null,
+  };
+  assert.deepEqual(R.judgeRehearsal('b-plan', good), []);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, steps: { ...good.steps, run: { exit: 0 } } }).join(), /a run or a merge step/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, tests: { passed: 1 } }).join(), /holds a score/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, valid: true }).join(), /not valid for being plan-only/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, planned: { ...planned, shape: { ...planned.shape, edges: 5 } } }).join(), /shape\.edges is 5, wanted 6/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, planned: { ...planned, plannerUsd: 0 } }).join(), /planner's spend is 0/);
+  assert.match(R.judgeRehearsal('b-plan', { ...good, planned: null }).join(), /no planned record/);
+  // The expectation is the shape the harness computes for the plan the fake serves.
+  assert.deepEqual(L.planStructure(s.plan()), s.expect.shape);
+  assert.deepEqual(L.planDigest(s.plan()).tasks.map((t) => t.kind), ['research', 'change', 'script', 'change', 'ops', 'change']);
+  const clean = { names: ['result.json', 'plan.json', 'plan-saved.json', 'ordewell.log'], digest: L.planDigest(s.plan()), expectedTitles: s.plan().tasks.map((t) => t.title) };
+  assert.deepEqual(R.judgePlanOnlyDir(clean), []);
+  assert.match(R.judgePlanOnlyDir({ ...clean, names: [...clean.names, 'arm-workdir', 'arm.patch'] }).join(), /arm-workdir.*arm\.patch/);
+  assert.match(R.judgePlanOnlyDir({ ...clean, names: ['result.json'] }).join(), /no plan\.json/);
+  // Nothing ran: the fake heard the planner alone.
+  assert.deepEqual(R.judgePlayed('b-plan', [{ role: 'planner' }], playCtx), []);
+  assert.match(R.judgePlayed('b-plan', [{ role: 'planner' }, { role: 'runner', key: 'edit' }], playCtx).join(), /runner turn was played/);
+  assert.match(R.judgePlayed('b-plan', [], playCtx).join(), /never heard the planner/);
+});
+
 test('meanConcurrency is the attempts\' running time over the time any ran, and null with one unended', () => {
   const at = (s, e) => ({ startedAt: new Date(s * 1000).toISOString(), endedAt: e === null ? undefined : new Date(e * 1000).toISOString() });
   assert.equal(L.meanConcurrency([at(0, 10), at(0, 10)]), 2);
@@ -1259,7 +1427,9 @@ test('runMetrics reads the tasks, checkpoints, the supervisor and each attempt f
     { taskId: 't2', attempt: 1, question: 'Where is upstream?', answeredBy: 'user', answer: 'rejected' },
   ]);
   assert.equal(m.supervisor.wakeUps, 2);
-  assert.deepEqual(m.supervisor.actions, [{ command: 'continue', task: '#2', outcome: 'done', at: 'y' }]);
+  assert.deepEqual(m.supervisor.actions, [{ kind: 'continue', command: 'continue', task: '#2', title: 'two', outcome: 'done', at: 'y' }]);
+  assert.deepEqual(m.supervisor.actionsBy, { continue: 1 });
+  assert.deepEqual(m.supervisor.wakes.map((w) => [w.at, w.updates]), [['x', 1], ['w', 1]]);
   assert.deepEqual(m.perTask[0], { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', runningMs: 1500, steps: 4,
     attempts: [{ attempt: 1, ended: 'ended without task_complete', steps: 2, runningMs: 1000 }, { attempt: 2, ended: 'done', steps: 2, runningMs: 500 }] });
   assert.equal(m.perTask[1].runningMs, null, 'an attempt with no running clock is not guessed');
@@ -1273,6 +1443,74 @@ test('runMetrics reads the tasks, checkpoints, the supervisor and each attempt f
   assert.equal(bare.perTask[0].steps, null);
   assert.equal(bare.perTask[0].attempts[0].ended, null);
   assert.equal(L.runMetrics(null, null), null);
+});
+
+test('supervisorRecord counts every act the supervisor made, edits and words included, and what woke it', () => {
+  const exec = (command, ref, outcome, at, extra = {}) => ({
+    role: 'assistant', kind: 'execution', content: '', timestamp: at,
+    execution: { command, actor: 'supervisor', level: 'act', ...(ref ? { task: { id: `id${ref}`, ref, title: `Task ${ref}` } } : {}), outcome, at, ...extra },
+  });
+  const said = (content, at) => ({ role: 'assistant', kind: 'supervisor', content, timestamp: at });
+  const wake = (content, at) => ({ role: 'user', kind: 'wake_up', content, timestamp: at });
+  const plan = {
+    tasks: [{ id: 'a', order: 1, title: 'Implement the library' }, { id: 'b', order: 2, title: 'Note the rehearsal' }],
+    conversationHistory: [
+      wake('Run update:\n- task #1 "Implement the library" failed: nope; it blocks task #2 "Note the rehearsal"', 't1'),
+      wake('Run update:\n- task #2 "Note the rehearsal" is waiting for input: May I?\nSince the last update:\n- task #3 "x" passed', 't1'),
+      exec('retry_task', '#1', 'done', 't2'),
+      exec('skip_task', '#2', 'done', 't3'),
+      exec('stop_task', '#2', 'refused', 't4', { detail: 'not running' }),
+      exec('stop_run', null, 'done', 't5'),
+      exec('message_task', '#2', 'done', 't6', { detail: 'use the tests' }),
+      exec('answer_checkpoint', '#2', 'done', 't7'),
+      exec('answer_approval', '#2', 'declined', 't8'),
+      exec('merge_all', null, 'done', 't9'),
+      { role: 'assistant', kind: 'execution', content: '', timestamp: 't10', execution: { command: 'retry_task', actor: 'user', outcome: 'done', at: 't10' } },
+      said('Tasks updated:\n- Updated "Implement the library" (prompt)\n- Added "A new task"\n- Removed "Gone"\n- Merged 2 tasks into "Note the rehearsal"\n- Re-armed "Implement the library"', 't11'),
+      said('I left task #1 alone.', 't12'),
+      { role: 'assistant', kind: 'plan_generated', content: 'Plan generated with 2 tasks.', timestamp: 't0' },
+      wake('Run update:\n- Task #1 "Implement the library" is still failed after your turn, and 1 task waits on it. The run has ended, and an edit starts nothing: nothing runs until you release it. Release it: call retry_task', 't13'),
+    ],
+  };
+  const s = L.supervisorRecord(plan);
+  assert.equal(s.wakeUps, 3);
+  assert.deepEqual(s.wakes, [
+    { at: 't1', updates: 2, triggers: [{ kind: 'task_failed', task: '#1' }, { kind: 'waiting_input', task: '#2' }] },
+    { at: 't13', updates: 1, triggers: [{ kind: 'failure_standing', task: '#1', closing: true }] },
+  ]);
+  assert.deepEqual(s.wakesBy, { task_failed: 1, waiting_input: 1, failure_standing: 1 });
+  // The user's own call and the plan card are not the supervisor's.
+  assert.deepEqual(s.actions.map((a) => [a.kind, a.task, a.outcome, a.at]), [
+    ['retry_task', '#1', 'done', 't2'], ['skip_task', '#2', 'done', 't3'], ['stop_task', '#2', 'refused', 't4'], ['stop_run', null, 'done', 't5'],
+    ['message_task', '#2', 'done', 't6'], ['answer_checkpoint', '#2', 'done', 't7'], ['answer_approval', '#2', 'declined', 't8'], ['merge_all', null, 'done', 't9'],
+    ['plan_edit', '#1', 'done', 't11'], ['plan_edit', null, 'done', 't11'], ['plan_edit', null, 'done', 't11'], ['plan_edit', '#2', 'done', 't11'], ['plan_edit', '#1', 'done', 't11'],
+    ['message', null, 'done', 't12'],
+  ]);
+  assert.deepEqual(s.actions.filter((a) => a.kind === 'plan_edit').map((a) => [a.op, a.title]), [
+    ['updated', 'Implement the library'], ['added', 'A new task'], ['removed', 'Gone'], ['merged', 'Note the rehearsal'], ['re-armed', 'Implement the library'],
+  ]);
+  assert.equal(s.actions.find((a) => a.kind === 'stop_task').detail, 'not running');
+  assert.deepEqual(s.actionsBy, { retry_task: 1, skip_task: 1, stop_task: 1, stop_run: 1, message_task: 1, answer_checkpoint: 1, answer_approval: 1, merge_all: 1, plan_edit: 5, message: 1 });
+  // A session with no history holds nothing to count, which is not zero.
+  assert.deepEqual(L.supervisorRecord({ tasks: [] }), { wakeUps: null, wakes: null, wakesBy: null, actions: null, actionsBy: null });
+  assert.deepEqual(L.supervisorRecord({ tasks: [], conversationHistory: [] }), { wakeUps: 0, wakes: [], wakesBy: {}, actions: [], actionsBy: {} });
+});
+
+test('wakeTriggers names each kind of line a wake-up digest holds', () => {
+  const one = (line) => L.wakeTriggers(`Run update:\n${line}`)[0];
+  assert.deepEqual(one('- the run finished: 2 tasks'), { kind: 'run_finished', task: null });
+  assert.deepEqual(one('- the run is idle: nothing is running and nothing can start. Task #2 "x" is on hold'), { kind: 'run_held', task: null });
+  assert.deepEqual(one('- task #1.1 "x" is waiting for approval: run it'), { kind: 'waiting_approval', task: '#1.1' });
+  assert.deepEqual(one('- task #1 "x" has gone quiet (3 min)'), { kind: 'task_idle', task: '#1' });
+  assert.deepEqual(one('- task #1 "x" has run long: 40 min running, past its 20 min threshold'), { kind: 'running_long', task: '#1' });
+  assert.deepEqual(one('- task #1 "x" finished, but its work conflicts and could not land: a.py'), { kind: 'landing_conflict', task: '#1' });
+  assert.deepEqual(one('- task #1 "x" passed, but git refused to land its work, which is kept'), { kind: 'landing_failed', task: '#1' });
+  assert.deepEqual(one('- task #1 "x"\'s runner asked for something nobody here may allow, and was denied'), { kind: 'approval_denied', task: '#1' });
+  assert.deepEqual(one('- openrouter\'s usage limit paused a task, which waits for a retry: #1 "x"'), { kind: 'usage_limit', task: null });
+  assert.deepEqual(one('- Task #1 "x" is still failed after your turn, and 1 task waits on it. Release it: skip_task'), { kind: 'failure_standing', task: '#1' });
+  assert.deepEqual(one('- task #2 "x", whose result you asked for, has ended. passed'), { kind: 'task_report', task: '#2' });
+  assert.deepEqual(one('- something new'), { kind: 'other', task: null });
+  assert.deepEqual(L.wakeTriggers('no bullet at all'), []);
 });
 
 test('readTaskLogs reads each attempt\'s log from a copied-out session', () => {
@@ -1695,10 +1933,26 @@ test('the planner plays the plan once; after it the conversation is the supervis
   const first = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }] }, both, playCtx);
   const second = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }, ...retried] }, both, playCtx);
   assert.deepEqual([first.toolCall?.name, second.toolCall?.name].sort(), ['answer_checkpoint', 'retry_task']);
-  // Left alone, a failure stays failed.
+  // Left alone, a failure stays failed: the closing turn plays nothing, and the second wake, for the failure left standing, is answered in prose too.
   const leave = R.createState();
   leave.planned = true;
-  assert.equal(R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: 'Task #1 failed' }] }, leave, playCtx).toolCall, undefined);
+  assert.equal(R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: planBlock(line(1, 'Implement the library', 'failed')) }] }, leave, playCtx).toolCall, undefined);
+  const again = R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: 'Run update:\n- Task #1 "Implement the library" is still failed after your turn, and 1 task waits on it.' }] }, leave, playCtx);
+  assert.equal(again.toolCall, undefined);
+  assert.match(again.content, /leaves task #1 failed/);
+
+  // The edit-then-retry scenario: the closing turn edits the failed task, keeping the key the fake routes by; only the second wake retries.
+  const er = R.createState();
+  er.planned = true;
+  const closing = planBlock(line(1, 'Implement the library', 'failed'), line(2, 'Note the rehearsal', 'approved'));
+  const edit = R.turnFor('b-edit-retry', { tools: [], messages: [{ role: 'user', content: closing }] }, er, playCtx);
+  assert.equal(edit.toolCall, undefined, 'the built-in planner edits by a JSON reply: it has no edit_plan tool');
+  const ops = JSON.parse(/```json\n([\s\S]*)\n```/.exec(edit.content)[1]).taskOps;
+  assert.deepEqual([ops[0].op, ops[0].taskId], ['update', '#1']);
+  assert.match(ops[0].changes.prompt, /\[rehearsal:edit\]/);
+  assert.equal(R.turnFor('b-edit-retry', { tools: [], messages: [{ role: 'user', content: closing }, ...retried] }, er, playCtx).toolCall, undefined, 'the closing turn retries nothing');
+  const standingWake = `Run update:\n- Task #1 "Implement the library" is still failed after your turn, and 1 task waits on it.\n${closing}`;
+  assert.equal(R.turnFor('b-edit-retry', { tools: [], messages: [{ role: 'user', content: standingWake }] }, er, playCtx).toolCall.name, 'retry_task');
 });
 
 test('the fake streams a tool call and its usage as OpenRouter does, and lists the bench\'s model', () => {
@@ -1737,13 +1991,27 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.match(R.judgeRehearsal('a-stall', { ...waited, truncated: { truncated: true, why: 'settled with 1 task open: 1 waiting on a person' }, stalled: { why: 'settled', open: [] } }).join(), /wanted \/\^stalled: waiting on checkpoint/);
   assert.match(R.judgeRehearsal('a-stall', { ...waited, tasks: [{ status: 'completed' }] }).join(), /every task is completed/);
   const held = { status: 'failed', held: 'nothing ready', reason: 'failed' };
+  const standing = (at) => ({ at, updates: 1, triggers: [{ kind: 'failure_standing', task: '#1', closing: true }] });
+  const leaving = { wakeUps: 2, wakes: [{ at: '2026-01-01T00:00:00.000Z', updates: 1, triggers: [{ kind: 'run_finished', task: null }] }, standing('2026-01-01T00:01:00.000Z')], actions: [{ kind: 'message', at: 'a', outcome: 'done' }] };
   const leftAlone = {
+    metrics: { supervisor: leaving },
     ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
     stalled: { why: 'settled', open: [held, { status: 'approved', held: 'nothing ready', reason: 'depends on 1 (failed)' }] }, tasks: [{ status: 'failed' }, { status: 'approved' }],
   };
   assert.deepEqual(R.judgeRehearsal('b-leave', leftAlone), []);
   assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, tests: { passed: 1653 } }).join(), /1653 passed, not the baseline's 11: work that never landed was scored/);
   assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, stalled: { why: 'settled', open: [held] } }).join(), /1 task\(s\) held open, wanted 2/);
+  // What the supervisor did is judged from the metrics: a retry the scenario never plays, or no wake for the failure left standing, fails.
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, actions: [{ kind: 'retry_task', at: 'a', outcome: 'done' }] } } }).join(), /acts are \["retry_task"\], wanted \[\]/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, wakes: leaving.wakes.slice(0, 1) } } }).join(), /0 wake\(s\) for a failure the closing turn left, wanted 1/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, wakes: [...leaving.wakes, standing('2026-01-01T00:02:00.000Z')], wakeUps: 3 } } }).join(), /2 wake\(s\) for a failure the closing turn left, wanted 1/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, wakes: [{ at: 'x', updates: 1, triggers: [{ kind: 'other', task: null }] }, standing('y')] } } }).join(), /trigger the harness cannot read/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: null }).join(), /no actions or wakes/);
+  const edited = { wakeUps: 3, wakes: [leaving.wakes[0], standing('2026-01-01T00:01:00.000Z')],
+    actions: [{ kind: 'plan_edit', at: '2026-01-01T00:00:30.000Z', outcome: 'done' }, { kind: 'message', at: '2026-01-01T00:00:40.000Z', outcome: 'done' }, { kind: 'retry_task', at: '2026-01-01T00:01:10.000Z', outcome: 'done' }] };
+  assert.deepEqual(R.judgeSupervision(R.scenario('b-edit-retry').supervision, edited), []);
+  assert.match(R.judgeSupervision(R.scenario('b-edit-retry').supervision, { ...edited, actions: [edited.actions[0], { ...edited.actions[2], at: '2026-01-01T00:00:50.000Z' }] }).join(), /did not follow the closing wake/);
+  assert.match(R.judgeSupervision(R.scenario('b-edit-retry').supervision, { ...edited, actions: edited.actions.slice(1) }).join(), /acts are \["retry_task"\], wanted \["plan_edit","retry_task"\]/);
   assert.match(R.judgeRehearsal('b-cap', { ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'cap: spend' }, stopped: { why: 'spend' }, tasks: [{ status: 'completed' }], steps: { run: { ended: 'by itself' }, merge: { exit: 0 } } }).join(), /driver had to stop it/);
   assert.deepEqual(R.judgeRehearsal('a-done', null), ['no result.json']);
 

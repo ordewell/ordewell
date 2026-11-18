@@ -105,6 +105,13 @@ describe('SessionView', () => {
       expect(session.receive({ type: 'review_approved' })).toBeNull();
     });
 
+    // A status tick re-reads the plan only when the dock moved, so a field
+    // patch (an edit on another surface, a model the session follows) is the
+    // one cue that tells the host its plan's task fields changed.
+    it('asks for the plan again when a task\'s fields were patched', () => {
+      expect(session.receive({ type: 'task_updated', taskId: 't1', changes: { title: 'Renamed' } })).toEqual({ type: 'plan' });
+    });
+
     it('clears the task\'s command list when it starts', () => {
       const posts: HostToWebview[] = [];
       const view = new SessionView((msg) => posts.push(msg));

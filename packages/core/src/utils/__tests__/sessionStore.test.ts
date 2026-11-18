@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fsHelpers from '../fsHelpers';
 import { saveSession, listSessions, loadSession, loadSessionPlanState, getLatestSession, deleteSession } from '../sessionStore';
 import { canContinue } from '../../services/continuation';
 import { createEmptyPlan, createTask, type ResearchLogEntry, type Task } from '../../models/Task';
@@ -7,6 +8,11 @@ import * as path from 'path';
 import * as os from 'os';
 
 import type { ILogger } from '../../interfaces/ILogger';
+
+vi.mock('../fsHelpers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../fsHelpers')>();
+  return { ...actual, writeFileAtomic: vi.fn(actual.writeFileAtomic), ensureStateDirIgnored: vi.fn(actual.ensureStateDirIgnored) };
+});
 
 function fakeLogger(): { logger: ILogger; warns: string[] } {
   const warns: string[] = [];
@@ -27,6 +33,17 @@ describe('sessionStore', () => {
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('the state directory\'s ignore file', () => {
+    it('is checked once per directory, not on every save', () => {
+      const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };
+
+      for (let i = 0; i < 3; i++) saveSession(plan, 'Goal', tmpDir, 'session-3333333333333333');
+
+      expect(fs.existsSync(path.join(tmpDir, '.ordewell', '.gitignore'))).toBe(true);
+      expect(vi.mocked(fsHelpers.ensureStateDirIgnored).mock.calls.filter(([dir]) => dir === tmpDir)).toHaveLength(1);
+    });
   });
 
   describe('a session\'s research log', () => {
@@ -57,6 +74,46 @@ describe('sessionStore', () => {
       plan.researchLog = [...plan.researchLog!, entry('r2')];
       saveSession(plan, 'Goal', tmpDir, id);
       expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([entry('r1'), entry('r2')]);
+    });
+
+    it('is not written again by a save whose log is a new array of the entries it already holds', () => {
+      const id = 'session-ffffffffffffffff';
+      const [r1, r2] = [entry('r1'), entry('r2')];
+      saveSession(planWith([r1, r2]), 'Goal', tmpDir, id);
+      const before = fs.statSync(logFile(id));
+
+      // A planner turn that added no research still builds its log afresh.
+      saveSession(planWith([r1, r2]), 'Goal', tmpDir, id);
+
+      const after = fs.statSync(logFile(id));
+      expect(after.ino).toBe(before.ino);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+    });
+
+    it('is written when a new array adds one entry, and again when the entries change order', () => {
+      const id = 'session-1111111111111111';
+      const [r1, r2, r3] = [entry('r1'), entry('r2'), entry('r3')];
+      saveSession(planWith([r1, r2]), 'Goal', tmpDir, id);
+
+      saveSession(planWith([r1, r2, r3]), 'Goal', tmpDir, id);
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([r1, r2, r3]);
+
+      saveSession(planWith([r3, r1, r2]), 'Goal', tmpDir, id);
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([r3, r1, r2]);
+    });
+
+    it('keeps what it held when a write fails, and writes again at the next save', () => {
+      const id = 'session-2222222222222222';
+      const [r1, r2] = [entry('r1'), entry('r2')];
+      saveSession(planWith([r1]), 'Goal', tmpDir, id);
+      const crash = vi.mocked(fsHelpers.writeFileAtomic).mockImplementationOnce(() => { throw new Error('crash'); });
+      expect(() => saveSession(planWith([r1, r2]), 'Goal', tmpDir, id)).toThrow('crash');
+      crash.mockClear();
+      expect(JSON.parse(fs.readFileSync(logFile(id), 'utf-8'))).toEqual([r1]);
+
+      saveSession(planWith([r1, r2]), 'Goal', tmpDir, id);
+
+      expect(loadSession(id, tmpDir)!.plan.researchLog).toEqual([r1, r2]);
     });
 
     it('writes nothing for a session with none', () => {

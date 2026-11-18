@@ -69,10 +69,11 @@ const loopFields = (t: RunTask): Pick<TaskView, 'loop' | 'loopRound' | 'verdict'
 };
 
 /**
- * One run-view task as the pane's `TaskView`, recursing into subtasks sorted by
- * order so the dotted labels read in plan order.
+ * One run-view task as the pane's `TaskView`, its subtasks already made: every
+ * field read here is the task's own, so a task equal to the last one folded
+ * makes the same view (`taskView`).
  */
-function runTaskToView(t: RunTask): TaskView {
+function runTaskToView(t: RunTask, subtasks: TaskView[] | undefined): TaskView {
   const model = t.assignedModel;
   return {
     id: String(t.id),
@@ -123,10 +124,82 @@ function runTaskToView(t: RunTask): TaskView {
     ...(t.addedBy ? { addedBy: t.addedBy } : {}),
     ...(Array.isArray(t.mergeGate) && t.mergeGate.length > 0 ? { mergeGate: t.mergeGate.map((title) => planLabel(title)) } : {}),
     ...(Array.isArray(t.forcedPastGate) && t.forcedPastGate.length > 0 ? { forcedPastGate: t.forcedPastGate.map((title) => planLabel(title)) } : {}),
-    subtasks: t.subtasks.length > 0
-      ? [...t.subtasks].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map(runTaskToView)
-      : undefined,
+    subtasks,
   };
+}
+
+/**
+ * Two wire values with the same content: plain data only, as a parsed message
+ * holds. A field set to `undefined` reads as one left out, as it does to
+ * every reader of a task: core's own fold writes absent status fields so.
+ */
+function same(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (!same(a[i], b[i])) return false;
+    return true;
+  }
+  return !Array.isArray(b) && sameFields(a as Record<string, unknown>, b as Record<string, unknown>, '');
+}
+
+/**
+ * Every field of the two but `skip` the same, an absent one and an `undefined`
+ * one alike. Run over every task of a status update each second, so it counts
+ * the fields rather than listing them.
+ */
+function sameFields(a: Record<string, unknown>, b: Record<string, unknown>, skip: string): boolean {
+  let fields = 0;
+  for (const key in a) {
+    const value = a[key];
+    if (key === skip || value === undefined) continue;
+    if (!same(value, b[key])) return false;
+    fields += 1;
+  }
+  for (const key in b) {
+    if (key !== skip && b[key] !== undefined) fields -= 1;
+  }
+  return fields === 0;
+}
+
+/** Every field but the subtasks, which `taskView` matches one by one. */
+const sameTask = (a: RunTask, b: RunTask): boolean =>
+  a === b || sameFields(a as unknown as Record<string, unknown>, b as unknown as Record<string, unknown>, 'subtasks');
+
+/**
+ * The task each view was made from. A status update arrives once a second with
+ * every task in it, parsed afresh, and a plan arrives whole: remaking every
+ * view sanitises every prompt again, which in a long plan is most of a fold.
+ * A view whose task is unchanged is handed back instead, so the panes' own
+ * caches keep it too. Keyed by the view, so a view a reducer replaced (an
+ * edit) has no entry and is made again.
+ */
+const madeFrom = new WeakMap<TaskView, RunTask>();
+
+const byOrder = (a: RunTask, b: RunTask): number => (a.order ?? 0) - (b.order ?? 0);
+
+/** `views` itself when every one of `next` is the same view, in the same place. */
+function sameViews(views: readonly TaskView[] | undefined, next: readonly TaskView[]): boolean {
+  return views !== undefined && views.length === next.length && next.every((view, i) => view === views[i]);
+}
+
+function taskViews(tasks: readonly RunTask[], was: readonly TaskView[] | undefined): TaskView[] {
+  const earlier = new Map((was ?? []).map((view) => [view.id, view]));
+  const views = tasks.map((task) => taskView(task, earlier.get(String(task.id))));
+  return was && sameViews(was, views) ? (was as TaskView[]) : views;
+}
+
+function taskView(task: RunTask, was: TaskView | undefined): TaskView {
+  const subtasks = task.subtasks.length > 0 ? taskViews([...task.subtasks].sort(byOrder), was?.subtasks) : undefined;
+  const source = was ? madeFrom.get(was) : undefined;
+  if (was && source && was.subtasks === subtasks && sameTask(source, task)) {
+    madeFrom.set(was, task);
+    return was;
+  }
+  const view = runTaskToView(task, subtasks);
+  madeFrom.set(view, task);
+  return view;
 }
 
 /** The run's own supervisor level, read off the run settings a run carries. */
@@ -147,7 +220,7 @@ export function withRun(state: TuiState, run: RunView): TuiState {
   return refillInbox({
     ...state,
     run,
-    tasks: run.tasks.map(runTaskToView),
+    tasks: taskViews(run.tasks, state.tasks),
     handoff: run.handoff ?? null,
     runMerge: run.runMerge
       ? { waitingAtGate: run.runMerge.waitingAtGate, paused: run.runMerge.paused, handoff: { repos: run.runMerge.repos, landed: run.runMerge.landed } }

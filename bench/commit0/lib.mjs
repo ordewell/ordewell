@@ -1610,7 +1610,7 @@ export function distFreshness({ dists, sources, allowStale = false }) {
 export const failedCheck = (c) => !c.ok && !c.unverified && !c.expectedFailure;
 
 /** Every reason a result is not one to compare. */
-export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false, scoring = null }) {
+export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false, planOnly = false, scoring = null }) {
   const reasons = [];
   if (aborted) reasons.push(`aborted: ${aborted}`);
   for (const f of scoring?.failures ?? []) reasons.push(`arm A scored without its work: ${f}`);
@@ -1618,6 +1618,8 @@ export function judgeValidity({ aborted, checks, tests, freshness, stopped = nul
   // The batch stops every run at one instant, so this arm got less time and spend than its pair (D1).
   if (stopped?.why === 'batch-budget') reasons.push('stopped by the batch budget');
   if (dryRun) reasons.push('dry run: no arm ran');
+  // Whatever the plan was, nothing ran and nothing was scored: no plan-only result is one to compare.
+  else if (planOnly) reasons.push('plan-only: the plan was made and nothing ran, so nothing was scored');
   else if (tests?.timedOut) reasons.push('eval timed out');
   else if (!tests || tests.passed === undefined) reasons.push('eval gave no summary');
   else if (typeof tests.collected === 'number') {
@@ -1644,11 +1646,12 @@ export function baselineRecord(evaluation) {
 }
 
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, dryRun, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, dryRun, planOnly = false, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
     dryRun,
+    planOnly,
     valid: validity?.valid ?? null,
     invalidReasons: validity?.invalidReasons ?? [],
     ...settings,
@@ -1721,35 +1724,179 @@ export function recordedSpend(plan) {
 }
 
 /**
+ * Each top-level task's level, one more than its deepest dependency's, or why
+ * there is none: a dependency on no task, one task named twice, a cycle. A
+ * plan that breaks one has no levels, never a crash. Subtasks are not part of
+ * the graph, as the plan orders only the top level.
+ */
+function dependencyLevels(tasks) {
+  const problems = [];
+  const label = (t) => `"${t.title ?? t.id ?? 'untitled'}"`;
+  const depsOf = (t) => (Array.isArray(t.dependencies) ? t.dependencies : []);
+  const byId = new Map();
+  for (const t of tasks) {
+    if (byId.has(t.id)) problems.push(`two tasks have the id ${JSON.stringify(t.id ?? null)}`);
+    else byId.set(t.id, t);
+  }
+  for (const t of tasks) for (const d of depsOf(t)) if (!byId.has(d)) problems.push(`${label(t)} depends on ${JSON.stringify(d)}, which is no task`);
+  if (problems.length) return { level: null, problems };
+  const level = new Map();
+  const onPath = new Set();
+  const visit = (t) => {
+    if (level.has(t.id)) return true;
+    if (onPath.has(t.id)) {
+      problems.push(`a dependency cycle through ${label(t)}`);
+      return false;
+    }
+    onPath.add(t.id);
+    let deepest = 0;
+    for (const d of depsOf(t)) {
+      const dep = byId.get(d);
+      if (!visit(dep)) return false;
+      deepest = Math.max(deepest, level.get(dep.id));
+    }
+    onPath.delete(t.id);
+    level.set(t.id, deepest + 1);
+    return true;
+  };
+  for (const t of tasks) if (!visit(t)) return { level: null, problems };
+  return { level, problems };
+}
+
+const topLevel = (plan) => (Array.isArray(plan?.tasks) ? plan.tasks.filter((t) => t && typeof t === 'object') : []);
+
+/**
  * The plan's longest dependency chain and its widest level, a task's level
  * being one more than its deepest dependency's. Top-level tasks only, as the
  * plan orders them; null for a plan with none, a cycle or a dependency on no task.
  */
 export function planShape(plan) {
-  const tasks = plan?.tasks ?? [];
+  const tasks = topLevel(plan);
   const none = { longestChain: null, widestLevel: null };
   if (!tasks.length) return none;
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  const level = new Map();
-  const visit = (t, stack) => {
-    if (level.has(t.id)) return level.get(t.id);
-    if (stack.has(t.id)) return null;
-    stack.add(t.id);
-    let deepest = 0;
-    for (const d of t.dependencies ?? []) {
-      const dep = byId.get(d);
-      const l = dep ? visit(dep, stack) : null;
-      if (l === null) return null;
-      deepest = Math.max(deepest, l);
-    }
-    stack.delete(t.id);
-    level.set(t.id, deepest + 1);
-    return deepest + 1;
-  };
-  for (const t of tasks) if (visit(t, new Set()) === null) return none;
+  const { level } = dependencyLevels(tasks);
+  if (!level) return none;
   const widths = new Map();
   for (const l of level.values()) widths.set(l, (widths.get(l) ?? 0) + 1);
   return { longestChain: Math.max(...level.values()), widestLevel: Math.max(...widths.values()) };
+}
+
+/**
+ * What one task is, for counting by kind. The kinds are exclusive and sum to
+ * the plan's tasks: a script task, a manual (user) task, a delegated one, then
+ * an AI task that is research, ops, or a change.
+ */
+export function taskKind(t) {
+  if (t.type === 'script') return 'script';
+  if (t.type === 'user') return 'user';
+  if (t.type === 'delegated') return 'delegated';
+  if (t.research === true) return 'research';
+  if (t.ops === true) return 'ops';
+  return 'change';
+}
+
+/**
+ * The shape of a plan, computed the same way for every plan, from its
+ * top-level tasks and their `dependencies` alone:
+ *
+ * - `kinds`: tasks by taskKind, and `loopChecks`, the tasks that carry a loop,
+ *   counted besides (a loop's check is a script or an AI task too).
+ * - `levels`, `longestChain` and `chain`: a task's level is one more than its
+ *   deepest dependency's, so the levels are as many as the longest chain, which
+ *   `chain` lists by title, from its first task to its last. Of equal chains,
+ *   the one whose last task the plan lists first, and at each step the first
+ *   dependency the task lists.
+ * - `widestLevel`: the most tasks one level holds.
+ * - `edges`: the dependencies, each counted once.
+ * - `gatedByOne` and `gate`: whether one task is, directly or through others,
+ *   a dependency of every other. A plan of one task has no gate.
+ *
+ * A plan that breaks the graph (a dependency on no task, a task named twice, a
+ * cycle) is `valid: false` with `problems`, and everything that needs the
+ * graph is null: it never throws.
+ */
+export function planStructure(plan) {
+  const tasks = topLevel(plan);
+  const kinds = { research: 0, change: 0, ops: 0, script: 0, user: 0, delegated: 0 };
+  for (const t of tasks) kinds[taskKind(t)]++;
+  const depsOf = (t) => (Array.isArray(t.dependencies) ? [...new Set(t.dependencies)] : []);
+  const out = {
+    tasks: tasks.length,
+    subtasks: tasks.reduce((n, t) => n + allTasks({ tasks: Array.isArray(t.subtasks) ? t.subtasks : [] }).length, 0),
+    kinds,
+    loopChecks: tasks.filter((t) => t.loop).length,
+    edges: tasks.reduce((n, t) => n + depsOf(t).length, 0),
+    levels: null, longestChain: null, chain: null, widestLevel: null, gatedByOne: null, gate: null,
+    valid: false, problems: [],
+  };
+  if (!tasks.length) return { ...out, problems: ['the plan holds no task'] };
+  const { level, problems } = dependencyLevels(tasks);
+  if (!level) return { ...out, problems };
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const widths = new Map();
+  for (const l of level.values()) widths.set(l, (widths.get(l) ?? 0) + 1);
+  const longest = Math.max(...level.values());
+  const chain = [];
+  for (let t = tasks.find((x) => level.get(x.id) === longest); t; ) {
+    chain.unshift(t.title ?? t.id);
+    t = depsOf(t).map((d) => byId.get(d)).find((d) => level.get(d.id) === level.get(t.id) - 1);
+  }
+  // A task gates the rest when every other task reaches it through dependencies.
+  const reaches = (t, goal, seen = new Set()) => depsOf(t).some((d) => d === goal || (!seen.has(d) && (seen.add(d), reaches(byId.get(d), goal, seen))));
+  const gate = tasks.length > 1 ? tasks.find((g) => tasks.every((t) => t === g || reaches(t, g.id))) : undefined;
+  return {
+    ...out, levels: longest, longestChain: longest, chain, widestLevel: Math.max(...widths.values()),
+    gatedByOne: tasks.length > 1 ? Boolean(gate) : false, gate: gate ? (gate.title ?? gate.id) : null, valid: true,
+  };
+}
+
+/**
+ * plan.json of a plan-only run: every top-level task's title, brief (the
+ * prompt its runner gets, or its description) and dependencies, by id and by
+ * title, so a plan reads without its saved session. Subtasks come nested.
+ */
+export function planDigest(plan) {
+  const titleOf = new Map(allTasks(plan).map((t) => [t.id, t.title ?? null]));
+  const one = (t) => ({
+    id: t.id ?? null, order: t.order ?? null, title: t.title ?? null, kind: taskKind(t), type: t.type ?? 'ai',
+    brief: t.prompt ?? t.description ?? null, description: t.description ?? null,
+    dependencies: Array.isArray(t.dependencies) ? t.dependencies : [],
+    dependsOn: (Array.isArray(t.dependencies) ? t.dependencies : []).map((d) => titleOf.get(d) ?? null),
+    ...(t.loop ? { loop: t.loop } : {}),
+    runner: t.assignedRunner ?? null, model: t.assignedModel?.modelId ?? null, mode: t.taskMode ?? null,
+    ...(t.subtasks?.length ? { subtasks: t.subtasks.map(one) } : {}),
+  });
+  return { tasks: topLevel(plan).map(one) };
+}
+
+/**
+ * What a plan-only run records of its plan: the shape, the planner's spend as
+ * Ordewell recorded it (null when the session recorded none), and how long
+ * `ordewell plan` ran.
+ */
+export function plannedRecord({ plan, planCheck, planningMs }) {
+  const spend = recordedSpend(plan);
+  return {
+    shape: planStructure(plan),
+    plannerUsd: spend.plannerUsd,
+    planningMs: planningMs ?? null,
+    protocolOk: planCheck?.ok ?? null,
+    protocolFailures: planCheck?.failures ?? [],
+    file: 'plan.json',
+  };
+}
+
+/** One line on a plan-only run's plan, for the driver's and the batch's logs. */
+export function describePlanned(planned) {
+  if (!planned) return 'no plan was recorded';
+  const sh = planned.shape;
+  const kinds = Object.entries(sh.kinds).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(', ');
+  const graph = sh.valid
+    ? `longest chain ${sh.longestChain}, widest level ${sh.widestLevel}, ${sh.edges} edges${sh.gatedByOne ? `, all gated by "${sh.gate}"` : ''}`
+    : `no graph: ${sh.problems.join('; ')}`;
+  const spend = planned.plannerUsd === null ? 'planner spend not recorded' : `planner $${planned.plannerUsd}`;
+  const time = planned.planningMs === null ? '' : `, ${Math.round(planned.planningMs / 1000)} s`;
+  return `plan-only: ${sh.tasks} tasks (${kinds || 'none'}${sh.loopChecks ? `; loop checks: ${sh.loopChecks}` : ''}), ${graph}; ${spend}${time}`;
 }
 
 /**
@@ -1790,6 +1937,112 @@ function checkpointAnswer(output) {
   if (m) return { answeredBy: m[2], answer: m[1] };
   if (/^The checkpoint was withdrawn/.test(output ?? '')) return { answeredBy: 'withdrawn', answer: 'withdrawn' };
   return { answeredBy: null, answer: null };
+}
+
+/**
+ * What woke the supervisor, from the bullet of a wake-up's digest that names
+ * it (core's attentionLine, services/Supervisor.ts; the lines a run update
+ * holds before its "Since the last update:" passes). The first pattern that
+ * fits wins, so the specific lines come before a bare "failed". Unknown text
+ * is 'other', never dropped.
+ */
+const TRIGGERS = [
+  ['run_held', /^- the run is idle: nothing is running/],
+  ['run_finished', /^- the run finished/],
+  ['failure_standing', /^- Task \S+ .* is still .* after your turn/],
+  ['task_report', /, whose result you asked for, has ended\./],
+  ['waiting_input', / is waiting for input/],
+  ['waiting_approval', / is waiting for approval/],
+  ['approval_denied', /asked for something nobody here may allow/],
+  ['task_idle', / has gone quiet/],
+  ['running_long', / (has run long|runner compacted its context)|context reached its threshold/],
+  ['landing_conflict', / but its work conflicts and could not land/],
+  ['landing_failed', / passed, but git refused to land/],
+  ['auto_merge_stopped', /^- automatic Merge all /],
+  ['start_refused', /^- work could not start/],
+  ['usage_limit', /usage limit paused/],
+  ['task_failed', /^- task \S+ ".*?" failed\b/],
+];
+
+/** A task's ref in a digest bullet ("task #2", "Task #1.1"), or null. */
+const refIn = (line) => /\b[Tt]ask (#\d+(?:\.\d+)*)/.exec(line)?.[1] ?? null;
+
+/**
+ * The triggers one wake-up's digest names: a bullet each, with the task it is
+ * about. `closing` marks the wake core raises for a failure the supervisor's
+ * own closing turn left standing at the run's end.
+ */
+export function wakeTriggers(digest) {
+  const asks = String(digest ?? '').split('\nSince the last update:\n')[0];
+  const lines = asks.split('\n').filter((l) => l.startsWith('- '));
+  return lines.map((line) => {
+    const kind = TRIGGERS.find(([, re]) => re.test(line))?.[0] ?? 'other';
+    const ended = kind === 'failure_standing' && /The run has ended, and an edit starts nothing/.test(line);
+    return { kind, task: kind === 'run_held' || kind === 'run_finished' ? null : refIn(line), ...(ended ? { closing: true } : {}) };
+  });
+}
+
+/** The plan-edit ops a supervisor's "Tasks updated:" entry lists, a line each. */
+const PLAN_OP = /^- (Updated|Added|Removed|Reordered|Merged|Split|Re-armed)\b[^"]*(?:"([^"]*)")?/;
+
+/**
+ * Everything the supervisor did and was woken for, from the session's
+ * conversation history. An act is one of:
+ *  - a call at the command seam it made (kind of the command: retry_task,
+ *    skip_task, stop_task, stop_run, message_task, answer_checkpoint,
+ *    answer_approval, merge_all, ...), refused or declined ones included,
+ *    with their `outcome`;
+ *  - `plan_edit`, one per op of an edit_plan it landed (the history keeps
+ *    those as a 'supervisor' entry that starts "Tasks updated:", not as a
+ *    call), its `op` and the task by title;
+ *  - `message`, what it said to the user in prose.
+ * Each carries its time and the task it names (`#n`, or null) and the task's
+ * title. `wakes` groups the wake-up digests of one turn (they share a
+ * timestamp) with what triggered it; `wakeUps` counts the digests. Null
+ * where the session holds no history.
+ */
+export function supervisorRecord(plan) {
+  const history = Array.isArray(plan?.conversationHistory) ? plan.conversationHistory : null;
+  if (!history) return { wakeUps: null, wakes: null, wakesBy: null, actions: null, actionsBy: null };
+  const tasks = allTasks(plan);
+  const refOfTitle = (title) => {
+    const hits = tasks.filter((t) => t.title === title);
+    return hits.length === 1 && hits[0].order !== undefined && hits[0].order !== null ? `#${hits[0].order}` : null;
+  };
+  const wakes = [];
+  const actions = [];
+  for (const m of history) {
+    if (m.kind === 'wake_up') {
+      const at = m.timestamp ?? null;
+      let wake = wakes.find((w) => w.at === at);
+      if (!wake) wakes.push(wake = { at, updates: 0, triggers: [] });
+      wake.updates++;
+      wake.triggers.push(...wakeTriggers(m.content));
+    } else if (m.kind === 'execution' && m.execution?.actor === 'supervisor') {
+      const x = m.execution;
+      actions.push({
+        kind: x.command, command: x.command, task: x.task?.ref ?? null, title: x.task?.title ?? null, outcome: x.outcome, at: x.at,
+        ...(x.detail ? { detail: String(x.detail).slice(0, 300) } : {}),
+      });
+    } else if (m.kind === 'supervisor' && String(m.content).startsWith('Tasks updated:')) {
+      const ops = String(m.content).split('\n').filter((l) => l.startsWith('- '));
+      for (const line of ops) {
+        const hit = PLAN_OP.exec(line);
+        const title = hit?.[2] ?? null;
+        actions.push({ kind: 'plan_edit', op: hit ? hit[1].toLowerCase() : 'other', task: title ? refOfTitle(title) : null, title, outcome: 'done', at: m.timestamp ?? null });
+      }
+    } else if (m.kind === 'supervisor') {
+      actions.push({ kind: 'message', task: null, title: null, outcome: 'done', at: m.timestamp ?? null });
+    }
+  }
+  const by = (items, key) => items.reduce((acc, i) => { acc[key(i)] = (acc[key(i)] ?? 0) + 1; return acc; }, {});
+  return {
+    wakeUps: wakes.reduce((n, w) => n + w.updates, 0),
+    wakes,
+    wakesBy: by(wakes.flatMap((w) => w.triggers), (t) => t.kind),
+    actions,
+    actionsBy: by(actions, (a) => a.kind),
+  };
 }
 
 /**
@@ -1845,16 +2098,10 @@ export function runMetrics(plan, taskLogs) {
     };
   });
 
-  const history = Array.isArray(plan.conversationHistory) ? plan.conversationHistory : null;
-  const supervisor = {
-    wakeUps: history ? history.filter((m) => m.kind === 'wake_up').length : null,
-    actions: history ? history.filter((m) => m.kind === 'execution' && m.execution?.actor === 'supervisor')
-      .map(({ execution: x }) => ({ command: x.command, task: x.task?.ref ?? null, outcome: x.outcome, at: x.at })) : null,
-  };
   return {
     tasks: counts,
     checkpoints,
-    supervisor,
+    supervisor: supervisorRecord(plan),
     perTask,
     plan: planShape(plan),
     meanConcurrentAttempts: meanConcurrency(tasks.flatMap((t) => t.attemptUsage ?? [])),
@@ -1970,12 +2217,12 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
  * (a run's unpriced calls, or a call outside the batch on the same key). When
  * runs overlapped, no run's own key delta exists, and each says so.
  */
-export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, startedAt, endedAt, runs }) {
+export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, planOnly = false, startedAt, endedAt, runs }) {
   const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
   const keyDeltaUsd = keyBeforeUsd != null && keyAfterUsd != null ? round6(keyAfterUsd - keyBeforeUsd) : null;
   return {
-    dryRun, rehearsal, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
+    dryRun, rehearsal, planOnly, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
     keyBeforeUsd: keyBeforeUsd ?? null,
     keyAfterUsd: keyAfterUsd ?? null,
     keyDeltaUsd,
@@ -1989,8 +2236,11 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
   };
 }
 
-/** Where a run's directory goes under the bench data directory: a rehearsal's and a dry run's never sit beside a paid run's. */
-export const runsDirName = ({ dryRun, rehearse }) => (dryRun ? 'dry-runs' : rehearse ? 'rehearsals' : 'runs');
+/** Where a run's directory goes under the bench data directory: a rehearsal's, a dry run's and a plan-only run's never sit beside a scored run's. */
+export const runsDirName = ({ dryRun, rehearse, planOnly }) => (dryRun ? 'dry-runs' : rehearse ? 'rehearsals' : planOnly ? 'plan-runs' : 'runs');
+
+/** Where a finished run's result is appended, one line each; a plan-only result is never a line of the scored runs'. */
+export const resultsFileName = ({ planOnly }) => (planOnly ? 'plans.jsonl' : 'results.jsonl');
 
 /** The runs of a batch, library by library and arm by arm; a library named twice would give two runs one name. */
 export function batchPlan({ libs, arms, seed }) {
@@ -2008,7 +2258,7 @@ export function parseArgs(argv) {
   const out = {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
     capUsd: CAP_USD, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
-    seed: null, batchDir: null, batchShared: false,
+    seed: null, batchDir: null, batchShared: false, planOnly: false,
     rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
   const number = (name, v, ok) => {
@@ -2046,6 +2296,7 @@ export function parseArgs(argv) {
     } else if (a === '--stall-min') out.stallMin = number(a, value(), (n) => n > 0);
     else if (a === '--ordewell-root') out.ordewellRoot = path.resolve(value());
     else if (a === '--allow-stale-dist') out.allowStaleDist = true;
+    else if (a === '--plan-only') out.planOnly = true;
     else if (a === '--sweep') out.sweep = true;
     else if (a === '--seed') out.seed = seedLabel(value());
     // Set by batch.mjs on each run it starts: the batch holds the key and its results.
@@ -2069,7 +2320,18 @@ export function parseArgs(argv) {
   if (out.fixture && !out.image) throw new Error('--fixture needs --image: an image with python3, pytest and git to build it in');
   if (!out.fixture && !out.libs) throw new Error('pass --libs <file>, a list of libraries as libraries.example.json shows, or --fixture');
   if (out.run && !out.providerPin) throw new Error('a run needs --provider-pin <provider>: the one OpenRouter provider the key is pinned to');
+  if (out.planOnly) planOnlyArms(out);
   return out;
+}
+
+/**
+ * Arm A has no plan, so --plan-only measures arm B alone: asked for A alone it
+ * is refused, and asked for both (the default) it leaves A out. Sets `arm`.
+ */
+export function planOnlyArms(o) {
+  if (o.dryRun) throw new Error('--plan-only makes a real plan, which is a model call: pass --run or --rehearse, not --dry-run');
+  if (o.arm === 'A') throw new Error('--plan-only is for arm B: arm A is one hand-written task and has no plan to measure, so --arm A with --plan-only is refused');
+  o.arm = 'B';
 }
 
 function rehearsalName(v) {
@@ -2084,7 +2346,7 @@ function seedLabel(v) {
 
 /** What batch.mjs passes on to each run as given, beside the libraries file. */
 const BATCH_PASSED = Object.freeze({
-  flags: ['--dry-run', '--run', '--allow-stale-dist', '--keep'],
+  flags: ['--dry-run', '--run', '--allow-stale-dist', '--keep', '--plan-only'],
   values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root',
     '--rehearse', '--settle-min', '--no-start-min', '--poll-sec', '--wall-min'],
 });
@@ -2127,6 +2389,7 @@ export function parseBatchArgs(argv) {
   }
   if (own.help) return { ...own, driveArgs };
   const run = parseArgs(driveArgs);
+  if (run.planOnly) planOnlyArms(own);
   if (!run.libs) throw new Error('a batch runs a list of libraries: pass --libs <file>');
   // The key's delta counts every run of the batch: on a key no cap of one run bounds that.
   if (run.run && own.budgetUsd === null) throw new Error('a paid batch needs --batch-budget-usd <usd>: the most the key may spend across the batch');

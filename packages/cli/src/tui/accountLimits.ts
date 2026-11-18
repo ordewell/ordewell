@@ -17,6 +17,8 @@ export function observeTaskServedModel(state: TuiState, action: Extract<Action, 
   const model = lastServedModel(action.events);
   if (!model && action.attempt === before?.attempt) return state;
   const served = { attempt: action.attempt, ...(model ? { model, assignment: assignmentKey(task) } : {}) };
+  // Every usage record names its model: a batch that names the one already known changes nothing on screen.
+  if (before && before.attempt === served.attempt && before.model === served.model && before.assignment === served.assignment) return state;
   return { ...state, servedModels: { ...state.servedModels, [task.id]: served } };
 }
 

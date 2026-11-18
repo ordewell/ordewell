@@ -72,20 +72,33 @@ const taskId = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 /**
  * Arm B's plan, as the planner emits it: one task per entry of `tasks`
- * ({ key, title, after? }), each on the bench's runner and model in full mode,
- * its prompt carrying the `[rehearsal:<key>]` the fake routes its attempts by.
+ * ({ key, title, after?, kind?, loopBody? }), each on the bench's runner and
+ * model in full mode, its prompt carrying the `[rehearsal:<key>]` the fake
+ * routes its attempts by. `kind` makes a task something else: 'research' (a
+ * read-only AI task), 'ops', or 'script' (which has no runner, model or
+ * prompt); `loopBody` (keys) makes it a loop's check over those tasks.
  */
 export function rehearsalPlan(tasks) {
   const order = new Map(tasks.map((t, i) => [t.key, i + 1]));
   return {
-    tasks: tasks.map((t, i) => ({
-      id: taskId(i + 1), order: i + 1, title: t.title, description: t.title, type: 'ai',
-      dependencies: (t.after ?? []).map((k) => taskId(order.get(k))),
-      prompt: `${t.title}. [rehearsal:${t.key}]`,
-      assignedRunner: 'openrouter',
-      assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
-      taskMode: 'full', autonomy: 'AFK', sliceType: 'AFK', subtasks: [],
-    })),
+    tasks: tasks.map((t, i) => {
+      const common = {
+        id: taskId(i + 1), order: i + 1, title: t.title, description: t.title,
+        dependencies: (t.after ?? []).map((k) => taskId(order.get(k))),
+        sliceType: 'AFK',
+        ...(t.loopBody ? { loop: { body: t.loopBody.map((k) => taskId(order.get(k))), maxRounds: 2 } } : {}),
+      };
+      // A script task's body is a list of argument vectors; nothing about it is a runner's.
+      if (t.kind === 'script') return { ...common, type: 'script', commands: [['python', '-m', 'pytest', '-q']] };
+      return {
+        ...common, type: 'ai', prompt: `${t.title}. [rehearsal:${t.key}]`,
+        assignedRunner: 'openrouter',
+        assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
+        taskMode: 'full', autonomy: 'AFK', subtasks: [],
+        ...(t.kind === 'research' ? { readOnly: true, research: true } : {}),
+        ...(t.kind === 'ops' ? { ops: true } : {}),
+      };
+    }),
   };
 }
 
@@ -98,6 +111,15 @@ export function rehearsalPlan(tasks) {
 export const taskIs = (n, status) => new RegExp(`^#${n} id=\\S+ "[^"\\n]*" \\[${status}\\]`, 'm');
 
 const RETRY = { tool: 'retry_task', args: { task: '#1', from: 'fresh', message: 'The rehearsal retries this once: make the edits again and report done.' } };
+/**
+ * The edit the closing turn makes to the failed task: its prompt changes (the
+ * key stays, which routes the fake) and nothing is retried. The built-in
+ * planner has no edit_plan tool, so an edit is a reply that carries the task
+ * ops as JSON, as a real run's supervisor sent it.
+ */
+const EDIT_REPLY = `The rehearsal edits task #1 and retries nothing.\n\`\`\`json\n${JSON.stringify({ taskOps: [{ op: 'update', taskId: '#1', changes: { prompt: 'Implement the library, and this time make the edits and report done. [rehearsal:edit]' } }] }, null, 2)}\n\`\`\``;
+/** What the second wake, raised for a failure the closing turn left standing, is told (core's standingDetail). */
+const STILL_FAILED = /is still failed after your turn/;
 const APPROVE = { tool: 'answer_checkpoint', args: { task: '#2', answer: 'approve', reason: 'Follow the tests.' } };
 const FAILS_ON_PURPOSE = 'The rehearsal fails this task on purpose.';
 const LEFT_PLAN = [
@@ -106,11 +128,40 @@ const LEFT_PLAN = [
 ];
 
 /**
+ * The plan b-plan makes: a research task everything follows, a change on it, a
+ * script that checks it as a loop's check over a fix, an ops task beside the
+ * change, and a last change that waits on the check (a loop's body is waited on by nothing outside it) and the ops task. Task 1
+ * gates the rest; the chain is 1, 2, 3, 4.
+ */
+const SHAPED_PLAN = [
+  { key: 'survey', title: 'Survey the stubs', kind: 'research' },
+  { key: 'edit', title: 'Implement the library', after: ['survey'] },
+  { key: 'check', title: 'Run the test suite', kind: 'script', after: ['edit'], loopBody: ['fix'] },
+  { key: 'fix', title: 'Fix what the suite finds', after: ['check'] },
+  { key: 'tidy', title: 'Tidy the workspace', kind: 'ops', after: ['survey'] },
+  { key: 'final', title: 'Write the closing note', after: ['check', 'tidy'] },
+];
+
+/**
  * Each scenario: the arm it runs, its scripted attempts per task (by the key
  * a task's prompt carries, or `A` for arm A's one task), and what its
  * result.json must hold. `ctx` is { src, tests, longSec }.
  */
 export const SCENARIOS = Object.freeze({
+  'b-plan': {
+    arm: 'B',
+    planOnly: true,
+    about: 'arm B, --plan-only: the planner returns a six-task plan of every kind, its shape is recorded, and nothing runs, merges or is scored',
+    plan: () => rehearsalPlan(SHAPED_PLAN),
+    // What the harness must say of the plan above; the unit tests hold the shape function to its own cases.
+    expect: {
+      shape: {
+        tasks: 6, subtasks: 0, kinds: { research: 1, change: 3, ops: 1, script: 1, user: 0, delegated: 0 }, loopChecks: 1, edges: 6,
+        levels: 4, longestChain: 4, chain: ['Survey the stubs', 'Implement the library', 'Run the test suite', 'Fix what the suite finds'],
+        widestLevel: 2, gatedByOne: true, gate: 'Survey the stubs', valid: true, problems: [],
+      },
+    },
+  },
   'a-done': {
     arm: 'A',
     about: 'arm A: its one task makes the edits and reports done; `ordewell run` returns by itself',
@@ -150,19 +201,39 @@ export const SCENARIOS = Object.freeze({
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['edit', 'after'],
     supervised: ['retry_task', 'answer_checkpoint'],
+    supervision: { acts: ['retry_task', 'answer_checkpoint'], closingWakes: 0 },
   },
   'b-leave': {
     arm: 'B',
     about: 'arm B: task 1 fails while task 2 waits on it; the supervisor at Act leaves it, so the run is held and ends by the stall rule, never complete',
     plan: () => rehearsalPlan(LEFT_PLAN),
     attempts: (ctx) => ({ edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)]], after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]] }),
-    supervisor: [],
+    // The closing turn leaves it, and so does the one core raises for the failure left standing: no third wake follows.
+    supervisor: [{ when: STILL_FAILED, say: 'The rehearsal leaves task #1 failed.' }],
     // Nothing landed: arm B scores merged work, which the failed task's never became.
     expect: {
       scoredFrom: 'merged', truncated: true, truncatedWhy: /^settled with 2 tasks open/, stoppedWhy: null, stalled: true, heldOpen: 2,
       notComplete: true, passedAtBaseline: true, tasks: { failed: 1, completed: 0 },
     },
     playedOut: ['edit'],
+    spoke: [/leaves task #1 failed/],
+    supervision: { acts: [], closingWakes: 1 },
+  },
+  'b-edit-retry': {
+    arm: 'B',
+    about: 'arm B: task 1 fails; the supervisor\'s closing turn edits it and retries nothing; the second wake, for the failure left standing, retries it; the run goes on to its end and the work is merged and scored',
+    plan: () => rehearsalPlan(LEFT_PLAN),
+    attempts: (ctx) => ({
+      edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)], [...editSteps(ctx), done('Implement the library')]],
+      after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]],
+    }),
+    // Order matters: the closing turn's wake holds both texts, and each rule plays once, the edit first.
+    supervisor: [{ when: taskIs(1, 'failed'), say: EDIT_REPLY }, { when: STILL_FAILED, step: RETRY }],
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
+    playedOut: ['edit', 'after'],
+    supervised: ['retry_task'],
+    spoke: [/edits task #1 and retries nothing/],
+    supervision: { acts: ['plan_edit', 'retry_task'], closingWakes: 1, retryAfterWake: true },
   },
   'b-cap': {
     arm: 'B',
@@ -199,7 +270,11 @@ export function windowArgs(s) {
 /** One line on what a result.json holds, for the rehearsal's log. */
 export function describeResult(r) {
   if (!r) return 'no result.json';
-  const t = r.truncated?.truncated ? `truncated (${r.truncated.why})` : 'not truncated';
+  if (r.planOnly) {
+    const sh = r.planned?.shape;
+    return `plan-only (never valid); ${sh ? `${sh.tasks} tasks, chain ${sh.longestChain}, widest level ${sh.widestLevel}, ${sh.edges} edges` : 'no plan'}; planner $${r.planned?.plannerUsd ?? '-'}, ${r.planned?.planningMs ?? '-'} ms`;
+  }
+  const t =r.truncated?.truncated ? `truncated (${r.truncated.why})` : 'not truncated';
   return `valid ${r.valid}; scored from ${r.scoredFrom}; ${t}; stopped ${r.stopped?.why ?? 'by nothing'}; `
     + `tasks ${JSON.stringify(taskCounts(r.tasks))}; passed ${r.tests?.passed ?? '-'} (baseline ${r.baseline?.passed ?? '-'}); run exit ${r.steps?.run?.exit ?? '-'}`;
 }
@@ -239,6 +314,7 @@ export function supervisorTurn(rules, messages, state) {
   const i = (rules ?? []).findIndex((r, n) => !state.supervised.includes(n) && r.when.test(said));
   if (i === -1) return { content: last.role === 'tool' ? 'Done.' : 'Nothing to do: the run goes on.' };
   state.supervised.push(i);
+  if (rules[i].say) return { content: rules[i].say, rule: i };
   return { toolCall: { name: rules[i].step.tool, args: rules[i].step.args }, rule: i };
 }
 
@@ -341,8 +417,14 @@ export function taskCounts(tasks) {
  */
 export function judgePlayed(name, turns, ctx) {
   const s = scenario(name);
-  const scripts = s.attempts(ctx);
   const f = [];
+  if (s.planOnly) {
+    // Nothing ran: the fake heard the planner and no runner or supervisor.
+    if (!turns.some((t) => t.role === 'planner')) f.push('the fake never heard the planner');
+    for (const t of turns.filter((x) => x.role === 'runner' || x.role === 'supervisor')) f.push(`a ${t.role} turn was played in a plan-only run`);
+    return f;
+  }
+  const scripts = s.attempts(ctx);
   for (const key of s.playedOut ?? []) {
     const attempts = scripts[key] ?? [];
     attempts.forEach((steps, i) => {
@@ -356,6 +438,9 @@ export function judgePlayed(name, turns, ctx) {
     const mine = turns.filter((t) => t.role === 'runner' && t.key === key);
     if (!mine.length) f.push(`task ${key} never started: there was no attempt for the stop to cut short`);
     else if (mine.some((t) => t.round === steps.length - 1 && t.toolCall?.name === steps.at(-1)?.tool)) f.push(`task ${key}, attempt 1: its last scripted step (${steps.at(-1).tool}) was played: the stop did not cut it short`);
+  }
+  for (const re of s.spoke ?? []) {
+    if (!turns.some((t) => t.role === 'supervisor' && !t.toolCall && re.test(t.content ?? ''))) f.push(`the supervisor never said ${re}`);
   }
   for (const tool of s.supervised ?? []) {
     if (!turns.some((t) => t.role === 'supervisor' && t.toolCall?.name === tool)) f.push(`the supervisor never played ${tool}`);
@@ -380,12 +465,95 @@ export function judgeBatch(record, { lib, arm, rehearsal }) {
   return f;
 }
 
-/** The failures of one scenario's result.json against its expectations; empty when it passed. */
-export function judgeRehearsal(name, result) {
+/**
+ * What a plan-only scenario's result.json must say: the plan's shape, a
+ * priced planner and a planning time, and that it is marked plan-only, never
+ * valid, and holds nothing of a run: no score, no tests, no run or merge step.
+ */
+function judgePlanOnly(name, result) {
   const e = scenario(name).expect;
   const f = [];
   const want = (ok, what) => { if (!ok) f.push(what); };
+  want(!result.aborted, `the run aborted: ${result.aborted}`);
+  want(result.planOnly === true, `planOnly is ${JSON.stringify(result.planOnly)}, not true`);
+  want(result.valid === false && (result.invalidReasons ?? []).some((r) => /^plan-only/.test(r)), `a plan-only result must be marked not valid for being plan-only (valid ${result.valid}, ${JSON.stringify(result.invalidReasons)})`);
+  want(result.tests === null && result.scoredFrom === null && result.tasks === null && (result.patches ?? []).length === 0, 'the result holds a score: tests, scoredFrom, tasks or patches');
+  want(result.baseline === null && result.truncated?.truncated === false, 'the result holds a baseline or a truncation');
+  want(!result.steps?.run && !result.steps?.merge && !result.closing?.merge, `a run or a merge step happened: ${JSON.stringify({ run: result.steps?.run, merge: result.steps?.merge })}`);
+  want(result.steps?.plan?.exit === 0, `ordewell plan exited ${JSON.stringify(result.steps?.plan ?? null)}`);
+  want(result.stopped === null && result.stalled === null, `the run was stopped or stalled (${JSON.stringify(result.stopped ?? result.stalled)})`);
+  const p = result.planned;
+  if (!p) return [...f, 'no planned record'];
+  want(p.protocolOk === true, `the plan broke the protocol: ${p.protocolFailures?.join('; ')}`);
+  const shape = p.shape ?? {};
+  for (const [k, v] of Object.entries(e.shape)) want(JSON.stringify(shape[k]) === JSON.stringify(v), `shape.${k} is ${JSON.stringify(shape[k])}, wanted ${JSON.stringify(v)}`);
+  want(typeof p.plannerUsd === 'number' && p.plannerUsd > 0, `the planner's spend is ${p.plannerUsd}, not above 0`);
+  want(typeof p.planningMs === 'number' && p.planningMs > 0, `the planning time is ${p.planningMs}`);
+  want(result.recordedUsd === p.plannerUsd, `recordedUsd ${result.recordedUsd} is not the planner's ${p.plannerUsd}: something besides the planner spent`);
+  want(result.metrics === null, 'a plan-only result holds run metrics');
+  return f;
+}
+
+/**
+ * The failures of a plan-only run's directory: plan.json beside the result
+ * (every task's title, brief and dependencies), the saved plan, and none of
+ * what a scored run leaves (the copy of the arm's work, its patch, its tests).
+ */
+export function judgePlanOnlyDir({ names, digest, expectedTitles }) {
+  const f = [];
+  for (const need of ['result.json', 'plan.json', 'plan-saved.json']) if (!names.includes(need)) f.push(`the run directory holds no ${need}`);
+  for (const stray of ['arm-workdir', 'arm.patch', 'baseline-tests.log', 'eval-tests.log']) if (names.includes(stray)) f.push(`the run directory holds ${stray}, which only a scored run makes`);
+  const tasks = digest?.tasks ?? [];
+  if (tasks.length !== expectedTitles.length) f.push(`plan.json holds ${tasks.length} tasks, wanted ${expectedTitles.length}`);
+  expectedTitles.forEach((title, i) => {
+    const t = tasks[i];
+    if (!t) return;
+    if (t.title !== title) f.push(`plan.json task ${i + 1} is "${t.title}", wanted "${title}"`);
+    if (!t.brief) f.push(`plan.json task ${i + 1} has no brief`);
+    if (!Array.isArray(t.dependencies) || !Array.isArray(t.dependsOn)) f.push(`plan.json task ${i + 1} has no dependencies`);
+  });
+  return f;
+}
+
+/**
+ * What metrics.supervisor must hold: the acts the supervisor made besides
+ * words (every call at the seam and every plan edit, in order, each done),
+ * how many wakes were the one core raises for a failure the closing turn left
+ * standing, that every wake names what triggered it in a line the harness
+ * knows, and, with `retryAfterWake`, that the retry came after that wake.
+ */
+export function judgeSupervision(want, sup) {
+  if (!sup?.actions || !sup.wakes) return ['metrics.supervisor holds no actions or wakes'];
+  const f = [];
+  const acts = sup.actions.filter((a) => a.kind !== 'message');
+  const kinds = acts.map((a) => a.kind);
+  if (JSON.stringify(kinds) !== JSON.stringify(want.acts)) f.push(`the supervisor's acts are ${JSON.stringify(kinds)}, wanted ${JSON.stringify(want.acts)}`);
+  for (const a of acts) if (a.outcome !== 'done') f.push(`act ${a.kind} was ${a.outcome}`);
+  for (const a of sup.actions) if (!a.at) f.push(`act ${a.kind} has no time`);
+  const triggers = sup.wakes.flatMap((w) => w.triggers);
+  const closing = sup.wakes.filter((w) => w.triggers.some((t) => t.kind === 'failure_standing' && t.closing));
+  if (closing.length !== want.closingWakes) f.push(`${closing.length} wake(s) for a failure the closing turn left, wanted ${want.closingWakes}`);
+  if (!sup.wakes.length || sup.wakeUps < sup.wakes.length) f.push(`wakeUps ${sup.wakeUps} against ${sup.wakes.length} wake(s)`);
+  for (const w of sup.wakes) if (!w.triggers.length) f.push(`the wake at ${w.at} names no trigger`);
+  for (const t of triggers.filter((x) => x.kind === 'other')) f.push(`a trigger the harness cannot read: ${JSON.stringify(t)}`);
+  if (want.closingWakes > 0 && closing[0]) {
+    const standing = closing[0].triggers.find((t) => t.kind === 'failure_standing');
+    if (standing.task !== '#1') f.push(`the closing wake names task ${standing.task}, wanted #1`);
+  }
+  if (want.retryAfterWake) {
+    const retry = acts.find((a) => a.kind === 'retry_task');
+    if (!retry || !closing[0] || !(retry.at > closing[0].at)) f.push(`the retry (${retry?.at}) did not follow the closing wake (${closing[0]?.at})`);
+  }
+  return f;
+}
+
+/** The failures of one scenario's result.json against its expectations; empty when it passed. */
+export function judgeRehearsal(name, result) {
   if (!result) return ['no result.json'];
+  if (scenario(name).planOnly) return judgePlanOnly(name, result);
+  const e = scenario(name).expect;
+  const f = [];
+  const want = (ok, what) => { if (!ok) f.push(what); };
   want(!result.aborted, `the run aborted: ${result.aborted}`);
   if ('valid' in e) want(result.valid === e.valid, `valid is ${result.valid}, not ${e.valid}${result.invalidReasons?.length ? ` (${result.invalidReasons.join('; ')})` : ''}`);
   if (e.scoredFrom) want(result.scoredFrom === e.scoredFrom, `scored from ${result.scoredFrom}, not ${e.scoredFrom}`);
@@ -413,6 +581,7 @@ export function judgeRehearsal(name, result) {
     const base = result.baseline?.passed ?? null;
     want(passed !== null && passed === base, `${passed} passed, not the baseline's ${base}: work that never landed was scored`);
   }
+  if (scenario(name).supervision) f.push(...judgeSupervision(scenario(name).supervision, result.metrics?.supervisor));
   if (e.testExcluded) {
     want((result.excluded ?? []).some((x) => /test/.test(x.path ?? '') && /test/.test(x.reason ?? '')), `no test file in excluded (${JSON.stringify(result.excluded ?? null)}): the edited test was scored`);
   }

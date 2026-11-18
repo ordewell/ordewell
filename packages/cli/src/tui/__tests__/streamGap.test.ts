@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { SurfacePlan } from '@ordewell/core';
+import type { SessionResponse } from '@ordewell/core';
 import type { WsEvent } from '../../apiClient';
 import { runEffect, type EffectDeps, type OrdewellApi } from '../effects';
 import { createInbound } from '../inbound';
@@ -76,13 +76,18 @@ describe('the TUI on a gap', () => {
 
   it('redraws what it missed from the daemon\'s transcript', async () => {
     let state = initialState({ sessionId: 's1', conversation: chatOf(['user', 'build a parser']) });
-    const plan = { tasks: [], conversationHistory: [
-      { role: 'user', content: 'build a parser' },
-      { role: 'assistant', content: 'Here is the plan.' },
-    ] } as unknown as SurfacePlan;
+    // As `GET /sessions/:id` answers: the phase-tagged plan keeps no transcript, which comes as `conversation`.
+    const response = {
+      meta: { id: 's1', goal: 'build a parser', createdAt: '2026-10-01T10:00:00.000Z' } as SessionResponse['meta'],
+      plan: { phase: 'planning', pendingTasks: [], executionLog: [] } as unknown as SessionResponse['plan'],
+      conversation: { conversationHistory: [
+        { role: 'user', content: 'build a parser', timestamp: '2026-10-01T10:00:00.000Z' },
+        { role: 'assistant', content: 'Here is the plan.', timestamp: '2026-10-01T10:00:05.000Z' },
+      ] },
+    } satisfies SessionResponse;
     const pending: Promise<void>[] = [];
     const deps = {
-      api: { getSession: vi.fn().mockResolvedValue({ plan }) } as unknown as OrdewellApi,
+      api: { getSession: vi.fn().mockResolvedValue(response) } as unknown as OrdewellApi,
       workspace: '/ws',
       dispatch: (action: Action) => {
         const step = reduce(state, action);

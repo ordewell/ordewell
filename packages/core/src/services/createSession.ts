@@ -2144,6 +2144,8 @@ export class Session {
    * there was neither.
    */
   abortPlannerTurn(): boolean {
+    // Before any turn it stops ends: its end must find the closing turn answered.
+    this.supervision.plannerStopping();
     // The queue first, while the stopped turn still holds the conversation: its release must find nothing of the user's to open.
     const queued = this.turns.stopQueued();
     const inFlight = this.conversation.stopTurn();
@@ -2846,7 +2848,8 @@ export class Session {
    */
   runSnapshot(): RunView {
     if (!this.plan) return EMPTY_RUN;
-    const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot() }) });
+    // Without the transcript: the fold reads the tasks and the run settings, so a long conversation and its research log are not copied to be dropped.
+    const planned = reduceRun(EMPTY_RUN, { type: 'plan_snapshot', plan: surfacePlan({ ...this.plan, tasks: this.store.snapshot(), conversationHistory: undefined, researchLog: undefined, pendingTurns: undefined }) });
     // The status last, as the stream's newest word: it drops what of the handoff git has found merged since it was sent.
     const handed = this.sentHandoff ? reduceRun(planned, { type: 'isolation_handoff', ...this.sentHandoff }) : planned;
     return reduceRun(handed, this.events.statusMessage());
