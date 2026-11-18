@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { closingNote, fanOutShape, FAN_OUT_MIN, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
-import { chainReviewMessage, longestChain } from '../PlanChainReview';
+import { applyChainReview, chainReviewMessage, longestChain } from '../PlanChainReview';
 import { BaseAiService, type PlanTextCall, type PlanTextReply } from '../BaseAiService';
 import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
@@ -70,6 +70,32 @@ describe('fanOutShape', () => {
     }
   });
 
+  // Two change tasks after every slice, not ordered against each other: neither is in the spine, but they are not slices either.
+  it('takes a closing check with an editing task beside it, both after every slice, as the closing check and the task beside it', () => {
+    const plan = [t('r', []), ...slices(6, ['r']), t('close', sliceIds(6)), t('docs', sliceIds(6), { title: 'Write the docs' })];
+    const s = fanOutShape(plan);
+    expect(s).toMatchObject({ wide: true, width: 6, faults: [] });
+    expect(ids(s.gates)).toEqual(['r']);
+    expect(ids(s.slices)).toEqual(sliceIds(6));
+    // By level then plan order, as among any closers: the later one is the closing check.
+    expect(ids(s.closers)).toEqual(['docs', 'close']);
+    const out = withShapeNotes(plan);
+    const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+    expect(prompt('docs')).toBe(`Fill in src/lib/docs.py.\n\n${closingNote(s)}`);
+    expect(prompt('close')).toBe('Fill in src/lib/close.py.');
+    for (const id of sliceIds(6)) expect(prompt(id)).toContain('"Write the docs" (docs) runs the whole test suite once every slice has ended.');
+    expect(prompt('r')).toContain('Plan shape: 6 slices wait for this task');
+  });
+
+  // Fewer than a fan-out's width after the rest is a closing check beside other tasks; as many is the plan's last level of slices.
+  it('keeps a fan-out of slices after shared modules as slices when nothing after them closes', () => {
+    const plan = [t('r', []), ...['m1', 'm2', 'm3', 'm4'].map((m) => t(m, ['r'])), ...slices(5, ['m1', 'm2', 'm3', 'm4'])];
+    const s = fanOutShape(plan);
+    expect(ids(s.slices)).toEqual(['m1', 'm2', 'm3', 'm4', ...sliceIds(5)]);
+    expect(s.faults).toEqual(['no-closing']);
+    expect(withShapeNotes(plan)).toBe(plan);
+  });
+
   it('does not count an ops task or a push after everything as a closing check', () => {
     const plan = [t('r', []), ...slices(4, ['r']), t('push', sliceIds(4), { ops: true })];
     expect(fanOutShape(plan).faults).toEqual(['no-closing']);
@@ -104,11 +130,34 @@ describe('withShapeNotes', () => {
     const note = sliceNote(fanOutShape(good())).split('\n');
     expect(note[0]).toBe('Plan shape: this task is one of 6 slices that start once "T r" (r) has landed, and "T close" (close) runs the whole test suite once every slice has ended. Read the module map at the end of "T r" (r)\'s report (read, with include_report) before you explore. The tasks and the paths their briefs name:');
     expect(note.slice(1, 3)).toEqual(['- "T r" (r): src/lib/r.py', '- "T s1" (s1): src/lib/s1.py']);
-    expect(note[note.length - 1]).toBe('Your scope is this brief\'s. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed in your worktree, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are "T close" (close)\'s. Do not write, stub or shim another slice\'s code to make them pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.');
+    expect(note[note.length - 1]).toBe('Your scope is this brief\'s. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are "T close" (close)\'s. Take in another slice\'s work once it has landed. Do not write, stub or shim another slice\'s code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.');
+  });
+
+  // The runner tells a slice its worktree holds only what had landed when it started, and to take in what lands after.
+  it('excuses only a slice\'s work that has not landed yet, and says to take it in once it has, as the runner\'s note on work landing beside it does', () => {
+    const note = sliceNote(fanOutShape(good()));
+    expect(note).not.toContain('landed in your worktree');
+    expect(note).toContain('that has not landed yet');
+    expect(note).toContain('Take in another slice\'s work once it has landed.');
   });
 
   it('reads the paths a brief names from the brief alone, not from a note already appended to it', () => {
     expect(sliceNote(fanOutShape(withShapeNotes(good())))).toBe(sliceNote(fanOutShape(good())));
+  });
+
+  // A revision note names the tasks it changed by title, and a title may name a file.
+  it('lists in the opening note\'s table only the paths a brief names, not those in the titles its revision note names', () => {
+    const titled = serial().map((x) => ({ ...x, title: `Fill in src/lib/${x.id}.py` }));
+    const reply = JSON.stringify({ dependencyChanges: [{ id: 'g3', dependencies: [] }, { id: 'g1', dependencies: ['g3'] }, { id: 'g2', dependencies: ['g3'] }, { id: 'close', dependencies: [...sliceIds(6), 'g1', 'g2'] }] });
+    const r = applyChainReview(titled, reply, RUNNERS);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.tasks.find((x) => x.id === 'g1')!.prompt).toContain('Plan revision:');
+    const table = openingNote(fanOutShape(r.tasks)).split('\n').slice(1);
+    expect(table.slice(0, 3)).toEqual([
+      '- "Fill in src/lib/g3.py" (g3): src/lib/g3.py',
+      '- "Fill in src/lib/g1.py" (g1): src/lib/g1.py',
+      '- "Fill in src/lib/g2.py" (g2): src/lib/g2.py',
+    ]);
   });
 
   it('words the opening and closing notes as measured', () => {

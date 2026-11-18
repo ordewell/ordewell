@@ -74,3 +74,20 @@ test('the closing check is the task no other waits for; a module task it waits f
   assert.equal(p.P6_closingToldOfUnlanded, true);
   assert.equal(p.P3_slicesParallel, true);
 });
+
+test('as core: a closing check with an editing task beside it is the closing check, not two more slices', () => {
+  const plan = { tasks: [t('r', []), ...slices(6, ['r']), t('close', sliceIds(6)), t('docs', sliceIds(6))] };
+  const s = fanOutShape(plan);
+  assert.deepEqual(s.slices.map((x) => x.id), sliceIds(6));
+  assert.deepEqual(s.closers.map((x) => x.id), ['docs', 'close']);
+  assert.deepEqual(s.faults, []);
+  assert.equal(fanOutProperties(plan).P4_closingCheck, true);
+  const later = { tasks: [t('r', []), ...['m1', 'm2', 'm3', 'm4'].map((m) => t(m, ['r'])), ...slices(5, ['m1', 'm2', 'm3', 'm4'])] };
+  assert.deepEqual(fanOutShape(later).slices.map((x) => x.id), ['m1', 'm2', 'm3', 'm4', ...sliceIds(5)]);
+  assert.deepEqual(fanOutShape(later).faults, ['no-closing']);
+});
+
+test('as core: a loop check whose body names no task is no closing check, and reading it does not throw', () => {
+  const plan = { tasks: [t('r', []), ...slices(4, ['r']), t('check', sliceIds(4), { type: 'script', commands: [['pytest']], loop: { body: ['gone'] } })] };
+  assert.deepEqual(fanOutShape(plan).faults, ['no-closing']);
+});
