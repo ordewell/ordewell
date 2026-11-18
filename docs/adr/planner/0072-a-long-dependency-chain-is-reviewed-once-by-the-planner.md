@@ -34,9 +34,16 @@ question is put depends on how the plan arrives.
   them, holds the result to the plan's invariants, and keeps it only when the
   longest chain is shorter; anything else, a reply that does not parse, names an
   unknown task, breaks an invariant or does not shorten the chain, leaves the
-  first plan as it was. A changed brief gets a `Plan revision:` note, last, that
-  names what it no longer waits for. The research log records each review and
-  its outcome, and the call's usage is the planner's.
+  first plan as it was. Ordewell also refuses, whatever the reply says, one
+  that leaves an ops, script or user task, or a loop's check, no longer waiting
+  for a task it waited for, directly or through others: the merge gate and the
+  check rest on those ancestors, and the question asking to keep such edges
+  does not ensure it. A redundant direct edge may still go. An entry for a
+  subtask, which the plan shows but the review does not revise, is ignored and
+  logged. A changed brief, a delegated task's goal included, gets a
+  `Plan revision:` note, last, that names what it no longer waits for even
+  through another task. The research log records each review and its outcome,
+  and the call's usage is the planner's.
 - **A reply the output limit cut off is asked for once more (R2).** The second
   call carries only the plan and the question, at the lowest effort and the
   longest reply the model serves; a second cut-off or an invalid reply leaves
@@ -116,3 +123,4 @@ conversation's as they stand.
 ## History
 
 - 2026-11-18 — accepted.
+- 2026-11-18 — R1: Ordewell refuses a reply that drops an ancestor of an ops, script or user task or a loop's check; the note names only dependencies no longer reached and reaches a delegated task's goal; a subtask entry is ignored.
