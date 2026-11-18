@@ -2063,3 +2063,482 @@ test('the rehearsal passes every scenario on a real library image', { skip: proc
   const scenarios = process.env.ORDEWELL_COMMIT0_REHEARSAL_SCENARIOS;
   execFileSync(process.execPath, [path.join(import.meta.dirname, 'rehearse.mjs'), '--libs', process.env.ORDEWELL_COMMIT0_REHEARSAL, ...(scenarios ? ['--scenario', scenarios] : [])], { stdio: 'inherit' });
 });
+
+// --- Pairs: a library's two arms start together, the next library's pair when both have ended. ---
+
+test('batchSegments: with --jobs 2 a library\'s A and B are one wave, and the next library waits for both', () => {
+  const runs = L.batchPlan({ libs: ['x', 'y', 'z'], arms: ['A', 'B'], seed: null });
+  const two = L.batchSegments({ runs, jobs: 2 });
+  assert.deepEqual(two.map((s) => [s.jobs, s.runs.map((r) => `${r.lib}${r.arm}`)]), [[2, ['xA', 'xB']], [2, ['yA', 'yB']], [2, ['zA', 'zB']]]);
+  // Four at once hold two libraries' pairs; an odd budget wastes its odd slot rather than split a pair.
+  assert.deepEqual(L.batchSegments({ runs, jobs: 4 }).map((s) => [s.jobs, s.runs.length]), [[4, 4], [2, 2]]);
+  assert.deepEqual(L.batchSegments({ runs, jobs: 3 }).map((s) => [s.jobs, s.runs.length]), [[2, 2], [2, 2], [2, 2]]);
+});
+
+test('batchSegments: one job, or one arm, is a plain queue', () => {
+  const both = L.batchPlan({ libs: ['x', 'y'], arms: ['A', 'B'], seed: null });
+  assert.deepEqual(L.batchSegments({ runs: both, jobs: 1 }).map((s) => [s.jobs, s.runs.length]), [[1, 4]]);
+  const one = L.batchPlan({ libs: ['x', 'y', 'z'], arms: ['B'], seed: null });
+  assert.deepEqual(L.batchSegments({ runs: one, jobs: 2 }).map((s) => [s.jobs, s.runs.length]), [[2, 3]]);
+  assert.deepEqual(L.batchSegments({ runs: [], jobs: 2 }), []);
+});
+
+test('judgePairing: a pair starts together, and the next library starts after both of the last have ended', () => {
+  const at = (s) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
+  const run = (lib, arm, s, e) => ({ lib, arm, startedAt: at(s), endedAt: at(e) });
+  const good = [run('x', 'A', 0, 50), run('x', 'B', 5, 90), run('y', 'A', 95, 120), run('y', 'B', 96, 130)];
+  assert.deepEqual(L.judgePairing(good, { jobs: 2 }), []);
+  const crept = [run('x', 'A', 0, 50), run('x', 'B', 5, 90), run('y', 'A', 60, 120), run('y', 'B', 96, 130)];
+  assert.match(L.judgePairing(crept, { jobs: 2 }).join(), /y A started .* before x B ended/);
+  const apart = [run('x', 'A', 0, 50), run('x', 'B', 400, 450)];
+  assert.match(L.judgePairing(apart, { jobs: 2 }).join(), /x A and x B did not start together/);
+  assert.match(L.judgePairing([run('x', 'A', 0, 5)], { jobs: 2 }).join(), /no pair/);
+  assert.match(L.judgePairing([{ lib: 'x', arm: 'A' }, { lib: 'x', arm: 'B' }], { jobs: 2 }).join(), /no start or end/);
+});
+
+// --- A stopped batch keeps what it had: batch.json after every run, written whole. ---
+
+test('writeJsonAtomic replaces the file whole and leaves nothing beside it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-atomic-'));
+  try {
+    const file = path.join(dir, 'batch.json');
+    L.writeJsonAtomic(file, { n: 1 });
+    L.writeJsonAtomic(file, { n: 2, list: [1, 2] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { n: 2, list: [1, 2] });
+    assert.deepEqual(fs.readdirSync(dir), ['batch.json']);
+    assert.match(fs.readFileSync(file, 'utf8'), /\n$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('batchRecord keeps the key readings as they were taken, and says whether the batch finished', () => {
+  const readings = [{ at: 't0', usd: 10, after: null }, { at: 't1', usd: 11.5, after: 'x A' }];
+  const partial = L.batchRecord({ keyBeforeUsd: 10, keyAfterUsd: null, budgetUsd: 20, stoppedByBudget: null, jobs: 2, overlapped: true, startedAt: 't0', endedAt: null, keyReadings: readings, runs: [{ lib: 'x', arm: 'A', recordedUsd: 1 }] });
+  assert.equal(partial.finished, false);
+  assert.equal(partial.endedAt, null);
+  assert.deepEqual(partial.keyReadings, readings);
+  // Unfinished, the key's delta is as of the latest reading, not of an end the batch never reached.
+  assert.equal(partial.keyDeltaUsd, 1.5);
+  const done = L.batchRecord({ keyBeforeUsd: 10, keyAfterUsd: 12, jobs: 2, overlapped: true, startedAt: 't0', endedAt: 't2', keyReadings: readings, runs: [] });
+  assert.equal(done.finished, true);
+  assert.equal(done.keyDeltaUsd, 2);
+  const keyless = L.batchRecord({ keyBeforeUsd: null, keyAfterUsd: null, jobs: 1, overlapped: false, startedAt: 't0', endedAt: 't1', runs: [] });
+  assert.deepEqual(keyless.keyReadings, []);
+  assert.equal(keyless.keyDeltaUsd, null);
+});
+
+test('a batch of pairs: a library\'s A and B start together, the next pair after both ended, and batch.json is whole after every run', { skip: process.platform === 'win32' && 'a copied tree of scripts and POSIX signals' }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-pairs-'));
+  const copy = path.join(root, 'tree', 'bench');
+  try {
+    fs.mkdirSync(path.join(copy, 'commit0'), { recursive: true });
+    fs.mkdirSync(path.join(copy, 'lib'));
+    for (const f of ['batch.mjs', 'lib.mjs', 'rehearsal.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, 'commit0', f));
+    fs.copyFileSync(path.join(here, '..', 'lib', 'data-dir.mjs'), path.join(copy, 'lib', 'data-dir.mjs'));
+    const release = path.join(root, 'release');
+    // A drive that writes the result.json a run leaves, after a time of its arm's: A is quick, B slow, and the second library's B waits to be let go.
+    fs.writeFileSync(path.join(copy, 'commit0', 'drive.mjs'), [
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "const arg = (n) => process.argv[process.argv.indexOf(n) + 1];",
+      "const [lib, arm, dir] = [arg('--only'), arg('--arm'), arg('--batch-dir')];",
+      'const startedAt = new Date().toISOString();',
+      "const wait = async (ms) => new Promise((r) => setTimeout(r, ms));",
+      "if (lib === 'b' && arm === 'B') while (!fs.existsSync(" + JSON.stringify(release) + ')) await wait(25);',
+      "else await wait(arm === 'A' ? 100 : 600);",
+      "const out = path.join(dir, `run-${lib}-${arm}`);",
+      'fs.mkdirSync(out);',
+      "fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ library: lib, arm, startedAt, endedAt: new Date().toISOString(), recordedUsd: 0.5, valid: true }));",
+    ].join('\n'));
+    const libs = path.join(root, 'libs.json');
+    fs.writeFileSync(libs, JSON.stringify(['a', 'b'].map((name) => ({ name, image: 'x', srcDir: name, testDir: 'tests', importName: name, distName: name, baseCommit: 'abc1234' }))));
+    const bench = path.join(root, 'data');
+    const child = spawn(process.execPath, [path.join(copy, 'commit0', 'batch.mjs'), '--dry-run', '--libs', libs, '--jobs', '2', '--cpus', '1', '--memory', '1g'], {
+      stdio: 'ignore', env: { ...process.env, NODE_OPTIONS: '', ORDEWELL_BENCH_DIR: bench },
+    });
+    const exited = new Promise((resolve) => child.on('close', (code) => resolve(code)));
+    const dryRuns = path.join(bench, 'commit0', 'dry-runs');
+    const readBatch = () => {
+      const [dir] = fs.existsSync(dryRuns) ? fs.readdirSync(dryRuns) : [];
+      const file = dir && path.join(dryRuns, dir, 'batch.json');
+      // Every read parses: the file is replaced whole, never written in place.
+      return file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+    };
+    // Library a's pair has ended, library b's A has too, and b's B is held: the batch is not over, and batch.json has what ended.
+    let mid = null;
+    for (const until = Date.now() + 20_000; Date.now() < until;) {
+      const b = readBatch();
+      if (b?.runs.length === 3) { mid = b; break; }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    assert.ok(mid, 'batch.json never held the three runs that had ended');
+    assert.equal(mid.finished, false);
+    assert.equal(mid.endedAt, null);
+    assert.deepEqual(mid.runs.map((r) => `${r.lib}${r.arm}`).sort(), ['aA', 'aB', 'bA']);
+    fs.writeFileSync(release, '');
+    assert.equal(await exited, 0);
+    const done = readBatch();
+    assert.equal(done.finished, true);
+    assert.equal(done.runs.length, 4);
+    assert.deepEqual(L.judgePairing(done.runs, { jobs: 2 }), []);
+    const start = (lib, arm) => Date.parse(done.runs.find((r) => r.lib === lib && r.arm === arm).startedAt);
+    const end = (lib, arm) => Date.parse(done.runs.find((r) => r.lib === lib && r.arm === arm).endedAt);
+    assert.ok(start('b', 'A') >= end('a', 'B'), 'b A started before a B ended');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- What result.json gains: the plan review, a cut attempt's running time, calls per upstream. ---
+
+test('planReview reads the last "chain review" line of the research log: the chains, the tasks changed, whether it was kept', () => {
+  const sys = (content) => ({ id: 'cr-1', type: 'system', content, timestamp: 't' });
+  const kept = L.planReview([sys('chain review: 12, reply cut off at the output limit [reply 3 tokens out]; asked once more with the plan alone'), sys('chain review: 12 -> 5, kept; 30 tasks changed: "A" drops "B" adds "C" [reply 9 tokens out]')]);
+  assert.deepEqual(kept, { reviewed: true, firstChain: 12, reviewedChain: 5, tasksChanged: 30, kept: true, outcome: 'kept' });
+  const notShorter = L.planReview([sys('chain review: 6 -> 6, first plan kept, not shorter; 1 task changed: "A" drops "B"')]);
+  assert.deepEqual(notShorter, { reviewed: true, firstChain: 6, reviewedChain: 6, tasksChanged: 1, kept: false, outcome: 'first plan kept, not shorter' });
+  const none = L.planReview([sys('chain review: 7 -> 4, kept; 0 tasks changed')]);
+  assert.equal(none.tasksChanged, 0);
+  // A review that failed or whose reply was refused changed nothing, and names no reviewed chain.
+  assert.deepEqual(L.planReview([sys('chain review: 5, first plan kept: unknown task "t9"')]), { reviewed: true, firstChain: 5, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'first plan kept' });
+  assert.deepEqual(L.planReview([sys('chain review: 5, failed: socket closed')]), { reviewed: true, firstChain: 5, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'failed' });
+  assert.deepEqual(L.planReview([sys('chain review: 12, reply cut off at the output limit [reply 3 tokens out]; asked once more with the plan alone')]), { reviewed: true, firstChain: 12, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'no answer' });
+  // No such line: a chain under the review's minimum, or an arm with no planner. Nothing to say, and nothing guessed.
+  assert.equal(L.planReview([{ id: 'x', type: 'user_prompt', content: 'hello' }, { id: 'y', type: 'tool_call' }]), null);
+  assert.equal(L.planReview([]), null);
+  assert.equal(L.planReview(null), null);
+});
+
+test('readResearchLog reads a copied-out session\'s log, and is null without one or with one that does not parse', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-rlog-'));
+  try {
+    assert.equal(L.readResearchLog(dir, 's1'), null);
+    const sdir = path.join(dir, 'sessions', 's1');
+    fs.mkdirSync(sdir, { recursive: true });
+    fs.writeFileSync(path.join(sdir, 'research-log.json'), '{ not json');
+    assert.equal(L.readResearchLog(dir, 's1'), null);
+    fs.writeFileSync(path.join(sdir, 'research-log.json'), JSON.stringify([{ type: 'system', content: 'chain review: 5 -> 4, kept; 1 task changed' }]));
+    assert.equal(L.readResearchLog(dir, 's1').length, 1);
+    // An id with a character a directory name cannot take is hex-named, as core's idSegment does.
+    const odd = path.join(dir, 'sessions', `~${Buffer.from('a/b', 'utf-8').toString('hex')}`);
+    fs.mkdirSync(odd, { recursive: true });
+    fs.writeFileSync(path.join(odd, 'research-log.json'), '[]');
+    assert.deepEqual(L.readResearchLog(dir, 'a/b'), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('runMetrics counts the running time of an attempt the stop cut, from its wall time, and says so', () => {
+  const iso = (s) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
+  const plan = {
+    tasks: [
+      { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', dependencies: [],
+        attemptUsage: [{ attempt: 1, runner: 'openrouter', startedAt: iso(0), endedAt: iso(100), wallTimeMs: 100_000, runningMs: 90_000, byModel: [] }] },
+      // The stop ended this one while it ran: its running clock reads 0, and its wall time holds the time it ran.
+      { id: 't2', order: 2, title: 'two', type: 'ai', status: 'in_progress', dependencies: [],
+        attemptUsage: [{ attempt: 1, runner: 'openrouter', startedAt: iso(0), endedAt: iso(300), wallTimeMs: 300_000, runningMs: 0, byModel: [] }] },
+      { id: 't3', order: 3, title: 'three', type: 'ai', status: 'failed', dependencies: [],
+        attemptUsage: [{ attempt: 1, runner: 'openrouter', startedAt: iso(0), endedAt: iso(5), wallTimeMs: 5_000, runningMs: 0, byModel: [] }, { attempt: 2, runner: 'openrouter', startedAt: iso(5), endedAt: iso(65), wallTimeMs: 60_000, runningMs: 60_000, byModel: [] }] },
+    ],
+  };
+  const m = L.runMetrics(plan, null);
+  assert.deepEqual(m.perTask[0].attempts, [{ attempt: 1, ended: null, steps: null, runningMs: 90_000 }]);
+  assert.deepEqual(m.perTask[1].attempts, [{ attempt: 1, ended: null, steps: null, runningMs: 300_000, runningFrom: 'wallTimeMs' }]);
+  assert.equal(m.perTask[1].runningMs, 300_000);
+  assert.equal(m.perTask[2].runningMs, 65_000, 'the cut attempt and the one that ran are both counted');
+  assert.equal(m.perTask[2].attempts[1].runningFrom, undefined);
+});
+
+test('callStats counts calls per upstream, and the billed calls that found almost no cache straight after a call of their attempt', () => {
+  const call = (input, cached, extra = {}) => ({ type: 'usage', record: { source: 'openrouter', model: 'm', inputTokens: input, cachedInputTokens: cached, ...extra } });
+  const logs = {
+    t1: {
+      1: [
+        call(1000, 0, { provider: 'up-a' }),     // the first call of an attempt has nothing before it to be cached from
+        call(1100, 1000, { provider: 'up-a' }),  // cached
+        call(1200, 0, { provider: 'up-b' }),     // cold straight after a call: counted
+        { type: 'tool_call', id: 'c1', name: 'bash', args: '{}' },
+        call(1300, 20, { provider: 'up-b' }),    // 20 of 1300 is under the share: counted
+        call(900, undefined, {}),                 // no cached count reported: not read as cold
+        call(50, 0, { subagentId: 's' }),         // a subagent's context is its own: counted as a call, never as cold
+        { type: 'usage', record: { source: 'openrouter', aggregate: true, inputTokens: 99999 } },
+        { type: 'usage', record: { source: 'openrouter', compacted: true } },
+      ],
+      2: [call(500, 0, { provider: 'up-a' }), call(600, 560, { provider: 'up-a' })],
+    },
+    t2: { 1: [call(100, 0, { provider: 'up-a' }), call(200, 0, { provider: 'up-a' })] },
+  };
+  const s = L.callStats(logs);
+  assert.deepEqual(s.byUpstream, { 'up-a': 6, 'up-b': 2, unreported: 2 });
+  assert.equal(s.calls, 10);
+  assert.equal(s.coldAfterCall, 3, 'up-b 1200, up-b 1300, and t2\'s second call');
+  assert.equal(L.callStats(null), null);
+  assert.deepEqual(L.callStats({}), { calls: 0, byUpstream: {}, coldAfterCall: 0, coldShare: L.COLD_CACHE_SHARE });
+});
+
+test('runMetrics carries the call counts, null without the logs', () => {
+  const plan = { tasks: [{ id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', dependencies: [], attemptUsage: [] }] };
+  const logs = { t1: { 1: [{ type: 'usage', record: { source: 'openrouter', inputTokens: 10, cachedInputTokens: 0, provider: 'p' } }] } };
+  assert.deepEqual(L.runMetrics(plan, logs).calls.byUpstream, { p: 1 });
+  assert.equal(L.runMetrics(plan, null).calls, null);
+});
+
+// --- Score over time: the choice of points and the commit-to-time mapping on a fixture repository, the container call through the dry-run seam. ---
+
+const T = await import('./timeline.mjs');
+const T0 = Date.UTC(2026, 0, 1, 0, 0, 0);
+const minutesAfter = (m) => new Date(T0 + m * 60_000).toISOString();
+
+/**
+ * A finished run's directory with a made-up history: `arm-workdir/.git` whose
+ * root is the stubs on commit0-base, then either arm B's landings (merge
+ * commits on ordewell/r1/integration, at `landings` minutes) or arm A's task
+ * branch (commits at those minutes). Each commit writes src/tinylib/m.py as
+ * `v<minute>`, so what a point materializes names the commit it came from.
+ */
+function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, errors: 0, collected: 9 } } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-timeline-'));
+  const work = path.join(dir, 'arm-workdir');
+  fs.mkdirSync(work);
+  const git = (at, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@localhost', '-c', 'commit.gpgsign=false', ...args], {
+    cwd: work, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_DATE: minutesAfter(at), GIT_COMMITTER_DATE: minutesAfter(at), GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+  });
+  const write = (v) => {
+    fs.mkdirSync(path.join(work, 'src', 'tinylib'), { recursive: true });
+    fs.writeFileSync(path.join(work, 'src', 'tinylib', 'm.py'), `${v}\n`);
+    git(0, 'add', '-A');
+  };
+  git(0, 'init', '-q', '-b', 'commit0-base');
+  write('stubs');
+  git(0, 'commit', '-q', '-m', 'stubs');
+  if (arm === 'B') {
+    git(0, 'checkout', '-q', '-b', 'ordewell/r1/integration');
+    minutes.forEach((m, i) => {
+      git(m - 1, 'checkout', '-q', '-b', `ordewell/r1/${i + 1}-task`, 'ordewell/r1/integration');
+      write(`v${m}`);
+      git(m - 1, 'commit', '-q', '-m', `task ${i + 1}`);
+      git(m, 'checkout', '-q', 'ordewell/r1/integration');
+      git(m, 'merge', '-q', '--no-ff', '-m', `land task ${i + 1}`, `ordewell/r1/${i + 1}-task`);
+    });
+  } else {
+    git(0, 'checkout', '-q', '-b', 'ordewell/r2/1-implement');
+    for (const m of minutes) {
+      write(`v${m}`);
+      git(m, 'commit', '-q', '-m', `edit at ${m}`);
+    }
+  }
+  fs.mkdirSync(path.join(dir, 'workspace-ordewell', 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'workspace-ordewell', 'sessions', 's.json'), JSON.stringify({ meta: { id: 's', createdAt: minutesAfter(0) } }));
+  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({
+    library: 'tinylib', arm, wallClockMs: wall * 60_000, startedAt: minutesAfter(-2), tests, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000,
+  }));
+  return dir;
+}
+
+const tinyLibs = [{ name: 'tinylib', image: 'commit0/tinylib:v0', srcDir: 'src/tinylib', testDir: 'tests', importName: 'tinylib', distName: 'tinylib', baseCommit: 'abc1234' }];
+
+test('runHistory maps arm B\'s landings to their committer times and arm A\'s branch commits to theirs, the stubs never a point', { skip: !hasGit && 'needs git' }, () => {
+  const b = fixtureRun('B', [10, 25, 40, 70]);
+  const a = fixtureRun('A', [5, 15, 30, 50, 80]);
+  try {
+    const hb = T.runHistory(b, { arm: 'B' });
+    assert.equal(hb.branch, 'ordewell/r1/integration');
+    assert.deepEqual(hb.commits.map((c) => (c.ms - T0) / 60_000), [10, 25, 40, 70]);
+    assert.deepEqual(hb.commits.map((c) => c.subject), ['land task 1', 'land task 2', 'land task 3', 'land task 4']);
+    assert.equal(hb.final, hb.commits.at(-1).sha);
+    assert.equal(hb.lastLanding, hb.final);
+    assert.match(hb.armTree, /^[0-9a-f]{40}$/);
+    const ha = T.runHistory(a, { arm: 'A' });
+    assert.equal(ha.branch, 'ordewell/r2/1-implement');
+    assert.deepEqual(ha.commits.map((c) => (c.ms - T0) / 60_000), [5, 15, 30, 50, 80]);
+    assert.equal(ha.final, ha.commits.at(-1).sha);
+    assert.equal(ha.lastLanding, null);
+    assert.ok(![...hb.commits, ...ha.commits].some((c) => c.sha === hb.root || c.sha === ha.root));
+    assert.equal(T.runStartMs(b, JSON.parse(fs.readFileSync(path.join(b, 'result.json'), 'utf8'))), T0, 'the session\'s creation, not the run\'s earlier start');
+    assert.throws(() => T.runHistory(a, { arm: 'A', branch: 'nope' }), /no branch of the run's work/);
+  } finally {
+    fs.rmSync(b, { recursive: true, force: true });
+    fs.rmSync(a, { recursive: true, force: true });
+  }
+});
+
+test('timelinePoints: up to N points evenly in time, each the newest commit at or before it, the final tree and arm B\'s last landing always among them', () => {
+  const at = (m) => ({ sha: `c${m}`, ms: T0 + m * 60_000 });
+  const landings = [10, 25, 40, 70].map(at);
+  const base = { commits: landings, finalSha: 'c70', lastLanding: 'c70', t0Ms: T0, endMs: T0 + 100 * 60_000 };
+  const shas = (o) => T.timelinePoints({ ...base, ...o }).map((p) => p.sha);
+  // Three points: the final and two targets, at a third and two thirds of the run.
+  assert.deepEqual(shas({ points: 3 }), ['c25', 'c40', 'c70']);
+  // Eight points over four landings is the four landings, each once.
+  assert.deepEqual(shas({ points: 8 }), ['c10', 'c25', 'c40', 'c70']);
+  assert.equal(T.timelinePoints({ ...base }).length, 4, 'the default is 8, and gives up to 8');
+  // A list of minutes: each the newest at or before it; the final is added.
+  assert.deepEqual(shas({ minutes: [30, 60] }), ['c25', 'c40', 'c70']);
+  // Before any commit there is nothing to score; the final is still one.
+  assert.deepEqual(shas({ minutes: [2] }), ['c70']);
+  assert.deepEqual(T.timelinePoints({ ...base, points: 3 }).map((p) => [p.kind, p.atMin, p.targetMin === null ? null : Math.round(p.targetMin)]), [['time', 25, 33], ['time', 40, 67], ['final', 70, null]]);
+  // A last landing that is not the final tree takes a point of its own, and one fewer target is spaced.
+  const apart = T.timelinePoints({ ...base, finalSha: 'tip', lastLanding: 'c70', commits: [...landings, { sha: 'tip', ms: T0 + 90 * 60_000 }], points: 4 });
+  assert.deepEqual(apart.map((p) => [p.sha, p.kind]), [['c25', 'time'], ['c40', 'time'], ['c70', 'landing'], ['tip', 'final']]);
+  // Arm A: the final alone is forced.
+  const a = [5, 15, 30, 50, 80].map(at);
+  assert.deepEqual(T.timelinePoints({ commits: a, finalSha: 'c80', t0Ms: T0, endMs: T0 + 100 * 60_000, points: 3 }).map((p) => p.sha), ['c30', 'c50', 'c80']);
+  // Nothing committed: the final, the stubs, is the one point.
+  assert.deepEqual(T.timelinePoints({ commits: [], finalSha: 'root', t0Ms: T0, endMs: T0 + 1000, points: 5 }).map((p) => p.sha), ['root']);
+});
+
+test('judgeFinal: the final point must score as result.json does', () => {
+  const resultTests = { passed: 7, failed: 1, errors: 0, collected: 9 };
+  assert.deepEqual(T.judgeFinal({ resultTests, final: { tests: { passed: 7, failed: 1, errors: 0, skipped: 2 } } }), { ok: true, reason: null });
+  assert.match(T.judgeFinal({ resultTests, final: { tests: { passed: 6, failed: 1, errors: 0 } } }).reason, /scored 6 passed.*result.json says 7/);
+  assert.match(T.judgeFinal({ resultTests, final: { error: 'eval box: no engine' } }).reason, /could not be scored: eval box/);
+  assert.match(T.judgeFinal({ resultTests: null, final: { tests: { passed: 1 } } }).reason, /no score to compare/);
+  assert.match(T.judgeFinal({ resultTests, final: undefined }).reason, /no final point/);
+});
+
+test('scoreTimeline scores each point\'s source through the driver\'s own two calls, with no key, at most --jobs at once, and writes timeline.json', { skip: !hasGit && 'needs git' }, async () => {
+  const dir = fixtureRun('B', [10, 25, 40, 70]);
+  const drive = await import('./drive.mjs');
+  const calls = [];
+  let live = 0;
+  let peak = 0;
+  const keyBefore = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'sk-or-v1-not-a-real-key-0000';
+  const driver = {
+    // The harness's own materialize, on the fixture repository; the container call is the stand-in.
+    materialize: drive.materialize,
+    scoreInFreshBox: async (lib, tree, o) => {
+      live++;
+      peak = Math.max(peak, live);
+      calls.push({ source: fs.readFileSync(path.join(tree, 'src', 'tinylib', 'm.py'), 'utf8').trim(), key: process.env.OPENROUTER_API_KEY ?? null, lib, runId: o.runId, settings: o.settings, runDir: o.runDir });
+      await new Promise((r) => setTimeout(r, 60));
+      live--;
+      return { treeCheck: { ok: true }, tests: { passed: 7, failed: 1, errors: 0, skipped: 0 }, copied: ['a'], removed: [], needsInspection: [], patchError: null };
+    },
+  };
+  try {
+    const { timeline, ok } = await T.scoreTimeline({ runDir: dir, libraries: tinyLibs, points: 8, jobs: 2, driver });
+    assert.equal(ok, true);
+    assert.equal(timeline.verified, true);
+    assert.deepEqual(calls.map((c) => c.source).sort(), ['v10', 'v25', 'v40', 'v70'], 'each point scored the files of its own commit');
+    assert.ok(calls.every((c) => c.key === null), 'a key reached the scoring');
+    assert.equal(peak, 2, 'two at once, no more');
+    const c = calls[0];
+    assert.equal(c.lib.flatTree.length, 40);
+    assert.match(c.lib.flatCommit, /^[0-9a-f]{40}$/);
+    assert.deepEqual(c.settings, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000 });
+    assert.match(c.runId, /^timescore-[a-z0-9-]+-p\d-[0-9a-f]{8}$/);
+    const file = JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8'));
+    assert.deepEqual(file.points.map((p) => [p.atMin, p.kind, p.tests.passed]), [[10, 'time', 7], [25, 'time', 7], [40, 'time', 7], [70, 'final', 7]]);
+    assert.equal(file.library, 'tinylib');
+    assert.equal(file.arm, 'B');
+    assert.equal(file.collected, 9);
+    assert.equal(file.unverified, null);
+    assert.ok(fs.existsSync(path.join(file.points[0].label ? path.join(dir, 'timeline', file.points[0].label) : dir, 'score.json')));
+  } finally {
+    if (keyBefore === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = keyBefore;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scoreTimeline marks the timeline unverified, and is not ok, when its final point does not score as result.json does', { skip: !hasGit && 'needs git' }, async () => {
+  const dir = fixtureRun('A', [5, 15, 30], { tests: { passed: 5, failed: 0, errors: 0, collected: 9 } });
+  const drive = await import('./drive.mjs');
+  const driver = { materialize: drive.materialize, scoreInFreshBox: async () => ({ treeCheck: { ok: true }, tests: { passed: 4, failed: 1, errors: 0 }, copied: [], removed: [], needsInspection: [], patchError: null }) };
+  try {
+    const { timeline, ok } = await T.scoreTimeline({ runDir: dir, libraries: tinyLibs, points: 2, jobs: 1, driver });
+    assert.equal(ok, false);
+    assert.equal(timeline.verified, false);
+    assert.match(timeline.unverified, /final point scored 4 passed.*result.json says 5/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8')).verified, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('timeline.mjs on the command line: the container calls are the eval box\'s, on no network, and no key reaches them; an unscored final point is a non-zero exit', { skip: (!hasGit || process.platform === 'win32') && 'needs git, and spawn finds no .cmd shim for a fake docker' }, () => {
+  const dir = fixtureRun('A', [5, 15, 30]);
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-fakedocker-'));
+  try {
+    const log = path.join(bin, 'calls.jsonl');
+    // An engine that is not there: every `run` is refused, anything else (the cleanup) is let through, and each call is written down with the key it saw.
+    fs.writeFileSync(path.join(bin, 'docker'), [
+      '#!/usr/bin/env node',
+      "const fs = require('node:fs');",
+      `fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(2), key: process.env.OPENROUTER_API_KEY ?? null }) + '\\n');`,
+      "if (process.argv[2] === 'run') { console.error('no engine here'); process.exit(1); }",
+    ].join('\n'), { mode: 0o755 });
+    const libs = path.join(dir, 'libs.json');
+    fs.writeFileSync(libs, JSON.stringify(tinyLibs));
+    let status = 0;
+    try {
+      execFileSync(process.execPath, [path.join(here, 'timeline.mjs'), dir, '--libs', libs, '--minutes', '6,16', '--jobs', '1'], {
+        encoding: 'utf8', stdio: 'pipe', env: { ...process.env, NODE_OPTIONS: '', PATH: `${bin}${path.delimiter}${process.env.PATH}`, OPENROUTER_API_KEY: 'sk-or-v1-not-a-real-key-0000' },
+      });
+    } catch (err) {
+      status = err.status;
+      assert.match(err.stderr, /UNVERIFIED: the final point could not be scored: .*no engine here/);
+    }
+    assert.notEqual(status, 0);
+    const calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    const runs = calls.filter((c) => c.argv[0] === 'run');
+    assert.equal(runs.length, 3, 'one eval box per point');
+    assert.ok(runs.every((c) => c.argv.includes('--network') && c.argv[c.argv.indexOf('--network') + 1] === 'none' && c.argv.some((a) => /^commit0-timescore-.*-eval$/.test(a))));
+    assert.ok(calls.every((c) => c.key === null), 'a docker call saw the key');
+    const timeline = JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8'));
+    assert.equal(timeline.verified, false);
+    assert.equal(timeline.points.length, 3);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test('parseTimelineArgs: a run directory and its libraries, the points or the minutes, the jobs', () => {
+  const o = T.parseTimelineArgs(['run1', '--libs', 'l.json']);
+  assert.deepEqual([o.points, o.minutes, o.jobs], [8, null, 2]);
+  assert.equal(o.runDir, path.resolve('run1'));
+  const m = T.parseTimelineArgs(['run1', '--libs', 'l.json', '--minutes', '20,40.5,60', '--jobs', '3', '--branch', 'x']);
+  assert.deepEqual(m.minutes, [20, 40.5, 60]);
+  assert.equal(m.jobs, 3);
+  assert.throws(() => T.parseTimelineArgs(['--libs', 'l.json']), /run directory/);
+  assert.throws(() => T.parseTimelineArgs(['run1']), /--libs/);
+  assert.throws(() => T.parseTimelineArgs(['run1', '--libs', 'l', '--points', '0']), /--points/);
+  assert.throws(() => T.parseTimelineArgs(['run1', '--libs', 'l', '--minutes', 'a,b']), /--minutes/);
+  assert.throws(() => T.parseTimelineArgs(['run1', '--libs', 'l', '--jobs', '1.5']), /--jobs/);
+  assert.throws(() => T.parseTimelineArgs(['run1', 'run2', '--libs', 'l']), /one run directory/);
+});
+
+// --- The rehearsal on the fake provider covers the pairs and the batch.json written as runs end. ---
+
+test('judgeBatch also holds the rehearsal\'s batch.json to being finished, with no key reading', () => {
+  const record = L.batchRecord({
+    keyBeforeUsd: null, keyAfterUsd: null, jobs: 1, overlapped: false, seed: 's', rehearsal: 'a-done', startedAt: 't0', endedAt: 't1',
+    runs: [{ lib: 'tlslite-ng', arm: 'A', exit: 0, signal: null, skipped: null, resultDir: '/r/x', recordedUsd: 0.001, valid: true }],
+  });
+  const want = { lib: 'tlslite-ng', arm: 'A', rehearsal: 'a-done' };
+  assert.deepEqual(R.judgeBatch(record, want), []);
+  assert.match(R.judgeBatch({ ...record, finished: false, endedAt: null }, want).join(), /not marked finished/);
+  assert.match(R.judgeBatch({ ...record, keyReadings: [{ at: 't', usd: 1, after: null }] }, want).join(), /key reading/);
+});
+
+test('judgePairBatch: every library\'s two runs found, the batch finished, and the pairs scheduled as --jobs 2 says', () => {
+  const at = (s) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
+  const run = (lib, arm, s, e, over = {}) => ({ lib, arm, exit: 0, signal: null, skipped: null, resultDir: `/r/${lib}-${arm}`, startedAt: at(s), endedAt: at(e), ...over });
+  const record = L.batchRecord({
+    keyBeforeUsd: null, keyAfterUsd: null, jobs: 2, overlapped: true, seed: 's', rehearsal: 'a-done', startedAt: at(0), endedAt: at(200),
+    runs: [run('x', 'A', 0, 40), run('x', 'B', 1, 90), run('y', 'A', 95, 140), run('y', 'B', 96, 150)],
+  });
+  const want = { libs: ['x', 'y'], rehearsal: 'a-done' };
+  assert.deepEqual(L.judgePairBatch(record, want), []);
+  assert.deepEqual(L.judgePairBatch(null, want), ['no batch.json']);
+  assert.match(L.judgePairBatch({ ...record, finished: false }, want).join(), /not marked finished/);
+  assert.match(L.judgePairBatch({ ...record, jobs: 1 }, want).join(), /--jobs 2/);
+  assert.match(L.judgePairBatch({ ...record, runs: record.runs.slice(0, 3) }, want).join(), /4 runs.*not 3/);
+  assert.match(L.judgePairBatch({ ...record, runs: record.runs.map((r) => (r.lib === 'y' && r.arm === 'A' ? { ...r, startedAt: at(50) } : r)) }, want).join(), /y A started .* before x B ended/);
+  assert.match(L.judgePairBatch({ ...record, runs: record.runs.map((r) => ({ ...r, resultDir: null })) }, want).join(), /no result directory/);
+  assert.match(L.judgePairBatch({ ...record, keyBeforeUsd: 3 }, want).join(), /read the key/);
+});

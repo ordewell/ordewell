@@ -17,6 +17,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { REPO_ROOT, checkedBenchDir } from '../lib/data-dir.mjs';
 import * as L from './lib.mjs';
 import * as R from './rehearsal.mjs';
@@ -71,9 +72,16 @@ const DRAIN_MS = 3 * 60 * 1000;
 const LEFTOVER_WAIT_MS = 60_000;
 const DISTS = Object.freeze(['packages/core/dist/index.js', 'packages/web/dist/server/main.js', 'packages/cli/dist/main.js']);
 
+/**
+ * Whether this file is the program, not a module another one loads for its
+ * scoring (timeline.mjs). A module takes no arguments from the program that
+ * loaded it, and is always a dry run: no key in any child's environment.
+ */
+const IS_MAIN = process.argv[1] !== undefined && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+
 const opts = (() => {
   try {
-    return L.parseArgs(process.argv.slice(2));
+    return L.parseArgs(IS_MAIN ? process.argv.slice(2) : ['--dry-run', '--libs', 'scoring-only']);
   } catch (err) {
     console.error(`${err.message}\n\n${HELP}`);
     process.exit(2);
@@ -1445,6 +1453,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     recordedUsd: recorded?.usd ?? null,
     recorded,
     metrics,
+    // What the plan review said (arm B's planner), from the research log's own line; null when it left none.
+    planReview: sessionId ? L.planReview(L.readResearchLog(path.join(runDir, 'workspace-ordewell'), sessionId)) : null,
     // A plan-only run's plan: its shape, the planner's spend and time (null for any other run, which has no such field).
     ...(opts.planOnly ? { planned: record.arm?.planned ?? null } : {}),
     ordewellRoot: ordewell.root,
@@ -1516,7 +1526,12 @@ async function main() {
   process.exitCode = failed.length || results.some((r) => r.aborted) ? 1 : 0;
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  bailOut('error', 1);
-});
+// The scoring a finished run's files go through, for timeline.mjs: the same functions, in the dry-run mode a module loads in.
+export { materialize, scoreInFreshBox };
+
+if (IS_MAIN) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    bailOut('error', 1);
+  });
+}

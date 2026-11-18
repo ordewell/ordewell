@@ -2075,6 +2075,7 @@ export function runMetrics(plan, taskLogs) {
   const checkpoints = taskLogs ? [] : null;
   const perTask = tasks.map((t) => {
     const attempts = attemptsOf(t).map(({ n, usage, events }) => {
+      const running = attemptRunning(usage);
       let ended = null;
       let steps = null;
       if (events) {
@@ -2087,7 +2088,7 @@ export function runMetrics(plan, taskLogs) {
           checkpoints.push({ taskId: t.id, attempt: n, question: parseArgsJson(c.args)?.question ?? null, ...checkpointAnswer(reply?.output) });
         }
       }
-      return { attempt: n, ended, steps, runningMs: usage?.runningMs ?? null };
+      return { attempt: n, ended, steps, runningMs: running.ms, ...(running.from ? { runningFrom: running.from } : {}) };
     });
     const logged = attempts.filter((a) => a.steps !== null);
     return {
@@ -2105,7 +2106,90 @@ export function runMetrics(plan, taskLogs) {
     perTask,
     plan: planShape(plan),
     meanConcurrentAttempts: meanConcurrency(tasks.flatMap((t) => t.attemptUsage ?? [])),
+    calls: callStats(taskLogs),
   };
+}
+
+/**
+ * An attempt's running time, which core keeps when the attempt ends of itself
+ * (`runningMs`, a wait on a person left out). A stop that cuts the attempt
+ * leaves that clock at 0 while its `wallTimeMs` holds how long it ran, so a
+ * 0 beside a wall time is read from the wall time, and says so: that time
+ * includes any wait on a person. No clock at all is null, never guessed.
+ */
+function attemptRunning(usage) {
+  const ms = usage?.runningMs;
+  if (typeof ms !== 'number') return { ms: null, from: null };
+  if (ms === 0 && usage.wallTimeMs > 0) return { ms: usage.wallTimeMs, from: 'wallTimeMs' };
+  return { ms, from: null };
+}
+
+/** A billed call whose cached input is under this share of its input found almost no cache. */
+export const COLD_CACHE_SHARE = 0.05;
+
+/**
+ * The model calls of a run's attempt logs (its `usage` events), per upstream
+ * and by how many were billed with almost no cached input straight after
+ * another call of the same attempt: a prompt that has just been sent should be
+ * served from the cache, so these are what a switch of upstream or an expired
+ * cache costs. The upstream is the `provider` of the built-in runner's usage
+ * record when it has one, and `unreported` when it has none. A subagent's call
+ * is counted but never judged cold, its context being its own; a record that
+ * says nothing of cached input is not read as cold. Null without the logs.
+ */
+export function callStats(taskLogs) {
+  if (!taskLogs) return null;
+  const byUpstream = {};
+  let calls = 0;
+  let coldAfterCall = 0;
+  for (const attempts of Object.values(taskLogs)) {
+    for (const events of Object.values(attempts)) {
+      let previous = false;
+      for (const e of events) {
+        const r = e.type === 'usage' ? e.record : null;
+        if (!r || r.aggregate || r.compacted || typeof r.inputTokens !== 'number') continue;
+        calls++;
+        const upstream = typeof r.provider === 'string' && r.provider ? r.provider : 'unreported';
+        byUpstream[upstream] = (byUpstream[upstream] ?? 0) + 1;
+        if (r.subagentId) continue;
+        if (previous && typeof r.cachedInputTokens === 'number' && r.inputTokens > 0 && r.cachedInputTokens / r.inputTokens < COLD_CACHE_SHARE) coldAfterCall++;
+        previous = true;
+      }
+    }
+  }
+  return { calls, byUpstream, coldAfterCall, coldShare: COLD_CACHE_SHARE };
+}
+
+/**
+ * What the plan review said, from the research log's "chain review" lines (the
+ * session records no structured field for it, core's reviewLongChain): the
+ * longest chain as the planner first wrote it, the one after the review, and
+ * how many tasks' dependencies it changed. The last line is the outcome; a
+ * cut-off reply that was asked again leaves an earlier line of its own. Null
+ * when the log holds none: a chain under the review's minimum, or no planner.
+ */
+export function planReview(researchLog) {
+  const lines = (Array.isArray(researchLog) ? researchLog : [])
+    .map((e) => (e?.type === 'system' && typeof e.content === 'string' ? /^chain review: (\d+)(.*)$/s.exec(e.content) : null))
+    .filter(Boolean);
+  const last = lines.at(-1);
+  if (!last) return null;
+  const firstChain = Number(last[1]);
+  const rest = last[2];
+  const done = /^ -> (\d+), (kept|first plan kept, not shorter); (\d+) tasks? changed/.exec(rest);
+  if (done) return { reviewed: true, firstChain, reviewedChain: Number(done[1]), tasksChanged: Number(done[3]), kept: done[2] === 'kept', outcome: done[2] };
+  const outcome = /^, first plan kept/.test(rest) ? 'first plan kept' : /^, failed/.test(rest) ? 'failed' : 'no answer';
+  return { reviewed: true, firstChain, reviewedChain: null, tasksChanged: null, kept: false, outcome };
+}
+
+/** A copied-out session's research log (core's research-log.json), or null when it holds none that parses. */
+export function readResearchLog(ordewellDir, sessionId) {
+  try {
+    const log = JSON.parse(fs.readFileSync(path.join(ordewellDir, 'sessions', idSegment(sessionId), 'research-log.json'), 'utf8'));
+    return Array.isArray(log) ? log : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Core's path segment for an id (utils/sessionDir.ts idSegment). */
@@ -2217,14 +2301,19 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
  * (a run's unpriced calls, or a call outside the batch on the same key). When
  * runs overlapped, no run's own key delta exists, and each says so.
  */
-export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, planOnly = false, startedAt, endedAt, runs }) {
+export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, planOnly = false, startedAt, endedAt, keyReadings = [], runs }) {
   const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
-  const keyDeltaUsd = keyBeforeUsd != null && keyAfterUsd != null ? round6(keyAfterUsd - keyBeforeUsd) : null;
+  // A batch still running has no end reading: its delta is as of the latest one taken.
+  const latestUsd = keyAfterUsd ?? keyReadings.filter((k) => typeof k.usd === 'number').at(-1)?.usd ?? null;
+  const keyDeltaUsd = keyBeforeUsd != null && latestUsd !== null ? round6(latestUsd - keyBeforeUsd) : null;
   return {
-    dryRun, rehearsal, planOnly, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
+    dryRun, rehearsal, planOnly, seed: seed ?? null, jobs, overlapped, startedAt, endedAt: endedAt ?? null,
+    finished: Boolean(endedAt),
     keyBeforeUsd: keyBeforeUsd ?? null,
     keyAfterUsd: keyAfterUsd ?? null,
+    // The key's usage as each reading found it: at the batch's start, and after each run that ended.
+    keyReadings,
     keyDeltaUsd,
     recordedSumUsd,
     unrecordedRuns: runs.filter((r) => typeof r.recordedUsd !== 'number').map((r) => `${r.lib} ${r.arm}`),
@@ -2234,6 +2323,13 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
     perRunKeyBilled: overlapped ? 'not available: the runs overlapped on one key' : 'each run\'s result.json, its key delta',
     runs,
   };
+}
+
+/** A JSON file written whole or not at all: a host stopped mid-write leaves the file as it was, never half of one. */
+export function writeJsonAtomic(file, value) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  fs.renameSync(tmp, file);
 }
 
 /** Where a run's directory goes under the bench data directory: a rehearsal's, a dry run's and a plan-only run's never sit beside a scored run's. */
@@ -2250,6 +2346,87 @@ export function batchPlan({ libs, arms, seed }) {
     seen.add(name);
   }
   return libs.flatMap((lib) => arms.map((arm) => ({ lib, arm, seed })));
+}
+
+/**
+ * How a batch's runs are scheduled: segments one after another, each with the
+ * runs it holds and how many of them run at once. Where jobs allow a pair and a
+ * library has both arms, a library's A and B form a wave that starts together,
+ * and the next library's wave starts only once every run of this one has ended,
+ * so an arm that finishes early never lets the next library's arm start beside
+ * the other one. Otherwise (one job, or one arm) the runs are a plain queue.
+ */
+export function batchSegments({ runs, jobs }) {
+  if (runs.length === 0) return [];
+  const libs = [...new Set(runs.map((r) => r.lib))];
+  const paired = jobs >= 2 && libs.every((l) => runs.filter((r) => r.lib === l).length === 2);
+  if (!paired) return [{ jobs, runs }];
+  const perWave = Math.floor(jobs / 2);
+  const segments = [];
+  for (let i = 0; i < libs.length; i += perWave) {
+    const wave = libs.slice(i, i + perWave);
+    const held = runs.filter((r) => wave.includes(r.lib));
+    segments.push({ jobs: held.length, runs: held });
+  }
+  return segments;
+}
+
+/** Slack between a pair's two starts: each run's driver does its own preflight first. */
+export const PAIR_START_SLACK_MS = 3 * 60 * 1000;
+
+/**
+ * What a batch's run times say of its schedule, for the rehearsal: a library's
+ * runs started together, and no run of a library began before every run of the
+ * one before it had ended. Reads `startedAt` and `endedAt` of batch.json's
+ * runs; a batch of one job has no pair to judge.
+ */
+export function judgePairing(runs, { jobs, slackMs = PAIR_START_SLACK_MS }) {
+  if (jobs < 2) return [];
+  const f = [];
+  const libs = [...new Set(runs.map((r) => r.lib))];
+  const ms = (t) => (t ? Date.parse(t) : NaN);
+  let previous = null;
+  for (const lib of libs) {
+    const own = runs.filter((r) => r.lib === lib);
+    if (own.length !== 2) {
+      f.push(`${lib} has ${own.length} run${own.length === 1 ? '' : 's'}, no pair`);
+      continue;
+    }
+    if (own.some((r) => !Number.isFinite(ms(r.startedAt)) || !Number.isFinite(ms(r.endedAt)))) {
+      f.push(`${lib} has no start or end time for a run: the pair cannot be judged`);
+      continue;
+    }
+    const starts = own.map((r) => ms(r.startedAt));
+    if (Math.max(...starts) - Math.min(...starts) > slackMs) f.push(`${own[0].lib} ${own[0].arm} and ${own[1].lib} ${own[1].arm} did not start together (${Math.round((Math.max(...starts) - Math.min(...starts)) / 1000)} s apart)`);
+    if (previous) {
+      const last = previous.reduce((a, b) => (ms(b.endedAt) > ms(a.endedAt) ? b : a));
+      for (const r of own) if (ms(r.startedAt) < ms(last.endedAt)) f.push(`${r.lib} ${r.arm} started ${Math.round((ms(last.endedAt) - ms(r.startedAt)) / 1000)} s before ${last.lib} ${last.arm} ended`);
+    }
+    previous = own;
+  }
+  return f;
+}
+
+/**
+ * What a rehearsal's batch of pairs (--jobs 2, both arms, several libraries)
+ * must leave: batch.json finished and marked a rehearsal, no key read, a run
+ * with a result directory for each library's two arms, and the pairs
+ * scheduled as `judgePairing` says.
+ */
+export function judgePairBatch(record, { libs, rehearsal }) {
+  if (!record) return ['no batch.json'];
+  const f = [];
+  if (record.rehearsal !== rehearsal) f.push(`batch.json is not marked as rehearsal ${rehearsal} (${JSON.stringify(record.rehearsal ?? null)})`);
+  if (record.keyBeforeUsd !== null || record.keyAfterUsd !== null || record.keyReadings?.length) f.push('the batch read the key\'s usage: a rehearsal has no key to read');
+  if (record.finished !== true) f.push('batch.json is not marked finished: the batch\'s last write is missing');
+  if (record.jobs !== 2) f.push(`the batch ran with --jobs ${record.jobs}, not --jobs 2: no pair was scheduled`);
+  const runs = record.runs ?? [];
+  if (runs.length !== libs.length * 2) return [...f, `batch.json wants ${libs.length * 2} runs (${libs.join(', ')}, both arms), not ${runs.length}`];
+  for (const r of runs) {
+    if (r.skipped) f.push(`the batch skipped ${r.lib} ${r.arm}: ${r.skipped}`);
+    else if (!r.resultDir) f.push(`the batch found no result directory for ${r.lib} ${r.arm}`);
+  }
+  return [...f, ...(f.length ? [] : judgePairing(runs, { jobs: record.jobs }))];
 }
 
 // --- Command line -----------------------------------------------------------

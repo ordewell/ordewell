@@ -457,7 +457,9 @@ export function judgeBatch(record, { lib, arm, rehearsal }) {
   if (!record) return ['no batch.json'];
   const f = [];
   if (record.rehearsal !== rehearsal) f.push(`batch.json is not marked as rehearsal ${rehearsal} (${JSON.stringify(record.rehearsal ?? null)})`);
-  if (record.keyBeforeUsd !== null || record.keyAfterUsd !== null) f.push('the batch read the key\'s usage: a rehearsal has no key to read');
+  if (record.keyBeforeUsd !== null || record.keyAfterUsd !== null || record.keyReadings?.length) f.push('the batch read the key\'s usage (a key reading in batch.json): a rehearsal has no key to read');
+  // The last write of batch.json is the one that marks the batch finished: one left unfinished is the write after the last run missing.
+  if (record.finished !== true) f.push('batch.json is not marked finished: the batch\'s last write is missing');
   const runs = (record.runs ?? []).filter((r) => r.lib === lib && r.arm === arm);
   if (runs.length !== 1 || record.runs.length !== 1) return [...f, `batch.json wants 1 run of ${lib} ${arm}, not ${runs.length} (of ${record.runs?.length ?? 0} in all)`];
   if (runs[0].skipped) f.push(`the batch skipped its run: ${runs[0].skipped}`);
