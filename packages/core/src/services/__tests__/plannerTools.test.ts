@@ -2396,7 +2396,7 @@ describe('task_diff through the planner handler', () => {
         answers.push((await call(mcp!, 'task_diff', { task: '#1', repo: '.', path: 'a.txt', lines: 400, since: answers[2].nextOffset })).body as typeof answers[number]);
         return 'Read it.';
       } }), {}, { isolation: iso });
-      session.loadPlan({ tasks: [task], generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'], isolation: { run, resolvers: {} },
+      session.loadPlan({ tasks: [task], generatedAt: '2026-10-05T09:00:00Z', lastUpdated: '2026-10-05T09:00:00Z', status: 'approved', runners: ['claude-code'], isolation: { run: { ...run, session: session.sessionId }, resolvers: {} },
         conversationHistory: [{ role: 'user', content: 'change files', timestamp: '2026-10-05T09:00:00Z' }],
       }, 'change files', workspace, { persist: false });
       await session.continueConversation('inspect the work');
