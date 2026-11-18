@@ -26,6 +26,13 @@ export function runOrigin(actor: ExecutionActor): RunOrigin {
   return actorAuthority(actor.kind);
 }
 
+/** The tasks that may stand failed or held: what {@link standingBlock} judges, without walking the whole plan once a task. */
+function standingCandidates(plan: readonly Task[], waits: ReadonlyMap<string, readonly StartWait[]>): string[] {
+  return flattenTasks([...plan])
+    .filter((t) => t.status === 'failed' || t.status === 'awaiting_user' || (waits.get(t.id) ?? []).some((w) => w.kind === 'on-hold'))
+    .map((t) => t.id);
+}
+
 /** One word for a loop's whole run, saying how many rounds it took (ADR-0045 L6); empty for any other failure. */
 function outOfRoundsNote(task: Readonly<Task>): string {
   return outOfRounds(task) ? `its loop ran out of rounds: it failed all ${loopRoundOf(task)}.` : '';
@@ -140,10 +147,11 @@ export class RunSupervision {
       restartPlanner: () => host.restartPlanner(),
       abandonTurn: () => host.abandonTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),
-      wakeUpEnded: (tasks) => {
+      wakeUpEnded: (tasks, runEnd) => {
+        // First: a wake it owes holds the run's end and the handoff.
+        this.failuresStanding(tasks ?? [], runEnd === true);
         if (!this.supervisor.awaitsRunEnd) this.handOver();
         this.settle();
-        this.failuresStanding(tasks ?? []);
         this.runIdle();
       },
       inputsWait: () => (host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor' && !t.rides),
@@ -345,8 +353,9 @@ export class RunSupervision {
    *
    * The end is concluded for a follower that cannot answer it (`ordewell run`)
    * once no turn of the supervisor's can continue the run: at once below Act,
-   * and at Act once its closing turn, retry included, is over, unless that
-   * turn opened the run again (ADR-0029).
+   * and at Act once its closing turn, retry included, is over, with the wake
+   * it owes for a failure it left standing (ADR-0057 R4), unless that turn
+   * opened the run again (ADR-0029).
    */
   runFinished(): void {
     this.running = false;
@@ -394,25 +403,31 @@ export class RunSupervision {
    * goes through {@link observe}, so the wake-up rate guard counts it. A run
    * idle behind its holds is {@link runIdle}'s, the backstop, and a task the
    * user stopped waits for them (ADR-0029).
+   *
+   * `runEnd`: the turn was on the run's end. With the run over, no idle
+   * backstop follows and nothing else wakes it, so every task failed or held
+   * with work waiting is the closing turn's, and the wake holds the run's end
+   * until its own turn is over (ADR-0029).
    */
-  private failuresStanding(tasks: readonly string[]): void {
+  private failuresStanding(tasks: readonly string[], runEnd: boolean): void {
     const plan = this.host.tasks();
     const waits = this.host.startWaits();
     for (const [taskId, key] of this.standingWoken) {
       const now = standingBlock(plan, waits, taskId);
       if (!now || standingKey(now) !== key) this.standingWoken.delete(taskId);
     }
-    if (!this.running || this.level !== 'act' || this.idleHolds()) return;
+    const closing = runEnd && !this.running;
+    if (this.level !== 'act' || (!closing && (!this.running || this.idleHolds()))) return;
     // A turn that failed is retried with the same inputs, which see the task as it stands.
     if ((this.host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor')) return;
     const { describe } = this.digestReader();
-    for (const taskId of new Set(tasks)) {
+    for (const taskId of closing ? standingCandidates(plan, waits) : new Set(tasks)) {
       const standing = standingBlock(plan, waits, taskId);
       if (!standing || standing.holdsBack === 0 || this.guards.allStopped([taskId])) continue;
       const key = standingKey(standing);
       if (this.standingWoken.get(taskId) === key) continue;
       this.standingWoken.set(taskId, key);
-      this.supervisor.observe({ kind: 'failure_standing', taskId, detail: standingDetail(standing, describe) });
+      this.supervisor.observe({ kind: 'failure_standing', taskId, detail: standingDetail(standing, describe, closing), ...(closing ? { closing: true as const } : {}) });
     }
   }
 

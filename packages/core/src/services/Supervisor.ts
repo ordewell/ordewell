@@ -107,8 +107,9 @@ export interface SupervisorHost {
   /**
    * A turn that took a wake-up ended, however it ended; see {@link Supervisor.awaitsRunEnd}.
    * `tasks` are those the supervisor's own turn was woken for; none for a turn that carried the user's reports.
+   * `runEnd`: the supervisor's own turn was on the run's end, or on what its closing turn left standing.
    */
-  wakeUpEnded(tasks?: readonly string[]): void;
+  wakeUpEnded(tasks?: readonly string[], runEnd?: boolean): void;
   /** Whether an input of the supervisor's that opens a turn still waits on the plan: what a retry would take. */
   inputsWait(): boolean;
   /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
@@ -213,7 +214,7 @@ export class Supervisor {
     return this.level !== 'off';
   }
 
-  /** The run's end was gathered for a wake-up whose turn has not ended yet. */
+  /** The run's end, or what its closing turn left standing, was gathered for a wake-up whose turn has not ended yet. */
   get awaitsRunEnd(): boolean {
     return this.runEndPending;
   }
@@ -309,6 +310,8 @@ export class Supervisor {
       this.finished = true;
       this.runEndPending = true;
     }
+    // The closing turn's backstop holds the run's end as the closing turn did (ADR-0057 R4).
+    if (event.closing) this.runEndPending = true;
     if (event.kind === 'task_passed' || event.report?.passed) this.wakeUps = [];
     if (event.kind !== 'task_passed') this.loaded = false;
     this.policy.push({ ...event, at: this.now() });
@@ -596,14 +599,14 @@ export class Supervisor {
     const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy);
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
     if (own.length > 0) {
-      const runEnd = own.some((e) => e.kind === 'run_finished');
+      const runEnd = own.some((e) => e.kind === 'run_finished' || e.closing === true);
       const asked = own.some((e) => e.kind === 'task_report') ? 'supervisor' : undefined;
       const text = digest({ attention: own, sinceLast: batch.sinceLast });
       const tasks = tasksOf(own);
       if (this.idle(own)) void this.host.deliver(text, undefined, true, tasks).catch(() => {});
       else void this.host.deliver(text, asked, undefined, tasks).catch(() => {}).then(() => {
         if (runEnd) this.runEndPending = false;
-        this.host.wakeUpEnded(tasks);
+        this.host.wakeUpEnded(tasks, runEnd);
       });
     }
     if (theirs.length > 0) {

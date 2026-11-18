@@ -56,8 +56,13 @@ describe('a loop under supervision (ADR-0045)', () => {
     expect(update).toContain('Round three finding.');
     expect(update).not.toContain('Round one finding.');
     env.planner.calls[0].finish(prose('The review still fails after three rounds.'));
+    // That closing turn left the check failed with ship waiting on it: woken once more for that, and no more (ADR-0057 R4).
+    await until(() => env.planner.calls.length === 2);
+    expect(env.planner.calls[1].message).toContain('is still failed after your turn');
+    env.planner.calls[1].finish(prose('It needs the user.'));
     await settled();
-    expect(env.planner.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS * 2);
+    expect(env.planner.calls).toHaveLength(2);
     env.session.destroy();
   });
 
