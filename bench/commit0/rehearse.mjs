@@ -6,7 +6,7 @@
  * since a dry run starts no agent and so cannot see how the driver follows,
  * stops and scores a live one.
  *
- *   node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b]
+ *   node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b] [--ordewell-root <dir>]
  *
  * Each scenario's result.json is judged against what the scenario expects,
  * its batch.json must hold the run, results.jsonl must not grow, and no box or
@@ -24,9 +24,10 @@ const arg = (name, fallback) => {
 };
 const libs = arg('--libs');
 const only = arg('--only', 'tlslite-ng');
+const ordewellRoot = arg('--ordewell-root');
 const names = (arg('--scenario') ?? R.scenarioNames().join(',')).split(',').filter(Boolean);
 if (!libs) {
-  console.error('usage: node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b]');
+  console.error('usage: node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b] [--ordewell-root <dir>]');
   process.exit(2);
 }
 for (const n of names) R.scenario(n);
@@ -44,10 +45,21 @@ const resultsSize = () => (fs.existsSync(resultsFile) ? fs.statSync(resultsFile)
 const plansFile = path.join(dataDir, 'plans.jsonl');
 const plansSize = () => (fs.existsSync(plansFile) ? fs.statSync(plansFile).size : 0);
 
-/** The bench's boxes and networks: this rehearsal's must all be gone when it ends. */
+/** The bench's boxes and networks, by id and name. */
 function leftovers() {
-  const ids = (kind) => execFileSync('docker', [kind, 'ls', '-q', ...(kind === 'container' ? ['-a'] : []), '--filter', 'label=commit0-bench=1'], { encoding: 'utf8' }).split('\n').filter(Boolean);
-  return { containers: ids('container'), networks: ids('network') };
+  const rows = (args, field) => execFileSync('docker', [...args, '--filter', 'label=commit0-bench=1', '--format', `{{.ID}} {{.${field}}}`], { encoding: 'utf8' })
+    .split('\n').filter(Boolean).map((l) => { const [id, ...name] = l.split(' '); return { id, name: name.join(' ') }; });
+  return { containers: rows(['container', 'ls', '-a'], 'Names'), networks: rows(['network', 'ls'], 'Name') };
+}
+
+/**
+ * What a scenario left behind: boxes and networks that were not there before
+ * and carry its seed in their name (every run names its own after the seed).
+ * Another driver's, started meanwhile on this host, is not this rehearsal's.
+ */
+function strays(before, after, seed) {
+  const known = new Set([...before.containers, ...before.networks].map((x) => x.id));
+  return [...after.containers, ...after.networks].filter((x) => !known.has(x.id) && x.name.includes(seed.toLowerCase())).map((x) => x.id);
 }
 
 /** The turns the fake played, from its request log. */
@@ -86,7 +98,7 @@ const outcome = [];
 for (const name of names) {
   const s = R.scenario(name);
   const seed = `rehearsal-${name}-${Date.now().toString(36)}`;
-  const argv = ['--rehearse', name, '--libs', libs, '--only', only, '--arm', s.arm, '--seed', seed, '--jobs', '1', ...(s.planOnly ? ['--plan-only'] : []), ...R.windowArgs(s)];
+  const argv = ['--rehearse', name, '--libs', libs, '--only', only, '--arm', s.arm, '--seed', seed, '--jobs', '1', ...(ordewellRoot ? ['--ordewell-root', ordewellRoot] : []), ...(s.planOnly ? ['--plan-only'] : []), ...R.windowArgs(s)];
   fs.mkdirSync(rehearsals, { recursive: true });
   const log = path.join(rehearsals, `${seed}.log`);
   console.log(`\n== ${name}: ${s.about}\n   node bench/commit0/batch.mjs ${argv.join(' ')}\n   log: ${log}`);
@@ -110,7 +122,7 @@ for (const name of names) {
     if (plansSize() !== plansBefore) failures.push('plans.jsonl grew: a rehearsal\'s plan was appended to the plan-only results');
   }
   const left = leftovers();
-  const stray = [...left.containers.filter((c) => !before.containers.includes(c)), ...left.networks.filter((n) => !before.networks.includes(n))];
+  const stray = strays(before, left, seed);
   if (stray.length) failures.push(`left behind: ${stray.join(', ')}`);
   const minutes = ((Date.now() - startedAt) / 60_000).toFixed(1);
   outcome.push({ name, passed: failures.length === 0, failures, runDir, exit, minutes });

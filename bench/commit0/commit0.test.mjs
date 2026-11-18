@@ -1427,7 +1427,9 @@ test('runMetrics reads the tasks, checkpoints, the supervisor and each attempt f
     { taskId: 't2', attempt: 1, question: 'Where is upstream?', answeredBy: 'user', answer: 'rejected' },
   ]);
   assert.equal(m.supervisor.wakeUps, 2);
-  assert.deepEqual(m.supervisor.actions, [{ command: 'continue', task: '#2', outcome: 'done', at: 'y' }]);
+  assert.deepEqual(m.supervisor.actions, [{ kind: 'continue', command: 'continue', task: '#2', title: 'two', outcome: 'done', at: 'y' }]);
+  assert.deepEqual(m.supervisor.actionsBy, { continue: 1 });
+  assert.deepEqual(m.supervisor.wakes.map((w) => [w.at, w.updates]), [['x', 1], ['w', 1]]);
   assert.deepEqual(m.perTask[0], { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', runningMs: 1500, steps: 4,
     attempts: [{ attempt: 1, ended: 'ended without task_complete', steps: 2, runningMs: 1000 }, { attempt: 2, ended: 'done', steps: 2, runningMs: 500 }] });
   assert.equal(m.perTask[1].runningMs, null, 'an attempt with no running clock is not guessed');
@@ -1441,6 +1443,74 @@ test('runMetrics reads the tasks, checkpoints, the supervisor and each attempt f
   assert.equal(bare.perTask[0].steps, null);
   assert.equal(bare.perTask[0].attempts[0].ended, null);
   assert.equal(L.runMetrics(null, null), null);
+});
+
+test('supervisorRecord counts every act the supervisor made, edits and words included, and what woke it', () => {
+  const exec = (command, ref, outcome, at, extra = {}) => ({
+    role: 'assistant', kind: 'execution', content: '', timestamp: at,
+    execution: { command, actor: 'supervisor', level: 'act', ...(ref ? { task: { id: `id${ref}`, ref, title: `Task ${ref}` } } : {}), outcome, at, ...extra },
+  });
+  const said = (content, at) => ({ role: 'assistant', kind: 'supervisor', content, timestamp: at });
+  const wake = (content, at) => ({ role: 'user', kind: 'wake_up', content, timestamp: at });
+  const plan = {
+    tasks: [{ id: 'a', order: 1, title: 'Implement the library' }, { id: 'b', order: 2, title: 'Note the rehearsal' }],
+    conversationHistory: [
+      wake('Run update:\n- task #1 "Implement the library" failed: nope; it blocks task #2 "Note the rehearsal"', 't1'),
+      wake('Run update:\n- task #2 "Note the rehearsal" is waiting for input: May I?\nSince the last update:\n- task #3 "x" passed', 't1'),
+      exec('retry_task', '#1', 'done', 't2'),
+      exec('skip_task', '#2', 'done', 't3'),
+      exec('stop_task', '#2', 'refused', 't4', { detail: 'not running' }),
+      exec('stop_run', null, 'done', 't5'),
+      exec('message_task', '#2', 'done', 't6', { detail: 'use the tests' }),
+      exec('answer_checkpoint', '#2', 'done', 't7'),
+      exec('answer_approval', '#2', 'declined', 't8'),
+      exec('merge_all', null, 'done', 't9'),
+      { role: 'assistant', kind: 'execution', content: '', timestamp: 't10', execution: { command: 'retry_task', actor: 'user', outcome: 'done', at: 't10' } },
+      said('Tasks updated:\n- Updated "Implement the library" (prompt)\n- Added "A new task"\n- Removed "Gone"\n- Merged 2 tasks into "Note the rehearsal"\n- Re-armed "Implement the library"', 't11'),
+      said('I left task #1 alone.', 't12'),
+      { role: 'assistant', kind: 'plan_generated', content: 'Plan generated with 2 tasks.', timestamp: 't0' },
+      wake('Run update:\n- Task #1 "Implement the library" is still failed after your turn, and 1 task waits on it. The run has ended, and an edit starts nothing: nothing runs until you release it. Release it: call retry_task', 't13'),
+    ],
+  };
+  const s = L.supervisorRecord(plan);
+  assert.equal(s.wakeUps, 3);
+  assert.deepEqual(s.wakes, [
+    { at: 't1', updates: 2, triggers: [{ kind: 'task_failed', task: '#1' }, { kind: 'waiting_input', task: '#2' }] },
+    { at: 't13', updates: 1, triggers: [{ kind: 'failure_standing', task: '#1', closing: true }] },
+  ]);
+  assert.deepEqual(s.wakesBy, { task_failed: 1, waiting_input: 1, failure_standing: 1 });
+  // The user's own call and the plan card are not the supervisor's.
+  assert.deepEqual(s.actions.map((a) => [a.kind, a.task, a.outcome, a.at]), [
+    ['retry_task', '#1', 'done', 't2'], ['skip_task', '#2', 'done', 't3'], ['stop_task', '#2', 'refused', 't4'], ['stop_run', null, 'done', 't5'],
+    ['message_task', '#2', 'done', 't6'], ['answer_checkpoint', '#2', 'done', 't7'], ['answer_approval', '#2', 'declined', 't8'], ['merge_all', null, 'done', 't9'],
+    ['plan_edit', '#1', 'done', 't11'], ['plan_edit', null, 'done', 't11'], ['plan_edit', null, 'done', 't11'], ['plan_edit', '#2', 'done', 't11'], ['plan_edit', '#1', 'done', 't11'],
+    ['message', null, 'done', 't12'],
+  ]);
+  assert.deepEqual(s.actions.filter((a) => a.kind === 'plan_edit').map((a) => [a.op, a.title]), [
+    ['updated', 'Implement the library'], ['added', 'A new task'], ['removed', 'Gone'], ['merged', 'Note the rehearsal'], ['re-armed', 'Implement the library'],
+  ]);
+  assert.equal(s.actions.find((a) => a.kind === 'stop_task').detail, 'not running');
+  assert.deepEqual(s.actionsBy, { retry_task: 1, skip_task: 1, stop_task: 1, stop_run: 1, message_task: 1, answer_checkpoint: 1, answer_approval: 1, merge_all: 1, plan_edit: 5, message: 1 });
+  // A session with no history holds nothing to count, which is not zero.
+  assert.deepEqual(L.supervisorRecord({ tasks: [] }), { wakeUps: null, wakes: null, wakesBy: null, actions: null, actionsBy: null });
+  assert.deepEqual(L.supervisorRecord({ tasks: [], conversationHistory: [] }), { wakeUps: 0, wakes: [], wakesBy: {}, actions: [], actionsBy: {} });
+});
+
+test('wakeTriggers names each kind of line a wake-up digest holds', () => {
+  const one = (line) => L.wakeTriggers(`Run update:\n${line}`)[0];
+  assert.deepEqual(one('- the run finished: 2 tasks'), { kind: 'run_finished', task: null });
+  assert.deepEqual(one('- the run is idle: nothing is running and nothing can start. Task #2 "x" is on hold'), { kind: 'run_held', task: null });
+  assert.deepEqual(one('- task #1.1 "x" is waiting for approval: run it'), { kind: 'waiting_approval', task: '#1.1' });
+  assert.deepEqual(one('- task #1 "x" has gone quiet (3 min)'), { kind: 'task_idle', task: '#1' });
+  assert.deepEqual(one('- task #1 "x" has run long: 40 min running, past its 20 min threshold'), { kind: 'running_long', task: '#1' });
+  assert.deepEqual(one('- task #1 "x" finished, but its work conflicts and could not land: a.py'), { kind: 'landing_conflict', task: '#1' });
+  assert.deepEqual(one('- task #1 "x" passed, but git refused to land its work, which is kept'), { kind: 'landing_failed', task: '#1' });
+  assert.deepEqual(one('- task #1 "x"\'s runner asked for something nobody here may allow, and was denied'), { kind: 'approval_denied', task: '#1' });
+  assert.deepEqual(one('- openrouter\'s usage limit paused a task, which waits for a retry: #1 "x"'), { kind: 'usage_limit', task: null });
+  assert.deepEqual(one('- Task #1 "x" is still failed after your turn, and 1 task waits on it. Release it: skip_task'), { kind: 'failure_standing', task: '#1' });
+  assert.deepEqual(one('- task #2 "x", whose result you asked for, has ended. passed'), { kind: 'task_report', task: '#2' });
+  assert.deepEqual(one('- something new'), { kind: 'other', task: null });
+  assert.deepEqual(L.wakeTriggers('no bullet at all'), []);
 });
 
 test('readTaskLogs reads each attempt\'s log from a copied-out session', () => {
@@ -1863,10 +1933,26 @@ test('the planner plays the plan once; after it the conversation is the supervis
   const first = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }] }, both, playCtx);
   const second = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }, ...retried] }, both, playCtx);
   assert.deepEqual([first.toolCall?.name, second.toolCall?.name].sort(), ['answer_checkpoint', 'retry_task']);
-  // Left alone, a failure stays failed.
+  // Left alone, a failure stays failed: the closing turn plays nothing, and the second wake, for the failure left standing, is answered in prose too.
   const leave = R.createState();
   leave.planned = true;
-  assert.equal(R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: 'Task #1 failed' }] }, leave, playCtx).toolCall, undefined);
+  assert.equal(R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: planBlock(line(1, 'Implement the library', 'failed')) }] }, leave, playCtx).toolCall, undefined);
+  const again = R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: 'Run update:\n- Task #1 "Implement the library" is still failed after your turn, and 1 task waits on it.' }] }, leave, playCtx);
+  assert.equal(again.toolCall, undefined);
+  assert.match(again.content, /leaves task #1 failed/);
+
+  // The edit-then-retry scenario: the closing turn edits the failed task, keeping the key the fake routes by; only the second wake retries.
+  const er = R.createState();
+  er.planned = true;
+  const closing = planBlock(line(1, 'Implement the library', 'failed'), line(2, 'Note the rehearsal', 'approved'));
+  const edit = R.turnFor('b-edit-retry', { tools: [], messages: [{ role: 'user', content: closing }] }, er, playCtx);
+  assert.equal(edit.toolCall, undefined, 'the built-in planner edits by a JSON reply: it has no edit_plan tool');
+  const ops = JSON.parse(/```json\n([\s\S]*)\n```/.exec(edit.content)[1]).taskOps;
+  assert.deepEqual([ops[0].op, ops[0].taskId], ['update', '#1']);
+  assert.match(ops[0].changes.prompt, /\[rehearsal:edit\]/);
+  assert.equal(R.turnFor('b-edit-retry', { tools: [], messages: [{ role: 'user', content: closing }, ...retried] }, er, playCtx).toolCall, undefined, 'the closing turn retries nothing');
+  const standingWake = `Run update:\n- Task #1 "Implement the library" is still failed after your turn, and 1 task waits on it.\n${closing}`;
+  assert.equal(R.turnFor('b-edit-retry', { tools: [], messages: [{ role: 'user', content: standingWake }] }, er, playCtx).toolCall.name, 'retry_task');
 });
 
 test('the fake streams a tool call and its usage as OpenRouter does, and lists the bench\'s model', () => {
@@ -1905,13 +1991,27 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.match(R.judgeRehearsal('a-stall', { ...waited, truncated: { truncated: true, why: 'settled with 1 task open: 1 waiting on a person' }, stalled: { why: 'settled', open: [] } }).join(), /wanted \/\^stalled: waiting on checkpoint/);
   assert.match(R.judgeRehearsal('a-stall', { ...waited, tasks: [{ status: 'completed' }] }).join(), /every task is completed/);
   const held = { status: 'failed', held: 'nothing ready', reason: 'failed' };
+  const standing = (at) => ({ at, updates: 1, triggers: [{ kind: 'failure_standing', task: '#1', closing: true }] });
+  const leaving = { wakeUps: 2, wakes: [{ at: '2026-01-01T00:00:00.000Z', updates: 1, triggers: [{ kind: 'run_finished', task: null }] }, standing('2026-01-01T00:01:00.000Z')], actions: [{ kind: 'message', at: 'a', outcome: 'done' }] };
   const leftAlone = {
+    metrics: { supervisor: leaving },
     ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
     stalled: { why: 'settled', open: [held, { status: 'approved', held: 'nothing ready', reason: 'depends on 1 (failed)' }] }, tasks: [{ status: 'failed' }, { status: 'approved' }],
   };
   assert.deepEqual(R.judgeRehearsal('b-leave', leftAlone), []);
   assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, tests: { passed: 1653 } }).join(), /1653 passed, not the baseline's 11: work that never landed was scored/);
   assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, stalled: { why: 'settled', open: [held] } }).join(), /1 task\(s\) held open, wanted 2/);
+  // What the supervisor did is judged from the metrics: a retry the scenario never plays, or no wake for the failure left standing, fails.
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, actions: [{ kind: 'retry_task', at: 'a', outcome: 'done' }] } } }).join(), /acts are \["retry_task"\], wanted \[\]/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, wakes: leaving.wakes.slice(0, 1) } } }).join(), /0 wake\(s\) for a failure the closing turn left, wanted 1/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, wakes: [...leaving.wakes, standing('2026-01-01T00:02:00.000Z')], wakeUps: 3 } } }).join(), /2 wake\(s\) for a failure the closing turn left, wanted 1/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: { supervisor: { ...leaving, wakes: [{ at: 'x', updates: 1, triggers: [{ kind: 'other', task: null }] }, standing('y')] } } }).join(), /trigger the harness cannot read/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, metrics: null }).join(), /no actions or wakes/);
+  const edited = { wakeUps: 3, wakes: [leaving.wakes[0], standing('2026-01-01T00:01:00.000Z')],
+    actions: [{ kind: 'plan_edit', at: '2026-01-01T00:00:30.000Z', outcome: 'done' }, { kind: 'message', at: '2026-01-01T00:00:40.000Z', outcome: 'done' }, { kind: 'retry_task', at: '2026-01-01T00:01:10.000Z', outcome: 'done' }] };
+  assert.deepEqual(R.judgeSupervision(R.scenario('b-edit-retry').supervision, edited), []);
+  assert.match(R.judgeSupervision(R.scenario('b-edit-retry').supervision, { ...edited, actions: [edited.actions[0], { ...edited.actions[2], at: '2026-01-01T00:00:50.000Z' }] }).join(), /did not follow the closing wake/);
+  assert.match(R.judgeSupervision(R.scenario('b-edit-retry').supervision, { ...edited, actions: edited.actions.slice(1) }).join(), /acts are \["retry_task"\], wanted \["plan_edit","retry_task"\]/);
   assert.match(R.judgeRehearsal('b-cap', { ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'cap: spend' }, stopped: { why: 'spend' }, tasks: [{ status: 'completed' }], steps: { run: { ended: 'by itself' }, merge: { exit: 0 } } }).join(), /driver had to stop it/);
   assert.deepEqual(R.judgeRehearsal('a-done', null), ['no result.json']);
 
