@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-18
+
+### Changed
+
+- A plan whose dependencies run in one long chain is reviewed once by the
+  planner that wrote it, which keeps a revision only when it shortens the
+  chain. A conversation planner is asked the same in `submit_plan`'s answer.
+
+### Fixed
+
+- A plan saved by an earlier version no longer lets a copy of it, such as the
+  plan restored after a window reload, remove the original's worktrees.
+- Picking a session with `/sessions` and reading a saved session's state no
+  longer open every other saved session.
+
 ## [0.14.2] - 2026-11-18
 
 ### Added
@@ -1720,7 +1735,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/ordewell/ordewell/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ordewell/ordewell/compare/v0.13.4...v0.14.0
