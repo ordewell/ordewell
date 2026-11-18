@@ -405,7 +405,7 @@ export class Attempts {
    */
   private readonly spawnCounts = new Map<string, number>();
   // Read when a flag falls due, so a task that passed meanwhile raises the threshold (ADR-0018 W1).
-  private readonly verifier = new VerdictEngine({ runningLongThreshold: () => runningLongThreshold(this.deps.store.planTasks) });
+  private readonly verifier = new VerdictEngine({ runningLongThreshold: (taskId) => runningLongThreshold(this.deps.store.planTasks, taskId) });
   /** What the workspace env has already warned about, so a run says it once, not per task. */
   private readonly envWarnings = new Set<string>();
   private readonly host: AttemptsHost;
@@ -633,6 +633,7 @@ export class Attempts {
       attempt.spawning.abort();
       dropProviderRetry(attempt);
       store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, this.verifier.runningMs(taskId));
+      if (reason === 'cancel' || reason === 'stop') store.setAttemptOutcome(taskId, attempt.attempt, 'stopped');
       this.deps.output.detach(taskId);
       attempt.shell?.end();
       attempt.web?.end();
@@ -1599,6 +1600,7 @@ export class Attempts {
     // writing, only caught.
     if (changedFiles.length > 0) return this.host.settle({ kind: 'files-changed', task, attempt, verdict, files: changedFiles });
     if (landing) return this.host.settle({ kind: 'passed', task, attempt, verdict, landing });
+    store.setAttemptOutcome(taskId, attempt.attempt, 'failed');
     return this.host.settle({ kind: 'failed', task, attempt, verdict, unresumed, signedOut });
   }
 

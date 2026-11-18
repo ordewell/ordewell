@@ -554,7 +554,24 @@ the task's prompt unchanged. The next attempt starts without it. A user's retry 
 carry one, and a script or delegated task has no brief to carry it, so a note
 there is refused. An `edit_plan` that changes the prompt of a failed or held
 task answers that the task still stands that way and needs `retry_task` to
-run as edited: a model ending its turn on an edit alone left a run held.
+run as edited: a model ending its turn on an edit alone left a run held. A
+`message_task` from a model to a task that has run and not started its next
+attempt yet is refused, saying so and that the note goes with `retry_task`: a
+runner's message queue lives in its session, which that attempt does not have
+yet, and an Act supervisor's message right after its retry was refused with no
+word of the note.
+
+The Act brief also says what a retry is for when a task failed part-way. When
+its report shows part of the brief working and committed, with evidence that
+the rest cannot be done from what the workspace holds, the supervisor does not
+retry the same goal: it edits the task so its done criterion is what works,
+names the rest as a follow-up task or in the task that checks the whole, and
+then retries it. It never gives a retry a done criterion the retry's own limits
+cannot meet, nor calls the rest solvable without evidence from the report. The
+verdict is still the runner's `task_complete` on what the plan holds, and
+nothing lands without a pass. Seen live: a retry told both to cap its search
+at 45 minutes and that done meant fully green ran 117 minutes, committed the
+same files again and never called `task_complete`.
 
 ### Failure handling: the run never depends on the supervisor
 
@@ -847,3 +864,4 @@ until #30 exists.
 - 2026-11-17 — a stopped task on hold takes a note on its next start too, and the note is given to the runner only, not claimed as shown in the log.
 - 2026-11-18 — the wake a closing turn owes for a task it left failed or held with work waiting holds `run_concluded` until its turn is over, so `ordewell run` waits for it too.
 - 2026-11-18 — what a closing turn left standing is judged once its retry is over too, so a closing turn that failed once still owes the wake, and the user's Stop of the closing turn or its retry owes none.
+- 2026-11-18 — the Act brief narrows a task that failed part-way, with evidence the rest cannot be done here, to what works before retrying it, and a model's `message_task` to a task not started since it ran is refused naming the retry's note.
