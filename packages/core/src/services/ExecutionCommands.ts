@@ -1469,7 +1469,11 @@ export class ExecutionCommands {
     // A session's queue starts with its attempt, so a message sent just after a retry would be lost: the note is how to reach that attempt.
     const { status } = located.task;
     if (actor.kind !== 'user' && located.task.attempted && (status === 'pending' || status === 'approved') && !this.running(located.task.id)) {
-      return { refusal: `${capitalize(label)} has not started its next attempt yet, so there is no turn to message. Its runner reads retry_task's message with its brief: give a note there, in the retry.` };
+      // Only a stopped attempt's is still to be retried: one already retried refuses a second note, as retry_task does.
+      const advice = waitOf(this.orchestrator.startWaits(located.task), 'on-hold')
+        ? 'Its runner reads retry_task\'s message with its brief: give a note there, in the retry.'
+        : 'It is already retried, and its runner reads its prompt with its brief: change the prompt with edit_plan before it starts.';
+      return { refusal: `${capitalize(label)} has not started its next attempt yet, so there is no turn to message. ${advice}` };
     }
     return {
       act: async () => {

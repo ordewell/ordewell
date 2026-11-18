@@ -296,6 +296,7 @@ export class OrdewellLoop {
         const limit = result.cutOffAt;
         if (result.calls > 0) {
           cutOffs = 0;
+          writtenCalls = 0;
           this.emit({ type: 'command_output', text: cutOffLog(limit, result.calls, 0) });
           continue;
         }
@@ -587,6 +588,8 @@ export class OrdewellLoop {
       ...(usage.cacheReadTokens !== undefined ? { cachedInputTokens: usage.cacheReadTokens } : {}),
       // Only the provider's own figure (ADR-0070): no price table makes one up.
       ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
+      ...(usage.provider ? { provider: usage.provider } : {}),
+      ...(usage.generationId ? { generationId: usage.generationId } : {}),
       // Always: compaction acts on this window, so the meter must read the same one, an assumed one or one an overflow shrank included.
       contextWindow: this.compactor.contextWindow,
       ...(this.compactor.windowAssumed ? { contextWindowAssumed: true } : {}),

@@ -615,8 +615,10 @@ export class Attempts {
    * still being made as it ends is let go by too. An end that says so also
    * reaches an attempt an earlier end left still being made: its say is the
    * later one. An end that does not say leaves that attempt's as it was.
+   * `how.runningMs` is the attempt's running time when the verifier that kept
+   * it has already been reset.
    */
-  end(taskId: string, reason: AttemptEnd, how?: { keep: boolean }): EndedAttempt | undefined {
+  end(taskId: string, reason: AttemptEnd, how?: { keep: boolean; runningMs?: number }): EndedAttempt | undefined {
     const { store } = this.deps;
     const attempt = this.live.get(taskId);
     this.live.delete(taskId);
@@ -632,7 +634,7 @@ export class Attempts {
       attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
       dropProviderRetry(attempt);
-      store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, this.verifier.runningMs(taskId));
+      store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, how?.runningMs ?? this.verifier.runningMs(taskId));
       if (reason === 'cancel' || reason === 'stop') store.setAttemptOutcome(taskId, attempt.attempt, 'stopped');
       this.deps.output.detach(taskId);
       attempt.shell?.end();
@@ -660,12 +662,15 @@ export class Attempts {
     // Let the verifier go before the runners: a killed session fires its exit
     // synchronously, and under a still-valid generation that exit is a verdict
     // — for a conflict repair, one that lands work the stop just cancelled.
+    // Its clocks go with it, so each attempt's running time is read first: a
+    // wait for input left in would time the next start (ADR-0018 W1).
+    const ran = new Map([...this.live.keys()].map((taskId) => [taskId, this.verifier.runningMs(taskId)]));
     this.verifier.reset();
     for (const attempt of this.live.values()) this.stopRunner(attempt);
     this.deps.runner.stopAll();
     this.deps.scriptRunner.stopAll();
     this.deps.childPlanRunner.stopAll();
-    return this.endAll('stop');
+    return this.endAll('stop', ran);
   }
 
   /**
@@ -1715,10 +1720,10 @@ export class Attempts {
     if (nativeSessionId) this.deps.store.setTaskRunnerSessionId(taskId, nativeSessionId, runner);
   }
 
-  private endAll(reason: 'stop' | 'load'): TaskAttempt[] {
+  private endAll(reason: 'stop' | 'load', ran?: ReadonlyMap<string, number | undefined>): TaskAttempt[] {
     const ended = [...this.live.values()];
     const keep = endKeeps(reason === 'stop' ? 'stopped' : 'loaded');
-    for (const { taskId } of ended) this.end(taskId, reason, { keep });
+    for (const { taskId } of ended) this.end(taskId, reason, { keep, runningMs: ran?.get(taskId) });
     this.verifier.reset();
     if (reason === 'load') this.deps.output.reset();
     return ended;
