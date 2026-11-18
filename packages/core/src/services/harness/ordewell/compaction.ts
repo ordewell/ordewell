@@ -521,5 +521,7 @@ function compactionUsageRecord(model: ModelInfo, usage: ModelUsage): UsageRecord
     ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
     ...(usage.cacheReadTokens !== undefined ? { cachedInputTokens: usage.cacheReadTokens } : {}),
     ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
+    ...(usage.provider ? { provider: usage.provider } : {}),
+    ...(usage.generationId ? { generationId: usage.generationId } : {}),
   };
 }

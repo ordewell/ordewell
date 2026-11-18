@@ -79,6 +79,15 @@ describe('a tool call written as text in a reply (ADR-0070)', () => {
     expect(taskTools.calls).toEqual([]);
   });
 
+  it('starts the count again after a step cut off at the output limit that still made a call', async () => {
+    const glob = (id: string) => call(id, 'glob', { pattern: '*.md' });
+    const LENGTH = { type: 'finish', reason: 'length' } as const;
+    const { loop, client } = loopWith([reply(WRITTEN), reply(WRITTEN), [glob('g1'), LENGTH], reply(WRITTEN), reply(WRITTEN), [glob('g2'), LENGTH], reply('Done.')]);
+    const outcome = await loop.runTurn('Work.', signals());
+    expect(outcome).toEqual({ interrupted: false });
+    expect(client.requests).toHaveLength(7);
+  });
+
   it('records the usage of the reply, as of any call', async () => {
     const { loop, store } = loopWith([reply(WRITTEN, { inputTokens: 111, outputTokens: 22 }), reply('Done.')]);
     await loop.runTurn('Work.', signals());

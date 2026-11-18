@@ -160,6 +160,28 @@ describe('a retry\'s running-long threshold (ADR-0018 W1)', () => {
     expect(flags).toEqual([{ elapsedMs: 50 * MINUTE, thresholdMs: 50 * MINUTE, retryOf: { attempt: 1, runningMs: 50 * MINUTE, outcome: 'stopped' } }]);
   });
 
+  it('times a start after a run Stop by the running time the stopped attempt had, not by its wait for input', async () => {
+    vi.useFakeTimers();
+    const h = setup();
+    h.orchestrator.loadPlan([plan()]);
+    const flags: Array<Pick<RunningLongEvent, 'elapsedMs' | 'thresholdMs' | 'retryOf'>> = [];
+    h.orchestrator.subscribe({ onTaskRunningLong: ({ runningLong: { elapsedMs, thresholdMs, retryOf } }) => flags.push({ elapsedMs, thresholdMs, ...(retryOf ? { retryOf } : {}) }) });
+    await h.orchestrator.forceStartTask('t1');
+    await vi.advanceTimersByTimeAsync(40 * MINUTE);
+    h.sessions[0].waitForInput();
+    await vi.advanceTimersByTimeAsync(10 * 60 * MINUTE);
+    flags.length = 0;
+    h.orchestrator.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.task('t1').attemptUsage!.at(-1)).toMatchObject({ runningMs: 40 * MINUTE, outcome: 'stopped' });
+
+    await h.orchestrator.forceStartTask('t1');
+    expect(h.sessions).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(40 * MINUTE);
+
+    expect(flags).toEqual([{ elapsedMs: 40 * MINUTE, thresholdMs: 40 * MINUTE, retryOf: { attempt: 1, runningMs: 40 * MINUTE, outcome: 'stopped' } }]);
+  });
+
   it('keeps the 30-minute floor after an attempt that failed sooner', async () => {
     const { flags } = await retriedAfter(5, 'failed');
 

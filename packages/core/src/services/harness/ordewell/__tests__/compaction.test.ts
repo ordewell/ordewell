@@ -237,7 +237,7 @@ function splitClient(main: (request: ModelRequest, index: number) => readonly Mo
         summaryRequests.push(request);
         return (async function* () {
           yield text(FULL_SUMMARY);
-          yield usage(2_000, 300);
+          yield { type: 'usage', usage: { inputTokens: 2_000, outputTokens: 300, provider: 'DeepInfra', generationId: 'gen-summary' } };
           yield STOP;
         })();
       }
@@ -285,7 +285,7 @@ describe('compaction in the loop', () => {
     // The meter resets to the new size, and the summary call is billed apart from it.
     const records = eventsOf(events, 'usage').map((e) => e.record);
     expect(records.find((r) => r.compacted)).toMatchObject({ compacted: true, contextTokens: event?.postTokens, contextWindow: 100_000 });
-    expect(records.find((r) => r.purpose === 'compaction')).toMatchObject({ aggregate: true, inputTokens: 2_000, outputTokens: 300 });
+    expect(records.find((r) => r.purpose === 'compaction')).toMatchObject({ aggregate: true, inputTokens: 2_000, outputTokens: 300, provider: 'DeepInfra', generationId: 'gen-summary' });
 
     // Persisted: the lines stay, one more says what replaced them, and a resume loads the compacted conversation.
     expect(store.entries.filter((e) => e.kind === 'compaction')).toHaveLength(1);
