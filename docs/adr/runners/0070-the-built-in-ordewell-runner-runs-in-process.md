@@ -220,7 +220,19 @@ is one runner per API provider, under the provider's own id and name.**
     prefix and reads the previous one only by chance. The order gives up
     OpenRouter's own choice among Claude's upstreams, and its sticky routing,
     while one of the two is up; a request either cannot take still routes
-    elsewhere, uncached.
+    elsewhere, uncached. Any other model through OpenRouter balances over
+    upstreams that each keep their own cache, and OpenRouter's sticky routing
+    holds a conversation only once it has seen a cache hit. So each request
+    asks for OpenRouter's routing metadata, and a conversation's later
+    requests name the upstream that served the one before first
+    (`provider.order`), with fallbacks on, so an outage or a rate limit there
+    still routes elsewhere. The name rides on the assistant turn's provider
+    state, so it belongs to that conversation alone: no other session, attempt
+    or model reads it, a turn on another model drops it, and a compaction that
+    keeps no routed turn starts it over. A routing shortcut in the model
+    id (`:nitro`, `:floor`) is the user's choice and is left alone. Each usage
+    report names the upstream (`provider`) and OpenRouter's generation id
+    (`generationId`), so a run's records say which cache each call could read.
 
 ## Key properties
 
@@ -421,5 +433,8 @@ comes from that call.
 - 2026-11-17 — each request asks for the model's stated output limit, held to
   the room its window leaves; a reply cut off at that limit continues the turn,
   and three in a row with no tool call fail the attempt.
+- 2026-11-18 — through OpenRouter, a conversation's later calls ask first for
+  the upstream that served the one before, fallbacks on, and each usage report
+  names the upstream and the generation id.
 - 2026-11-18 — a reply that writes a tool call out as text continues the turn with a
   correction, and three in a row fail the attempt.

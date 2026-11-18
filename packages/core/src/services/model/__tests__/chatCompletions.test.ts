@@ -117,12 +117,15 @@ describe('chat-completions adapter: streams', () => {
       cacheWriteTokens: 1900,
       reasoningTokens: 12,
       cost: { amount: 0.0042, currency: 'USD' },
+      provider: 'Anthropic',
+      generationId: 'gen-1731500300-abc',
     });
     const [state] = ofType(events, 'provider-state');
     expect(state.state.data).toEqual({
       field: 'reasoning',
       reasoning: 'Checking the plan.',
       details: [{ type: 'reasoning.text', text: 'Checking the plan.', signature: 'EqQBCkgIBRABGAIiQL3sig==', format: 'anthropic-claude-v1', index: 0 }],
+      upstream: { model: 'test-model', name: 'Anthropic' },
     });
 
     const next = requestBody('openrouter', { ...BASE_REQUEST, messages: [{ role: 'assistant', text: 'Done.', providerState: state.state }] });
@@ -447,5 +450,83 @@ describe('chat-completions adapter: an aggregator\'s wrapped upstream errors', (
     const bare = await failure(clientFor('openrouter', replay(sse(event({ code: 400, message: 'Provider returned error', metadata: { provider_name: 'DeepSeek' } })))), BASE_REQUEST);
     expect(bare).toMatchObject({ kind: 'transient', maxAttempts: 3 });
     expect((bare as ModelError).message).toContain('DeepSeek');
+  });
+});
+
+// `openrouter-upstream.sse` is written to the response schema OpenRouter
+// documents (`openrouter_metadata`, opted into by a header), not recorded:
+// no key here reaches it. `openrouter-reasoning.sse` is a recorded stream, and
+// names its upstream in a top-level `provider` the schema leaves out.
+describe('chat-completions adapter: the upstream an aggregator routed to', () => {
+  const FLASH: ModelRequest = { ...BASE_REQUEST, model: 'deepseek/deepseek-v4.1-flash' };
+
+  it('records the upstream that served the call and the generation id, from the metadata it asks for', async () => {
+    const transport = replay(recorded('openrouter-upstream.sse'));
+    const events = await collect(clientFor('openrouter', transport), FLASH);
+    expect(transport.sent[0].headers.get('x-openrouter-metadata')).toBe('enabled');
+    expect(ofType(events, 'usage')[0].usage).toEqual({
+      inputTokens: 9000,
+      outputTokens: 4,
+      cacheReadTokens: 8704,
+      cost: { amount: 0.0003, currency: 'USD' },
+      provider: 'DeepInfra',
+      generationId: 'gen-1763400000-dsk',
+    });
+  });
+
+  it('records no upstream, and asks for no metadata, from a vendor that routes nothing', async () => {
+    const transport = replay(recorded('openrouter-upstream.sse'));
+    const events = await collect(clientFor('together', transport), FLASH);
+    expect(transport.sent[0].headers.get('x-openrouter-metadata')).toBeNull();
+    expect(ofType(events, 'usage')[0].usage).not.toHaveProperty('provider');
+    expect(ofType(events, 'usage')[0].usage).not.toHaveProperty('generationId');
+    expect(ofType(events, 'provider-state')).toEqual([]);
+  });
+
+  it('asks the next call of the conversation for the upstream that served the last, with fallbacks allowed', async () => {
+    const transport = replay(recorded('openrouter-upstream.sse'), recorded('openrouter-upstream.sse'));
+    const client = clientFor('openrouter', transport);
+    const first = await collect(client, FLASH);
+    expect(transport.sent[0].body.provider).toBeUndefined();
+
+    const [state] = ofType(first, 'provider-state');
+    const reply: ModelRequest['messages'][number] = { role: 'assistant', text: 'Reading it.', providerState: state.state };
+    await collect(client, { ...FLASH, messages: [...FLASH.messages, reply, { role: 'user', text: 'Go on.' }] });
+    expect(transport.sent[1].body.provider).toEqual({ order: ['DeepInfra'], allow_fallbacks: true });
+    // The state is the turn's own: it puts nothing on the wire.
+    expect(transport.sent[1].body.messages).toContainEqual({ role: 'assistant', content: 'Reading it.' });
+  });
+
+  const servedEarlier = (model: string): ModelRequest['messages'] => [
+    { role: 'user', text: 'Run the tests.' },
+    { role: 'assistant', text: 'Ran.', providerState: { dialect: 'chat-completions', data: { upstream: { model, name: 'DeepInfra' } } } },
+    { role: 'user', text: 'Again.' },
+  ];
+
+  it('drops the preference once the conversation switches model', () => {
+    const switched = requestBody('openrouter', { ...BASE_REQUEST, model: 'qwen/qwen3-coder', messages: servedEarlier(FLASH.model) });
+    expect(switched.provider).toBeUndefined();
+    // A later turn on the new model with no upstream of its own still hides the older one.
+    const back = requestBody('openrouter', {
+      ...FLASH,
+      messages: [...servedEarlier(FLASH.model), { role: 'assistant', text: 'Ran.', providerState: { dialect: 'chat-completions', data: { upstream: { model: 'qwen/qwen3-coder', name: 'Alibaba' } } } }],
+    });
+    expect(back.provider).toBeUndefined();
+  });
+
+  it('sends no routing to an endpoint that is not OpenRouter', () => {
+    for (const provider of ['openai_compatible', 'deepinfra', 'together'] as const) {
+      expect(requestBody(provider, { ...FLASH, messages: servedEarlier(FLASH.model) }).provider).toBeUndefined();
+    }
+  });
+
+  it('leaves a Claude model to its cache routing, and a routing shortcut in the model id to the user', () => {
+    const claude = 'anthropic/claude-haiku-5.5';
+    const cached: ModelRequest = { ...BASE_REQUEST, model: claude, system: [{ text: 'stable', cacheBreakpoint: true }], cache: { atLastMessage: true }, messages: servedEarlier(claude) };
+    expect(requestBody('openrouter', cached).provider).toEqual({ order: ['anthropic', 'amazon-bedrock'] });
+    expect(requestBody('openrouter', { ...BASE_REQUEST, model: claude, messages: servedEarlier(claude) }).provider).toBeUndefined();
+    for (const model of ['deepseek/deepseek-v4.1-flash:nitro', 'deepseek/deepseek-v4.1-flash:floor']) {
+      expect(requestBody('openrouter', { ...BASE_REQUEST, model, messages: servedEarlier(model) }).provider).toBeUndefined();
+    }
   });
 });

@@ -72,6 +72,10 @@ export interface UsageRecord {
   compacted?: true;
   /** Set when a subagent made the call; its usage still counts toward the total. */
   subagentId?: string;
+  /** The upstream an aggregator (OpenRouter) routed the call to, by the name it reports: which cache the call could read. */
+  provider?: string;
+  /** The aggregator's id for the call, which its generation lookup takes. */
+  generationId?: string;
 }
 
 /** A model's window as its reporter stated it: what a plan saves of its session's windows (`SessionWindows`). */

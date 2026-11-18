@@ -27,7 +27,7 @@ type AssistantWire = OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam
 };
 type Body = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
   reasoning?: { effort: string };
-  provider?: { order: readonly string[] };
+  provider?: { order: readonly string[]; allow_fallbacks?: boolean };
 };
 
 const KEYLESS_PLACEHOLDER = 'not-needed';
@@ -43,6 +43,19 @@ const MAX_SYSTEM_BREAKPOINTS = 3;
 // routes elsewhere, uncached. A set order turns OpenRouter's sticky routing
 // off, which only ever kept a request on that same scattering endpoint (ADR-0070).
 const CACHE_ROUTING = { order: ['anthropic', 'amazon-bedrock'] } as const;
+
+// OpenRouter balances a model's calls over its upstreams, each with a cache of
+// its own, and its sticky routing holds a conversation only once it has seen a
+// cache hit. So a conversation's later calls name the upstream that served the
+// one before first, fallbacks on, so an outage or a rate limit there still
+// routes elsewhere. The name rides on the assistant turn's provider state, which
+// makes it the conversation's own: no other session, attempt or model sees it
+// (ADR-0070).
+const PREFER_UPSTREAM = (name: string) => ({ order: [name], allow_fallbacks: true });
+// Routing metadata, the upstream's name among it, comes back only when asked for.
+const ROUTING_METADATA = { 'X-OpenRouter-Metadata': 'enabled' } as const;
+// A model id's routing shortcut is the user's own choice of upstream, which wins.
+const USER_ROUTED = /:(nitro|floor)$/;
 
 // Vendors whose models take a top-level `reasoning_effort`; OpenRouter takes
 // its own `reasoning` object and drops it for a model without reasoning.
@@ -78,6 +91,8 @@ interface ChatState {
   field?: 'reasoning' | 'reasoning_content';
   /** OpenRouter's `reasoning_details`, which carry the signatures an Anthropic or Gemini model checks. */
   details?: Array<Record<string, unknown>>;
+  /** The upstream OpenRouter served this turn from, and for which model: another model's upstream is no preference. */
+  upstream?: { model: string; name: string };
 }
 
 export function createChatCompletionsClient(options: AdapterOptions): ModelClient {
@@ -96,7 +111,10 @@ export function createChatCompletionsClient(options: AdapterOptions): ModelClien
 
   const open = async (body: Body, signal?: AbortSignal) => {
     try {
-      return await client.chat.completions.create(body, signal ? { signal } : undefined);
+      return await client.chat.completions.create(body, {
+        ...(signal ? { signal } : {}),
+        ...(provider === 'openrouter' ? { headers: ROUTING_METADATA } : {}),
+      });
     } catch (err) {
       throw toModelError(err, signal);
     }
@@ -116,7 +134,7 @@ export function createChatCompletionsClient(options: AdapterOptions): ModelClien
         body = requestBody(provider, request, true);
         chunks = await open(body, signal);
       }
-      yield* readStream(provider, chunks, signal);
+      yield* readStream(provider, request.model, chunks, signal);
     },
   };
 }
@@ -138,8 +156,9 @@ export function requestBody(provider: AiProvider, request: ModelRequest, without
     stream: true,
     ...(NO_STREAM_OPTIONS.has(provider) ? {} : { stream_options: { include_usage: true } }),
     ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
-    ...(explicitCache && asksForCache(request) ? { provider: CACHE_ROUTING } : {}),
   };
+  const routing = routingFor(provider, request, explicitCache);
+  if (routing) body.provider = routing;
   if (request.tools.length > 0) {
     body.tools = request.tools.map((t) => ({
       type: 'function',
@@ -153,6 +172,25 @@ export function requestBody(provider: AiProvider, request: ModelRequest, without
     else body.reasoning_effort = EFFORT[request.effort];
   }
   return body;
+}
+
+function routingFor(provider: AiProvider, request: ModelRequest, explicitCache: boolean): Body['provider'] {
+  if (provider !== 'openrouter') return undefined;
+  if (explicitCache) return asksForCache(request) ? CACHE_ROUTING : undefined;
+  if (USER_ROUTED.test(request.model)) return undefined;
+  const name = lastUpstream(request);
+  return name ? PREFER_UPSTREAM(name) : undefined;
+}
+
+/** The upstream the conversation's latest routed turn came from, unless that turn was another model's: a switch starts over. */
+function lastUpstream(request: ModelRequest): string | undefined {
+  for (let i = request.messages.length - 1; i >= 0; i--) {
+    const message = request.messages[i];
+    if (message.role !== 'assistant' || message.providerState?.dialect !== 'chat-completions') continue;
+    const upstream = readState(message.providerState.data)?.upstream;
+    if (upstream) return upstream.model === request.model ? upstream.name : undefined;
+  }
+  return undefined;
 }
 
 function asksForCache(request: ModelRequest): boolean {
@@ -218,11 +256,12 @@ function wireMessage(provider: AiProvider, message: ModelMessage, cacheHere: boo
 
 function readState(data: unknown): ChatState | undefined {
   if (!data || typeof data !== 'object') return undefined;
-  const { reasoning, field, details } = data as Record<string, unknown>;
+  const { reasoning, field, details, upstream } = data as Record<string, unknown>;
   const state: ChatState = {};
   if (typeof reasoning === 'string') state.reasoning = reasoning;
   if (field === 'reasoning' || field === 'reasoning_content') state.field = field;
   if (Array.isArray(details)) state.details = details.filter(isRecord);
+  if (isRecord(upstream) && typeof upstream.model === 'string' && typeof upstream.name === 'string') state.upstream = { model: upstream.model, name: upstream.name };
   return state;
 }
 
@@ -252,6 +291,29 @@ interface ChunkUsage {
   cost?: number;
 }
 
+/**
+ * Where OpenRouter names the upstream that served a call, beyond the SDK's
+ * types: its documented `openrouter_metadata`, sent when asked for, and the
+ * top-level `provider` its streams carry, which that schema leaves out.
+ */
+interface Routed {
+  provider?: unknown;
+  openrouter_metadata?: unknown;
+}
+
+function servedBy(chunk: Routed): string | undefined {
+  const meta = chunk.openrouter_metadata;
+  if (isRecord(meta)) {
+    const endpoints = isRecord(meta.endpoints) && Array.isArray(meta.endpoints.available) ? meta.endpoints.available.filter(isRecord) : [];
+    const selected = endpoints.find((e) => e.selected === true)?.provider;
+    if (typeof selected === 'string' && selected) return selected;
+    const attempts = Array.isArray(meta.attempts) ? meta.attempts.filter(isRecord) : [];
+    const answered = attempts.filter((a) => typeof a.status === 'number' && a.status >= 200 && a.status < 300).at(-1)?.provider;
+    if (typeof answered === 'string' && answered) return answered;
+  }
+  return typeof chunk.provider === 'string' && chunk.provider ? chunk.provider : undefined;
+}
+
 interface PendingCall {
   id: string;
   name: string;
@@ -261,6 +323,7 @@ interface PendingCall {
 
 async function* readStream(
   provider: AiProvider,
+  model: string,
   chunks: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>,
   signal?: AbortSignal,
 ): AsyncIterable<ModelEvent> {
@@ -268,10 +331,17 @@ async function* readStream(
   const state: ChatState = {};
   let finishReason: string | undefined;
   let usage: ChunkUsage | undefined;
+  const routed = provider === 'openrouter';
+  let generationId: string | undefined;
+  let upstream: string | undefined;
 
   try {
     for await (const chunk of chunks) {
       if (chunk.usage) usage = chunk.usage as ChunkUsage;
+      if (routed) {
+        if (chunk.id) generationId = chunk.id;
+        upstream = servedBy(chunk as Routed) ?? upstream;
+      }
       const choice = chunk.choices[0];
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
@@ -320,8 +390,13 @@ async function* readStream(
   const completed = finishReason === 'length' ? started.filter(cameThroughWhole) : started;
   for (const call of completed) yield { type: 'tool-call-complete', call };
   const reported = usage && modelUsage(provider, usage);
-  if (reported) yield { type: 'usage', usage: reported };
-  if (state.reasoning !== undefined || state.details) yield { type: 'provider-state', state: { dialect: 'chat-completions', data: state } };
+  if (reported) {
+    if (upstream) reported.provider = upstream;
+    if (generationId) reported.generationId = generationId;
+    yield { type: 'usage', usage: reported };
+  }
+  if (upstream) state.upstream = { model, name: upstream };
+  if (state.reasoning !== undefined || state.details || state.upstream) yield { type: 'provider-state', state: { dialect: 'chat-completions', data: state } };
   yield { type: 'finish', reason: finish(finishReason, completed.length > 0) };
 }
 
