@@ -23,7 +23,7 @@ import { hasGitEntry, workspaceRepoGroup } from './repoGroup';
 import { NEVER_SCANNED } from './worktreeBootstrap';
 import { stateRootOf } from './stateRoot';
 import {
-  allowedPath, readOnlyGitArgs, readSavedPatch, readTaskDiff, TASK_DIFF_NO_RECORD, TASK_DIFF_NO_RUN, TASK_DIFF_READ_ONLY, taskDiffUnavailable,
+  allowedPath, readOnlyGitArgs, readSavedPatch, readTaskDiff, taskForkPoint, TASK_DIFF_NO_RECORD, TASK_DIFF_NO_RUN, TASK_DIFF_READ_ONLY, taskDiffUnavailable,
   type TaskDiffRead, type TaskDiffResult,
 } from './taskDiffRead';
 
@@ -76,7 +76,7 @@ interface Scope {
   cwd: string;
   /** The scope root's place in its repository, `/`-terminated or empty. */
   prefix: string;
-  /** What the scope's changes are against: the checkout's HEAD, a run's or a task's starting commit. Null on an unborn branch. */
+  /** What the scope's changes are against: the checkout's HEAD, a run's starting commit or a task's fork point. Null on an unborn branch. */
   base: string | null;
   /** Which task changed a path: the task a task scope is, or the run's landings on its integration branch. */
   changedBy: { task: string } | { landings: Array<{ taskId: string; merge: string }> } | null;
@@ -327,7 +327,10 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const entry = record.repos[repo];
     if (!entry) gone(`Task "${target.taskId}" has no share of repository ${repo}.`);
     const prefix = await prefixOf(runRepo.root, repo);
-    const base = entry.baseRef && SHA.test(entry.baseRef) ? entry.baseRef : null;
+    const start = entry.baseRef && SHA.test(entry.baseRef) ? entry.baseRef : null;
+    // What the task took in from its siblings is theirs: its changes start at its fork point, as its diff's do (ADR-0013).
+    const forkOf = async (cwd: string, head: string): Promise<string | null> => start === null ? null
+      : taskForkPoint(invoker, cwd, await readOnlyGitArgs(invoker, cwd), { start, head, landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrationBranch: runRepo.integrationBranch }) });
     const changedBy = { task: record.taskId };
     if (record.status !== 'merged' && fs.existsSync(entry.worktree)) {
       const worktree = fs.realpathSync(entry.worktree);
@@ -338,14 +341,14 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
       const head = await tryGit(invoker, root, ['rev-parse', '--verify', '-q', 'HEAD^{commit}']);
       return {
         at: { repo, scope: 'task', source: 'disk', commit: head.ok ? head.stdout.trim() : null, branch: record.branch },
-        root, cwd: root, prefix, base, changedBy, linked: entry.linked,
+        root, cwd: root, prefix, base: head.ok ? await forkOf(root, 'HEAD') : start, changedBy, linked: entry.linked,
       };
     }
     const commit = await branchTip(runRepo.root, record.branch);
     if (commit === null) gone(`Task "${target.taskId}" is gone: its worktree was pruned and its branch ${record.branch} deleted.`);
     return {
       at: { repo, scope: 'task', source: 'commit', commit, branch: record.branch },
-      root: null, cwd: runRepo.root, prefix, base, changedBy, linked: [],
+      root: null, cwd: runRepo.root, prefix, base: await forkOf(runRepo.root, commit), changedBy, linked: [],
     };
   }
 

@@ -8,7 +8,7 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { composeCompactionNudge, delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
+import { composeCompactionNudge, delegatedWorkNote, landsBeside, LOOP_VERDICT_REMINDER, summarizeOutput, type LandingBeside } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { runningLongThreshold, type RunningLongEvent } from './RunningLong';
 import type { PlanStore } from './PlanStore';
@@ -313,7 +313,7 @@ export interface AttemptsDeps {
   /** The child a delegated task's last attempt left goes, as its next attempt starts afresh (ADR-0055 D15). */
   discardChild?: (task: Readonly<Task>) => Promise<void>;
   /** A passed attempt's work, or a repair's, onto the integration branch, while the attempt stays live. */
-  landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt'>;
+  landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt' | 'takeInMessage'>;
   registry: RunnerRegistry | null;
   /** The workspace root, read at call time — VS Code can change it. */
   workspaceRoot: () => string;
@@ -1100,6 +1100,23 @@ export class Attempts {
   }
 
   /**
+   * Where a change in an isolated run takes in what its siblings land while it
+   * runs (ADR-0013): nothing when nothing of the plan can land beside it. A
+   * sibling's work lands as its own attempt's would: a person's task has none,
+   * and what is read-only or ops is its work's, read as `workOf` reads it.
+   */
+  private landingBeside(task: Task): { beside?: LandingBeside } {
+    const repos = this.deps.runs.taskRepos(task.id);
+    const landsWork = (sibling: Task): boolean => {
+      if (sibling.type === 'user') return false;
+      const work = this.workOf(sibling);
+      return work === 'change' || work === 'delegated';
+    };
+    if (repos.length === 0 || !landsBeside(task, this.deps.store.planTasks, landsWork)) return {};
+    return { beside: { integrationBranch: repos[0].integrationBranch, message: this.deps.landing.takeInMessage(task), repos: repos.map((r) => r.path) } };
+  }
+
+  /**
    * The runner's half of a start: the skills read where the attempt runs, the
    * prompt its kind is told, and the runner spawned on its model and mode. A
    * read-only attempt is given its shell, which may write its task workspace,
@@ -1124,6 +1141,7 @@ export class Attempts {
       previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
       previousHandoff: this.deps.previousHandoffFromLog,
       previousRound: this.host.previousRound(task.id),
+      ...(worktree && (kind.kind === 'change' || kind.kind === 'carryOver') ? this.landingBeside(task) : {}),
     });
     // The one push down a tree, and only to an attempt its plan's prompt starts: a continuing one was told at its start (ADR-0057 R10).
     const pins = board && takesSkills(kind) ? board.pins() : [];
