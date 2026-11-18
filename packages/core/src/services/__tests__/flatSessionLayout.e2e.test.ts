@@ -99,8 +99,8 @@ describe('a flat session on disk', () => {
     const saved = JSON.parse(readFileSync(join(root, file), 'utf8')) as { meta: object; plan: { isolation: { run: { tasks: Record<string, object> } } } };
     expect(Object.keys(saved.meta).sort()).toEqual(['createdAt', 'goal', 'id', 'runners', 'status', 'taskCount', 'updatedAt']);
     const { run } = saved.plan.isolation;
-    expect(Object.keys(run).sort()).toEqual(['carried', 'id', 'keepsEveryLanding', 'landedOn', 'landedTasks', 'landings', 'repos', 'shared', 'sharedRepos', 'tasks', 'workspaceRoot']);
-    expect(run).toMatchObject({ id: 'run00001', workspaceRoot: root });
+    expect(Object.keys(run).sort()).toEqual(['carried', 'id', 'keepsEveryLanding', 'landedOn', 'landedTasks', 'landings', 'repos', 'session', 'shared', 'sharedRepos', 'tasks', 'workspaceRoot']);
+    expect(run).toMatchObject({ id: 'run00001', session: 'session-feedface', workspaceRoot: root });
     expect(Object.keys(run.tasks.t1).sort()).toEqual(['branch', 'order', 'repos', 'status', 'taskId', 'title', 'workspace']);
     session.destroy();
   });
