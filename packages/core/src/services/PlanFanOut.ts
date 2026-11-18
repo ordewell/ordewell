@@ -1,8 +1,4 @@
-import { createTask, runsAsOps, type RunnerId, type Task } from '../models/Task';
-import type { RunnerModeInfo } from './ModeResolver';
-import { escapeControlCharsInStrings, extractObjectsWithKey, stripTrailingCommas } from './JsonExtractor';
-import { checkPlanInvariants } from './PlannedTask';
-import { applyChainReview, CHAIN_REVIEW_KEY, CHAIN_REVIEW_MIN, chainQuestion, reviewHeader, type ChainChange } from './PlanChainReview';
+import { runsAsOps, type Task } from '../models/Task';
 
 /**
  * A one-shot plan that fans out over code whose parts call each other (a
@@ -11,14 +7,16 @@ import { applyChainReview, CHAIN_REVIEW_KEY, CHAIN_REVIEW_MIN, chainQuestion, re
  * its own worktree, and one check after them all. The planner was told so in
  * words and still wrote three opening tasks in series, none, or no closing
  * check, and its slices ran on past their best test count against siblings
- * that were still stubs. So the shape is read from the dependencies alone, a
- * fault in it is put to the planner in the review call ADR-0072 already makes,
- * and each role's brief gets a note Ordewell writes the same way every time.
+ * that were still stubs. So the shape is read from the dependencies alone and
+ * each role's brief gets a note Ordewell writes the same way every time. Its
+ * faults are data for the log and the bench: asked about them in the review
+ * call, the planner made its plans worse, so nothing asks it (ADR-0072 R5).
  */
 
 /** A plan fans out when at least this many of its slices sit at one level: they run at once. */
 export const FAN_OUT_MIN = 4;
 
+/** Data for the research log and the bench: nothing asks the planner about a fault (ADR-0072 R5). */
 export type FanOutFault = 'serial-opening' | 'no-opening' | 'no-closing';
 
 export interface FanOutShape {
@@ -26,11 +24,11 @@ export interface FanOutShape {
   wide: boolean;
   /** The most slices one level holds. */
   width: number;
-  /** Change tasks every slice waits for, first to last: what runs before the fan-out. */
+  /** Change tasks every slice waits for, first to last: what runs before the fan-out. The first is the opening task; one after it is a shared module. */
   gates: Task[];
-  /** Change tasks that are not ordered against every other change task. */
+  /** Change tasks that are not ordered against every other change task, then a change task the closing check waits for that waits for all of those. */
   slices: Task[];
-  /** Tasks that wait for every slice, a loop's check among them, nearest first. */
+  /** Tasks that wait for every slice and can fix, a loop's check among them: the closing check, which no other waits for, first. */
   closers: Task[];
   /** Dependencies from one slice on another. */
   sliceEdges: number;
@@ -77,7 +75,8 @@ function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: 
  * waits for every slice and can fix what still fails: an AI task that edits,
  * or a loop's check whose body holds one. An ops task, a manual one and a
  * script that is not a loop's check never count, since a script after
- * everything may be a push.
+ * everything may be a push. The closing check is the closer no other waits
+ * for; a change task it waits for is a slice too, unless it is the only one.
  */
 export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const g = graph(tasks);
@@ -87,15 +86,23 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const change = tasks.filter((t) => t.type === 'ai' && !t.readOnly && !runsAsOps(t) && !t.research && !t.loop && !body.has(t.id));
   const ordered = (a: Task, b: Task) => anc(a).has(b.id) || anc(b).has(a.id);
   const spine = new Set(change.filter((t) => change.every((o) => o === t || ordered(t, o))));
-  const slices = change.filter((t) => !spine.has(t));
-  if (slices.length < 2) return NONE;
+  const parallel = change.filter((t) => !spine.has(t));
+  if (parallel.length < 2) return NONE;
   const byLevel = (a: Task, b: Task) => g.level.get(a.id)! - g.level.get(b.id)!;
-  const gates = [...spine].filter((t) => slices.every((s) => anc(s).has(t.id))).sort(byLevel);
+  const gates = [...spine].filter((t) => parallel.every((s) => anc(s).has(t.id))).sort(byLevel);
   const fixer = new Set(tasks.filter((t) => t.type === 'ai' && !t.readOnly).map((t) => t.id));
   const closes = (t: Task) => !body.has(t.id) && t.type !== 'user' && !t.ops
     && (fixer.has(t.id) || (t.loop?.body ?? []).some((id) => fixer.has(id)))
-    && slices.every((s) => anc(t).has(s.id));
-  const closers = tasks.filter(closes).sort(byLevel);
+    && parallel.every((s) => anc(t).has(s.id));
+  const candidates = tasks.filter(closes).sort(byLevel);
+  // The closing check is the candidate nothing else after the slices waits for, the
+  // deepest if several. A change task it waits for only implements one more module
+  // after them, so it is a slice of the last level, told as the others are.
+  const last = candidates.filter((c) => !candidates.some((o) => anc(o).has(c.id)));
+  const closer = last[last.length - 1];
+  const late = new Set(candidates.filter((c) => closer && c !== closer && spine.has(c) && anc(closer).has(c.id)));
+  const slices = [...parallel, ...candidates.filter((c) => late.has(c))];
+  const closers = candidates.filter((c) => !late.has(c)).sort((a, b) => Number(b === closer) - Number(a === closer));
   const perLevel = new Map<number, number>();
   for (const s of slices) perLevel.set(g.level.get(s.id)!, (perLevel.get(g.level.get(s.id)!) ?? 0) + 1);
   const width = Math.max(...perLevel.values());
@@ -104,141 +111,17 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const wide = width >= FAN_OUT_MIN;
   if (!wide) return { ...NONE, width };
   const faults: FanOutFault[] = [];
-  if (gates.length >= 2) faults.push('serial-opening');
+  // A later gate that waits for the opening task alone (an install or a manual step
+  // aside) is a shared module the slices build on, not a second opening task.
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const outside = (id: string) => { const d = byId.get(id); return !d || runsAsOps(d) || d.type === 'user'; };
+  if (gates.slice(1).some((t) => !t.dependencies.every((d) => d === gates[0].id || outside(d)))) faults.push('serial-opening');
   if (gates.length === 0) faults.push('no-opening');
   if (closers.length === 0) faults.push('no-closing');
   return { wide, width, gates, slices, closers, sliceEdges, faults };
 }
 
 const ref = (t: Pick<Task, 'title' | 'id'>) => `"${t.title}" (${t.id})`;
-
-/** The questions a fault puts, each the fault's own: nothing is asked of a shape that has none. */
-function faultQuestions(shape: FanOutShape): string[] {
-  const lines: string[] = [`This plan fans out: up to ${shape.width} of its slices run at once.`];
-  if (shape.faults.includes('serial-opening')) {
-    lines.push(`Before any slice starts, ${shape.gates.length} tasks run one after another: ${shape.gates.map(ref).join(' → ')}. Every slice waits for all of them, so only one task should come first: the one that makes the project import and collect its tests, and nothing more. Make that task depend on nothing. Of the others, keep one before the slices only where it is one of a few shared modules most slices' tests build their inputs with, and make it depend on that first task alone; make every other one a slice that depends on that first task alone.`);
-  }
-  if (shape.faults.includes('no-opening')) {
-    lines.push('No task runs before the slices. If the project does not import or collect its tests as it stands, add one task that restores just that: it may edit whichever files block it, whatever task owns them, implements nothing beyond that, and is checked by the project importing and its tests collecting. Every slice will wait for it. If the project imports and collects its tests already, add none.');
-  }
-  if (shape.faults.includes('no-closing')) {
-    lines.push('No task runs after every slice, so nothing runs the whole test suite once they have all ended. Add one closing check that runs it and fixes what still fails; it will wait for every slice.');
-  }
-  return lines;
-}
-
-export const ADD_TASKS_KEY = 'addTasks';
-
-const SHAPE_REPLY = `Reply as one JSON object and nothing else: {"${CHAIN_REVIEW_KEY}":[{"id":"<task id>","dependencies":["<task id>", ...]}],"${ADD_TASKS_KEY}":[{"id":"<new task id>","role":"restoring|closing","title":"<title>","prompt":"<its whole brief>"}]}. In "${CHAIN_REVIEW_KEY}" list only the tasks whose dependencies change, each with its complete new list, by the ids above; an empty list makes the task wait for none. In "${ADD_TASKS_KEY}" put only a task the questions above ask you to add; Ordewell sets what it waits for and what waits for it. When nothing changes, reply {"${CHAIN_REVIEW_KEY}":[],"${ADD_TASKS_KEY}":[]}.`;
-
-/**
- * The review message for a plan whose fan-out has a fault: the chain question
- * as measured when the chain reaches {@link CHAIN_REVIEW_MIN}, then a question
- * for each fault, then a reply that may add the one task a fault asks for.
- * A plan with no fault is asked {@link chainReviewMessage}, word for word.
- */
-export function shapeReviewMessage(tasks: readonly Task[], chain: readonly Task[], shape: FanOutShape, alone = false): string {
-  return [
-    ...reviewHeader(tasks, alone),
-    ...(chain.length >= CHAIN_REVIEW_MIN ? [...chainQuestion(chain), ''] : []),
-    ...faultQuestions(shape),
-    SHAPE_REPLY,
-  ].join('\n');
-}
-
-export type ShapeReviewResult = { ok: true; tasks: Task[]; changes: ChainChange[]; added: Task[]; ignored: string[] } | { ok: false; error: string };
-
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-/**
- * The reply applied: each task it adds, wired by Ordewell as its role says (a
- * restoring task waits for what every slice waited for, an install or a manual
- * step it is checked against, and every slice waits for it; a closing
- * check waits for every slice, and so does a push or a manual step that waited
- * for every slice), then its dependency lists, held to everything
- * {@link applyChainReview} holds. A task is added only for the fault that asks
- * for it, and any fault in the reply rejects it whole.
- */
-export function applyShapeReview(
-  tasks: readonly Task[],
-  shape: FanOutShape,
-  reply: string,
-  runners: readonly RunnerId[],
-  runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
-): ShapeReviewResult {
-  const { matches } = extractObjectsWithKey(reply, CHAIN_REVIEW_KEY);
-  if (matches.length === 0) return { ok: false, error: `no {"${CHAIN_REVIEW_KEY}":[...]} object in the reply` };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripTrailingCommas(escapeControlCharsInStrings(matches[matches.length - 1])));
-  } catch (err) {
-    return { ok: false, error: `reply was not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
-  }
-  const entries = isRecord(parsed) ? parsed[ADD_TASKS_KEY] ?? [] : [];
-  if (!Array.isArray(entries)) return { ok: false, error: `"${ADD_TASKS_KEY}" is not a list` };
-  const ids = new Set(tasks.flatMap(function all(t: Task): string[] { return [t.id, ...t.subtasks.flatMap(all)]; }));
-  const template = shape.slices[0];
-  const top = Math.max(0, ...tasks.map((t) => t.order));
-  const sliceIds = new Set(shape.slices.map((s) => s.id));
-  const shared = shape.slices[0].dependencies.filter((d) => !sliceIds.has(d) && shape.slices.every((s) => s.dependencies.includes(d)));
-  const added: Task[] = [];
-  let restoring: Task | undefined;
-  let closing: Task | undefined;
-  const roles = new Set<string>();
-  for (const e of entries) {
-    if (!isRecord(e) || typeof e.id !== 'string' || !e.id || typeof e.title !== 'string' || !e.title.trim() || typeof e.prompt !== 'string' || !e.prompt.trim()) {
-      return { ok: false, error: `malformed task to add ${JSON.stringify(e)}` };
-    }
-    const role = e.role;
-    if (role !== 'restoring' && role !== 'closing') return { ok: false, error: `task "${e.id}" has role ${JSON.stringify(role)}, not "restoring" or "closing"` };
-    if (roles.has(role)) return { ok: false, error: `more than one ${role} task to add` };
-    if (!shape.faults.includes(role === 'restoring' ? 'no-opening' : 'no-closing')) return { ok: false, error: `the plan already has a ${role === 'restoring' ? 'task before its slices' : 'closing check'}, so none is added` };
-    if (ids.has(e.id)) return { ok: false, error: `task "${e.id}" to add has an id the plan already has` };
-    roles.add(role);
-    ids.add(e.id);
-    const task = createTask({
-      id: e.id,
-      order: top + 1 + added.length,
-      title: e.title.trim(),
-      description: e.title.trim(),
-      prompt: e.prompt,
-      dependencies: role === 'closing' ? shape.slices.map((s) => s.id) : [...new Set(shared)],
-      assignedRunner: template.assignedRunner,
-      assignedModel: template.assignedModel,
-      taskMode: template.taskMode,
-      autonomy: template.autonomy ?? 'AFK',
-      sliceType: template.sliceType ?? 'AFK',
-    });
-    added.push(task);
-    if (role === 'restoring') restoring = task;
-    else closing = task;
-  }
-  // A push or a manual step after every slice acts on what the closing check fixes too, so it waits for it (ADR-0072 R1).
-  const anc = closing ? graph(tasks)?.anc : undefined;
-  const actsAfterSlices = (t: Task) => (runsAsOps(t) || t.type === 'user') && shape.slices.every((s) => anc?.get(t.id)?.has(s.id));
-  const augmented = [
-    ...tasks.map((t) => {
-      const deps = [
-        ...t.dependencies,
-        ...(restoring && sliceIds.has(t.id) ? [restoring.id] : []),
-        ...(closing && actsAfterSlices(t) ? [closing.id] : []),
-      ];
-      return deps.length === t.dependencies.length ? t : { ...t, dependencies: deps };
-    }),
-    ...added,
-  ];
-  const applied = applyChainReview(augmented, reply, runners, runnerModes);
-  if (!applied.ok) return applied;
-  // A task moved from before the slices to beside them is a slice the closing check must wait for too: Ordewell adds that wait, never drops one.
-  const closer = shape.closers[0] ?? closing;
-  const now = fanOutShape(applied.tasks);
-  if (!closer || now.closers.some((c) => c.id === closer.id)) return { ...applied, added };
-  const missing = now.slices.map((s) => s.id).filter((id) => id !== closer.id);
-  const closed = applied.tasks.map((t) => (t.id === closer.id ? { ...t, dependencies: [...new Set([...t.dependencies, ...missing])] } : t));
-  const errors = checkPlanInvariants(closed, runners, runnerModes);
-  if (errors.length) return { ok: false, error: errors[0].message };
-  return { ...applied, tasks: closed, added };
-}
 
 /** Repository paths a brief names, for the slices' map of who owns what. */
 const PATH = /(?<![\w/.-])(?:[\w.-]+\/)*[\w-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|rb|php|c|h|cc|cpp|hpp|cs|swift|scala)\b/g;
@@ -258,6 +141,33 @@ function ownershipTable(shape: FanOutShape): string {
   }).join('\n');
 }
 
+/** The most a slice's table holds: every slice carries it, so a plan of forty slices would put kilobytes in each brief. */
+export const SLICE_TABLE_MAX = 2000;
+
+/**
+ * A slice's table: one line a task, with the first path its brief names, cut
+ * at {@link SLICE_TABLE_MAX} with a line saying how many more there are and
+ * where the rest is: the opening task's module map, which its own note's
+ * whole table lets it write.
+ */
+function sliceTable(shape: FanOutShape): string {
+  const lines = [...shape.gates, ...shape.slices].map((t) => {
+    const [first] = namedPaths(t);
+    return `- ${ref(t)}${first ? `: ${first}` : ''}`;
+  });
+  const gate = shape.gates[0];
+  const more = (n: number) => (gate
+    ? `- … and ${n} more, each with the paths it owns in the module map at the end of ${ref(gate)}'s report.`
+    : `- … and ${n} more, not listed here: a module your brief does not name is another task's.`);
+  if (lines.join('\n').length <= SLICE_TABLE_MAX) return lines.join('\n');
+  const kept: string[] = [];
+  for (const line of lines) {
+    if ([...kept, line, more(lines.length - kept.length - 1)].join('\n').length > SLICE_TABLE_MAX) break;
+    kept.push(line);
+  }
+  return [...kept, more(lines.length - kept.length)].join('\n');
+}
+
 /** The first gate's note: the slices wait for it, so it is short, and its report carries the map they start from. */
 export function openingNote(shape: FanOutShape): string {
   return [
@@ -272,7 +182,7 @@ export function sliceNote(shape: FanOutShape): string {
   const closer = shape.closers[0];
   return [
     `Plan shape: this task is one of ${shape.slices.length} slices${gate ? ` that start once ${ref(gate)} has landed` : ''}, and ${ref(closer)} runs the whole test suite once every slice has ended.${gate ? ` Read the module map at the end of ${ref(gate)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
-    ownershipTable(shape),
+    sliceTable(shape),
     `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed in your worktree, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are ${ref(closer)}'s. Do not write, stub or shim another slice's code to make them pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
   ].join('\n');
 }

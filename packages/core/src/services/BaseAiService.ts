@@ -8,7 +8,7 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply, repairLoop } from './PlanRepair';
 import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain } from './PlanChainReview';
-import { applyShapeReview, fanOutShape, shapeReviewMessage, withShapeNotes } from './PlanFanOut';
+import { fanOutShape, withShapeNotes } from './PlanFanOut';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -750,21 +750,16 @@ export abstract class BaseAiService {
   ): Promise<Task[]> {
     const chain = longestChain(tasks);
     const note = (content: string) => log?.push({ id: `cr-${Date.now()}`, type: 'system', content, timestamp: new Date().toISOString() });
-    // A fan-out's faults ride on the same one call; a plan with none is asked the chain question word for word.
-    const shape = fanOutShape(tasks);
-    const faults = shape.faults;
+    // The role notes are Ordewell's, written on the plan that stands, at no call: nothing asks the planner about the fan-out (ADR-0072 R5).
     const shaped = (final: Task[]) => {
       const out = withShapeNotes(final);
-      const last = fanOutShape(out);
-      if (out !== final || faults.length) note(`fan-out: ${last.width} at once, ${last.gates.length} before, ${last.closers.length} after${last.faults.length ? `, faults ${last.faults.join(', ')}` : ''}${out !== final ? '; role notes added' : ''}`);
+      if (out !== final) {
+        const s = fanOutShape(out);
+        note(`fan-out: ${s.width} at once, ${s.gates.length} before, ${s.closers.length} after${s.faults.length ? `, faults ${s.faults.join(', ')}` : ''}; role notes added`);
+      }
       return out;
     };
-    if (chain.length < CHAIN_REVIEW_MIN && faults.length === 0) return shaped(tasks);
-    const label = faults.length ? `shape review (${faults.join(', ')})` : 'chain review';
-    const message = (alone: boolean) => (faults.length ? shapeReviewMessage(tasks, chain, shape, alone) : chainReviewMessage(tasks, chain, alone));
-    const apply = (reply: string) => (faults.length
-      ? applyShapeReview(tasks, shape, reply, runners, runnerModes)
-      : { ...applyChainReview(tasks, reply, runners, runnerModes), added: [] as Task[] });
+    if (chain.length < CHAIN_REVIEW_MIN) return shaped(tasks);
     // The reply is a list of changes, not a plan, so it streams to no plan view.
     // Low effort: each edge is a yes-or-no question, and a reasoning model left at
     // its default can think past the output limit before it writes the list.
@@ -788,20 +783,20 @@ export abstract class BaseAiService {
           largestReply,
         },
       );
-      return { applied: apply(reply), cutOff, out };
+      return { applied: applyChainReview(tasks, reply, runners, runnerModes), cutOff, out };
     };
     type Asked = Awaited<ReturnType<typeof ask>>;
     try {
       const prompt = buildPlanWithResults(userDescription, contextStr, compactResearchResults(researchResults), modelsByRunner, runners, runnerModes, modes);
       const { applied, cutOff, out } = await repairLoop<Asked, Asked>({
-        first: () => ask(prompt, message(false), false),
+        first: () => ask(prompt, chainReviewMessage(tasks, chain), false),
         // Only a cut-off is asked again (ADR-0072 R2): an invalid reply the model finished would come back the same.
         interpret: (r) => {
           if (r.applied.ok || !r.cutOff) return { done: r };
           // A function runs only when the re-ask follows, so a second cut-off is not noted as asked again.
           const corrective = () => {
-            note(`${label}: ${chain.length}, reply cut off at the output limit${r.out}; asked once more with the plan alone`);
-            return message(true);
+            note(`chain review: ${chain.length}, reply cut off at the output limit${r.out}; asked once more with the plan alone`);
+            return chainReviewMessage(tasks, chain, true);
           };
           return { retry: { errors: [r.applied.error], corrective } };
         },
@@ -810,24 +805,18 @@ export abstract class BaseAiService {
         onExhausted: ({ reply }) => reply,
       });
       if (!applied.ok) {
-        note(`${label}: ${chain.length}, first plan kept: ${cutOff ? 'reply cut off at the output limit; ' : ''}${applied.error}${out}`);
+        note(`chain review: ${chain.length}, first plan kept: ${cutOff ? 'reply cut off at the output limit; ' : ''}${applied.error}${out}`);
         return shaped(tasks);
       }
       const after = longestChain(applied.tasks);
-      // A fault mended may lengthen the chain by the task it added; with no fault, only a shorter chain is kept (ADR-0072 R1).
-      const left = fanOutShape(applied.tasks).faults.length;
-      const kept = after.length > 0 && (faults.length === 0
-        ? after.length < chain.length
-        : (left < faults.length && after.length <= chain.length + applied.added.length) || (left <= faults.length && after.length < chain.length));
-      const title = (id: string) => applied.tasks.find((t) => t.id === id)?.title ?? id;
+      const kept = after.length > 0 && after.length < chain.length;
+      const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
       const changed = applied.changes.map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}`);
-      const why = faults.length ? `faults ${faults.length} -> ${left}` : 'not shorter';
-      const adds = applied.added.map((t) => `; added "${t.title}"`).join('');
-      note(`${label}: ${chain.length} -> ${after.length}, ${kept ? 'kept' : `first plan kept, ${why}`}${faults.length && kept ? ` (faults ${faults.length} -> ${left})` : ''}${adds}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
+      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
       return shaped(kept ? applied.tasks : tasks);
     } catch (err) {
       if (signal?.aborted) throw err;
-      note(`${label}: ${chain.length}, failed: ${err instanceof Error ? err.message : String(err)}`);
+      note(`chain review: ${chain.length}, failed: ${err instanceof Error ? err.message : String(err)}`);
       return shaped(tasks);
     }
   }

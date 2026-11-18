@@ -49,3 +49,28 @@ test('a read-only check is the closing check only through its loop\'s fix, whose
   const alone = { tasks: [t('r', []), ...slices(4, ['r']), t('review', sliceIds(4), { readOnly: true, prompt: `Review it.\n\n${note}` })] };
   assert.deepEqual(fanOutProperties(alone).numbers.faults, ['no-closing']);
 });
+
+test('a shared module that waits for the opening task alone is not a second opening task', () => {
+  const plan = { tasks: [t('r', []), t('core', ['r']), ...slices(5, ['core']), t('close', sliceIds(5))] };
+  const p = fanOutProperties(plan, { baseBroken: true });
+  assert.deepEqual(p.numbers.faults, []);
+  assert.equal(p.P1_oneOpening && p.P2_openingFirstAndAlone && p.P3_slicesParallel, true);
+  const chained = { tasks: [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('close', sliceIds(5))] };
+  assert.equal(fanOutProperties(chained, { baseBroken: true }).P2_openingFirstAndAlone, false);
+});
+
+test('an opening task that waits for an install or a manual step alone is the one opening task', () => {
+  const plan = { tasks: [t('install', [], { type: 'script', commands: [['npm', 'ci']] }), t('setup', [], { type: 'user' }), t('r', ['install', 'setup']), ...slices(4, ['r']), t('close', sliceIds(4))] };
+  assert.equal(fanOutProperties(plan, { baseBroken: true }).P1_oneOpening, true);
+});
+
+test('the closing check is the task no other waits for; a module task it waits for is a slice', () => {
+  const note = 'Plan shape: this check runs after the 5 slices. … a slice that did not land …';
+  const plan = { tasks: [t('r', []), ...slices(4, ['r']), t('m', sliceIds(4)), t('verify', [...sliceIds(4), 'm'], { prompt: `Verify it.\n\n${note}` })] };
+  const s = fanOutShape(plan);
+  assert.equal(s.closers[0].id, 'verify');
+  assert.deepEqual(s.slices.map((x) => x.id), [...sliceIds(4), 'm']);
+  const p = fanOutProperties(plan);
+  assert.equal(p.P6_closingToldOfUnlanded, true);
+  assert.equal(p.P3_slicesParallel, true);
+});

@@ -607,17 +607,18 @@ planner's own next `submit_plan` changes the plan. Never a refusal.
 
 **Fan-out shape** (`PlanFanOut.ts`, ADR-0072 R5) — a one-shot plan's slices
 that run at once, four or more at one level, read from its dependencies alone,
-with the roles around them. The **opening task** is the change task every slice
-waits for: the one that makes the project import and collect its tests (a
-**restoring task** when the review adds it). The **slices** are the change
-tasks not ordered against every other one, each done when the code in its own
-scope is in place. The **closing check** waits for every slice and runs the
-whole suite and can fix what fails: a loop's check counts when its body
-edits, an ops task, a push or a read-only check alone does not. Opening
-tasks in series, no opening task and no closing check are its faults, asked in
-the **Chain review**'s one call, whose reply may add the one restoring or
-closing task a fault asks for. A wide plan with a closing check gets a fixed
-`Plan shape:` note on each role's brief.
+with the roles around them. The **opening task** is the first change task
+every slice waits for: the one that makes the project import and collect its
+tests. A later one that waits for it alone is a **shared module**, not a second
+opening task. The **slices** are the change tasks not ordered against every
+other one, each done when the code in its own scope is in place. The **closing
+check** waits for every slice, runs the whole suite and can fix what fails, and
+no other such task waits for it: a loop's check counts when its body edits, an
+ops task, a push or a read-only check alone does not, and a change task the
+closing check waits for after every slice is a slice of the last level.
+Opening tasks in series, no opening task and no closing check are its faults,
+recorded in the research log and never asked about. A wide plan with a closing
+check gets a fixed `Plan shape:` note on each role's brief.
 *Avoid:* "gate" for the opening task (the merge gate is something else),
 "barrier".
 

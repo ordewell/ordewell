@@ -38,33 +38,43 @@ export function fanOutShape(plan) {
     level.set(t.id, deepest + 1);
     return true;
   };
-  const none = { wide: false, width: 0, levels: null, gates: [], slices: [], closers: [], shared: [], sliceEdges: 0, faults: [] };
+  const none = { wide: false, width: 0, levels: null, gates: [], openings: 0, slices: [], closers: [], shared: [], sliceEdges: 0, faults: [] };
   for (const t of tasks) if (!visit(t)) return { ...none, cycle: true };
   const body = new Set(tasks.flatMap((t) => t.loop?.body ?? []));
   const change = tasks.filter((t) => (t.type ?? 'ai') === 'ai' && !t.readOnly && !runsAsOps(t) && !t.research && !t.loop && !body.has(t.id));
   const ordered = (a, b) => anc.get(a.id).has(b.id) || anc.get(b.id).has(a.id);
   const spine = new Set(change.filter((t) => change.every((o) => o === t || ordered(t, o))));
-  const slices = change.filter((t) => !spine.has(t));
+  const parallel = change.filter((t) => !spine.has(t));
   const levels = tasks.length ? Math.max(...level.values()) : null;
-  if (slices.length < 2) return { ...none, levels };
+  if (parallel.length < 2) return { ...none, levels };
   const byLevel = (a, b) => level.get(a.id) - level.get(b.id);
-  const gates = [...spine].filter((t) => slices.every((s) => anc.get(s.id).has(t.id))).sort(byLevel);
+  const gates = [...spine].filter((t) => parallel.every((s) => anc.get(s.id).has(t.id))).sort(byLevel);
   const edits = (t) => (t?.type ?? 'ai') === 'ai' && !t.readOnly;
-  const closers = tasks.filter((t) => !body.has(t.id) && t.type !== 'user' && !t.ops
+  const candidates = tasks.filter((t) => !body.has(t.id) && t.type !== 'user' && !t.ops
     && (edits(t) || (t.loop?.body ?? []).some((id) => edits(byId.get(id))))
-    && slices.every((s) => anc.get(t.id).has(s.id))).sort(byLevel);
+    && parallel.every((s) => anc.get(t.id).has(s.id))).sort(byLevel);
+  // As core: the closing check is the candidate no other waits for, and a change task it waits for is a slice of the last level.
+  const last = candidates.filter((c) => !candidates.some((o) => anc.get(o.id).has(c.id)));
+  const closer = last[last.length - 1];
+  const late = new Set(candidates.filter((c) => closer && c !== closer && spine.has(c) && anc.get(closer.id).has(c.id)));
+  const slices = [...parallel, ...candidates.filter((c) => late.has(c))];
+  const closers = candidates.filter((c) => !late.has(c)).sort((a, b) => Number(b === closer) - Number(a === closer));
+  // As core: a later gate that waits for the opening task alone (an install or a manual step aside) is a shared module.
+  const outside = (id) => { const d = byId.get(id); return !d || runsAsOps(d) || d.type === 'user'; };
+  const sharedGates = gates.slice(1).filter((t) => (t.dependencies ?? []).every((d) => d === gates[0].id || outside(d)));
   const perLevel = new Map();
   for (const s of slices) perLevel.set(level.get(s.id), (perLevel.get(level.get(s.id)) ?? 0) + 1);
   const width = Math.max(...perLevel.values());
   const ids = new Set(slices.map((s) => s.id));
   const sliceEdges = slices.reduce((n, s) => n + new Set((s.dependencies ?? []).filter((d) => ids.has(d))).size, 0);
-  const shared = slices.filter((s) => slices.some((o) => (o.dependencies ?? []).includes(s.id)));
+  // A last-level slice waits for every other one, which makes none of them a module the others build on.
+  const shared = [...sharedGates, ...parallel.filter((s) => parallel.some((o) => (o.dependencies ?? []).includes(s.id)))];
   const wide = width >= FAN_OUT_MIN;
   const faults = [];
-  if (wide && gates.length >= 2) faults.push('serial-opening');
+  if (wide && gates.length > 1 + sharedGates.length) faults.push('serial-opening');
   if (wide && gates.length === 0) faults.push('no-opening');
   if (wide && closers.length === 0) faults.push('no-closing');
-  return { wide, width, levels, gates, slices, closers, shared, sliceEdges, faults };
+  return { wide, width, levels, gates, openings: gates.length - sharedGates.length, slices, closers, shared, sliceEdges, faults };
 }
 
 const brief = (t) => t?.prompt ?? '';
@@ -75,14 +85,17 @@ export function fanOutProperties(plan, { baseBroken = false } = {}) {
   const gate = s.gates[0];
   const closer = s.closers[0];
   const tasks = plan?.tasks ?? [];
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const outside = (id) => { const d = byId.get(id); return !d || runsAsOps(d) || d.type === 'user'; };
   // As core's withShapeNotes: a check that cannot edit has its note on its loop's body.
   const closingBriefs = closer ? ((closer.type ?? 'ai') === 'ai' && !closer.readOnly ? [closer] : tasks.filter((t) => closer.loop?.body?.includes(t.id))) : [];
   const sharedOk = s.shared.length <= 3 && s.shared.every((m) => gate && (m.dependencies ?? []).every((d) => d === gate.id));
   return {
     wide: s.wide,
     numbers: { slices: s.slices.length, width: s.width, levels: s.levels, gates: s.gates.length, closers: s.closers.length, shared: s.shared.length, sliceEdges: s.sliceEdges, faults: s.faults },
-    P1_oneOpening: baseBroken ? s.gates.length === 1 && (gate.dependencies ?? []).length === 0 : s.gates.length <= 1,
-    P2_openingFirstAndAlone: s.gates.length <= 1,
+    // The opening task may wait for an install or a manual step, as core's restoring task does.
+    P1_oneOpening: baseBroken ? s.openings === 1 && (gate.dependencies ?? []).every((d) => outside(d)) : s.openings <= 1,
+    P2_openingFirstAndAlone: s.openings <= 1,
     P3_slicesParallel: s.levels !== null && s.levels <= 4 && sharedOk && s.width >= Math.ceil(0.6 * s.slices.length),
     P4_closingCheck: s.closers.length >= 1,
     P5_ownScopeDone: s.slices.length > 0 && s.slices.every((t) => /Plan shape: this task is one of \d+ slices/.test(brief(t)) && brief(t).includes('end with status done')),
