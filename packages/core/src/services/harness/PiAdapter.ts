@@ -16,8 +16,8 @@ import { privateTempDir } from '../../utils/privateTempDir';
 import { spawnedCommand } from '../../plugins/types';
 import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 
-/** What a restricted start may run: Pi's read tools and Ordewell's, none that writes or runs a command (ADR-0009, ADR-0046). */
-const RESTRICTED_TOOLS = ['read', 'grep', 'find', 'ls', `${PI_ORDEWELL.toolName('')}*`];
+/** Pi's own tools a restricted start keeps: the read tools, none that writes or runs a command (ADR-0009, ADR-0046). */
+const READ_TOOLS = ['read', 'grep', 'find', 'ls'];
 
 /** Pi's dialogs that wait for an answer; the rest of its extension UI is fire-and-forget. */
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor']);
@@ -54,6 +54,8 @@ interface PiLine {
   command?: string;
   success?: boolean;
   error?: string;
+  /** A prompt's answer: `handled` when Pi ran it as a command of its own and started no run. */
+  data?: { disposition?: string };
   /** The message of a `message_*` event; the text of an extension's `confirm`. */
   message?: PiMessage | string;
   assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
@@ -157,7 +159,8 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
       '-e', 'builtin:mcp',
       '-e', extension,
       '--append-system-prompt', prompt,
-      ...(this.restricted ? ['--no-approve', '--no-extensions', '--tools', RESTRICTED_TOOLS.join(',')] : []),
+      // The token's tools by exact name: `mcp__ordewell__*` would also admit a server named `ordewell__x`.
+      ...(this.restricted ? ['--no-approve', '--no-extensions', '--tools', [...READ_TOOLS, ...PI_ORDEWELL.toolNames(started.kind === 'planner' ? 'planner' : started.mcp.readOnly ? 'readOnlyTask' : 'task', started.mcp.hidden, started.mcp.extraTools)].join(',')] : []),
       // A planner is given the repository's instruction files by Ordewell's reader, as text in its prompt (ADR-0028).
       ...(started.kind === 'planner' ? ['--no-context-files'] : []),
       ...(started.runnerConfig === 'minimal' ? ['--no-skills', '--no-prompt-templates'] : []),
@@ -206,7 +209,10 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     if (!line) return;
     switch (line.type) {
       case 'response':
-        if (line.command === 'prompt' && line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
+        if (line.command !== 'prompt') return;
+        if (line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
+        // A command Pi ran itself, as `/mcp`, starts no run, so no `agent_settled` follows it.
+        else if (line.data?.disposition === 'handled') this.endTurn(emit, this.outcome.settle('completed'));
         return;
       case 'message_start':
         if (typeof line.message === 'object' && line.message.role === 'assistant') this.message = `${this.turns}.${++this.messages}`;

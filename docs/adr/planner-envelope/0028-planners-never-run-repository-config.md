@@ -377,7 +377,8 @@ specifies.
   can run code or redirect the runner: `.mcp.json`, `.claude/settings.json`,
   `.claude/settings.local.json`, `.claude/hooks/`, `.claude/plugins/`,
   `.claude-plugin/`, a `plugin.json` or `marketplace.json` under `.claude/`,
-  OpenCode's `opencode.json` and its plugin, tool and agent directories, and `.codex/`
+  OpenCode's `opencode.json` and its plugin, tool and agent directories, `.codex/`,
+  and Pi's `.pi/settings.json`, `.pi/mcp.json` and `.pi/extensions/`
   (the list is the runners', and holds a start for any of them whichever
   runner it launches). A difference holds the start with a reason naming each
   path, so a landing that added one stops the run's later starts.
@@ -547,4 +548,4 @@ specifies.
 - 2026-11-04 — a Gemini CLI planner or read-only task starts in a private directory, out of reach of the repository's `.gemini/settings.json` (ADR-0060).
 - 2026-11-04 — a Cursor planner or read-only task starts in a private directory with a config home of its own, out of reach of the repository's `.cursor/` (ADR-0060).
 - 2026-11-05 — a Cline planner starts in a private directory too, out of reach of the repository's hooks (ADR-0060).
-- 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell (#78).
+- 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell; a change task's start is held for `.pi/` config added during the run (#78).

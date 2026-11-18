@@ -1564,7 +1564,8 @@ runner loads at launch and that can run code or redirect its traffic: Claude
 Code's `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`,
 `.claude/hooks/`, `.claude/plugins/`, `.claude-plugin/`, and the `plugin.json`
 and `marketplace.json` manifests under `.claude/`; OpenCode's `opencode.json`
-and its plugin and tool directories; Codex's `.codex/`
+and its plugin and tool directories; Codex's `.codex/`; Pi's
+`.pi/settings.json`, `.pi/mcp.json` and `.pi/extensions/`
 (`repositoryRunnerConfigPaths`). A *planner* loads none of it (ADR-0028); a
 change or ops task loads it as its runner does, so a start whose runner
 directory differs from where the run started in one of these paths is held

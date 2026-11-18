@@ -130,10 +130,10 @@ describe('Pi\'s command line', () => {
 
   it('starts a read-only task on Pi\'s read tools and Ordewell\'s, with nothing of the repository\'s or the user\'s that runs, its context files read', async () => {
     const kit = silentSpawn(() => {});
-    await started(kit, taskStart('plan', { runnerConfig: 'minimal' }));
+    await started(kit, taskStart('plan', { runnerConfig: 'minimal', mcp: mcp({ readOnly: true }) }));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', 'read,grep,find,ls,mcp__ordewell__*', '--no-skills', '--no-prompt-templates', '--model', 'script/read-only']);
+    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('readOnlyTask').join(',')}`, '--no-skills', '--no-prompt-templates', '--model', 'script/read-only']);
     expect(files['ordewell.ts']).toContain('"asksReads":true');
     expect(files['instructions.md']).toContain('This task is read-only');
     expect(files['instructions.md']).toContain('`mcp__ordewell__read` reads a task\'s handoff, not a file');
@@ -145,7 +145,9 @@ describe('Pi\'s command line', () => {
     await started(kit, plannerStart({ model: 'ollama/qwen3:8b', effort: 'low', mcp: mcp({ hidden: ['web_search'] }) } as Partial<AgentStartOptions>));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', 'read,grep,find,ls,mcp__ordewell__*', '--no-context-files', '--model', 'ollama/qwen3:8b', '--thinking', 'low']);
+    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('planner', ['web_search']).join(',')}`, '--no-context-files', '--model', 'ollama/qwen3:8b', '--thinking', 'low']);
+    // Exact names: a pattern would let in the tools of a server named `ordewell__x`, which Pi names `mcp__ordewell__x__<tool>`.
+    expect(args[13].split(',').every((tool) => !tool.includes('*'))).toBe(true);
     expect(files['instructions.md']).toMatch(/^PLAN\n\nYour Ordewell tools come from the `ordewell` MCP server: `mcp__ordewell__list_runners`/);
     expect(files['instructions.md']).toContain('read web pages with `mcp__ordewell__fetch`');
     expect(files['instructions.md']).not.toContain('web_search');
@@ -175,7 +177,7 @@ describe('Pi\'s command line', () => {
 describe('Pi\'s recorded runs, replayed', () => {
   it('refuses a read-only task\'s reads outside both roots with core\'s reason and no approval card, and reads inside them (ADR-0046)', async () => {
     const kit = replay('read-only');
-    const adapter = await started(kit, taskStart('plan'));
+    const adapter = await started(kit, taskStart('plan', { mcp: mcp({ readOnly: true }) }));
     const events: AgentEvent[] = [];
 
     await adapter.send(prompt('read-only'), (event) => events.push(event));
@@ -345,6 +347,14 @@ describe('Pi\'s dialogs and its other answers', () => {
       { type: 'turn_end' },
     ]);
     expect(adapter.answerPermission('r1', { decision: 'allow' })).toBe(false);
+  });
+
+  it('ends a turn whose prompt Pi ran as a command of its own, which starts no run', async () => {
+    const { events, say, turn } = await inTurn(taskStart('agent'));
+    say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
+    await turn;
+
+    expect(events).toEqual([{ type: 'turn_end' }]);
   });
 
   it('fails a turn whose prompt Pi refused', async () => {
