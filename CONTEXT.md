@@ -3451,7 +3451,8 @@ fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 last status update said, the checkpoint question only while the task still
 waits at it. A status update replaces every status field of each task it
 carries, and carries only the tasks that moved, with every task again every
-half minute so that a surface a change missed comes right; what it says of the
+half minute so that a surface a change missed comes right (a settled task only
+for a minute after it last moved, since nothing moves it after); what it says of the
 run is whole each time. The daemon sends `Session.runSnapshot()`, always whole,
 as a `run_snapshot` frame right after `connected`, so a client that joins
 mid-run has the run before the next update; the session routes' load and read
