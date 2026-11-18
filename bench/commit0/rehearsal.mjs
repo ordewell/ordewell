@@ -111,6 +111,15 @@ export function rehearsalPlan(tasks) {
 export const taskIs = (n, status) => new RegExp(`^#${n} id=\\S+ "[^"\\n]*" \\[${status}\\]`, 'm');
 
 const RETRY = { tool: 'retry_task', args: { task: '#1', from: 'fresh', message: 'The rehearsal retries this once: make the edits again and report done.' } };
+/**
+ * The edit the closing turn makes to the failed task: its prompt changes (the
+ * key stays, which routes the fake) and nothing is retried. The built-in
+ * planner has no edit_plan tool, so an edit is a reply that carries the task
+ * ops as JSON, as a real run's supervisor sent it.
+ */
+const EDIT_REPLY = `The rehearsal edits task #1 and retries nothing.\n\`\`\`json\n${JSON.stringify({ taskOps: [{ op: 'update', taskId: '#1', changes: { prompt: 'Implement the library, and this time make the edits and report done. [rehearsal:edit]' } }] }, null, 2)}\n\`\`\``;
+/** What the second wake, raised for a failure the closing turn left standing, is told (core's standingDetail). */
+const STILL_FAILED = /is still failed after your turn/;
 const APPROVE = { tool: 'answer_checkpoint', args: { task: '#2', answer: 'approve', reason: 'Follow the tests.' } };
 const FAILS_ON_PURPOSE = 'The rehearsal fails this task on purpose.';
 const LEFT_PLAN = [
@@ -192,19 +201,39 @@ export const SCENARIOS = Object.freeze({
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['edit', 'after'],
     supervised: ['retry_task', 'answer_checkpoint'],
+    supervision: { acts: ['retry_task', 'answer_checkpoint'], closingWakes: 0 },
   },
   'b-leave': {
     arm: 'B',
     about: 'arm B: task 1 fails while task 2 waits on it; the supervisor at Act leaves it, so the run is held and ends by the stall rule, never complete',
     plan: () => rehearsalPlan(LEFT_PLAN),
     attempts: (ctx) => ({ edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)]], after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]] }),
-    supervisor: [],
+    // The closing turn leaves it, and so does the one core raises for the failure left standing: no third wake follows.
+    supervisor: [{ when: STILL_FAILED, say: 'The rehearsal leaves task #1 failed.' }],
     // Nothing landed: arm B scores merged work, which the failed task's never became.
     expect: {
       scoredFrom: 'merged', truncated: true, truncatedWhy: /^settled with 2 tasks open/, stoppedWhy: null, stalled: true, heldOpen: 2,
       notComplete: true, passedAtBaseline: true, tasks: { failed: 1, completed: 0 },
     },
     playedOut: ['edit'],
+    spoke: [/leaves task #1 failed/],
+    supervision: { acts: [], closingWakes: 1 },
+  },
+  'b-edit-retry': {
+    arm: 'B',
+    about: 'arm B: task 1 fails; the supervisor\'s closing turn edits it and retries nothing; the second wake, for the failure left standing, retries it; the run goes on to its end and the work is merged and scored',
+    plan: () => rehearsalPlan(LEFT_PLAN),
+    attempts: (ctx) => ({
+      edit: [[...editSteps(ctx), failed(FAILS_ON_PURPOSE)], [...editSteps(ctx), done('Implement the library')]],
+      after: [[note('commit0-rehearsal-note.md'), done('Note the rehearsal')]],
+    }),
+    // Order matters: the closing turn's wake holds both texts, and each rule plays once, the edit first.
+    supervisor: [{ when: taskIs(1, 'failed'), say: EDIT_REPLY }, { when: STILL_FAILED, step: RETRY }],
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
+    playedOut: ['edit', 'after'],
+    supervised: ['retry_task'],
+    spoke: [/edits task #1 and retries nothing/],
+    supervision: { acts: ['plan_edit', 'retry_task'], closingWakes: 1, retryAfterWake: true },
   },
   'b-cap': {
     arm: 'B',
@@ -285,6 +314,7 @@ export function supervisorTurn(rules, messages, state) {
   const i = (rules ?? []).findIndex((r, n) => !state.supervised.includes(n) && r.when.test(said));
   if (i === -1) return { content: last.role === 'tool' ? 'Done.' : 'Nothing to do: the run goes on.' };
   state.supervised.push(i);
+  if (rules[i].say) return { content: rules[i].say, rule: i };
   return { toolCall: { name: rules[i].step.tool, args: rules[i].step.args }, rule: i };
 }
 
@@ -409,6 +439,9 @@ export function judgePlayed(name, turns, ctx) {
     if (!mine.length) f.push(`task ${key} never started: there was no attempt for the stop to cut short`);
     else if (mine.some((t) => t.round === steps.length - 1 && t.toolCall?.name === steps.at(-1)?.tool)) f.push(`task ${key}, attempt 1: its last scripted step (${steps.at(-1).tool}) was played: the stop did not cut it short`);
   }
+  for (const re of s.spoke ?? []) {
+    if (!turns.some((t) => t.role === 'supervisor' && !t.toolCall && re.test(t.content ?? ''))) f.push(`the supervisor never said ${re}`);
+  }
   for (const tool of s.supervised ?? []) {
     if (!turns.some((t) => t.role === 'supervisor' && t.toolCall?.name === tool)) f.push(`the supervisor never played ${tool}`);
   }
@@ -482,6 +515,38 @@ export function judgePlanOnlyDir({ names, digest, expectedTitles }) {
   return f;
 }
 
+/**
+ * What metrics.supervisor must hold: the acts the supervisor made besides
+ * words (every call at the seam and every plan edit, in order, each done),
+ * how many wakes were the one core raises for a failure the closing turn left
+ * standing, that every wake names what triggered it in a line the harness
+ * knows, and, with `retryAfterWake`, that the retry came after that wake.
+ */
+export function judgeSupervision(want, sup) {
+  if (!sup?.actions || !sup.wakes) return ['metrics.supervisor holds no actions or wakes'];
+  const f = [];
+  const acts = sup.actions.filter((a) => a.kind !== 'message');
+  const kinds = acts.map((a) => a.kind);
+  if (JSON.stringify(kinds) !== JSON.stringify(want.acts)) f.push(`the supervisor's acts are ${JSON.stringify(kinds)}, wanted ${JSON.stringify(want.acts)}`);
+  for (const a of acts) if (a.outcome !== 'done') f.push(`act ${a.kind} was ${a.outcome}`);
+  for (const a of sup.actions) if (!a.at) f.push(`act ${a.kind} has no time`);
+  const triggers = sup.wakes.flatMap((w) => w.triggers);
+  const closing = sup.wakes.filter((w) => w.triggers.some((t) => t.kind === 'failure_standing' && t.closing));
+  if (closing.length !== want.closingWakes) f.push(`${closing.length} wake(s) for a failure the closing turn left, wanted ${want.closingWakes}`);
+  if (!sup.wakes.length || sup.wakeUps < sup.wakes.length) f.push(`wakeUps ${sup.wakeUps} against ${sup.wakes.length} wake(s)`);
+  for (const w of sup.wakes) if (!w.triggers.length) f.push(`the wake at ${w.at} names no trigger`);
+  for (const t of triggers.filter((x) => x.kind === 'other')) f.push(`a trigger the harness cannot read: ${JSON.stringify(t)}`);
+  if (want.closingWakes > 0 && closing[0]) {
+    const standing = closing[0].triggers.find((t) => t.kind === 'failure_standing');
+    if (standing.task !== '#1') f.push(`the closing wake names task ${standing.task}, wanted #1`);
+  }
+  if (want.retryAfterWake) {
+    const retry = acts.find((a) => a.kind === 'retry_task');
+    if (!retry || !closing[0] || !(retry.at > closing[0].at)) f.push(`the retry (${retry?.at}) did not follow the closing wake (${closing[0]?.at})`);
+  }
+  return f;
+}
+
 /** The failures of one scenario's result.json against its expectations; empty when it passed. */
 export function judgeRehearsal(name, result) {
   if (!result) return ['no result.json'];
@@ -516,6 +581,7 @@ export function judgeRehearsal(name, result) {
     const base = result.baseline?.passed ?? null;
     want(passed !== null && passed === base, `${passed} passed, not the baseline's ${base}: work that never landed was scored`);
   }
+  if (scenario(name).supervision) f.push(...judgeSupervision(scenario(name).supervision, result.metrics?.supervisor));
   if (e.testExcluded) {
     want((result.excluded ?? []).some((x) => /test/.test(x.path ?? '') && /test/.test(x.reason ?? '')), `no test file in excluded (${JSON.stringify(result.excluded ?? null)}): the edited test was scored`);
   }
