@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { readFileSync, statSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -39,11 +39,28 @@ type PiRecord = Record<string, unknown> & { type?: string; id?: string; message?
 type Recorded = { dir: 'in' | 'out'; ms: number; line: PiRecord } | { dir: 'note'; ms: number; event: string; args?: string[]; [key: string]: unknown };
 
 function recording(name: string): Recorded[] {
-  const text = Object.entries(PLACES).reduce(
-    (raw, [mark, path]) => raw.replaceAll(`{{${mark}}}`, JSON.stringify(path).slice(1, -1)),
-    readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8'),
-  );
-  return text.trim().split('\n').map((line) => JSON.parse(line) as Recorded);
+  return readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').trim().split('\n').map((line) => placed(JSON.parse(line)) as Recorded);
+}
+
+/**
+ * A recorded value with its marks filled in by this host's paths. A mark in a
+ * JSON document carried as a string (a read ask's placeholder, a decision) is
+ * filled inside that document, so a Windows path is escaped once per level,
+ * and the path after a mark takes this host's separator, as Pi and the
+ * adapter write it here.
+ */
+function placed(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(placed);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, placed(inner)]));
+  if (typeof value !== 'string' || !value.includes('{{')) return value;
+  if (/^[[{]/.test(value)) {
+    try {
+      return JSON.stringify(placed(JSON.parse(value)));
+    } catch {
+      // Text that only starts like JSON.
+    }
+  }
+  return value.replace(/\{\{(\w+)\}\}((?:\/[\w.*@~+-]*)*)/g, (whole, mark: string, rest: string) => (mark in PLACES ? PLACES[mark] + rest.replaceAll('/', sep) : whole));
 }
 
 const wire = (entries: Recorded[]) => entries.flatMap((entry) => (entry.dir === 'note' ? [] : [entry]));

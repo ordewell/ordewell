@@ -18,7 +18,8 @@ const server = { name: 'ordewell' as const, url: 'http://127.0.0.1:4555/mcp', he
 
 /** The extension as Pi loads it: the module Ordewell writes, imported and handed a fake of Pi's extension API. */
 async function loaded(config: PiExtensionConfig) {
-  const dir = mkdtempSync(join(tmpdir(), 'ordewell-pi-ext-'));
+  // The long path: a Windows 8.3 short name's `~` reaches the import URL as %7E, which Vite does not resolve.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-pi-ext-')));
   dirs.push(dir);
   const file = join(dir, 'ordewell.mjs');
   writeFileSync(file, piExtensionSource(config));
