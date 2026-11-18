@@ -19,8 +19,8 @@ import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 /** Pi's own tools a restricted start keeps: the read tools, none that writes or runs a command (ADR-0009, ADR-0046). */
 const READ_TOOLS = ['read', 'grep', 'find', 'ls'];
 
-/** The id of the `get_state` that asks whether a prompt Pi handled itself started a run. */
-const IDLE_CHECK = 'ordewell-idle-check';
+/** The id of the `get_state` that asks whether turn `n`'s prompt, which Pi handled itself, started a run. */
+const idleCheck = (n: number) => `ordewell-idle-check-${n}`;
 
 /** Pi's dialogs that wait for an answer; the rest of its extension UI is fire-and-forget. */
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor']);
@@ -206,7 +206,8 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     this.outcome.open();
     this.failure = null;
     this.settled = new Promise((resolve) => { this.settle = resolve; });
-    return `${JSON.stringify({ id: `turn-${++this.turns}`, type: 'prompt', message })}\n`;
+    // `followUp` changes nothing for an idle Pi; a run Ordewell did not see start, an extension's, gets the message queued behind it, not refused.
+    return `${JSON.stringify({ id: `turn-${++this.turns}`, type: 'prompt', message, streamingBehavior: 'followUp' })}\n`;
   }
 
   protected handleLine(raw: string, emit: (event: AgentEvent) => void): void {
@@ -218,8 +219,8 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
         // A command Pi ran itself, as `/mcp`, needs no run and sends no
         // `agent_settled`, but one an extension defines may start a run of its
         // own, so Pi is asked whether one is going before the turn ends.
-        else if (line.command === 'prompt' && line.data?.disposition === 'handled' && !this.running) this.writeLine({ id: IDLE_CHECK, type: 'get_state' });
-        else if (line.id === IDLE_CHECK && this.settled && !this.running && line.data?.isStreaming !== true) this.endTurn(emit, this.outcome.settle('completed'));
+        else if (line.command === 'prompt' && line.data?.disposition === 'handled' && !this.running) this.writeLine({ id: idleCheck(this.turns), type: 'get_state' });
+        else if (line.id === idleCheck(this.turns) && this.settled && !this.running && line.data?.isStreaming !== true) this.endTurn(emit, this.outcome.settle('completed'));
         return;
       case 'agent_start':
         this.running = true;

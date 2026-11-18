@@ -353,8 +353,8 @@ describe('Pi\'s dialogs and its other answers', () => {
     const { proc, events, say, turn } = await inTurn(taskStart('agent'));
     say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
 
-    expect(written(proc).at(-1)).toEqual({ id: 'ordewell-idle-check', type: 'get_state' });
-    say({ id: 'ordewell-idle-check', type: 'response', command: 'get_state', success: true, data: { isStreaming: false } });
+    expect(written(proc).at(-1)).toEqual({ id: 'ordewell-idle-check-1', type: 'get_state' });
+    say({ id: 'ordewell-idle-check-1', type: 'response', command: 'get_state', success: true, data: { isStreaming: false } });
     await turn;
     expect(events).toEqual([{ type: 'turn_end' }]);
   });
@@ -362,7 +362,7 @@ describe('Pi\'s dialogs and its other answers', () => {
   it('keeps the turn of a handled prompt open for the run its command started, until Pi settles', async () => {
     const { events, say, turn } = await inTurn(taskStart('agent'));
     say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
-    say({ id: 'ordewell-idle-check', type: 'response', command: 'get_state', success: true, data: { isStreaming: true } });
+    say({ id: 'ordewell-idle-check-1', type: 'response', command: 'get_state', success: true, data: { isStreaming: true } });
     say({ type: 'agent_start' });
     const message = { role: 'assistant', content: [{ type: 'text', text: 'Asked.' }] };
     say({ type: 'message_start', message });
@@ -372,6 +372,23 @@ describe('Pi\'s dialogs and its other answers', () => {
     say({ type: 'agent_settled', aborted: false });
     await turn;
     expect(events).toEqual([{ type: 'assistant_text', runId: '1.1.0', text: 'Asked.' }, { type: 'turn_end' }]);
+  });
+
+  it('takes no idle check of an earlier turn for the open one\'s', async () => {
+    const { adapter, events, say, turn } = await inTurn(taskStart('agent'));
+    say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
+    say({ type: 'agent_start' });
+    say({ type: 'agent_settled', aborted: false });
+    await turn;
+    const next: AgentEvent[] = [];
+    const second = adapter.send('go on', (event) => next.push(event));
+    say({ id: 'ordewell-idle-check-1', type: 'response', command: 'get_state', success: true, data: { isStreaming: false } });
+    expect(next).toEqual([]);
+
+    say({ type: 'agent_settled', aborted: false });
+    await second;
+    expect(events).toEqual([{ type: 'turn_end' }]);
+    expect(next).toEqual([{ type: 'turn_end' }]);
   });
 
   it('fails a turn whose prompt Pi refused', async () => {
