@@ -4,6 +4,7 @@ import { dropRetiredPlanFields, failInterruptedTasks, LegacyPlanState, migrateLo
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { getStateDir, ensureDir, writeFileAtomic } from './fsHelpers';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
+import { ownerOfSavedRun } from './sessionStore';
 
 const STATE_FILE = 'state.json';
 
@@ -49,8 +50,9 @@ export function loadState(baseDir?: string, logger: ILogger = defaultLogger): Sa
     const plan = parsed as LegacyPlanState;
     const savedBy = typeof sessionId === 'string' && sessionId ? sessionId : undefined;
     failInterruptedTasks(plan.tasks, new Date().toISOString());
-    // The restore file is the plan of the session it names, written by that session.
-    migratePlanStateIsolation(plan, savedBy);
+    // The restore file is the plan of the session it names, written by that session,
+    // which may still have saved a copy of another's run into its own file.
+    migratePlanStateIsolation(plan, ownerOfSavedRun(plan, savedBy, dir));
     settleOwedRepairs(plan);
     releaseMadeManual(plan.tasks);
     migrateLoadedTasks(plan.tasks);

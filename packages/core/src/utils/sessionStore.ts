@@ -303,12 +303,47 @@ function findSessionFile(sessionsDir: string, sessionId: string, logger: ILogger
   return null;
 }
 
+/**
+ * The session a loaded plan's run is named after when it names none: `savedBy`,
+ * the session whose own file (or restore file) holds it, only when no other
+ * session's file holds that run as well. Builds before runs named their session
+ * saved a run into whichever session adopted it (a VS Code window reload
+ * restored under a fresh id, a plan loaded with no id), so of several holders
+ * any may be a copy, whose record would prune the worktrees the run's maker is
+ * still working in. Nothing then shows whose run it is: it stays unnamed, and
+ * no holder adopts it (ADR-0013). A holder naming `savedBy` confirms it.
+ */
+export function ownerOfSavedRun(plan: unknown, savedBy: string | undefined, baseDir?: string): string | undefined {
+  return ownerOnLoad(plan, savedBy, getSessionsDir(baseDir));
+}
+
+function ownerOnLoad(plan: unknown, savedBy: string | undefined, sessionsDir: string): string | undefined {
+  const run = runOf(plan);
+  if (!savedBy || !run || run.session !== undefined || typeof run.id !== 'string') return savedBy;
+  if (!fs.existsSync(sessionsDir)) return savedBy;
+  for (const file of fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.json'))) {
+    let other: { meta?: { id?: unknown }; plan?: unknown };
+    try {
+      other = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf-8')) as typeof other;
+    } catch { continue; } // An unreadable file holds no run anyone could adopt.
+    if (other?.meta?.id === savedBy) continue;
+    const held = runOf(other?.plan);
+    if (held?.id === run.id && held.session !== savedBy) return undefined;
+  }
+  return savedBy;
+}
+
+function runOf(plan: unknown): { id?: unknown; session?: unknown } | undefined {
+  const run = (plan as { isolation?: { run?: unknown } } | null | undefined)?.isolation?.run;
+  return run && typeof run === 'object' ? run as { id?: unknown; session?: unknown } : undefined;
+}
+
 /** What every load does to a saved session before anyone reads it. */
-function settledOnLoad(session: SessionData, researchLog: string, logger: ILogger): { meta: SessionMeta; plan: LegacyPlanState } {
+function settledOnLoad(session: SessionData, researchLog: string, logger: ILogger, savedBy: string | undefined): { meta: SessionMeta; plan: LegacyPlanState } {
   const plan = session.plan as LegacyPlanState;
   restoreResearchLog(plan, session.meta.id, researchLog, logger);
   failInterruptedTasks(plan.tasks, new Date().toISOString());
-  migratePlanStateIsolation(plan, session.meta.id);
+  migratePlanStateIsolation(plan, savedBy);
   settleOwedRepairs(plan);
   releaseMadeManual(plan.tasks);
   migrateLoadedTasks(plan.tasks);
@@ -326,7 +361,7 @@ export function loadChildSession(place: ChildSessionPlace, logger: ILogger = def
     return null;
   }
   const session = parsed as SessionData;
-  return isSessionMeta(session?.meta) ? settledOnLoad(session, researchLogPath(place.sessionId, place.baseDir, place.rootSessionId), logger) : null;
+  return isSessionMeta(session?.meta) ? settledOnLoad(session, researchLogPath(place.sessionId, place.baseDir, place.rootSessionId), logger, session.meta.id) : null;
 }
 
 export function loadSession(sessionId: string, baseDir?: string, logger: ILogger = defaultLogger): { meta: SessionMeta; plan: LegacyPlanState } | null {
@@ -339,7 +374,7 @@ export function loadSession(sessionId: string, baseDir?: string, logger: ILogger
         logger.warn('sessionStore', `session file ${found.file}: ${REJECTION_MESSAGE}`);
         return null;
       }
-      return settledOnLoad(found.session, researchLogPath(sessionId, baseDir), logger);
+      return settledOnLoad(found.session, researchLogPath(sessionId, baseDir), logger, ownerOnLoad(found.session.plan, sessionId, sessionsDir));
     }
   } catch (err: unknown) {
     logger.warn('sessionStore', `failed to list sessions directory while searching for ${sessionId}`, err);

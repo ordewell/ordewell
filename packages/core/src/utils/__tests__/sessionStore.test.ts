@@ -529,6 +529,16 @@ describe('sessionStore', () => {
       expect(loadSession('session-bbbb0002', tmpDir)!.plan.isolation?.run.session).toBe('session-aaaa0001');
     });
 
+    it('names no session on a pre-upgrade run another session\'s file holds too, whichever holder is loaded', () => {
+      const run = { id: 'runaaaa1', workspaceRoot: tmpDir, repos: [], shared: [], sharedRepos: [], tasks: {} };
+      const plan = () => ({ ...createEmptyPlan(), runners: ['claude-code'], tasks: [], isolation: { run: structuredClone(run), resolvers: {} } }) as Parameters<typeof saveSession>[0];
+      saveSession(plan(), 'mine', tmpDir, 'session-aaaa0001');
+      saveSession(plan(), 'a reload copy', tmpDir, 'session-yyyy0003');
+
+      expect(loadSession('session-aaaa0001', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+      expect(loadSession('session-yyyy0003', tmpDir)!.plan.isolation?.run.session).toBeUndefined();
+    });
+
     it('returns null for old sessions with scalar runner at meta level', () => {
       const sessionsDir = path.join(tmpDir, '.ordewell', 'sessions');
       fs.mkdirSync(sessionsDir, { recursive: true });

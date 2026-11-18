@@ -12,6 +12,7 @@ import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { Session } from '../createSession';
 import { fakeConfig, FakeRunnerSession, removeDir } from '../../testing';
 import { loadSession, saveSession } from '../../utils/sessionStore';
+import { loadState, saveState } from '../../utils/stateStore';
 import { getSessionsDir } from '../../utils/sessionDir';
 import { openTaskLog } from '../../utils/taskLogStore';
 import { closeSessions, fakeNotification, makeSession } from './sessionTestKit';
@@ -383,4 +384,67 @@ describe('a stranger to a pre-upgrade session', () => {
       expect(a.isolationView()?.tasks.r1).toMatchObject({ state: 'active' });
     });
   }
+});
+
+/**
+ * VS Code v0.5.0–v0.10.8 restored a window reload into a Session under a fresh
+ * id (no id in the restore file), adopted the run, and every later save wrote
+ * that run, naming no session, into the fresh id's own file.
+ */
+function asForkedByPreUpgradeReload(root: string, fromId: string, toId: string): void {
+  const plan = structuredClone(sessionFile(root, fromId).data.plan);
+  delete plan.isolation!.run.session;
+  saveSession(plan, 'The goal', root, toId);
+}
+
+describe('a pre-upgrade reload copy of a live session', () => {
+  it('leaves the live worktree alone when the copy is reopened under its own id', async () => {
+    const root = repo();
+    const { marker } = await liveSessionA(root);
+    asSavedBy0141(root, 'session-aaaa0001');
+    asForkedByPreUpgradeReload(root, 'session-aaaa0001', 'session-yyyy0003');
+
+    const { b, settled } = sessionB(root, 'session-yyyy0003');
+    const loaded = loadSession('session-yyyy0003', root)!;
+    expect(loaded.plan.isolation?.run.id).toBe('runaaaa1');
+    expect(existsSync(marker)).toBe(true);
+    b.loadPlan(loaded.plan, 'The goal', root, { sessionId: 'session-yyyy0003' });
+    await settled();
+
+    expect(existsSync(marker)).toBe(true);
+    expect(b.isolationView()).toBeNull();
+  });
+  it('leaves the live worktree alone when the copy is restored from a restore file naming it', async () => {
+    const root = repo();
+    const { marker } = await liveSessionA(root);
+    asSavedBy0141(root, 'session-aaaa0001');
+    asForkedByPreUpgradeReload(root, 'session-aaaa0001', 'session-yyyy0003');
+    // A later build kept the restore file's session id, still naming no session on the run.
+    saveState(sessionFile(root, 'session-yyyy0003').data.plan, root, 'session-yyyy0003');
+
+    const { b, settled } = sessionB(root, 'session-yyyy0003');
+    const restored = loadState(root)!;
+    expect(restored.plan.isolation?.run).toMatchObject({ id: 'runaaaa1' });
+    b.loadPlan(restored.plan, 'The goal', root, { sessionId: restored.sessionId });
+    await settled();
+
+    expect(existsSync(marker)).toBe(true);
+    expect(b.isolationView()).toBeNull();
+  });
+
+  it('names the run after its sole holder once the copy has let it go, and leaves the copy\'s file without it', async () => {
+    const root = repo();
+    const { marker } = await liveSessionA(root);
+    asSavedBy0141(root, 'session-aaaa0001');
+    asForkedByPreUpgradeReload(root, 'session-aaaa0001', 'session-yyyy0003');
+    expect(loadSession('session-aaaa0001', root)!.plan.isolation?.run.session).toBeUndefined();
+
+    const { b, settled } = sessionB(root, 'session-yyyy0003');
+    b.loadPlan(loadSession('session-yyyy0003', root)!.plan, 'The goal', root, { sessionId: 'session-yyyy0003' });
+    await settled();
+    await vi.waitFor(() => expect(savedPlanOf(root, 'session-yyyy0003').isolation).toBeUndefined());
+
+    expect(loadSession('session-aaaa0001', root)!.plan.isolation?.run).toMatchObject({ id: 'runaaaa1', session: 'session-aaaa0001' });
+    expect(existsSync(marker)).toBe(true);
+  });
 });
