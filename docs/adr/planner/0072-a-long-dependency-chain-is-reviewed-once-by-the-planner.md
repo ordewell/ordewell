@@ -35,10 +35,11 @@ question is put depends on how the plan arrives.
   longest chain is shorter; anything else, a reply that does not parse, names an
   unknown task, breaks an invariant or does not shorten the chain, leaves the
   first plan as it was. Ordewell also refuses, whatever the reply says, one
-  that leaves an ops, script or user task, or a loop's check, no longer waiting
-  for a task it waited for, directly or through others: the merge gate and the
-  check rest on those ancestors, and the question asking to keep such edges
-  does not ensure it. A redundant direct edge may still go. An entry for a
+  that leaves an ops, script or user task, or a loop's check, a subtask among
+  them, no longer waiting for a task it waited for, directly or through others,
+  counted with the merge gate's own walk, which passes through subtasks and
+  their parents' dependencies: the merge gate and the check rest on those
+  ancestors, and the question asking to keep such edges does not ensure it. A redundant direct edge may still go. An entry for a
   subtask, which the plan shows but the review does not revise, is ignored and
   logged. A changed brief, a delegated task's goal included, gets a
   `Plan revision:` note, last, that names what it no longer waits for even
@@ -124,3 +125,4 @@ conversation's as they stand.
 
 - 2026-11-18 — accepted.
 - 2026-11-18 — R1: Ordewell refuses a reply that drops an ancestor of an ops, script or user task or a loop's check; the note names only dependencies no longer reached and reaches a delegated task's goal; a subtask entry is ignored.
+- 2026-11-18 — R1: the guard counts ancestors with the merge gate's walk, so a path through a subtask is held too.

@@ -2,6 +2,7 @@ import { runsAsOps, type Task, type RunnerId } from '../models/Task';
 import type { RunnerModeInfo } from './ModeResolver';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings } from './JsonExtractor';
 import { checkPlanInvariants } from './PlannedTask';
+import { planAncestors } from './readiness';
 
 /**
  * A planner filling in code whose interfaces exist still orders slices by what
@@ -106,31 +107,21 @@ export type ChainReviewResult = { ok: true; tasks: Task[]; changes: ChainChange[
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Every task each top-level task waits for, directly or through others. */
-function ancestorsOf(tasks: readonly Pick<Task, 'id' | 'dependencies'>[]): Map<string, Set<string>> {
-  const deps = new Map(tasks.map((t) => [t.id, t.dependencies]));
-  const walk = (id: string): Set<string> => {
-    const seen = new Set<string>();
-    const queue = [...deps.get(id) ?? []];
-    for (let d = queue.shift(); d !== undefined; d = queue.shift()) {
-      if (seen.has(d) || d === id) continue;
-      seen.add(d);
-      queue.push(...deps.get(d) ?? []);
-    }
-    return seen;
-  };
-  return new Map(tasks.map((t) => [t.id, walk(t.id)]));
-}
-
 /**
  * A task that acts on the user's checkout, an ops or script task or a user
  * task, is gated on every ancestor's work being merged, and a loop's check
  * checks the work it waits for (readiness.ts mergeGate, ADR-0020, ADR-0045).
  * Dropping one of its ancestors lets it act before that work exists, and no
- * edge test the planner applies can tell that it is needed.
+ * edge test the planner applies can tell that it is needed. A subtask is one
+ * too when it is a user task or its top-level task runs as ops, as the gate
+ * judges it (PlanStore.isOps).
  */
-const actsAfterItsAncestors = (t: Task): boolean => runsAsOps(t) || t.loop !== undefined || hasUserTask(t);
-const hasUserTask = (t: Task): boolean => t.type === 'user' || t.subtasks.some(hasUserTask);
+const actsAfterItsAncestors = (t: Task, root: Task): boolean => runsAsOps(root) || t.loop !== undefined || t.type === 'user';
+/** Every task of the tree with its top-level task, subtasks included. */
+const withRoots = (tasks: readonly Task[]): [Task, Task][] => {
+  const under = (t: Task, root: Task): [Task, Task][] => [[t, root], ...t.subtasks.flatMap((s) => under(s, root))];
+  return tasks.flatMap((t) => under(t, t));
+};
 const subtaskIds = (t: Task): string[] => t.subtasks.flatMap((s) => [s.id, ...subtaskIds(s)]);
 
 /**
@@ -176,14 +167,18 @@ export function applyChainReview(
     if (unknown) return { ok: false, error: `task "${e.id}" names unknown dependency "${unknown}"` };
     next.set(e.id, deps);
   }
-  const rewired = tasks.map((t) => ({ id: t.id, dependencies: next.get(t.id) ?? t.dependencies }));
-  const before = ancestorsOf(tasks);
-  const after = ancestorsOf(rewired);
+  // Subtasks kept: the merge gate walks through them and their parents' edges.
+  const rewired = tasks.map((t) => ({ ...t, dependencies: next.get(t.id) ?? t.dependencies }));
+  const before = planAncestors(tasks);
+  const after = planAncestors(rewired);
+  const rewiredById = new Map(withRoots(rewired).map(([t]) => [t.id, t]));
+  const afterOf = (id: string): Set<string> => new Set(after(rewiredById.get(id)!));
   // By title and id: a brief may name the other task either way.
-  const title = (id: string) => `"${byId.get(id)?.title ?? id}" (${id})`;
-  for (const t of tasks) {
-    if (!actsAfterItsAncestors(t)) continue;
-    const lost = [...before.get(t.id) ?? []].find((a) => !after.get(t.id)?.has(a));
+  const title = (id: string) => `"${rewiredById.get(id)?.title ?? id}" (${id})`;
+  for (const [t, root] of withRoots(tasks)) {
+    if (!actsAfterItsAncestors(t, root)) continue;
+    const kept = afterOf(t.id);
+    const lost = before(t).find((a) => !kept.has(a));
     if (lost) return { ok: false, error: `task "${t.id}" would no longer run after ${title(lost)}, which it waits for` };
   }
   const changes: ChainChange[] = [];
@@ -195,7 +190,8 @@ export function applyChainReview(
     if (!removed.length && !added.length) return t;
     changes.push({ id: t.id, removed, added });
     // A removed dependency still reached through another runs before this task, not beside it.
-    const parallel = removed.filter((d) => !after.get(t.id)?.has(d));
+    const kept = afterOf(t.id);
+    const parallel = removed.filter((d) => !kept.has(d));
     if (!parallel.length && !added.length) return { ...t, dependencies: deps };
     const note = revisionNote(parallel.map(title), added.map(title));
     // A delegated task has no prompt: its goal is its brief.

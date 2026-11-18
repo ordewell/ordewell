@@ -402,6 +402,19 @@ function opsOf(task: Readonly<Task>, store: Pick<PlanStore, 'get' | 'isOps'>): b
 }
 
 /**
+ * {@link ancestors}, the merge gate's walk, over a plan no store holds yet:
+ * what each task of the tree, a subtask among them, waits for. The plan
+ * review refuses a reply that shrinks it for a task the gate holds (ADR-0072 R1).
+ */
+export function planAncestors(tasks: readonly Task[]): (task: Readonly<Task>) => string[] {
+  const byId = new Map<string, Task>();
+  const index = (list: readonly Task[]): void => { for (const t of list) { byId.set(t.id, t); index(t.subtasks); } };
+  index(tasks);
+  const held = heldDependencies(tasks);
+  return (task) => ancestors(task, { get: (id) => byId.get(id) }, held);
+}
+
+/**
  * Every task a task depends on, directly or through others, a subtask's
  * ancestors' dependencies among them, nearest first, and a check's body; a
  * cycle is walked once.

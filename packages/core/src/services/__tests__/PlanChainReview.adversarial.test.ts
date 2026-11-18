@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { applyChainReview, chainReviewMessage, longestChain } from '../PlanChainReview';
 import { BaseAiService, type PlanTextCall } from '../BaseAiService';
+import { mergeGate } from '../readiness';
+import { checkPlanInvariants } from '../PlannedTask';
 import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../../models/Task';
 import { fakeConfig } from '../../testing';
 
@@ -59,6 +61,53 @@ describe('a task that acts on the user\'s checkout keeps every task it acted aft
   it('still lets a redundant direct edge of an ops task go, since it waits for the same tasks', () => {
     const tasks = [ai('a', []), ai('b', ['a']), ai('c', ['b']), ai('d', ['c']), ai('push', ['a', 'd'], { ops: true })];
     expect(applyChainReview(tasks, '{"dependencyChanges":[{"id":"push","dependencies":["d"]}]}', RUNNERS).ok).toBe(true);
+  });
+});
+
+/** What the merge gate holds a task to, every other task completed and unmerged: the guard's source of truth. */
+const gate = (tasks: Task[], id: string): string[] => {
+  const all = (ts: Task[]): Task[] => ts.flatMap((t) => [t, ...all(t.subtasks)]);
+  const flat = all(tasks);
+  const rootOf = (x: string): Task => tasks.find((t) => all([t]).some((s) => s.id === x))!;
+  const store = { allTasks: tasks, get: (x: string) => flat.find((t) => t.id === x), isCompleted: () => true, isOps: (x: string) => rootOf(x).ops === true };
+  return mergeGate(flat.find((t) => t.id === id)!, store as never, { awaitsMerge: () => true } as never).sort();
+};
+
+describe('a path through a subtask counts as the merge gate counts it', () => {
+  it('refuses a reply that lets an ops task waiting on a subtask act before that subtask\'s parent\'s ancestors', () => {
+    // a > b > c > r (subtask s1); push (ops) waits on s1 alone.
+    const tasks = [ai('a', []), ai('b', ['a']), ai('c', ['b']), ai('r', ['c'], { subtasks: [ai('s1', [])] }), ai('push', ['s1'], { ops: true })];
+    expect(checkPlanInvariants(tasks, RUNNERS)).toEqual([]);
+    expect(gate(tasks, 'push')).toEqual(['a', 'b', 'c', 's1']);
+    const r = applyChainReview(tasks, '{"dependencyChanges":[{"id":"r","dependencies":[]}]}', RUNNERS);
+    expect(r.ok ? gate(r.tasks, 'push') : r.error).toBe('task "push" would no longer run after "T c" (c), which it waits for');
+  });
+
+  it('refuses a reply that lets a user subtask check by hand before what it waits for has merged', () => {
+    // a > b > x; change task r holds a user subtask that waits on x.
+    const tasks = [ai('a', []), ai('b', ['a']), ai('x', ['b']), ai('r', [], { subtasks: [createTask({ id: 'try', title: 'Try it', type: 'user', dependencies: ['x'] })] })];
+    expect(checkPlanInvariants(tasks, RUNNERS)).toEqual([]);
+    expect(gate(tasks, 'try')).toEqual(['a', 'b', 'x']);
+    const r = applyChainReview(tasks, '{"dependencyChanges":[{"id":"x","dependencies":[]}]}', RUNNERS);
+    expect(r.ok ? gate(r.tasks, 'try') : r.error).toBe('task "try" would no longer run after "T b" (b), which it waits for');
+  });
+
+  it('refuses a reply that lets a loop\'s check, waiting on a subtask, check before its parent\'s ancestors', () => {
+    const tasks = [ai('a', []), ai('b', ['a']), ai('c', ['b']), ai('r', ['c'], { subtasks: [ai('s1', [])] }),
+      ai('check', ['s1'], { readOnly: true, loop: { body: ['fix'], maxRounds: 2 } }), ai('fix', ['check'])];
+    expect(checkPlanInvariants(tasks, RUNNERS)).toEqual([]);
+    const r = applyChainReview(tasks, '{"dependencyChanges":[{"id":"r","dependencies":[]}]}', RUNNERS);
+    expect(r.ok ? 'applied' : r.error).toBe('task "check" would no longer run after "T c" (c), which it waits for');
+  });
+
+  it('still applies a change through a subtask that leaves every such task waiting for the same tasks', () => {
+    // r's edge to a is redundant: r still waits for a through c.
+    const tasks = [ai('a', []), ai('b', ['a']), ai('c', ['b']), ai('r', ['a', 'c'], { subtasks: [ai('s1', [])] }), ai('push', ['s1'], { ops: true })];
+    const r = applyChainReview(tasks, '{"dependencyChanges":[{"id":"r","dependencies":["c"]}]}', RUNNERS);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.tasks.find((x) => x.id === 'r')!.dependencies).toEqual(['c']);
+    expect(r.tasks.find((x) => x.id === 'r')!.subtasks.map((s) => s.id)).toEqual(['s1']);
+    expect(gate(r.tasks, 'push')).toEqual(['a', 'b', 'c', 's1']);
   });
 });
 
