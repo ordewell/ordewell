@@ -26,7 +26,7 @@ function deps(): { d: PlanManagerDeps; posted: RunView[] } {
   const plan = { status: 'draft', tasks: [] } as unknown as LegacyPlanState;
   const d = {
     session: { isExecuting: true, status: 'running' },
-    chatProvider: { view, run, showPlan: vi.fn() },
+    chatProvider: { view, run, showPlan: vi.fn(), showPlanStatus: vi.fn() },
     getCurrentPlan: () => plan,
     isGeneratingPlan: () => false,
   } as unknown as PlanManagerDeps;
