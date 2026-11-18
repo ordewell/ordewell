@@ -27,6 +27,7 @@ import {
 } from '../PlanPrompts';
 import { resolveResearchShell } from '../researchShell';
 import { repairLoop, resubmitPlanPrompt } from '../PlanRepair';
+import { chainReviewNote, longestChain, TOOL_CHAIN_REVIEW_MIN } from '../PlanChainReview';
 import { PlanChangeCheck, planChangeErrorText, requestScope } from '../PlanChangeCheck';
 import type { SkillLookup } from '../taskSkills';
 import { PLANNER_TURN_ENDED } from '../plannerTools';
@@ -1298,6 +1299,7 @@ export class CliAgentAiService implements IAiService {
   private async oneShot(prompt: string, catalog: OneShotCatalog, onProgress?: (p: ResearchProgress) => void, signal?: AbortSignal): Promise<OneShot> {
     let submitted: Task[] | undefined;
     let refused: string[] = [];
+    let chainReviewed = false;
     // A call still waiting on the skill check when the session ends must not record a plan nobody reads.
     let ended = false;
     const refuse = (errors: string[]) => {
@@ -1318,11 +1320,16 @@ export class CliAgentAiService implements IAiService {
           if (!checked.ok) return refuse(checked.errors.map(planChangeErrorText));
           submitted = checked.tasks;
           refused = [];
+          // The conversation's review too, once a session: a later accepted call replaces `submitted` (ADR-0072 R3).
+          const chain = chainReviewed ? [] : longestChain(checked.tasks);
+          const review = chain.length >= TOOL_CHAIN_REVIEW_MIN ? chainReviewNote(chain) : undefined;
+          if (review) chainReviewed = true;
           return {
             text: JSON.stringify({
               ok: true,
               ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
-              next: 'Plan recorded. End your turn now.',
+              ...(review ? { review } : {}),
+              next: review ? 'Plan recorded. Do what review says, then end your turn.' : 'Plan recorded. End your turn now.',
             }),
           };
         },

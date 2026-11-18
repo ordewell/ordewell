@@ -86,6 +86,15 @@ export function replyTokens(limits: ModelLimits | undefined, wanted = CONTEXT_BU
   );
 }
 
+/**
+ * The longest reply a call can ask for: the provider's own cap where it states
+ * one above `wanted`, still within the window's share. For a call whose reply
+ * was cut off at the usual allowance.
+ */
+export function largestReplyTokens(limits: ModelLimits | undefined, wanted = CONTEXT_BUDGET.defaultMaxOutputTokens): number {
+  return replyTokens(limits, Math.max(wanted, positive(limits?.maxOutputTokens) ?? 0));
+}
+
 /** Undefined when the window is unknown: then nothing is budgeted, and nothing pruned ahead of a call. */
 export function callBudget(limits: ModelLimits | undefined, wanted?: number): CallBudget | undefined {
   const maxOutputTokens = replyTokens(limits, wanted);

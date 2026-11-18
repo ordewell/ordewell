@@ -22,13 +22,13 @@ import { ContextCollector } from './ContextCollector';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { IAiService, ConversationRequest, ConversationTurn, type ContextCondenseRequest } from './AiService';
 import type { TurnBudgets } from './PlannerBudgets';
-import { BaseAiService, ResearchChat, ConversationTurnContext } from './BaseAiService';
+import { BaseAiService, ResearchChat, ConversationTurnContext, type PlanTextCall } from './BaseAiService';
 import { listsPost, plannerToolDefinitions, subagentToolDefinitions } from './researchTools';
 import { getProviderMeta, isApiProvider, stripModelPrefix } from './ProviderRegistry';
 import { PLANNER_ESCAPE_HINT } from './plannerReadiness';
 import { condenseConversation, type ContextSummarizer } from './budgetedChat';
 import type { SummaryCall } from './contextSummary';
-import { CONTEXT_BUDGET, TokenGauge, callBudget, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
+import { CONTEXT_BUDGET, TokenGauge, callBudget, largestReplyTokens, replyTokens, type ChatBudget, type ModelLimits, type PlannerContextDeps, type PlannerContextStatus } from './plannerContextBudget';
 import type { UsageRecord } from '../models/Usage';
 import type { EffortLevel, ModelClient } from './model';
 import {
@@ -38,6 +38,7 @@ import {
   plannerEffort,
   plannerRequest,
   streamReply,
+  usageRecordOf,
   type ModelClientFactory,
   type PlannerMessage,
 } from './modelPlannerChat';
@@ -164,19 +165,22 @@ export class OpenAiService extends BaseAiService implements IAiService {
     onToken: (token: string) => void,
     onReasoning?: (token: string) => void,
     signal?: AbortSignal,
+    call: PlanTextCall = {},
   ): Promise<string> {
     const messages: PlannerMessage[] = [{ role: 'user', content: prompt }];
     if (repairHint) messages.push({ role: 'user', content: repairHint });
     const model = this.requireModel('orchestratorModel', this.config.orchestratorModel);
-    const effort = this.effort();
+    const effort = call.effort ?? this.effort();
+    const limits = this.limitsOf(model);
     // Only the reply's text is handed to the parser; thinking is routed to the
     // trace so chain-of-thought can never pollute the JSON.
     const reply = await streamReply(
       this.getClient(),
-      plannerRequest(messages, { model, tools: [], maxOutputTokens: replyTokens(this.limitsOf(model)), ...(effort ? { effort } : {}) }),
+      plannerRequest(messages, { model, tools: [], maxOutputTokens: call.largestReply ? largestReplyTokens(limits) : replyTokens(limits), ...(effort ? { effort } : {}) }),
       signal,
       { onText: onToken, ...(onReasoning ? { onThinking: onReasoning } : {}) },
     );
+    call.onReply?.({ usage: usageRecordOf(this.config.aiProvider, model, reply.usage), cutOff: reply.finish === 'length' });
     return reply.text;
   }
 
@@ -299,9 +303,10 @@ export class OpenAiService extends BaseAiService implements IAiService {
     });
 
     const result = await this.runResearchLoop(researchChat, firstMessage, fs, onProgress, runners, undefined, fetcher, userDescription, runnerModes, autonomousDefault, signal);
-    if (result.tasks) return { tasks: result.tasks, researchLog: result.researchLog, researchResults: result.researchResults };
+    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log);
+    if (result.tasks) return { tasks: await review(result.tasks, result.researchLog), researchLog: result.researchLog, researchResults: result.researchResults };
     const fallback = await this.generatePlanFallback(userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, result.researchLog, runnerModes, autonomousDefault, signal, modes);
-    return { tasks: fallback.tasks, researchLog: fallback.researchLog, researchResults: result.researchResults };
+    return { tasks: await review(fallback.tasks, fallback.researchLog), researchLog: fallback.researchLog, researchResults: result.researchResults };
   }
 
   async generatePlanDirect(

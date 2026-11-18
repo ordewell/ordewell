@@ -294,6 +294,31 @@ function oneShot(isolatedExecution: false | RepoGroupLayout) {
   return buildResearchPrompt('goal', '', {}, ['claude-code'], undefined, modes({ isolatedExecution }));
 }
 
+/** The conversation's parallelism rules as they stood before the one-shot planner got its own wording. */
+const CONVERSATION_RULES_AS_TODAY = [
+  '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a small leading task that fixes it, not the first layer of a chain. A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel.',
+  '- Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own. A decision several tasks share (an interface, a name, a limit such as a size ceiling a test pins) is named in each brief that touches it, with the task that owns it.',
+  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
+  '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs. This never justifies chaining layers a contract task can decouple.',
+  '- Build shared verification once: where several tasks need the same kind of check (a test harness, fixtures, golden files), one early task builds it and each runs it on its own slice. Each such brief asks for the tests that prove its slice, not a suite of its own.',
+  '- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven. If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.',
+];
+
+/** The one-shot planner's DEPENDENCY & PARALLELISM RULES, tasks sharing the workspace, as the chain review was measured with. */
+const ONE_SHOT_RULES_AS_MEASURED = [
+  'DEPENDENCY & PARALLELISM RULES:',
+  '- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.',
+  CONVERSATION_RULES_AS_TODAY[0],
+  CONVERSATION_RULES_AS_TODAY[1],
+  '- A task depends on another only where it needs something the other creates that does not exist yet (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Filling in a stub or interface that already exists creates nothing to consume. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
+  CONVERSATION_RULES_AS_TODAY[3],
+  CONVERSATION_RULES_AS_TODAY[4],
+  '- Each task verifies its own slice when it runs. If the project does not build, import or collect its tests as it stands, a leading task restores just that and the rest depend on it: it may edit whichever files block it, whatever task owns them, implements nothing beyond that, and is checked by the project importing and its tests collecting. A slice\'s tests may also call code another slice writes: that is never a reason to order them. Its brief runs them, reports which fail only for that reason, and leaves those to the closing check.',
+  '- Where the interfaces already exist and the goal fills them in (stubs, declared signatures, a schema in place), dependencies follow only what does not exist yet, so the plan is at most four levels deep: (1) the restoring task, if the project does not import or collect its tests as it stands; (2) if most slices\' tests build their inputs with a few shared modules (a core data type and its constructors), those modules, in parallel tasks; (3) every other slice at once, each depending only on levels 1 and 2; (4) one closing check that depends on every slice, runs the whole test suite and fixes what still fails. No slice in level 3 depends on another, even where its tests call into it.',
+  '- Tasks that run in parallel must not each append to the same shared file (changelogs, registries, index lists) — give that edit to the final task, or to one task the others depend on.',
+  '- Slices that touch different areas of the codebase are naturally parallel.',
+];
+
 describe('read-only guidance (ADR-0031, ADR-0046)', () => {
   it('lets read-only tasks run anything sealed and try changes in a throwaway worktree, and keeps ops tasks separate', () => {
     for (const p of [conversation(false), oneShot(LONE_REPO)]) {
@@ -582,10 +607,15 @@ describe('the coordinator role and its defaults (#5)', () => {
     expect(p).not.toMatch(/Read key source files to understand architecture|depth=2-3/);
   });
 
-  it('gives the one-shot planner the same parallelism rule as the conversation', () => {
-    for (const p of [oneShot(false), oneShot(LONE_REPO), conversation(false)]) {
-      for (const line of PARALLELISM_RULE) expect(p).toContain(line);
+  it('gives the one-shot planner the conversation\'s parallelism rule, but for its own dependency and restoring-task lines', () => {
+    const own = [PARALLELISM_RULE[2], PARALLELISM_RULE[5]];
+    for (const p of [oneShot(false), oneShot(LONE_REPO)]) {
+      for (const line of PARALLELISM_RULE) {
+        if (own.includes(line)) expect(p).not.toContain(line);
+        else expect(p).toContain(line);
+      }
     }
+    for (const line of PARALLELISM_RULE) expect(conversation(false)).toContain(line);
   });
 
   // A runner is shown no plan map, so the brief is the only place its boundary can be written.
@@ -668,7 +698,6 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
     expect(conversation(false)).toContain(OVERLAP_RULE);
 
     const p = oneShot(false);
-    for (const line of PARALLELISM_RULE) expect(p).toContain(line);
     expect(p).toContain('- Slices that touch different areas of the codebase are naturally parallel.');
     expect(p).toContain(OVERLAP_RULE);
   });
@@ -700,8 +729,13 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
   });
 
   it('still asks for dependencies that reflect genuine ordering: each names what it consumes', () => {
-    for (const p of [conversation(false), conversation(LONE_REPO), oneShot(false), oneShot(LONE_REPO)]) {
+    for (const p of [conversation(false), conversation(LONE_REPO)]) {
       expect(p).toContain('- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them.');
+      expect(p).not.toMatch(/Only add dependencies when/);
+    }
+    // The one-shot planner chained slices that fill in existing interfaces by call order.
+    for (const p of [oneShot(false), oneShot(LONE_REPO)]) {
+      expect(p).toContain('- A task depends on another only where it needs something the other creates that does not exist yet (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Filling in a stub or interface that already exists creates nothing to consume.');
       expect(p).not.toMatch(/Only add dependencies when/);
     }
   });
@@ -716,9 +750,32 @@ describe('planner parallelism rules under worktree isolation (ADR-0013)', () => 
 
   // A plan whose tasks each passed delivered nothing: no task made the project build, so no test could be collected.
   it('has each task verify its own slice, behind a leading task that makes the project build', () => {
-    for (const p of [conversation(LONE_REPO), oneShot(LONE_REPO), conversation(false), oneShot(false)]) {
+    for (const p of [conversation(LONE_REPO), conversation(false)]) {
       expect(p).toContain('- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven.');
       expect(p).toContain('If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.');
+    }
+    // A one-shot restoring task confined to files that did not hold the fault left the import broken.
+    for (const p of [oneShot(LONE_REPO), oneShot(false)]) {
+      expect(p).toContain('If the project does not build, import or collect its tests as it stands, a leading task restores just that and the rest depend on it: it may edit whichever files block it, whatever task owns them, implements nothing beyond that, and is checked by the project importing and its tests collecting.');
+      expect(p).toContain('A slice\'s tests may also call code another slice writes: that is never a reason to order them. Its brief runs them, reports which fail only for that reason, and leaves those to the closing check.');
+    }
+  });
+
+  // The one-shot wording and its four-level shape were measured on the one-shot path alone, the conversation's rules as they stand.
+  it('words the one-shot rules exactly as measured, and leaves the conversation\'s rules as they were', () => {
+    const block = (p: string) => p.slice(p.indexOf('DEPENDENCY & PARALLELISM RULES:\n'), p.indexOf('\n\nCHANGE AND OPS TASKS:'));
+    expect(block(oneShot(false))).toBe(ONE_SHOT_RULES_AS_MEASURED.join('\n'));
+    expect(block(oneShot(LONE_REPO))).toBe([
+      ...ONE_SHOT_RULES_AS_MEASURED.slice(0, -1),
+      '- Each change task runs in its own git worktree and is merged afterwards. Never add a dependency just because two tasks touch the same file.',
+      '- In a task\'s prompt, name every file by its path from the workspace root, never by an absolute path: each task works in its own copy of the workspace, and an absolute path into the workspace reaches the user\'s own checkout instead, where the earlier tasks\' work is not merged yet.',
+    ].join('\n'));
+    for (const harness of [false, true]) {
+      const p = buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner: harness ? 'claude-code' : undefined });
+      expect(p).toContain(['DEPENDENCY & PARALLELISM:', ...CONVERSATION_RULES_AS_TODAY].join('\n'));
+      for (const oneShotOnly of ['does not exist yet', 'creates nothing to consume', 'may edit whichever files block it', 'never a reason to order them', 'at most four levels deep']) {
+        expect(p).not.toContain(oneShotOnly);
+      }
     }
   });
 

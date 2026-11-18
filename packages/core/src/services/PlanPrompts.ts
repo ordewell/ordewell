@@ -390,6 +390,10 @@ function opsTaskSection(conversation: boolean): string[] {
 const VERIFIABLE_SLICE_RULE =
   '- Each task verifies its own slice when it runs, so its check never needs what a later or parallel task writes: work it cannot check passes unproven. If the project does not build, import or collect its tests as it stands, a leading task restores that and the rest depend on it.';
 
+/** What a dependency is for; the one-shot planner words it as {@link ONE_SHOT_DEPENDENCY_RULE}. */
+const PARALLELISM_DEPENDENCY_LINE =
+  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.';
+
 /**
  * When slices run in parallel, for the conversation and the one-shot planner
  * alike: split only along decisions nobody else relies on, since a slice built
@@ -401,7 +405,7 @@ const VERIFIABLE_SLICE_RULE =
 export const PARALLELISM_RULE: readonly string[] = [
   '- Slices are parallel when none decides something another relies on (an interface, a schema, a name, a behaviour): make that shared decision a small leading task that fixes it, not the first layer of a chain. A breaking change to a name, schema or interface travels with its consumers and its migration, in one task or an expand-contract chain: disjoint files do not make them parallel.',
   '- Each brief states its boundary: what is out of scope, and which tasks running in parallel own the neighbouring files or areas, named by what they own. A decision several tasks share (an interface, a name, a limit such as a size ceiling a test pins) is named in each brief that touches it, with the task that owns it.',
-  '- A task depends on another only to consume what it creates (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.',
+  PARALLELISM_DEPENDENCY_LINE,
   '- Keep one line of reasoning, or a small job, in one task: split, each part guesses at the others, and atomising only adds handoffs. This never justifies chaining layers a contract task can decouple.',
   '- Build shared verification once: where several tasks need the same kind of check (a test harness, fixtures, golden files), one early task builds it and each runs it on its own slice. Each such brief asks for the tests that prove its slice, not a suite of its own.',
   VERIFIABLE_SLICE_RULE,
@@ -409,6 +413,28 @@ export const PARALLELISM_RULE: readonly string[] = [
 
 /** The one-shot planner has no DEFAULTS block to say this. */
 const ONE_SHOT_PARALLEL_DEFAULT = '- Make slices parallel by default, without waiting to be asked: tasks with no dependency between them run at once.';
+
+/**
+ * The one-shot planner's own wording of two of {@link PARALLELISM_RULE}'s
+ * lines, which the conversation keeps as they are. A one-shot plan filling in
+ * existing interfaces chained its slices by call order and ran almost serially;
+ * this wording was measured on the one-shot path only, and on a conversation
+ * planner it may split a rename that should stay whole (ADR-0072 R4).
+ */
+const ONE_SHOT_DEPENDENCY_RULE =
+  '- A task depends on another only where it needs something the other creates that does not exist yet (an interface, a schema, a registry, a file layout, a fixture), named in its brief, or where another rule orders them. Filling in a stub or interface that already exists creates nothing to consume. Once a leading task fixes a contract the rest only add to (a registry or layout where each addition is a new file), each depends on it alone, never on its siblings.';
+
+/** The restoring task may reach whatever blocks the import, so it is not confined to files that do not hold the fault. */
+const ONE_SHOT_VERIFIABLE_SLICE_RULE =
+  '- Each task verifies its own slice when it runs. If the project does not build, import or collect its tests as it stands, a leading task restores just that and the rest depend on it: it may edit whichever files block it, whatever task owns them, implements nothing beyond that, and is checked by the project importing and its tests collecting. A slice\'s tests may also call code another slice writes: that is never a reason to order them. Its brief runs them, reports which fail only for that reason, and leaves those to the closing check.';
+
+const ONE_SHOT_PARALLELISM_RULE: readonly string[] = PARALLELISM_RULE.map((line) =>
+  line === PARALLELISM_DEPENDENCY_LINE ? ONE_SHOT_DEPENDENCY_RULE : line === VERIFIABLE_SLICE_RULE ? ONE_SHOT_VERIFIABLE_SLICE_RULE : line,
+);
+
+/** Where the interfaces exist, the work is filling them in, and nothing it fills in is a contract another slice waits for. */
+const ONE_SHOT_EXISTING_INTERFACES_SHAPE =
+  '- Where the interfaces already exist and the goal fills them in (stubs, declared signatures, a schema in place), dependencies follow only what does not exist yet, so the plan is at most four levels deep: (1) the restoring task, if the project does not import or collect its tests as it stands; (2) if most slices\' tests build their inputs with a few shared modules (a core data type and its constructors), those modules, in parallel tasks; (3) every other slice at once, each depending only on levels 1 and 2; (4) one closing check that depends on every slice, runs the whole test suite and fixes what still fails. No slice in level 3 depends on another, even where its tests call into it.';
 
 /** Even under worktree isolation, tasks appending to one shared file still race each other's merges. */
 const SHARED_APPEND_FILE_RULE =
@@ -876,7 +902,8 @@ function corePlannerPrompt(isolatedExecution: IsolatedExecution, tools = false):
   ...taskSkillsSection([]),
   'DEPENDENCY & PARALLELISM RULES:',
   ONE_SHOT_PARALLEL_DEFAULT,
-  ...PARALLELISM_RULE,
+  ...ONE_SHOT_PARALLELISM_RULE,
+  ONE_SHOT_EXISTING_INTERFACES_SHAPE,
   SHARED_APPEND_FILE_RULE,
   isolatedExecution ? ISOLATED_PARALLELISM_RULE : '- Slices that touch different areas of the codebase are naturally parallel.',
   ...(isolatedExecution ? [ISOLATED_PATHS_RULE] : []),

@@ -1,5 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { TokenGauge, callBudget } from '../plannerContextBudget';
+import { TokenGauge, callBudget, largestReplyTokens } from '../plannerContextBudget';
+
+// A chain review cut off at the usual allowance is asked once more for the longest reply the model serves.
+describe('largestReplyTokens', () => {
+  it.each([
+    [{ contextWindow: 1_048_576, maxOutputTokens: 128_000 }, 32_000, 128_000],
+    [{ inputTokenLimit: 1_048_576, maxOutputTokens: 65_536 }, 16_384, 65_536],
+    // The window's share still bounds it, and a model that states no cap keeps the usual allowance.
+    [{ contextWindow: 200_000, maxOutputTokens: 128_000 }, 32_000, 50_000],
+    [{ contextWindow: 1_048_576 }, 32_000, 32_000],
+    [undefined, 32_000, 32_000],
+    [{ contextWindow: 200_000, maxOutputTokens: 8_192 }, 32_000, 8_192],
+  ])('asks %o, usually %d, for %d', (limits, wanted, expected) => {
+    expect(largestReplyTokens(limits, wanted)).toBe(expected);
+  });
+});
 
 describe('callBudget', () => {
   // Worked by hand: ceiling = min(90% of W, W less the reply); the reply is
