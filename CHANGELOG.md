@@ -8,8 +8,47 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-18
+
+### Added
+
+- **A supervisor or planner retry can carry a note for the new attempt.** A
+  fresh retry of a failed or held task may say what to do differently: the note
+  is given to the runner with its brief, under a heading that names whose note
+  it is, and the task's prompt stays as the plan holds it. The note belongs to
+  that one attempt, so a later retry starts without it. The guard that refuses
+  an identical retry counts a note as a change, and its refusal says so; an
+  edit to a failed or held task's prompt answers that the task still needs a
+  retry.
+
+### Changed
+
+- **Long sessions stay responsive.** The terminal UI stays quick in sessions
+  with hundreds of tasks and a long conversation: it paints only when the
+  screen changed, lays out only the plan rows and the part of the chat in view,
+  and reuses what did not move. Status updates are built from the tasks that
+  moved rather than from every task, saves no longer rewrite an unchanged
+  research log, the daemon answers a live session from memory and sends a
+  task's output in fewer, merged messages, and the desktop app and VS Code
+  reload the whole plan only when the plan itself changed.
+
 ### Fixed
 
+- **A failure the supervisor leaves standing wakes it again.** When a
+  supervisor turn at Act ends with a task it was woken for still failed, or
+  held with work waiting on it, the supervisor is woken once more for that task
+  as the turn ends, without waiting for the run to go idle. This holds for the
+  turn at the end of a run too, and `ordewell run` waits for that turn before
+  it reports the run concluded. It happens once per failure, and not after you
+  stop that closing turn yourself.
+- **A session no longer removes another session's worktrees.** A plan copied
+  from a live session and opened under another session id used to adopt the
+  original's isolation run and prune its worktrees. A session now adopts only
+  an isolation run it made itself.
+- **The terminal UI's chat no longer comes back empty after a stream gap.**
+  When the stream to the daemon skipped messages, the chat was redrawn from
+  the plan, which holds no conversation; it is now redrawn from the session's
+  conversation.
 - **`brew install ordewell/tap/ordewell` works on Homebrew 7 again.** The tap
   no longer maps `ordewell` to the desktop cask in `cask_renames.json`: Homebrew
   loaded that cask while it resolved the formula and refused it from a tap
@@ -4707,7 +4746,10 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.4...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/ordewell/ordewell/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/ordewell/ordewell/compare/v0.13.4...v0.14.0
 [0.13.4]: https://github.com/ordewell/ordewell/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/ordewell/ordewell/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/ordewell/ordewell/compare/v0.13.1...v0.13.2
