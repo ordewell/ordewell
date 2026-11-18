@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-18
+
+### Added
+
+- A supervisor or planner retry of a failed or held task can carry a note for
+  the new attempt, given to the runner with its brief while the task's prompt
+  stays as planned.
+
+### Changed
+
+- Long sessions stay responsive: the extension reloads the whole plan only
+  when the plan itself changed, and status updates and saves do less work in
+  sessions with many tasks.
+
+### Fixed
+
+- A failure the supervisor at Act leaves standing, with work waiting on it,
+  wakes the supervisor once more, also after the closing turn at the end of a
+  run.
+- A session no longer removes another session's worktrees when a copy of its
+  plan is opened under another session id.
+
 ## [0.14.1] - 2026-11-18
 
 ### Fixed
@@ -1698,7 +1720,10 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.13.4...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/ordewell/ordewell/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/ordewell/ordewell/compare/v0.13.4...v0.14.0
 [0.13.4]: https://github.com/ordewell/ordewell/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/ordewell/ordewell/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/ordewell/ordewell/compare/v0.13.1...v0.13.2
