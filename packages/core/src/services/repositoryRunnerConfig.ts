@@ -31,6 +31,7 @@ export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] 
     // code it runs, and its MCP config starts commands or reaches a URL.
     path === '.pi/settings.json' ||
     path === '.pi/mcp.json' ||
+    path === '.pi/extensions' ||
     path.startsWith('.pi/extensions/')
   ))].sort();
 }

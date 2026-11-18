@@ -349,12 +349,29 @@ describe('Pi\'s dialogs and its other answers', () => {
     expect(adapter.answerPermission('r1', { decision: 'allow' })).toBe(false);
   });
 
-  it('ends a turn whose prompt Pi ran as a command of its own, which starts no run', async () => {
+  it('ends a turn whose prompt Pi ran as a command of its own once Pi says no run is going', async () => {
+    const { proc, events, say, turn } = await inTurn(taskStart('agent'));
+    say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
+
+    expect(written(proc).at(-1)).toEqual({ id: 'ordewell-idle-check', type: 'get_state' });
+    say({ id: 'ordewell-idle-check', type: 'response', command: 'get_state', success: true, data: { isStreaming: false } });
+    await turn;
+    expect(events).toEqual([{ type: 'turn_end' }]);
+  });
+
+  it('keeps the turn of a handled prompt open for the run its command started, until Pi settles', async () => {
     const { events, say, turn } = await inTurn(taskStart('agent'));
     say({ id: 'turn-1', type: 'response', command: 'prompt', success: true, data: { disposition: 'handled' } });
-    await turn;
+    say({ id: 'ordewell-idle-check', type: 'response', command: 'get_state', success: true, data: { isStreaming: true } });
+    say({ type: 'agent_start' });
+    const message = { role: 'assistant', content: [{ type: 'text', text: 'Asked.' }] };
+    say({ type: 'message_start', message });
+    say({ type: 'message_end', message });
+    expect(events.filter((e) => e.type === 'turn_end')).toEqual([]);
 
-    expect(events).toEqual([{ type: 'turn_end' }]);
+    say({ type: 'agent_settled', aborted: false });
+    await turn;
+    expect(events).toEqual([{ type: 'assistant_text', runId: '1.1.0', text: 'Asked.' }, { type: 'turn_end' }]);
   });
 
   it('fails a turn whose prompt Pi refused', async () => {

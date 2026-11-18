@@ -19,6 +19,9 @@ import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 /** Pi's own tools a restricted start keeps: the read tools, none that writes or runs a command (ADR-0009, ADR-0046). */
 const READ_TOOLS = ['read', 'grep', 'find', 'ls'];
 
+/** The id of the `get_state` that asks whether a prompt Pi handled itself started a run. */
+const IDLE_CHECK = 'ordewell-idle-check';
+
 /** Pi's dialogs that wait for an answer; the rest of its extension UI is fire-and-forget. */
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor']);
 
@@ -54,8 +57,8 @@ interface PiLine {
   command?: string;
   success?: boolean;
   error?: string;
-  /** A prompt's answer: `handled` when Pi ran it as a command of its own and started no run. */
-  data?: { disposition?: string };
+  /** A prompt's answer (`handled`: Pi ran it as a command), or Pi's state. */
+  data?: { disposition?: string; isStreaming?: boolean };
   /** The message of a `message_*` event; the text of an extension's `confirm`. */
   message?: PiMessage | string;
   assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
@@ -115,6 +118,8 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   private message: string | null = null;
   /** Pi's last word on the turn's model call when that call failed: Pi retries before it settles, so only the last one counts. */
   private failure: string | null = null;
+  /** Whether Pi is in a run: from its `agent_start` to its `agent_settled`. */
+  private running = false;
   /** Settles when the open turn has: Pi said `agent_settled`, refused the prompt, or exited. */
   private settled: Promise<void> | null = null;
   private settle: (() => void) | null = null;
@@ -209,10 +214,15 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     if (!line) return;
     switch (line.type) {
       case 'response':
-        if (line.command !== 'prompt') return;
-        if (line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
-        // A command Pi ran itself, as `/mcp`, starts no run, so no `agent_settled` follows it.
-        else if (line.data?.disposition === 'handled') this.endTurn(emit, this.outcome.settle('completed'));
+        if (line.command === 'prompt' && line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
+        // A command Pi ran itself, as `/mcp`, needs no run and sends no
+        // `agent_settled`, but one an extension defines may start a run of its
+        // own, so Pi is asked whether one is going before the turn ends.
+        else if (line.command === 'prompt' && line.data?.disposition === 'handled' && !this.running) this.writeLine({ id: IDLE_CHECK, type: 'get_state' });
+        else if (line.id === IDLE_CHECK && this.settled && !this.running && line.data?.isStreaming !== true) this.endTurn(emit, this.outcome.settle('completed'));
+        return;
+      case 'agent_start':
+        this.running = true;
         return;
       case 'message_start':
         if (typeof line.message === 'object' && line.message.role === 'assistant') this.message = `${this.turns}.${++this.messages}`;
@@ -311,6 +321,7 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   }
 
   private endTurnState(): void {
+    this.running = false;
     this.message = null;
     this.failure = null;
     this.settle?.();
