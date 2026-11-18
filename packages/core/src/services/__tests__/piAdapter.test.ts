@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { PiAdapter } from '../harness/PiAdapter';
+import { PI_ORDEWELL } from '../harness/piOrdewell';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
 import { decidePlannerPermission } from '../harness/plannerPermissions';
@@ -157,6 +158,13 @@ describe('Pi\'s command line', () => {
 
     expect(kit.lastArgs().slice(2, 4)).toEqual(['--session-id', 'sess-1']);
     expect(adapter.nativeSessionId()).toBe('sess-1');
+  });
+
+  it('names Ordewell\'s tools as Pi does under direct exposure, hides none from a planner and holds none of Pi\'s requests for them', () => {
+    expect(PI_ORDEWELL.toolNames('readOnlyTask')).toEqual(['task_complete', 'checkpoint', 'read', 'run_command', 'save_patch', 'fetch', 'web_search'].map((tool) => `mcp__ordewell__${tool}`));
+    expect(PI_ORDEWELL.plannerHidden(plannerStart() as Extract<AgentStartOptions, { kind: 'planner' }>)).toEqual([]);
+    expect(PI_ORDEWELL.isOrdewellAsk(undefined as never)).toBe(false);
+    expect(['connected', 'failed', 'pending', undefined].map((status) => PI_ORDEWELL.attachState(status))).toEqual(['connected', 'failed', 'pending', 'pending']);
   });
 
   it('refuses to start without Ordewell\'s server', async () => {
