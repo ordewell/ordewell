@@ -2029,6 +2029,79 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   assert.match(R.judgePlayed('b-cap', editDone, playCtx).join(), /task spend never started/);
 });
 
+// What core's renderLandingBeside writes for a lone repository, and what a task is first told.
+const TAKE_IN_COMMAND = `git merge --no-edit -m 'Merge: Build on the library (take in landed work)' ordewell/run1/integration`;
+const landingBlock = (command = TAKE_IN_COMMAND) => `Build on the library. [rehearsal:consumer]\n\n${R.LANDING_HEADING}\n\nIf that work has landed, commit your work and take it in with \`${command}\`; resolve any conflict.`;
+
+test('the fake reads a step\'s command out of the task\'s own first message, and a message with none makes a failing step', () => {
+  const state = R.createState();
+  const steps = R.scenario('b-take-in').attempts(playCtx).consumer[0];
+  const at = steps.findIndex((s) => s.fromPrompt);
+  assert.ok(at > 0, 'the take-in comes after the long step, so the producer has landed');
+  assert.equal(steps[0].args.command, 'sleep 85 && echo slept 85s');
+  const brief = { role: 'user', content: landingBlock() };
+  const turnAt = (messages, round) => R.turnFor('b-take-in', runnerRequest([...messages, ...Array.from({ length: round }, () => toolRound('shell')).flat()]), state, playCtx);
+  const turn = turnAt([{ role: 'system', content: 'a system prompt that says take it in with `not this`' }, brief], at);
+  assert.deepEqual([turn.key, turn.round, turn.toolCall.name, turn.toolCall.args.command, turn.fromPrompt], ['consumer', at, 'shell', TAKE_IN_COMMAND, TAKE_IN_COMMAND]);
+  const none = turnAt([{ role: 'user', content: 'Build on the library. [rehearsal:consumer]' }], at);
+  assert.match(none.toolCall.args.command, /exit 3$/);
+  assert.equal(none.fromPrompt, null);
+  // The producer has no such step, and the commit comes before the take-in so that the merge is a merge.
+  assert.equal(R.scenario('b-take-in').attempts(playCtx).producer[0].some((s) => s.fromPrompt), false);
+  assert.match(steps[at - 1].args.command, /git commit/);
+  assert.deepEqual(R.scenario('b-take-in').takeIn, { key: 'consumer', ownSubject: 'Note the rehearsal consumer', landed: 'Implement the library' });
+});
+
+test('judgeTakeIn wants the heading and the command in the consumer\'s first message, every step to exit 0, and the merge commit on the integration branch', () => {
+  const steps = R.scenario('b-take-in').attempts(playCtx).consumer[0];
+  const at = steps.findIndex((s) => s.fromPrompt);
+  const exit = (n) => ({ role: 'tool', content: `taken\n[exit code ${n}]` });
+  const log = ({ exits = {}, first = landingBlock() } = {}) => steps.map((st, round) => ({
+    messages: [{ role: 'system', content: 's' }, { role: 'user', content: first }, ...(round > 0 ? [exit(exits[round - 1] ?? 0)] : [])],
+    turn: { role: 'runner', key: 'consumer', attempt: 1, round, toolCall: { name: st.tool }, ...(st.fromPrompt ? { fromPrompt: TAKE_IN_COMMAND } : {}) },
+  })).concat([{ messages: [{ role: 'user', content: first }, exit(exits[steps.length - 1] ?? 0)], turn: { role: 'runner', key: 'consumer', attempt: 1, round: steps.length, content: 'Done.' } }]);
+  // As the merged work's git log reads: the consumer's landing holds the take-in, which joins its own commit and the producer's landing.
+  const history = [
+    { sha: 'l', parents: ['p', 'm'], subject: 'Merge: Build on the library' },
+    { sha: 'm', parents: ['b', 'p'], subject: 'Merge: Build on the library (take in landed work)' },
+    { sha: 'p', parents: ['a', 'x'], subject: 'Merge: Implement the library' },
+    { sha: 'x', parents: ['a'], subject: 'Implement the library' },
+    { sha: 'b', parents: ['a'], subject: 'Note the rehearsal consumer' },
+    { sha: 'a', parents: [], subject: 'Commit0 base' },
+  ];
+  assert.deepEqual(R.judgeTakeIn('b-take-in', log(), playCtx, history), []);
+  assert.match(R.judgeTakeIn('b-take-in', log({ first: 'Build on the library. [rehearsal:consumer]' }), playCtx, history).join(), /holds no "## Work landing beside yours" block/);
+  assert.match(R.judgeTakeIn('b-take-in', log({ exits: { [at]: 1 } }), playCtx, history).join(), /the take-in command exited 1, wanted 0/);
+  assert.match(R.judgeTakeIn('b-take-in', log({ exits: { [at + 1]: 1 } }), playCtx, history).join(), /test -f tlslite\/_commit0_rehearsal\.py.* exited 1/);
+  assert.match(R.judgeTakeIn('b-take-in', log().filter((r) => r.turn.round !== at), playCtx, history).join(), /gives no command to take the work in with/);
+  assert.match(R.judgeTakeIn('b-take-in', [], playCtx, history).join(), /task consumer never made a request/);
+  // A fast-forward leaves no merge commit; a merge of another subject is not the take-in.
+  const without = history.filter((c) => c.sha !== 'm');
+  assert.match(R.judgeTakeIn('b-take-in', log(), playCtx, without).join(), /holds no merge commit "Merge: \.\.\. \(take in landed work\)"/);
+  const swap = (sha, change) => history.map((c) => (c.sha === sha ? { ...c, ...change } : c));
+  assert.match(R.judgeTakeIn('b-take-in', log(), playCtx, swap('m', { parents: ['b'] })).join(), /holds no merge commit/);
+  // The take-in must join the consumer's own commit and the producer's landing, and the consumer's landing must hold it.
+  assert.match(R.judgeTakeIn('b-take-in', log(), playCtx, swap('m', { parents: ['a', 'p'] })).join(), /first parent is "Commit0 base", wanted the consumer's own commit/);
+  assert.match(R.judgeTakeIn('b-take-in', log(), playCtx, swap('m', { parents: ['b', 'a'] })).join(), /second parent is "Commit0 base", wanted the landing of "Implement the library"/);
+  assert.match(R.judgeTakeIn('b-take-in', log(), playCtx, swap('l', { parents: ['p', 'b'] })).join(), /does not hold it/);
+  assert.match(R.judgeTakeIn('b-take-in', log(), playCtx, null).join(), /could not be read/);
+  assert.deepEqual(R.judgeTakeIn('b-cap', [], playCtx, null), [], 'a scenario with no take-in has nothing to judge');
+  // The scenario is judged as b-retry is: both tasks completed and merged work scored above the baseline.
+  const e = R.scenario('b-take-in').expect;
+  assert.deepEqual([e.scoredFrom, e.tasks, e.passedAboveBaseline, e.truncated], ['merged', { completed: 2 }, true, false]);
+});
+
+test('a task that ends done with a finding must still land: b-edit-retry names its note, and judgeLanded misses it when absent', () => {
+  const s = R.scenario('b-edit-retry');
+  const closing = s.attempts(playCtx).after[0].at(-1);
+  assert.equal(closing.args.status, 'done');
+  assert.equal(closing.args.findings.length, 1);
+  assert.deepEqual(s.landed, ['commit0-rehearsal-note.md']);
+  assert.deepEqual(R.judgeLanded('b-edit-retry', () => true), []);
+  assert.match(R.judgeLanded('b-edit-retry', () => false).join(), /commit0-rehearsal-note\.md never landed/);
+  assert.deepEqual(R.judgeLanded('a-done', () => false), []);
+});
+
 test('judgeBatch holds the rehearsal\'s batch.json to its one run, marked a rehearsal and never a paid batch', () => {
   const record = L.batchRecord({
     keyBeforeUsd: null, keyAfterUsd: null, budgetUsd: null, stoppedByBudget: null, jobs: 1, overlapped: false, seed: 's', dryRun: false,

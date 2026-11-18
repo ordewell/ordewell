@@ -21,8 +21,9 @@
  * have ended, and batch.json is whole and finished. The libraries' images must
  * be on the host; --cpus and --memory size each run so that two pairs fit.
  */
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { checkedBenchDir } from '../lib/data-dir.mjs';
 import * as L from './lib.mjs';
@@ -74,10 +75,24 @@ function strays(before, after, seed) {
   return [...after.containers, ...after.networks].filter((x) => !known.has(x.id) && x.name.includes(seed.toLowerCase())).map((x) => x.id);
 }
 
-/** The turns the fake played, from its request log. */
-function turnsOf(file) {
+/** The requests the fake heard, from its request log. */
+function requestsOf(file) {
   if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).turn).filter(Boolean);
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/**
+ * The commits the copy of the arm's workdir ends on, or null when git cannot
+ * read them: `ordewell merge` has folded the integration branch into the
+ * workdir's own and deleted it, so its history is the base branch's. The copy
+ * is the box's own repository, so git reads it with no configuration of the
+ * host's or its own to run, and only to list commits.
+ */
+function historyOf(armDir) {
+  const env = { PATH: process.env.PATH, HOME: armDir, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' };
+  const r = spawnSync('git', ['--git-dir', path.join(armDir, '.git'), 'log', '--format=%H%x09%P%x09%s', 'HEAD', '--'], { env, encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  return r.stdout.split('\n').filter(Boolean).map((l) => { const [sha, parents, ...subject] = l.split('\t'); return { sha, parents: parents.split(' ').filter(Boolean), subject: subject.join('\t') }; });
 }
 
 /** The context the fake was started with, for reading its scripts back: only the step tools matter here. */
@@ -123,7 +138,14 @@ for (const name of names) {
   const failures = R.judgeRehearsal(name, result);
   failures.push(...R.judgeBatch(batchRecord, { lib: only, arm: s.arm, rehearsal: name }));
   if (resultsSize() !== sizeBefore) failures.push(`${resultsFile} grew: a rehearsal's result was appended to the paid runs' results`);
-  if (runDir) failures.push(...R.judgePlayed(name, turnsOf(path.join(runDir, 'rehearsal-requests.jsonl')), playCtx(libs, only)));
+  if (runDir) {
+    const requests = requestsOf(path.join(runDir, 'rehearsal-requests.jsonl'));
+    const ctx = playCtx(libs, only);
+    failures.push(...R.judgePlayed(name, requests.map((r) => r.turn).filter(Boolean), ctx));
+    const armDir = path.join(runDir, 'arm-workdir');
+    if (s.takeIn) failures.push(...R.judgeTakeIn(name, requests, ctx, historyOf(armDir)));
+    failures.push(...R.judgeLanded(name, (file) => fs.existsSync(path.join(armDir, file))));
+  }
   if (runDir && s.planOnly) {
     const digestFile = path.join(runDir, 'plan.json');
     failures.push(...R.judgePlanOnlyDir({
