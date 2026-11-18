@@ -1,0 +1,9 @@
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1763400000-dsk","model":"deepseek/deepseek-v4.1-flash","object":"chat.completion.chunk","created":1763400000,"choices":[{"index":0,"delta":{"role":"assistant","content":"Reading"},"finish_reason":null}]}
+
+data: {"id":"gen-1763400000-dsk","model":"deepseek/deepseek-v4.1-flash","object":"chat.completion.chunk","created":1763400000,"choices":[{"index":0,"delta":{"content":" it."},"finish_reason":"stop"}]}
+
+data: {"id":"gen-1763400000-dsk","model":"deepseek/deepseek-v4.1-flash","object":"chat.completion.chunk","created":1763400000,"choices":[],"usage":{"prompt_tokens":9000,"completion_tokens":4,"total_tokens":9004,"cost":0.0003,"prompt_tokens_details":{"cached_tokens":8704}},"openrouter_metadata":{"requested":"deepseek/deepseek-v4.1-flash","strategy":"default","region":null,"summary":"","attempt":2,"is_byok":false,"attempts":[{"provider":"Novita","model":"deepseek/deepseek-v4.1-flash","status":429},{"provider":"DeepInfra","model":"deepseek/deepseek-v4.1-flash","status":200}],"endpoints":{"total":3,"available":[{"model":"deepseek/deepseek-v4.1-flash","provider":"Novita","selected":false},{"model":"deepseek/deepseek-v4.1-flash","provider":"DeepInfra","selected":true},{"model":"deepseek/deepseek-v4.1-flash","provider":"SiliconFlow","selected":false}]}}}
+
+data: [DONE]

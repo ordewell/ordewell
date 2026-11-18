@@ -208,6 +208,8 @@ export function usageRecordOf(source: string, model: string, usage: ModelUsage |
   }
   const context = contextTokens(usage);
   if (context !== undefined) record.contextTokens = context;
+  if (usage.provider) record.provider = usage.provider;
+  if (usage.generationId) record.generationId = usage.generationId;
   return measured ? record : undefined;
 }
 
