@@ -8,6 +8,7 @@
 //
 //   node bench/commit0/drive.mjs --dry-run --fixture --image <image>
 //   node bench/commit0/drive.mjs --dry-run --libs <libraries.json>
+//   node bench/commit0/drive.mjs --rehearse <scenario> --libs <libraries.json>   (rehearse.mjs runs them all)
 //   node bench/commit0/drive.mjs --run --libs <libraries.json> --provider-pin <provider>
 //   node bench/commit0/drive.mjs --sweep
 
@@ -17,11 +18,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { REPO_ROOT, checkedBenchDir } from '../lib/data-dir.mjs';
 import * as L from './lib.mjs';
+import * as R from './rehearsal.mjs';
 
 const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) [options]
 
   --dry-run              set up the box and run every check; no model call, no key in the box
   --run                  run the arms: spends on the OpenRouter key in OPENROUTER_API_KEY
+  --rehearse <scenario>  run the arms on a scripted fake provider in the box: no key, no spend
+                         (refuses to start with a real key in the environment; see rehearse.mjs)
   --sweep                remove the boxes and networks of drivers no longer running, then exit
                          (with --dry-run or --run: sweep first, then go on)
   --libs <file>          the libraries, as libraries.example.json shows
@@ -35,6 +39,10 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --cpus <n>             the box's CPU quota (default ${L.CPUS})
   --memory <size>        the box's memory quota, swap held to it (default ${L.MEMORY})
   --stall-min <min>      stop a run that waits this long on a person with nothing running (default ${L.STALL_MIN})
+  --settle-min <min>     the settle window (default ${L.SETTLE_MS / 60_000}); with --no-start-min, --poll-sec
+  --no-start-min <min>   and --wall-min, for a rehearsal to take minutes (defaults ${L.NO_START_MS / 60_000},
+  --poll-sec <s>         ${30} and the ${L.WALL_CAP_MS / 3_600_000} h wall-clock cap)
+  --wall-min <min>
   --ordewell-root <dir>  the built Ordewell tree to pack into the box (default: the tree this driver is in)
   --allow-stale-dist     run a dist older than that tree's sources; the result says so and is not valid
   --keep                 leave the box and its network up after a dry run, for a look inside
@@ -52,7 +60,6 @@ const LABEL = 'commit0-bench=1';
 const NODE_IN_BOX = '/opt/node/bin/node';
 const ORDEWELL_IN_BOX = '/opt/ordewell';
 const BOX_HOME = '/root';
-const POLL_MS = 30_000;
 const MERGE_TIMEOUT_MS = 15 * 60 * 1000;
 const STOP_TIMEOUT_MS = 2 * 60 * 1000;
 /** How long a stopped run's attempts get to end before the followers are signalled. */
@@ -74,6 +81,19 @@ if (opts.help) {
 }
 
 const ORDEWELL_ROOT = opts.ordewellRoot ?? REPO_ROOT;
+/** A rehearsal follows a live run through every path a paid run takes; only the provider is the fake. */
+const LIVE = opts.run || Boolean(opts.rehearse);
+const POLL_MS = (opts.pollSec ?? 30) * 1000;
+const SETTLE_MS = opts.settleMin ? opts.settleMin * 60_000 : undefined;
+const NO_START_MS = opts.noStartMin ? opts.noStartMin * 60_000 : undefined;
+if (opts.rehearse) {
+  R.scenario(opts.rehearse);
+  const keys = R.realKeysIn(process.env);
+  if (keys.length) {
+    console.error(`a rehearsal never runs with a real key in the environment: unset ${keys.join(', ')}`);
+    process.exit(2);
+  }
+}
 
 /**
  * What every child of this process sees. A dry run drops the key from it, so
@@ -81,6 +101,7 @@ const ORDEWELL_ROOT = opts.ordewellRoot ?? REPO_ROOT;
  */
 const hostEnv = { ...process.env };
 if (opts.dryRun) delete hostEnv.OPENROUTER_API_KEY;
+if (opts.rehearse) hostEnv.OPENROUTER_API_KEY = R.FAKE_KEY;
 
 function exec(cmd, args, { input, timeoutMs, log, cwd } = {}) {
   return new Promise((resolve) => {
@@ -376,11 +397,14 @@ async function openSandbox(lib, runId, runtime, settings) {
       PIP_NO_INDEX: '1',
       AI_PROVIDER: L.PROVIDER,
       ORCHESTRATOR_MODEL: L.PROVIDER_MODEL,
+      ...(opts.rehearse ? { OPENROUTER_BASE_URL: `http://127.0.0.1:${R.FAKE_PORT}/v1` } : {}),
     };
     const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
     // By name only, so the value never sits in an argument list; and never on a dry run.
-    if (opts.run) envArgs.push('-e', 'OPENROUTER_API_KEY');
+    if (LIVE) envArgs.push('-e', 'OPENROUTER_API_KEY');
     const mounts = ['-v', `${runtime}:${ORDEWELL_IN_BOX}:ro`];
+    // Outside /opt/ordewell, whose processes the driver counts as Ordewell's.
+    if (opts.rehearse) mounts.push('-v', `${path.dirname(new URL(import.meta.url).pathname)}:${R.FAKE_DIR_IN_BOX}:ro`);
     const box = await docker(['run', '-d', '--init', '--name', sb.box, '--label', LABEL, '--network', sb.network, '--user', '0:0',
       ...L.boxRunArgs({ cpus: settings.cpus, memory: settings.memory, parallel: settings.parallel, driver }),
       ...nodeMount, ...mounts, ...envArgs, '--entrypoint', 'sleep', lib.image, 'infinity']);
@@ -398,12 +422,29 @@ async function openSandbox(lib, runId, runtime, settings) {
     must(check(lib.name, 'box', setup.code === 0, setup.code === 0 ? setup.stdout.trim().split('\n').join(', ') : setup.stderr.trim()), 'box setup failed');
     const key = await inBox(sb, ['sh', '-c', 'test -n "${OPENROUTER_API_KEY:-}"']);
     const keyIn = key.code === 0;
-    must(check(lib.name, 'key in the box', keyIn === opts.run, opts.run ? (keyIn ? 'present, for the run' : 'missing: export OPENROUTER_API_KEY') : (keyIn ? 'present on a dry run' : 'absent, as a dry run needs')), 'key check');
+    must(check(lib.name, 'key in the box', keyIn === LIVE, opts.run ? (keyIn ? 'present, for the run' : 'missing: export OPENROUTER_API_KEY') : opts.rehearse ? (keyIn ? 'the fake\'s placeholder, for the rehearsal' : 'missing') : (keyIn ? 'present on a dry run' : 'absent, as a dry run needs')), 'key check');
+    if (opts.rehearse) await startFake(lib, sb);
     return sb;
   } catch (err) {
-    if (!opts.keep || opts.run) await close();
+    if (!opts.keep || LIVE) await close();
     throw err;
   }
+}
+
+/** The scripted provider, on the box's loopback, where the box's OPENROUTER_BASE_URL points. */
+async function startFake(lib, sb) {
+  const table = JSON.parse(fs.readFileSync(path.join(ORDEWELL_ROOT, 'packages/core/src/services/modelDetailsSnapshot.json'), 'utf8'));
+  const longSec = R.longCommandSec({ settleMin: SETTLE_MS ? SETTLE_MS / 60_000 : L.SETTLE_MS / 60_000, pollSec: POLL_MS / 1000 });
+  const started = await docker(['exec', '-d', sb.box, NODE_IN_BOX, path.posix.join(R.FAKE_DIR_IN_BOX, R.FAKE_SERVER),
+    '--scenario', opts.rehearse, '--port', String(R.FAKE_PORT), '--src', srcDirOf(lib), '--tests', lib.testDir.replace(/^\.\//, '').replace(/\/+$/, ''),
+    '--long-sec', String(longSec), '--model', L.PROVIDER_MODEL, '--context', String(L.snapshotWindow(table) ?? 131072), '--log', R.FAKE_LOG_IN_BOX]);
+  let ready = false;
+  for (let i = 0; i < 40 && !ready && started.code === 0; i++) {
+    const r = await inBox(sb, [NODE_IN_BOX, '-e', `fetch('http://127.0.0.1:${R.FAKE_PORT}/v1/models').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))`]);
+    ready = r.code === 0;
+    if (!ready) await sleep(250);
+  }
+  must(check(lib.name, 'rehearsal fake', ready, ready ? `scenario ${opts.rehearse} on 127.0.0.1:${R.FAKE_PORT} in the box; the long command runs ${longSec} s` : `did not answer: ${started.stderr.trim()}`), 'the fake provider did not start');
 }
 
 function inBox(sb, argv, { workdir, env = {}, input, timeoutMs, log } = {}) {
@@ -830,8 +871,9 @@ async function checkChooser(lib, sb) {
   ]);
 }
 
-const keySpent = () => L.keyUsage(process.env.OPENROUTER_API_KEY);
-const settledKeySpent = () => L.settledKeyUsage(process.env.OPENROUTER_API_KEY);
+// A rehearsal's key is the fake's placeholder: there is no usage to read, and it must never be sent out.
+const keySpent = async () => (opts.rehearse ? null : L.keyUsage(process.env.OPENROUTER_API_KEY));
+const settledKeySpent = async () => (opts.rehearse ? null : L.settledKeyUsage(process.env.OPENROUTER_API_KEY));
 
 async function transcriptSummary(sb) {
   const r = await inBox(sb, ['sh', '-c', `cat ${BOX_HOME}/.ordewell/runners/ordewell/sessions/*/transcript.jsonl 2>/dev/null || true`]);
@@ -890,7 +932,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
       return 'the batch budget is spent';
     }
     if (!runStart || !plan) return null;
-    const start = L.startDecision({ sinceRunMs: nowMs - runStart.atMs, usageLines: transcripts.usageLines - runStart.usageLines, plan });
+    const start = L.startDecision({ sinceRunMs: nowMs - runStart.atMs, usageLines: transcripts.usageLines - runStart.usageLines, plan, boundMs: NO_START_MS });
     if (start.stop) {
       stopped = { why: start.why, atMs: nowMs - started, spentUsd: cap.spentUsd, detail: start.detail };
       return start.detail;
@@ -901,7 +943,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
       stalled = s.stalled;
       return `stalled: "${s.stalled.task.title}" waits on ${s.stalled.waiting} for ${Math.round(s.stalled.sinceMs / 60_000)} min with nothing running`;
     }
-    const d = L.settleDecision({ plan, activity: view.activity, fingerprint: L.planFingerprint(plan, transcripts.usageLines), nowMs, state: settle });
+    const d = L.settleDecision({ plan, activity: view.activity, fingerprint: L.planFingerprint(plan, transcripts.usageLines), nowMs, state: settle, settleMs: SETTLE_MS });
     settle = d.state;
     if (d.settled) {
       endMs = d.state.sinceMs;
@@ -960,9 +1002,11 @@ async function realArm(lib, sb, arm, settings, runDir) {
     throw err;
   } finally {
     endMs = endMs ?? Date.now();
+    // Recorded, never judged (D5): whether a follower returned by itself or was ended by the stop.
+    const endedBeforeStop = new Set(followers.filter((f) => f.done).map((f) => f.name));
     // A run that never started has nothing to merge, and its result is the failure, not a score.
     closing = await stopRun(lib, sb, { sessionId, followers, merge: !aborted && stopped?.why !== 'no-start', log });
-    for (const f of followers) if (f.done) steps[f.name] = { exit: f.result.code, timedOut: f.result.timedOut };
+    for (const f of followers) if (f.done) steps[f.name] = { exit: f.result.code, timedOut: f.result.timedOut, ended: endedBeforeStop.has(f.name) ? 'by itself' : 'by the stop' };
     if (closing.merge) steps.merge = closing.merge;
     log.end();
   }
@@ -1297,9 +1341,14 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     }
     const reference = await collectReference(lib, sb);
     must(reference.ok, 'the tests do not collect offline at the reference');
-    const refFiles = opts.dryRun ? await exportReferenceFiles(lib, sb, runDir) : null;
+    const refFiles = opts.dryRun || opts.rehearse ? await exportReferenceFiles(lib, sb, runDir) : null;
     record.leak = await flattenAndProbe(lib, sb);
     must(record.leak.ok, 'the reference implementation is reachable: nothing runs');
+    // After the probe, which must still find the reference out of reach: the scripted agent's work is this tar.
+    if (opts.rehearse) {
+      const put = await onHost('docker cp "$2" "$1"', [`${sb.box}:${R.REFERENCE_TAR_IN_BOX}`, refFiles]);
+      must(check(lib.name, 'reference source for the scripted agent', put.code === 0, put.code === 0 ? R.REFERENCE_TAR_IN_BOX : put.stderr.trim()), 'the reference files cannot be put in the box');
+    }
     record.network = await collect(lib, sb, reference);
     must(record.network.ok, 'a dependency is missing from the image');
     const base = await evaluate(lib, sb, fs.createWriteStream(path.join(runDir, 'baseline-tests.log')));
@@ -1334,6 +1383,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     record.aborted = err.message;
   } finally {
     if (sb) {
+      if (opts.rehearse) await copyOut(sb, R.FAKE_LOG_IN_BOX, path.join(runDir, 'rehearsal-requests.jsonl'));
       await copyOut(sb, `${BOX_HOME}/.ordewell`, path.join(runDir, 'ordewell-home'));
       await copyOut(sb, path.posix.join(lib.workdir, '.ordewell'), path.join(runDir, 'workspace-ordewell'));
       record.transcripts = readTranscripts(path.join(runDir, 'ordewell-home'));
@@ -1360,6 +1410,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,
+    rehearsal: opts.rehearse ?? null,
     // Whether arm A's score came from its own work, and if not, which task's work had no source.
     scoredSource: record.files?.source ?? null,
     // What Ordewell recorded for the session: the planner's turns, the supervisor's and every attempt's, as the providers priced them.
@@ -1378,7 +1429,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   };
   fs.writeFileSync(path.join(runDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);
   // A batch appends its runs' results itself, one at a time, once they have all ended.
-  if (!opts.dryRun && !opts.batchDir) fs.appendFileSync(path.join(path.dirname(runsDir), 'results.jsonl'), `${JSON.stringify(result)}\n`);
+  if (opts.run && !opts.batchDir) fs.appendFileSync(path.join(path.dirname(runsDir), 'results.jsonl'), `${JSON.stringify(result)}\n`);
   return result;
 }
 
@@ -1402,13 +1453,13 @@ async function main() {
   if (opts.sweep) {
     console.log('Commit0 sweep: labelled containers and networks of drivers no longer running');
     printSweep(await sweep());
-    if (!opts.dryRun && !opts.run) return;
+    if (!opts.dryRun && !LIVE) return;
   }
   const dataDir = checkedBenchDir('commit0');
-  const runsDir = opts.batchDir ?? path.join(dataDir, opts.dryRun ? 'dry-runs' : 'runs');
+  const runsDir = opts.batchDir ?? path.join(dataDir, L.runsDirName(opts));
   fs.mkdirSync(runsDir, { recursive: true });
   const libs = loadLibraries();
-  console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);
+  console.log(`Commit0 driver: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}; model ${L.MODEL_ID}; provider pin ${opts.providerPin ?? 'not given'}; Ordewell from ${ORDEWELL_ROOT}; data in ${dataDir}`);
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
   // A batch holds the key's lock for all its runs.
   const release = opts.run && !opts.batchDir ? L.lockKey(dataDir) : () => {};
