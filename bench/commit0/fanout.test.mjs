@@ -39,3 +39,13 @@ test('the four-level shape passes P3; a chained one does not', () => {
 test('a serial plan is no fan-out', () => {
   assert.equal(fanOutShape({ tasks: [t('a', []), t('b', ['a']), t('c', ['b'])] }).wide, false);
 });
+
+test('a read-only check is the closing check only through its loop\'s fix, whose brief is the one told', () => {
+  const note = 'Plan shape: this check runs after the 4 slices. … a slice that did not land …';
+  const looped = { tasks: [t('r', []), ...slices(4, ['r']), t('check', sliceIds(4), { readOnly: true, prompt: 'Review it.', loop: { body: ['fix'], maxRounds: 2 } }), t('fix', ['check'], { prompt: `Fix it.\n\n${note}` })] };
+  const p = fanOutProperties(looped);
+  assert.deepEqual(p.numbers.faults, []);
+  assert.equal(p.P6_closingToldOfUnlanded, true);
+  const alone = { tasks: [t('r', []), ...slices(4, ['r']), t('review', sliceIds(4), { readOnly: true, prompt: `Review it.\n\n${note}` })] };
+  assert.deepEqual(fanOutProperties(alone).numbers.faults, ['no-closing']);
+});

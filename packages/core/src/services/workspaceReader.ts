@@ -330,7 +330,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const start = entry.baseRef && SHA.test(entry.baseRef) ? entry.baseRef : null;
     // What the task took in from its siblings is theirs: its changes start at its fork point, as its diff's do (ADR-0013).
     const forkOf = async (cwd: string, head: string): Promise<string | null> => start === null ? null
-      : taskForkPoint(invoker, cwd, await readOnlyGitArgs(invoker, cwd), { start, head, landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrationBranch: runRepo.integrationBranch }) });
+      : taskForkPoint(invoker, cwd, await readOnlyGitArgs(invoker, cwd), { start, head, landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: landingsIn(run, repo).map(({ merge }) => merge) }) });
     const changedBy = { task: record.taskId };
     if (record.status !== 'merged' && fs.existsSync(entry.worktree)) {
       const worktree = fs.realpathSync(entry.worktree);

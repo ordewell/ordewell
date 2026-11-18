@@ -95,7 +95,7 @@ describe('applyChainReview', () => {
   });
 
   it('names several removed tasks together', () => {
-    expect(revisionNote(['"A"', '"B"'], [])).toBe('Plan revision: this task no longer waits for "A" and "B", which run in parallel with it. Where this brief says to wait for them, do not: take in their work once it has landed, and until then run this slice\'s tests, report which fail only because that work has not landed, and leave those to the closing check.');
+    expect(revisionNote(['"A"', '"B"'], [])).toBe('Plan revision: this task no longer waits for "A" and "B", which run in parallel with it. Where this brief says to wait for them, do not: take in their work once it has landed, and until then run this slice\'s tests, name each that fails only because that work has not landed in a finding, and leave those to the closing check.');
     expect(revisionNote([], ['"C"'])).toBe('Plan revision: This task now also runs after "C".');
   });
 });

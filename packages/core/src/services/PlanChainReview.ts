@@ -225,7 +225,7 @@ export function revisionNote(removed: readonly string[], added: readonly string[
   const list = (names: readonly string[]) => names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
   const parts: string[] = ['Plan revision:'];
   if (removed.length) {
-    parts.push(`this task no longer waits for ${list(removed)}, which ${removed.length > 1 ? 'run' : 'runs'} in parallel with it. Where this brief says to wait for ${removed.length > 1 ? 'them' : 'it'}, do not: take in ${removed.length > 1 ? 'their' : 'its'} work once it has landed, and until then run this slice's tests, report which fail only because that work has not landed, and leave those to the closing check.`);
+    parts.push(`this task no longer waits for ${list(removed)}, which ${removed.length > 1 ? 'run' : 'runs'} in parallel with it. Where this brief says to wait for ${removed.length > 1 ? 'them' : 'it'}, do not: take in ${removed.length > 1 ? 'their' : 'its'} work once it has landed, and until then run this slice's tests, name each that fails only because that work has not landed in a finding, and leave those to the closing check.`);
   }
   if (added.length) parts.push(`${removed.length ? 'It' : 'This task'} now also runs after ${list(added)}.`);
   return parts.join(' ');

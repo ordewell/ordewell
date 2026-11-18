@@ -49,8 +49,9 @@ export function fanOutShape(plan) {
   if (slices.length < 2) return { ...none, levels };
   const byLevel = (a, b) => level.get(a.id) - level.get(b.id);
   const gates = [...spine].filter((t) => slices.every((s) => anc.get(s.id).has(t.id))).sort(byLevel);
+  const edits = (t) => (t?.type ?? 'ai') === 'ai' && !t.readOnly;
   const closers = tasks.filter((t) => !body.has(t.id) && t.type !== 'user' && !t.ops
-    && (t.type !== 'script' || t.loop !== undefined || t.readOnly === true)
+    && (edits(t) || (t.loop?.body ?? []).some((id) => edits(byId.get(id))))
     && slices.every((s) => anc.get(t.id).has(s.id))).sort(byLevel);
   const perLevel = new Map();
   for (const s of slices) perLevel.set(level.get(s.id), (perLevel.get(level.get(s.id)) ?? 0) + 1);
@@ -74,7 +75,8 @@ export function fanOutProperties(plan, { baseBroken = false } = {}) {
   const gate = s.gates[0];
   const closer = s.closers[0];
   const tasks = plan?.tasks ?? [];
-  const closingBriefs = closer ? (closer.type === 'script' ? tasks.filter((t) => closer.loop?.body?.includes(t.id)) : [closer]) : [];
+  // As core's withShapeNotes: a check that cannot edit has its note on its loop's body.
+  const closingBriefs = closer ? ((closer.type ?? 'ai') === 'ai' && !closer.readOnly ? [closer] : tasks.filter((t) => closer.loop?.body?.includes(t.id))) : [];
   const sharedOk = s.shared.length <= 3 && s.shared.every((m) => gate && (m.dependencies ?? []).every((d) => d === gate.id));
   return {
     wide: s.wide,

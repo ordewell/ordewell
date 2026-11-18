@@ -73,10 +73,11 @@ function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: 
  * task is an AI task that edits the repository and is neither research, an
  * ops task, a loop's check nor in a loop's body. The change tasks ordered
  * against every other one are its spine: those every slice waits for are its
- * gates, the rest of the change tasks are its slices. A closer is any task but
- * an ops task or a manual one that waits for every slice; a script task counts
- * only as a loop's check or read-only, since a script after everything may be
- * a push.
+ * gates, the rest of the change tasks are its slices. A closer is a task that
+ * waits for every slice and can fix what still fails: an AI task that edits,
+ * or a loop's check whose body holds one. An ops task, a manual one and a
+ * script that is not a loop's check never count, since a script after
+ * everything may be a push.
  */
 export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const g = graph(tasks);
@@ -90,8 +91,9 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   if (slices.length < 2) return NONE;
   const byLevel = (a: Task, b: Task) => g.level.get(a.id)! - g.level.get(b.id)!;
   const gates = [...spine].filter((t) => slices.every((s) => anc(s).has(t.id))).sort(byLevel);
+  const fixer = new Set(tasks.filter((t) => t.type === 'ai' && !t.readOnly).map((t) => t.id));
   const closes = (t: Task) => !body.has(t.id) && t.type !== 'user' && !t.ops
-    && (t.type !== 'script' || t.loop !== undefined || t.readOnly === true)
+    && (fixer.has(t.id) || (t.loop?.body ?? []).some((id) => fixer.has(id)))
     && slices.every((s) => anc(t).has(s.id));
   const closers = tasks.filter(closes).sort(byLevel);
   const perLevel = new Map<number, number>();
@@ -150,7 +152,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /**
  * The reply applied: each task it adds, wired by Ordewell as its role says (a
- * restoring task waits for nothing and every slice waits for it; a closing
+ * restoring task waits for what every slice waited for, an install or a manual
+ * step it is checked against, and every slice waits for it; a closing
  * check waits for every slice, and so does a push or a manual step that waited
  * for every slice), then its dependency lists, held to everything
  * {@link applyChainReview} holds. A task is added only for the fault that asks
@@ -176,7 +179,11 @@ export function applyShapeReview(
   const ids = new Set(tasks.flatMap(function all(t: Task): string[] { return [t.id, ...t.subtasks.flatMap(all)]; }));
   const template = shape.slices[0];
   const top = Math.max(0, ...tasks.map((t) => t.order));
+  const sliceIds = new Set(shape.slices.map((s) => s.id));
+  const shared = shape.slices[0].dependencies.filter((d) => !sliceIds.has(d) && shape.slices.every((s) => s.dependencies.includes(d)));
   const added: Task[] = [];
+  let restoring: Task | undefined;
+  let closing: Task | undefined;
   const roles = new Set<string>();
   for (const e of entries) {
     if (!isRecord(e) || typeof e.id !== 'string' || !e.id || typeof e.title !== 'string' || !e.title.trim() || typeof e.prompt !== 'string' || !e.prompt.trim()) {
@@ -189,23 +196,23 @@ export function applyShapeReview(
     if (ids.has(e.id)) return { ok: false, error: `task "${e.id}" to add has an id the plan already has` };
     roles.add(role);
     ids.add(e.id);
-    added.push(createTask({
+    const task = createTask({
       id: e.id,
       order: top + 1 + added.length,
       title: e.title.trim(),
       description: e.title.trim(),
       prompt: e.prompt,
-      dependencies: role === 'closing' ? shape.slices.map((s) => s.id) : [],
+      dependencies: role === 'closing' ? shape.slices.map((s) => s.id) : [...new Set(shared)],
       assignedRunner: template.assignedRunner,
       assignedModel: template.assignedModel,
       taskMode: template.taskMode,
       autonomy: template.autonomy ?? 'AFK',
       sliceType: template.sliceType ?? 'AFK',
-    }));
+    });
+    added.push(task);
+    if (role === 'restoring') restoring = task;
+    else closing = task;
   }
-  const restoring = added.find((t) => !t.dependencies.length);
-  const closing = added.find((t) => t.dependencies.length > 0);
-  const sliceIds = new Set(shape.slices.map((s) => s.id));
   // A push or a manual step after every slice acts on what the closing check fixes too, so it waits for it (ADR-0072 R1).
   const anc = closing ? graph(tasks)?.anc : undefined;
   const actsAfterSlices = (t: Task) => (runsAsOps(t) || t.type === 'user') && shape.slices.every((s) => anc?.get(t.id)?.has(s.id));
