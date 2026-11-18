@@ -87,6 +87,9 @@ export function makeFeed({ tasks = 300, settled = 280, entries = 400, seed = 1, 
     }
   };
   refill();
+  // A settled task's attempt ended once, when it settled: its usage says so in every message, as the daemon's does.
+  const begun = state.when;
+  const settledUsage = (i) => usageOf(at(begun - (tasks - i) * 60_000));
   const statusOf = (i) => (i < state.settled ? 'completed' : state.running.includes(i) ? 'in_progress' : 'pending');
   const dependenciesOf = (i) => (i < 1 ? [] : [id(i - 1), ...(i > 20 && i % 3 === 0 ? [id(i - 20)] : [])]);
 
@@ -99,7 +102,7 @@ export function makeFeed({ tasks = 300, settled = 280, entries = 400, seed = 1, 
       assignedModel: { modelId: 'sonnet', modelLabel: 'Sonnet', thinkingEffort: 'medium', availableVariants: ['adaptive', 'low', 'medium', 'high', 'xhigh', 'max'] },
       taskMode: 'bypassPermissions', prompt: b.prompt, subtasks: [], sliceType: 'AFK',
       ...(status === 'pending' ? {} : { attempted: true }),
-      ...(status === 'completed' ? { attemptUsage: usageOf(at(state.when)), handoff: b.handoff } : {}),
+      ...(status === 'completed' ? { attemptUsage: settledUsage(i), handoff: b.handoff } : {}),
     };
   };
   const verdictOf = (i) => (i < state.settled ? { outcome: 'pass', reason: 'Verified: the runner reported completion through task_complete with status done.', checks: [{ name: 'task_complete', passed: true, skipped: false, detail: 'the runner called task_complete with status done' }] } : null);
@@ -108,7 +111,7 @@ export function makeFeed({ tasks = 300, settled = 280, entries = 400, seed = 1, 
     return {
       id: id(i), type: 'ai', status, verdict: verdictOf(i),
       ...(status === 'pending' ? {} : { attempted: true }),
-      ...(status === 'completed' ? { attemptUsage: usageOf(at(state.when)), handoff: taskBasis(i).handoff } : {}),
+      ...(status === 'completed' ? { attemptUsage: settledUsage(i), handoff: taskBasis(i).handoff } : {}),
       ...(status === 'in_progress' ? { idleSince: null } : {}),
     };
   };

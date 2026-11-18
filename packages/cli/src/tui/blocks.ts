@@ -822,17 +822,54 @@ function drawn(block: DisplayBlock, cols: number, detailAll: boolean): string[] 
   return lines;
 }
 
+/** The chat-pane lines of `blocks[i]`: the block, the keys under the request being answered, and the blank line after it. */
+function blockChunk(blocks: readonly DisplayBlock[], i: number, cols: number, detailAll: boolean, answering?: ApprovalBlock): string[] {
+  const block = blocks[i]!;
+  if (block.type === 'usage') return [];
+  const lines = drawn(block, cols, detailAll);
+  const keys = block === answering ? [approvalKeysLine(block, cols)] : [];
+  // A skill load sits right under the message that loaded it.
+  const gap = blocks[i + 1]?.type !== 'skill_load' ? [''] : [];
+  return keys.length === 0 && gap.length === 0 ? lines : [...lines, ...keys, ...gap];
+}
+
 /** The conversation as chat-pane lines, a blank line after each block; `answering` is the request the task view's keys answer, which carries them under it. The token line is not among them. */
 export function conversationLines(blocks: readonly DisplayBlock[], cols: number, detailAll: boolean, answering?: ApprovalBlock): string[] {
-  const lines: string[] = [];
-  for (const [i, block] of blocks.entries()) {
-    if (block.type === 'usage') continue;
-    lines.push(...drawn(block, cols, detailAll));
-    if (block === answering) lines.push(approvalKeysLine(block, cols));
-    // A skill load sits right under the message that loaded it.
-    if (blocks[i + 1]?.type !== 'skill_load') lines.push('');
+  return conversationTail(blocks, blocks.length, cols, detailAll, Infinity, answering).lines;
+}
+
+/** How many chat-pane lines `blocks[from..]` draw. */
+export function conversationLength(blocks: readonly DisplayBlock[], from: number, cols: number, detailAll: boolean, answering?: ApprovalBlock): number {
+  let count = 0;
+  for (let i = from; i < blocks.length; i += 1) count += blockChunk(blocks, i, cols, detailAll, answering).length;
+  return count;
+}
+
+/**
+ * The last lines of `blocks[0..end)`, at least `want` of them where there are
+ * that many, laid out from the newest block back: a long transcript's older
+ * blocks cost nothing until someone scrolls to them. `from` is the first block
+ * the lines start at; nothing before it is drawn.
+ */
+export function conversationTail(
+  blocks: readonly DisplayBlock[], end: number, cols: number, detailAll: boolean, want: number, answering?: ApprovalBlock,
+): { lines: string[]; from: number } {
+  const chunks: string[][] = [];
+  let count = 0;
+  let from = end;
+  while (from > 0 && count < want) {
+    from -= 1;
+    const chunk = blockChunk(blocks, from, cols, detailAll, answering);
+    chunks.push(chunk);
+    count += chunk.length;
   }
-  return lines;
+  // Usage blocks draw nothing, so the ones left above take no lines either.
+  while (from > 0 && blocks[from - 1]!.type === 'usage') from -= 1;
+  const lines: string[] = [];
+  for (let c = chunks.length - 1; c >= 0; c -= 1) {
+    for (const line of chunks[c]!) lines.push(line);
+  }
+  return { lines, from };
 }
 
 /**

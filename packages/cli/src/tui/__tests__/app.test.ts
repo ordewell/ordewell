@@ -129,6 +129,30 @@ describe('createApp', () => {
     }
   });
 
+  it('paints nothing for a message that changes nothing on screen', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ sessionId: 's1' });
+      h.app.start();
+      const before = h.frames.length;
+      const shown = h.app.getState();
+
+      // A log batch for a task no view is open on, and one for another session.
+      h.app.dispatch({ type: 'taskLog', sessionId: 's1', taskId: 'nobody', attempt: 1, events: [] });
+      h.app.dispatch({ type: 'taskLog', sessionId: 'elsewhere', taskId: 't1', attempt: 1, events: [] });
+      await vi.advanceTimersByTimeAsync(FRAME_BUDGET_MS * 3);
+
+      expect(h.app.getState()).toBe(shown);
+      expect(h.frames).toHaveLength(before);
+
+      h.app.dispatch({ type: 'notice', message: 'something to show' });
+      await vi.advanceTimersByTimeAsync(FRAME_BUDGET_MS);
+      expect(h.frames).toHaveLength(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('performs the effects an action produces', () => {
     const h = harness();
     h.app.start();
@@ -174,9 +198,13 @@ describe('createApp', () => {
         tasks: [{ id: 't1', order: 1, title: 'Add the login route', type: 'ai', status: 'in_progress', dependencies: [] }],
       });
       h.app.start();
+      const drawn = h.frames.length;
 
       vi.advanceTimersByTime(500);
       expect(h.app.getState().spinnerFrame).toBeGreaterThan(0);
+      // Each turn is a state of its own, so it paints.
+      vi.advanceTimersByTime(FRAME_BUDGET_MS);
+      expect(h.frames.length).toBeGreaterThan(drawn);
     } finally {
       vi.useRealTimers();
     }
