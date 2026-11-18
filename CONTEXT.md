@@ -2532,7 +2532,10 @@ workspace path) loses its worktrees, and its integration branch in each repo
 whose HEAD already contains it; it keeps the others. A run closes
 when its last attempt ends, however it ends — verdict, cancel, Mark complete or a
 failed spawn — so the next one decides its own mode. The field belongs to one
-plan: a fork must not copy it.
+plan: a fork must not copy it. The record names the session that minted it
+(`session`), and a session that loads a copy of another's plan under its own id
+adopts none of it: it prunes nothing, keeps no record and starts clean. A record
+saved before runs named theirs is taken by the first session that adopts it.
 A record saved in the ADR-0013 shape (the refs on the run itself, one `worktree`
 per task) is converted to a group of one when plan state is loaded, so a session
 saved by 0.4.23 resumes and hands off as it would have.
@@ -3448,7 +3451,8 @@ fields (verdict, `idleSince`, isolation, checkpoint, queued messages,
 last status update said, the checkpoint question only while the task still
 waits at it. A status update replaces every status field of each task it
 carries, and carries only the tasks that moved, with every task again every
-half minute so that a surface a change missed comes right; what it says of the
+half minute so that a surface a change missed comes right (a settled task only
+for a minute after it last moved, since nothing moves it after); what it says of the
 run is whole each time. The daemon sends `Session.runSnapshot()`, always whole,
 as a `run_snapshot` frame right after `connected`, so a client that joins
 mid-run has the run before the next update; the session routes' load and read

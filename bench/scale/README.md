@@ -36,6 +36,100 @@ node bench/scale/real.mjs .ordewell/sessions        # what real runs left, as ag
 | `scale.test.mjs` | Runs `ops.mjs`, `live.mjs` and `target.mjs` small under `npm run test:bench`, since a change to core's internals breaks them with no type error. |
 | `compare.test.mjs` | `compare.mjs`, with no run at all. |
 
+## Terminal UI
+
+What the TUI costs a long session, with no terminal and no daemon: the messages a
+daemon sends a client go through the TUI's own inbound stream, reducer and
+`render`, and `createApp` coalesces the frames as it does for a user. For judging a
+fix to its lag or memory growth by figures taken before and after it.
+
+```bash
+node bench/scale/build-tui.mjs                      # after any change to packages/cli or packages/core (core's source is bundled, no dist)
+node bench/scale/tui.mjs --profile --out tui.json   # the default size, swept over settled tasks and conversation entries
+node bench/scale/tui.mjs --no-sweep --minutes 2     # one configuration, a quicker look
+node bench/scale/tui.mjs --session path/to/saved-session.json --profile
+```
+
+It starts itself again with `--expose-gc`, which the heap figures need. The default
+run takes tens of minutes at full size, since a stream the TUI cannot keep up with
+costs what it costs: `--minutes` and `--sweep-minutes` shorten it.
+
+| Option | Default | |
+| --- | --- | --- |
+| `--tasks`, `--settled` | 300, 280 | Plan size, and how many of its tasks are settled (completed, with a usage ledger and a handoff digest). |
+| `--entries` | 400 | Conversation entries in the saved transcript: user messages, replies, and research steps with their output. |
+| `--minutes` | 10 | Virtual minutes of stream at the full size. |
+| `--sweep-minutes` | 3 | Virtual minutes for the other configurations. |
+| `--no-sweep` | off | One configuration only. Otherwise five run: D = 0, a third of `--settled`, and `--settled`, each with the default entries; `--settled` with no entries; and a plan a fifth of `--tasks`, settled in proportion. |
+| `--cols`, `--rows` | 200, 50 | The wide terminal. |
+| `--narrow-cols`, `--narrow-rows` | 60, 40 | A terminal too narrow for the panes side by side, so the plan stacks under the chat. |
+| `--keys` | 20 | Keypresses timed per scrolling pane. |
+| `--running`, `--log-tasks` | 2, 2 | Tasks running at once, and how many of them send a task-log batch each second. |
+| `--turn-every`, `--turn-len`, `--delta` | 40, 20, 30 | A planner turn every so many seconds, lasting so many, with so many text or thinking pieces a second. |
+| `--rotate`, `--mutate-every` | 60, 30 | Seconds a task runs before the next starts, and between plan mutations (a task update, and every fourth time the whole plan). |
+| `--task-view` | off | Open the first running task's view before the stream, so its log is folded rather than dropped. |
+| `--session` | none | A saved session file (`{ meta, plan }` or a plan), read and never printed: its tasks, transcript and research log replace the generated ones, and `--tasks`, `--settled` and `--entries` are ignored, with no sweep. |
+| `--profile`, `--profile-out` | off | Self time by function for a frame, for one status update folded and for the reducer on a key that scrolls the plan, at the full size; the second writes the frame's `.cpuprofile`. |
+| `--out` | none | Write the JSON there instead of printing it as the last line. |
+| `--seed` | 1 | The generated text. |
+
+The feed (`tui-feed.mjs`) is the shapes the client folds: the saved transcript
+(`chatRestored`) and plan (`planRefreshed`) a load reads, then the socket's
+`run_snapshot` and whole-plan `plan_generated` frames, then a stream of
+`status_update` (every task, every second), `task_log` batches, a planner turn's
+thinking, research steps and text deltas and its settled reply, `task_updated`,
+`task_started`, and now and then the whole plan again. Frames are JSON strings and
+are parsed before they are folded, as a socket's are.
+
+What the figures are, per configuration (`D` settled tasks, `T` entries):
+
+- **load**: the cost of each message that opens a session, as one dispatch.
+  `planRefreshed` and the whole-plan frame carry every task.
+- **load: first paint**: `render(state)` once the load is folded, before any
+  frame has drawn the transcript: what a surface attaching to the session waits
+  for. The chat lays out only the tail it shows, so it should not grow with `T`.
+- **heap after load**: `heapUsed` after a collection, with the harness's own copy
+  of the feed's task text in it (a few MB). Quote the difference between runs.
+- **frame wide / narrow**: `render(state)` for the loaded state, median and 95th of
+  repeats. This is what each repaint costs, whatever caused it.
+- **key scrolling the plan / the chat**: a page key through `createApp.dispatch`:
+  the reducer, then the paint a key asks for at once. The reducer's own share is
+  the line below it.
+- **stream: actions folded / changing nothing**: the actions the stream's messages
+  dispatched, and how many of them the reducer handed the same state back for,
+  which `createApp` paints nothing for (a task log no open view shows).
+- **stream: frames a second**: paints caused by the stream, by virtual seconds.
+- **stream: event-loop ms a second**: the folds, JSON parsing and paints the stream
+  costs per second of stream. Past 1000 the TUI cannot keep up.
+- **stream: behind the daemon at the end**: how late the last second of the stream
+  was folded.
+- **stream: heap slope**: the least-squares slope of `heapUsed` after a collection at
+  each virtual minute, in MB a minute. The conversation grows by the turns the
+  stream holds, so compare a slope with the same stream, not with zero.
+- **Folding by message type**: per message, the inbound frame through the reducer.
+  `(deltas flushed)` is the debounced burst of text deltas going out; its cost is
+  not in `planner_text_delta`, which only holds it.
+- **Growth**: the slope of each figure over D (with T at its default), over T (with D
+  at its default) and over the plan's size N (settled in proportion), per hundred.
+  The frames use their fastest repeat. Two or three points make these lines rough:
+  they say which way and how steeply, and a figure whose repeats differ by more than
+  its slope says nothing. D moves no row in the plan pane, so a slope over D is
+  mostly the cost of what a settled task carries.
+
+How it keeps time: `setTimeout`, `setInterval` and `Date.now` run on a clock that
+moves only when the harness moves it, so ten minutes of stream need no ten
+minutes of waiting, and the app's 33 ms frame budget, the 75 ms delta debounce and
+the spinner interval behave as they do live. What a callback takes in `hrtime` is
+added to that clock, so a TUI that cannot keep up falls behind (and coalesces
+paints) as the real one does. A frame that arrives while it is behind is read
+together with the others that have, after one round of timers.
+
+What it leaves out: the terminal's output (`draw` only keeps the frame), the
+WebSocket and its framing, the effects the reducer asks for (`perform` does
+nothing), and the runner side of a session. Its numbers are one machine's on one
+day; rerun them rather than trusting old ones, and see "Reading the numbers"
+below for what they may be quoted in.
+
 ## Reading the numbers
 
 A figure from here belongs in a handoff or a review, not in anything a user reads:

@@ -51,6 +51,18 @@ describe('reduceRun', () => {
     expect(view.usage).toEqual({ attempts: 1, totals: { inputTokens: 10, outputTokens: 5 }, byModel: [], wallTimeMs: 0 });
   });
 
+  it('keeps each task a status update does not name as the very task it was, so a surface can skip it', () => {
+    const before = play([generated([planned('t1', 1, { subtasks: [planned('t1.1', 1)] }), planned('t2', 2, { subtasks: [planned('t2.1', 1)] })])]);
+
+    const after = reduceRun(before, { type: 'status_update', tasks: [{ id: 't2.1', status: 'completed', verdict: null }] });
+    const none = reduceRun(after, { type: 'status_update', tasks: [] });
+
+    expect(after.tasks[0]).toBe(before.tasks[0]);
+    expect(after.tasks[1]).not.toBe(before.tasks[1]);
+    expect(after.tasks[1].subtasks[0].status).toBe('completed');
+    expect(none.tasks).toBe(after.tasks);
+  });
+
   it('carries the run activity a status update says, from an idle run to a start on its way', () => {
     expect(EMPTY_RUN.activity).toEqual({ starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false });
 

@@ -1,6 +1,6 @@
 import { NO_TURN, closeTurn, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
-import { SPINNER_CYCLE, chatScrollMax } from './layout';
+import { SPINNER_CYCLE, chatScrollGrowth, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
 import { applyKey, commit } from './editor';
 import { endRunningCompactions, hear, say, wiped } from './transcript';
@@ -41,8 +41,25 @@ function because(reason: string | undefined): string {
 function holdReadingPlace(before: TuiState, after: TuiState): TuiState {
   if (before.scroll <= 0 || after.scroll !== before.scroll) return after;
   if (before.taskView?.taskId !== after.taskView?.taskId) return after;
-  const grown = chatScrollMax(after) - chatScrollMax(before);
-  return grown > 0 ? { ...after, scroll: clamp(after.scroll + grown, chatScrollMax(after)) } : after;
+  const grown = chatScrollGrowth(before, after);
+  if (grown <= 0) return after;
+  const held = { ...after, scroll: after.scroll + grown };
+  return { ...held, scroll: clamp(held.scroll, chatScrollMax(held)) };
+}
+
+/**
+ * Full detail while scrolled back moves the reader by what the whole
+ * transcript grew or shrank (see `toggleDetail`), which only a whole layout
+ * can say: the bound `chatScrollMax` gives is measured only as far as a scroll
+ * needs. A key the reader pressed, so laying out what they scrolled past is
+ * theirs to wait for; at the tail the pin holds and nothing more is drawn.
+ */
+function toggleDetailHeld(state: TuiState): Step {
+  if (state.scroll === 0) return toggleDetail(state);
+  const flipped = { ...state, detailAll: !state.detailAll };
+  const bound = chatScrollMax(state, true);
+  const expanded = chatScrollMax(flipped, true);
+  return step({ ...flipped, scroll: clamp(flipped.scroll + expanded - bound, expanded) });
 }
 
 /**
@@ -71,6 +88,8 @@ function heldInPlace(state: TuiState, action: Action, result: Step): Step {
   // alone; one that holds the reader's place grows the content below them
   // exactly as live output does.
   if (action.type !== 'sessionMessage' && action.type !== 'compacted' && action.type !== 'taskLog' && action.type !== 'notice') return result;
+  // Nothing moved, so nothing needs holding: re-settling would only copy the state and cost a frame.
+  if (result.state === state) return result;
   return { ...result, state: holdPlanInView(holdReadingPlace(state, result.state)) };
 }
 
@@ -747,7 +766,7 @@ function handleKey(state: TuiState, key: Key): Step {
   // A chat-pane switch: the plan pane's rows are never truncated, so there is
   // nothing there to expand. It is open mid-turn on purpose — reading the
   // stream in full as it lands is where full detail matters most.
-  if (key.name === 'ctrl-o' && state.focus === 'chat' && !state.overlay) return toggleDetail(state);
+  if (key.name === 'ctrl-o' && state.focus === 'chat' && !state.overlay) return toggleDetailHeld(state);
 
   // ESC backs out of whichever side the TAB selection is on. While the plan
   // pane has something of its own open, Esc collapses that first and the task

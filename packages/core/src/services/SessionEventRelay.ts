@@ -10,10 +10,12 @@ import {
   type SessionBroadcaster,
   type SessionMessage,
   type SessionNotice,
+  type SerializedTaskStatus,
+  type TaskStatusFacts,
 } from './SessionMessage';
 import { surfaceStep } from '../conversation/records';
 import { planUsage, type UsageRecord } from '../models/Usage';
-import type { LegacyPlanState, ResearchProgress } from '../models/Task';
+import type { LegacyPlanState, ResearchProgress, Task } from '../models/Task';
 import type { Escalation } from './escalations';
 import type { DelegatedRow } from '../models/Delegation';
 
@@ -25,8 +27,46 @@ const STATUS_INTERVAL_MS = 1000;
  * How often a status update says every task again. A surface holds what the
  * stream told it, and a snapshot read over HTTP can land on top of a newer
  * update, so what a change alone would leave wrong for good comes right here.
+ * A settled task is said again only until two of these have passed since it
+ * last moved: a snapshot read before then has landed by then, and its status
+ * does not move again by itself, so in a long session most tasks cost nothing.
  */
 const WHOLE_STATUS_INTERVAL_MS = 30_000;
+
+const settled = (task: SerializedTaskStatus): boolean => task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
+
+/**
+ * A task's status as it was last built, and what it was built from: built
+ * again only when one of those has changed, so a status update costs what
+ * moved rather than the plan.
+ */
+interface BuiltStatus {
+  /**
+   * A shallow copy of the task as it was read. The store replaces a value it
+   * changes and never writes into one (a handoff, a verdict, an attempt's
+   * usage), so a task whose every field is the same value has not moved.
+   */
+  fields: Readonly<Task>;
+  /** How many fields {@link fields} has. */
+  count: number;
+  /** {@link TaskStatusFacts} as JSON: what the session knows of the task beyond its record. */
+  facts: string;
+  status: SerializedTaskStatus;
+  /** {@link status} as JSON, to tell whether it differs from what was sent. */
+  json: string;
+}
+
+/** `task` has the fields {@link BuiltStatus} was built from, each the same value, and no other. */
+function sameFields({ fields, count }: BuiltStatus, task: Readonly<Task>): boolean {
+  const was = fields as unknown as Record<string, unknown>;
+  const now = task as unknown as Record<string, unknown>;
+  let seen = 0;
+  for (const key in now) {
+    if (was[key] !== now[key]) return false;
+    seen++;
+  }
+  return seen === count;
+}
 
 const waitIds = (list: readonly Escalation[]): string => list.map((e) => e.id).join();
 const landedIds = (view: RunMergeView | null | undefined): string => view?.landed.map((t) => t.taskId).join() ?? '';
@@ -38,7 +78,7 @@ export interface SessionEventRelayDeps {
   /** Where isolation notices go, for a host whose notifications are not seen by the user. */
   onNotice?: (notice: SessionNotice) => void;
   store: Pick<PlanStore, 'allTasks' | 'planTasks' | 'snapshot' | 'statusMark'>;
-  orchestrator: Pick<TaskOrchestrator, 'judgingOnce' | 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getRunningLong' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'loopStranded' | 'runMergeView' | 'activity' | 'taskIsolation'>;
+  orchestrator: Pick<TaskOrchestrator, 'judgingOnce' | 'getIdleSince' | 'getCompletionReceipt' | 'getToolsAttaching' | 'getRunningLong' | 'getQueuedTaskMessages' | 'getMergeGate' | 'holdReason' | 'loopStranded' | 'runMergeView' | 'activity' | 'isolationView'>;
   /** Shared with the Session, which snapshots, restores and clears it. */
   usage: PlannerUsageLedger;
   /** What a subplanner's budget hears of each planner call (ADR-0056 M5); absent at the root, which is charged nothing. */
@@ -119,8 +159,13 @@ export class SessionEventRelay implements StatusGate {
   private landedSent = false;
   /** The run as {@link statusChanged} last read it. */
   private lastMoved: string | undefined;
-  /** Each task's status as the last status update left surfaces holding it, so one carries only what moved. */
-  private sentTasks = new Map<string, string>();
+  /**
+   * Each task's status as the last status update left surfaces holding it, so
+   * one carries only what moved, and when it last moved.
+   */
+  private sentTasks = new Map<string, { json: string; movedAt: number }>();
+  /** Each task's status as it was last built, by task id. */
+  private built = new Map<string, BuiltStatus>();
   private wholeStatusAt: number | undefined;
   private livePlan: () => LegacyPlanState | null = () => null;
   /** The planner's requests announced and not yet settled, as they were announced: a surface joining now is owed them. */
@@ -203,16 +248,24 @@ export class SessionEventRelay implements StatusGate {
     this.escalationsSent(message.escalations ?? []);
   }
 
-  /** `message` with only the tasks that moved: serialized, since most of what moves in a status is no field of the store. */
+  /**
+   * `message` with only the tasks that moved, told apart by their JSON, since
+   * most of what moves in a status is no field of the store. Each task left
+   * out is one a surface folds as it was, so a whole update is only a longer
+   * list of them.
+   */
   private changesIn(message: StatusUpdate): StatusUpdate {
     const now = Date.now();
     const whole = this.wholeStatusAt === undefined || now - this.wholeStatusAt >= WHOLE_STATUS_INTERVAL_MS;
     if (whole) this.wholeStatusAt = now;
-    const sent = new Map<string, string>();
+    const sent = new Map<string, { json: string; movedAt: number }>();
     const tasks = message.tasks.filter((task) => {
-      const serialized = JSON.stringify(task);
-      sent.set(task.id, serialized);
-      return whole || this.sentTasks.get(task.id) !== serialized;
+      const json = this.built.get(task.id)?.json ?? JSON.stringify(task);
+      const was = this.sentTasks.get(task.id);
+      const moved = was?.json !== json;
+      const movedAt = moved || !was ? now : was.movedAt;
+      sent.set(task.id, { json, movedAt });
+      return moved || (whole && (!settled(task) || now - movedAt < 2 * WHOLE_STATUS_INTERVAL_MS));
     });
     this.sentTasks = sent;
     return { ...message, tasks };
@@ -304,16 +357,17 @@ export class SessionEventRelay implements StatusGate {
 
   private judgedStatus(): StatusUpdate {
     const runMerge = this.orchestrator.runMergeView();
-    return {
-      type: 'status_update',
-      usage: planUsage(this.store.planTasks),
-      tasks: this.store.allTasks.map((t) => serializeTaskStatus(t, {
+    // Read once for every task: each read derives the whole run's marks.
+    const isolation = this.orchestrator.isolationView();
+    const built = new Map<string, BuiltStatus>();
+    const tasks = this.store.allTasks.map((t) => {
+      const facts: TaskStatusFacts = {
         idleSince: this.orchestrator.getIdleSince(t.id),
-        isolation: this.orchestrator.taskIsolation(t.id),
+        isolation: isolation ? isolation.tasks[t.id] ?? { state: 'none' } : null,
         queued: this.orchestrator.getQueuedTaskMessages(t.id),
         awaitingApproval: this.awaitingApproval(t.id),
         mergeGate: this.orchestrator.getMergeGate(t.id),
-        checkpoint: this.checkpointQuestion(t.id),
+        checkpoint: this.checkpointQuestion(t.id) ?? '',
         waitsForApproval: this.waitsForApproval(t.id),
         holdReason: this.orchestrator.holdReason(t.id),
         completionReceived: this.orchestrator.getCompletionReceipt(t.id),
@@ -321,7 +375,25 @@ export class SessionEventRelay implements StatusGate {
         runningLong: this.orchestrator.getRunningLong(t.id),
         loopStranded: this.orchestrator.loopStranded(t.id),
         delegation: t.type === 'delegated' ? this.delegation(t.id) : undefined,
-      })),
+      };
+      const factsJson = JSON.stringify(facts);
+      const was = this.built.get(t.id);
+      let entry: BuiltStatus;
+      if (was && was.facts === factsJson && sameFields(was, t)) {
+        entry = was;
+      } else {
+        const status = serializeTaskStatus(t, facts);
+        const fields = { ...t };
+        entry = { fields, count: Object.keys(fields).length, facts: factsJson, status, json: JSON.stringify(status) };
+      }
+      built.set(t.id, entry);
+      return entry.status;
+    });
+    this.built = built;
+    return {
+      type: 'status_update',
+      usage: planUsage(this.store.planTasks),
+      tasks,
       ...(runMerge ? { runMerge } : {}),
       activity: this.orchestrator.activity,
       escalations: this.escalations(),

@@ -246,6 +246,12 @@ export interface IsolationRepo {
  */
 export interface IsolationRun {
   id: string;
+  /**
+   * The session that made the run, and whose worktrees and branches it names
+   * (ADR-0049): a copy of its plan under another id adopts none of them.
+   * Absent on a record saved before runs named theirs.
+   */
+  session?: string;
   /** The code root: what git reads for the run's repos, branch and base (ADR-0055 D11). */
   workspaceRoot: string;
   /**

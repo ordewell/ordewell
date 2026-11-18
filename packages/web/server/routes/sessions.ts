@@ -9,13 +9,32 @@ import {
   surfacePlanState,
   taskLogForSurface,
   type AdoptSessionResponse,
+  type LegacyPlanState,
   type OkResponse,
   type SessionListResponse,
+  type SessionMeta,
   type SessionResponse,
   type TaskLogAttemptsResponse,
   type TaskLogResponse,
 } from '@ordewell/core';
 import { failure, refuse } from './errors';
+
+/**
+ * The meta a save of this plan writes (core's `sessionData`), for a session held
+ * in memory: `lastUpdated` is stamped at each save, so it stands for the file's
+ * `updatedAt`.
+ */
+function liveMeta(id: string, goal: string, plan: LegacyPlanState): SessionMeta {
+  return {
+    id,
+    goal: goal || '(untitled)',
+    runners: plan.runners,
+    taskCount: plan.tasks.flatMap((t) => [t, ...(((t as unknown) as { subtasks?: unknown[] }).subtasks || [])]).length,
+    status: plan.status,
+    createdAt: plan.generatedAt,
+    updatedAt: plan.lastUpdated,
+  };
+}
 
 export function sessionsRoute(pool: OrchestratorPool) {
   const router = new Hono();
@@ -45,18 +64,21 @@ export function sessionsRoute(pool: OrchestratorPool) {
     try {
       const ws = c.req.query('workspace') || process.cwd();
       const id = c.req.param('id');
-      const saved = loadSession(id, ws);
-      if (!saved) return refuse(c, 404, 'Session not found', 'session_not_found');
       // The pool keeps one session per id: one open for another workspace is not this file's session.
       const live = pool.holds(id, ws);
+      // A held session is answered from memory: its file is parsed whole (megabytes, for a long one) only for this read's meta and a plan this read then discards.
+      const livePlan = live ? pool.getPlan(id) : null;
+      const livePlanState = live ? pool.getPlanState(id) : null;
+      const saved = livePlan && livePlanState ? null : loadSession(id, ws);
+      if (!saved && !(livePlan && livePlanState)) return refuse(c, 404, 'Session not found', 'session_not_found');
       const run = live ? pool.runSnapshot(id) : null;
       const plannerTurnId = live ? pool.plannerTurnId(id) : undefined;
       const plannerCompaction = live ? pool.plannerCompaction(id) : undefined;
       // The phase-tagged plan keeps no transcript: a client that joins or only reads the session redraws its chat from this.
-      const { conversationHistory, researchLog, plannerUsage, pendingTurns } = surfacePlan((live ? pool.getPlan(id) : null) ?? saved.plan);
+      const { conversationHistory, researchLog, plannerUsage, pendingTurns } = surfacePlan(livePlan ?? saved!.plan);
       return c.json({
-        meta: saved.meta,
-        plan: surfacePlanState((live ? pool.getPlanState(id) : null) ?? migratePlanState(saved.plan)),
+        meta: saved?.meta ?? liveMeta(id, pool.getGoal(id), livePlan!),
+        plan: surfacePlanState(livePlanState ?? migratePlanState(saved!.plan)),
         conversation: { conversationHistory, researchLog, plannerUsage, pendingTurns },
         ...(run ? { run } : {}),
         ...(plannerTurnId ? { plannerTurnId } : {}),

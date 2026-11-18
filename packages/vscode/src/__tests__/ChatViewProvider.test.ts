@@ -139,6 +139,76 @@ describe('ChatViewProvider.showPlan', () => {
   });
 });
 
+describe('ChatViewProvider.showPlanStatus', () => {
+  const planWith = (status: 'draft' | 'running' | 'completed' = 'draft') => ({ ...createEmptyPlan(), status, tasks: [createTask({ id: 't1' })] });
+  const planUpdates = (posted: { type: string }[]) => posted.filter((m) => m.type === 'planUpdated') as unknown as { plan: { status: string } }[];
+
+  it('posts nothing for a status tick that leaves the dock\'s status where it was', () => {
+    const { provider, posted } = providerWithCapture();
+    const plan = planWith();
+    provider.showPlan(plan, 'running');
+    posted.length = 0;
+
+    provider.showPlanStatus(plan, 'running');
+
+    expect(posted).toEqual([]);
+  });
+
+  it('tells the webview a status the dock now shows, as the plan it already has', () => {
+    const { provider, posted } = providerWithCapture();
+    const plan = planWith();
+    provider.showPlan(plan, 'running');
+    posted.length = 0;
+
+    provider.showPlanStatus(plan, 'completed');
+
+    expect(planUpdates(posted)).toHaveLength(1);
+    expect(planUpdates(posted)[0]!.plan).toMatchObject({ status: 'completed', tasks: [{ id: 't1' }] });
+  });
+
+  it('posts the whole plan when it is a plan the webview was not sent', () => {
+    const { provider, posted } = providerWithCapture();
+    provider.showPlan(planWith(), 'running');
+    posted.length = 0;
+
+    provider.showPlanStatus(planWith(), 'running');
+
+    expect(planUpdates(posted)).toHaveLength(1);
+  });
+
+  it('posts the whole plan to a webview that has been opened again', () => {
+    const first = providerWithCapture();
+    const plan = planWith();
+    first.provider.showPlan(plan, 'running');
+    first.dispose();
+    const { posted } = (() => {
+      const next: { type: string }[] = [];
+      first.provider.resolveWebviewView({
+        show: vi.fn(), onDidDispose: () => ({ dispose() {} }),
+        webview: { options: {}, html: '', cspSource: '', asWebviewUri: (u: unknown) => u, onDidReceiveMessage: () => ({ dispose() {} }), postMessage: (msg: { type: string }) => { next.push(msg); return Promise.resolve(true); } },
+      } as unknown as vscode.WebviewView, {} as never, {} as never);
+      next.length = 0;
+      return { posted: next };
+    })();
+
+    first.provider.showPlanStatus(plan, 'running');
+
+    expect(planUpdates(posted)).toHaveLength(1);
+  });
+
+  it('posts the whole plan after the chat was restored', () => {
+    const { provider, posted } = providerWithCapture();
+    const plan = planWith();
+    provider.showPlan(plan, 'running');
+    provider.restoreChat({ conversationHistory: [] } as never);
+    posted.length = 0;
+
+    provider.showPlanStatus(plan, 'running');
+
+    expect(planUpdates(posted)).toHaveLength(1);
+  });
+});
+
 describe('ChatViewProvider.setSkills', () => {
   it('sends the discovered skill list to the webview', () => {
     const { provider, posted } = providerWithCapture();

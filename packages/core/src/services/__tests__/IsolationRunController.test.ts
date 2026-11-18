@@ -7,7 +7,7 @@ import { PlanEditError } from '../PlanEditError';
 import { PrepareFailedError } from '../isolationRecord';
 import { fakeNotification } from './sessionTestKit';
 
-function setup(isolation = new FakeWorktreeIsolation()) {
+function setup(isolation = new FakeWorktreeIsolation(), sessionId?: string) {
   const listener: IsolationRunListener = {
     changed: vi.fn(),
     blocked: vi.fn(),
@@ -19,7 +19,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
   const notifications = fakeNotification();
   /** Tasks the plan has live: an attempt running, or in progress or waiting on the user. */
   const live = new Set<string>();
-  const runs = new IsolationRunController({ isolation, config: fakeConfig(), notifications, workspaceRoot: () => '/repo', listener, liveTasks: () => live, landedOn: () => [] });
+  const runs = new IsolationRunController({ isolation, config: fakeConfig(), notifications, workspaceRoot: () => '/repo', listener, liveTasks: () => live, landedOn: () => [], ...(sessionId ? { sessionId: () => sessionId } : {}) });
   return { runs, isolation, listener, notifications, live };
 }
 
@@ -146,6 +146,54 @@ describe('IsolationRunController', () => {
       expect(runs.planIsolation?.run.id).toBe('run1');
       expect(ops(isolation)).toContain('pruneOrphans');
       expect(ops(isolation)).not.toContain('startRun');
+    });
+  });
+
+  describe('adopting a record another session made (ADR-0049)', () => {
+    async function savedBy(sessionId?: string) {
+      const { runs } = setup(new FakeWorktreeIsolation(), sessionId);
+      await runs.decide(async () => undefined);
+      await runs.attemptCwd(task('t1', 1), 'fresh', runs.decision);
+      await runs.release('t1', { keep: true });
+      return structuredClone(runs.planIsolation!);
+    }
+
+    it('names the session that minted the run on its record', async () => {
+      expect((await savedBy('session-a')).run.session).toBe('session-a');
+    });
+
+    it('takes over a record of its own session, pruning what a crash left', async () => {
+      const { runs, isolation } = setup(new FakeWorktreeIsolation(), 'session-a');
+      expect(await runs.adopt(await savedBy('session-a'))).toBe('unchanged');
+      expect(runs.planIsolation?.run.id).toBe('run1');
+      expect(ops(isolation)).toContain('pruneOrphans');
+    });
+
+    it('asks git nothing of another session\'s record, holds none of it, and says why', async () => {
+      const { runs, isolation, notifications } = setup(new FakeWorktreeIsolation(), 'session-b');
+      expect(await runs.adopt(await savedBy('session-a'), 'run0')).toBe('changed');
+      expect(runs.planIsolation).toBeNull();
+      expect(runs.view()).toBeNull();
+      expect(runs.mergedRun).toBe('run0');
+      expect(isolation.calls).toEqual([]);
+      expect(notifications.info).toHaveBeenCalledWith(expect.stringContaining('copied from another session'));
+    });
+
+    it('mints a run of its own after another session\'s record, discarding nothing of it', async () => {
+      const { runs, isolation } = setup(new FakeWorktreeIsolation(), 'session-b');
+      await runs.adopt(await savedBy('session-a'));
+      await runs.decide(async () => undefined);
+      expect(ops(isolation)).not.toContain('discard');
+      expect(runs.planIsolation?.run.session).toBe('session-b');
+    });
+
+    it('takes a record saved before runs named their session as its own', async () => {
+      const legacy = await savedBy();
+      expect(legacy.run.session).toBeUndefined();
+      const { runs, isolation } = setup(new FakeWorktreeIsolation(), 'session-b');
+      await runs.adopt(legacy);
+      expect(ops(isolation)).toContain('pruneOrphans');
+      expect(runs.planIsolation?.run.session).toBe('session-b');
     });
   });
 

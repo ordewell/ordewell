@@ -1,7 +1,7 @@
 import { taskServedModel } from './accountLimits';
-import { firstGrapheme, nextBoundary, pad, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
+import { firstGrapheme, nextBoundary, pad, palette, previousBoundary, sanitize, style, truncate, width, wrap, wrapLines, type WrapLine } from './ansi';
 import { cursorInLines, type CursorPosition } from './editor';
-import { assignmentFlagText, checkpointCardLines, conversationLines, subplannerCardLines, tokenLine } from './blocks';
+import { assignmentFlagText, checkpointCardLines, conversationLength, conversationTail, subplannerCardLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
@@ -451,7 +451,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
  * the selected chat's business, but it must stay visible whichever chat is. The
  * plan pane's title takes the longest one that fits its width.
  */
-export function runHints(state: TuiState): string[] {
+export function runHints(state: Pick<TuiState, 'status' | 'tasks' | 'runMerge' | 'child'>): string[] {
   if (state.status === 'starting') return ['starting…', 'starting'];
   const waiting = state.tasks.filter((t) => t.status === 'awaiting_user').length;
   if (waiting > 0) return [waiting === 1 ? '1 task waits for you' : `${waiting} tasks wait for you`, `${waiting} waiting`];
@@ -499,7 +499,10 @@ interface ChatBodyMemo {
   blocks: readonly DisplayBlock[];
   cols: number;
   detailAll: boolean;
+  answering: ApprovalBlock | undefined;
+  /** The transcript's last lines, from block `from` on. */
   lines: string[];
+  from: number;
 }
 
 // The transcript is the single most expensive thing to render, but a spinner
@@ -511,24 +514,45 @@ interface ChatBodyMemo {
 // runs. A single last-seen entry is all that can be reused, which is why the
 // reducer asks for its scroll bound at the same width the renderer will paint
 // at: the two of them share the one entry instead of evicting each other's.
+//
+// Only the tail is laid out, as far back as someone asked for: the viewport
+// and the scrollback in use. A long session's older blocks are drawn when the
+// reader scrolls to them, so the first paint after attaching costs what the
+// screen shows, not what the session ever said.
 let chatBodyMemo: ChatBodyMemo | null = null;
 
-export function chatBodyLines(blocks: readonly DisplayBlock[], cols: number, detailAll: boolean, answering?: ApprovalBlock): string[] {
-  const memo = chatBodyMemo;
-  if (memo && memo.blocks === blocks && memo.cols === cols && memo.detailAll === detailAll) return memo.lines;
-  const lines = conversationLines(blocks, cols, detailAll, answering);
-  chatBodyMemo = { blocks, cols, detailAll, lines };
-  return lines;
+/** The transcript's last `want` lines, or all of it when it has fewer; `complete` when nothing is left above them. */
+function chatBody(blocks: readonly DisplayBlock[], cols: number, detailAll: boolean, answering: ApprovalBlock | undefined, want: number): { lines: string[]; complete: boolean } {
+  let memo = chatBodyMemo;
+  if (!memo || memo.blocks !== blocks || memo.cols !== cols || memo.detailAll !== detailAll || memo.answering !== answering) {
+    const { lines, from } = conversationTail(blocks, blocks.length, cols, detailAll, want, answering);
+    memo = { blocks, cols, detailAll, answering, lines, from };
+  } else if (memo.lines.length < want && memo.from > 0) {
+    // Scrolled further back than anyone had: draw the blocks above, and keep what was drawn.
+    const above = conversationTail(blocks, memo.from, cols, detailAll, want - memo.lines.length, answering);
+    memo = { ...memo, lines: [...above.lines, ...memo.lines], from: above.from };
+  }
+  chatBodyMemo = memo;
+  return { lines: memo.lines, complete: memo.from === 0 };
+}
+
+/** The transcript's chat-pane lines: all of them, or the last `want` of them where it has more. */
+export function chatBodyLines(blocks: readonly DisplayBlock[], cols: number, detailAll: boolean, answering?: ApprovalBlock, want = Infinity): string[] {
+  return chatBody(blocks, cols, detailAll, answering, want).lines;
 }
 
 /**
  * The chat pane's content, the edge it hangs off, and how far back it can be
  * scrolled. `maxScroll` is the whole point: it is the exact number of lines
  * that exist above the viewport, so an offset clamped to it can never sit in a
- * dead zone the renderer will silently ignore.
+ * dead zone the renderer will silently ignore — counted, in a transcript longer
+ * than the scrollback in use, only as far as `CHAT_LOOKAHEAD` past the
+ * viewport, which is further than any one scroll moves it.
  */
 export interface ChatLayout {
+  /** The content's last lines: all of it when `complete`, else at least the viewport, the scroll and the lookahead. */
   lines: string[];
+  complete: boolean;
   /** Rows pinned above the scrolling lines, which no scrolling moves. Empty for the planner chat. */
   header: string[];
   /** Rows pinned under the scrolling lines, which no scrolling moves. */
@@ -537,7 +561,31 @@ export interface ChatLayout {
   maxScroll: number;
 }
 
-export function chatLayout(state: TuiState, rows: number, cols: number): ChatLayout {
+/**
+ * Lines laid out past the top of the viewport beyond what the scroll uses, at
+ * the least: a page key moves a viewport less than its height and a wheel
+ * notch a few lines, so a scroll bound measured this far ahead, or a pane's
+ * height where that is more, clamps every one of them as the whole
+ * transcript's would.
+ */
+const CHAT_LOOKAHEAD = 200;
+
+/** Everything of the chat pane but the transcript's own lines, which `chatBody` lays out. */
+interface ChatParts {
+  blocks: readonly DisplayBlock[];
+  answering: ApprovalBlock | undefined;
+  /** The welcome, while it heads the transcript; laid out only when the content is wanted whole. */
+  welcome: (() => string[]) | null;
+  /** Lines under the transcript's blocks: what is not the runner's log, then the queued prompts. */
+  under: string[];
+  /** Whether anything at all of the transcript (blocks, or the lines under them that belong to it) is drawn. */
+  said: boolean;
+  header: string[];
+  footer: string[];
+  space: number;
+}
+
+function chatParts(state: TuiState, rows: number, cols: number): ChatParts {
   const tv = state.taskView;
   // The task view draws the runner's own blocks; the planner chat draws the
   // conversation's. Both go through the same core view, so they paint alike.
@@ -552,15 +600,14 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   const card = tv && checkpoint ? checkpointCardLines(findTask(state.tasks, tv.taskId)?.order ?? 0, checkpoint, cols, waitingApproval(tv) !== undefined, !state.child && findTask(state.tasks, tv.taskId)?.type === 'delegated') : [];
   const above = tv ? null : questionAbove(state);
   const asked = above ? subplannerCardLines(above.question, cols, !state.child?.parent.child) : [];
-  const answering = chatBodyLines(blocks, cols, state.detailAll, tv ? waitingApproval(tv) : undefined);
-  const reading = state.child?.reading && answering.length === 0 ? [style.grey('Reading this plan…')] : [];
-  const body = [...answering, ...reading, ...card, ...asked];
-  const transcript = !welcome ? body : body.length === 0 ? welcomeLines(state, rows, cols) : [...welcomeLines(state, rows, cols), '', ...body];
+  // Every block but a usage one draws at least a line, so whether the
+  // transcript is empty is known without laying any of it out.
+  const drawsAny = blocks.some((block) => block.type !== 'usage');
+  const reading = state.child?.reading && !drawsAny ? [style.grey('Reading this plan…')] : [];
   // The queued prompts paint as part of the tail, newest last — they are the
   // turns that have not gone out yet, and they travel where a sent message
   // would have appeared. A task's queue is its own, taken back one at a time.
   const bubbles = tv ? taskQueuedRows(state, cols) : queuedPromptRows(state, cols);
-  const content = [...transcript, ...(bubbles.length > 0 ? ['', ...bubbles] : [])];
   const taskHeader = [...childHeaderLines(state, cols), ...(tv ? taskHeaderLines(state, tv, cols) : [])];
   // The usage rows are the session's (or the opened task's), not lines of the
   // transcript: they keep the pane's bottom rows while everything above them
@@ -570,10 +617,95 @@ export function chatLayout(state: TuiState, rows: number, cols: number): ChatLay
   // The per-model rows are the expendable part: they yield to the transcript
   // so a short pane never trades its last conversation row for a breakdown.
   const footer = usage.slice(0, Math.max(1, rows - taskHeader.length - 1));
-  const space = Math.max(0, rows - taskHeader.length - footer.length);
+  return {
+    blocks,
+    answering: tv ? waitingApproval(tv) : undefined,
+    welcome: welcome ? () => welcomeLines(state, rows, cols) : null,
+    under: [...reading, ...card, ...asked, ...(bubbles.length > 0 ? ['', ...bubbles] : [])],
+    said: drawsAny || reading.length + card.length + asked.length > 0,
+    header: taskHeader,
+    footer,
+    space: Math.max(0, rows - taskHeader.length - footer.length),
+  };
+}
+
+/** The welcome and the blank line under it, as they head the content. */
+const welcomeHead = (parts: ChatParts): string[] => {
+  if (!parts.welcome) return [];
+  const welcome = parts.welcome();
+  return parts.said ? [...welcome, ''] : welcome;
+};
+
+/**
+ * `fill` is how many of the content's last lines to lay out at least; by
+ * default the viewport, the scroll in use and `CHAT_LOOKAHEAD`, and
+ * `Infinity` for all of it.
+ */
+export function chatLayout(state: TuiState, rows: number, cols: number, fill?: number): ChatLayout {
+  return chatLayoutOf(state, chatParts(state, rows, cols), rows, cols, fill);
+}
+
+function chatLayoutOf(state: TuiState, parts: ChatParts, rows: number, cols: number, fill?: number): ChatLayout {
+  const { under, space } = parts;
+  const want = fill ?? state.scroll + space + Math.max(CHAT_LOOKAHEAD, rows);
+  const body = chatBody(parts.blocks, cols, state.detailAll, parts.answering, Math.max(0, want - under.length));
+  const lines = body.complete ? [...welcomeHead(parts), ...body.lines, ...under] : [...body.lines, ...under];
   // Content that fits hangs off the top so the welcome does not jump when the
   // first message lands; once it overflows the newest lines win the pane.
-  return { lines: content, header: taskHeader, footer, anchor: content.length > space ? 'bottom' : 'top', maxScroll: Math.max(0, content.length - space) };
+  return { lines, complete: body.complete, header: parts.header, footer: parts.footer, anchor: lines.length > space ? 'bottom' : 'top', maxScroll: Math.max(0, lines.length - space) };
+}
+
+interface ChatMeasure {
+  state: TuiState;
+  rows: number;
+  cols: number;
+  parts: ChatParts;
+  layout: ChatLayout;
+}
+
+/** The chat pane at the size it is about to be painted. */
+function chatMeasure(state: TuiState): ChatMeasure {
+  const { chat } = bodyPanes(state);
+  const parts = chatParts(state, chat.rows, chat.cols);
+  return { state, rows: chat.rows, cols: chat.cols, parts, layout: chatLayoutOf(state, parts, chat.rows, chat.cols) };
+}
+
+/**
+ * How many lines the content grew by, exactly, with only the blocks that
+ * changed laid out. Core hands back the same object for every block an input
+ * did not touch, so the blocks both share from the start draw the same lines
+ * in each; the last of them is counted again, since the blank line under a
+ * block depends on the one after it.
+ */
+function contentGrowth(was: ChatMeasure, now: ChatMeasure): number {
+  const a = was.parts;
+  const b = now.parts;
+  if (was.cols !== now.cols || was.state.detailAll !== now.state.detailAll || a.answering !== b.answering) {
+    const whole = (m: ChatMeasure): number => chatLayoutOf(m.state, m.parts, m.rows, m.cols, Infinity).lines.length;
+    return whole(now) - whole(was);
+  }
+  const shared = Math.min(a.blocks.length, b.blocks.length);
+  let same = 0;
+  while (same < shared && a.blocks[same] === b.blocks[same]) same += 1;
+  const from = Math.max(0, same - 1);
+  const drawn = (blocks: readonly DisplayBlock[]): number => conversationLength(blocks, from, now.cols, now.state.detailAll, b.answering);
+  return (welcomeHead(b).length - welcomeHead(a).length) + (drawn(b.blocks) - drawn(a.blocks)) + (b.under.length - a.under.length);
+}
+
+/**
+ * How far `chatScrollMax` moved from `before` to `after`, as if both were
+ * measured whole: what a reader scrolled back is held by while lines arrive
+ * below. The content's length is known where its layout is complete, and an
+ * incomplete one overflows its pane by definition, so the bound of each
+ * follows from the growth without laying out what neither screen shows.
+ */
+export function chatScrollGrowth(before: TuiState, after: TuiState): number {
+  const was = chatMeasure(before);
+  const now = chatMeasure(after);
+  const grown = contentGrowth(was, now);
+  const known = was.layout.complete ? was.layout.lines.length : now.layout.complete ? now.layout.lines.length - grown : null;
+  if (known === null) return grown - now.parts.space + was.parts.space;
+  return Math.max(0, known + grown - now.parts.space) - Math.max(0, known - was.parts.space);
 }
 
 /** The widest a plan's name gets in the path, so a long goal leaves room for the plans under it. */
@@ -699,7 +831,8 @@ export function bodyPanes(state: TuiState): BodyPanes {
 
   // Measured with no row limit, so the answer is what each pane would fill, not
   // what it was last handed.
-  const chat = chatLayout(state, UNBOUNDED, chatCols);
+  // Past the body's height the chat's needs all split the same way, so no more of it is laid out.
+  const chat = chatLayout(state, UNBOUNDED, chatCols, rows + 1);
   const split = stackRows(rows, {
     chat: chat.header.length + chat.lines.length + chat.footer.length,
     chatMin: chat.header.length + STACKED_CHAT_BODY_MIN,
@@ -791,10 +924,15 @@ export function selectionColumns(area: SelectionArea, row: number): { firstCol: 
     : { firstCol: area.frameFirstCol, lastCol: area.frameLastCol };
 }
 
-/** How far back the chat pane can be scrolled at the size it is about to be painted. */
-export function chatScrollMax(state: TuiState): number {
+/**
+ * How far back the chat pane can be scrolled at the size it is about to be
+ * painted. Measured only as far as the lookahead past the scroll in use (see
+ * `chatLayout`), which is all any one scroll is clamped by; `whole` lays out
+ * the whole transcript for the exact figure.
+ */
+export function chatScrollMax(state: TuiState, whole = false): number {
   const { chat } = bodyPanes(state);
-  return chatLayout(state, chat.rows, chat.cols).maxScroll;
+  return chatLayout(state, chat.rows, chat.cols, whole ? Infinity : undefined).maxScroll;
 }
 
 // ── Welcome ──────────────────────────────────────────────────────────────────
@@ -1128,9 +1266,10 @@ export interface LineSpan {
  * so at offset `n` the visible body is `lines[1 + n .. n + rows - 1]`.
  */
 export interface PlanLayout {
-  lines: string[];
+  /** Shared by every caller that lays out the same plan (see the caches below): read only. */
+  readonly lines: readonly string[];
   /** One span per plan row, in row order — rows are one to many lines tall. */
-  rowSpans: LineSpan[];
+  readonly rowSpans: readonly LineSpan[];
   /** What the viewport must keep on screen: the open prompt's caret line, else the selected row. */
   anchor: LineSpan;
   /** Rows the pane is painted at, header included. */
@@ -1138,7 +1277,101 @@ export interface PlanLayout {
   maxScroll: number;
 }
 
+// ── Plan pane caches ──
+//
+// A frame used to lay out every row of the plan and then show the few that fit:
+// at a few hundred tasks that was most of a core, five times a second, to paint
+// rows that had not changed. The pane is a pure function of the state fields
+// below and its width (ADR-0006), so it is cached on exactly those: the whole
+// pane by their identity, and each row by what that row reads. A cache may
+// change what a frame costs and nothing it shows.
+
+/**
+ * Every field of the state the plan pane reads. The layout below is typed to
+ * see only these, so reading another one is a type error rather than a stale
+ * frame: add it here and it joins the key.
+ */
+const PLAN_INPUTS = [
+  'tasks', 'expandedTaskId', 'selectedTask', 'focus', 'spinnerFrame', 'taskEditor', 'runners', 'allowlist', 'models',
+  'modesByRunner', 'childTree', 'sessionId', 'status', 'runMerge', 'child',
+] as const;
+type PlanInputs = Pick<TuiState, (typeof PLAN_INPUTS)[number]>;
+
+/** The paint switches the pane's rows are written with: a test or a setting can flip them under the same state. */
+const paintKey = (): string => `${+style.enabled}${+style.attributes}${+palette.truecolor}`;
+
+/** The pane with no row count: its lines do not depend on how many of them fit. */
+type PlanBody = Omit<PlanLayout, 'rows' | 'maxScroll'>;
+
+interface BodyEntry {
+  tasks: TuiState['tasks'];
+  inputs: unknown[];
+  cols: number;
+  paint: string;
+  body: PlanBody;
+}
+
+/**
+ * The last few panes laid out. A key lays the pane out in the reducer, to keep
+ * the selection in view, and again in the frame it paints; a stacked body
+ * measures it once more to split the rows. All of them see the same inputs.
+ */
+const bodies: BodyEntry[] = [];
+const BODIES_HELD = 3;
+
+interface RowEntry {
+  task: TaskView;
+  parent: TaskView | null;
+  /** The plan it was laid out in: its dependency and loop references are read off it. */
+  tasks: TuiState['tasks'];
+  context: unknown[];
+  selected: boolean;
+  /** The prompt editor, for the expanded row only: it is the one that draws it. */
+  editor: TuiState['taskEditor'] | undefined;
+  /** The spinner frame drawn, for a running row only. */
+  spinner: number | undefined;
+  paint: string;
+  lines: TaskLines;
+}
+
+/** Rows by width, parent and task id. Rows of tasks gone from the plan go oldest first. */
+const rowCache = new Map<string, RowEntry>();
+const ROWS_HELD = 4096;
+
+/** Switches for tests that compare frames with the caches cold, warm and off. */
+export const planRowCache = {
+  enabled: true,
+  clear(): void {
+    rowCache.clear();
+    bodies.length = 0;
+  },
+};
+
 export function planLayout(state: TuiState, rows: number, cols: number): PlanLayout {
+  const body = planBody(state, cols);
+  return { ...body, rows, maxScroll: Math.max(0, body.lines.length - rows) };
+}
+
+function planBody(state: PlanInputs, cols: number): PlanBody {
+  if (!planRowCache.enabled) return layPlanBody(state, cols);
+  const inputs = PLAN_INPUTS.map((field) => state[field]);
+  const paint = paintKey();
+  const at = bodies.findIndex((entry) => entry.cols === cols && entry.paint === paint && entry.inputs.every((value, i) => value === inputs[i]));
+  if (at >= 0) return bodies[at].body;
+  const body = layPlanBody(state, cols);
+  // A plan the pane no longer shows is let go of, task views and all: the
+  // memo is for one plan read at several widths, and the rows laid out just
+  // now replaced every entry of this plan that was still current.
+  if (bodies[0] && bodies[0].tasks !== state.tasks) {
+    bodies.length = 0;
+    for (const [key, entry] of rowCache) if (entry.tasks !== state.tasks) rowCache.delete(key);
+  }
+  bodies.unshift({ tasks: state.tasks, inputs, cols, paint, body });
+  bodies.length = Math.min(bodies.length, BODIES_HELD);
+  return body;
+}
+
+function layPlanBody(state: PlanInputs, cols: number): PlanBody {
   const done = state.tasks.filter((t) => t.status === 'completed').length;
   const totalUsage = tasksTotalText(state.tasks);
   const unmerged = state.runMerge?.handoff.landed.length ?? 0;
@@ -1156,6 +1389,10 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
   }
   const firstRowLine = lines.length;
 
+  // Before the runners load, every task would read as on a runner that is off.
+  const runnerScope = state.runners.length > 0
+    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist, models: modelsByRunnerOf(state.models) }
+    : undefined;
   const rowSpans: LineSpan[] = [];
   // An expanded task starts its editor at the end of its prompt. For a long
   // prompt, keeping only the task heading visible makes edits appear to do
@@ -1165,17 +1402,51 @@ export function planLayout(state: TuiState, rows: number, cols: number): PlanLay
     // A blank line between top-level tasks; a subtask stays tight to its parent.
     if (i > 0 && !row.parent) lines.push('');
     const taskStart = lines.length;
-    const renderedTask = taskLines(state, row, i, cols);
+    const renderedTask = cachedTaskLines(state, row, i, cols, runnerScope);
     if (row.task.id === state.expandedTaskId && renderedTask.editorLine !== undefined) {
       editorLine = taskStart + renderedTask.editorLine;
     }
-    lines.push(...renderedTask.lines);
+    for (const line of renderedTask.lines) lines.push(line);
     rowSpans.push({ start: taskStart, end: lines.length - 1 });
   });
 
   const selected = rowSpans[state.selectedTask] ?? { start: firstRowLine, end: firstRowLine };
   const anchor = editorLine === undefined ? selected : { start: editorLine, end: editorLine };
-  return { lines, rowSpans, anchor, rows, maxScroll: Math.max(0, lines.length - rows) };
+  return { lines, rowSpans, anchor };
+}
+
+/**
+ * One row's lines, laid out again only when something it reads changed: its
+ * task and parent, the whole plan (which its dependency and loop references
+ * are read off), the runner settings its warnings come from, the child tree
+ * a delegated row counts questions in, and its own selection, expansion,
+ * editor and spinner.
+ */
+function cachedTaskLines(state: PlanInputs, planRow: PlanRow, index: number, cols: number, runnerScope: RunnerScope | undefined): TaskLines {
+  if (!planRowCache.enabled) return taskLines(state, planRow, index, cols, runnerScope);
+  const { task, parent } = planRow;
+  const context = [state.modesByRunner, state.runners, state.allowlist, state.models, state.childTree, state.sessionId];
+  const selected = state.focus === 'plan' && index === state.selectedTask;
+  const editor = state.expandedTaskId === task.id ? state.taskEditor : undefined;
+  const frame = state.spinnerFrame % SPINNER.length;
+  const paint = paintKey();
+  const key = `${cols}\u0000${parent?.id ?? ''}\u0000${task.id}`;
+  const held = rowCache.get(key);
+  if (
+    held && held.task === task && held.parent === parent && held.tasks === state.tasks && held.selected === selected && held.editor === editor
+    && (held.spinner === undefined || held.spinner === frame) && held.paint === paint
+    && held.context.every((value, i) => value === context[i])
+  ) {
+    return held.lines;
+  }
+  const lines = taskLines(state, planRow, index, cols, runnerScope);
+  rowCache.delete(key);
+  rowCache.set(key, { task, parent, tasks: state.tasks, context, selected, editor, spinner: lines.spins ? frame : undefined, paint, lines });
+  if (rowCache.size > ROWS_HELD) {
+    const oldest = rowCache.keys().next().value;
+    if (oldest !== undefined) rowCache.delete(oldest);
+  }
+  return lines;
 }
 
 const clampOffset = (layout: PlanLayout, offset: number): number =>
@@ -1268,21 +1539,26 @@ function modelsByRunnerOf(models: readonly ModelView[]): Record<string, Discover
 }
 
 interface TaskLines {
-  lines: string[];
+  readonly lines: readonly string[];
   /** The zero-based line within `lines` containing the prompt editor caret. */
   editorLine?: number;
+  /** Whether a spinner frame is drawn in it, so the next frame draws it again. */
+  spins: boolean;
 }
 
-function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: number): TaskLines {
+interface RunnerScope {
+  enabledRunners: string[];
+  allowlist: TuiState['allowlist'];
+  models: Record<string, DiscoveredModel[]>;
+}
+
+function taskLines(state: PlanInputs, planRow: PlanRow, index: number, cols: number, runnerScope: RunnerScope | undefined): TaskLines {
   const { task, parent } = planRow;
-  // Before the runners load, every task would read as on a runner that is off.
-  const runnerScope = state.runners.length > 0
-    ? { enabledRunners: state.runners.filter((r) => r.enabled).map((r) => r.id), allowlist: state.allowlist, models: modelsByRunnerOf(state.models) }
-    : undefined;
   const row = taskRowView(task, { parent, tasks: state.tasks, modes: modesForTask(state.modesByRunner, task), runnerScope });
   const selected = state.focus === 'plan' && index === state.selectedTask;
   const expanded = state.expandedTaskId === task.id;
   const rawIcon = row.status === 'running' ? SPINNER[state.spinnerFrame % SPINNER.length] : STATUS_ICON[row.status];
+  const spins = row.status === 'running';
   const icon = STATUS_PAINT[row.status](rawIcon);
   const kind = row.running
     ? style.yellow('RUN')
@@ -1472,7 +1748,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     // A script's body is the planner's to write: there is no editor to save or cancel.
     if (row.kind === 'script') {
       lines.push(style.grey(`${bodyPad}esc collapse · f start · D deps · d remove`));
-      return { lines, editorLine };
+      return { lines, editorLine, spins };
     }
     // Two lines: the assignment keys plus the edit verbs no longer fit the plan
     // pane on one, and a truncated hint hides the keys it exists to teach. They
@@ -1482,7 +1758,7 @@ function taskLines(state: TuiState, planRow: PlanRow, index: number, cols: numbe
     lines.push(style.grey(truncate(`${bodyPad}then R runner · o model · e effort · M mode · D deps · K skills`, cols)));
   }
 
-  return { lines, editorLine };
+  return { lines, editorLine, spins };
 }
 
 /**

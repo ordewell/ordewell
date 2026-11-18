@@ -72,20 +72,33 @@ const taskId = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 /**
  * Arm B's plan, as the planner emits it: one task per entry of `tasks`
- * ({ key, title, after? }), each on the bench's runner and model in full mode,
- * its prompt carrying the `[rehearsal:<key>]` the fake routes its attempts by.
+ * ({ key, title, after?, kind?, loopBody? }), each on the bench's runner and
+ * model in full mode, its prompt carrying the `[rehearsal:<key>]` the fake
+ * routes its attempts by. `kind` makes a task something else: 'research' (a
+ * read-only AI task), 'ops', or 'script' (which has no runner, model or
+ * prompt); `loopBody` (keys) makes it a loop's check over those tasks.
  */
 export function rehearsalPlan(tasks) {
   const order = new Map(tasks.map((t, i) => [t.key, i + 1]));
   return {
-    tasks: tasks.map((t, i) => ({
-      id: taskId(i + 1), order: i + 1, title: t.title, description: t.title, type: 'ai',
-      dependencies: (t.after ?? []).map((k) => taskId(order.get(k))),
-      prompt: `${t.title}. [rehearsal:${t.key}]`,
-      assignedRunner: 'openrouter',
-      assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
-      taskMode: 'full', autonomy: 'AFK', sliceType: 'AFK', subtasks: [],
-    })),
+    tasks: tasks.map((t, i) => {
+      const common = {
+        id: taskId(i + 1), order: i + 1, title: t.title, description: t.title,
+        dependencies: (t.after ?? []).map((k) => taskId(order.get(k))),
+        sliceType: 'AFK',
+        ...(t.loopBody ? { loop: { body: t.loopBody.map((k) => taskId(order.get(k))), maxRounds: 2 } } : {}),
+      };
+      // A script task's body is a list of argument vectors; nothing about it is a runner's.
+      if (t.kind === 'script') return { ...common, type: 'script', commands: [['python', '-m', 'pytest', '-q']] };
+      return {
+        ...common, type: 'ai', prompt: `${t.title}. [rehearsal:${t.key}]`,
+        assignedRunner: 'openrouter',
+        assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
+        taskMode: 'full', autonomy: 'AFK', subtasks: [],
+        ...(t.kind === 'research' ? { readOnly: true, research: true } : {}),
+        ...(t.kind === 'ops' ? { ops: true } : {}),
+      };
+    }),
   };
 }
 
@@ -106,11 +119,40 @@ const LEFT_PLAN = [
 ];
 
 /**
+ * The plan b-plan makes: a research task everything follows, a change on it, a
+ * script that checks it as a loop's check over a fix, an ops task beside the
+ * change, and a last change that waits on the check (a loop's body is waited on by nothing outside it) and the ops task. Task 1
+ * gates the rest; the chain is 1, 2, 3, 4.
+ */
+const SHAPED_PLAN = [
+  { key: 'survey', title: 'Survey the stubs', kind: 'research' },
+  { key: 'edit', title: 'Implement the library', after: ['survey'] },
+  { key: 'check', title: 'Run the test suite', kind: 'script', after: ['edit'], loopBody: ['fix'] },
+  { key: 'fix', title: 'Fix what the suite finds', after: ['check'] },
+  { key: 'tidy', title: 'Tidy the workspace', kind: 'ops', after: ['survey'] },
+  { key: 'final', title: 'Write the closing note', after: ['check', 'tidy'] },
+];
+
+/**
  * Each scenario: the arm it runs, its scripted attempts per task (by the key
  * a task's prompt carries, or `A` for arm A's one task), and what its
  * result.json must hold. `ctx` is { src, tests, longSec }.
  */
 export const SCENARIOS = Object.freeze({
+  'b-plan': {
+    arm: 'B',
+    planOnly: true,
+    about: 'arm B, --plan-only: the planner returns a six-task plan of every kind, its shape is recorded, and nothing runs, merges or is scored',
+    plan: () => rehearsalPlan(SHAPED_PLAN),
+    // What the harness must say of the plan above; the unit tests hold the shape function to its own cases.
+    expect: {
+      shape: {
+        tasks: 6, subtasks: 0, kinds: { research: 1, change: 3, ops: 1, script: 1, user: 0, delegated: 0 }, loopChecks: 1, edges: 6,
+        levels: 4, longestChain: 4, chain: ['Survey the stubs', 'Implement the library', 'Run the test suite', 'Fix what the suite finds'],
+        widestLevel: 2, gatedByOne: true, gate: 'Survey the stubs', valid: true, problems: [],
+      },
+    },
+  },
   'a-done': {
     arm: 'A',
     about: 'arm A: its one task makes the edits and reports done; `ordewell run` returns by itself',
@@ -199,7 +241,11 @@ export function windowArgs(s) {
 /** One line on what a result.json holds, for the rehearsal's log. */
 export function describeResult(r) {
   if (!r) return 'no result.json';
-  const t = r.truncated?.truncated ? `truncated (${r.truncated.why})` : 'not truncated';
+  if (r.planOnly) {
+    const sh = r.planned?.shape;
+    return `plan-only (never valid); ${sh ? `${sh.tasks} tasks, chain ${sh.longestChain}, widest level ${sh.widestLevel}, ${sh.edges} edges` : 'no plan'}; planner $${r.planned?.plannerUsd ?? '-'}, ${r.planned?.planningMs ?? '-'} ms`;
+  }
+  const t =r.truncated?.truncated ? `truncated (${r.truncated.why})` : 'not truncated';
   return `valid ${r.valid}; scored from ${r.scoredFrom}; ${t}; stopped ${r.stopped?.why ?? 'by nothing'}; `
     + `tasks ${JSON.stringify(taskCounts(r.tasks))}; passed ${r.tests?.passed ?? '-'} (baseline ${r.baseline?.passed ?? '-'}); run exit ${r.steps?.run?.exit ?? '-'}`;
 }
@@ -341,8 +387,14 @@ export function taskCounts(tasks) {
  */
 export function judgePlayed(name, turns, ctx) {
   const s = scenario(name);
-  const scripts = s.attempts(ctx);
   const f = [];
+  if (s.planOnly) {
+    // Nothing ran: the fake heard the planner and no runner or supervisor.
+    if (!turns.some((t) => t.role === 'planner')) f.push('the fake never heard the planner');
+    for (const t of turns.filter((x) => x.role === 'runner' || x.role === 'supervisor')) f.push(`a ${t.role} turn was played in a plan-only run`);
+    return f;
+  }
+  const scripts = s.attempts(ctx);
   for (const key of s.playedOut ?? []) {
     const attempts = scripts[key] ?? [];
     attempts.forEach((steps, i) => {
@@ -380,12 +432,63 @@ export function judgeBatch(record, { lib, arm, rehearsal }) {
   return f;
 }
 
-/** The failures of one scenario's result.json against its expectations; empty when it passed. */
-export function judgeRehearsal(name, result) {
+/**
+ * What a plan-only scenario's result.json must say: the plan's shape, a
+ * priced planner and a planning time, and that it is marked plan-only, never
+ * valid, and holds nothing of a run: no score, no tests, no run or merge step.
+ */
+function judgePlanOnly(name, result) {
   const e = scenario(name).expect;
   const f = [];
   const want = (ok, what) => { if (!ok) f.push(what); };
+  want(!result.aborted, `the run aborted: ${result.aborted}`);
+  want(result.planOnly === true, `planOnly is ${JSON.stringify(result.planOnly)}, not true`);
+  want(result.valid === false && (result.invalidReasons ?? []).some((r) => /^plan-only/.test(r)), `a plan-only result must be marked not valid for being plan-only (valid ${result.valid}, ${JSON.stringify(result.invalidReasons)})`);
+  want(result.tests === null && result.scoredFrom === null && result.tasks === null && (result.patches ?? []).length === 0, 'the result holds a score: tests, scoredFrom, tasks or patches');
+  want(result.baseline === null && result.truncated?.truncated === false, 'the result holds a baseline or a truncation');
+  want(!result.steps?.run && !result.steps?.merge && !result.closing?.merge, `a run or a merge step happened: ${JSON.stringify({ run: result.steps?.run, merge: result.steps?.merge })}`);
+  want(result.steps?.plan?.exit === 0, `ordewell plan exited ${JSON.stringify(result.steps?.plan ?? null)}`);
+  want(result.stopped === null && result.stalled === null, `the run was stopped or stalled (${JSON.stringify(result.stopped ?? result.stalled)})`);
+  const p = result.planned;
+  if (!p) return [...f, 'no planned record'];
+  want(p.protocolOk === true, `the plan broke the protocol: ${p.protocolFailures?.join('; ')}`);
+  const shape = p.shape ?? {};
+  for (const [k, v] of Object.entries(e.shape)) want(JSON.stringify(shape[k]) === JSON.stringify(v), `shape.${k} is ${JSON.stringify(shape[k])}, wanted ${JSON.stringify(v)}`);
+  want(typeof p.plannerUsd === 'number' && p.plannerUsd > 0, `the planner's spend is ${p.plannerUsd}, not above 0`);
+  want(typeof p.planningMs === 'number' && p.planningMs > 0, `the planning time is ${p.planningMs}`);
+  want(result.recordedUsd === p.plannerUsd, `recordedUsd ${result.recordedUsd} is not the planner's ${p.plannerUsd}: something besides the planner spent`);
+  want(result.metrics === null, 'a plan-only result holds run metrics');
+  return f;
+}
+
+/**
+ * The failures of a plan-only run's directory: plan.json beside the result
+ * (every task's title, brief and dependencies), the saved plan, and none of
+ * what a scored run leaves (the copy of the arm's work, its patch, its tests).
+ */
+export function judgePlanOnlyDir({ names, digest, expectedTitles }) {
+  const f = [];
+  for (const need of ['result.json', 'plan.json', 'plan-saved.json']) if (!names.includes(need)) f.push(`the run directory holds no ${need}`);
+  for (const stray of ['arm-workdir', 'arm.patch', 'baseline-tests.log', 'eval-tests.log']) if (names.includes(stray)) f.push(`the run directory holds ${stray}, which only a scored run makes`);
+  const tasks = digest?.tasks ?? [];
+  if (tasks.length !== expectedTitles.length) f.push(`plan.json holds ${tasks.length} tasks, wanted ${expectedTitles.length}`);
+  expectedTitles.forEach((title, i) => {
+    const t = tasks[i];
+    if (!t) return;
+    if (t.title !== title) f.push(`plan.json task ${i + 1} is "${t.title}", wanted "${title}"`);
+    if (!t.brief) f.push(`plan.json task ${i + 1} has no brief`);
+    if (!Array.isArray(t.dependencies) || !Array.isArray(t.dependsOn)) f.push(`plan.json task ${i + 1} has no dependencies`);
+  });
+  return f;
+}
+
+/** The failures of one scenario's result.json against its expectations; empty when it passed. */
+export function judgeRehearsal(name, result) {
   if (!result) return ['no result.json'];
+  if (scenario(name).planOnly) return judgePlanOnly(name, result);
+  const e = scenario(name).expect;
+  const f = [];
+  const want = (ok, what) => { if (!ok) f.push(what); };
   want(!result.aborted, `the run aborted: ${result.aborted}`);
   if ('valid' in e) want(result.valid === e.valid, `valid is ${result.valid}, not ${e.valid}${result.invalidReasons?.length ? ` (${result.invalidReasons.join('; ')})` : ''}`);
   if (e.scoredFrom) want(result.scoredFrom === e.scoredFrom, `scored from ${result.scoredFrom}, not ${e.scoredFrom}`);

@@ -1160,8 +1160,9 @@ async function readBackSession(deps: EffectDeps, sessionId: string, how: { openi
 /** The stream skipped a broadcast: the conversation, plan and run are read again from the daemon, without disturbing anything it runs. */
 async function resyncConversation(deps: EffectDeps, sessionId: string): Promise<void> {
   try {
-    const { plan, run } = await deps.api.getSession(sessionId, deps.workspace);
-    deps.dispatch({ type: 'conversationResynced', chat: restoredChat(plan, sessionId), sessionId });
+    const { plan, run, conversation } = await deps.api.getSession(sessionId, deps.workspace);
+    // The phase-tagged plan keeps no transcript: the route sends it beside the plan, and a daemon that predates that sent none.
+    deps.dispatch({ type: 'conversationResynced', chat: restoredChat(conversation ?? plan, sessionId), sessionId });
     deps.dispatch({ type: 'planRefreshed', plan, sessionId });
     if (run) deps.dispatch({ type: 'runSnapshot', view: run, sessionId });
   } catch (err) {

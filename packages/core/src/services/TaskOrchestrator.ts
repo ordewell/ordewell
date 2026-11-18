@@ -525,6 +525,7 @@ export class TaskOrchestrator {
       },
       liveTasks: (): ReadonlySet<string> => orchestrator.liveTaskIds(),
       landedOn: (taskId) => landedOnOf(taskId, store.allTasks),
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     });
     const landing = new Landing({ runs, config: options.config, tasks: store, ...(options.plannedWith ? { plannedWith: options.plannedWith } : {}), ...(options.inheritedProtectedPaths ? { inheritedProtectedPaths: options.inheritedProtectedPaths } : {}) });
     const pool = options.pool ?? new SlotPool(() => options.config.maxParallelSessions);
