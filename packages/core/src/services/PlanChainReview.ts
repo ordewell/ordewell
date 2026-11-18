@@ -1,4 +1,4 @@
-import type { Task, RunnerId } from '../models/Task';
+import { runsAsOps, type Task, type RunnerId } from '../models/Task';
 import type { RunnerModeInfo } from './ModeResolver';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings } from './JsonExtractor';
 import { checkPlanInvariants } from './PlannedTask';
@@ -64,6 +64,7 @@ function asPlanJson(tasks: readonly Task[]): string {
     type: t.type,
     dependencies: t.dependencies,
     ...(t.prompt !== undefined ? { prompt: t.prompt } : {}),
+    ...(t.prompt === undefined && t.goal ? { goal: t.goal } : {}),
     ...(t.readOnly ? { readOnly: true } : {}),
     ...(t.ops ? { ops: true } : {}),
     ...(t.loop ? { loop: t.loop } : {}),
@@ -100,14 +101,46 @@ export interface ChainChange {
   added: string[];
 }
 
-export type ChainReviewResult = { ok: true; tasks: Task[]; changes: ChainChange[] } | { ok: false; error: string };
+/** `ignored`: the subtask ids the reply answered for, which the review does not revise. */
+export type ChainReviewResult = { ok: true; tasks: Task[]; changes: ChainChange[]; ignored: string[] } | { ok: false; error: string };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Every task each top-level task waits for, directly or through others. */
+function ancestorsOf(tasks: readonly Pick<Task, 'id' | 'dependencies'>[]): Map<string, Set<string>> {
+  const deps = new Map(tasks.map((t) => [t.id, t.dependencies]));
+  const walk = (id: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [...deps.get(id) ?? []];
+    for (let d = queue.shift(); d !== undefined; d = queue.shift()) {
+      if (seen.has(d) || d === id) continue;
+      seen.add(d);
+      queue.push(...deps.get(d) ?? []);
+    }
+    return seen;
+  };
+  return new Map(tasks.map((t) => [t.id, walk(t.id)]));
+}
+
+/**
+ * A task that acts on the user's checkout, an ops or script task or a user
+ * task, is gated on every ancestor's work being merged, and a loop's check
+ * checks the work it waits for (readiness.ts mergeGate, ADR-0020, ADR-0045).
+ * Dropping one of its ancestors lets it act before that work exists, and no
+ * edge test the planner applies can tell that it is needed.
+ */
+const actsAfterItsAncestors = (t: Task): boolean => runsAsOps(t) || t.loop !== undefined || hasUserTask(t);
+const hasUserTask = (t: Task): boolean => t.type === 'user' || t.subtasks.some(hasUserTask);
+const subtaskIds = (t: Task): string[] => t.subtasks.flatMap((s) => [s.id, ...subtaskIds(s)]);
+
 /**
  * The review's reply applied to the plan as written. Any fault, an unknown id,
- * a malformed entry, a graph the plan's own invariants refuse, rejects the
- * whole reply, so the first plan stands rather than half a revision.
+ * a malformed entry, a graph the plan's own invariants refuse, a task acting
+ * on the checkout that no longer waits for all it did, rejects the whole
+ * reply, so the first plan stands rather than half a revision. Ordewell
+ * holds these whatever the reply says: the question asks to keep such edges,
+ * but only this check ensures it (ADR-0072 R1). An entry for a subtask, which
+ * the plan shows but the review does not revise, is ignored alone.
  */
 export function applyChainReview(
   tasks: readonly Task[],
@@ -126,16 +159,32 @@ export function applyChainReview(
   const entries = isRecord(parsed) ? parsed[CHAIN_REVIEW_KEY] : undefined;
   if (!Array.isArray(entries)) return { ok: false, error: `"${CHAIN_REVIEW_KEY}" is not a list` };
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const subtasks = new Set(tasks.flatMap(subtaskIds));
   const next = new Map<string, string[]>();
+  const ignored: string[] = [];
   for (const e of entries) {
     if (!isRecord(e) || typeof e.id !== 'string' || !Array.isArray(e.dependencies) || !e.dependencies.every((d) => typeof d === 'string')) {
       return { ok: false, error: `malformed entry ${JSON.stringify(e)}` };
+    }
+    if (!byId.has(e.id) && subtasks.has(e.id)) {
+      ignored.push(e.id);
+      continue;
     }
     if (!byId.has(e.id)) return { ok: false, error: `unknown task "${e.id}"` };
     const deps = [...new Set(e.dependencies as string[])];
     const unknown = deps.find((d) => !byId.has(d));
     if (unknown) return { ok: false, error: `task "${e.id}" names unknown dependency "${unknown}"` };
     next.set(e.id, deps);
+  }
+  const rewired = tasks.map((t) => ({ id: t.id, dependencies: next.get(t.id) ?? t.dependencies }));
+  const before = ancestorsOf(tasks);
+  const after = ancestorsOf(rewired);
+  // By title and id: a brief may name the other task either way.
+  const title = (id: string) => `"${byId.get(id)?.title ?? id}" (${id})`;
+  for (const t of tasks) {
+    if (!actsAfterItsAncestors(t)) continue;
+    const lost = [...before.get(t.id) ?? []].find((a) => !after.get(t.id)?.has(a));
+    if (lost) return { ok: false, error: `task "${t.id}" would no longer run after ${title(lost)}, which it waits for` };
   }
   const changes: ChainChange[] = [];
   const revised = tasks.map((t) => {
@@ -145,13 +194,18 @@ export function applyChainReview(
     const added = deps.filter((d) => !t.dependencies.includes(d));
     if (!removed.length && !added.length) return t;
     changes.push({ id: t.id, removed, added });
-    // By title and id: a brief may name the other task either way.
-    const title = (id: string) => `"${byId.get(id)?.title ?? id}" (${id})`;
-    return { ...t, dependencies: deps, ...(t.prompt !== undefined ? { prompt: `${t.prompt}\n\n${revisionNote(removed.map(title), added.map(title))}` } : {}) };
+    // A removed dependency still reached through another runs before this task, not beside it.
+    const parallel = removed.filter((d) => !after.get(t.id)?.has(d));
+    if (!parallel.length && !added.length) return { ...t, dependencies: deps };
+    const note = revisionNote(parallel.map(title), added.map(title));
+    // A delegated task has no prompt: its goal is its brief.
+    if (t.prompt !== undefined) return { ...t, dependencies: deps, prompt: `${t.prompt}\n\n${note}` };
+    if (t.goal) return { ...t, dependencies: deps, goal: `${t.goal}\n\n${note}` };
+    return { ...t, dependencies: deps };
   });
   const errors = checkPlanInvariants(revised, runners, runnerModes);
   if (errors.length) return { ok: false, error: errors[0].message };
-  return { ok: true, tasks: revised, changes };
+  return { ok: true, tasks: revised, changes, ignored };
 }
 
 /**

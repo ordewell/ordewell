@@ -802,7 +802,7 @@ export abstract class BaseAiService {
       const kept = after.length > 0 && after.length < chain.length;
       const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
       const changed = applied.changes.map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}`);
-      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${out}`);
+      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
       return kept ? applied.tasks : tasks;
     } catch (err) {
       if (signal?.aborted) throw err;
