@@ -2567,28 +2567,6 @@ describe('the shape a plan tool answers with', () => {
     expect(body(await over({ now: [] }, fan).submitPlan!({ tasks: [] } as unknown as SubmitPlanArgs, context)).shape).toBeUndefined();
   });
 
-  // A subplanner (unread) must be able to act on the note before its turn ends.
-  it('does not tell an unread planner to end its turn in the answer that asks it to drop an edge', async () => {
-    const h = plannerToolHandlerUnread();
-    const reply = JSON.parse((await h.submitPlan!({ tasks: [] } as unknown as SubmitPlanArgs, context)).text) as { shape?: string; next: string };
-    expect(reply.shape).toBeDefined();
-    expect(reply.next).toMatch(/edit_plan/);
-  });
-  const plannerToolHandlerUnread = () => plannerToolHandler({
-    skills: () => [], turnId: () => 'turn-1', recordSkillLoad: () => false,
-    liveCatalog: async () => ({ runners: ['claude-code'], models: {}, modes: {}, autonomousDefault: true }),
-    checkPlan: async () => ({ ok: true as const, tasks: chain, adjustments: [], warnings: [], summary: [], handles: new Map() }),
-    submitPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
-    unread: () => true,
-    editPlan: async () => ({ ok: true as const, summary: [], tasks: [] }),
-    tasks: () => [], read: async (_s, a) => ({ status: 'answered', value: await a(), landNow: false }),
-    liveOutput: () => null, lastAttempt: () => null, taskLogAttempts: () => [], taskLog: () => [],
-    taskDiff: async () => ({ available: false, reason: 'not available', cause: 'no-record' }),
-    runCommand: async () => ({ success: true, output: '', truncated: false }),
-    fetchUrl: async () => ({ success: true, output: '', truncated: false }),
-    webSearch: async () => undefined, execute: vi.fn(),
-  });
-
   it('tells edit_plan only of a chain the edit lengthened', async () => {
     expect(body(await over({ now: fan }, []).editPlan!({ ops: [] }, context)).shape).toMatch(/longest chain is 4/);
     expect(body(await over({ now: chain }, []).editPlan!({ ops: [] }, context)).shape).toBeUndefined();

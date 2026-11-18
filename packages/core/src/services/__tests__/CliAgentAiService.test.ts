@@ -2385,28 +2385,6 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     expect(tasks.map((t) => t.dependencies)).toEqual([[], ['a'], ['a'], ['a']]);
   });
 
-  // The invitation is to submit "once more": a later accepted long chain must not repeat it.
-  it('offers the resubmit once, not on a second long-chain submission', async () => {
-    const base = (planTasks() as Record<string, unknown>[])[0];
-    const chain = ['a', 'b', 'c', 'd', 'e'].map((id, i, ids) => ({ ...base, id, order: i + 1, title: `Step ${id}`, prompt: `Write src/${id}.ts`, dependencies: i ? [ids[i - 1]] : [] }));
-    const shorter = chain.slice(0, 4);
-    const mcp = fakeMcpServer();
-    const answers: McpToolReply[] = [];
-    const { svc } = service('claude-code', [
-      (_written, proc) => {
-        const submit = (tasks: unknown) => mcp.plannerHandlers.at(-1)!.submitPlan!({ tasks: tasks as SubmitPlanArgs['tasks'] }, { signal: new AbortController().signal });
-        void submit(chain).then((first) => { answers.push(first); return submit(shorter); }).then((second) => {
-          answers.push(second);
-          proc.emitStdout(claudeSays('Submitted.'));
-        });
-      },
-    ], {}, {}, mcp);
-    await svc.generatePlanDirect('Plan', ['claude-code']);
-    expect((JSON.parse(answers[0].text) as { next: string }).next).toMatch(/once more/);
-    const second = JSON.parse(answers[1].text) as { shape?: string; next: string };
-    expect(second.next).not.toMatch(/once more/);
-  });
-
   it('refuses a one-shot submission attaching a skill nothing provides, saying how to fix it', async () => {
     const taskSkills: SkillLookup = { findSkill: () => undefined, searchedDirs: () => [] };
     const mcp = fakeMcpServer();

@@ -234,9 +234,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
         ...(warnings.length > 0 ? { warnings } : {}),
         ...(shape ? { shape } : {}),
         next: host.unread?.()
-          ? shape
-            ? 'The plan is committed, and it starts as your turn ends. If shape names a dependency that does neither, remove it with one edit_plan call first; then end your turn now, with one line: nobody reads more.'
-            : 'The plan is committed, and it starts as your turn ends. End your turn now, with one line: nobody reads more.'
+          ? 'The plan is committed, and it starts as your turn ends. End your turn now, with one line: nobody reads more.'
           : 'The plan is committed: it is the current plan now, and the user is shown it. Tell them briefly what you submitted; do not repeat the plan as JSON.',
       });
     },
