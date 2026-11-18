@@ -2292,6 +2292,43 @@ describe('CliAgentAiService — one-shot plan generation', () => {
     expect(tokens.join('')).toBe(plan);
   });
 
+  // A one-shot agent is offered the conversation's chain review once a session (ADR-0072): the plan it then resubmits is the one taken.
+  it('asks a one-shot agent once to review a long chain, and takes the plan it submits after', async () => {
+    const one = (planTasks() as Record<string, unknown>[])[0];
+    const chained = ['a', 'b', 'c', 'd'].map((id, i, ids) => ({ ...one, id, title: `T ${id}`, dependencies: i ? [ids[i - 1]] : [] }));
+    const fanned = chained.map((t) => ({ ...t, dependencies: t.id === 'a' ? [] : ['a'] }));
+    const mcp = fakeMcpServer();
+    const answers: { review?: string; next: string }[] = [];
+    const submit = async (tasks: unknown) => {
+      const answer = await mcp.plannerHandlers.at(-1)!.submitPlan!({ tasks: tasks as SubmitPlanArgs['tasks'] }, { signal: new AbortController().signal });
+      answers.push(JSON.parse(answer.text) as { review?: string; next: string });
+    };
+    const scripted = scriptedAdapter([[{ type: 'assistant_text', runId: 'r1', text: 'Submitted.' }, { type: 'turn_end' }]]);
+    const svc = new CliAgentAiService(fakeConfig({ aiProvider: 'claude-code' }), {
+      createAdapter: (runner, deps) => {
+        const adapter = scripted(runner, deps)!;
+        return {
+          ...adapter,
+          send: async (message, onEvent, signal) => {
+            await submit(chained);
+            await submit(chained);
+            await submit(fanned);
+            return adapter.send(message, onEvent, signal);
+          },
+        };
+      },
+      workspaceRoot: () => '/repo',
+      mcpServer: mcp,
+    });
+
+    const tasks = await svc.generatePlanDirect('Fill in the stubs', ['claude-code']);
+
+    expect(answers[0].review).toMatch(/^Its longest chain of dependencies is 4 tasks, .* Do not mention this review to the user\.$/);
+    expect(answers[0].next).toBe('Plan recorded. Do what review says, then end your turn.');
+    expect(answers.slice(1).map((a) => [a.review, a.next])).toEqual([[undefined, 'Plan recorded. End your turn now.'], [undefined, 'Plan recorded. End your turn now.']]);
+    expect(tasks.map((t) => t.dependencies)).toEqual([[], ['a'], ['a'], ['a']]);
+  });
+
   it('generates the plan its submit_plan call recorded through a Codex session', async () => {
     const mcp = fakeMcpServer();
     const { svc, spawned } = service('codex', [...codexHandshake(), submitting(mcp, planTasks('codex'), fixture('codex', 'plan', { PLAN: 'Submitted.' }))], {}, {}, mcp);

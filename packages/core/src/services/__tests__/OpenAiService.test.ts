@@ -133,6 +133,37 @@ describe('OpenAiService usage reporting (#49)', () => {
     expect(records[0]).not.toHaveProperty('cachedInputTokens');
   });
 
+  // A one-shot plan call (the fallback, the chain review) is billed like any other.
+  it('reports a plan-text call\'s usage and whether its reply was cut off, at the effort asked for', async () => {
+    createSpy.mockReturnValue(streamOf([
+      { choices: [{ delta: { content: '{"tasks":[' }, finish_reason: 'length' }] },
+      { choices: [], usage: { prompt_tokens: 100, completion_tokens: 50, cost: 0.002 } },
+    ]));
+    const replies: unknown[] = [];
+    const text = await (new OpenAiService(cfg({ aiProvider: 'openrouter', orchestratorModel: 'openai/gpt-4o' } as Partial<IConfig>)) as unknown as {
+      streamPlanText(p: string, h: string | undefined, onToken: (t: string) => void, r: undefined, s: undefined, call: { onReply: (r: unknown) => void; effort: string }): Promise<string>;
+    }).streamPlanText('prompt', undefined, () => {}, undefined, undefined, { onReply: (r) => replies.push(r), effort: 'low' });
+    expect(text).toBe('{"tasks":[');
+    expect((createSpy.mock.calls[0][0] as { reasoning?: unknown }).reasoning).toEqual({ effort: 'low' });
+    expect(replies).toEqual([{
+      usage: { source: 'openrouter', model: 'openai/gpt-4o', inputTokens: 100, outputTokens: 50, reportedCost: { amount: 0.002, currency: 'USD', kind: 'billed' }, contextTokens: 150 },
+      cutOff: true,
+    }]);
+  });
+
+  it('asks for the longest reply the model serves when a plan-text call wants it', async () => {
+    const call = async (largestReply: boolean) => {
+      createSpy.mockReturnValue(streamOf([{ choices: [{ delta: { content: '{}' }, finish_reason: 'stop' }] }]));
+      await (new OpenAiService(cfg(), { modelLimits: () => ({ contextWindow: 1_048_576, maxOutputTokens: 128_000 }) }) as unknown as {
+        streamPlanText(p: string, h: string | undefined, onToken: (t: string) => void, r: undefined, s: undefined, call: { largestReply: boolean }): Promise<string>;
+      }).streamPlanText('prompt', undefined, () => {}, undefined, undefined, { largestReply });
+      const body = createSpy.mock.calls.at(-1)![0] as { max_tokens?: number; max_completion_tokens?: number };
+      return body.max_completion_tokens ?? body.max_tokens;
+    };
+    expect(await call(false)).toBe(32_000);
+    expect(await call(true)).toBe(128_000);
+  });
+
   // The provider reports no window, so a record claims none: the session reads
   // the window of the model a record names from its catalog, per call.
   it('claims no context window the provider did not report', async () => {

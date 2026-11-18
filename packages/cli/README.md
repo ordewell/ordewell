@@ -85,6 +85,10 @@ ordewell merge                      # bring it onto your branch
 ordewell decisions                  # what the planner recorded as standing (`all` adds the superseded)
 ```
 
+`ordewell plan --no-chat` plans in one pass, with no dialogue. When that plan's
+longest chain of dependencies is long, the planner may make one extra call to
+review its dependencies before the plan is kept.
+
 `ordewell run` follows the run until its end stands: with the supervisor at
 Act, that is after the closing turn the supervisor is woken to, and it keeps
 following if that turn continues the run. It prints the run's supervisor level,
