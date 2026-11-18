@@ -1,5 +1,6 @@
 import { flattenTasks, type AwaitingReason, type ConversationMessage, type Task } from '../models/Task';
 import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
+import { repeatingChecks } from './blocking';
 import type { StartWait } from './readiness';
 
 /**
@@ -21,12 +22,30 @@ export interface RunHold {
  */
 export function runHolds(plan: readonly Task[], waits: ReadonlyMap<string, readonly StartWait[]>): RunHold[] {
   const tasks = flattenTasks([...plan]);
+  const holdsBack = holdsBackIn(tasks);
+  return tasks.flatMap((task) => {
+    const hold = holdOf(task, waits);
+    return hold ? [{ taskId: task.id, hold, holdsBack: holdsBack(task.id) }] : [];
+  });
+}
+
+/** A task's hold, if it has one: on hold, or waiting on a person for anything but a usage limit's reset. */
+function holdOf(task: Readonly<Task>, waits: ReadonlyMap<string, readonly StartWait[]>): RunHold['hold'] | undefined {
+  if (task.status === 'awaiting_user') {
+    return task.awaitingReason === 'usage-limit' ? undefined : { kind: 'waiting', ...(task.awaitingReason ? { reason: task.awaitingReason } : {}) };
+  }
+  const onHold = (waits.get(task.id) ?? []).find((w): w is Extract<StartWait, { kind: 'on-hold' }> => w.kind === 'on-hold');
+  return onHold ? { kind: 'on-hold', ...(onHold.reason ? { reason: onHold.reason } : {}) } : undefined;
+}
+
+/** How many tasks not yet done need each task, however far down. */
+function holdsBackIn(tasks: readonly Task[]): (id: string) => number {
   const dependents = new Map<string, string[]>();
   for (const task of tasks) {
     for (const dep of task.dependencies) dependents.set(dep, [...(dependents.get(dep) ?? []), task.id]);
   }
   const open = new Set(tasks.filter((t) => t.status !== 'completed' && t.status !== 'skipped').map((t) => t.id));
-  const holdsBack = (id: string): number => {
+  return (id) => {
     const seen = new Set<string>();
     const walk = (from: string) => {
       for (const next of dependents.get(from) ?? []) {
@@ -38,17 +57,51 @@ export function runHolds(plan: readonly Task[], waits: ReadonlyMap<string, reado
     walk(id);
     return [...seen].filter((t) => open.has(t)).length;
   };
-  const holds: RunHold[] = [];
-  for (const task of tasks) {
-    if (task.status === 'awaiting_user') {
-      if (task.awaitingReason === 'usage-limit') continue;
-      holds.push({ taskId: task.id, hold: { kind: 'waiting', ...(task.awaitingReason ? { reason: task.awaitingReason } : {}) }, holdsBack: holdsBack(task.id) });
-      continue;
-    }
-    const onHold = (waits.get(task.id) ?? []).find((w): w is Extract<StartWait, { kind: 'on-hold' }> => w.kind === 'on-hold');
-    if (onHold) holds.push({ taskId: task.id, hold: { kind: 'on-hold', ...(onHold.reason ? { reason: onHold.reason } : {}) }, holdsBack: holdsBack(task.id) });
-  }
-  return holds;
+}
+
+/** A task that stops what needs it until someone releases it: failed, or held as {@link RunHold} says. */
+export interface StandingBlock {
+  taskId: string;
+  block: { kind: 'failed' } | RunHold['hold'];
+  /** The tasks not yet done that need it, however far down. */
+  holdsBack: number;
+}
+
+/** Whether a task is failed or held now, and what it holds back; undefined when it is neither. */
+export function standingBlock(plan: readonly Task[], waits: ReadonlyMap<string, readonly StartWait[]>, taskId: string): StandingBlock | undefined {
+  const tasks = flattenTasks([...plan]);
+  const task = tasks.find((t) => t.id === taskId);
+  if (!task) return undefined;
+  // A loop's check between rounds is stored as failed but is no failure: its loop goes on (ADR-0045 L3).
+  const block = task.status !== 'failed' ? holdOf(task, waits) : repeatingChecks(tasks).has(taskId) ? undefined : { kind: 'failed' as const };
+  return block ? { taskId, block, holdsBack: holdsBackIn(tasks)(taskId) } : undefined;
+}
+
+/** One key per failure or hold of a task: the same task, standing the same way. */
+export function standingKey({ taskId, block }: StandingBlock): string {
+  return `${taskId}:${block.kind}:${block.kind === 'failed' ? '' : block.reason ?? ''}`;
+}
+
+/** How a standing task stands, in words: "failed", "on hold (why)", "waiting for input". */
+export function standingWords(block: StandingBlock['block']): string {
+  if (block.kind === 'failed') return 'failed';
+  if (block.kind === 'on-hold') return `on hold${block.reason ? ` (${block.reason})` : ''}`;
+  return WAITING_WORDS[block.reason ?? 'input'];
+}
+
+/**
+ * The supervisor's line for a task its wake-up turn left failed or held with
+ * work waiting on it (ADR-0057 R4): what still stands, what waits, and the
+ * calls that release it.
+ */
+export function standingDetail({ taskId, block, holdsBack }: StandingBlock, describe: (taskId: string) => string): string {
+  const waiting = `${holdsBack} ${holdsBack === 1 ? 'task waits' : 'tasks wait'} on it`;
+  const release = block.kind === 'waiting' && block.reason === 'checkpoint'
+    ? 'answer it with answer_checkpoint'
+    : block.kind === 'waiting'
+      ? 'message_task its runner with what to do next, or call retry_task from "fresh" with a message, your note on what to do differently'
+      : 'call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply';
+  return `Task ${describe(taskId)} is still ${standingWords(block)} after your turn, and ${waiting}. Release it: ${release}; or skip_task it with your reason; or tell the user.`;
 }
 
 /** One key per distinct set of holds: the same tasks, held the same way. */

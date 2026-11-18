@@ -33,12 +33,25 @@ export const NUDGES = [
   'Keep your context as clear as possible: make use of research tasks to surface to you only the relevant information to make decisions.',
 ];
 
+/**
+ * Where V3, the control, is built from when `--control-ref` names none: this
+ * variable, else the merge-base of the candidate ref and CONTROL_UPSTREAM,
+ * which is the code the candidate's change started from.
+ */
+export const CONTROL_REF_ENV = 'ORDEWELL_BENCH_CONTROL_REF';
+export const CONTROL_UPSTREAM = 'origin/main';
+
 /** An `optional` variant runs only when `--variant` names it (or on the mock), as an optional cell does. */
 export const VARIANTS = {
   V0: { id: 'V0', build: 'baseline', nudges: true, env: {}, about: `Ordewell at ${BASELINE_REF}, goal plus the two nudges` },
   V1: { id: 'V1', build: 'candidate', nudges: false, env: { ORDEWELL_PLANNER_READ_LIMIT: 'off' }, about: 'the candidate ref, goal alone, with no planner read limit' },
   // ADR-0068: the planner's own reads per turn are capped, at the default limit; V1 names it off because the default is on.
   V2: { id: 'V2', build: 'candidate', nudges: false, optional: true, env: { ORDEWELL_PLANNER_READ_LIMIT: 'on' }, about: 'V1 plus the planner read limit' },
+  // The control: the code before a change, built as it is and asked as V1 is, so V1 against V3 is the change alone.
+  V3: {
+    id: 'V3', build: 'control', nudges: false, optional: true, env: { ORDEWELL_PLANNER_READ_LIMIT: 'off' },
+    about: `the control ref (--control-ref, else $${CONTROL_REF_ENV}, else the candidate's merge-base with ${CONTROL_UPSTREAM}), goal alone, with no planner read limit`,
+  },
 };
 
 /** The answer to a clarifying question and the confirmation of an outline, verbatim. */
@@ -214,14 +227,18 @@ export function runSettings({ cell, enabledRunners }) {
 }
 
 const FLAG_VALUES = new Set(['--backend', '--goal', '--variant', '--repeats', '--concurrency', '--timeout', '--candidate-ref',
-  '--baseline-ref', '--resume', '--out', '--max-parallel', '--runners', '--review-model', '--review-timeout', '--mock-persona', '--report',
+  '--baseline-ref', '--control-ref', '--resume', '--out', '--max-parallel', '--runners', '--review-model', '--review-timeout', '--mock-persona', '--report',
   '--rescore', '--baseline-from', '--api-timeout', '--model']);
 const FLAG_SWITCHES = new Set(['--smoke', '--full', '--mock', '--no-review', '--with-optional', '--keep', '--list', '--help']);
 
 const list = (v) => (v === undefined ? undefined : String(v).split(',').map((s) => s.trim()).filter(Boolean));
 
-/** The command line, parsed. Throws on a flag it does not know, so a typo cannot widen a run. */
-export function parseArgs(argv) {
+/**
+ * The command line, parsed. Throws on a flag it does not know, so a typo
+ * cannot widen a run. `env` supplies what a variable may set instead
+ * (CONTROL_REF_ENV); a flag wins over it.
+ */
+export function parseArgs(argv, env = process.env) {
   const raw = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -254,6 +271,8 @@ export function parseArgs(argv) {
     apiTimeoutMs: positive('--api-timeout', 2 * timeout) * 1000,
     candidateRef: raw['--candidate-ref'] ?? 'HEAD',
     baselineRef: raw['--baseline-ref'] ?? BASELINE_REF,
+    // null: the candidate's merge-base with CONTROL_UPSTREAM, which only git can say (builds.mjs controlSha).
+    controlRef: raw['--control-ref'] ?? (env[CONTROL_REF_ENV] || null),
     resume: raw['--resume'],
     out: raw['--out'],
     report: raw['--report'],

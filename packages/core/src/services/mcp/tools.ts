@@ -216,8 +216,8 @@ const oneTaskInput = z.object({ task: taskRef });
 const retryTaskInput = z.object({
   task: taskRef,
   from: z.enum(['fresh', 'session'])
-    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now (change the prompt with edit_plan first). "session": continue the runner\'s saved session with "message"; for a completed or failed task, or one paused on a usage limit.'),
-  message: z.string().optional().describe('What the runner should do next. Required with "session", except to resume a task paused on a usage limit.'),
+    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now. "session": continue the runner\'s saved session with "message"; for a completed or failed task, or one paused on a usage limit.'),
+  message: z.string().optional().describe('"session": what the runner should do next, required unless resuming a task paused on a usage limit. "fresh": your note on what to do differently; it counts as a change to the identical-retry guard.'),
 });
 
 const skipTaskInput = z.object({
@@ -707,23 +707,23 @@ const PLANNER_EXECUTES = { readOnlyHint: false };
  * one, and records it. The API planner offers the same tools as its own.
  */
 export const PLANNER_EXECUTION_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
-  tool('run_plan', 'Start the whole plan, as the user\'s own run of it does, or make the tasks already running one scheduled run, so their dependents start. What failed stays failed, and blocks what depends on it: retry_task gives it a new attempt. Only a plan the user has approved, and in Guarded the user is asked first; with autorun on in Full nobody is asked, on a first plan too.',
+  tool('run_plan', 'Start the whole plan, as the user\'s own run of it does, or make the tasks already running one scheduled run, so their dependents start. What failed stays failed and blocks its dependents: retry_task gives it a new attempt. Only a plan the user has approved, and in Guarded the user is asked first; with autorun on in Full nobody is asked, on a first plan too.',
     runPlanInput, (h) => h.runPlan?.bind(h), PLANNER_EXECUTES),
-  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies have not finished, one waiting at its merge gate, or one the user has not approved; in Guarded the user is asked first, and with autorun on in Full nobody is. Nothing starts after it on its own: run_plan is what starts the rest. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
+  tool('run_task', 'Start one task now. Refused, with the reason, for a task whose dependencies are unfinished, one waiting at its merge gate, or one the user has not approved; in Guarded the user is asked first, and with autorun on in Full nobody is. Nothing starts after it on its own: run_plan is what starts the rest. A task this reply\'s edit_plan added is in the plan already: name it by that call\'s id or handle, or its title.',
     oneTaskInput, (h) => h.runTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_task', 'Stop one running task: its open approvals are denied, and it goes back to not started and stays held, through a run_plan too, blocking every task that depends on it, until it is retried, force started or skipped. After changing its prompt with edit_plan, retry it in the same reply.',
     oneTaskInput, (h) => h.stopTask?.bind(h), PLANNER_EXECUTES),
   tool('stop_run', 'Stop every running task and the run. The plan is kept.',
     runPlanInput, (h) => h.stopRun?.bind(h), PLANNER_EXECUTES),
-  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session with a message. To change what it is told, edit its prompt with edit_plan first. A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset. In Guarded the user is asked first. A task an edit_plan call of this reply added is in the plan already: name it by the id or handle that call answered with, or its title.',
+  tool('retry_task', 'Start a new attempt of a failed, stopped or waiting task: fresh from its prompt, or continuing its saved session. To change what a fresh attempt is told, pass a message, your note, or edit its prompt with edit_plan and retry in the same reply: an edit alone starts nothing. Once the user says a usage limit has been reset, resume a task paused on it early with from "session". In Guarded the user is asked first. A task this reply\'s edit_plan added is in the plan already: name it by that call\'s id or handle, or its title.',
     retryTaskInput, (h) => h.retryTask?.bind(h), PLANNER_EXECUTES),
-  tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn; a reason is required.',
+  tool('skip_task', 'Give up waiting for a task that failed, is blocked or is waiting for input: it ends as skipped, none of its work lands, and the tasks that depend on it go ahead without it once the work it waited on is done, told your reason. It never marks work complete. Only the supervisor at Act may, in a wake-up turn.',
     skipTaskInput, (h) => h.skipTask?.bind(h), PLANNER_EXECUTES),
   tool('message_task', 'Send a message to a running task, or answer one waiting for input. A message to a task paused on a usage limit resumes it in its saved session. A task waiting at a checkpoint is answered with answer_checkpoint, not a message.',
     messageTaskInput, (h) => h.messageTask?.bind(h), PLANNER_EXECUTES),
   tool('answer_approval', 'Answer a request a task\'s runner is waiting on: deny it with a note, or escalate it to the user. It never allows. It does not cover a checkpoint: that is answer_checkpoint.',
     answerApprovalInput, (h) => h.answerApproval?.bind(h), PLANNER_EXECUTES),
-  tool('answer_checkpoint', 'Answer the checkpoint a task\'s runner waits at, as the user does: approve it and the task goes on, or reject it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it themselves, so tell them what it asks. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect is not yours to approve: leave it for the user and say why. A message does not answer a checkpoint.',
+  tool('answer_checkpoint', 'Answer the checkpoint a task\'s runner waits at, as the user does: approve it and the task goes on, or reject it with a reason the runner acts on. Only the supervisor at Act may, in a wake-up turn; in the user\'s own turn they answer it themselves, so tell them what it asks. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect is not yours to approve: leave it for the user and say why.',
     answerCheckpointInput, (h) => h.answerCheckpoint?.bind(h), PLANNER_EXECUTES),
   tool('merge_all', 'Merge the run\'s landed work into the user\'s branch, as their own merge does, opening the merge gates that wait on it. Only the supervisor at Act may, in a wake-up turn; otherwise the user merges, or automatic merging does.',
     runPlanInput, (h) => h.mergeAll?.bind(h), PLANNER_EXECUTES),

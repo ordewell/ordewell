@@ -150,7 +150,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   | wakes at once | events |
   |---|---|
   | a child plan ended | a delegated task's verdict, or its Stop |
-  | a person is needed | `waiting_input`, `waiting_approval`, `landing_conflict` left waiting, `auto_merge_stopped`, `usage_limit`, `run_held` |
+  | a person is needed | `waiting_input`, `waiting_approval`, `landing_conflict` left waiting, `auto_merge_stopped`, `usage_limit`, `run_held`, `failure_standing` |
   | something is open | a question from a child, or a report with `open` |
   | a report arrived | `task_report` ([ADR-0037](0037-research-tasks-wake-the-planner.md)) |
   | the run ended | `run_finished`, with no merge window |
@@ -184,6 +184,24 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   or a start the user asks for, a join of the open run included, wakes afresh. It is counted
   against the rate guard as any wake is. A supervisor that stopped a task waiting for input and
   ended its turn, the stop alone moving nothing, had left a run idle with no wake to come.
+
+  `failure_standing` is a blocking failure a supervisor's own turn left standing while the run is
+  not idle. When a wake-up turn at Act ends and a task it was woken for is still failed, on hold
+  or waiting on a person (a usage limit apart), was not stopped by the user, and tasks not yet
+  done need it, `RunSupervision` raises it for that task as the turn ends, without waiting for the
+  run to go idle, which another task still running can put off for good. A loop's check between
+  rounds is stored as failed but is no failure ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3), so it raises
+  none. It goes with no merge window, as `run_finished` does: the turn that left it standing is its
+  context, and `ordewell run --unattended` judges a person's wait still standing shortly after a
+  turn, so a wake that waited out the window came after the follower had left. Its line says the task
+  still stands that way after the turn, how many tasks wait on it, and the calls that release it.
+  It is raised once per task for each failure or hold, keyed by the task with how it stands and
+  why: a turn that leaves it standing again is not woken a third time, and a turn woken for
+  another task is not woken for it; the task settling again, a new hold, or a start the user asks
+  for makes it new. It is counted against the rate guard as any wake is. A run idle behind its
+  holds is `run_held`'s, which stays the backstop. An Act supervisor refused an identical retry
+  had edited the prompt and ended its turn while another task ran: twelve tasks stayed held with
+  no wake to come.
 
   A `running_long` event is raised by a task's running time, by an automatic compaction of its own
   runner session, or by its context growing large; which compactions count as routine, and where a
@@ -478,3 +496,5 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-17 — R4, R5: a compaction is routine only under a window below 200k tokens; with none set, as `auto` sets none but Haiku's, or any window from 200k, `running_long` fires from the first, and R5's example names a 400k window.
 - 2026-11-17 — R4, R5: a task's context reaching 40% of its effective window, never below 150k, and each doubling of that below the window, raises `running_long`, held as the others are; its line names the size it passed against the window.
 - 2026-11-17 — R4: `run_held`, the run idle behind a task on hold or one waiting on a person, wakes as a person needed does, once per distinct set of holds, naming each hold, who put it there and what it holds back.
+- 2026-11-17 — R4: `failure_standing`, a task a wake-up turn at Act left failed or held with work waiting on it, wakes the supervisor once more as the turn ends, once per task for each failure or hold, while `run_held` stays the backstop for an idle run.
+- 2026-11-17 — R4: `failure_standing` goes with no merge window, and a loop's check between rounds raises none.

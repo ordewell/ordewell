@@ -45,6 +45,7 @@ export const TASK_FIELDS = {
   waitsEnded: 'execution',
   resumeAt: 'attempt',
   carriedFrom: 'attempt',
+  retryNote: 'attempt',
   skipReason: 'attempt',
   skipOrigin: 'attempt',
   reverted: 'attempt',

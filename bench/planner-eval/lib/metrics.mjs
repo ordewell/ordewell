@@ -127,6 +127,69 @@ export const isResearch = (task) => task.research === true;
 export const isReadOnly = (task) => isResearch(task) || READ_ONLY_MODES.has(String(task.taskMode ?? '').toLowerCase());
 export const isLoop = (task) => task.loop !== undefined && task.loop !== null;
 
+const titleOf = (t) => String(t.title ?? '');
+
+/** A task that checks the work rather than doing it: a verify script, or one titled as a check or gate. */
+const VERIFY_TITLE = /^\s*(verify|check|validate|review|confirm|re-?run|run)\b|\bgate\b|\b(integration|final|closing) (check|verification)\b/i;
+const DOCS_TITLE = /\b(docs?|documentation|changelog|readme|CONTEXT\.md|ADRs?|ADR[- ]?\d+)\b/i;
+const CODE_TITLE = /\b(code|src|source|tests?|types?|field|schema|migrat\w*|persist\w*|implement\w*|model|reader|writer)\b/i;
+
+/** The ids of every task a loop runs as its body: the fix half of a verify/fix pair. */
+function loopBodies(all) {
+  return new Set(all.flatMap((t) => (Array.isArray(t.loop?.body) ? t.loop.body : [])));
+}
+
+export const isVerify = (t) => t.type === 'script' || VERIFY_TITLE.test(titleOf(t));
+const isCheckLoop = (t) => isLoop(t) && Array.isArray(t.loop.body) && t.loop.body.length > 0;
+
+/**
+ * A task that changes the code a key is about. Research, read-only, verify
+ * and loop tasks change nothing of their own, a loop's body fixes only what
+ * its check reports, and a docs task edits prose: two of those beside the
+ * change are not the change split in two.
+ */
+export function changeTasks(top) {
+  const bodies = loopBodies(flatten(top));
+  return top.filter((t) => !isReadOnly(t)
+    && !isVerify(t)
+    && !isCheckLoop(t)
+    && !bodies.has(t.id)
+    && !(DOCS_TITLE.test(titleOf(t)) && !CODE_TITLE.test(titleOf(t))));
+}
+
+/**
+ * The longest dependency chain counted in change tasks only: a research task
+ * before the work or a check after it orders the plan without lengthening the
+ * work. Null for a cycle.
+ */
+export function changePath(top) {
+  if (criticalPath(top) === null) return null;
+  const changing = new Set(changeTasks(top).map((t) => t.id));
+  const byId = new Map(top.map((t) => [t.id, t]));
+  const memo = new Map();
+  const depth = (id) => {
+    if (memo.has(id)) return memo.get(id);
+    let best = 0;
+    for (const dep of byId.get(id)?.dependencies ?? []) if (byId.has(dep)) best = Math.max(best, depth(dep));
+    memo.set(id, best + (changing.has(id) ? 1 : 0));
+    return memo.get(id);
+  };
+  return Math.max(0, ...top.map((t) => depth(t.id)));
+}
+
+/**
+ * Whether the plan closes with an integration check: a task that checks
+ * rather than changes (a verify script, a task titled as a check, a
+ * verify/fix loop) and waits for every change task. A plan with no change
+ * task has nothing to close.
+ */
+export function endsInCheck(top) {
+  const changes = changeTasks(top);
+  if (changes.length === 0) return false;
+  const up = ancestors(top);
+  return top.some((t) => !isResearch(t) && (isVerify(t) || isCheckLoop(t)) && changes.every((c) => up.get(t.id).has(c.id)));
+}
+
 function byteLength(value) {
   return typeof value === 'string' ? Buffer.byteLength(value, 'utf8') : 0;
 }
@@ -343,6 +406,8 @@ export function runMetrics(session, { researchLog, driver = {}, autoMerge = true
     topLevelTasks: top.length,
     width: width(top),
     criticalPath: criticalPath(top),
+    changePath: changePath(top),
+    endsInCheck: endsInCheck(top),
     researchTasks,
     readOnlyTasks: all.filter(isReadOnly).length,
     loopTasks: all.filter(isLoop).length,

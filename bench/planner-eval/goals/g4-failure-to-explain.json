@@ -17,6 +17,7 @@
       "name": "labels a severity, and names the worst one a row can show"
     }
   },
+  "guards": "over-flattening: the fix still waits for the failure to be seen (a reproduction before it, or the fix running the failing tests first), so a plan that starts the fix at once fails its key",
   "key": {
     "taskCount": { "min": 1, "max": 5 },
     "parallelAllowed": true,

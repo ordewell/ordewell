@@ -10,7 +10,10 @@ The question it answers: does the candidate planner prompt, given no nudges,
 break the goals' answer keys no more often than the baseline given nudges, and
 without telling the user to operate a control the terminal UI does not have?
 How parallel and how delegated each side planned is reported beside that, and
-judges nothing.
+judges nothing. With V3, the control, it also answers whether a change to the
+planner's instructions (V1 against the code before it) widens the plans that
+can be wide without breaking the ones that must stay serial: see
+[Judging a change to the planner](#judging-a-change-to-the-planner).
 
 ## Variants
 
@@ -19,11 +22,22 @@ judges nothing.
 | V0 | `--baseline-ref` (default `0ecc6412`) | the goal, then the two nudges below, verbatim | — |
 | V1 | `--candidate-ref` (default `HEAD`) | the goal alone | `ORDEWELL_PLANNER_READ_LIMIT=off` |
 | V2 | `--candidate-ref` (default `HEAD`) | the goal alone | `ORDEWELL_PLANNER_READ_LIMIT=on` |
+| V3 | `--control-ref`, else `$ORDEWELL_BENCH_CONTROL_REF`, else the merge-base of `--candidate-ref` and `origin/main` | the goal alone | `ORDEWELL_PLANNER_READ_LIMIT=off` |
 
 V2 is V1 with the planner's own reads capped per turn at the default limit
 ([ADR-0068](../../docs/adr/planner-envelope/0068-a-limit-on-the-planners-own-reads-per-turn.md)). It
 runs only when `--variant` names it, or on `--mock`, and each of its records
 carries the environment it ran under as `env`.
+
+V3 is the control: a named ref built as it is, asked exactly as V1 is (no
+nudges, the same environment), so V1 against V3 measures the code change
+alone. By default it is where the candidate's branch left `origin/main`, the
+code before the change. When that merge-base is the candidate itself (a
+candidate already on main), the run says so: V1 against V3 then compares a
+build with itself, and `--control-ref` should name the commit before the
+change. Without an `origin/main` the run refuses to start and names the flag
+and the variable. Like V2, V3 runs only when `--variant` names it, or on
+`--mock`.
 
 V0's nudges, each its own paragraph:
 
@@ -46,6 +60,17 @@ Every run plans against a throwaway repository: a `git archive` of the baseline
 ref, committed as one commit in a fresh `git init` with no remote. G4's goal
 first applies its bug patch (`setup.patches` in
 `goals/g4-failure-to-explain.json`), which makes exactly two core tests fail.
+Every variant, V3 included, plans against the same target: the targets are cut
+from `--baseline-ref` whatever ref a variant builds, so G4's patch and G5's
+ground truth hold for each.
+
+G6 is the exception. Its goal names a fixture (`setup.fixture`), and its
+target is that directory, `fixtures/g6-stubs/`, committed the same way, with
+no `node_modules` put in: the fixture is plain Node with no dependencies, and
+`npm test` (`node --test`) runs its tests. Its template is cut again whenever
+a fixture file changes. Its tests sit in `test/<module>.mjs`, not
+`*.test.mjs`, so `npm run test:bench` never runs them: at the stubs every one
+fails.
 
 Each run gets its own clone of the template, under the OS temp directory, or
 under `~/.cache` when only that shares the builds' file system. The baseline
@@ -70,6 +95,7 @@ can take. The bench grants this, not the planner prompt.
 | G3 | a hint's wording fix plus its test | one task |
 | G4 | a findings badge names the mildest severity | 1–5 tasks. Reproduce first: the planner ran the failing test and saw its result, a reproduction task precedes every fix, or the fix runs the failing tests before it changes code. The fix, or a task after it, runs the named tests. Hypotheses go to research tasks before the fix only when no fix names the cause |
 | G5 | which child-process spawn sites pass `process.env` unfiltered, then a helper that filters it | 3–7 tasks; at least two agents or research tasks, briefed by package, before any change; the planner's own reads at most 10 and 60 KB. Width is compared with 2–5 slices ±1, reported only |
+| G6 | fill in the stubs: implement a small library whose functions are stubs with signatures and doc comments until its tests pass | 3–8 tasks; the longest chain of change tasks at most 3; at least 3 change tasks that can run at once; no module slice ordered after another whose module it calls, or that calls it. A closing check that waits for every slice is allowed and counts in neither the path nor the width |
 
 Each `goals/gN-*.json` holds the goal text and its `key`. The key's
 `expectedStrategy` and `integrationRisks` are prose for the rubric reviewer.
@@ -90,6 +116,40 @@ G5's `groundTruth` lists every source file that imports a child-process API at
 the baseline commit, with the `git grep` that found them; a test checks the
 list against that commit. `expectedSlices` sits beside the key, outside it, so
 changing it leaves the key's hash alone.
+
+G6's fixture, `fixtures/g6-stubs/`, is an invoice library of six modules:
+`money`, `tax` and `csv` call nothing, `lines` calls `money` and `tax`,
+`invoice` calls `csv` and `lines`, and `render` calls `money`, `lines` and
+`invoice`. Every function throws `not implemented` under a doc comment that
+is its whole contract, and each module has its own tests. Its import graph is
+four deep, so a plan chained along it (money, then lines, then invoice, then
+render) has a change path of 4 and fails. The key (`slices`) names each
+module by a title pattern and lists the calls; a change task is a slice of
+every module its title names, and two slices with no module in common that
+are ordered (directly, or through a check between them) where one's modules
+call the other's are ordered by the call alone, which is a violation. An order
+between modules with no call between them is left to the path. A test checks
+the key's calls against the fixture's imports, and that every stub throws and
+every fixture test fails. A slice's own tests can pass only once the modules
+it calls land, which is what the closing check is for.
+
+### Guards against over-flattening
+
+A change that widens plans must not flatten the ones whose work is ordered for
+a reason. Three goals guard that, each marked `guards` in its goal file
+(outside the key, so the note changes no key hash):
+
+- **G1 needs its contract task.** Every surface waits for the one task that
+  decides the usage shape and its formatter (`leading task: usage-shape`).
+- **G2 must stay serial.** The rename, its schema change and its migration are
+  one task or a serial chain (`kept together: rename`).
+- **G4 reproduces before it fixes.** The fix waits for the failure to be seen
+  (`reproduce first`, `validated by the failing tests`).
+
+A change to the planner's dependency rules must not raise their key
+violations: in V1 against V3, each of G1, G2 and G4 must read `yes` under
+`key viol. holds`, on every cell run, beside G6's widening. G3 (one task) and
+G5 (delegation before change) are not about order and guard nothing here.
 
 ## What a run does
 
@@ -190,7 +250,7 @@ node bench/planner-eval/run.mjs --mock
 # Smoke: G1 on claude-code/haiku, once per variant, reviewed.
 node bench/planner-eval/run.mjs --smoke
 
-# Everything: G1–G5 x the six cells x V0/V1, three times each.
+# Everything: G1–G6 x the six cells x V0/V1, three times each.
 OPENROUTER_API_KEY=... node bench/planner-eval/run.mjs --full --candidate-ref <branch>
 
 # A slice, and a resume after an interruption.
@@ -209,6 +269,11 @@ node bench/planner-eval/run.mjs --full --backend opencode --variant V1,V2
 
 # Run only the candidate, and compare it with V0 runs stored elsewhere.
 node bench/planner-eval/run.mjs --full --variant V1 --baseline-from <bench dir>/planner-eval/results/<stamp>-rescored
+
+# A change to the planner against the code before it: V1 (the branch) and V3 (its merge-base
+# with origin/main), on the guards and G6, one cell. --list first to see the runs.
+node bench/planner-eval/run.mjs --full --candidate-ref <branch> --variant V1,V3 --goal g1,g2,g4,g6 --backend claude-code/haiku
+node bench/planner-eval/run.mjs --full --candidate-ref <branch> --control-ref <commit before the change> --variant V1,V3 --goal g1,g2,g4,g6 --backend claude-code/haiku
 ```
 
 `--help` lists every flag. The useful ones:
@@ -226,6 +291,10 @@ node bench/planner-eval/run.mjs --full --variant V1 --baseline-from <bench dir>/
   none for that cell and goal. A V0 run of its own replaces the borrowed ones
   for its cell and goal.
 - `--repeats N` overrides the mode's repeat count.
+- `--control-ref REF` names V3's build. Without it, `ORDEWELL_BENCH_CONTROL_REF`
+  does, and without either, V3 builds the merge-base of `--candidate-ref` and
+  `origin/main`. The flag wins over the variable. `meta.json` records the ref
+  and its commit under `control`.
 
 ## Where run data goes
 
@@ -275,6 +344,8 @@ subtask runs inside its parent.
 | tasks | every task, subtasks included |
 | width | the largest set of top-level tasks no two of which are ordered by dependencies, which is the most the plan lets run at once |
 | path | the longest dependency chain, in tasks (`–` for a cycle) |
+| change path | the longest dependency chain counted in change tasks only: a research task before the work, or a verify task or verify/fix loop after it, orders the plan without lengthening the work. Change tasks are those the keys count as changing code: not research, read-only, verify, loop or docs tasks |
+| ends in a check | the plan closes with an integration check: a verify script, a task titled as a check (`Run …`, `Verify …`, `Integration check`, …) or a verify/fix loop, which waits for every change task. Reported per goal as plans that do over plans submitted, in V1 against V3 |
 | research | tasks marked `research` |
 | read-only | research tasks plus tasks whose mode is read-only (`plan`, `ask`, …) |
 | loops | tasks with a `loop` |
@@ -311,6 +382,8 @@ plan's digest and a fixed list of questions:
 - for G4, reproduction first, validation by the failing tests, and
   hypotheses in research only where the cause is not named
 - for G5, delegation by package before any change
+- for G6, a task waiting for another only because its module calls the
+  other's, though that function's contract is already written
 
 Every claim must cite a task id from the plan, or quote the plan verbatim. A
 claim that does neither is discarded, and an answer left with no cited claim
@@ -319,8 +392,9 @@ claims.
 
 ## Verdicts
 
-The report gives one verdict per backend for V1 against V0, and for V2 against
-V1 on a backend that ran V2, over the goals both sides have complete runs of. Two criteria
+The report gives one verdict per backend for V1 against V0, for V2 against
+V1 on a backend that ran V2, and for V1 against V3 on a backend that ran V3,
+over the goals both sides have complete runs of. Two criteria
 judge it, each against run-to-run spread:
 
 - key violations per run, where a complete run with no plan counts one;
@@ -343,6 +417,31 @@ never a pass. Every violation, error and substitution is listed by run.
 
 The report holds medians and spreads over the repeats it ran. It makes no
 claim beyond those runs.
+
+## Judging a change to the planner
+
+A verdict pools every goal, so a change that fixes G6 and breaks G2 can still
+pass it. V1 against V3 therefore also gets a table of its own,
+`## V1 against V3, per goal` in `report.md` (`goalRows` in `report.json`),
+with one row per goal and backend. Each pair of columns is V3, then V1:
+
+| Column | Meaning |
+| --- | --- |
+| goal, backend | the goal and the cell |
+| guard | `yes` for a goal that guards against over-flattening (G1, G2, G4) |
+| complete | complete runs over runs, V3 then V1; a timeout or error counts here only |
+| key viol. | key violations per run, median [min–max]; a complete run with no plan counts one |
+| width | the most top-level tasks the plan lets run at once |
+| path | the longest dependency chain, in tasks |
+| change path | the same chain counted in change tasks only, G6's measure |
+| tasks | every task, subtasks included |
+| ends in a check | plans that close with an integration check, over plans submitted (`–` for none, or for records scored before the metric existed) |
+| key viol. holds | V1's mean key violations on this goal are no more than V3's plus the allowance, the verdicts' rule applied to the one goal; `no data` when a side has no complete run |
+
+Read it as: on G6, V1's change path should fall to 3 or less and its width
+rise to 3 or more, and its key violations hold or fall; on G1, G2 and G4,
+`key viol. holds` must read `yes`. Width, path and the check are reported and
+judge nothing, as everywhere in this report.
 
 ## Re-scoring
 
@@ -376,5 +475,10 @@ removes only the token files of the daemons it started.
 - the run matrix and the terminal command
 - G4's patch, against the baseline's `Handoff.ts`, and G5's ground truth,
   against the baseline's `git grep`
+- G6's fixture against its key (the calls are the imports, every stub
+  throws, every fixture test fails, none is a `*.test.mjs`), its key on flat,
+  grouped and chained plans, and its template
+- V3's wiring (its build, its ref from the flag, the variable or the
+  merge-base) and the V1 against V3 rows
 
 `npm run test:bench` runs it. `--mock` is the end-to-end dry run.

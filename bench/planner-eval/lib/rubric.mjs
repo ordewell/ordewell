@@ -15,6 +15,7 @@ export const QUESTIONS = [
   { id: 'interface', text: 'Do two tasks that can run in parallel (neither depends on the other, directly or not) decide the same interface: a type, a schema, a formatter, a file both must edit?' },
   { id: 'paths', text: "Does each task's prompt name the files and paths it works on?" },
   { id: 'reproduce', text: 'Did the plan reproduce the failure before fixing it, and give the hypotheses about its cause to research tasks?', only: 'g4' },
+  { id: 'call-order', text: "Does a task wait for another only because the module it implements calls the other's, though the called function's signature and doc comment are already written?", only: 'g6' },
 ];
 
 export const questionsFor = (goal) => QUESTIONS.filter((q) => !q.only || q.only === goal.id);

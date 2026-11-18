@@ -1402,7 +1402,7 @@ test('ADV F-c: a signal to a batch stops its queued runs, not only the running o
   try {
     fs.mkdirSync(path.join(copy, 'commit0'), { recursive: true });
     fs.mkdirSync(path.join(copy, 'lib'));
-    for (const f of ['batch.mjs', 'lib.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, 'commit0', f));
+    for (const f of ['batch.mjs', 'lib.mjs', 'rehearsal.mjs']) fs.copyFileSync(path.join(here, f), path.join(copy, 'commit0', f));
     fs.copyFileSync(path.join(here, '..', 'lib', 'data-dir.mjs'), path.join(copy, 'lib', 'data-dir.mjs'));
     const starts = path.join(root, 'starts.log');
     fs.writeFileSync(path.join(copy, 'commit0', 'drive.mjs'), [
@@ -1486,4 +1486,312 @@ test('ADV2 F-a: a forged summary within the reference count is valid, so a pytes
   const sel = L.selectScoredFiles({ lib: l, base: new Map(), final });
   assert.deepEqual(sel.copy, []);
   assert.equal(sel.needsInspection.length, 4);
+});
+
+// --- Reading a live run -------------------------------------------------------
+
+/** The daemon's `GET /api/sessions/:id` as SESSION_VIEW_JS prints it, for a session the pool holds. */
+const daemonSession = ({ tasks, activity, approved = true, plannerUsage } = {}) => ({
+  status: 200,
+  body: {
+    meta: { id: 's1', goal: 'g' },
+    // The phase-tagged plan the route serves: its tasks split between the log and the pending list.
+    plan: { phase: 'executing', executionLog: [], pendingTasks: tasks.map(({ subtasks: _subtasks, ...t }) => t), approved, approvedTasks: tasks.map((t) => t.id), status: 'approved' },
+    ...(plannerUsage ? { conversation: { plannerUsage } } : {}),
+    run: { tasks, runMerge: null, handoff: null, mergeResult: null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false, ...activity } },
+  },
+});
+
+/** Polls a run every 30 s for `minutes`, nothing moving, and says whether it ever settled. */
+const settlesWithin = (view, minutes, usageLines = 7) => {
+  const fingerprint = L.planFingerprint(view.plan, usageLines);
+  let state = null;
+  for (let nowMs = 0; nowMs <= minutes * 60_000; nowMs += 30_000) {
+    const d = L.settleDecision({ ...view, fingerprint, nowMs, state });
+    if (d.settled) return true;
+    state = d.state;
+  }
+  return false;
+};
+
+test('a run whose task is in progress, with no model call for twenty minutes, is not settled', () => {
+  const task = { id: 't1', order: 1, title: 'Implement', type: 'ai', status: 'in_progress', attempted: true, subtasks: [] };
+  const view = L.liveView({ response: daemonSession({ tasks: [task], activity: { running: true, scheduled: true, advancesOnItsOwn: true } }), saved: null });
+  assert.equal(view.source, 'daemon');
+  assert.equal(view.plan.tasks[0].status, 'in_progress', 'the daemon\'s word on the task, not a loader\'s');
+  assert.equal(settlesWithin(view, 20), false, 'a long shell command or a stream-idle retry was cut off as a quiet run');
+  // An attempt the daemon counts live while its task reads otherwise (landing, starting) is no quieter.
+  const landing = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'completed' }], activity: { running: true } }), saved: null });
+  assert.equal(settlesWithin(landing, 20), false, 'an attempt still running settled');
+  const starting = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'failed' }], activity: { starting: true } }), saved: null });
+  assert.equal(settlesWithin(starting, 20), false, 'a start on its way settled');
+  const resuming = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'awaiting_user', awaitingReason: 'usage-limit' }], activity: { resumable: true, advancesOnItsOwn: true } }), saved: null });
+  assert.equal(settlesWithin(resuming, 20), false, 'a run that resumes by itself settled');
+  // Core's endedOnFailure: resumable, yet nothing advances until a retry nobody in arm A gives (found by the rehearsal).
+  const endedOnFailure = L.liveView({ response: daemonSession({ tasks: [{ ...task, status: 'failed', attempted: true }], activity: { resumable: true, advancesOnItsOwn: false } }), saved: null });
+  assert.equal(settlesWithin(endedOnFailure, 20), true, 'a run that ended on a failure never settled, so it ran to the wall cap');
+});
+
+test('a run whose tasks have all ended settles once nothing moved for the settle time', () => {
+  const tasks = [
+    { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', attempted: true, subtasks: [], attemptUsage: [{ totals: { reportedCost: { USD: 0.25 } } }] },
+    { id: 't2', order: 2, title: 'two', type: 'ai', status: 'failed', attempted: true, subtasks: [] },
+  ];
+  const view = L.liveView({ response: daemonSession({ tasks, activity: { scheduled: true }, plannerUsage: { totals: { reportedCost: { USD: 0.5 } } } }), saved: null });
+  assert.equal(settlesWithin(view, (L.SETTLE_MS / 60_000) - 0.5), false, 'settled before the settle time');
+  assert.equal(settlesWithin(view, L.SETTLE_MS / 60_000), true);
+  // The caps read the daemon's view too: the planner's spend and every attempt's.
+  assert.equal(L.recordedSpend(view.plan).usd, 0.75);
+});
+
+test('a run waiting on a person follows the stall rule and does not settle', () => {
+  const tasks = [
+    { id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', attempted: true, subtasks: [] },
+    { id: 't2', order: 2, title: 'two', type: 'ai', status: 'awaiting_user', awaitingReason: 'checkpoint', attempted: true, subtasks: [] },
+  ];
+  const view = L.liveView({ response: daemonSession({ tasks }), saved: null });
+  assert.equal(settlesWithin(view, 30), false, 'a wait on a person settled');
+  const stallMs = 15 * 60_000;
+  const first = L.stallDecision({ plan: view.plan, nowMs: 0, sinceMs: null, stallMs });
+  assert.equal(first.stalled, null);
+  assert.equal(L.stallDecision({ plan: view.plan, nowMs: stallMs, sinceMs: first.sinceMs, stallMs }).stalled.waiting, 'checkpoint');
+});
+
+test('without the daemon\'s run the saved session is read as written, a task in progress still in progress', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-saved-'));
+  try {
+    const dir = path.join(ws, '.ordewell', 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const plan = { tasks: [{ id: 't1', title: 'Implement', type: 'ai', status: 'in_progress', attempted: true }], status: 'approved', runners: [], generatedAt: 'x', lastUpdated: 'x' };
+    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify({ meta: { id: 'other' }, plan: { tasks: [] } }));
+    fs.writeFileSync(path.join(dir, '2026-11-17-s1.json'), JSON.stringify({ meta: { id: 's1', goal: 'g' }, plan }));
+    const read = (id) => JSON.parse(execFileSync(process.execPath, ['-e', L.SAVED_PLAN_JS, ws, id], { encoding: 'utf8' }));
+    assert.deepEqual(read('s1'), plan, 'the saved plan, nothing settled on it');
+    assert.equal(read('missing'), null);
+    for (const response of [{ error: 'no daemon token: the daemon is not running' }, { status: 200, body: { meta: { id: 's1' }, plan: { phase: 'executing' } } }]) {
+      const view = L.liveView({ response, saved: read('s1') });
+      assert.equal(view.source, 'saved');
+      assert.equal(view.run, null);
+      assert.equal(settlesWithin(view, 20), false, 'an attempt the file still holds in progress settled');
+    }
+    assert.equal(L.liveView({ response: { error: 'x' }, saved: null }).plan, null);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('the harness never reads a session through core\'s loader, which fails every task in progress in what it returns', () => {
+  for (const file of ['lib.mjs', 'drive.mjs', 'batch.mjs']) {
+    const src = fs.readFileSync(path.join(here, file), 'utf8');
+    assert.doesNotMatch(src, /\bloadSession(PlanState)?\s*\(|getLatestSession\s*\(|loadChildSession\s*\(/, `${file} reads a session through core's loader`);
+  }
+});
+
+// --- The rehearsal: its scripts' own logic; the Docker run only when asked ---
+
+const R = await import('./rehearsal.mjs');
+const playCtx = { src: 'tlslite', tests: 'unit_tests', longSec: 85 };
+const runnerRequest = (messages) => ({ tools: [{ function: { name: 'shell' } }, { function: { name: 'task_complete' } }], messages });
+const toolRound = (name) => [{ role: 'assistant', tool_calls: [{ function: { name } }] }, { role: 'tool', content: 'ok' }];
+
+test('parseArgs takes a rehearsal and its shortened windows, never with --run, and spends nothing', () => {
+  const o = L.parseArgs(['--rehearse', 'a-done', '--libs', 'x.json', '--settle-min', '1', '--poll-sec', '5', '--no-start-min', '3', '--wall-min', '25']);
+  assert.equal(o.rehearse, 'a-done');
+  assert.equal(o.run, false, 'a rehearsal is not a paid run');
+  assert.deepEqual([o.settleMin, o.pollSec, o.noStartMin, o.wallCapMs], [1, 5, 3, 25 * 60_000]);
+  assert.throws(() => L.parseArgs(['--rehearse', 'a-done', '--run', '--libs', 'x.json']), /--rehearse/);
+  assert.throws(() => L.parseArgs(['--rehearse', 'A Done', '--libs', 'x.json']), /scenario name/);
+  // A paid run keeps the defaults: the settle window is the one the D5 fix set.
+  assert.equal(L.parseArgs(['--dry-run', '--libs', 'x.json']).settleMin, null);
+});
+
+test('a rehearsal refuses every real credential in its environment, and only its own placeholder passes', () => {
+  assert.deepEqual(R.realKeysIn({ OPENROUTER_API_KEY: 'sk-or-1', ANTHROPIC_API_KEY: 'a', GH_TOKEN: 'g', CLAUDE_CODE_OAUTH_TOKEN: 'c', PATH: '/bin' }),
+    ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GH_TOKEN', 'OPENROUTER_API_KEY']);
+  assert.deepEqual(R.realKeysIn({ OPENROUTER_API_KEY: R.FAKE_KEY, OPENAI_API_KEY: '' }), []);
+  // The placeholder must not hold a word the run's output uses, or Ordewell's redaction hides that word.
+  assert.doesNotMatch(R.FAKE_KEY, /rehears|commit0|ordewell/i);
+});
+
+test('the long command outlasts the settle window by more than two polls, and every scenario names a known arm and windows', () => {
+  for (const w of [R.WINDOWS, { settleMin: 5, pollSec: 30 }]) assert.ok(R.longCommandSec(w) > w.settleMin * 60 + 2 * w.pollSec);
+  for (const name of R.scenarioNames()) {
+    const s = R.scenario(name);
+    assert.ok(['A', 'B'].includes(s.arm), name);
+    const args = R.windowArgs(s);
+    const o = L.parseArgs(['--rehearse', name, '--libs', 'x.json', '--arm', s.arm, ...args]);
+    assert.equal(o.settleMin, R.WINDOWS.settleMin, name);
+    if (s.capUsd) assert.equal(o.capUsd, s.capUsd, name);
+    assert.ok(R.longCommandSec(R.WINDOWS) < (s.windows?.wallMin ?? R.WINDOWS.wallMin) * 60, `${name}: the long command outlasts the wall cap`);
+  }
+  assert.throws(() => R.scenario('nope'), /no rehearsal scenario nope/);
+});
+
+test('the fake routes a runner\'s attempts by its task key and round, and an attempt past its script stops in prose', () => {
+  const state = R.createState();
+  const steps = R.scenario('b-retry').attempts(playCtx).edit;
+  const brief = { role: 'user', content: 'Implement the library. [rehearsal:edit]' };
+  const first = R.turnFor('b-retry', runnerRequest([brief]), state, playCtx);
+  assert.deepEqual([first.role, first.key, first.attempt, first.round, first.toolCall.name], ['runner', 'edit', 1, 0, steps[0][0].tool]);
+  const later = R.turnFor('b-retry', runnerRequest([brief, ...toolRound('shell')]), state, playCtx);
+  assert.equal(later.round, 1);
+  assert.equal(later.toolCall.name, 'write');
+  assert.match(later.toolCall.args.path, /^tlslite\/_commit0_rehearsal\.py$/, 'the new module goes inside the library');
+  // A request with no tool round opens the next attempt, whose script is the retry's.
+  const retry = R.turnFor('b-retry', runnerRequest([brief]), state, playCtx);
+  assert.equal(retry.attempt, 2);
+  const past = R.turnFor('b-retry', runnerRequest([brief, ...Array.from({ length: 40 }, () => toolRound('shell')).flat()]), state, playCtx);
+  assert.equal(past.toolCall, undefined);
+  assert.equal(past.content, 'Done.');
+  // Arm A's one task carries no key.
+  assert.equal(R.taskKeyOf([{ role: 'user', content: 'Implement the tlslite-ng library' }]), 'A');
+  assert.equal(R.turnFor('a-failed', runnerRequest([{ role: 'user', content: 'x' }]), R.createState(), playCtx).toolCall.args.command, `sleep 85 && echo slept 85s`);
+});
+
+test('the edits change a source file, add a module inside the library and edit a test, and the failing script reports failed', () => {
+  const steps = R.editSteps(playCtx);
+  const said = JSON.stringify(steps);
+  assert.match(said, /tar -xf \/tmp\/commit0-rehearsal-reference\.tar/);
+  assert.match(said, /tlslite\/__init__\.py/, 'the package imports the new module, so scoring that drops it breaks every import');
+  assert.match(said, /find unit_tests -name 'test_\*\.py'/);
+  const [attempt] = R.scenario('a-failed').attempts(playCtx).A;
+  assert.equal(attempt[0].tool, 'shell');
+  assert.match(attempt[0].args.command, /^sleep \d+/);
+  assert.ok(attempt[0].args.timeout > 85_000, 'the shell tool\'s own timeout would cut the long command short');
+  assert.deepEqual(attempt.at(-1).args.status, 'failed');
+});
+
+test('the planner plays the plan once; after it the conversation is the supervisor, which plays each rule once and closes in prose', () => {
+  const state = R.createState();
+  const plan = R.turnFor('b-retry', { tools: [{ function: { name: 'retry_task' } }], messages: [{ role: 'user', content: 'the goal' }] }, state, playCtx);
+  assert.equal(plan.role, 'planner', 'a planner offered retry_task is still the planner before its plan');
+  const json = JSON.parse(/```json\n([\s\S]*)\n```/.exec(plan.content)[1]);
+  assert.deepEqual(L.judgePlan(json).ok, true, 'the driver refuses a plan that breaks the protocol');
+  assert.deepEqual(json.tasks[1].dependencies, [json.tasks[0].id]);
+  assert.match(json.tasks[1].prompt, /\[rehearsal:after\]/);
+
+  // As core's wake-up turn shows the plan: one line per task, its status in brackets, under protocol text that names checkpoints and failures.
+  const line = (n, title, status) => `#${n} id=${json.tasks[n - 1].id} "${title}" [${status}] type:AI runner:openrouter autonomy:AFK slice:AFK deps:[]`;
+  const protocol = 'Answer a checkpoint with answer_checkpoint; a failed task blocks what depends on it.';
+  const planBlock = (...lines) => `<current_plan>\n${lines.join('\n')}\n</current_plan>\n${protocol}`;
+  const history = [{ role: 'user', content: 'the goal' }, { role: 'assistant', content: plan.content }];
+  const wake = (content, after = []) => R.turnFor('b-retry', { tools: [], messages: [...history, { role: 'user', content }, ...after] }, state, playCtx);
+  assert.equal(wake(planBlock(line(1, 'Implement the library', 'in_progress'), line(2, 'Note the rehearsal', 'approved'))).toolCall, undefined,
+    'the protocol\'s own words are no event: nothing is failed or waiting');
+  const failed = wake(planBlock(line(1, 'Implement the library', 'failed'), line(2, 'Note the rehearsal', 'approved')));
+  assert.equal(failed.role, 'supervisor');
+  assert.deepEqual([failed.toolCall.name, failed.toolCall.args.task, failed.toolCall.args.from], ['retry_task', '#1', 'fresh'], 'a fresh attempt opens a new runner conversation, which the fake counts as attempt 2');
+  assert.ok(failed.toolCall.args.message, 'its note is the change the identical-retry guard lets through');
+  const retried = [{ role: 'assistant', tool_calls: [{}] }, { role: 'tool', content: 'retried' }];
+  assert.equal(wake(planBlock(line(1, 'Implement the library', 'failed')), retried).content, 'Done.', 'after the tool\'s answer, with nothing else to play, it closes in prose');
+  assert.equal(wake(planBlock(line(1, 'Implement the library', 'failed'))).toolCall, undefined, 'a rule plays once');
+  const asked = wake(planBlock(line(1, 'Implement the library', 'completed'), line(2, 'Note the rehearsal', 'awaiting_user')));
+  assert.deepEqual([asked.toolCall.name, asked.toolCall.args.task, asked.toolCall.args.answer], ['answer_checkpoint', '#2', 'approve']);
+
+  // A wake that holds both plays both: the second after the first's answer, in the same turn.
+  const both = R.createState();
+  both.planned = true;
+  const two = planBlock(line(1, 'Implement the library', 'failed'), line(2, 'Note the rehearsal', 'awaiting_user'));
+  const first = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }] }, both, playCtx);
+  const second = R.turnFor('b-retry', { tools: [], messages: [{ role: 'user', content: two }, ...retried] }, both, playCtx);
+  assert.deepEqual([first.toolCall?.name, second.toolCall?.name].sort(), ['answer_checkpoint', 'retry_task']);
+  // Left alone, a failure stays failed.
+  const leave = R.createState();
+  leave.planned = true;
+  assert.equal(R.turnFor('b-leave', { tools: [], messages: [{ role: 'user', content: 'Task #1 failed' }] }, leave, playCtx).toolCall, undefined);
+});
+
+test('the fake streams a tool call and its usage as OpenRouter does, and lists the bench\'s model', () => {
+  const body = R.sseBody({ toolCall: { name: 'shell', args: { command: 'ls' } }, costUsd: 0.25 });
+  const chunks = body.split('\n\n').filter((c) => c.startsWith('data: ') && c !== 'data: [DONE]').map((c) => JSON.parse(c.slice(6)));
+  const call = chunks.flatMap((c) => c.choices?.[0]?.delta?.tool_calls ?? [])[0];
+  assert.equal(call.function.name, 'shell');
+  assert.deepEqual(JSON.parse(call.function.arguments), { command: 'ls' });
+  assert.equal(chunks.find((c) => c.choices?.[0]?.finish_reason)?.choices[0].finish_reason, 'tool_calls');
+  assert.equal(chunks.find((c) => c.usage)?.usage.cost, 0.25, 'the spend cap reads the usage the fake reports');
+  assert.ok(body.endsWith('data: [DONE]\n\n'));
+  const listing = R.modelsBody({ modelId: 'deepseek/deepseek-v4.1-flash', contextLength: 1048576 });
+  assert.equal(listing.data[0].id, 'deepseek/deepseek-v4.1-flash');
+  assert.equal(listing.data[0].context_length, 1048576);
+});
+
+test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the steps the fake played', () => {
+  const passing = {
+    valid: true, scoredFrom: 'task-worktree', truncated: { truncated: true, why: 'settled with 1 task open: 1 nothing ready ("x" failed)' }, stopped: null,
+    tasks: [{ status: 'failed' }], tests: { passed: 1653, collectionErrors: [] }, baseline: { passed: 11 },
+    excluded: [{ path: 'unit_tests/test_x.py', reason: 'a test: the reference\'s is kept' }],
+    steps: { run: { exit: 2, ended: 'by itself' } },
+  };
+  assert.deepEqual(R.judgeRehearsal('a-failed', passing), []);
+  const wrongTree = R.judgeRehearsal('a-failed', { ...passing, scoredFrom: 'merged', tests: { passed: 11, collectionErrors: ['tlslite/_commit0_rehearsal.py'] } });
+  assert.equal(wrongTree.length, 3, wrongTree.join('; '));
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, truncated: { truncated: true, why: 'cap: wall-clock' }, stopped: { why: 'wall-clock' } }).join('; '), /cap: wall-clock.*stopped by wall-clock/);
+  assert.match(R.judgeRehearsal('a-done', { ...passing, scoredFrom: 'merged', truncated: { truncated: false }, tasks: [{ status: 'completed' }], steps: { run: { exit: 0, ended: 'by the stop' } } }).join(), /not by itself/);
+  assert.match(R.judgeRehearsal('b-leave', { ...passing, truncated: { truncated: true, why: 'settled with 2 tasks open' }, stalled: {}, tasks: [{ status: 'completed' }, { status: 'completed' }] }).join(), /every task is completed/);
+  // An unanswered checkpoint is the stall rule's: a person waited on with nothing running.
+  const waited = {
+    ...passing, truncated: { truncated: true, why: 'stalled: waiting on checkpoint' }, stopped: null,
+    stalled: { task: { id: 'x', title: 'Implement' }, waiting: 'checkpoint', question: 'q', sinceMs: 120_000 }, tasks: [{ status: 'awaiting_user' }],
+  };
+  assert.deepEqual(R.judgeRehearsal('a-stall', waited), []);
+  assert.match(R.judgeRehearsal('a-stall', { ...waited, truncated: { truncated: true, why: 'settled with 1 task open: 1 waiting on a person' }, stalled: { why: 'settled', open: [] } }).join(), /wanted \/\^stalled: waiting on checkpoint/);
+  assert.match(R.judgeRehearsal('a-stall', { ...waited, tasks: [{ status: 'completed' }] }).join(), /every task is completed/);
+  const held = { status: 'failed', held: 'nothing ready', reason: 'failed' };
+  const leftAlone = {
+    ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
+    stalled: { why: 'settled', open: [held, { status: 'approved', held: 'nothing ready', reason: 'depends on 1 (failed)' }] }, tasks: [{ status: 'failed' }, { status: 'approved' }],
+  };
+  assert.deepEqual(R.judgeRehearsal('b-leave', leftAlone), []);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, tests: { passed: 1653 } }).join(), /1653 passed, not the baseline's 11: work that never landed was scored/);
+  assert.match(R.judgeRehearsal('b-leave', { ...leftAlone, stalled: { why: 'settled', open: [held] } }).join(), /1 task\(s\) held open, wanted 2/);
+  assert.match(R.judgeRehearsal('b-cap', { ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'cap: spend' }, stopped: { why: 'spend' }, tasks: [{ status: 'completed' }], steps: { run: { ended: 'by itself' }, merge: { exit: 0 } } }).join(), /driver had to stop it/);
+  assert.deepEqual(R.judgeRehearsal('a-done', null), ['no result.json']);
+
+  const steps = R.scenario('a-failed').attempts(playCtx).A[0];
+  const last = { role: 'runner', key: 'A', attempt: 1, round: steps.length - 1, toolCall: { name: 'task_complete' } };
+  assert.deepEqual(R.judgePlayed('a-failed', [last], playCtx), []);
+  assert.match(R.judgePlayed('a-failed', [{ ...last, round: 0, toolCall: { name: 'shell' } }], playCtx).join(), /never played/);
+  assert.match(R.judgePlayed('b-retry', [], playCtx).join(), /supervisor never played retry_task/);
+  // b-cap's stop must land mid-attempt: its spending task began, and never reached its last step.
+  const capSteps = R.scenario('b-cap').attempts(playCtx);
+  const played = (key, steps) => steps.map((st, round) => ({ role: 'runner', key, attempt: 1, round, toolCall: { name: st.tool } }));
+  const editDone = played('edit', capSteps.edit[0]);
+  assert.deepEqual(R.judgePlayed('b-cap', [...editDone, ...played('spend', capSteps.spend[0]).slice(0, 2)], playCtx), []);
+  assert.match(R.judgePlayed('b-cap', [...editDone, ...played('spend', capSteps.spend[0])], playCtx).join(), /task spend, attempt 1: its last scripted step \(task_complete\) was played: the stop did not cut it short/);
+  assert.match(R.judgePlayed('b-cap', editDone, playCtx).join(), /task spend never started/);
+});
+
+test('judgeBatch holds the rehearsal\'s batch.json to its one run, marked a rehearsal and never a paid batch', () => {
+  const record = L.batchRecord({
+    keyBeforeUsd: null, keyAfterUsd: null, budgetUsd: null, stoppedByBudget: null, jobs: 1, overlapped: false, seed: 's', dryRun: false,
+    rehearsal: 'a-done', startedAt: 't0', endedAt: 't1',
+    runs: [{ lib: 'tlslite-ng', arm: 'A', exit: 0, signal: null, skipped: null, resultDir: '/r/x', recordedUsd: 0.001, valid: true }],
+  });
+  const want = { lib: 'tlslite-ng', arm: 'A', rehearsal: 'a-done' };
+  assert.deepEqual(R.judgeBatch(record, want), []);
+  assert.deepEqual(R.judgeBatch(null, want), ['no batch.json']);
+  assert.match(R.judgeBatch({ ...record, rehearsal: null }, want).join(), /not marked as rehearsal a-done/);
+  assert.match(R.judgeBatch({ ...record, runs: [{ ...record.runs[0], resultDir: null }] }, want).join(), /no result directory/);
+  assert.match(R.judgeBatch({ ...record, runs: [] }, want).join(), /1 run of tlslite-ng A, not 0 /);
+  assert.match(R.judgeBatch({ ...record, runs: [{ ...record.runs[0], skipped: 'cancelled' }] }, want).join(), /skipped its run: cancelled/);
+  assert.match(R.judgeBatch({ ...record, keyBeforeUsd: 3 }, want).join(), /read the key/);
+  assert.equal(L.runsDirName({ dryRun: false, rehearse: 'a-done' }), 'rehearsals');
+  assert.equal(L.runsDirName({ dryRun: true }), 'dry-runs');
+  assert.equal(L.runsDirName({ dryRun: false, rehearse: null }), 'runs');
+});
+
+test('a batch passes a rehearsal and its windows on to every run, and a rehearsal batch needs no budget', () => {
+  const b = L.parseBatchArgs(['--rehearse', 'a-done', '--libs', 'libs.json', '--arm', 'A', '--settle-min', '1', '--poll-sec', '5', '--wall-min', '25']);
+  assert.equal(b.rehearse, 'a-done');
+  assert.equal(b.run, false);
+  assert.equal(b.budgetUsd, null);
+  assert.deepEqual(b.driveArgs.filter((a) => a.startsWith('--')), ['--rehearse', '--libs', '--settle-min', '--poll-sec', '--wall-min']);
+  assert.throws(() => L.parseBatchArgs(['--rehearse', 'a-done', '--run', '--libs', 'libs.json']), /pass --dry-run/);
+});
+
+// The rehearsal itself: real Docker, a real image, minutes per scenario. Only when asked:
+// ORDEWELL_COMMIT0_REHEARSAL=<libraries.json> [ORDEWELL_COMMIT0_REHEARSAL_SCENARIOS=a,b].
+test('the rehearsal passes every scenario on a real library image', { skip: process.env.ORDEWELL_COMMIT0_REHEARSAL ? false : 'set ORDEWELL_COMMIT0_REHEARSAL=<libraries.json> to run the Docker rehearsal', timeout: 3 * 60 * 60_000 }, () => {
+  const scenarios = process.env.ORDEWELL_COMMIT0_REHEARSAL_SCENARIOS;
+  execFileSync(process.execPath, [path.join(import.meta.dirname, 'rehearse.mjs'), '--libs', process.env.ORDEWELL_COMMIT0_REHEARSAL, ...(scenarios ? ['--scenario', scenarios] : [])], { stdio: 'inherit' });
 });

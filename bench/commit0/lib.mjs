@@ -196,7 +196,9 @@ const keyless = (url, init = {}) => {
   headers.delete('authorization');
   return fetch(url, { ...init, headers });
 };
-core.fetchAllProviderModels({ apiKeys: { openrouter: key || 'keyless' }, baseUrls: {}, fetchImpl: key ? fetch : keyless })
+// The runner's own listing honours OPENROUTER_BASE_URL (a rehearsal's fake), so the probe asks where it will.
+const baseUrls = process.env.OPENROUTER_BASE_URL ? { openrouter: process.env.OPENROUTER_BASE_URL } : {};
+core.fetchAllProviderModels({ apiKeys: { openrouter: key || 'keyless' }, baseUrls, fetchImpl: key ? fetch : keyless })
   .then(({ models, errors }) => {
     const list = models.openrouter ?? [];
     const mine = list.filter((m) => m.id === model || m.id === 'openrouter:' + model).map((m) => ({ id: m.id, contextLength: m.contextLength }));
@@ -916,20 +918,85 @@ const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approv
 process.stdout.write(meta.id);
 `;
 
-/** A saved session's plan, read back with core, as JSON on stdout. */
-export const READ_PLAN_JS = String.raw`
+/**
+ * A saved session as its file holds it, `{meta, plan}` or null, read without
+ * core: core's loadSession settles the copy it returns as if no run were live
+ * (every task in progress failed), which told the settle detector a running
+ * attempt had ended. Interpolated into the box scripts that read a session.
+ */
+const SAVED_SESSION_FN = String.raw`
+function savedSession(workspace, id) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = path.join(workspace, '.ordewell', 'sessions');
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')); } catch { return null; }
+  for (const name of names) {
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    if (saved && saved.meta && saved.meta.id === id) return saved;
+  }
+  return null;
+}
+`;
+
+/** A saved session's plan as its file holds it, as JSON on stdout: null for none. */
+export const SAVED_PLAN_JS = String.raw`
+${SAVED_SESSION_FN}
+const [workspace, sessionId] = process.argv.slice(1);
+const saved = savedSession(workspace, sessionId);
+process.stdout.write(JSON.stringify(saved ? saved.plan : null));
+`;
+
+/**
+ * Asks the box's daemon for a session as a surface reads it
+ * (`GET /api/sessions/:id`), with the daemon's own token, never starting one
+ * as `ordewell status` would. Prints `{status, body}`, or `{error}`.
+ */
+export const SESSION_VIEW_JS = String.raw`
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
 const [workspace, sessionId] = process.argv.slice(1);
-const loaded = core.loadSession(sessionId, workspace);
-process.stdout.write(JSON.stringify(loaded ? loaded.plan : null));
+(async () => {
+  try {
+    const port = core.DEFAULT_DAEMON_PORT;
+    const token = core.readDaemonToken(port);
+    if (!token) throw new Error('no daemon token: the daemon is not running');
+    const q = new URLSearchParams({ workspace });
+    const res = await fetch('http://127.0.0.1:' + port + '/api/sessions/' + encodeURIComponent(sessionId) + '?' + q, { headers: { Authorization: core.bearerHeaderValue(token) }, signal: AbortSignal.timeout(15000) });
+    process.stdout.write(JSON.stringify({ status: res.status, body: await res.json() }));
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ error: String(err && err.message || err) }));
+  }
+})();
 `;
+
+/**
+ * A run's state as the watcher reads it: the daemon's own run view while its
+ * pool holds the session, else the saved file as written. The daemon's `plan`
+ * without a `run` is never used: the route reads it through core's loader,
+ * settled as if nothing ran. `plan` keeps the saved plan's shape (`tasks`,
+ * `approved`, `approvedTasks`, `plannerUsage`) for the caps and the detectors.
+ */
+export function liveView({ response, saved }) {
+  const body = response && !response.error && response.status === 200 ? response.body : null;
+  if (body?.run) {
+    return {
+      plan: { tasks: body.run.tasks ?? [], approved: body.plan?.approved, approvedTasks: body.plan?.approvedTasks, plannerUsage: body.conversation?.plannerUsage },
+      run: body.run,
+      activity: body.run.activity ?? null,
+      source: 'daemon',
+    };
+  }
+  return { plan: saved ?? null, run: null, activity: null, source: 'saved' };
+}
 
 /**
  * A worktree layout as a stopped run leaves it, made by core's own isolation
  * in the box, so a change in where core records a task's work breaks the dry
- * run and not a paid one. Prints the saved session's plan as core reloads it.
+ * run and not a paid one. Prints the saved session's plan as its file holds it.
  */
 export const CHOOSER_JS = String.raw`
+${SAVED_SESSION_FN}
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -974,7 +1041,7 @@ const put = (dir, file, text) => { fs.mkdirSync(path.dirname(path.join(dir, file
   await iso.release(run, t4.id, { keep: true });
   const now = new Date().toISOString();
   const meta = core.saveSession({ tasks: [t1, t2, t3, t4, t5], generatedAt: now, status: 'approved', runners: [], lastUpdated: now, isolation: { run, resolvers: {} } }, 'chooser', root);
-  process.stdout.write(JSON.stringify(core.loadSession(meta.id, root).plan));
+  process.stdout.write(JSON.stringify(savedSession(root, meta.id).plan));
 })().catch((err) => { process.stderr.write(String(err && err.stack || err)); process.exit(1); });
 `;
 
@@ -984,6 +1051,7 @@ const put = (dir, file, text) => { fs.mkdirSync(path.dirname(path.join(dir, file
  * the work left uncommitted in it, the task failed, the session saved.
  */
 export const FIXTURE_TASK_JS = String.raw`
+${SAVED_SESSION_FN}
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
 const [phase, workspace, arg] = process.argv.slice(1);
 const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', worktreeSetupCommand: '', workspaceRepos: [], worktreeLinks: [] }, noHooks: true });
@@ -997,13 +1065,13 @@ const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', 
     process.stdout.write(JSON.stringify({ sessionId: core.saveSession(plan, arg, workspace).id, cwd }));
     return;
   }
-  const loaded = core.loadSession(arg, workspace);
+  const loaded = savedSession(workspace, arg);
   const plan = loaded.plan;
   await iso.release(plan.isolation.run, plan.tasks[0].id, { keep: true });
   plan.tasks[0].status = 'failed';
   plan.lastUpdated = now;
   core.saveSession(plan, loaded.meta.goal, workspace, arg);
-  process.stdout.write(JSON.stringify(core.loadSession(arg, workspace).plan));
+  process.stdout.write(JSON.stringify(savedSession(workspace, arg).plan));
 })().catch((err) => { process.stderr.write(String(err && err.stack || err)); process.exit(1); });
 `;
 
@@ -1306,14 +1374,25 @@ export function planFingerprint(plan, usageLines) {
 }
 
 /**
- * Whether a run is over (D5): no attempt running, nobody waited on, some AI
- * task tried or ended, and nothing moved for settleMs. `ordewell run`'s exit
- * says none of this: it may exit non-zero on a failed task, or return before
- * the supervisor's closing turn retries one.
+ * Whether a run is over (D5): no attempt running, none starting, nothing that
+ * resumes by itself, nobody waited on, some AI task tried or ended, and
+ * nothing moved for settleMs. `activity` is the daemon's word on its attempts
+ * (RunActivity), absent once it has stopped. A run that ended on a failure
+ * settles: core calls it resumable, but only a retry moves it. An attempt that runs without a
+ * sign of life is the wall-clock cap's and Ordewell's own limits' business,
+ * never this one's: a long shell command or a stream-idle retry writes no
+ * usage line for minutes. `ordewell run`'s exit says none of this: it may exit
+ * non-zero on a failed task, or return before the supervisor's closing turn
+ * retries one.
  */
-export function settleDecision({ plan, fingerprint, nowMs, state, settleMs = SETTLE_MS }) {
+export function settleDecision({ plan, activity = null, fingerprint, nowMs, state, settleMs = SETTLE_MS }) {
   const tasks = allTasks(plan).filter((t) => (t.type ?? 'ai') === 'ai');
-  const quiet = plan && !tasks.some((t) => t.status === 'in_progress') && !waitingOnPerson(plan)
+  // `resumable` also holds for a run that ended on a failure, which waits on a
+  // retry or a skip nobody in an unsupervised arm gives: only what advances on
+  // its own (an attempt, a start, the scheduler, a usage-limit hold) keeps a run live.
+  const advances = activity && 'advancesOnItsOwn' in activity ? activity.advancesOnItsOwn : activity?.resumable;
+  const live = allTasks(plan).some((t) => t.status === 'in_progress') || activity?.running || activity?.starting || advances;
+  const quiet = plan && !live && !waitingOnPerson(plan)
     && tasks.some((t) => t.attempted || !isOpen(t) || t.status === 'failed');
   if (!quiet) return { settled: false, state: null };
   const next = state && state.fingerprint === fingerprint ? state : { fingerprint, sinceMs: nowMs };
@@ -1891,12 +1970,12 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
  * (a run's unpriced calls, or a call outside the batch on the same key). When
  * runs overlapped, no run's own key delta exists, and each says so.
  */
-export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, startedAt, endedAt, runs }) {
+export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, startedAt, endedAt, runs }) {
   const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
   const keyDeltaUsd = keyBeforeUsd != null && keyAfterUsd != null ? round6(keyAfterUsd - keyBeforeUsd) : null;
   return {
-    dryRun, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
+    dryRun, rehearsal, seed: seed ?? null, jobs, overlapped, startedAt, endedAt,
     keyBeforeUsd: keyBeforeUsd ?? null,
     keyAfterUsd: keyAfterUsd ?? null,
     keyDeltaUsd,
@@ -1909,6 +1988,9 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
     runs,
   };
 }
+
+/** Where a run's directory goes under the bench data directory: a rehearsal's and a dry run's never sit beside a paid run's. */
+export const runsDirName = ({ dryRun, rehearse }) => (dryRun ? 'dry-runs' : rehearse ? 'rehearsals' : 'runs');
 
 /** The runs of a batch, library by library and arm by arm; a library named twice would give two runs one name. */
 export function batchPlan({ libs, arms, seed }) {
@@ -1927,6 +2009,7 @@ export function parseArgs(argv) {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
     capUsd: CAP_USD, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
     seed: null, batchDir: null, batchShared: false,
+    rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
   const number = (name, v, ok) => {
     const n = Number(v);
@@ -1968,17 +2051,30 @@ export function parseArgs(argv) {
     // Set by batch.mjs on each run it starts: the batch holds the key and its results.
     else if (a === '--batch-dir') out.batchDir = path.resolve(value());
     else if (a === '--batch-shared') out.batchShared = true;
+    else if (a === '--rehearse') out.rehearse = rehearsalName(value());
+    // The windows a rehearsal shortens so that it takes minutes; a paid run keeps the defaults.
+    else if (a === '--settle-min') out.settleMin = number(a, value(), (n) => n > 0);
+    else if (a === '--no-start-min') out.noStartMin = number(a, value(), (n) => n > 0);
+    else if (a === '--poll-sec') out.pollSec = number(a, value(), (n) => n > 0);
+    else if (a === '--wall-min') out.wallCapMs = number(a, value(), (n) => n > 0) * 60_000;
     else throw new Error(`unknown argument ${a}`);
   }
   if (out.batchShared && !out.batchDir) throw new Error('--batch-shared is for a run batch.mjs starts, with --batch-dir');
-  if (out.help || (out.sweep && !out.dryRun && !out.run)) return out;
+  if (out.help || (out.sweep && !out.dryRun && !out.run && !out.rehearse)) return out;
   // Spending is never the default: a run that bills the key has to say so.
-  if (out.dryRun === out.run) throw new Error('pass --dry-run to set up and check without a model call, or --run to run the arms and spend');
+  if ([out.dryRun, out.run, Boolean(out.rehearse)].filter(Boolean).length !== 1) {
+    throw new Error('pass --dry-run to set up and check without a model call, --rehearse <scenario> to run the arms on a scripted fake provider, or --run to run the arms and spend');
+  }
   if (out.fixture && !out.dryRun) throw new Error('--fixture is a dry-run library: pass --dry-run with it');
   if (out.fixture && !out.image) throw new Error('--fixture needs --image: an image with python3, pytest and git to build it in');
   if (!out.fixture && !out.libs) throw new Error('pass --libs <file>, a list of libraries as libraries.example.json shows, or --fixture');
   if (out.run && !out.providerPin) throw new Error('a run needs --provider-pin <provider>: the one OpenRouter provider the key is pinned to');
   return out;
+}
+
+function rehearsalName(v) {
+  if (!/^[a-z][a-z0-9-]{0,39}$/.test(v)) throw new Error(`--rehearse takes a scenario name, not ${v}`);
+  return v;
 }
 
 function seedLabel(v) {
@@ -1989,7 +2085,8 @@ function seedLabel(v) {
 /** What batch.mjs passes on to each run as given, beside the libraries file. */
 const BATCH_PASSED = Object.freeze({
   flags: ['--dry-run', '--run', '--allow-stale-dist', '--keep'],
-  values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root'],
+  values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root',
+    '--rehearse', '--settle-min', '--no-start-min', '--poll-sec', '--wall-min'],
 });
 
 /**

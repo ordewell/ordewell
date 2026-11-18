@@ -38,7 +38,7 @@ describe('no identical retry', () => {
     const trip = identicalRetry(t3, failed, attemptShape(task('t3')))!;
 
     expect(trip.key).toBe('identical-retry:t3');
-    expect(trip.refusal).toBe('Refused: task #3 "Build" failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: edit its prompt with edit_plan, or move it to another model or runner, then retry; or tell the user.');
+    expect(trip.refusal).toBe('Refused: task #3 "Build" failed with this same prompt and model, and an unchanged retry would fail the same way. Change something or escalate: call retry_task from "fresh" again with a message, your note to the new attempt saying what to do differently; or edit its prompt with edit_plan, or move it to another model or runner, and call retry_task again in this same reply, since an edit alone starts nothing; or tell the user.');
     expect(trip.escalation).toMatch(/^Loop guard, identical retry: I tried to retry task #3 "Build" unchanged after it failed/);
   });
 
@@ -57,6 +57,22 @@ describe('no identical retry', () => {
     expect(identicalRetry(t3, failed, attemptShape(task('t3', { skills: [] })))).toBeNull();
   });
 
+  describe('with a note for the new attempt (ADR-0029)', () => {
+    const noted = (text: string): Task => ({ ...task('t3'), retryNote: { by: 'supervisor', text } });
+
+    it('lets a retry through with a note the failed attempt was not given', () => {
+      expect(identicalRetry(t3, attemptShape(task('t3')), attemptShape(noted('Run the migrations first.')))).toBeNull();
+      expect(identicalRetry(t3, attemptShape(noted('Run the migrations first.')), attemptShape(noted('Seed the database first.')))).toBeNull();
+    });
+
+    it('refuses the same note again, and reads dropping the note as no change', () => {
+      const failed = attemptShape(noted('Run the migrations first.'));
+
+      expect(identicalRetry(t3, failed, attemptShape(noted('Run the migrations first.')))!.refusal).toMatch(/^Refused: task #3 "Build" failed with this same prompt, model and note, /);
+      expect(identicalRetry(t3, failed, attemptShape(task('t3')))!.refusal).toMatch(/^Refused: task #3 "Build" failed with this same prompt and model, /);
+    });
+  });
+
   it('has nothing to compare before a failure', () => {
     expect(identicalRetry(t3, undefined, attemptShape(task('t3')))).toBeNull();
   });
@@ -73,7 +89,7 @@ describe('no identical retry', () => {
     it('refuses a retry of the same body and time limit, saying what to change', () => {
       const trip = identicalRetry(t3, attemptShape(script()), attemptShape(script()))!;
 
-      expect(trip.refusal).toBe('Refused: task #3 "Build" failed with this same body and time limit, and an unchanged retry would run the same commands. Change something or escalate: edit its "commands", "script" or "timeoutMs" with edit_plan, then retry; or tell the user.');
+      expect(trip.refusal).toBe('Refused: task #3 "Build" failed with this same body and time limit, and an unchanged retry would run the same commands. Change something or escalate: edit its "commands", "script" or "timeoutMs" with edit_plan and call retry_task again in this same reply, since an edit alone starts nothing; or tell the user.');
     });
 
     it.each([
@@ -165,6 +181,16 @@ describe('the memory round-trips through a snapshot', () => {
     expect(restored.check({ command: 'run_task', task: 't1' }, target, plan, 5)?.key).toBe('identical-retry:t1');
     expect(restored.checkEdit([plan[0]], [plan[0], task('n1', { title: 'write the docs ', prompt: 'something new' })])?.key).toBe('re-add:write the docs');
     expect(restored.firstReport(trip)).toBe(false);
+  });
+
+  it('reads a fresh retry\'s message as the note the new attempt would carry', () => {
+    const memory = new SupervisionMemory();
+    memory.settled({ ...plan[0], status: 'failed' });
+    const target = { task: { ...plan[0], status: 'failed' as const }, ref: '#1' };
+
+    expect(memory.check({ command: 'retry_task', task: 't1', from: 'fresh' }, target, plan, 5)?.key).toBe('identical-retry:t1');
+    expect(memory.check({ command: 'retry_task', task: 't1', from: 'fresh', message: '  ' }, target, plan, 5)?.key).toBe('identical-retry:t1');
+    expect(memory.check({ command: 'retry_task', task: 't1', from: 'fresh', message: 'Import from ./lib.' }, target, plan, 5)).toBeNull();
   });
 
   it('restores nothing from a plan saved before the snapshot existed', () => {

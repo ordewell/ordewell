@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WAKE_UP_RATE } from '../LoopGuards';
 import { WAKE_DEBOUNCE_MS } from '../Supervisor';
 import { PLANNER_EXECUTION_TOOLS } from '../mcp/tools';
+import type { ExecutionActor } from '../../models/Execution';
 import { ctx, NOW, prose, settled, supervised, task, until, waitForInput, type Env, type Options } from './supervisorTestKit';
 
 /**
@@ -123,5 +124,219 @@ describe('what the supervisor is told stop_task leaves behind', () => {
 
     expect(description).toContain('blocking every task that depends on it, until it is retried, force started or skipped');
     expect(description).toContain(`After changing its prompt with edit_plan, ${retried}`);
+  });
+});
+
+/**
+ * A wake-up turn at Act that ends with the failure it was woken for still
+ * standing, and work waiting on it, while another task runs (ADR-0057 R4): the
+ * run is not idle, so only this wakes the supervisor again, once.
+ */
+describe('a blocking failure a turn left standing, at Act', () => {
+  /** Task 1 failed with tasks 2 and 3 waiting on it while task 4 runs, and the supervisor is in its first turn on it. */
+  async function failedWhileOthersRun(): Promise<Env> {
+    const env = await supervised(
+      [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] }), task('t4', 4)],
+      { settings: { supervisorLevel: 'act' } },
+    );
+    await until(() => env.run.spawnedIds().includes('t4'));
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+    return env;
+  }
+
+  const STANDING = 'Task #1 "Task t1" is still failed after your turn, and 2 tasks wait on it. Release it: call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply; or skip_task it with your reason; or tell the user.';
+
+  it('wakes the supervisor once more right after a turn that edited the task and did not retry it', async () => {
+    const env = await failedWhileOthersRun();
+    await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+    env.planner.calls[0].finish(prose('Rewrote task 1.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+
+    expect(env.planner.calls[1].message).toContain(`- ${STANDING}`);
+  });
+
+  it('wakes it only once for the same failure', async () => {
+    const env = await failedWhileOthersRun();
+    env.planner.calls[0].finish(prose('Task 1 failed; leaving it.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+
+    env.planner.calls[1].finish(prose('Still leaving it.'));
+    await settled();
+    // Task 4 running on wakes the supervisor for itself, and those turns leave task 1 failed too.
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      for (const call of env.planner.calls.slice(2)) call.finish(prose('Noted.'));
+      await settled();
+    }
+
+    expect(env.planner.calls.filter((c) => c.message.includes('is still failed after your turn'))).toHaveLength(1);
+  });
+
+  it.each([
+    ['retried', (env: Env) => env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Import from ./lib.' }, ctx)],
+    ['skipped', (env: Env) => env.planner.tools().skipTask!({ task: '1', reason: 'not needed' }, ctx)],
+  ])('does not wake it again after a turn that %s the task', async (_what, act) => {
+    const env = await failedWhileOthersRun();
+    expect((await act(env)).isError).toBeFalsy();
+    env.planner.calls[0].finish(prose('Handled task 1.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(10 * WAKE_DEBOUNCE_MS);
+
+    expect(env.planner.calls).toHaveLength(1);
+  });
+
+  it('answers an edit of the failed task\'s prompt saying it is still failed and needs retry_task', async () => {
+    const env = await failedWhileOthersRun();
+
+    const edit = await env.planner.tools().editPlan!({ ops: [{ op: 'update', taskId: '#1', changes: { prompt: 'do t1, importing from ./lib' } }] }, ctx);
+
+    expect(JSON.parse(edit.text).warnings).toContain('Task #1 "Task t1" is still failed: an edit starts nothing, so call retry_task to run it as edited.');
+  });
+});
+
+/**
+ * A task the supervisor stopped is on hold, not failed: the wake after its turn
+ * tells it to retry with a note, so a note retry of it is accepted (ADR-0029).
+ */
+describe('a task the supervisor stopped, left standing at Act', () => {
+  /** Task 1 waits for input with tasks 2 and 3 on it while task 4 runs; the supervisor stops it and ends its turn, and is woken again. */
+  async function stoppedWhileOthersRun(): Promise<Env> {
+    const env = await supervised(
+      [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] }), task('t4', 4)],
+      { settings: { supervisorLevel: 'act' } },
+    );
+    await until(() => env.run.spawnedIds().includes('t4'));
+    waitForInput(env.run.of('t1'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+    expect((await env.planner.tools().stopTask!({ task: '1' }, ctx)).isError).toBeFalsy();
+    env.planner.calls[0].finish(prose('Stopped task 1.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 2);
+    return env;
+  }
+
+  it('retries it with the note the wake told it to give, and the runner reads the note', async () => {
+    const env = await stoppedWhileOthersRun();
+    expect(env.planner.calls[1].message).toContain('Task #1 "Task t1" is still on hold');
+
+    const retry = await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Use ./lib.' }, ctx);
+
+    expect(retry.isError, retry.text).toBeFalsy();
+    env.planner.calls[1].finish(prose('Retried task 1 with a note.'));
+    await until(() => env.run.spawnedIds().filter((id) => id === 't1').length === 2);
+    const spawns = env.run.runner.spawn.mock.calls.filter(([options]) => options.taskId === 't1');
+    expect(spawns[1][0].prompt).toContain('## The supervisor\'s note for this attempt\n\nThe last attempt at this task ended without passing, and the supervisor retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\nUse ./lib.');
+  });
+
+  const SUPERVISOR = { kind: 'supervisor', level: 'act' } as const;
+
+  /** The supervisor retries task 1 with a note, and `by` stops that attempt. */
+  async function notedThenStopped(by: ExecutionActor = { kind: 'user' }): Promise<Env> {
+    const env = await noted();
+    const stop = await env.session.execute({ command: 'stop_task', task: 't1' }, by);
+    expect(stop.ok, stop.message).toBe(true);
+    await settled();
+    return env;
+  }
+
+  const t1Prompts = (env: Env): string[] =>
+    env.run.runner.spawn.mock.calls.filter(([options]) => options.taskId === 't1').map(([options]) => options.prompt);
+
+  it('drops the note with the attempt it was for, so a stopped attempt\'s note never briefs the next one', async () => {
+    const env = await notedThenStopped();
+
+    await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' });
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+    expect(t1Prompts(env)[2]).not.toContain('The supervisor\'s note for this attempt');
+  });
+
+  /** The supervisor retries task 1 with a note, and that attempt is still running. */
+  async function noted(): Promise<Env> {
+    const env = await stoppedWhileOthersRun();
+    expect((await env.planner.tools().retryTask!({ task: '1', from: 'fresh', message: 'Use ./lib.' }, ctx)).isError).toBeFalsy();
+    env.planner.calls[1].finish(prose('Retried task 1 with a note.'));
+    await until(() => t1Prompts(env).length === 2);
+    return env;
+  }
+
+  /** Ends each supervisor turn the run opens, until it settles: a turn already ended ignores a second end. */
+  async function quiet(env: Env): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await settled();
+      await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+      for (const call of env.planner.calls.slice(2)) call.finish(prose('Leaving it.'));
+    }
+  }
+
+  it('drops the note of an attempt that failed when the user runs the plan again', async () => {
+    const env = await noted();
+    env.run.of('t1').reportComplete({ status: 'failed', summary: '', reason: 'the import is wrong' });
+    env.run.of('t4').reportComplete({ status: 'done', summary: 'done' });
+    await quiet(env);
+
+    expect((await env.session.execute({ command: 'run_plan' }, { kind: 'user' })).ok).toBe(true);
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+  });
+
+  it('drops the note of an attempt the run\'s Stop ended when the user runs the plan again', async () => {
+    const env = await noted();
+    expect((await env.session.execute({ command: 'stop_run' }, { kind: 'user' })).ok).toBe(true);
+    await quiet(env);
+
+    expect((await env.session.execute({ command: 'run_plan' }, { kind: 'user' })).ok).toBe(true);
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+  });
+
+  it('briefs the attempt after a stop with the new note a retry of it gives, not the old one', async () => {
+    const env = await notedThenStopped(SUPERVISOR);
+
+    const retry = await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh', message: 'Use ./vendor.' }, SUPERVISOR);
+    expect(retry.ok, retry.message).toBe(true);
+
+    await until(() => t1Prompts(env).length === 3);
+    expect(t1Prompts(env)[2]).toContain('Use ./vendor.');
+    expect(t1Prompts(env)[2]).not.toContain('Use ./lib.');
+  });
+});
+
+/**
+ * `ordewell run --unattended` at Act ends on a person's wait that still stands
+ * 2 seconds after a supervisor turn with none open, so the turn owed for a wait
+ * the last turn left standing must open within that.
+ */
+describe('a wait on a person left standing by a turn at Act', () => {
+  it('opens the turn owed for it at once, with no merge window', async () => {
+    const env = await supervised(
+      [task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] }), task('t4', 4)],
+      { settings: { supervisorLevel: 'act' } },
+    );
+    await until(() => env.run.spawnedIds().includes('t4'));
+    waitForInput(env.run.of('t1'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+
+    env.planner.calls[0].finish(prose('Task 1 needs the user; telling them.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(env.planner.calls).toHaveLength(2);
+    expect(env.planner.calls[1].message).toContain('Task #1 "Task t1" is still waiting for input after your turn');
   });
 });

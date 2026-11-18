@@ -108,6 +108,12 @@ export interface TaskModelAssignment {
 
 export type RunnerId = string;
 
+/** A model's note for one fresh attempt: `by` is whose turn wrote it, the supervisor's or the planner's in the user's turn. */
+export interface RetryNote {
+  by: 'supervisor' | 'planner';
+  text: string;
+}
+
 /**
  * Bring loaded tasks to the structured-only shape, in place. A task saved
  * while the terminal transport existed may say it ran there, and why; neither
@@ -119,6 +125,7 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
   for (const task of tasks) {
     if (typeof task.runnerSessionId !== 'string') delete task.runnerSessionId;
     if (typeof task.carriedFrom !== 'string') delete task.carriedFrom;
+    if (typeof task.retryNote?.text !== 'string') delete task.retryNote;
     if (typeof task.runnerSessionOwner !== 'string') delete task.runnerSessionOwner;
     const legacy = task as Task & { transport?: { kind?: unknown; nativeSessionId?: unknown } };
     if (!task.runnerSessionId && legacy.transport?.kind === 'structured' && typeof legacy.transport.nativeSessionId === 'string') {
@@ -363,6 +370,12 @@ export interface Task {
    * attempt's files. Cleared once that attempt runs, and by a retry or a rearm.
    */
   carriedFrom?: RunnerId;
+  /**
+   * The note a model's fresh `retry_task` gave this attempt (ADR-0029): the
+   * runner reads it with its brief, and the identical-retry guard counts it as
+   * a change. Cleared by the next fresh attempt; a user's retry never sets one.
+   */
+  retryNote?: RetryNote;
   /** Why the task was skipped, as whoever skipped it put it; set only while `status` is `skipped`, and not always then. */
   skipReason?: string;
   /**

@@ -32,6 +32,7 @@ export type RunEventKind =
   | 'start_refused'
   | 'run_finished'
   | 'run_held'
+  | 'failure_standing'
   | 'task_report';
 
 export type RunEvent = {
@@ -184,7 +185,9 @@ export function wakeDue(held: readonly RunEvent[], facts: () => WakeFacts, debou
   if (held.some((e) => e.kind === 'run_finished')) return { at: first.at, reason: 'run_ended' };
   // A fixed window from the event: one that restarted on each event could be held off by tasks that keep settling.
   const waited = held.find((e) => !isHeldEvent(e));
-  if (waited) return { at: waited.at + debounceMs, reason: 'at_once' };
+  // The turn that left a failure or hold standing is its context, so nothing is waited for to join it, and an unattended follower judges the wait soon after (ADR-0057 R4).
+  const standing = held.find((e) => e.kind === 'failure_standing');
+  if (waited) return { at: Math.min(waited.at + debounceMs, standing?.at ?? Number.POSITIVE_INFINITY), reason: 'at_once' };
   const { nothingCanStart, cohortDone, blocksWork, blocksAny, acting, ttlMs = UNKNOWN_CACHE_TTL_MS, requestAt } = facts();
   const merged = first.at + debounceMs;
   if (nothingCanStart) return { at: merged, reason: 'nothing_can_start' };

@@ -70,6 +70,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
 import { taskRefOf } from './TaskRefs';
+import { standingBlock, standingWords } from './runHolds';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { withTaskRunnerConfig } from './taskRunnerConfig';
 import { containerExecution } from './container/dockerLease';
@@ -80,7 +81,7 @@ import { TurnBudgets, contextLine, taskReadsLine, webReadsLine } from './Planner
 import { mintSessionId } from '../utils/sessionId';
 import { savePrdMarkdown, extractPrdBlock } from '../utils/prdStore';
 import { takeUserActions } from '../utils/userActionLog';
-import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, wakeUpReply, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId } from '../models/Task';
+import { approvalRecordOf, flattenTasks, migrateLoadedPlan, stampOrigin, wakeUpReply, type LegacyPlanState, type PlanState, type Task, type TaskReportTo, type TaskSnapshot, type RunnerId, type RetryNote } from '../models/Task';
 import { AlreadyExecutingError, NoPlanError } from './SessionErrors';
 import { describeHeld, describeLost, SessionHeldError, type LeaseHost, type SessionHeld, type SessionLease } from './sessionLease';
 import { PlannerNotReadyError, plannerNotReadyFor } from './plannerReadiness';
@@ -1248,7 +1249,7 @@ export class Session {
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor), this.failuresLeftBy(actor)),
       joinRun: (approved, left) => this.joinRun(approved, left),
-      startTask: (taskId, actor) => this.startOneTask(taskId, runOrigin(actor)),
+      startTask: (taskId, actor, note) => this.startOneTask(taskId, runOrigin(actor), note),
       stopTask: (taskId, actor) => {
         // Before it ends: its release can outlast a held event's timer, which must find the stop.
         if (actorAuthority(actor.kind) === 'user') this.supervision.taskStoppedByUser(taskId);
@@ -2437,10 +2438,27 @@ export class Session {
       const task = this.store.get(id);
       return task ? [[name, this.taskHeads([task])[0]] as const] : [];
     });
+    const stillStanding = this.editedWhileStanding(committed.before);
     return {
-      ok: true, summary, coerced: adjustments, warnings, tasks: this.taskHeads(added),
+      ok: true, summary, coerced: adjustments, warnings: stillStanding.length > 0 ? [...(warnings ?? []), ...stillStanding] : warnings, tasks: this.taskHeads(added),
       ...(named.length > 0 ? { handles: Object.fromEntries(named) } : {}),
     };
+  }
+
+  /**
+   * A prompt edit to a failed or held task starts nothing, which a model can
+   * read the other way and end its turn on (ADR-0029): the edit's answer says
+   * the task still stands as it did, and what runs it as edited.
+   */
+  private editedWhileStanding(before: readonly Task[]): string[] {
+    const was = new Map(flattenTasks([...before]).map((t) => [t.id, t.prompt]));
+    const plan = this.store.planTasks;
+    const waits = this.orchestrator.planStartWaits();
+    return flattenTasks(plan).flatMap((task) => {
+      if (!was.has(task.id) || was.get(task.id) === task.prompt) return [];
+      const standing = standingBlock(plan, waits, task.id);
+      return standing ? [`Task ${this.namedRow(task)} is still ${standingWords(standing.block)}: an edit starts nothing, so call retry_task to run it as edited.`] : [];
+    });
   }
 
   /** Tasks as a planner tool's answer names them: by id and by the reference the plan gives each now. */
@@ -2700,9 +2718,10 @@ export class Session {
     return said;
   }
 
-  private async startOneTask(taskId: string, origin: RunOrigin): Promise<void> {
+  private async startOneTask(taskId: string, origin: RunOrigin, note?: RetryNote): Promise<void> {
     if (!this.plan) return;
     this.requireTask(taskId);
+    if (note) this.store.setRetryNote(taskId, note);
     await this.controls.forceStartTask(taskId, origin);
   }
 

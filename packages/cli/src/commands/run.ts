@@ -91,12 +91,13 @@ function whoAnswers(level: SupervisorLevel | null): string {
 
 /**
  * Who releases a task on hold, unattended: at Act the supervisor is woken to
- * it once the run is idle behind it (ADR-0057 R4); below Act nobody is.
+ * it when a turn of its ends leaving it held, or once the run is idle behind it
+ * (ADR-0057 R4); below Act nobody is.
  */
 function whoReleases(level: SupervisorLevel | null): string {
   if (level === null) return '';
   return level === 'act'
-    ? ' The supervisor is woken to it once nothing else can run.'
+    ? ' The supervisor is woken to it when a turn of its ends with it still held, or once nothing else can run.'
     : ' Nobody releases it unattended: it waits until someone does. `ordewell supervisor act` lets the supervisor act in new sessions.';
 }
 

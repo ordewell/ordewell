@@ -211,7 +211,7 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
     case 'repair':
       // A merge to resolve is not the task's own work, so its skills do not
       // apply, nor a check's verdict rule: the repair confirms no problem.
-      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task), loop: undefined }, plan);
+      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task), loop: undefined, retryNote: undefined }, plan);
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.

@@ -1,5 +1,5 @@
 import { actorAuthority } from '../models/Execution';
-import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RunSettings, type TurnAuthority } from '../models/Task';
+import { Task, TaskSnapshot, Verdict, RunnerId, DEFAULT_RUNNERS, flattenTasks, flattenTasksWithParents, pausedOnLimit, waitsForReset, waitsMidAttempt, type RetryNote, type RunSettings, type TurnAuthority } from '../models/Task';
 import { IConfig } from '../interfaces/IConfig';
 import { INotification } from '../interfaces/INotification';
 import type { IRunner, QueuedTaskMessage } from '../interfaces/IRunner';
@@ -1545,6 +1545,8 @@ export class TaskOrchestrator {
       else if (left.status === 'failed') this.store.markFailed(taskId);
       else if (left.status === 'pending') {
         this.store.markPending(taskId);
+        // A note was for the attempt this ends (ADR-0029): whatever starts the task next, a retry, a run or a reload, starts without it.
+        this.store.setRetryNote(taskId, undefined);
         if (left.hold) this.starts.hold(taskId, left.hold, 'chosen');
       }
     }
@@ -2179,7 +2181,8 @@ export class TaskOrchestrator {
     // showing them alongside pending and running work.
   }
 
-  async retryTask(taskId: string, origin: RunOrigin = 'user'): Promise<void> {
+  /** `note` is a model's note for the new attempt (ADR-0029), set past the retry that clears the last one's. */
+  async retryTask(taskId: string, origin: RunOrigin = 'user', note?: RetryNote): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
     this.refuseWhileCompleting(taskId);
@@ -2193,6 +2196,7 @@ export class TaskOrchestrator {
       const ended = this.attempts.end(taskId, 'retry');
       const movedFrom = this.movedFrom(task);
       this.store.retry(taskId);
+      if (note) this.store.setRetryNote(taskId, note);
       // Now, not once the worktree has gone: a tick in between would start it.
       this.retireResolvers(taskId);
       if (movedFrom) this.store.setCarriedFrom(taskId, movedFrom);
