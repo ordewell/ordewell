@@ -37,13 +37,22 @@ function withStatus({ awaitingReason: _reason, resumeAt: _resumeAt, skipReason: 
   return { ...plan, ...status };
 }
 
-/** A status update says everything about a task's status: what it leaves out, the task no longer has. */
-function applyStatus(tasks: readonly RunTask[], updates: ReadonlyMap<string, SerializedTaskStatus>): RunTask[] {
-  return tasks.map((task) => {
+/**
+ * A status update says everything about a task's status: what it leaves out,
+ * the task no longer has. A task it does not name, with none of its subtasks,
+ * stays the very task it was, and `tasks` itself when it names none of them,
+ * so a surface can skip what did not move.
+ */
+function applyStatus(tasks: RunTask[], updates: ReadonlyMap<string, SerializedTaskStatus>): RunTask[] {
+  let changed = false;
+  const next = tasks.map((task) => {
     const subtasks = applyStatus(task.subtasks, updates);
     const update = updates.get(task.id);
+    if (!update && subtasks === task.subtasks) return task;
+    changed = true;
     return update ? { ...withStatus(split(task).plan, update), subtasks } : { ...task, subtasks };
   });
+  return changed ? next : tasks;
 }
 
 /** `tasks` itself when `change` leaves the task named alone, or no task has that id. */

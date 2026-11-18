@@ -37,7 +37,7 @@ describe('a run of landings', () => {
         getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [],
         holdReason: () => null, loopStranded: () => false, runMergeView,
         activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
-        taskIsolation: () => null,
+        isolationView: () => null,
       },
       usage: new PlannerUsageLedger(),
       escalations: () => waits,

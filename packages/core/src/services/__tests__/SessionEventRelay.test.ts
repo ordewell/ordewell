@@ -7,12 +7,13 @@ import type { SessionMessage, SessionNotice } from '../SessionMessage';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import { fakeConfig, fakeNotification } from './sessionTestKit';
 import type { Escalation } from '../escalations';
+import type { IsolationView } from '../../interfaces/IWorktreeIsolation';
 
 function plan(): LegacyPlanState {
   return { tasks: [], generatedAt: '2026-01-01T00:00:00Z', status: 'approved', runners: ['claude-code'], lastUpdated: '2026-01-01T00:00:00Z' };
 }
 
-function setup(holds: ReadonlyMap<string, string> = new Map(), escalations?: () => Escalation[]) {
+function setup(holds: ReadonlyMap<string, string> = new Map(), escalations?: () => Escalation[], isolationView: () => IsolationView | null = () => null) {
   const sent: SessionMessage[] = [];
   const notices: SessionNotice[] = [];
   const store = new PlanStore();
@@ -28,7 +29,7 @@ function setup(holds: ReadonlyMap<string, string> = new Map(), escalations?: () 
     broadcast: (m) => sent.push(m),
     onNotice: (n) => notices.push(n),
     store,
-    orchestrator: { judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, taskIsolation: () => null },
+    orchestrator: { judgingOnce: (read) => read(), getIdleSince: () => null, getCompletionReceipt: () => null, getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [], holdReason: (id) => holds.get(id) ?? null, loopStranded: (id) => id === 't2', runMergeView: () => null, activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false }, isolationView },
     usage,
     escalations,
   });
@@ -120,7 +121,7 @@ describe('SessionEventRelay', () => {
       expect(ids(relay.statusMessage())).toEqual(['t1', 't2', 't3']);
     });
 
-    it('says every task again now and then, so a surface a change missed comes right', () => {
+    it('says every task again now and then, so a surface a change missed comes right, and a settled one only for a minute after it moved', () => {
       vi.useFakeTimers();
       const { relay, sent } = setup();
       const p = plan();
@@ -130,8 +131,37 @@ describe('SessionEventRelay', () => {
       relay.status(p);
       vi.advanceTimersByTime(1_000);
       relay.status(p);
+      vi.advanceTimersByTime(30_000);
+      relay.status(p);
 
-      expect(updates(sent).map(ids)).toEqual([['t1', 't2', 't3'], [], ['t1', 't2', 't3']]);
+      expect(updates(sent).map(ids)).toEqual([['t1', 't2', 't3'], [], ['t1', 't2', 't3'], ['t3']]);
+    });
+
+    it('builds the status of a task that did not move once, whoever asks', () => {
+      const holds = new Map<string, string>();
+      const { relay, store } = setup(holds);
+
+      const first = relay.statusMessage().tasks;
+      store.markCompleted('t3');
+      holds.set('t2', 'merge-gate');
+      const second = relay.statusMessage().tasks;
+
+      expect(second[0]).toBe(first[0]);
+      expect(second[1]).not.toBe(first[1]);
+      expect(second[1].holdReason).toBe('merge-gate');
+      expect(second[2]).not.toBe(first[2]);
+      expect(second[2].status).toBe('completed');
+    });
+
+    it('reads the run\'s isolation once per status update, whatever the plan\'s size', () => {
+      const active = { state: 'active' as const, branch: 'ordewell/r/1-t1', worktree: '/w/t1', repos: [] };
+      const isolationView = vi.fn((): IsolationView => ({ tasks: { t1: active }, handoff: { repos: [], landed: [] } }));
+      const { relay } = setup(new Map(), undefined, isolationView);
+
+      const { tasks } = relay.statusMessage();
+
+      expect(isolationView).toHaveBeenCalledTimes(1);
+      expect(tasks.map((t) => t.isolation)).toEqual([active, { state: 'none' }, { state: 'none' }]);
     });
   });
 

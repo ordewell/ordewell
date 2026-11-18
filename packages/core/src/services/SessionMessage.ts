@@ -330,7 +330,8 @@ export type SessionMessage =
   /**
    * `tasks` holds the tasks that moved, each whole, and a task left out is as
    * it was; `RunSnapshotFrame` gives a joining surface the rest. Now and then
-   * it holds every task again. The run-wide fields are whole on every update.
+   * it holds every task again, a settled one only for a minute after it last
+   * moved. The run-wide fields are whole on every update.
    * `escalations`: what waits on a person now (ADR-0053); absent from an older daemon.
    */
   | { type: 'status_update'; tasks: SerializedTaskStatus[]; runMerge?: RunMergeView; usage?: PlanUsage; activity?: RunActivity; escalations?: Escalation[] }

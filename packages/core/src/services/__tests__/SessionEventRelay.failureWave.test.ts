@@ -39,7 +39,7 @@ describe('a wave of failures', () => {
         getToolsAttaching: () => null, getRunningLong: () => null, getQueuedTaskMessages: () => [], getMergeGate: () => [],
         holdReason: () => null, loopStranded: () => false, runMergeView: () => null,
         activity: { starting: false, running: false, scheduled: false, resumable: false, advancesOnItsOwn: false },
-        taskIsolation: () => null,
+        isolationView: () => null,
       },
       usage: new PlannerUsageLedger(),
       escalations,
