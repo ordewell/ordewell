@@ -2286,6 +2286,14 @@ another's stays. One that holds work the user has not merged is never deleted
 unasked.
 *Avoid:* "result branch", "staging branch".
 
+**Take-in** — a running change task's merge of its run's integration branch into its
+own branch, to use work a sibling landed after its worktree was cut (ADR-0013). The
+runner makes it, told when and with the message Ordewell writes,
+`Merge: <subject> (take in landed work)`; Ordewell never merges into a running
+worktree. It lands with the task, and the task's own work is read from its
+*fork point*, the newest integration commit its branch holds, so what it took in is
+never its diff. *Avoid:* "sync", "rebase onto main": it is a merge, and never a rebase.
+
 **Landing** — integrating one task under ADR-0014: its branch merged into the
 integration branch of every repo it changed, or of none. Only repos where the
 task branch has commits ahead of the integration tip are merged; a task that

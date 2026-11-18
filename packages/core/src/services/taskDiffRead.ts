@@ -197,6 +197,36 @@ export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPat
   return { available: true, text: head + files.map((f) => `[repo .] ${f.path}: ${f.added === '-' ? 'binary change' : `+${f.added} -${f.removed}`}\n`).join('') };
 }
 
+/** What a task's fork point is read from in one repository: where it started, where its work is now, and what it lands on. */
+export interface ForkPointOf {
+  /** The integration tip its worktree was cut from, as its record holds it. */
+  start: string;
+  /** Its work: `HEAD` in its live worktree, else its branch's tip. */
+  head: string;
+  /** The run's integration branch in this repository. */
+  integrationBranch?: string;
+  /** The integration tip right after it landed here, once it has. */
+  landedTip?: string;
+}
+
+/**
+ * Where a task's own work starts in a repository: the newest commit of the
+ * integration branch its branch holds. That is the commit its worktree was cut
+ * from, unless it merged the branch in since, taking in what landed beside it
+ * or a repair's merge (ADR-0013, ADR-0015): that work is its siblings', and is
+ * never read as its own. Once it landed, the branch holds its own landing, so
+ * it is read against the tip that landing merged onto. The recorded starting
+ * commit when git cannot say. The one reading for every view of a task's own
+ * work: its diff, which a verdict checks, and the host's (ADR-0064).
+ */
+export async function taskForkPoint(invoker: GitInvoker, cwd: string, common: readonly string[], of: ForkPointOf): Promise<string> {
+  const onto = of.landedTip ? `${of.landedTip}^1` : of.integrationBranch ? `refs/heads/${of.integrationBranch}` : null;
+  if (!onto) return of.start;
+  const found = await tryGit(invoker, cwd, [...common, 'merge-base', of.head, onto]);
+  const base = found.ok ? found.stdout.trim() : '';
+  return /^[a-f0-9]{40,64}$/.test(base) ? base : of.start;
+}
+
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
   const record = run.tasks[taskId];
   if (!record) return taskDiffUnavailable('no-record', TASK_DIFF_NO_RECORD);
@@ -241,10 +271,12 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         if (!/^[a-f0-9]{40,64}$/.test(tip)) throw new Error('Invalid task commit.');
         target = [tip];
       }
+      // A merged task's branch is in the integration branch, which no longer says where it began: a record from before landed tips were kept is read from its start.
+      const base = await taskForkPoint(reader, cwd, common, { start: entry.baseRef, head: live ? 'HEAD' : target[0], landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrationBranch: repo.integrationBranch }) });
       const ordewells = (file: string) => entry.linked.some((linked) => file === linked || file.startsWith(`${linked}/`))
         || run.shared.some((shared) => repo.path === '.' && (file === shared || file.startsWith(`${shared}/`)));
       if (options.names) {
-        const tracked = stats(await git(reader, cwd, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative=', entry.baseRef, ...target, '--numstat', '-z']));
+        const tracked = stats(await git(reader, cwd, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative=', base, ...target, '--numstat', '-z']));
         const fresh = live ? (await git(reader, cwd, [...common, 'ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean) : [];
         const work = fresh.filter((f) => !(f.startsWith(prefix) && ordewells(f.slice(prefix.length))));
         for (const file of [...tracked.map((f) => f.path), ...work]) {
@@ -253,7 +285,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         continue;
       }
       const scope = prefix ? [`:(top,literal)${prefix.replace(/\/$/, '')}`] : [];
-      const diffArgs = [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, entry.baseRef, ...target];
+      const diffArgs = [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, base, ...target];
       const listed = stats(await git(reader, cwd, [...diffArgs, '--numstat', '-z', '--', ...scope]));
       const allowed = (file: string) => allowedPath(file) && !ordewells(file);
       // A tracked path is in the diff only because the task put it there: Ordewell's links are never committed.

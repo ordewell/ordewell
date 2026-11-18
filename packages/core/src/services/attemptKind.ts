@@ -4,7 +4,7 @@ import type { StoredHandoff } from '../models/Handoff';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { LeaseWorkspaceIntent } from './executionLease';
 import type { RepairAttempt } from './Landing';
-import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE } from './promptAugment';
+import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE, type LandingBeside } from './promptAugment';
 
 /** A continue the user asked for: their message, and the runner session it resumes (ADR-0018, K1). */
 export interface Continuation {
@@ -179,6 +179,8 @@ export interface AttemptPromptSources {
   previousHandoff: (taskId: string) => StoredHandoff | undefined;
   /** The legacy report captured while the check was between rounds, before repeat cleared it. */
   previousRound?: { round: number; report?: string };
+  /** Where work landing beside a change in an isolated run is found, when any may land while it runs. */
+  beside?: LandingBeside;
 }
 
 /**
@@ -217,11 +219,11 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       // the next one is told what the last one did.
       return composeAugmentedPrompt(task, plan, { skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
     case 'change':
-      return composeAugmentedPrompt(task, plan, { skills: src.skills, loop });
+      return composeAugmentedPrompt(task, plan, { skills: src.skills, loop, ...(src.beside ? { beside: src.beside } : {}) });
     case 'readOnly':
       return composeAugmentedPrompt(task, plan, { skills: src.skills, loop, readOnly: true });
     case 'carryOver':
-      return composeAugmentedPrompt(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop });
+      return composeAugmentedPrompt(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop, ...(src.beside ? { beside: src.beside } : {}) });
     case 'delegated':
       // A subplanner reads its goal, not a runner's brief.
       return task.goal ?? '';
