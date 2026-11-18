@@ -7,9 +7,8 @@
  * Tasks are parsed from JSON first, as a plan read off disk or from a planner
  * is: built here they would share one prompt string and read as next to nothing.
  */
-import fs from 'node:fs';
 import os from 'node:os';
-import { captureConsole, core, heapMb, hostSession, makeTasks, ms, now, numbers, tempWorkspace } from './lib.mjs';
+import { captureConsole, core, heapMb, hostSession, makeTasks, ms, now, numbers, removeDir, tempWorkspace } from './lib.mjs';
 
 const { say } = captureConsole();
 const sizes = numbers('sizes', '1000,10000,100000');
@@ -63,6 +62,6 @@ for (const count of [...counts, 10000]) {
   const best = Math.min(...runs);
   say(`| ${count} | ${best.toFixed(1)} | ${((best / 10000) * 100).toFixed(2)}% |`);
   lease.releaseAll();
-  fs.rmSync(workspace, { recursive: true, force: true });
+  removeDir(workspace);
 }
 process.exit(0);
