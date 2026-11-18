@@ -12,7 +12,6 @@ import {
   type PlannerNativeSession,
 } from '../../models/Task';
 import { addUsage, type RunnerSessionCost, type UsageRecord, type UsageTotals } from '../../models/Usage';
-import { longChainNote } from '../../models/PlanShape';
 import type { IConfig } from '../../interfaces/IConfig';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import type { IWebFetcher } from '../../interfaces/IWebFetcher';
@@ -1319,16 +1318,11 @@ export class CliAgentAiService implements IAiService {
           if (!checked.ok) return refuse(checked.errors.map(planChangeErrorText));
           submitted = checked.tasks;
           refused = [];
-          // The conversation's advice too, for a plan nobody converses over: a later accepted call replaces `submitted`.
-          const shape = longChainNote(checked.tasks);
           return {
             text: JSON.stringify({
               ok: true,
               ...(checked.warnings.length > 0 ? { warnings: checked.warnings } : {}),
-              ...(shape ? { shape } : {}),
-              next: shape
-                ? 'Plan recorded. If shape names a dependency that does neither, call submit_plan once more without it, which replaces this plan; otherwise end your turn now.'
-                : 'Plan recorded. End your turn now.',
+              next: 'Plan recorded. End your turn now.',
             }),
           };
         },
