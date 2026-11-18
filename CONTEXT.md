@@ -605,6 +605,21 @@ plan through `submit_plan` gets it as the answer's `review`, and only the
 planner's own next `submit_plan` changes the plan. Never a refusal.
 *Avoid:* "plan review" (a review task in a plan is something else), "auto-fix".
 
+**Fan-out shape** (`PlanFanOut.ts`, ADR-0072 R5) — a one-shot plan's slices
+that run at once, four or more at one level, read from its dependencies alone,
+with the roles around them. The **opening task** is the change task every slice
+waits for: the one that makes the project import and collect its tests (a
+**restoring task** when the review adds it). The **slices** are the change
+tasks not ordered against every other one, each done when the code in its own
+scope is in place. The **closing check** waits for every slice and runs the
+whole suite; a loop's check counts, an ops task or a push does not. Opening
+tasks in series, no opening task and no closing check are its faults, asked in
+the **Chain review**'s one call, whose reply may add the one restoring or
+closing task a fault asks for. A wide plan with a closing check gets a fixed
+`Plan shape:` note on each role's brief.
+*Avoid:* "gate" for the opening task (the merge gate is something else),
+"barrier".
+
 **Context compaction** (`contextCompaction.ts`, `budgetedChat.ts`,
 `contextSummary.ts`) — what an API planner does on its own to keep each call
 inside its model's window, as against the user-triggered **Compaction** below,

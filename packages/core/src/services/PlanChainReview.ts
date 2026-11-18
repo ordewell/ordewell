@@ -57,7 +57,7 @@ export function longestChain(tasks: readonly Task[]): Task[] {
 }
 
 /** The plan as the review reads it: what each task does and what it waits for. */
-function asPlanJson(tasks: readonly Task[]): string {
+export function asPlanJson(tasks: readonly Task[]): string {
   const strip = (t: Task): Record<string, unknown> => ({
     id: t.id,
     title: t.title,
@@ -81,19 +81,31 @@ function asPlanJson(tasks: readonly Task[]): string {
  * plan.
  */
 export function chainReviewMessage(tasks: readonly Task[], chain: readonly Task[], alone = false): string {
-  const edges = chain.slice(1).map((t, i) => `- "${t.title}" (${t.id}) depends on "${chain[i].title}" (${chain[i].id})`);
+  return [...reviewHeader(tasks, alone), ...chainQuestion(chain), CHAIN_REPLY].join('\n');
+}
+
+/** The opening of every one-shot review message: whose plan it is, and the plan. */
+export function reviewHeader(tasks: readonly Task[], alone: boolean): string[] {
   return [
     alone ? 'This is a plan of tasks that coding agents will run, each task once its dependencies are done:' : 'This is the plan you wrote:',
     asPlanJson(tasks),
     '',
+  ];
+}
+
+/** The chain and the edge question, without the reply's shape, which {@link PlanFanOut} extends. */
+export function chainQuestion(chain: readonly Task[]): string[] {
+  const edges = chain.slice(1).map((t, i) => `- "${t.title}" (${t.id}) depends on "${chain[i].title}" (${chain[i].id})`);
+  return [
     `Its longest chain of dependencies is ${chain.length} tasks, which run one after another:`,
     ...edges,
     '',
     'Review the plan edge by edge, every dependency, not only these. For each, ask: does the dependent need a file, name, signature or schema that does not exist in the repository until the other task writes it? Filling in a stub or an interface that already exists creates nothing to consume, and a slice whose tests also run code another slice writes does not need it either: it runs them, reports which fail only for that reason, and leaves those to the closing check.',
     'Keep an edge all the same when the dependent needs the other task\'s finding (research before the build it informs, a reproduction before its fix), or when another rule orders them: an ops task after the changes it acts on, a loop\'s body after its check, two tasks that would collide in one checkout, the steps of an expand-contract change. Keep a leading task that makes the project build, import or collect its tests, and a closing check that depends on every task.',
-    `Reply with only the tasks whose dependencies change, each with its complete new list, as one JSON object and nothing else: {"${CHAIN_REVIEW_KEY}":[{"id":"<task id>","dependencies":["<task id>", ...]}]}. Use the ids above. An empty list makes the task wait for none; when nothing changes, reply {"${CHAIN_REVIEW_KEY}":[]}.`,
-  ].join('\n');
+  ];
 }
+
+const CHAIN_REPLY = `Reply with only the tasks whose dependencies change, each with its complete new list, as one JSON object and nothing else: {"${CHAIN_REVIEW_KEY}":[{"id":"<task id>","dependencies":["<task id>", ...]}]}. Use the ids above. An empty list makes the task wait for none; when nothing changes, reply {"${CHAIN_REVIEW_KEY}":[]}.`;
 
 /** One task whose dependencies the review changed, by title, for the brief's note and the research log. */
 export interface ChainChange {
@@ -213,7 +225,7 @@ export function revisionNote(removed: readonly string[], added: readonly string[
   const list = (names: readonly string[]) => names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
   const parts: string[] = ['Plan revision:'];
   if (removed.length) {
-    parts.push(`this task no longer waits for ${list(removed)}, which ${removed.length > 1 ? 'run' : 'runs'} in parallel with it. Where this brief says to wait for ${removed.length > 1 ? 'them' : 'it'} or use ${removed.length > 1 ? 'their' : 'its'} work, do not: run this slice's tests, report which fail only because that work has not landed, and leave those to the closing check.`);
+    parts.push(`this task no longer waits for ${list(removed)}, which ${removed.length > 1 ? 'run' : 'runs'} in parallel with it. Where this brief says to wait for ${removed.length > 1 ? 'them' : 'it'}, do not: take in ${removed.length > 1 ? 'their' : 'its'} work once it has landed, and until then run this slice's tests, report which fail only because that work has not landed, and leave those to the closing check.`);
   }
   if (added.length) parts.push(`${removed.length ? 'It' : 'This task'} now also runs after ${list(added)}.`);
   return parts.join(' ');
