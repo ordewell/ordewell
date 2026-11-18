@@ -124,6 +124,13 @@ export class RunSupervision {
   private holdsSeen: string | undefined;
   /** Each task the supervisor was woken for again after its turn left it failed or held, by how it stood then (ADR-0057 R4); see {@link failuresStanding}. */
   private readonly standingWoken = new Map<string, string>();
+  /**
+   * A closing turn ended, not by the user's Stop, and what it left standing is
+   * not judged yet (ADR-0057 R4): judged once its retry is not in flight or
+   * owed either, and answered by the user's Stop of that retry; see
+   * {@link judgeClosing}.
+   */
+  private closingOwed = false;
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -147,9 +154,12 @@ export class RunSupervision {
       restartPlanner: () => host.restartPlanner(),
       abandonTurn: () => host.abandonTurn(),
       goUnsupervised: (reason) => this.goUnsupervised(reason),
-      wakeUpEnded: (tasks, runEnd) => {
+      wakeUpEnded: (tasks, runEnd, stopped) => {
+        // The user's Stop of the closing turn is their answer to it.
+        if (runEnd) this.closingOwed = stopped !== true;
         // First: a wake it owes holds the run's end and the handoff.
-        this.failuresStanding(tasks ?? [], runEnd === true);
+        this.failuresStanding(tasks ?? [], false);
+        this.judgeClosing();
         if (!this.supervisor.awaitsRunEnd) this.handOver();
         this.settle();
         this.runIdle();
@@ -205,6 +215,7 @@ export class RunSupervision {
     this.running = true;
     this.changedAfterRun = false;
     this.endOwed = false;
+    this.closingOwed = false;
     this.supervisor.runStarted(continued);
   }
 
@@ -254,6 +265,16 @@ export class RunSupervision {
     this.supervisor.userStopped();
     this.handOver();
     this.settle();
+  }
+
+  /**
+   * The user is stopping the planner's turns, before any of them ends: the
+   * retry a failed closing turn owes is among what they stopped, in flight or
+   * at the gate, and their Stop is their answer to what it leaves standing
+   * (ADR-0029). A closing turn's own Stop is heard as it ends.
+   */
+  plannerStopping(): void {
+    this.closingOwed = false;
   }
 
   /**
@@ -404,10 +425,10 @@ export class RunSupervision {
    * idle behind its holds is {@link runIdle}'s, the backstop, and a task the
    * user stopped waits for them (ADR-0029).
    *
-   * `runEnd`: the turn was on the run's end. With the run over, no idle
-   * backstop follows and nothing else wakes it, so every task failed or held
-   * with work waiting is the closing turn's, and the wake holds the run's end
-   * until its own turn is over (ADR-0029).
+   * `runEnd`: the closing turn is over, as {@link judgeClosing} judges it.
+   * With the run over, no idle backstop follows and nothing else wakes it, so
+   * every task failed or held with work waiting is the closing turn's, and the
+   * wake holds the run's end until its own turn is over (ADR-0029).
    */
   private failuresStanding(tasks: readonly string[], runEnd: boolean): void {
     const plan = this.host.tasks();
@@ -429,6 +450,26 @@ export class RunSupervision {
       this.standingWoken.set(taskId, key);
       this.supervisor.observe({ kind: 'failure_standing', taskId, detail: standingDetail(standing, describe, closing), ...(closing ? { closing: true as const } : {}) });
     }
+  }
+
+  /**
+   * The closing turn's judgment of what it left standing, made from state
+   * rather than where a turn happens to end: once no turn of the
+   * supervisor's is in flight, none owes the run's end and no retry is owed,
+   * whether the turn that ended it was the first attempt, its retry, or the
+   * user's turn that carried the retry. A run the turn opened again, or a
+   * supervisor no longer at Act, owes it nothing.
+   */
+  private judgeClosing(): void {
+    if (!this.closingOwed) return;
+    if (this.running || this.level !== 'act') {
+      this.closingOwed = false;
+      return;
+    }
+    if (this.supervisor.turning || this.supervisor.awaitsRunEnd || this.supervisor.retryOwed) return;
+    this.closingOwed = false;
+    this.failuresStanding([], true);
+    if (!this.supervisor.awaitsRunEnd) this.handOver();
   }
 
   /** The holds the run stands idle behind now, and their key; undefined when it is not idle behind any. */
@@ -541,6 +582,7 @@ export class RunSupervision {
     this.endOwed = false;
     this.holdsSeen = undefined;
     this.standingWoken.clear();
+    this.closingOwed = false;
     this.guards.forget();
   }
 
@@ -611,6 +653,8 @@ export class RunSupervision {
    */
   settle(): void {
     this.supervisor.settled();
+    // First: a wake the closing turn owes holds the run's end.
+    this.judgeClosing();
     if (!this.endOwed || this.running) return;
     let held: string | undefined;
     if (this.level === 'act') {

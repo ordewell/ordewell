@@ -208,8 +208,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   run, so every task still failed or held with work waiting on it raises `failure_standing` as it
   ends, under the same once-per-failure key, and the line adds that the run has ended and an edit
   starts nothing until the task is released. That wake holds the run's end as the closing turn did
-  ([ADR-0029](0029-the-supervisor.md)): `run_concluded` waits for its turn too. Below Act none is
-  raised. An Act supervisor on a small model edited the one failed task's prompt in its closing
+  ([ADR-0029](0029-the-supervisor.md)): `run_concluded` waits for its turn too. A closing turn that
+  failed is judged once its retry is over, whether that retry is the supervisor's turn or a user's
+  turn that carried it, and one the user stopped, or whose retry they stopped, raises none. Below
+  Act none is raised. An Act supervisor on a small model edited the one failed task's prompt in its closing
   turn and never retried it: thirty tasks behind it never ran, and `ordewell run` returned.
 
   A `running_long` event is raised by a task's running time, by an automatic compaction of its own
@@ -508,3 +510,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-17 — R4: `failure_standing`, a task a wake-up turn at Act left failed or held with work waiting on it, wakes the supervisor once more as the turn ends, once per task for each failure or hold, while `run_held` stays the backstop for an idle run.
 - 2026-11-17 — R4: `failure_standing` goes with no merge window, and a loop's check between rounds raises none.
 - 2026-11-18 — R4: the closing turn raises `failure_standing` too, for every task it left failed or held with work waiting, once per failure, and that wake holds `run_concluded` until its turn is over.
+- 2026-11-18 — R4: the closing turn's `failure_standing` is judged once its retry is over, and none is raised after the user's Stop of the closing turn or its retry.

@@ -108,8 +108,9 @@ export interface SupervisorHost {
    * A turn that took a wake-up ended, however it ended; see {@link Supervisor.awaitsRunEnd}.
    * `tasks` are those the supervisor's own turn was woken for; none for a turn that carried the user's reports.
    * `runEnd`: the supervisor's own turn was on the run's end, or on what its closing turn left standing.
+   * `stopped`: the user's Stop ended it.
    */
-  wakeUpEnded(tasks?: readonly string[], runEnd?: boolean): void;
+  wakeUpEnded(tasks?: readonly string[], runEnd?: boolean, stopped?: boolean): void;
   /** Whether an input of the supervisor's that opens a turn still waits on the plan: what a retry would take. */
   inputsWait(): boolean;
   /** An Act supervisor tripped the wake-up rate: the run carries on at Watch. `reason` says what it did. */
@@ -604,9 +605,9 @@ export class Supervisor {
       const text = digest({ attention: own, sinceLast: batch.sinceLast });
       const tasks = tasksOf(own);
       if (this.idle(own)) void this.host.deliver(text, undefined, true, tasks).catch(() => {});
-      else void this.host.deliver(text, asked, undefined, tasks).catch(() => {}).then(() => {
+      else void this.host.deliver(text, asked, undefined, tasks).then(() => false, (err: unknown) => err instanceof PlannerTurnStoppedError).then((stopped) => {
         if (runEnd) this.runEndPending = false;
-        this.host.wakeUpEnded(tasks, runEnd);
+        this.host.wakeUpEnded(tasks, runEnd, stopped);
       });
     }
     if (theirs.length > 0) {
