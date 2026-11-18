@@ -76,9 +76,13 @@ export class SessionView {
       case 'status_update':
         return { type: 'plan', dock: 'run' };
       // The Session changes the plan itself (a live turn's edits, a run
-      // setting) and announces the result; the card follows it.
+      // setting) and announces the result; the card follows it. A field patch
+      // (an edit on another surface, a followed model) is announced only as
+      // task_updated, and a status tick re-reads the plan only when the dock's
+      // status moved, so it is the patch's cue.
       case 'plan_generated':
       case 'review_needed':
+      case 'task_updated':
         return { type: 'plan' };
       case 'execution_complete':
         return { type: 'settled' };
@@ -106,7 +110,6 @@ export class SessionView {
       case 'research_step':
       case 'research_step_done':
       case 'review_approved':
-      case 'task_updated':
       case 'planner_turn_started':
       case 'planner_skill_loaded':
       case 'planner_turn_ended':
