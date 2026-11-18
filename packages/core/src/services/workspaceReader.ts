@@ -18,7 +18,7 @@ import { readTaskPatch } from '../utils/taskLogStore';
 import { augmentedPath, withPath } from '../utils/shellPath';
 import { cleanEnv, defaultExecFile, MAX_BUFFER, NO_HOOKS, tryGit, type GitExecFn, type GitInvoker, type GitResult } from './gitExec';
 import { repoRootOf, SELF_REPO } from './isolationRecord';
-import { landingsIn } from './LandingLedger';
+import { integratedIn, landingsIn } from './LandingLedger';
 import { hasGitEntry, workspaceRepoGroup } from './repoGroup';
 import { NEVER_SCANNED } from './worktreeBootstrap';
 import { stateRootOf } from './stateRoot';
@@ -330,7 +330,7 @@ export function createWorkspaceReader(deps: WorkspaceReaderDeps) {
     const start = entry.baseRef && SHA.test(entry.baseRef) ? entry.baseRef : null;
     // What the task took in from its siblings is theirs: its changes start at its fork point, as its diff's do (ADR-0013).
     const forkOf = async (cwd: string, head: string): Promise<string | null> => start === null ? null
-      : taskForkPoint(invoker, cwd, await readOnlyGitArgs(invoker, cwd), { start, head, landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: landingsIn(run, repo).map(({ merge }) => merge) }) });
+      : taskForkPoint(invoker, cwd, await readOnlyGitArgs(invoker, cwd), { start, head, landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: integratedIn(run, repo) }) });
     const changedBy = { task: record.taskId };
     if (record.status !== 'merged' && fs.existsSync(entry.worktree)) {
       const worktree = fs.realpathSync(entry.worktree);

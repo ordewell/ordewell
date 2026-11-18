@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
-import { landingsIn } from './LandingLedger';
+import { integratedIn } from './LandingLedger';
 import { stateRootOf } from './stateRoot';
 import { realPathOf } from '../utils/realPath';
 import type { HandoffPatch } from '../models/Handoff';
@@ -206,7 +206,8 @@ export interface ForkPointOf {
   head: string;
   /**
    * The integration commits the run recorded in this repository, the merges
-   * that landed its tasks (`landingsIn`). Never the integration branch itself:
+   * that landed its tasks and the commits its reverts made (`integratedIn`):
+   * a take-in past a revert holds one. Never the integration branch itself:
    * a runner shares the repository's refs and can move it.
    */
   integrated?: readonly string[];
@@ -286,7 +287,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         target = [tip];
       }
       // A merged task's branch is in the integration branch, which no longer says where it began: a record from before landed tips were kept is read from its start.
-      const base = await taskForkPoint(reader, cwd, common, { start: entry.baseRef, head: live ? 'HEAD' : target[0], landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: landingsIn(run, repo.path).map(({ merge }) => merge) }) });
+      const base = await taskForkPoint(reader, cwd, common, { start: entry.baseRef, head: live ? 'HEAD' : target[0], landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: integratedIn(run, repo.path) }) });
       const ordewells = (file: string) => entry.linked.some((linked) => file === linked || file.startsWith(`${linked}/`))
         || run.shared.some((shared) => repo.path === '.' && (file === shared || file.startsWith(`${shared}/`)));
       if (options.names) {

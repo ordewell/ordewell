@@ -1,12 +1,12 @@
-import type { IsolationRun, IsolationTaskRecord, LandedTask } from '../interfaces/IWorktreeIsolation';
+import type { IsolationRepoRevert, IsolationRun, IsolationTaskRecord, LandedTask } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
 
 /*
  * The landing ledger (ADR-0054): what an isolated run keeps of who landed what
  * across every attempt, after a record has gone too. That is
  * `IsolationRun.landings`, `carried`, `landedTasks`, `landedOn`,
- * `keepsEveryLanding` and `reverted`, with each record's `landedTip` for a run
- * saved before `landings` were kept. Every read and write of those goes through
+ * `keepsEveryLanding`, `reverted` and `revertCommits`, with each record's
+ * `landedTip` for a run saved before `landings` were kept. Every read and write of those goes through
  * here and none of it asks git: GitWorktreeIsolation hands it what a merge made,
  * and FakeWorktreeIsolation hands it the same facts, so both keep one set of rules.
  */
@@ -37,6 +37,15 @@ export function landingsOf(run: IsolationRun, taskId: string, repoPath: string):
 /** Every kept merge in a repo, by the task it landed. */
 export function landingsIn(run: IsolationRun, repoPath: string): Array<{ taskId: string; merge: string }> {
   return Object.entries(run.landings ?? {}).flatMap(([taskId, byRepo]) => (byRepo[repoPath] ?? []).map((merge) => ({ taskId, merge })));
+}
+
+/**
+ * Every integration commit the run recorded in a repo: the merges that landed
+ * its tasks and the commits its reverts made, which a task's fork point is
+ * read from (ADR-0013).
+ */
+export function integratedIn(run: IsolationRun, repoPath: string): string[] {
+  return [...landingsIn(run, repoPath).map(({ merge }) => merge), ...run.revertCommits?.[repoPath] ?? []];
 }
 
 /** Whether anything ever landed in a repo, by the ledger or a record's tip. */
@@ -200,9 +209,10 @@ export function keepLandedOn(run: IsolationRun, taskId: string, dependsOn: reado
  * The tasks a revert took back, all in one step with no await between: a
  * landed record goes; a later attempt's that never landed stays, `kept`, for
  * the worktree only it names, its conflict over and nothing to repair or land;
- * the ledger lets go of each; and the run is marked as reverted.
+ * the ledger lets go of each and keeps the commits the revert made; and the run
+ * is marked as reverted.
  */
-export function forgetReverted(run: IsolationRun, taskIds: readonly string[]): void {
+export function forgetReverted(run: IsolationRun, taskIds: readonly string[], reverts: Readonly<Record<string, IsolationRepoRevert>> = {}): void {
   for (const taskId of taskIds) {
     const record = run.tasks[taskId];
     if (record?.status === 'merged') delete run.tasks[taskId];
@@ -215,6 +225,9 @@ export function forgetReverted(run: IsolationRun, taskIds: readonly string[]): v
     delete run.landings?.[taskId];
     delete run.landedTasks?.[taskId];
     delete run.landedOn?.[taskId];
+  }
+  for (const [repoPath, { commits }] of Object.entries(reverts)) {
+    if (commits.length > 0) (run.revertCommits ??= {})[repoPath] = [...run.revertCommits?.[repoPath] ?? [], ...commits];
   }
   run.reverted = true;
 }

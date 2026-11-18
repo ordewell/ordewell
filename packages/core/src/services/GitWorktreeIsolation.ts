@@ -1727,7 +1727,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
 
     // No await between these: a persist must never see the records gone with the tasks not back, or the tips cleared with either undone.
     delete run.landing;
-    forgetReverted(run, read.tasks.map((t) => t.taskId));
+    forgetReverted(run, read.tasks.map((t) => t.taskId), reverts);
     watch.settled(read.tasks.map((t) => t.taskId));
     return { outcome: 'reverted', tasks: read.tasks };
   }
