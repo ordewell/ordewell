@@ -54,6 +54,6 @@ One task per selected candidate, unless a candidate is large enough that a runne
 
 Write each task's prompt as self-contained: the runner executing it won't see this conversation. Include the problem, the solution, the files/seam involved, what "done" looks like, and — if the project keeps a glossary or ADR log — an instruction to update it when the task introduces or sharpens a term.
 
-Order tasks `Strong` → `Worth exploring` → `Speculative`. Two selected candidates that touch overlapping files must not run concurrently: make the later one depend on the earlier one even when nothing else connects them, since two runners editing the same file in parallel is a conflict, not a coincidence.
+Order tasks `Strong` → `Worth exploring` → `Speculative`. Two selected candidates that touch overlapping files must not run concurrently in a shared workspace: unless each task runs in its own worktree, make the later one depend on the earlier one even when nothing else connects them, since two runners editing the same file in parallel there is a conflict, not a coincidence.
 
 Propose the task outline in prose and get the user's confirmation — the same convergence point any planning conversation reaches. Do not emit the task plan JSON until they've confirmed it.

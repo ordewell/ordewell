@@ -53,6 +53,14 @@ export function planShape(tasks: readonly Task[]): PlanShape | undefined {
 export const LONG_CHAIN = 4;
 
 /**
+ * How many of a long chain's tasks the note names, its first and its last: a
+ * serial plan of hundreds would otherwise come back whole on every edit that
+ * lengthens it.
+ */
+const NAMED_HEAD = 3;
+const NAMED_TAIL = 2;
+
+/**
  * Advice on a plan whose longest chain is long, for the planner tool's answer:
  * it refuses nothing and rewrites nothing, since only the planner can tell an
  * edge that consumes something from one that only orders work (the plan is
@@ -66,6 +74,9 @@ export function longChainNote(tasks: readonly Task[], before?: readonly Task[]):
     const was = planShape(before);
     if (was && was.longestChain >= shape.longestChain) return undefined;
   }
-  const path = shape.chain.map((t) => `"${t.title}"`).join(' → ');
-  return `The plan's longest chain is ${shape.longestChain} of its ${shape.tasks} top-level tasks, and its widest level ${shape.widestLevel}: ${path}. Each of those dependencies should consume something its dependency creates that does not exist yet; where one only orders work, removing it lets the tasks run at once.`;
+  const titles = shape.chain.map((t) => `"${t.title}"`);
+  const unnamed = titles.length - NAMED_HEAD - NAMED_TAIL;
+  const path = (unnamed > 1 ? [...titles.slice(0, NAMED_HEAD), `${unnamed} more`, ...titles.slice(-NAMED_TAIL)] : titles).join(' → ');
+  // The exemption is the dependency rule's own, so the note never asks to drop an edge another rule requires.
+  return `The plan's longest chain is ${shape.longestChain} of its ${shape.tasks} top-level tasks, and its widest level ${shape.widestLevel}: ${path}. Each of those dependencies should consume something its dependency creates that does not exist yet, or be one that another rule orders; where one does neither, removing it lets the tasks run at once.`;
 }
