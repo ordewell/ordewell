@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { LandingBranchHeld } from '../daemonContract';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import type { LegacyPlanState } from '../models/Task';
-import { listSessions, loadSession } from '../utils/sessionStore';
+import { listSessions, readSession } from '../utils/sessionStore';
 import { hasLandingIn } from './LandingLedger';
 
 /**
@@ -77,7 +77,7 @@ export function landingRuns(
     const lands = (entry: IsolationRun['repos'][number]): boolean =>
       (dir === own && entry.path === checkout.repo) || (target !== null && checkoutOf(entry.root) === target);
     for (const meta of listSessions(workspace)) {
-      const plan = loadSession(meta.id, workspace)?.plan;
+      const plan = readSession(meta.id, workspace)?.plan;
       const run = plan?.isolation?.run;
       if (!plan || !run) continue;
       const entries = run.repos.filter((entry) => entry.baseBranch && !entry.startedDetached && lands(entry));
