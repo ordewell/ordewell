@@ -207,7 +207,15 @@ async function measure({ tasks, settled, entries, minutes }) {
       onExit: () => {},
     });
     const app = make({ rows: options.rows, cols: options.cols, focus: 'chat' });
-    const dispatch = (action) => app.dispatch(action);
+    let actions = 0;
+    let unchanged = 0;
+    // An action the reducer hands the same state back for paints nothing.
+    const dispatch = (action) => {
+      const before = app.getState();
+      app.dispatch(action);
+      actions += 1;
+      if (app.getState() === before) unchanged += 1;
+    };
     app.start();
 
     const out = { tasks, settled, entries, load: {} };
@@ -247,6 +255,8 @@ async function measure({ tasks, settled, entries, minutes }) {
     }
     load = null;
     frames = null;
+    // The paint the load asked for, before any frame has drawn the transcript: what a surface attaching waits for.
+    out.load.firstPaint = timeOf(() => tui.render({ ...app.getState(), now: clock.now() }))[0];
     clock.advanceTo(clock.now() + 1000);
     out.load.heapMb = heapMb();
     out.load.heapAboveBaseMb = out.load.heapMb - base;
@@ -310,6 +320,8 @@ async function measure({ tasks, settled, entries, minutes }) {
     // Heap after a collection at the load, every half virtual minute and the end, with the minute it was taken.
     const heap = [{ at: 0, mb: out.load.heapMb }];
     const framesBefore = drawn;
+    const actionsBefore = actions;
+    const unchangedBefore = unchanged;
     let parseMs = 0;
     let messages = 0;
     const t0 = clock.now();
@@ -349,6 +361,8 @@ async function measure({ tasks, settled, entries, minutes }) {
       messages,
       frames: drawn - framesBefore,
       framesPerSecond: (drawn - framesBefore) / seconds,
+      actions: actions - actionsBefore,
+      unchangedActions: unchanged - unchangedBefore,
       frameMs: mean(frameCost),
       frameP95Ms: percentile(frameCost, 95),
       frameMaxMs: Math.max(0, ...frameCost),
@@ -482,6 +496,7 @@ function tables(runs, extra) {
   row('load: runSnapshot action, ms', (r) => r.load.runSnapshot);
   row('load: run_snapshot frame, ms', (r) => r.load.snapshotFrame);
   row('load: whole-plan frame, ms', (r) => r.load.wholePlanFrame);
+  row('load: first paint, ms', (r) => r.load.firstPaint);
   row('heap after load, MB', (r) => r.load.heapMb, 1);
   row('frame wide, ms (median)', (r) => r.render.wide);
   row('frame wide, ms (p95)', (r) => r.render.wideP95);
@@ -490,6 +505,8 @@ function tables(runs, extra) {
   row('  of it the reducer, ms', (r) => r.keys.planScrollReduce);
   row('key scrolling the chat, ms (reduce + paint)', (r) => r.keys.chatScroll);
   row('  of it the reducer, ms', (r) => r.keys.chatScrollReduce);
+  row('stream: actions folded', (r) => r.stream.actions, 0);
+  row('  of them changing nothing, so painting nothing', (r) => r.stream.unchangedActions, 0);
   row('stream: frames a second', (r) => r.stream.framesPerSecond);
   row('stream: frame, ms (mean)', (r) => r.stream.frameMs);
   row('stream: frame, ms (p95)', (r) => r.stream.frameP95Ms);
@@ -528,6 +545,7 @@ function tables(runs, extra) {
 }
 
 const FIGURES = {
+  'first paint after load, ms': (r) => r.load.firstPaint,
   'frame wide, ms (fastest)': (r) => r.render.wideMin,
   'frame narrow, ms (fastest)': (r) => r.render.narrowMin,
   'plan scroll key, ms': (r) => r.keys.planScroll,

@@ -85,6 +85,9 @@ What the figures are, per configuration (`D` settled tasks, `T` entries):
 
 - **load**: the cost of each message that opens a session, as one dispatch.
   `planRefreshed` and the whole-plan frame carry every task.
+- **load: first paint**: `render(state)` once the load is folded, before any
+  frame has drawn the transcript: what a surface attaching to the session waits
+  for. The chat lays out only the tail it shows, so it should not grow with `T`.
 - **heap after load**: `heapUsed` after a collection, with the harness's own copy
   of the feed's task text in it (a few MB). Quote the difference between runs.
 - **frame wide / narrow**: `render(state)` for the loaded state, median and 95th of
@@ -92,6 +95,9 @@ What the figures are, per configuration (`D` settled tasks, `T` entries):
 - **key scrolling the plan / the chat**: a page key through `createApp.dispatch`:
   the reducer, then the paint a key asks for at once. The reducer's own share is
   the line below it.
+- **stream: actions folded / changing nothing**: the actions the stream's messages
+  dispatched, and how many of them the reducer handed the same state back for,
+  which `createApp` paints nothing for (a task log no open view shows).
 - **stream: frames a second**: paints caused by the stream, by virtual seconds.
 - **stream: event-loop ms a second**: the folds, JSON parsing and paints the stream
   costs per second of stream. Past 1000 the TUI cannot keep up.

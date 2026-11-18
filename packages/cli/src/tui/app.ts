@@ -104,6 +104,11 @@ export function createApp(deps: AppDeps): App {
     if (exited) return;
 
     const result = reduce(state, action);
+    // The reducer hands back the very state it was given when nothing on
+    // screen changed, so a message that changed nothing paints nothing: a long
+    // session's frame is the costliest thing here, and a log flood for a task
+    // no one is watching would otherwise pay it per batch.
+    const unchanged = result.state === state;
     // A child plan is a place in its root's session, never a session to resume.
     const previousSession = rootId(state);
     state = result.state;
@@ -119,7 +124,8 @@ export function createApp(deps: AppDeps): App {
     // Typing and a resize own the screen the moment they arrive; a log line
     // can wait for the next frame.
     if (action.type === 'key') paintKey();
-    else scheduleRender(action.type === 'resize');
+    else if (action.type === 'resize') scheduleRender(true);
+    else if (!unchanged) scheduleRender(false);
     for (const effect of result.effects) fire(effect);
   }
 
