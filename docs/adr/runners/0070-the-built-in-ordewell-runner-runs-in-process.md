@@ -268,13 +268,17 @@ is one runner per API provider, under the provider's own id and name.**
   appended message like the notices so the cached prefix holds: a model left to
   keep its own tally overestimated it and reported failed at 430 calls of 1000.
   For the same reason a `failed` or `blocked` report whose reason or summary
-  gives the budget as why, in a phrase that names it (a call or attempt budget,
-  budget exhausted, calls left, the step limit, out of calls), made before the
-  80% notice is due, is not recorded but answered with the count, and the turn
-  goes on. The bare words are not enough: a check's failed verdict ("calls save
-  twice", "steps to reproduce") and a real block ("network calls", "rate limit")
-  use them for something else, and are recorded as they are. It is answered
-  once an attempt, so a second such report is recorded as it is. A step continued after
+  gives the attempt's own budget as why, in a phrase that names it (a call,
+  step or attempt budget, the budget exhausted, model calls left, the step
+  limit, out of calls), made before the 80% notice is due, is not recorded but
+  answered with the count, and the turn goes on. The bare words are not enough:
+  a check's failed verdict ("calls save twice", "two steps remain", "the
+  bundle-size budget is exhausted") and a real block ("network calls", "the API
+  call limit") use them for something else, and are recorded as they are. A
+  phrase can still match such a report, so the answer is conditional: if the
+  model stopped over the call budget, it is not spent and it goes on; if for
+  another reason, it reports again and that is recorded. It is answered once an
+  attempt, so a second such report is recorded as it is. A step continued after
   a cut-off reply is a model call like any other: it counts against the limit,
   can carry a notice or the forced last call, and is compacted before like any
   step; a cut-off on the last allowed call ends the attempt at the step limit.
@@ -453,3 +457,6 @@ comes from that call.
 - 2026-11-19 — the runner tells the model the exact call count every 50 calls and
   in each notice, and answers once a report that gives up on a budget not yet
   near its end.
+- 2026-11-19 — an early give-up counts only a phrase about the attempt's own
+  budget, and the answer asks a report that stopped for another reason to be
+  sent again.
