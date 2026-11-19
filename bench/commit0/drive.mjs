@@ -1431,7 +1431,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const plan = record.arm?.finalPlan ?? null;
   const recorded = plan ? L.recordedSpend(plan) : null;
   const sessionId = record.arm?.sessionId ?? null;
-  const metrics = plan && sessionId && !opts.planOnly ? L.runMetrics(plan, L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan)) : null;
+  const taskLogs = plan && sessionId && !opts.planOnly ? L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan) : null;
+  const metrics = plan && sessionId && !opts.planOnly ? L.runMetrics(plan, taskLogs) : null;
   const validity = L.judgeValidity({ aborted: record.aborted, checks: [...preflightChecks, ...armChecks], tests: record.tests, freshness: ordewell.freshness, stopped: record.arm?.stopped, dryRun: opts.dryRun, planOnly: opts.planOnly, scoring: record.files?.source });
   const result = {
     ...L.resultRecord({
@@ -1453,6 +1454,10 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     recordedUsd: recorded?.usd ?? null,
     recorded,
     metrics,
+    // How the arm stopped (its own completion and the runner's reason, a cap, or the settle rule and what it left open) and, for arm A, its model calls against the step limit; null parts are what the copied session did not hold.
+    ending: L.runEnding({ arm: arm.id, plan, taskLogs, stopped: record.arm?.stopped, stalled: record.arm?.stalled, ran: !opts.dryRun && !opts.planOnly }),
+    // Attempts whose upstream provider changed at least once, and the changes, as the built-in runner's usage records name it.
+    providerSwitches: L.providerSwitches(taskLogs),
     // What the plan review said (arm B's planner), from the research log's own line; null when it left none.
     planReview: sessionId ? L.planReview(L.readResearchLog(path.join(runDir, 'workspace-ordewell'), sessionId)) : null,
     // A plan-only run's plan: its shape, the planner's spend and time (null for any other run, which has no such field).

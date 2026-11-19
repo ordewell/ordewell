@@ -251,7 +251,12 @@ and completion evidence.
   first reaches 40% of its effective window, the smaller of the model's window
   and a window Ordewell set, and never below 150,000 tokens, then again at each
   doubling of that size while it stays below the effective window, once per
-  size and never after the attempt ends. Quality falls with a context's
+  size and never after the attempt ends. An attempt that continues a saved
+  session takes the context its first call carries over as its baseline: a
+  size at or under it does not flag, so its first is the next doubling above
+  it. Seen live: a continued attempt that carried 449k of a 1,049k window was
+  flagged a second in, and the supervisor spent a turn on a task just begun.
+  Quality falls with a context's
   length well before its window is full, though no measurement gives a point,
   so both numbers are a judgement (`CONTEXT_SHARE`, `CONTEXT_FLOOR_TOKENS`); and
   the remedy is a fresh session with a handoff, which is the supervisor's to
@@ -764,3 +769,4 @@ transport is retained for take-over.
 - 2026-11-17 — C4: when a task compacts is stated once for every harness: one `taskCompactAt` setting (`auto`, a number, `off`), what each harness is given, `compactStartTokens` for the meter, and the running-long and reminder effects; W1 refers to it.
 - 2026-11-17 — C4: the running-long clock reads every harness's window as its start plus 32,000; Codex's number is held to 16,000 and 90% of its window; an inherited Claude Code window or OpenCode compaction room is dropped from a task's launch; OpenCode 1.x keeps no start for a model without an input limit; ACP infers compactions under small windows and after non-command slash messages; the built-in runner announces one compaction per step and reports the start in force.
 - 2026-11-18 — W1: an attempt that follows a failed or stopped attempt of the same task is first flagged at max(30 min, that attempt's running time), not at 3× the plan's longest pass; the flag names that attempt.
+- 2026-11-19 — W1: an attempt that continues a saved session takes the context it starts with as its baseline, so its first context flag is the next doubling above it; fresh attempts and the time and compaction flags are unchanged.

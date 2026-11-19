@@ -48,12 +48,12 @@ function working(context: PromptContext): string {
   const lines = [
     'How to work through the brief:',
     '- Work through the brief in order. How much work remains is never a reason to stop or to report `blocked`: a large brief is done one part at a time.',
-    `- Your context is compacted for you as it fills, so a long task does not run out of room. You have a budget of ${context.stepLimit} model calls for this attempt; you are told when it is nearly spent, and the last call is kept for \`task_complete\`.`,
+    `- Your context is compacted for you as it fills, so a long task does not run out of room. You have a budget of ${context.stepLimit} model calls for this attempt; the runner counts them and tells you the exact count at fixed points. Until told otherwise you have calls left: never estimate the count yourself. The last call is kept for \`task_complete\`.`,
   ];
   if (context.commits) lines.push('- Commit each coherent part as it works: an attempt can end at any time, and work that is not committed is not its result.');
   lines.push(
     '- `blocked` is for an obstacle outside your control that you cannot work around: a missing credential, a contradiction in the brief, an environment you cannot repair. Then say exactly what is missing, so someone can supply it.',
-    `- When the budget is nearly spent with part of the brief working, ${context.commits ? 'commit that part and ' : ''}report honestly what is done and what remains. Never report \`done\` for a brief whose done criterion does not hold: the tasks after yours build on a \`done\` task as finished.`,
+    `- When you are told the budget is nearly spent with part of the brief working, ${context.commits ? 'commit that part and ' : ''}report honestly what is done and what remains. Never report \`done\` for a brief whose done criterion does not hold: the tasks after yours build on a \`done\` task as finished.`,
   );
   return lines.join('\n');
 }

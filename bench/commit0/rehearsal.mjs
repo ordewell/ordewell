@@ -180,6 +180,7 @@ export const SCENARIOS = Object.freeze({
     arm: 'A',
     about: 'arm A: its one task makes the edits and reports done; `ordewell run` returns by itself',
     attempts: (ctx) => ({ A: [[...editSteps(ctx), done('Implement the library')]] }),
+    ending: { by: 'completion', status: 'done', reason: null, calls: true },
     expect: { valid: true, runExit: 0, truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 } },
     playedOut: ['A'],
   },
@@ -187,6 +188,7 @@ export const SCENARIOS = Object.freeze({
     arm: 'A',
     about: 'arm A: one shell command outlasts the settle window, then the edits, then the task reports failed; scored from its unlanded worktree',
     attempts: (ctx) => ({ A: [[longStep(ctx.longSec), ...editSteps(ctx), failed('The rehearsal fails this task on purpose.')]] }),
+    ending: { by: 'completion', status: 'failed', reason: FAILS_ON_PURPOSE, calls: true },
     expect: {
       valid: true, scoredFrom: 'task-worktree', truncated: true, truncatedWhy: /^settled with 1 task open: 1 nothing ready/,
       stoppedWhy: null, passedAboveBaseline: true, testExcluded: true, tasks: { failed: 1 },
@@ -197,6 +199,7 @@ export const SCENARIOS = Object.freeze({
     arm: 'A',
     about: 'arm A: the task makes the edits, then asks a checkpoint nobody answers: the stall rule ends the run, scored from its unlanded worktree',
     attempts: (ctx) => ({ A: [[...editSteps(ctx), checkpoint('Two docstrings disagree with the tests: may I follow the tests?'), done('Implement the library')]] }),
+    ending: { by: 'stall', calls: true },
     expect: {
       valid: true, scoredFrom: 'task-worktree', truncated: true, truncatedWhy: /^stalled: waiting on checkpoint/, stoppedWhy: null, stalled: true,
       notComplete: true, passedAboveBaseline: true, testExcluded: true,
@@ -212,6 +215,7 @@ export const SCENARIOS = Object.freeze({
       after: [[checkpoint('Two docstrings disagree with the tests: may I follow the tests?'), note('commit0-rehearsal-note.md'), done('Note the rehearsal')]],
     }),
     supervisor: [{ when: taskIs(1, 'failed'), step: RETRY }, { when: taskIs(2, 'awaiting_user'), step: APPROVE }],
+    ending: { by: 'completion', status: 'done', reason: null },
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['edit', 'after'],
     supervised: ['retry_task', 'answer_checkpoint'],
@@ -225,6 +229,7 @@ export const SCENARIOS = Object.freeze({
     // The closing turn leaves it, and so does the one core raises for the failure left standing: no third wake follows.
     supervisor: [{ when: STILL_FAILED, say: 'The rehearsal leaves task #1 failed.' }],
     // Nothing landed: arm B scores merged work, which the failed task's never became.
+    ending: { by: 'completion', status: 'failed', reason: FAILS_ON_PURPOSE },
     expect: {
       scoredFrom: 'merged', truncated: true, truncatedWhy: /^settled with 2 tasks open/, stoppedWhy: null, stalled: true, heldOpen: 2,
       notComplete: true, passedAtBaseline: true, tasks: { failed: 1, completed: 0 },
@@ -243,6 +248,7 @@ export const SCENARIOS = Object.freeze({
     }),
     // Order matters: the closing turn's wake holds both texts, and each rule plays once, the edit first.
     supervisor: [{ when: taskIs(1, 'failed'), say: EDIT_REPLY }, { when: STILL_FAILED, step: RETRY }],
+    ending: { by: 'completion', status: 'done', reason: null },
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['edit', 'after'],
     // A task that ends done with a finding still lands: its note is in the merged work.
@@ -268,6 +274,7 @@ export const SCENARIOS = Object.freeze({
         done('Build on the library'),
       ]],
     }),
+    ending: { by: 'completion', status: 'done', reason: null },
     expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 2 } },
     playedOut: ['producer', 'consumer'],
     takeIn: { key: 'consumer', ownSubject: CONSUMER_COMMIT, landed: 'Implement the library' },
@@ -281,6 +288,7 @@ export const SCENARIOS = Object.freeze({
       edit: [[...editSteps(ctx), done('Implement the library')]],
       spend: [[{ ...shell('echo spending'), costUsd: 1 }, longStep(ctx.longSec), done('Spend past the cap')]],
     }),
+    ending: { by: 'cap', cap: 'spend' },
     expect: {
       valid: true, scoredFrom: 'merged', truncated: true, truncatedWhy: /^cap: spend/, stoppedWhy: 'spend', runStopped: true, mergeExit: 0,
       passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 },
@@ -586,6 +594,7 @@ function judgePlanOnly(name, result) {
   want(typeof p.planningMs === 'number' && p.planningMs > 0, `the planning time is ${p.planningMs}`);
   want(result.recordedUsd === p.plannerUsd, `recordedUsd ${result.recordedUsd} is not the planner's ${p.plannerUsd}: something besides the planner spent`);
   want(result.metrics === null, 'a plan-only result holds run metrics');
+  want(result.ending?.by === 'not-run' && result.providerSwitches === null, `a plan-only result holds an ending or provider switches: ${JSON.stringify([result.ending, result.providerSwitches])}`);
   return f;
 }
 
@@ -642,6 +651,27 @@ export function judgeSupervision(want, sup) {
   return f;
 }
 
+/**
+ * What result.json says of how the arm stopped (`ending`) and of the upstream
+ * switches (`providerSwitches`): the fields are always there, and the ending
+ * is the one the scenario plays. The fake provider names no upstream, so
+ * the switches are read, from every attempt's log, and none is found.
+ */
+function judgeEnding(want, result) {
+  const f = [];
+  const end = result.ending;
+  if (!end || typeof end.by !== 'string') return ['result.json holds no ending'];
+  const sw = result.providerSwitches;
+  if (!sw || !(sw.attempts > 0) || sw.attemptsSwitched !== 0 || sw.switches !== 0) f.push(`providerSwitches is ${JSON.stringify(sw)}, wanted every attempt read and no switch`);
+  if (!want) return f;
+  for (const k of ['by', 'status', 'reason', 'cap']) if (k in want && end[k] !== want[k]) f.push(`ending.${k} is ${JSON.stringify(end[k])}, wanted ${JSON.stringify(want[k])}`);
+  if (want.calls) {
+    const m = end.modelCalls;
+    if (!m || !(m.used > 0) || !(m.limitPerAttempt > 0) || m.reachedLimit) f.push(`ending.modelCalls is ${JSON.stringify(m)}, wanted calls used against the step limit`);
+  } else if (end.modelCalls !== null) f.push(`ending.modelCalls is ${JSON.stringify(end.modelCalls)}, but only arm A reports its calls`);
+  return f;
+}
+
 /** The failures of one scenario's result.json against its expectations; empty when it passed. */
 export function judgeRehearsal(name, result) {
   if (!result) return ['no result.json'];
@@ -676,6 +706,7 @@ export function judgeRehearsal(name, result) {
     const base = result.baseline?.passed ?? null;
     want(passed !== null && passed === base, `${passed} passed, not the baseline's ${base}: work that never landed was scored`);
   }
+  f.push(...judgeEnding(scenario(name).ending, result));
   if (scenario(name).supervision) f.push(...judgeSupervision(scenario(name).supervision, result.metrics?.supervisor));
   if (e.testExcluded) {
     want((result.excluded ?? []).some((x) => /test/.test(x.path ?? '') && /test/.test(x.reason ?? '')), `no test file in excluded (${JSON.stringify(result.excluded ?? null)}): the edited test was scored`);

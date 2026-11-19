@@ -5,8 +5,9 @@ import { createChatCompletionsClient } from '../../../model/adapters/chatComplet
 import { BASE_REQUEST, failure, refusal, replay } from '../../../model/__tests__/replay';
 import { classifyRunnerStop, readUsageLimitReset } from '../../../runnerExit';
 import { defaultModelInfo } from '../models';
-import { OrdewellLoop, stepFailure, type LoopOptions } from '../loop';
+import { citesBudget, OrdewellLoop, stepFailure, type LoopOptions } from '../loop';
 import { scratch } from '../tools/__tests__/helpers';
+import type { ModelEvent } from '../../../model';
 import { call, eventsOf, fakeTaskTools, MemoryTranscriptStore, scriptedClient, STOP, type ScriptedStep } from './loopKit';
 
 function signals(): { stop: AbortSignal; hard: AbortSignal } {
@@ -116,6 +117,35 @@ describe('the budget notices', () => {
     expect(notes.get(39)).toMatch(/^\[Ordewell\] 2 model calls are left of the 40/);
     expect(notes.get(39)).toMatch(/what is done and what remains/);
     expect(notes.get(40)).toMatch(/last model call/);
+    // Each notice carries the exact count, so the model need not keep one.
+    expect(notes.get(33)).toContain('[calls: 32 of 40]');
+    expect(notes.get(39)).toContain('[calls: 38 of 40]');
+  });
+
+  it('sends the exact count every 50 calls, on the newest message only, so the model never keeps its own', async () => {
+    const { loop, client } = loopWith([...working(110), [STOP]], { stepLimit: 1000 });
+    await loop.runTurn('Work.', signals());
+
+    expect(client.requests).toHaveLength(111);
+    const notes = notesOf(client.requests);
+    expect([...notes.keys()]).toEqual([51, 101]);
+    expect(notes.get(51)).toBe('[calls: 50 of 1000]');
+    expect(notes.get(101)).toBe('[calls: 100 of 1000]');
+  });
+
+  it('changes nothing before the newest message, so each call reads the previous call\'s cached prefix', async () => {
+    const { loop, client } = loopWith([...working(110), [STOP]], { stepLimit: 1000 });
+    await loop.runTurn('Work.', signals());
+
+    for (let i = 1; i < client.requests.length; i++) {
+      const before = client.requests[i - 1]?.messages ?? [];
+      const after = client.requests[i]?.messages ?? [];
+      expect(after.length).toBeGreaterThan(before.length);
+      expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    }
+    // The count lines were among what each later call carried unchanged.
+    const last = client.requests.at(-1)?.messages ?? [];
+    expect(last.filter((m) => m.role === 'user' && 'text' in m && /^\[calls: /.test(m.text)).map((m) => ('text' in m ? m.text : ''))).toEqual(['[calls: 50 of 1000]', '[calls: 100 of 1000]']);
   });
 
   it('sends none once a report stands', async () => {
@@ -132,6 +162,112 @@ describe('the budget notices', () => {
     const { loop, client } = loopWith([...working(4), [call('end', 'task_complete', { status: 'blocked', summary: 'part done' }), STOP]], { stepLimit: 5 });
     await loop.runTurn('Work.', signals());
     expect([...notesOf(client.requests).keys()]).toEqual([5]);
+  });
+});
+
+describe('a completion that cites the budget early', () => {
+  const working = (steps: number): ScriptedStep[] => Array.from({ length: steps }, (_, i) => [call(`g${i}`, 'glob', { pattern: `${i}/*.md` }), STOP]);
+  const USAGE: ModelEvent = { type: 'usage', usage: { inputTokens: 100, outputTokens: 10 } };
+  const giveUp = (id: string, args: Record<string, unknown>): ScriptedStep => [call(id, 'task_complete', args), USAGE, STOP];
+  const statuses = (calls: readonly { args: unknown }[]) => calls.map((c) => (c.args as { status: string }).status);
+
+  it('cites the budget when a failed or blocked report gives the budget as why, in a phrase that names it', () => {
+    // The reasons three recorded attempts ended on, each with most of its calls unspent.
+    expect(citesBudget({ status: 'failed', summary: 'Partial.', reason: 'Budget exhausted before the done criterion held' })).toBe(true);
+    expect(citesBudget({ status: 'failed', summary: 'model-call budget exhausted' })).toBe(true);
+    expect(citesBudget({ status: 'blocked', summary: 'x', reason: 'scope exceeds the attempt budget' })).toBe(true);
+    expect(citesBudget({ status: 'blocked', summary: 'Too few model CALLS left.' })).toBe(true);
+    expect(citesBudget({ status: 'failed', summary: 'x', reason: 'about to hit the step limit' })).toBe(true);
+    expect(citesBudget({ status: 'failed', summary: 'My budget ran out.' })).toBe(true);
+    expect(citesBudget({ status: 'failed', summary: 'Partial; out of model calls.' })).toBe(true);
+    // Another status, other words, or the words inside others, are not.
+    expect(citesBudget({ status: 'done', summary: 'Budget code done.' })).toBe(false);
+    expect(citesBudget({ status: 'blocked', summary: 'The API is rate-limited.', reason: 'It recalls nothing.' })).toBe(false);
+    expect(citesBudget({ status: 'failed', summary: 'One call failed.' })).toBe(false);
+    expect(citesBudget({ status: 'failed', summary: 'x', findings: [{ title: 'budget' }] })).toBe(false);
+    // A check's verdict or a real block uses the same words for something else (review #382).
+    expect(citesBudget({ status: 'failed', summary: 'Confirmed 2 problems in the parser; steps to reproduce are in F1.' })).toBe(false);
+    expect(citesBudget({ status: 'failed', summary: 'The retry wrapper calls the endpoint twice on a 500.' })).toBe(false);
+    expect(citesBudget({ status: 'blocked', summary: 'Cannot install deps.', reason: 'The sandbox refuses all network calls.' })).toBe(false);
+    expect(citesBudget({ status: 'blocked', summary: 'x', reason: 'The provider rate limit is 0 for this key.' })).toBe(false);
+    expect(citesBudget({ status: 'failed', summary: 'The budget test in loop.test.ts still fails.' })).toBe(false);
+    expect(citesBudget('budget')).toBe(false);
+  });
+
+  // A report that names a budget, a limit or what is left, but not the attempt's own (review #382, round 2).
+  it.each([
+    ['steps that remain of the work', { status: 'failed', summary: 'x', reason: 'Two steps remain: the migration and the docs; the schema change breaks the old reader.' }],
+    ['steps left that need what is missing', { status: 'failed', summary: 'x', reason: 'The importer works; three steps left that need the vendor SDK, which is not in the workspace.' }],
+    ['calls left over in the code', { status: 'failed', summary: 'x', reason: 'Two calls remain to the deprecated fetchUser; the tests still fail on them.' }],
+    ['few calls left, not named the model\'s', { status: 'blocked', summary: 'Too few calls left.' }],
+    ['a provider\'s call limit', { status: 'blocked', summary: 'x', reason: 'The GitHub API call limit was hit (403, X-RateLimit-Remaining: 0); retry after 15:00.' }],
+    ['a bundle-size budget', { status: 'failed', summary: 'x', reason: 'The bundle-size budget is exhausted: main.js is 412 KB against 400 KB.' }],
+    ['a performance budget', { status: 'failed', summary: 'The performance budget is spent on the first paint.' }],
+    ['an error budget', { status: 'blocked', summary: 'x', reason: 'The error budget was exhausted this week; deploys are frozen.' }],
+  ])('does not cite the budget for %s', (_what, args) => {
+    expect(citesBudget(args)).toBe(false);
+  });
+
+  it('cites it for a check\'s verdict whose subject is the call budget, a shape it shares with a recorded give-up', () => {
+    // "the call budget answer" and "exceeds the attempt budget" are both a named budget with no word of its use;
+    // telling them apart takes the verbs around it. The answer leaves such a report free to be sent again.
+    expect(citesBudget({ status: 'failed', summary: 'x', reason: 'The call budget answer still swallows a check verdict: citesBudget matches it.' })).toBe(true);
+  });
+
+  it('records a check\'s failed verdict on its first call, whose words are not about the budget', async () => {
+    const verdict = { status: 'failed', summary: 'Confirmed: the handler calls save twice.', findings: [{ severity: 'major', title: 'double save' }] };
+    const { loop, taskTools } = loopWith([giveUp('v', verdict), [STOP]], { stepLimit: 1000 });
+    await loop.runTurn('Review.', signals());
+    expect(taskTools.calls.map((c) => c.args)).toEqual([verdict]);
+  });
+
+  it('is answered once with the real count, not recorded, and the turn goes on', async () => {
+    const early = { status: 'failed', summary: 'Out of room.', reason: 'Budget exhausted before the done criterion held' };
+    const { loop, client, taskTools, events } = loopWith(
+      [...working(5), giveUp('early', early), [glob('more'), STOP], [call('end', 'task_complete', { status: 'done', summary: 'ok' }), STOP], [STOP]],
+      { stepLimit: 1000 },
+    );
+    expect(await loop.runTurn('Work.', signals())).toEqual({ interrupted: false });
+
+    // The handler never saw it, and the model worked on to a report of its own.
+    expect(statuses(taskTools.calls)).toEqual(['done']);
+    expect(client.requests).toHaveLength(9);
+    const answer = eventsOf(events, 'tool_result').find((r) => r.id === 'early');
+    // It holds for a report that stopped for another reason too, so it asks for that one again rather than to go on.
+    expect(answer?.output).toBe(
+      '[Ordewell] Not recorded: if you stopped because of the call budget, it is not spent, so go on with the brief. '
+      + 'If you stopped for another reason, call task_complete again and that report is recorded.\n[calls: 6 of 1000]',
+    );
+    expect(answer?.success).toBe(false);
+    // The model reads the answer as the call's result in its next request.
+    expect(JSON.stringify(client.requests[6]?.messages.at(-1))).toContain('[calls: 6 of 1000]');
+    // Its step is billed like any other.
+    expect(eventsOf(events, 'usage')).toHaveLength(1);
+  });
+
+  it('is accepted as it is the second time in an attempt', async () => {
+    const first = { status: 'blocked', summary: 'Scope exceeds the attempt budget.' };
+    const second = { status: 'blocked', summary: 'Still too few model calls left.' };
+    const { loop, client, taskTools, events } = loopWith([giveUp('one', first), [glob('more'), STOP], giveUp('two', second), [STOP]], { stepLimit: 1000 });
+    await loop.runTurn('Work.', signals());
+
+    expect(taskTools.calls.map((c) => c.args)).toEqual([second]);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'two')).toMatchObject({ success: true });
+    expect(client.requests).toHaveLength(4);
+  });
+
+  it.each([
+    ['a blocked report that does not cite the budget', { status: 'blocked', summary: 'No credential.', reason: 'The AWS key is missing.' }, 10],
+    ['a done report that does', { status: 'done', summary: 'All 40 calls of the API are covered.' }, 10],
+    ['a budget-citing failure once the first notice is due', { status: 'failed', summary: 'Out of calls.', reason: 'model-call budget exhausted' }, 10],
+  ])('passes %s straight through', async (_what, args, limit) => {
+    // The 80% notice of a limit of 10 is due at 8 calls used; the report is the 9th call for the third case.
+    const lead = args.status === 'failed' ? working(8) : [];
+    const { loop, taskTools, events } = loopWith([...lead, giveUp('r', args), [STOP]], { stepLimit: limit });
+    await loop.runTurn('Work.', signals());
+
+    expect(taskTools.calls.map((c) => c.args)).toEqual([args]);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'r')).toMatchObject({ success: true, output: 'ok' });
   });
 });
 

@@ -192,3 +192,68 @@ describe('a retry\'s running-long threshold (ADR-0018 W1)', () => {
     expect(flags).toEqual([{ elapsedMs: 30 * MINUTE, thresholdMs: 30 * MINUTE }]);
   });
 });
+
+describe('the context of an attempt that continues a saved session (ADR-0018 W1)', () => {
+  const call = (session: FakeRunnerSession, contextTokens: number) =>
+    session.emitEvent({ type: 'usage', record: { source: 'claude', model: 'opus', contextTokens, contextWindow: 1_049_000 } });
+
+  async function setupFlagged() {
+    const h = setup();
+    h.orchestrator.loadPlan([plan()]);
+    const flags: Array<Pick<RunningLongEvent, 'reason' | 'contextThreshold' | 'contextTokens'>> = [];
+    h.orchestrator.subscribe({ onTaskRunningLong: ({ runningLong: { reason, contextThreshold, contextTokens } }) => flags.push({ reason, contextThreshold, contextTokens }) });
+    await h.orchestrator.forceStartTask('t1');
+    return { h, flags };
+  }
+
+  it('is the baseline: carried over past the threshold, the first flag waits for the next doubling above it', async () => {
+    const { h, flags } = await setupFlagged();
+    // 40% of 1049k is 419.6k: the first attempt passes it and is flagged.
+    call(h.sessions[0], 449_000);
+    expect(flags).toEqual([{ reason: 'context', contextThreshold: 419_600, contextTokens: 449_000 }]);
+    h.sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'one more case' });
+    h.sessions[0].emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.task('t1').status).toBe('failed'));
+    flags.length = 0;
+
+    await h.orchestrator.continueTask('t1', 'cover the empty case');
+    expect(h.sessions).toHaveLength(2);
+    call(h.sessions[1], 449_000);
+    call(h.sessions[1], 839_000);
+    expect(flags).toEqual([]);
+    call(h.sessions[1], 840_000);
+
+    expect(flags).toEqual([{ reason: 'context', contextThreshold: 839_200, contextTokens: 840_000 }]);
+    h.orchestrator.stop();
+  });
+
+  it('carried over under the threshold, is flagged at the threshold, as a fresh attempt is', async () => {
+    const { h, flags } = await setupFlagged();
+    call(h.sessions[0], 100_000);
+    h.sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'one more case' });
+    h.sessions[0].emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.task('t1').status).toBe('failed'));
+
+    await h.orchestrator.continueTask('t1', 'cover the empty case');
+    call(h.sessions[1], 120_000);
+    call(h.sessions[1], 420_000);
+
+    expect(flags).toEqual([{ reason: 'context', contextThreshold: 419_600, contextTokens: 420_000 }]);
+    h.orchestrator.stop();
+  });
+
+  it('is no baseline for a fresh retry: a context past the threshold at its first call is flagged', async () => {
+    const { h, flags } = await setupFlagged();
+    h.sessions[0].reportComplete({ status: 'failed', summary: '', reason: 'one more case' });
+    h.sessions[0].emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.task('t1').status).toBe('failed'));
+
+    await h.orchestrator.retryTask('t1');
+    await h.orchestrator.forceStartTask('t1');
+    expect(h.sessions).toHaveLength(2);
+    call(h.sessions[1], 449_000);
+
+    expect(flags).toEqual([{ reason: 'context', contextThreshold: 419_600, contextTokens: 449_000 }]);
+    h.orchestrator.stop();
+  });
+});
