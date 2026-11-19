@@ -8,6 +8,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A running change is told where a sibling's work lands, and how to take it
+  in.** A task's first message names the branch sibling work lands on and the
+  merge that brings it into the task's worktree; its diff, which a verdict
+  checks, is read from its fork point, so work taken in from a sibling, or a
+  revert's deletions, are not read as its own.
+- **A wide one-shot plan's roles are read and noted.** Ordewell reads which
+  tasks open, which fan out and which close a plan whose dependencies fan out
+  wide, and appends a short note to each role's brief. The plan review is
+  unchanged.
+- **OpenRouter calls prefer the upstream that served the last one**, and each
+  call's upstream is recorded in the task's usage.
+
+### Changed
+
+- **The supervisor narrows a task that failed part-way before retrying it.** A
+  retry's running-long threshold counts from its last attempt, a running-long
+  wake names the tasks blocked on a long one, and a message to a task that has
+  just been retried is refused with the retry's note named instead.
+
+### Fixed
+
+- **The built-in runner continues the turn when a reply writes its tool call
+  as text** instead of ending it.
+
 ## [0.14.3] - 2026-11-18
 
 ### Changed

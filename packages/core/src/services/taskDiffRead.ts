@@ -2,7 +2,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
-import { git, tryGit, type GitInvoker } from './gitExec';
+import { git, isAncestor, tryGit, type GitInvoker } from './gitExec';
 import { integratedIn } from './LandingLedger';
 import { stateRootOf } from './stateRoot';
 import { realPathOf } from '../utils/realPath';
@@ -238,8 +238,9 @@ export async function taskForkPoint(invoker: GitInvoker, cwd: string, common: re
   const base = found.ok ? found.stdout.trim() : '';
   if (!sha.test(base) || base === of.start) return of.start;
   if (of.landedTip) return base;
-  const past = await tryGit(invoker, cwd, [...common, 'merge-base', '--is-ancestor', of.start, base]);
-  return past.ok ? base : of.start;
+  // gitExec owns the ancestry query; this read's own git options ride along on it. An unanswered query keeps the recorded start, as a no does.
+  const reading: GitInvoker = { ...invoker, exec: (file, args, opts) => invoker.exec(file, [...common, ...args], opts) };
+  return (await isAncestor(reading, cwd, of.start, base)) === 'yes' ? base : of.start;
 }
 
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
