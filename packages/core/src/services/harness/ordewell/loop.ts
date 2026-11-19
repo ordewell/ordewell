@@ -670,19 +670,28 @@ function noticeAt(share: number, limit: number): number {
   return Math.max(1, Math.floor(limit * share));
 }
 
-/** The words a report that blames the budget uses; as whole words, so "rate-limited" or "recalls" is not one. */
-const BUDGET_WORDS = /\b(budget|calls|steps|limit)\b/i;
+/**
+ * The phrases a report that blames the budget uses. Phrases, not the bare
+ * words: a check's verdict ("calls save twice", "steps to reproduce") and a
+ * real block ("network calls", "rate limit") use those for something else.
+ */
+const BUDGET_PHRASES = [
+  /\b(?:attempt|call|step|model[- ]call|tool[- ]call)s?\s+budget\b/i,
+  /\bbudget\s+(?:is\s+|was\s+)?(?:exhausted|spent|used|ran\s+out|running\s+out|nearly|almost|left|remain\w*)/i,
+  /\bout\s+of\s+(?:the\s+)?(?:budget|(?:model\s+|tool\s+)?calls|steps)\b/i,
+  /\b(?:call|step)s?\s+(?:limit|left|remain\w*)\b/i,
+] as const;
 
 /**
  * Whether a `task_complete` call's arguments end the attempt as `failed` or
- * `blocked` and give the budget as why: one of BUDGET_WORDS in its reason or
+ * `blocked` and give the budget as why: one of BUDGET_PHRASES in its reason or
  * its summary, whatever their case.
  */
 export function citesBudget(args: unknown): boolean {
   if (typeof args !== 'object' || args === null) return false;
   const { status, reason, summary } = args as Record<string, unknown>;
   if (status !== 'failed' && status !== 'blocked') return false;
-  return [reason, summary].some((text) => typeof text === 'string' && BUDGET_WORDS.test(text));
+  return [reason, summary].some((text) => typeof text === 'string' && BUDGET_PHRASES.some((phrase) => phrase.test(text)));
 }
 
 function earlyGiveUpAnswer(used: number, limit: number): string {

@@ -267,9 +267,13 @@ is one runner per API provider, under the provider's own id and name.**
   exact count, `[calls: N of M]`, which also goes out alone every 50 calls, an
   appended message like the notices so the cached prefix holds: a model left to
   keep its own tally overestimated it and reported failed at 430 calls of 1000.
-  For the same reason a `failed` or `blocked` report whose reason or summary has
-  the word budget, calls, steps or limit, made before the 80% notice is due, is
-  not recorded but answered with the count, and the turn goes on; it is answered
+  For the same reason a `failed` or `blocked` report whose reason or summary
+  gives the budget as why, in a phrase that names it (a call or attempt budget,
+  budget exhausted, calls left, the step limit, out of calls), made before the
+  80% notice is due, is not recorded but answered with the count, and the turn
+  goes on. The bare words are not enough: a check's failed verdict ("calls save
+  twice", "steps to reproduce") and a real block ("network calls", "rate limit")
+  use them for something else, and are recorded as they are. It is answered
   once an attempt, so a second such report is recorded as it is. A step continued after
   a cut-off reply is a model call like any other: it counts against the limit,
   can carry a notice or the forced last call, and is compacted before like any
