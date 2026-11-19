@@ -3,8 +3,8 @@
 // the git history of its work: for arm B every landed task is a merge commit on
 // the run's integration branch (ordewell/<run>/integration), with the time it
 // landed; for arm A the task's branch holds the commits the agent made as it
-// went. This picks up to N points in time, takes the source at each commit
-// and scores it through the harness's own `materialize` and `scoreInFreshBox`
+// went. This picks N-1 points in time, and for arm B every landing after the
+// last slice besides, takes the source at each commit and scores it through the harness's own `materialize` and `scoreInFreshBox`
 // (drive.mjs), the same eval box and the same selection of the arm's non-test
 // source files as the run's final score: nothing here scores anything itself.
 // The final point is the run's own final tree, and it must equal result.json's
@@ -20,6 +20,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as L from './lib.mjs';
 import * as R from './rehearsal.mjs';
+import { fanOutShape } from './fanout.mjs';
 
 export const DEFAULT_POINTS = 8;
 export const DEFAULT_JOBS = 2;
@@ -29,11 +30,12 @@ const HELP = `Usage: node bench/commit0/timeline.mjs <run dir> --libs <libraries
   <run dir>             a finished run's directory: result.json, arm-workdir/ (its git history)
                         and workspace-ordewell/ (its session)
   --libs <file>         the libraries the run was made with (its image and test settings)
-  --points <n>          up to n points in time (default ${DEFAULT_POINTS}), evenly spaced over the run's
+  --points <n>          n - 1 points in time (default ${DEFAULT_POINTS}), evenly spaced over the run's
                         wall clock, each the newest commit at or before it; the final tree is always
-                        one, and for arm B so is the last landing
+                        one, and for arm B so is every landing after the last slice landed (the
+                        closing check's and what follows), on top of the n - 1
   --minutes <a,b,c>     the minutes after the run began to take, in place of --points; the final
-                        tree and arm B's last landing are still scored
+                        tree and arm B's landings from the closing check on are still scored
   --jobs <n>            containers at once (default ${DEFAULT_JOBS})
   --branch <ref>        the branch holding the run's work, when it is not the one found
 
@@ -125,19 +127,58 @@ export function runStartMs(runDir, result) {
 // --- Which points -----------------------------------------------------------
 
 /**
- * The commits to score. `commits` is `{sha, ms}`, oldest first, without the
- * stubs. Each target time (`minutes` after `t0Ms`, else `points` less what is
- * forced, spaced evenly over the run's length) takes the newest commit at or
- * before it, and a target before any commit takes none. The final commit is
- * always a point, and so is `lastLanding` where there is one. Points that name
- * one commit are one point: the answer is up to `points`, in time order.
+ * The plan a run's session saved (`{meta, plan}` in workspace-ordewell), the
+ * session `sessionId` names when result.json has one, else the first that
+ * holds a plan; null when the copy holds none.
  */
-export function timelinePoints({ commits, finalSha, lastLanding = null, t0Ms, endMs, points = DEFAULT_POINTS, minutes = null }) {
-  const forced = [...new Set([finalSha, lastLanding].filter(Boolean))];
+export function savedPlan(runDir, sessionId = null) {
+  const dir = path.join(runDir, 'workspace-ordewell', 'sessions');
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort(); } catch { /* the copy holds no session */ }
+  const plans = [];
+  for (const name of names) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      if (Array.isArray(saved?.plan?.tasks)) plans.push({ id: saved.meta?.id ?? null, plan: saved.plan });
+    } catch { /* a file that does not parse is not a session */ }
+  }
+  return (plans.find((p) => sessionId && p.id === sessionId) ?? plans[0])?.plan ?? null;
+}
+
+/**
+ * The landings that come after the last slice has landed: the closing check's
+ * and whatever follows it. The closing check waits for every slice (core's
+ * fan-out shape, fanout.mjs), so its first attempt starts after the last
+ * slice's landing, and a landing later than that start (to the second, the
+ * resolution of a commit's time) is its or a later one's. Empty where the plan
+ * has no closing check or its attempts carry no start time: the last landing
+ * is forced anyway.
+ */
+export function landingsAfterSlices({ commits, plan }) {
+  const closer = plan ? fanOutShape(plan).closers[0] : null;
+  const starts = (closer?.attemptUsage ?? []).map((u) => Date.parse(u?.startedAt)).filter(Number.isFinite);
+  if (!starts.length) return [];
+  const from = Math.floor(Math.min(...starts) / 1000) * 1000;
+  return commits.filter((c) => c.ms > from).map((c) => c.sha);
+}
+
+/**
+ * The commits to score. `commits` is `{sha, ms}`, oldest first, without the
+ * stubs. Each target time (`minutes` after `t0Ms`, else `points` less the
+ * final's own slot, spaced evenly over the run's length) takes the newest
+ * commit at or before it, and a target before any commit takes none. The
+ * final commit is always a point, and so is `lastLanding` where there is one,
+ * and every one of `afterSlices` (arm B's landings from the closing check on):
+ * these come on top, so `points` bounds only the evenly spaced part. Points
+ * that name one commit are one point: the answer is in time order.
+ */
+export function timelinePoints({ commits, finalSha, lastLanding = null, afterSlices = [], t0Ms, endMs, points = DEFAULT_POINTS, minutes = null }) {
+  const forced = [...new Set([finalSha, lastLanding, ...afterSlices].filter(Boolean))];
+  const spaced = Math.max(0, points - 1);
   const targets = minutes
     ? minutes.map((m) => ({ targetMin: m, at: t0Ms + m * 60_000 }))
-    : Array.from({ length: Math.max(0, points - forced.length) }, (_, i) => {
-      const at = t0Ms + ((i + 1) * (endMs - t0Ms)) / (Math.max(0, points - forced.length) + 1);
+    : Array.from({ length: spaced }, (_, i) => {
+      const at = t0Ms + ((i + 1) * (endMs - t0Ms)) / (spaced + 1);
       return { targetMin: (at - t0Ms) / 60_000, at };
     });
   const byTime = new Map();
@@ -151,6 +192,21 @@ export function timelinePoints({ commits, finalSha, lastLanding = null, t0Ms, en
     ...forced.map((sha) => ({ sha, kind: sha === finalSha ? 'final' : 'landing', targetMin: null })),
   ].sort((a, b) => msOf(a.sha) - msOf(b.sha) || (a.kind === 'final') - (b.kind === 'final'));
   return picked.map((p) => ({ ...p, atMin: Number.isFinite(msOf(p.sha)) ? round1((msOf(p.sha) - t0Ms) / 60_000) : null }));
+}
+
+/**
+ * A run's history, its start and the points to score, from its directory.
+ * `arm` is the arm's id; `result` is its result.json.
+ */
+export function chooseTimelinePoints(runDir, { arm, result = null, points = DEFAULT_POINTS, minutes = null, branch = null }) {
+  runDir = path.resolve(runDir);
+  result ??= JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8'));
+  const history = runHistory(runDir, { arm, branch });
+  const t0Ms = runStartMs(runDir, result);
+  const endMs = t0Ms + (result.wallClockMs ?? 0);
+  const afterSlices = arm === 'B' ? landingsAfterSlices({ commits: history.commits, plan: savedPlan(runDir, result.sessionId) }) : [];
+  const chosen = timelinePoints({ commits: history.commits, finalSha: history.final, lastLanding: history.lastLanding, afterSlices, t0Ms, endMs, points, minutes });
+  return { history, t0Ms, chosen };
 }
 
 const round1 = (x) => Math.round(x * 10) / 10;
@@ -189,10 +245,7 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
   const raw = libraries.find((l) => l.name === result.library);
   if (!raw) throw new Error(`the run's library ${result.library} is not in the libraries file`);
   const arm = result.arm === 'A' ? L.ARMS.A : L.ARMS.B;
-  const history = runHistory(runDir, { arm: arm.id, branch });
-  const t0Ms = runStartMs(runDir, result);
-  const endMs = t0Ms + (result.wallClockMs ?? 0);
-  const chosen = timelinePoints({ commits: history.commits, finalSha: history.final, lastLanding: history.lastLanding, t0Ms, endMs, points, minutes });
+  const { history, t0Ms, chosen } = chooseTimelinePoints(runDir, { arm: arm.id, result, points, minutes, branch });
   const d = driver ?? await loadDriver();
   const settings = L.armSettings(arm, { parallel: result.parallel, cpus: result.cpus, memory: result.memory, capUsd: result.capUsd, wallCapMs: result.wallCapMs });
   const lib = { ...L.validateLibrary(raw), flatTree: history.armTree, flatCommit: history.root };
