@@ -633,10 +633,19 @@ describe('Supervisor', () => {
     const whole = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn().brief?.whole ?? '';
 
     expect(whole).toMatch(/report shows part of its brief working and committed, with evidence that the rest cannot be done from what the workspace holds, do not retry the same goal/);
-    expect(whole).toMatch(/edit_plan it so its done criterion is what works, name the rest as a follow-up task or in the task that checks the whole, then retry it/);
+    expect(whole).toMatch(/edit_plan it so its done criterion is what works, then retry it/);
+    expect(whole).not.toMatch(/name the rest as a follow-up task or in the task that checks the whole/);
     expect(whole).toMatch(/Never give a retry a done criterion its own limits cannot meet/);
     expect(whole).toMatch(/nor call the rest solvable without evidence from the report/);
     expect(whole).toMatch(/The verdict is still its runner's task_complete, and nothing lands without a pass/);
+  });
+
+  it('tells a wake-up turn at Act that a remainder shown undoable is a known gap with no task, and adds none once the run has ended (ADR-0029)', () => {
+    const whole = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn().brief?.whole ?? '';
+
+    expect(whole).toMatch(/A rest the report shows cannot be done gets no task: record it as a known gap in the brief of the task that checks the whole and in your message to the user/);
+    expect(whole).toMatch(/A follow-up task is only for a rest that can be done, and gets only that scope/);
+    expect(whole).toMatch(/Once the run's last task has ended, add no task unless new evidence makes its goal reachable/);
   });
 
   it('tells a wake-up turn at Act that it answers checkpoints, and leaves the ones that need the user\'s judgement to them', () => {

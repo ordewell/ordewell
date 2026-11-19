@@ -1176,7 +1176,8 @@ same task, that attempt's running time), doubled after each flag, whose own runn
 compacted its context by itself, or whose context first reached 40% of its effective
 window (the smaller of the model's and a compaction window in force; see *Task
 compaction start*), never below 150k tokens, and again at each doubling of that
-below the window. Time waiting on a
+below the window; an attempt that continues a saved session counts only the
+doublings above the context it started with. Time waiting on a
 person is left out of the running time. It
 carries the running time, the threshold and the task or attempt it came from,
 the live and peak context, the model's window and the compactions so far, and
