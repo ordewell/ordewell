@@ -108,6 +108,10 @@ export interface ModelUsage {
   reasoningTokens?: number;
   /** Only a provider's own figure (OpenRouter's); never a price-table estimate. */
   cost?: { amount: number; currency: string };
+  /** The upstream an aggregator (OpenRouter) routed the call to, by the name it reports. */
+  provider?: string;
+  /** The aggregator's id for the call, which its own generation lookup takes. */
+  generationId?: string;
 }
 
 export type FinishReason = 'stop' | 'tool-calls' | 'length' | 'content-filter';

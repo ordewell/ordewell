@@ -3,7 +3,7 @@ import {
   addTaskToPlan, removeTaskFromPlan, updateTaskInPlan,
   releaseMadeManual, runsAsOps,
 } from '../models/Task';
-import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type CompactionPoint, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
+import { startAttemptUsage, addAttemptUsage, endAttemptUsage, type AttemptOutcome, type CompactionPoint, type RunnerSessionCost, type UsageRecord } from '../models/Usage';
 import { sessionOwner } from './continuation';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { SkipOrigin } from '../models/SkipOrigin';
@@ -494,6 +494,11 @@ export class PlanStore {
   endAttemptUsage(id: string, attempt: number, now: string, runnerSessionCost?: RunnerSessionCost, sessionId?: string, runningMs?: number): void {
     const task = this.edit(id);
     if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? endAttemptUsage(usage, now, runnerSessionCost, sessionId, runningMs) : usage);
+  }
+
+  setAttemptOutcome(id: string, attempt: number, outcome: AttemptOutcome): void {
+    const task = this.edit(id);
+    if (task?.attemptUsage) task.attemptUsage = task.attemptUsage.map((usage) => usage.attempt === attempt ? { ...usage, outcome } : usage);
   }
 
   setTaskAttemptSkills(id: string, skills: Task['attemptSkills']): void {

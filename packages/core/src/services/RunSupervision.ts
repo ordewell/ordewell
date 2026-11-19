@@ -679,7 +679,7 @@ export class RunSupervision {
     return undefined;
   }
 
-  /** How one run update reads the plan: `#3 "Title"` for a task, and what a failure blocks, each walked once. */
+  /** How one run update reads the plan: `#3 "Title"` for a task, and what a task blocks, each walked once. */
   private digestReader(): DigestReader {
     const plan = [...this.host.tasks()];
     let names: Map<string, string> | undefined;
@@ -689,7 +689,7 @@ export class RunSupervision {
         names ??= new Map(flattenTasksWithParents(plan).map(({ task, ref }) => [task.id, `${ref} "${task.title}"`]));
         return names.get(taskId) ?? taskId;
       },
-      blockedBy: (failedId) => {
+      blockedBy: (id) => {
         if (!blocked) {
           blocked = new Map();
           for (const [taskId, failures] of blockingFailures(plan)) {
@@ -700,7 +700,11 @@ export class RunSupervision {
             }
           }
         }
-        return blocked.get(failedId) ?? [];
+        const found = blocked.get(id);
+        if (found) return found;
+        // What a task still at work holds back is what the same rule would block were it to fail.
+        const failed = (tasks: readonly Task[]): Task[] => tasks.map((t) => t.id === id ? { ...t, status: 'failed' } : t.subtasks ? { ...t, subtasks: failed(t.subtasks) } : t);
+        return [...blockingFailures(failed(plan))].flatMap(([taskId, failures]) => failures.includes(id) ? [taskId] : []);
       },
     };
   }

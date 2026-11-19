@@ -233,7 +233,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   is the exception: it carries its facts whole, up to 360 characters, with the context measured against the window the task
   compacts at where Ordewell sets one and the model's window beside it ("context 16k of a 400k compaction
   window (model window 1000k)"), or, for one its context raised, the size it passed ("context 412k
-  of a 1000k window, past 400k"), and the digest says once,
+  of a 1000k window, past 400k"), then, as a failure's line does, the tasks it blocks, by the same
+  rule read as though it had failed, subtasks included, and none when it blocks nothing. The digest says once,
   after the attention lines, what the supervisor can do about one, so the planner's system prompt
   does not grow. What woke the planner goes
   first, whole items only. Overflow becomes counts and a pointer: `task_query` reads the rest. The
@@ -511,3 +512,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-17 — R4: `failure_standing` goes with no merge window, and a loop's check between rounds raises none.
 - 2026-11-18 — R4: the closing turn raises `failure_standing` too, for every task it left failed or held with work waiting, once per failure, and that wake holds `run_concluded` until its turn is over.
 - 2026-11-18 — R4: the closing turn's `failure_standing` is judged once its retry is over, and none is raised after the user's Stop of the closing turn or its retry.
+- 2026-11-18 — R5: a `running_long` line names the tasks it blocks, by the rule a failure's line uses as though it had failed, subtasks included, and nothing when it blocks nothing.

@@ -70,6 +70,13 @@ describe('OrdewellLoop', () => {
     expect(store.entries.some((entry) => entry.kind === 'usage')).toBe(true);
   });
 
+  it('names in its usage record the upstream that served the call, as the adapter reported it (ADR-0070)', async () => {
+    const { loop, events } = loopWith([[{ type: 'text-delta', text: 'Done.' }, { type: 'usage', usage: { inputTokens: 9, outputTokens: 4, provider: 'DeepInfra', generationId: 'gen-1' } }, STOP]]);
+    await loop.runTurn('Work.', signals().both);
+
+    expect(eventsOf(events, 'usage')[0]?.record).toMatchObject({ provider: 'DeepInfra', generationId: 'gen-1' });
+  });
+
   it('rebuilds every request from the transcript, with the same tools on every step', async () => {
     const { loop, client, worktree } = loopWith([[call('c1', 'read', { path: 'notes.txt' }), STOP], [{ type: 'text-delta', text: 'Read it.' }, STOP]]);
     writeFileSync(path.join(worktree, 'notes.txt'), 'first line\n');

@@ -22,6 +22,8 @@ describe('landingMessage', () => {
   it('names a rescue and the merge that restores it for the task, with no stated body', () => {
     expect(landingMessage('rescue', stated)).toBe('WIP: Greet the user on start\n\nWork left uncommitted when its worktree was removed, kept so that nothing is lost.');
     expect(landingMessage('restore-merge', stated)).toBe('Merge: Greet the user on start (resume its kept work)');
+    // A running task's merge of what landed beside it: no body, as a repair's has none.
+    expect(landingMessage('take-in', stated)).toBe('Merge: Greet the user on start (take in landed work)');
   });
 
   it('falls back to the first line of the title when no commit was stated', () => {
@@ -49,7 +51,7 @@ describe('landingMessage with the Planned-with trailer', () => {
 
   const trailerOf = (message: string): string => execFileSync('git', ['interpret-trailers', '--parse'], { input: message, encoding: 'utf8' });
 
-  it.each(['work', 'merge', 'repair-merge', 'rescue', 'restore-merge'] as const)('ends a %s message with the trailer as its own paragraph', (kind) => {
+  it.each(['work', 'merge', 'repair-merge', 'rescue', 'restore-merge', 'take-in'] as const)('ends a %s message with the trailer as its own paragraph', (kind) => {
     const message = landingMessage(kind, stated, true);
     expect(message.endsWith('\n\nPlanned-with: Ordewell')).toBe(true);
     expect(trailerOf(message)).toBe('Planned-with: Ordewell\n');

@@ -106,6 +106,28 @@ describe('the supervisor at Watch: what wakes it', () => {
     });
   });
 
+  it('names what a task running long holds back, subtasks included, and nothing for one that holds nothing back (ADR-0057 R5)', async () => {
+    const env = await supervised([
+      task('t1', 1),
+      task('t2', 2, { dependencies: ['t1'] }),
+      task('t3', 3, { dependencies: ['t2'], subtasks: [task('t31', 1)] }),
+      task('t4', 4),
+    ]);
+    await settled();
+
+    // Both keep talking, so neither goes quiet and wakes it first.
+    for (let ran = 0; ran < 30 * 60_000 + HELD_MAX_AGE_MS; ran += IDLE_TIMEOUT_MS / 2) {
+      env.run.of('t1').emitOutput('working\n');
+      env.run.of('t4').emitOutput('working\n');
+      await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS / 2);
+    }
+
+    await until(() => env.planner.calls.length === 1);
+    const lines = env.planner.calls[0].message.split('\n');
+    expect(lines.find((l) => l.startsWith('- task #1 '))).toMatch(/^- task #1 "Task t1" has run long: [^\n]*; it blocks tasks #2 "Task t2", #3 "Task t3" and #3\.1 "Task t31"$/);
+    expect(lines.find((l) => l.startsWith('- task #4 '))).toMatch(/^- task #4 "Task t4" has run long: [^;]*\)$/);
+  });
+
   it('names the tasks a failure blocks, and counts them when the run finishes (ADR-0034)', async () => {
     const env = await supervised([task('t1', 1), task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t2'] })]);
 

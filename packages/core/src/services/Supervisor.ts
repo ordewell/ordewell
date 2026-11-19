@@ -122,7 +122,7 @@ export interface SupervisorHost {
 export interface DigestReader {
   /** How a digest names a task: `#3 "Title"`. */
   describe(taskId: string): string;
-  /** The tasks a failed task blocks now, through their dependencies (ADR-0034). */
+  /** The tasks a failed task blocks now, through their dependencies (ADR-0034); for one still at work, those its failure would. */
   blockedBy(taskId: string): string[];
 }
 
@@ -691,6 +691,7 @@ function actBrief(readBudget: number, retryLimit: number): WakeBrief {
       'A task waiting at a checkpoint is answered with answer_checkpoint: approve and it goes on, or reject with a reason, which the runner reads and acts on. A checkpoint that asks for the user\'s judgement on an irreversible or outward effect (a deletion, a push, a payment, a message to someone) is theirs: escalate it to the user rather than approving it. Leave it waiting and tell them what it asks and why you did not answer. When you reject, give the reason the runner should act on.',
       readsLine(readBudget),
       'To run a failed or stopped task again with a change, call retry_task from "fresh" with a message: your note for the new attempt, saying what to do differently, which its runner reads with its brief. To change the task itself, call edit_plan and then retry_task in the same reply: the edit is in the plan as edit_plan answers, so the retry runs it as edited, and an edit alone starts nothing.',
+      'When a failed task\'s report shows part of its brief working and committed, with evidence that the rest cannot be done from what the workspace holds, do not retry the same goal: edit_plan it so its done criterion is what works, name the rest as a follow-up task or in the task that checks the whole, then retry it. Never give a retry a done criterion its own limits cannot meet, nor call the rest solvable without evidence from the report. The verdict is still its runner\'s task_complete, and nothing lands without a pass.',
       'A task you stop stays on hold, and every task that depends on it waits, until it is retried or skipped: a stop alone moves nothing on. To change a stopped task\'s prompt and run it again, call edit_plan and then retry it in the same reply.',
       'A task paused on a usage limit can be resumed early with from "session" once the user says the limit has been reset.',
       `Loop guards hold you: you may retry one task up to ${retryLimit} times this run, and a skip of a task you retried counts as one more; a retry after a failure must change its prompt or model, or carry a new note; you may not re-add a task you removed or undo an edit of your own. A refused call says why and what would be accepted. When a guard stops you, escalate to the user rather than trying again.`,
@@ -841,9 +842,9 @@ function overflowLine(left: readonly DigestItem[]): string {
 
 function attentionItem(event: RunEvent, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[]): DigestItem {
   // Read as the update goes out: a retry that passed since has lifted the block.
-  const blocked = event.kind === 'task_failed' && event.taskId !== undefined ? blockedBy(event.taskId) : [];
+  const blocked = (event.kind === 'task_failed' || event.kind === 'running_long') && event.taskId !== undefined ? blockedBy(event.taskId) : [];
   const line = attentionLine(event, describe, blocked);
-  // A failure holding work back is why the wake came, whatever else it was held for.
+  // A task holding work back is why the wake came, whatever else it was held for.
   if (!isHeldEvent(event) || blocked.length > 0) return { kind: event.kind, rank: 0, line: `- ${line}` };
   return { kind: event.kind, rank: 1, line: `- ${cut(line, (event.kind === 'running_long' ? RUNNING_LONG_CHARS : RIDE_ALONG_CHARS) - 2)}` };
 }
@@ -853,15 +854,12 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
   const detail = event.detail ? brief(event.detail) : '';
   const colon = detail ? `: ${detail}` : '';
   switch (event.kind) {
-    case 'task_failed': {
-      const blocks = blocked.length === 0 ? '' : `; it blocks ${blocked.length === 1 ? 'task' : 'tasks'} ${namedFirst(blocked, describe)}`;
-      return `${task} failed${colon}${blocks}`;
-    }
+    case 'task_failed': return `${task} failed${colon}${blocks(blocked, describe)}`;
     case 'waiting_input': return `${task} is waiting for input${colon}`;
     case 'waiting_approval': return `${task} is waiting for approval${colon}`;
     case 'approval_denied': return `${task}'s runner asked for something nobody here may allow, and was denied${colon}`;
     case 'task_idle': return `${task} has gone quiet${detail ? ` (${detail})` : ''}`;
-    case 'running_long': return runningLongLine(task, event.runningLong, describe);
+    case 'running_long': return `${runningLongLine(task, event.runningLong, describe)}${blocks(blocked, describe)}`;
     case 'landing_conflict': return `${task} finished, but its work conflicts and could not land${colon}`;
     // Not a conflict: no repair lands it, only fixing what git refused. The fix is said whole, outside the cut detail.
     case 'landing_failed': {
@@ -893,6 +891,10 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
   }
 }
 
+function blocks(blocked: readonly string[], describe: (taskId: string) => string): string {
+  return blocked.length === 0 ? '' : `; it blocks ${blocked.length === 1 ? 'task' : 'tasks'} ${namedFirst(blocked, describe)}`;
+}
+
 /** The facts of a running-long flag, worded for the supervisor to weigh (ADR-0018 W1). */
 function runningLongLine(task: string, facts: RunningLongEvent | undefined, describe: (taskId: string) => string): string {
   if (!facts) return `${task} has run long`;
@@ -913,10 +915,13 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
   }
-  const base = facts.basis ? facts.basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
-  const from = facts.basis
-    ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(facts.basis.runningMs)} task ${describe(facts.basis.taskId)} passed in`
-    : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
+  const { basis, retryOf } = facts;
+  const base = retryOf ? retryOf.runningMs : basis ? basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
+  const from = retryOf
+    ? `the ${formatElapsed(retryOf.runningMs)} attempt ${retryOf.attempt} ran before it ${retryOf.outcome === 'failed' ? 'failed' : 'was stopped'}`
+    : basis
+      ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(basis.runningMs)} task ${describe(basis.taskId)} passed in`
+      : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
   const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
   return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${from}${doubled})${context}${compacted}`;
 }

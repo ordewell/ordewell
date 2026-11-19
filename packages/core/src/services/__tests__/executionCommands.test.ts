@@ -609,6 +609,38 @@ describe('the command seam: message_task', () => {
   });
 });
 
+describe('the command seam: message_task to a retry not started yet', () => {
+  const ACT: ExecutionActor = { kind: 'supervisor', level: 'act' };
+
+  it('refuses a retry waiting for a slot, sending it to edit_plan, since a second retry_task with a note is refused too', async () => {
+    // One slot, taken by t2 once t1 failed: the retry waits for it.
+    const env = setup({ maxParallel: 1 });
+    env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    env.latest('t1').reportComplete({ status: 'failed', summary: '', reason: 'broke' });
+    await vi.waitFor(() => expect(env.spawned('t2')).toHaveLength(1));
+    expect(await env.run({ command: 'retry_task', task: 't1', from: 'fresh', message: 'narrow it' }, ACT)).toMatchObject({ ok: true });
+    expect(env.spawned('t1')).toHaveLength(1);
+
+    expect(await env.run({ command: 'message_task', task: 't1', text: 'cap the search' }, ACT)).toEqual({
+      ok: false, outcome: 'refused',
+      message: 'Task #1 "Task t1" has not started its next attempt yet, so there is no turn to message. It is already retried, and its runner reads its prompt with its brief: change the prompt with edit_plan before it starts.',
+    });
+    expect(await env.run({ command: 'retry_task', task: 't1', from: 'fresh', message: 'cap the search' }, ACT)).toMatchObject({ ok: false, outcome: 'refused' });
+  });
+
+  it('refuses a stopped task, sending the note to retry_task, which takes it', async () => {
+    const env = await running();
+    expect(await env.run({ command: 'stop_task', task: 't1' }, ACT)).toMatchObject({ ok: true });
+
+    expect(await env.run({ command: 'message_task', task: 't1', text: 'cap the search' }, ACT)).toEqual({
+      ok: false, outcome: 'refused',
+      message: 'Task #1 "Task t1" has not started its next attempt yet, so there is no turn to message. Its runner reads retry_task\'s message with its brief: give a note there, in the retry.',
+    });
+    expect(await env.run({ command: 'retry_task', task: 't1', from: 'fresh', message: 'cap the search' }, ACT)).toMatchObject({ ok: true });
+  });
+});
+
 describe('the command seam: answer_approval never allows', () => {
   async function asking() {
     const env = await running();
@@ -1438,3 +1470,4 @@ describe('the command seam\'s extension points', () => {
   });
 
 });
+

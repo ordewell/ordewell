@@ -82,6 +82,11 @@ describe('usageRecordOf', () => {
     expect(usageRecordOf('openai', 'm', {})).toBeUndefined();
     expect(usageRecordOf('openai', 'm', undefined)).toBeUndefined();
   });
+
+  it('keeps the upstream an aggregator named and its generation id, which measure nothing alone', () => {
+    expect(usageRecordOf('openrouter', 'm', { inputTokens: 10, provider: 'DeepInfra', generationId: 'gen-1' })).toMatchObject({ provider: 'DeepInfra', generationId: 'gen-1' });
+    expect(usageRecordOf('openrouter', 'm', { provider: 'DeepInfra', generationId: 'gen-1' })).toBeUndefined();
+  });
 });
 
 describe('each provider by its dialect', () => {

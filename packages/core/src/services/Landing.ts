@@ -233,6 +233,11 @@ export class Landing {
     });
   }
 
+  /** The message of the merge a running task writes to take in what landed beside it (ADR-0013), with the trailer as the user set it now. */
+  takeInMessage(task: Task): string {
+    return landingMessage('take-in', task, this.plannedWith());
+  }
+
   /** What a repair is asked to do; read once `reopen` has recorded the tips it must bring in. */
   repairPrompt(task: Task): string {
     this.runs.requireRun();

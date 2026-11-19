@@ -233,6 +233,7 @@ paid run, and again after any change to `drive.mjs`, `lib.mjs` or `batch.mjs`:
 npm run build
 node bench/commit0/drive.mjs --sweep
 node bench/commit0/rehearse.mjs --libs <libraries.json> [--only tlslite-ng] [--scenario a-done,b-cap] [--ordewell-root <dir>]
+node bench/commit0/rehearse.mjs --libs <libraries.json> --pairs <libA,libB> [--cpus 2 --memory 4g]   # the pairs and batch.json, below
 ```
 
 `--ordewell-root` is `batch.mjs`'s: the driver refuses a tree with tracked changes
@@ -257,7 +258,7 @@ The scripted agent's edits are the reference source (copied into the box after
 the leak probe has found it out of reach), a new module inside the library that
 the package imports, and an edit to a test file. Every scenario checks the
 fields its `result.json` holds. Each one also checks that its `batch.json`
-holds its one run, that `results.jsonl` did not grow, that the fake played the
+holds its one run and is marked finished (the batch's last write), that `results.jsonl` did not grow, that the fake played the
 last scripted step of every attempt the scenario needs, and that no container
 or network of the bench is left behind:
 
@@ -268,9 +269,30 @@ or network of the bench is left behind:
 | `a-stall` | A | the task makes the edits, then asks a checkpoint that nobody answers | ended by the stall rule (`stalled: waiting on checkpoint`), not by a cap; never complete; the attempt cut short; scored from the task's unlanded worktree; more passed than the baseline |
 | `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint`; `metrics.supervisor` counts exactly those two acts and no wake for a failure the closing turn left |
 | `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it, at the closing turn and again at the second wake core raises for the failure left standing | ended by the settle rule with both tasks held open, which the stall record names, since nobody is waited on; never complete; scored from merged work, at the baseline, since nothing landed; the supervisor said it left the task; `metrics.supervisor` holds no act but words, and exactly one wake for the failure the closing turn left (never a third) |
-| `b-edit-retry` | B | task 1 fails; the supervisor's closing turn edits it (a reply with task ops, as the built-in planner has no `edit_plan` tool) and retries nothing; the second wake, for the failure left standing, retries it; the run goes on to its end | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; `metrics.supervisor` counts `plan_edit` then `retry_task`, the retry after the closing wake, and one wake for the failure left standing |
+| `b-edit-retry` | B | task 1 fails; the supervisor's closing turn edits it (a reply with task ops, as the built-in planner has no `edit_plan` tool) and retries nothing; the second wake, for the failure left standing, retries it; the run goes on to its end | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; `metrics.supervisor` counts `plan_edit` then `retry_task`, the retry after the closing wake, and one wake for the failure left standing; the closing task ends done with a finding, and its note file is in the merged work |
+| `b-take-in` | B | two tasks side by side: the producer makes the edits and reports done; the consumer runs a long step so that the producer lands, writes a note and commits it, then runs the merge command its own first message gives (the fake reads it out of that message), checks the producer's module is in its worktree, and reports done | the consumer's first message holds the `## Work landing beside yours` block and a command to take the work in with; the commit, the merge and the check each exited 0; the run's integration branch holds a two-parent `Merge: ... (take in landed work)` commit; not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the test edit excluded |
 | `b-plan` | B, `--plan-only` | the planner returns a six-task plan with a research task, three changes, an ops task and a script that checks a loop; nothing else is scripted | marked `planOnly` and never valid; the shape the plan has (6 tasks, chain of 4, widest level 2, 6 edges, one gate, one loop check); a priced planner and a planning time; no `run` or `merge` step, no score, no tests; `plan.json` and `plan-saved.json` in the run's directory and no `arm-workdir/`; the fake heard no runner and no supervisor; `plans.jsonl` did not grow |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
+
+`b-take-in` proves, in the real box, that the built-in runner's shell lets a task
+run the merge its first message gives and that the merge lands: the fake reads
+the command out of that message (a step with `fromPrompt`), so a change to the
+sentence that carries it, or to its merge message, fails the scenario. The
+consumer commits a note of its own before it takes the work in, as the message
+tells it to: with nothing of its own the merge is a fast-forward and makes no
+commit. `ordewell merge` folds the integration branch into the workdir's own
+and deletes it, so the judge reads the merged history from `HEAD`.
+
+`--pairs <libA,libB>` adds one batch of both arms of two libraries at `--jobs 2`,
+on one scenario (`--pair-scenario`, default `a-done`, whose script only arm A
+plays: what it proves is the schedule and the record, not a score). It checks
+that each library's A and B started together and that the second library's pair
+started only after both of the first's had ended, that `batch.json` is finished
+and whole (no half-written file beside it) with a result directory for every
+run and no key reading, that `results.jsonl` did not grow, and that nothing is
+left behind. What a stop cuts in `batch.json` (a key reading after each run)
+needs a key, so a rehearsal cannot cover it; `commit0.test.mjs` covers it with
+a drive that stands in for the real one.
 
 `npm run test:bench` runs the scripts' own logic and never starts the Docker
 rehearsal. `ORDEWELL_COMMIT0_REHEARSAL=<libraries.json>` (with
@@ -414,7 +436,15 @@ this arm short of its pair's cap, an allowed stale dist); the arm's `supervisorL
 `patches`, each with the worktree or branch it came from and whether it was
 scored (`arm.patch` is always the scored diff); `evalBox: 'fresh'`,
 `excluded` (`[{path, reason}]`) and `needsInspection`; and
-`staleDistAllowed`. A stub
+`staleDistAllowed`. Of the run itself, `result.json` also holds:
+
+| Field | |
+| --- | --- |
+| `planReview` | arm B's plan review, read from the `chain review: N -> M, kept; K tasks changed` line of the session's research log (the session keeps no structured field for it): `firstChain` (the longest chain as the planner first wrote it), `reviewedChain` (null when the review failed or was refused), `tasksChanged`, `kept` and `outcome`. Null when the log holds no such line (a chain under the review's minimum, or arm A) |
+| `metrics.perTask[].attempts[].runningMs` | an attempt a stop cut has a running clock of 0; its `wallTimeMs` is then its running time, and the attempt says `runningFrom: 'wallTimeMs'` (that time includes any wait on a person) |
+| `metrics.calls` | from the attempts' logs: `calls`, `byUpstream` (the `provider` of each of the built-in runner's usage records; `unreported` for one without it) and `coldAfterCall`: calls billed with under `coldShare` (5%) of their input cached straight after another call of the same attempt (a subagent's calls are counted, never judged). Null without the logs |
+
+A stub
 baseline that collects nothing (networkx's and sphinx's stubs do not import)
 is recorded as `baseline: {collected: 0, reason}`, not failed. Its offline
 tests are `bench/commit0/commit0.test.mjs`.
@@ -470,9 +500,43 @@ When the batch budget is met, every run stops through its own stop path. On
 SIGINT or SIGTERM the batch passes the signal to its running runs and starts
 none of those still queued. The
 runs and `batch.json` go in `runs/batch-<time>[-<seed>]/`. `batch.json` holds
-the key's usage before and after, the recorded sum and the gap. When runs
+the key's usage before and after, the recorded sum and the gap. It is written
+whole (a rename, never in place) when the batch starts and after every run
+ends, with `finished: false` until the last write, and `keyReadings` holds the
+key's usage as read at the start and after each run when a key is present, so a
+host stop loses at most the runs that were going. With both arms and `--jobs`
+2 or more, a library's A and B start together, and the next library's pair
+starts only when both have ended (`--jobs 4` takes two libraries at a time). When runs
 overlapped, a run's `billedUsd` is null and `billedSource` says why; a run
 alone keeps its key delta.
+
+### Score over time
+
+A finished run keeps the git history of its work, so its score can be read at
+earlier points afterwards, with no key and no model call. For arm B every landed
+task is a merge commit on `ordewell/<run>/integration`, with the time it
+landed; for arm A the task's branch (`ordewell/<run>/<task>`) holds the commits
+the agent made as it went:
+
+```bash
+node bench/commit0/timeline.mjs <run dir> --libs <libraries.json> [--points 8 | --minutes 20,40,60] [--jobs 2] [--branch <ref>]
+```
+
+It picks up to `--points` points (default 8) evenly in time over the run's wall
+clock, each the newest commit at or before it, or the minutes after the run
+began (the session's creation) that `--minutes` lists. The final tree is always
+a point, and for arm B so is the last landing. Each point's source is written
+out by the harness's own `materialize` and scored by its own
+`scoreInFreshBox` (`drive.mjs` exports both and runs nothing when loaded; it is
+then always a dry run), in a fresh box on no network, with no key: any key in the
+environment is removed first. At most `--jobs` containers run at once. It
+writes `timeline.json` into the run directory (`timeline/<point>/` holds each
+point's `score.json`, `arm.patch` and `tests.log`). The final point must score
+as `result.json` does (passed, failed, errors); when it does not, the timeline
+says `verified: false` and why, and the exit is non-zero, as it is when a point
+could not be scored. `commit0.test.mjs` tests the choice of points and the
+commit-to-time mapping on a repository it builds, and the container call
+through a fake `docker` on `PATH`.
 
 ## Execution pipeline harness (`bench/pipeline/`)
 

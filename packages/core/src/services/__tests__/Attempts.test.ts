@@ -77,6 +77,7 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     landPassed: vi.fn(opts.landPassed ?? (async (): Promise<LandingOutcome> => ({ kind: 'nothing-to-land', messages: [] }))),
     settleRepair: vi.fn(async (): Promise<LandingOutcome> => ({ kind: 'landed', messages: [] })),
     repairPrompt: () => 'Repair the conflict.',
+    takeInMessage: (task) => `Merge: ${task.title} (take in landed work)`,
   };
   const notifications = fakeNotification();
   const leases = new LocalWorktreeLease({ pool: new SlotPool(() => Infinity), node: { tick: async () => undefined, openTurn: () => undefined, waitsOnPlanner: () => false, limitFound: () => undefined }, runs, workspaceRoot: () => '/repo' });

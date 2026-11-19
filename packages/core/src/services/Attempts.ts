@@ -8,7 +8,7 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { composeCompactionNudge, delegatedWorkNote, LOOP_VERDICT_REMINDER, summarizeOutput } from './promptAugment';
+import { composeCompactionNudge, delegatedWorkNote, landsBeside, LOOP_VERDICT_REMINDER, summarizeOutput, type LandingBeside } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { runningLongThreshold, type RunningLongEvent } from './RunningLong';
 import type { PlanStore } from './PlanStore';
@@ -313,7 +313,7 @@ export interface AttemptsDeps {
   /** The child a delegated task's last attempt left goes, as its next attempt starts afresh (ADR-0055 D15). */
   discardChild?: (task: Readonly<Task>) => Promise<void>;
   /** A passed attempt's work, or a repair's, onto the integration branch, while the attempt stays live. */
-  landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt'>;
+  landing: Pick<Landing, 'landPassed' | 'settleRepair' | 'nextRepair' | 'repairPrompt' | 'takeInMessage'>;
   registry: RunnerRegistry | null;
   /** The workspace root, read at call time — VS Code can change it. */
   workspaceRoot: () => string;
@@ -405,7 +405,7 @@ export class Attempts {
    */
   private readonly spawnCounts = new Map<string, number>();
   // Read when a flag falls due, so a task that passed meanwhile raises the threshold (ADR-0018 W1).
-  private readonly verifier = new VerdictEngine({ runningLongThreshold: () => runningLongThreshold(this.deps.store.planTasks) });
+  private readonly verifier = new VerdictEngine({ runningLongThreshold: (taskId) => runningLongThreshold(this.deps.store.planTasks, taskId) });
   /** What the workspace env has already warned about, so a run says it once, not per task. */
   private readonly envWarnings = new Set<string>();
   private readonly host: AttemptsHost;
@@ -615,8 +615,10 @@ export class Attempts {
    * still being made as it ends is let go by too. An end that says so also
    * reaches an attempt an earlier end left still being made: its say is the
    * later one. An end that does not say leaves that attempt's as it was.
+   * `how.runningMs` is the attempt's running time when the verifier that kept
+   * it has already been reset.
    */
-  end(taskId: string, reason: AttemptEnd, how?: { keep: boolean }): EndedAttempt | undefined {
+  end(taskId: string, reason: AttemptEnd, how?: { keep: boolean; runningMs?: number }): EndedAttempt | undefined {
     const { store } = this.deps;
     const attempt = this.live.get(taskId);
     this.live.delete(taskId);
@@ -632,7 +634,8 @@ export class Attempts {
       attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
       dropProviderRetry(attempt);
-      store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, this.verifier.runningMs(taskId));
+      store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, how?.runningMs ?? this.verifier.runningMs(taskId));
+      if (reason === 'cancel' || reason === 'stop') store.setAttemptOutcome(taskId, attempt.attempt, 'stopped');
       this.deps.output.detach(taskId);
       attempt.shell?.end();
       attempt.web?.end();
@@ -659,12 +662,15 @@ export class Attempts {
     // Let the verifier go before the runners: a killed session fires its exit
     // synchronously, and under a still-valid generation that exit is a verdict
     // — for a conflict repair, one that lands work the stop just cancelled.
+    // Its clocks go with it, so each attempt's running time is read first: a
+    // wait for input left in would time the next start (ADR-0018 W1).
+    const ran = new Map([...this.live.keys()].map((taskId) => [taskId, this.verifier.runningMs(taskId)]));
     this.verifier.reset();
     for (const attempt of this.live.values()) this.stopRunner(attempt);
     this.deps.runner.stopAll();
     this.deps.scriptRunner.stopAll();
     this.deps.childPlanRunner.stopAll();
-    return this.endAll('stop');
+    return this.endAll('stop', ran);
   }
 
   /**
@@ -1099,6 +1105,23 @@ export class Attempts {
   }
 
   /**
+   * Where a change in an isolated run takes in what its siblings land while it
+   * runs (ADR-0013): nothing when nothing of the plan can land beside it. A
+   * sibling's work lands as its own attempt's would: a person's task has none,
+   * and what is read-only or ops is its work's, read as `workOf` reads it.
+   */
+  private landingBeside(task: Task): { beside?: LandingBeside } {
+    const repos = this.deps.runs.taskRepos(task.id);
+    const landsWork = (sibling: Task): boolean => {
+      if (sibling.type === 'user') return false;
+      const work = this.workOf(sibling);
+      return work === 'change' || work === 'delegated';
+    };
+    if (repos.length === 0 || !landsBeside(task, this.deps.store.planTasks, landsWork)) return {};
+    return { beside: { integrationBranch: repos[0].integrationBranch, message: this.deps.landing.takeInMessage(task), repos: repos.map((r) => r.path) } };
+  }
+
+  /**
    * The runner's half of a start: the skills read where the attempt runs, the
    * prompt its kind is told, and the runner spawned on its model and mode. A
    * read-only attempt is given its shell, which may write its task workspace,
@@ -1123,6 +1146,7 @@ export class Attempts {
       previousAttempt: (taskId) => this.opsPreviousAttempt(taskId),
       previousHandoff: this.deps.previousHandoffFromLog,
       previousRound: this.host.previousRound(task.id),
+      ...(worktree && (kind.kind === 'change' || kind.kind === 'carryOver') ? this.landingBeside(task) : {}),
     });
     // The one push down a tree, and only to an attempt its plan's prompt starts: a continuing one was told at its start (ADR-0057 R10).
     const pins = board && takesSkills(kind) ? board.pins() : [];
@@ -1599,6 +1623,7 @@ export class Attempts {
     // writing, only caught.
     if (changedFiles.length > 0) return this.host.settle({ kind: 'files-changed', task, attempt, verdict, files: changedFiles });
     if (landing) return this.host.settle({ kind: 'passed', task, attempt, verdict, landing });
+    store.setAttemptOutcome(taskId, attempt.attempt, 'failed');
     return this.host.settle({ kind: 'failed', task, attempt, verdict, unresumed, signedOut });
   }
 
@@ -1713,10 +1738,10 @@ export class Attempts {
     if (nativeSessionId) this.deps.store.setTaskRunnerSessionId(taskId, nativeSessionId, runner);
   }
 
-  private endAll(reason: 'stop' | 'load'): TaskAttempt[] {
+  private endAll(reason: 'stop' | 'load', ran?: ReadonlyMap<string, number | undefined>): TaskAttempt[] {
     const ended = [...this.live.values()];
     const keep = endKeeps(reason === 'stop' ? 'stopped' : 'loaded');
-    for (const { taskId } of ended) this.end(taskId, reason, { keep });
+    for (const { taskId } of ended) this.end(taskId, reason, { keep, runningMs: ran?.get(taskId) });
     this.verifier.reset();
     if (reason === 'load') this.deps.output.reset();
     return ended;

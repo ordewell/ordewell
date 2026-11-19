@@ -605,6 +605,23 @@ plan through `submit_plan` gets it as the answer's `review`, and only the
 planner's own next `submit_plan` changes the plan. Never a refusal.
 *Avoid:* "plan review" (a review task in a plan is something else), "auto-fix".
 
+**Fan-out shape** (`PlanFanOut.ts`, ADR-0072 R5) — a one-shot plan's slices
+that run at once, four or more at one level, read from its dependencies alone,
+with the roles around them. The **opening task** is the first change task
+every slice waits for: the one that makes the project import and collect its
+tests. A later one that waits for it alone is a **shared module**, not a second
+opening task. The **slices** are the change tasks not ordered against every
+other one, each done when the code in its own scope is in place. The **closing
+check** waits for every slice, runs the whole suite and can fix what fails, and
+no other such task waits for it: a loop's check counts when its body edits, an
+ops task, a push or a read-only check alone does not, and a change task the
+closing check waits for after every slice is a slice of the last level.
+Opening tasks in series, no opening task and no closing check are its faults,
+recorded in the research log and never asked about. A wide plan with a closing
+check gets a fixed `Plan shape:` note on each role's brief.
+*Avoid:* "gate" for the opening task (the merge gate is something else),
+"barrier".
+
 **Context compaction** (`contextCompaction.ts`, `budgetedChat.ts`,
 `contextSummary.ts`) — what an API planner does on its own to keep each call
 inside its model's window, as against the user-triggered **Compaction** below,
@@ -1154,14 +1171,16 @@ approval" is derived from the task's pending approvals.
 
 **Running long** (ADR-0018, W1) — the advisory flag on an AI task's attempt
 whose running time passed max(30 min, 3× the longest running time of an AI
-task that passed in its plan), doubled after each flag, whose own runner session
+task that passed in its plan, or, after a failed or stopped attempt of the
+same task, that attempt's running time), doubled after each flag, whose own runner session
 compacted its context by itself, or whose context first reached 40% of its effective
 window (the smaller of the model's and a compaction window in force; see *Task
 compaction start*), never below 150k tokens, and again at each doubling of that
 below the window. Time waiting on a
 person is left out of the running time. It
-carries the running time, the threshold and the task it came from, the live
-and peak context, the model's window and the compactions so far. The
+carries the running time, the threshold and the task or attempt it came from,
+the live and peak context, the model's window and the compactions so far, and
+its wake line names the tasks it blocks. The
 supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or
 fails anything. A quiet task is silent, and a task running long may be busy.
 *Avoid:* "stuck", "slow", "timeout" (a script task's limit, which does end it).
@@ -2283,6 +2302,15 @@ worktree. The decision is per repo: in a group, one repo's may go while
 another's stays. One that holds work the user has not merged is never deleted
 unasked.
 *Avoid:* "result branch", "staging branch".
+
+**Take-in** — a running change task's merge of its run's integration branch into its
+own branch, to use work a sibling landed after its worktree was cut (ADR-0013). The
+runner makes it, told when and with the message Ordewell writes,
+`Merge: <subject> (take in landed work)`; Ordewell never merges into a running
+worktree. It lands with the task, and the task's own work is read from its
+*fork point*, the newest integration commit its branch holds of those the run
+recorded, so what it took in is never its diff. What it took in counts as
+what it depends on when a revert asks. *Avoid:* "sync", "rebase onto main": it is a merge, and never a rebase.
 
 **Landing** — integrating one task under ADR-0014: its branch merged into the
 integration branch of every repo it changed, or of none. Only repos where the

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { IsolationRun, IsolationTaskRecord, IsolationTaskStatus } from '../../interfaces/IWorktreeIsolation';
 import { createTask } from '../../models/Task';
 import {
-  alsoLandedBy, carriedTipsIn, dependentsOf, forgetReverted, freshLedger, hasLandingIn, hasReverted, isCarried, keepLandedOn, landedIn,
+  alsoLandedBy, carriedTipsIn, dependentsOf, forgetReverted, freshLedger, hasLandingIn, hasReverted, integratedIn, isCarried, keepLandedOn, landedIn,
   landedOnOf, landedReposOf, landedTaskOf, landedTitleOf, landedWork, landingsIn, landingsOf, marksRevertible, mayHaveLanded, mergedIn,
   recordCarried, recordLanding, recordlessRevertible, revertReach, startedOlder, unreadLanding,
 } from '../LandingLedger';
@@ -309,5 +309,17 @@ describe('forgetReverted', () => {
     const run = olderRun();
     forgetReverted(run, []);
     expect(run.reverted).toBe(true);
+  });
+
+  it('keeps each revert\'s commits by repo, after those of earlier reverts, among what the run integrated', () => {
+    const run = runOf({ landings: { t1: { '.': ['a'], lib: ['b'] }, t2: { '.': ['c'] } } });
+    expect(integratedIn(run, '.')).toEqual(['a', 'c']);
+    forgetReverted(run, ['t1'], { '.': { commits: ['ra'] }, lib: { commits: ['rb'] }, web: { commits: [] } });
+    forgetReverted(run, ['t2'], { '.': { commits: ['rc'] } });
+    expect(run.revertCommits).toEqual({ '.': ['ra', 'rc'], lib: ['rb'] });
+    expect(integratedIn(run, '.')).toEqual(['ra', 'rc']);
+    expect(integratedIn(run, 'lib')).toEqual(['rb']);
+    // A run saved before reverts were kept reads its landings alone.
+    expect(integratedIn(runOf({ reverted: true, landings: { t3: { '.': ['d'] } } }), '.')).toEqual(['d']);
   });
 });

@@ -5,11 +5,14 @@ import type { HandoffCommit } from '../models/Handoff';
  * `work`, the `merge` that lands it, the `repair-merge` that brings the
  * integration tip into its branch when a landing conflicted (ADR-0015), the
  * `rescue` of edits a removal would otherwise delete, and the `restore-merge`
- * that brings that kept work back into a continued task's branch. The last
- * two land with the task's branch, so they read like the rest. A commit the
- * runner made is never rewritten, so it is not one of these.
+ * that brings that kept work back into a continued task's branch, and the
+ * `take-in` a running task is told to write when it merges what landed
+ * beside it into its own branch. The last three land with the task's branch,
+ * so they read like the rest. A commit the runner made is never rewritten, so
+ * it is not one of these: the `take-in` is one the runner makes, with the
+ * message Ordewell gives it, as a repair's merge is.
  */
-export type LandingCommit = 'work' | 'merge' | 'repair-merge' | 'rescue' | 'restore-merge';
+export type LandingCommit = 'work' | 'merge' | 'repair-merge' | 'rescue' | 'restore-merge' | 'take-in';
 
 /** What a landing message is written from: the task's title, and the commit its done handoff stated, if any. */
 export interface LandingSubject {
@@ -42,9 +45,10 @@ export function landingMessage(kind: LandingCommit, from: LandingSubject, planne
     : kind === 'merge' ? `Merge: ${subject.replace(/^Merge: /, '')}`
     : kind === 'rescue' ? `WIP: ${subject}`
     : kind === 'restore-merge' ? `Merge: ${subject} (resume its kept work)`
+    : kind === 'take-in' ? `Merge: ${subject} (take in landed work)`
     : `Merge: ${subject} (resolve conflicts with integration)`;
   const body = kind === 'rescue' ? RESCUE_BODY
-    : kind === 'repair-merge' || kind === 'restore-merge' ? ''
+    : kind === 'repair-merge' || kind === 'restore-merge' || kind === 'take-in' ? ''
     : from.commit?.body?.trim() ?? '';
   return finish(body ? `${head}\n\n${body}` : head, body, plannedWith);
 }
