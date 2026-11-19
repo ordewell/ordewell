@@ -2375,8 +2375,11 @@ function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-timeline-'));
   const work = path.join(dir, 'arm-workdir');
   fs.mkdirSync(work);
+  // An empty file, not os.devNull: on Windows that is `\\.\nul`, which git cannot open as a config.
+  const noConfig = path.join(dir, 'empty-gitconfig');
+  fs.writeFileSync(noConfig, '');
   const git = (at, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@localhost', '-c', 'commit.gpgsign=false', ...args], {
-    cwd: work, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_DATE: minutesAfter(at), GIT_COMMITTER_DATE: minutesAfter(at), GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+    cwd: work, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_DATE: minutesAfter(at), GIT_COMMITTER_DATE: minutesAfter(at), GIT_CONFIG_GLOBAL: noConfig, GIT_CONFIG_NOSYSTEM: '1' },
   });
   const write = (v) => {
     fs.mkdirSync(path.join(work, 'src', 'tinylib'), { recursive: true });

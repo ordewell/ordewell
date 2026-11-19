@@ -51,6 +51,19 @@ export function dropKeys(env) {
 // --- The run's history ------------------------------------------------------
 
 /**
+ * An empty file for GIT_CONFIG_GLOBAL, made once: os.devNull is `\\.\nul` on
+ * Windows, which git cannot open as a configuration.
+ */
+let emptyConfig = null;
+function noGlobalConfig() {
+  if (!emptyConfig) {
+    emptyConfig = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-gitconfig-')), 'empty');
+    fs.writeFileSync(emptyConfig, '');
+  }
+  return emptyConfig;
+}
+
+/**
  * The commits of a finished run's work, from the repository copied out of the
  * arm's box, read by a git that takes no configuration from the machine or the
  * arm's own hooks beyond what reading history touches.
@@ -63,7 +76,7 @@ export function dropKeys(env) {
  */
 export function runHistory(runDir, { arm, branch = null }) {
   const gitDir = path.join(runDir, 'arm-workdir', '.git');
-  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull };
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: noGlobalConfig() };
   const git = (...args) => {
     const r = spawnSync('git', ['--git-dir', gitDir, ...args], { encoding: 'utf8', env, maxBuffer: 2 ** 28 });
     if (r.status !== 0) throw new Error(`git ${args[0]}: ${(r.stderr || r.error?.message || '').trim()}`);
