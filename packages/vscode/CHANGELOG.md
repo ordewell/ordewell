@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-11-19
+
+### Added
+
+- A running change is told where a sibling's work lands and the merge that
+  takes it in. Its diff, which a verdict checks, is read from its fork point,
+  so work taken in from a sibling, or a revert's deletions, are not read as the
+  task's own.
+- A wide one-shot plan's opening task, slices and closing check each get a
+  short note appended to their brief.
+- OpenRouter calls prefer the upstream that served the last one, and each
+  call's upstream is recorded in the task's usage.
+
+### Changed
+
+- The supervisor narrows a task that failed part-way before retrying it. A
+  retry's running-long threshold counts from its last attempt, and a message to
+  a task that has just been retried is refused with the retry's note named.
+
+### Fixed
+
+- The built-in runner continues the turn when a reply writes its tool call as
+  text instead of ending it.
+
 ## [0.14.3] - 2026-11-18
 
 ### Changed
@@ -1735,7 +1759,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/ordewell/ordewell/compare/v0.14.0...v0.14.1
