@@ -153,7 +153,8 @@ is one runner per API provider, under the provider's own id and name.**
   how a long brief is worked through, each rule with its reason (how much work
   remains is never a reason to stop or to report `blocked`; the context is
   compacted for the model; the attempt's step limit, as a fixed number so the
-  prompt stays one cached prefix; each coherent part committed as it works,
+  prompt stays one cached prefix, which the runner counts and the model is told
+  never to estimate; each coherent part committed as it works,
   when the task commits; `blocked` for an obstacle outside the model's control,
   saying what is missing; near the budget's end, what works committed and an
   honest report, never `done` short of the done criterion); then the completion
@@ -262,7 +263,14 @@ is one runner per API provider, under the provider's own id and name.**
   is done and what remains. Each goes out at most once an attempt, none while a
   report stands and none on the last call, and two falling due together send
   only the later; so a limit of 5 or less sends neither, and one of 6 to 20 only
-  the 80% one, its 95% share falling on the last call. A step continued after
+  the 80% one, its 95% share falling on the last call. Each notice ends on the
+  exact count, `[calls: N of M]`, which also goes out alone every 50 calls, an
+  appended message like the notices so the cached prefix holds: a model left to
+  keep its own tally overestimated it and reported failed at 430 calls of 1000.
+  For the same reason a `failed` or `blocked` report whose reason or summary has
+  the word budget, calls, steps or limit, made before the 80% notice is due, is
+  not recorded but answered with the count, and the turn goes on; it is answered
+  once an attempt, so a second such report is recorded as it is. A step continued after
   a cut-off reply is a model call like any other: it counts against the limit,
   can carry a notice or the forced last call, and is compacted before like any
   step; a cut-off on the last allowed call ends the attempt at the step limit.
@@ -438,3 +446,6 @@ comes from that call.
   names the upstream and the generation id.
 - 2026-11-18 — a reply that writes a tool call out as text continues the turn with a
   correction, and three in a row fail the attempt.
+- 2026-11-19 — the runner tells the model the exact call count every 50 calls and
+  in each notice, and answers once a report that gives up on a budget not yet
+  near its end.
