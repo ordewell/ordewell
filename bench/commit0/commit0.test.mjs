@@ -1363,7 +1363,7 @@ test('the b-plan scenario judges a plan-only result by the shape, the priced pla
     planOnly: true, valid: false, invalidReasons: ['plan-only: the plan was made and nothing ran, so nothing was scored'],
     tests: null, scoredFrom: null, tasks: null, patches: [], baseline: null, truncated: { truncated: false, why: null },
     steps: { plan: { exit: 0 }, planCheck: { ok: true } }, closing: { stop: { exit: 0 } }, stopped: null, stalled: null,
-    planned, recordedUsd: 0.0002, metrics: null,
+    planned, recordedUsd: 0.0002, metrics: null, ending: { by: 'not-run', modelCalls: null }, providerSwitches: null,
   };
   assert.deepEqual(R.judgeRehearsal('b-plan', good), []);
   assert.match(R.judgeRehearsal('b-plan', { ...good, steps: { ...good.steps, run: { exit: 0 } } }).join(), /a run or a merge step/);
@@ -1975,8 +1975,17 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
     tasks: [{ status: 'failed' }], tests: { passed: 1653, collectionErrors: [] }, baseline: { passed: 11 },
     excluded: [{ path: 'unit_tests/test_x.py', reason: 'a test: the reference\'s is kept' }],
     steps: { run: { exit: 2, ended: 'by itself' } },
+    ending: { by: 'completion', status: 'failed', reason: 'The rehearsal fails this task on purpose.', modelCalls: { used: 3, limitPerAttempt: 1000, reachedLimit: false } },
+    providerSwitches: { attempts: 1, withProvider: 0, attemptsSwitched: 0, switches: 0 },
   };
   assert.deepEqual(R.judgeRehearsal('a-failed', passing), []);
+  // The ending is the scenario's: another status, another reason, another way to stop, no calls for arm A, calls for arm B, a switch the fake never makes, or no field at all.
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, ending: { ...passing.ending, status: 'blocked' } }).join(), /ending\.status is "blocked", wanted "failed"/);
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, ending: { ...passing.ending, reason: null } }).join(), /ending\.reason is null/);
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, ending: { by: 'settle', open: [], modelCalls: passing.ending.modelCalls } }).join(), /ending\.by is "settle", wanted "completion"/);
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, ending: { ...passing.ending, modelCalls: null } }).join(), /ending\.modelCalls is null/);
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, providerSwitches: { attempts: 1, withProvider: 1, attemptsSwitched: 1, switches: 2 } }).join(), /providerSwitches is/);
+  assert.match(R.judgeRehearsal('a-failed', { ...passing, ending: undefined }).join(), /holds no ending/);
   const wrongTree = R.judgeRehearsal('a-failed', { ...passing, scoredFrom: 'merged', tests: { passed: 11, collectionErrors: ['tlslite/_commit0_rehearsal.py'] } });
   assert.equal(wrongTree.length, 3, wrongTree.join('; '));
   assert.match(R.judgeRehearsal('a-failed', { ...passing, truncated: { truncated: true, why: 'cap: wall-clock' }, stopped: { why: 'wall-clock' } }).join('; '), /cap: wall-clock.*stopped by wall-clock/);
@@ -1986,6 +1995,7 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   const waited = {
     ...passing, truncated: { truncated: true, why: 'stalled: waiting on checkpoint' }, stopped: null,
     stalled: { task: { id: 'x', title: 'Implement' }, waiting: 'checkpoint', question: 'q', sinceMs: 120_000 }, tasks: [{ status: 'awaiting_user' }],
+    ending: { by: 'stall', waiting: 'checkpoint', modelCalls: passing.ending.modelCalls },
   };
   assert.deepEqual(R.judgeRehearsal('a-stall', waited), []);
   assert.match(R.judgeRehearsal('a-stall', { ...waited, truncated: { truncated: true, why: 'settled with 1 task open: 1 waiting on a person' }, stalled: { why: 'settled', open: [] } }).join(), /wanted \/\^stalled: waiting on checkpoint/);
@@ -1995,7 +2005,7 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
   const leaving = { wakeUps: 2, wakes: [{ at: '2026-01-01T00:00:00.000Z', updates: 1, triggers: [{ kind: 'run_finished', task: null }] }, standing('2026-01-01T00:01:00.000Z')], actions: [{ kind: 'message', at: 'a', outcome: 'done' }] };
   const leftAlone = {
     metrics: { supervisor: leaving },
-    ...passing, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
+    ...passing, ending: { ...passing.ending, modelCalls: null }, scoredFrom: 'merged', truncated: { truncated: true, why: 'settled with 2 tasks open: 2 nothing ready' }, tests: { passed: 11, collectionErrors: [] },
     stalled: { why: 'settled', open: [held, { status: 'approved', held: 'nothing ready', reason: 'depends on 1 (failed)' }] }, tasks: [{ status: 'failed' }, { status: 'approved' }],
   };
   assert.deepEqual(R.judgeRehearsal('b-leave', leftAlone), []);
@@ -2351,6 +2361,70 @@ test('callStats counts calls per upstream, and the billed calls that found almos
   assert.deepEqual(L.callStats({}), { calls: 0, byUpstream: {}, coldAfterCall: 0, coldShare: L.COLD_CACHE_SHARE });
 });
 
+test('providerSwitches counts the attempts whose upstream changed and the changes, from the provider the usage records name', () => {
+  const call = (provider, extra = {}) => ({ type: 'usage', record: { source: 'openrouter', model: 'm', inputTokens: 10, ...(provider ? { provider } : {}), ...extra } });
+  const logs = {
+    t1: {
+      1: [call('up-a'), call('up-a'), call('up-b'), call('up-a')],                 // a to b, and back: two switches
+      2: [call('up-a'), call('up-a')],                                              // none
+    },
+    t2: {
+      1: [call('up-a'), call(null), call('up-a')],                                  // a record that names none is skipped, not a change
+      2: [call('up-a'), call('up-b', { subagentId: 's' }), call('up-a', { aggregate: true }), call('up-c', { compacted: true, inputTokens: undefined })], // a subagent's own upstream and the non-calls are not the attempt's
+      3: [call('up-a'), call('up-c'), call(null), call('up-c'), call('up-d')],      // a to c, c to d: two
+      4: [call(null), call(null)],                                                  // names no provider at all
+    },
+  };
+  assert.deepEqual(L.providerSwitches(logs), { attempts: 6, withProvider: 5, attemptsSwitched: 2, switches: 4 });
+  assert.deepEqual(L.providerSwitches({}), { attempts: 0, withProvider: 0, attemptsSwitched: 0, switches: 0 });
+  assert.equal(L.providerSwitches(null), null, 'no logs: not read, not zero');
+});
+
+test('runEnding says how the arm stopped: its own completion with the runner\'s reason, a cap, the settle rule with the tasks open', () => {
+  const use = (n, extra = {}) => Array.from({ length: n }, () => ({ type: 'usage', record: { source: 'openrouter', inputTokens: 5, ...extra } }));
+  const done = (args) => ({ type: 'tool_call', id: 'x', name: 'mcp__ordewell__task_complete', args: JSON.stringify(args) });
+  const task = (id, order, status, extra = {}) => ({ id, order, title: `task ${order}`, type: 'ai', status, dependencies: [], attemptUsage: [], ...extra });
+  const one = (status, extra) => ({ tasks: [task('t1', 1, status, extra)] });
+
+  // Arm A, done: no reason; the calls against the step limit, per attempt, a subagent's apart.
+  const doneLogs = { t1: { 1: [...use(2), ...use(1, { subagentId: 's' }), done({ status: 'done', summary: 'ok' })], 2: [...use(3), done({ status: 'done', summary: 'ok' })] } };
+  assert.deepEqual(L.runEnding({ arm: 'A', plan: one('completed', { verdict: { outcome: 'pass', reported: 'done' } }), taskLogs: doneLogs, stopped: null, stalled: null }), {
+    by: 'completion', status: 'done', reason: null,
+    reports: [{ order: 1, title: 'task 1', status: 'done', reason: null }],
+    modelCalls: { used: 5, limitPerAttempt: L.STEP_LIMIT, perAttempt: [{ attempt: 1, calls: 2 }, { attempt: 2, calls: 3 }], peakAttempt: 3, reachedLimit: false, subagentCalls: 1 },
+  });
+
+  // Failed and blocked: the status and the text the runner gave. The settle rule saw only a failed task, which the runner itself reported: its completion.
+  const failedPlan = one('failed', { verdict: { outcome: 'fail', reported: 'failed' } });
+  const failedLogs = { t1: { 1: [...use(1000), done({ status: 'failed', summary: 's', reason: 'the tests cannot import' })] } };
+  const failedStall = { why: 'settled', quietMs: 300_000, runView: true, open: [{ id: 't1', order: 1, title: 'task 1', status: 'failed', held: 'nothing ready', reason: 'failed' }] };
+  const failed = L.runEnding({ arm: 'A', plan: failedPlan, taskLogs: failedLogs, stopped: null, stalled: failedStall });
+  assert.deepEqual([failed.by, failed.status, failed.reason, failed.modelCalls.used, failed.modelCalls.reachedLimit], ['completion', 'failed', 'the tests cannot import', 1000, true]);
+  const blocked = L.runEnding({ arm: 'B', plan: failedPlan, taskLogs: { t1: { 1: [done({ status: 'blocked', reason: 'no network' })] } }, stopped: null, stalled: failedStall });
+  assert.deepEqual([blocked.by, blocked.status, blocked.reason, blocked.modelCalls], ['completion', 'blocked', 'no network', null], 'arm B has no one call budget to report');
+
+  // A cap: which one, and nothing of the runner's own word.
+  const capped = L.runEnding({ arm: 'A', plan: one('in_progress'), taskLogs: { t1: { 1: use(7) } }, stopped: { why: 'spend', atMs: 4000, spentUsd: 8.01 }, stalled: null });
+  assert.deepEqual([capped.by, capped.cap, capped.spentUsd, capped.atMs, capped.modelCalls.used], ['cap', 'spend', 8.01, 4000, 7]);
+  assert.equal(L.runEnding({ arm: 'B', plan: null, taskLogs: null, stopped: { why: 'wall-clock', atMs: 9, spentUsd: 1 }, stalled: null }).cap, 'wall-clock');
+  assert.equal(L.runEnding({ arm: 'B', plan: null, taskLogs: null, stopped: { why: 'batch-budget', atMs: 9, spentUsd: 1 }, stalled: null }).cap, 'batch-budget');
+  assert.deepEqual(L.runEnding({ arm: 'B', plan: null, taskLogs: null, stopped: { why: 'no-start', atMs: 9, spentUsd: 0, detail: 'no model call' }, stalled: null }), { by: 'no-start', detail: 'no model call', modelCalls: null });
+
+  // The settle rule, with tasks still open that something else holds.
+  const open = [{ id: 't2', order: 2, title: 'task 2', status: 'awaiting_user', held: 'waiting on a person', reason: 'checkpoint' }, { id: 't3', order: 3, title: 'task 3', status: 'pending', held: 'nothing ready', reason: 'depends on 2 (awaiting_user)' }];
+  const settled = L.runEnding({ arm: 'B', plan: { tasks: [task('t2', 2, 'awaiting_user'), task('t3', 3, 'pending')] }, taskLogs: null, stopped: null, stalled: { why: 'settled', quietMs: 300_000, runView: true, open } });
+  assert.deepEqual([settled.by, settled.quietMs, settled.open], ['settle', 300_000, open.map((o) => ({ order: o.order, title: o.title, status: o.status, held: o.held, reason: o.reason }))]);
+  // A person waited on for --stall-min is the stall rule's, not the settle rule's.
+  assert.equal(L.runEnding({ arm: 'B', plan: null, taskLogs: null, stopped: null, stalled: { waiting: 'checkpoint', sinceMs: 1, task: { title: 't' } } }).by, 'stall');
+
+  // Every task done by itself: done, from the plan when the logs were not copied. A run that never ran says so.
+  const bare = L.runEnding({ arm: 'B', plan: { tasks: [task('t1', 1, 'completed', { verdict: { outcome: 'pass', reported: 'done' } }), task('t2', 2, 'skipped')] }, taskLogs: null, stopped: null, stalled: null });
+  assert.deepEqual([bare.by, bare.status, bare.reason, bare.reports.map((r) => r.status)], ['completion', 'done', null, ['done', null]]);
+  assert.deepEqual(L.runEnding({ arm: 'A', plan: null, taskLogs: null, stopped: null, stalled: null }), { by: 'not-run', modelCalls: null });
+  // A dry run or a plan-only run holds a plan whose tasks never ran: not an ending.
+  assert.deepEqual(L.runEnding({ arm: 'B', plan: one('pending'), taskLogs: null, stopped: null, stalled: null, ran: false }), { by: 'not-run', modelCalls: null });
+});
+
 test('runMetrics carries the call counts, null without the logs', () => {
   const plan = { tasks: [{ id: 't1', order: 1, title: 'one', type: 'ai', status: 'completed', dependencies: [], attemptUsage: [] }] };
   const logs = { t1: { 1: [{ type: 'usage', record: { source: 'openrouter', inputTokens: 10, cachedInputTokens: 0, provider: 'p' } }] } };
@@ -2371,7 +2445,7 @@ const minutesAfter = (m) => new Date(T0 + m * 60_000).toISOString();
  * branch (commits at those minutes). Each commit writes src/tinylib/m.py as
  * `v<minute>`, so what a point materializes names the commit it came from.
  */
-function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, errors: 0, collected: 9 } } = {}) {
+function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, errors: 0, collected: 9 }, plan = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-timeline-'));
   const work = path.join(dir, 'arm-workdir');
   fs.mkdirSync(work);
@@ -2406,7 +2480,7 @@ function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, 
     }
   }
   fs.mkdirSync(path.join(dir, 'workspace-ordewell', 'sessions'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'workspace-ordewell', 'sessions', 's.json'), JSON.stringify({ meta: { id: 's', createdAt: minutesAfter(0) } }));
+  fs.writeFileSync(path.join(dir, 'workspace-ordewell', 'sessions', 's.json'), JSON.stringify({ meta: { id: 's', createdAt: minutesAfter(0) }, ...(plan ? { plan } : {}) }));
   fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({
     library: 'tinylib', arm, wallClockMs: wall * 60_000, startedAt: minutesAfter(-2), tests, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000,
   }));
@@ -2455,14 +2529,44 @@ test('timelinePoints: up to N points evenly in time, each the newest commit at o
   // Before any commit there is nothing to score; the final is still one.
   assert.deepEqual(shas({ minutes: [2] }), ['c70']);
   assert.deepEqual(T.timelinePoints({ ...base, points: 3 }).map((p) => [p.kind, p.atMin, p.targetMin === null ? null : Math.round(p.targetMin)]), [['time', 25, 33], ['time', 40, 67], ['final', 70, null]]);
-  // A last landing that is not the final tree takes a point of its own, and one fewer target is spaced.
+  // A last landing that is not the final tree takes a point of its own, on top of the spaced ones.
   const apart = T.timelinePoints({ ...base, finalSha: 'tip', lastLanding: 'c70', commits: [...landings, { sha: 'tip', ms: T0 + 90 * 60_000 }], points: 4 });
   assert.deepEqual(apart.map((p) => [p.sha, p.kind]), [['c25', 'time'], ['c40', 'time'], ['c70', 'landing'], ['tip', 'final']]);
+  // Landings after the last slice are points whatever --points says: here the spaced targets (33 and 66) name c10 and c40.
+  const late = T.timelinePoints({ ...base, finalSha: 'c70', lastLanding: 'c70', afterSlices: ['c40', 'c70'], commits: [10, 40, 70].map(at), points: 3 });
+  assert.deepEqual(late.map((p) => [p.sha, p.kind]), [['c10', 'time'], ['c40', 'landing'], ['c70', 'final']]);
   // Arm A: the final alone is forced.
   const a = [5, 15, 30, 50, 80].map(at);
   assert.deepEqual(T.timelinePoints({ commits: a, finalSha: 'c80', t0Ms: T0, endMs: T0 + 100 * 60_000, points: 3 }).map((p) => p.sha), ['c30', 'c50', 'c80']);
   // Nothing committed: the final, the stubs, is the one point.
   assert.deepEqual(T.timelinePoints({ commits: [], finalSha: 'root', t0Ms: T0, endMs: T0 + 1000, points: 5 }).map((p) => p.sha), ['root']);
+});
+
+/** An arm B plan of an opening task, four slices and a closing check that starts at `closerStart` minutes: what the session saves of it. */
+function closingPlan(closerStart) {
+  const task = (id, order, dependencies, extra = {}) => ({ id, order, title: id, type: 'ai', status: 'completed', dependencies, attemptUsage: [], ...extra });
+  const slices = ['s1', 's2', 's3', 's4'].map((id, i) => task(id, i + 2, ['open']));
+  return { tasks: [task('open', 1, []), ...slices, task('close', 6, slices.map((s) => s.id), { attemptUsage: [{ attempt: 1, runner: 'openrouter', startedAt: minutesAfter(closerStart) }] })] };
+}
+
+test('chooseTimelinePoints: for arm B every landing after the last slice landed is a point, however few the evenly spaced ones reach', { skip: !hasGit && 'needs git' }, () => {
+  // The opening task and four slices land early; the closing check starts at 70 and lands at 90, a repair at 95 is the final tree.
+  const b = fixtureRun('B', [5, 10, 20, 30, 40, 90, 95], { plan: closingPlan(70) });
+  const a = fixtureRun('A', [5, 10, 20, 30, 40, 90, 95]);
+  try {
+    const at = (dir, arm, o) => T.chooseTimelinePoints(dir, { arm, ...o }).chosen.map((p) => [p.atMin, p.kind]);
+    // Three evenly spaced targets (25, 50, 75) all land on two commits: the closing landing would be missed.
+    assert.deepEqual(at(b, 'B', { points: 4 }), [[20, 'time'], [40, 'time'], [90, 'landing'], [95, 'final']]);
+    // --points bounds only the evenly spaced part: one point is the final's own slot, and the landings come on top.
+    assert.deepEqual(at(b, 'B', { points: 1 }), [[90, 'landing'], [95, 'final']]);
+    // --minutes keeps its meaning, the landings added as before.
+    assert.deepEqual(at(b, 'B', { minutes: [15] }), [[10, 'time'], [90, 'landing'], [95, 'final']]);
+    // Arm A has no landings: its points are as they were.
+    assert.deepEqual(at(a, 'A', { points: 4 }), [[20, 'time'], [40, 'time'], [95, 'final']]);
+  } finally {
+    fs.rmSync(b, { recursive: true, force: true });
+    fs.rmSync(a, { recursive: true, force: true });
+  }
 });
 
 test('judgeFinal: the final point must score as result.json does', () => {

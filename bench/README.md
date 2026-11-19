@@ -443,6 +443,8 @@ scored (`arm.patch` is always the scored diff); `evalBox: 'fresh'`,
 | `planReview` | arm B's plan review, read from the `chain review: N -> M, kept; K tasks changed` line of the session's research log (the session keeps no structured field for it): `firstChain` (the longest chain as the planner first wrote it), `reviewedChain` (null when the review failed or was refused), `tasksChanged`, `kept` and `outcome`. Null when the log holds no such line (a chain under the review's minimum, or arm A) |
 | `metrics.perTask[].attempts[].runningMs` | an attempt a stop cut has a running clock of 0; its `wallTimeMs` is then its running time, and the attempt says `runningFrom: 'wallTimeMs'` (that time includes any wait on a person) |
 | `metrics.calls` | from the attempts' logs: `calls`, `byUpstream` (the `provider` of each of the built-in runner's usage records; `unreported` for one without it) and `coldAfterCall`: calls billed with under `coldShare` (5%) of their input cached straight after another call of the same attempt (a subagent's calls are counted, never judged). Null without the logs |
+| `ending` | how the arm stopped, in `by`: `completion` (the arm's own word: `status` `done`, `failed` or `blocked` and the `reason` text the runner gave in `task_complete`, with each task's own in `reports`; a run the settle rule found holding only failed tasks and the tasks behind them is this too, the runner having reported and nothing left to move), `cap` (`cap` is `spend`, `wall-clock` or `batch-budget`, with `spentUsd` and `atMs`), `settle` (nothing moved for the settle window while a task was still open for another cause: `open` lists each with what held it, and `quietMs`), `stall` (a person waited on for `--stall-min`), `no-start`, or `not-run` (a dry run, a plan-only run or no task). For arm A `modelCalls`: `used` (the attempts' own calls, a subagent's apart in `subagentCalls`), `perAttempt`, `peakAttempt` and `reachedLimit` against `limitPerAttempt`, the runner's step limit, which is per attempt; null for arm B and without the logs |
+| `providerSwitches` | from the same usage records' `provider`: `attempts` read, `withProvider` (those naming an upstream), `attemptsSwitched` (attempts whose upstream changed at least once) and `switches` (the changes; a record naming no upstream is skipped, a subagent's calls are left out). Null without the logs, as in a dry run, which shows `ending.by: 'not-run'`; the rehearsal's fake names no upstream, so it shows no switch |
 
 A stub
 baseline that collects nothing (networkx's and sphinx's stubs do not import)
@@ -522,10 +524,16 @@ the agent made as it went:
 node bench/commit0/timeline.mjs <run dir> --libs <libraries.json> [--points 8 | --minutes 20,40,60] [--jobs 2] [--branch <ref>]
 ```
 
-It picks up to `--points` points (default 8) evenly in time over the run's wall
-clock, each the newest commit at or before it, or the minutes after the run
+It picks `--points` less one (default 8) targets evenly in time over the run's
+wall clock, each the newest commit at or before it, or the minutes after the run
 began (the session's creation) that `--minutes` lists. The final tree is always
-a point, and for arm B so is the last landing. Each point's source is written
+a point, and for arm B so is every landing after the last slice has landed: the
+closing check's and whatever follows, found from the session's plan (the closing
+check waits for every slice, so a landing later than its first attempt's start is
+its or a later one's; a plan with no closing check keeps the last landing). These
+come on top, so `--points` bounds only the evenly spaced part, and sparse late
+landings are never all mapped to one commit and skipped. Arm A's points are as
+`--points` says. Each point's source is written
 out by the harness's own `materialize` and scored by its own
 `scoreInFreshBox` (`drive.mjs` exports both and runs nothing when loaded; it is
 then always a dry run), in a fresh box on no network, with no key: any key in the
@@ -535,7 +543,7 @@ point's `score.json`, `arm.patch` and `tests.log`). The final point must score
 as `result.json` does (passed, failed, errors); when it does not, the timeline
 says `verified: false` and why, and the exit is non-zero, as it is when a point
 could not be scored. `commit0.test.mjs` tests the choice of points and the
-commit-to-time mapping on a repository it builds, and the container call
+commit-to-time mapping on a repository it builds, the closing check's landing included, and the container call
 through a fake `docker` on `PATH`.
 
 ## Execution pipeline harness (`bench/pipeline/`)
