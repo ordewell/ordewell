@@ -411,17 +411,30 @@ const moduleOf = (line) => {
   return found;
 };
 
+/**
+ * The profile of `fn` and its self time, from enough runs of it that a sample
+ * landed in the TUI's own code. A sampler sees only what a tick lands in, and
+ * at a tiny size a batch can end between ticks, more so on a busy machine
+ * whose sampler thread waits for a core: so the batch runs again, twice as
+ * many times each round, until the profile holds one.
+ */
 async function profiled(fn) {
   const session = new inspector.Session();
   session.connect();
   const post = (method, params) => new Promise((resolve, reject) => session.post(method, params, (err, result) => (err ? reject(err) : resolve(result))));
   await post('Profiler.enable');
   await post('Profiler.setSamplingInterval', { interval: 100 });
-  await post('Profiler.start');
-  await fn();
-  const { profile } = await post('Profiler.stop');
-  session.disconnect();
-  return profile;
+  try {
+    for (let runs = 1; ; runs *= 2) {
+      await post('Profiler.start');
+      for (let i = 0; i < runs; i += 1) await fn();
+      const { profile } = await post('Profiler.stop');
+      const rows = selfTime(profile);
+      if (rows.length > 0) return { profile, rows };
+    }
+  } finally {
+    session.disconnect();
+  }
 }
 
 /** The package a script of node_modules is, or the file's own name. */
@@ -455,21 +468,19 @@ function selfTime(profile, top = 10) {
 
 async function profileDefault({ state, status, now }) {
   const out = {};
-  const frameProfile = await profiled(async () => {
+  const { profile: frameProfile, rows: frame } = await profiled(async () => {
     for (let i = 0; i < 150; i += 1) tui.render({ ...state, now });
   });
-  out.frame = selfTime(frameProfile);
+  out.frame = frame;
   // One status update folded into the state the stream left: the work every second pays.
-  const foldProfile = await profiled(async () => {
+  out.statusFold = (await profiled(async () => {
     for (let i = 0; i < 150; i += 1) tui.reduce(state, { type: 'runMessage', sessionId: 'bench', message: JSON.parse(status) });
-  });
-  out.statusFold = selfTime(foldProfile);
+  })).rows;
   // The reducer's half of a key that scrolls the plan.
   const planFocused = { ...state, focus: 'plan' };
-  const keyProfile = await profiled(async () => {
+  out.planScrollReduce = (await profiled(async () => {
     for (let i = 0; i < 40; i += 1) tui.reduce(planFocused, { type: 'key', key: { name: 'pagedown' } });
-  });
-  out.planScrollReduce = selfTime(keyProfile);
+  })).rows;
   if (arg('profile-out', null)) {
     fs.writeFileSync(arg('profile-out'), JSON.stringify(frameProfile));
     out.file = arg('profile-out');

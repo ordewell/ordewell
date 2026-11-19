@@ -69,7 +69,7 @@ costs what it costs: `--minutes` and `--sweep-minutes` shorten it.
 | `--rotate`, `--mutate-every` | 60, 30 | Seconds a task runs before the next starts, and between plan mutations (a task update, and every fourth time the whole plan). |
 | `--task-view` | off | Open the first running task's view before the stream, so its log is folded rather than dropped. |
 | `--session` | none | A saved session file (`{ meta, plan }` or a plan), read and never printed: its tasks, transcript and research log replace the generated ones, and `--tasks`, `--settled` and `--entries` are ignored, with no sweep. |
-| `--profile`, `--profile-out` | off | Self time by function for a frame, for one status update folded and for the reducer on a key that scrolls the plan, at the full size; the second writes the frame's `.cpuprofile`. |
+| `--profile`, `--profile-out` | off | Self time by function for a frame, for one status update folded and for the reducer on a key that scrolls the plan, at the full size, each repeated until a sample lands in the TUI's code; the second writes the frame's `.cpuprofile`. |
 | `--out` | none | Write the JSON there instead of printing it as the last line. |
 | `--seed` | 1 | The generated text. |
 
