@@ -8,6 +8,7 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply, repairLoop } from './PlanRepair';
 import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain } from './PlanChainReview';
+import { fanOutShape, withShapeNotes } from './PlanFanOut';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -749,7 +750,16 @@ export abstract class BaseAiService {
   ): Promise<Task[]> {
     const chain = longestChain(tasks);
     const note = (content: string) => log?.push({ id: `cr-${Date.now()}`, type: 'system', content, timestamp: new Date().toISOString() });
-    if (chain.length < CHAIN_REVIEW_MIN) return tasks;
+    // The role notes are Ordewell's, written on the plan that stands, at no call: nothing asks the planner about the fan-out (ADR-0072 R5).
+    const shaped = (final: Task[]) => {
+      const out = withShapeNotes(final);
+      if (out !== final) {
+        const s = fanOutShape(out);
+        note(`fan-out: ${s.width} at once, ${s.gates.length} before, ${s.closers.length} after${s.faults.length ? `, faults ${s.faults.join(', ')}` : ''}; role notes added`);
+      }
+      return out;
+    };
+    if (chain.length < CHAIN_REVIEW_MIN) return shaped(tasks);
     // The reply is a list of changes, not a plan, so it streams to no plan view.
     // Low effort: each edge is a yes-or-no question, and a reasoning model left at
     // its default can think past the output limit before it writes the list.
@@ -796,18 +806,18 @@ export abstract class BaseAiService {
       });
       if (!applied.ok) {
         note(`chain review: ${chain.length}, first plan kept: ${cutOff ? 'reply cut off at the output limit; ' : ''}${applied.error}${out}`);
-        return tasks;
+        return shaped(tasks);
       }
       const after = longestChain(applied.tasks);
       const kept = after.length > 0 && after.length < chain.length;
       const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
       const changed = applied.changes.map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}`);
       note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
-      return kept ? applied.tasks : tasks;
+      return shaped(kept ? applied.tasks : tasks);
     } catch (err) {
       if (signal?.aborted) throw err;
       note(`chain review: ${chain.length}, failed: ${err instanceof Error ? err.message : String(err)}`);
-      return tasks;
+      return shaped(tasks);
     }
   }
 

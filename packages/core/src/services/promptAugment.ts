@@ -5,6 +5,7 @@ import { TASK_COMPLETE_TOOL } from './mcp/tools';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
 import { betweenRounds, loopRoundOf, type TaskLoop } from '../models/Loop';
+import { quotedMessageArgs } from './landingMessage';
 import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, wordsFrom, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
@@ -154,6 +155,78 @@ export interface ComposeOptions {
   carriedOver?: { from: string; work?: PreviousWork };
   /** The AI check's next round, after its body has landed (ADR-0047). */
   loop?: { round: number; previousHandoff?: StoredHandoff; previousReport?: string };
+  /** A change task in an isolated run with work that may land beside it: where that lands and how it is taken in (ADR-0013). */
+  beside?: LandingBeside;
+}
+
+/** Where a change task in an isolated run finds what lands beside it, read from the run's record as its attempt is spawned. */
+export interface LandingBeside {
+  /** The run's integration branch, one name in every repository of the run. */
+  integrationBranch: string;
+  /** The message of the merge that takes it in: `landingMessage('take-in', …)`. */
+  message: string;
+  /** The task's repositories by their path in the workspace: `.` alone for a lone repository. */
+  repos: readonly string[];
+}
+
+/**
+ * Every task of the plan that waits for `task`, directly or through others, a
+ * subtask of one among them. A subtask is held to its ancestors' dependencies,
+ * not to its ancestors (ADR-0034), so `task`'s own subtasks do not wait for it.
+ */
+function waitingFor(task: Task, plan: readonly Task[]): Set<string> {
+  const flat = flattenTasksWithParents(plan);
+  const waits = new Map(flat.map(({ task: t, parent }) => [t.id, { deps: t.dependencies, parent: parent?.id }]));
+  const found = new Set<string>();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [id, { deps, parent }] of waits) {
+      if (found.has(id) || !(deps.some((d) => d === task.id || found.has(d)) || (parent !== undefined && found.has(parent)))) continue;
+      found.add(id);
+      grew = true;
+    }
+  }
+  return found;
+}
+
+/**
+ * Whether work of the plan may land on the integration branch while `task`
+ * runs: another task, not finished, whose work lands, that does not wait for
+ * it, its parent and its own subtasks included, which start with it
+ * (ADR-0034). Its dependencies landed before it started, and what waits for it
+ * starts after it lands. Whether a
+ * task's work lands is `landsWork`'s, the caller's: a read-only task lands
+ * nothing (ADR-0046), an ops task works in the checkout (ADR-0020), and which
+ * a task is depends on the mode its runner tags read-only, which only the
+ * caller knows.
+ */
+export function landsBeside(task: Task, plan: readonly Task[], landsWork: (sibling: Task) => boolean): boolean {
+  const after = waitingFor(task, plan);
+  return flattenTasksWithParents(plan).some(({ task: t }) => t.id !== task.id && !after.has(t.id)
+    && t.status !== 'completed' && t.status !== 'skipped' && landsWork(t));
+}
+
+/**
+ * What a change task is told of the work landing beside it (ADR-0013): its
+ * worktree was cut from the integration tip when it started, so a sibling
+ * that lands later is not in it. It takes that work in itself, with the merge
+ * a repair writes the other way round (ADR-0015), and never a stand-in.
+ */
+export function renderLandingBeside(beside: LandingBeside): string {
+  const branch = `\`${beside.integrationBranch}\``;
+  const merge = `git merge --no-edit ${quotedMessageArgs(beside.message)} ${beside.integrationBranch}`;
+  const repos = beside.repos.filter((repo) => repo !== SELF_REPO);
+  const takeIn = repos.length === 0
+    ? `commit your work and take it in with \`${merge}\``
+    : `commit your work and, in each repository of the run (${repos.join(', ')}), run \`${merge}\` inside that repository's directory`;
+  return [
+    '## Work landing beside yours',
+    '',
+    `Other tasks of this plan run beside this one, each in its own worktree, and each lands its work on ${branch} when it passes. Your worktree was cut from that branch when this task started: it holds what had landed by then, and nothing since. \`git log --oneline HEAD..${beside.integrationBranch}\` lists what has landed after.`,
+    `When code you build or test calls code another task owns, and it is missing or still a stub here, look there first. If that work has landed, ${takeIn}; resolve any conflict so that both sides' intent survives. If you cannot, \`git merge --abort\` puts your worktree back as it was: go on without that work, and never reset your own work away. Take in what has landed once more before you finish, so that what you report was checked against it.`,
+    'Never write a stand-in for another task\'s code, fill it in yourself, or build a scratch copy of the project with it filled in: none of that lands, and what you check against it says nothing of the code that will. If the work you need has not landed, do not wait for it: finish your own part, and once the checks left fail only because that work is missing, stop working on them. Name each such check, and the task whose work it needs, in a finding, and end as your brief\'s done criterion says.',
+  ].join('\n');
 }
 
 function renderSinceLastRound(task: Task, allTasks: readonly Task[], loop: NonNullable<ComposeOptions['loop']>): string {
@@ -315,6 +388,8 @@ export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], op
   if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
 
   if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE);
+
+  if (opts?.beside) blocks.push(renderLandingBeside(opts.beside));
 
   // Near the brief it corrects, and marked as whose it is: the runner reads it as a correction to how, not a new task (ADR-0029).
   if (task.retryNote) blocks.push(renderRetryNote(task.retryNote));

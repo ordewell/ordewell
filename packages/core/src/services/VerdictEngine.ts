@@ -15,7 +15,7 @@ export type RunningLongListener = (taskId: string, facts: RunningLongFacts) => v
 
 export interface VerdictEngineOptions {
   /** How long an attempt may run before it is flagged, read again as tasks pass; the floor alone when absent. */
-  runningLongThreshold?: () => RunningLongThreshold;
+  runningLongThreshold?: (taskId: string) => RunningLongThreshold;
 }
 
 /**
@@ -86,7 +86,7 @@ export class VerdictEngine {
   /** The running time an attempt's clock stopped at, until the task's next attempt starts. */
   private ran = new Map<string, number>();
   private runningLongListeners: RunningLongListener[] = [];
-  private readonly runningLongThreshold: () => RunningLongThreshold;
+  private readonly runningLongThreshold: (taskId: string) => RunningLongThreshold;
 
   constructor(options: VerdictEngineOptions = {}) {
     this.runningLongThreshold = options.runningLongThreshold ?? (() => ({ ms: RUNNING_LONG_FLOOR_MS }));
@@ -250,7 +250,7 @@ export class VerdictEngine {
     this.stopClock(task.id);
     this.ran.delete(task.id);
     // A script has its own timeoutMs, and a person's task has no runner (ADR-0018 W1).
-    const clock = task.type === 'ai' ? new RunningLongClock(this.runningLongThreshold, (facts) => {
+    const clock = task.type === 'ai' ? new RunningLongClock(() => this.runningLongThreshold(task.id), (facts) => {
       if (this.generations.get(task.id) !== gen) return;
       for (const l of this.runningLongListeners) l(task.id, facts);
     }, () => compactWindowInForce(session)) : undefined;

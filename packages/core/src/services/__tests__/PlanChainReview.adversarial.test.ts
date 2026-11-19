@@ -130,7 +130,7 @@ describe('the revision note', () => {
     const del = r.tasks.find((x) => x.id === 'del')!;
     expect(del.dependencies).toEqual(['a']);
     expect(del.prompt).toBeUndefined();
-    expect(del.goal).toBe('After "T d" lands, migrate the callers.\n\nPlan revision: this task no longer waits for "T d" (d), which runs in parallel with it. Where this brief says to wait for it or use its work, do not: run this slice\'s tests, report which fail only because that work has not landed, and leave those to the closing check. It now also runs after "T a" (a).');
+    expect(del.goal).toBe('After "T d" lands, migrate the callers.\n\nPlan revision: this task no longer waits for "T d" (d), which runs in parallel with it. Where this brief says to wait for it, do not: take in its work once it has landed, and until then run this slice\'s tests, name each that fails only because that work has not landed in a finding, and leave those to the closing check. It now also runs after "T a" (a).');
     // The review judges its edges against that brief.
     expect(chainReviewMessage(tasks, longestChain(tasks))).toContain('"goal":"After \\"T d\\" lands, migrate the callers."');
   });

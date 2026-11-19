@@ -93,6 +93,7 @@ function setup() {
     landPassed: async (): Promise<LandingOutcome> => ({ kind: 'nothing-to-land', messages: [] }),
     settleRepair: async (): Promise<LandingOutcome> => ({ kind: 'landed', messages: [] }),
     repairPrompt: () => 'Repair the conflict.',
+    takeInMessage: (task) => `Merge: ${task.title} (take in landed work)`,
   };
   const leases = new LocalWorktreeLease({
     pool: new SlotPool(() => Infinity),

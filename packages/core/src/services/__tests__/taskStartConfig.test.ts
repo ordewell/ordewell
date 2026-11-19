@@ -95,3 +95,38 @@ it.runIf(process.platform === 'win32')('holds what a task linked into its worktr
   expect(held).toContain('.opencode/agents/build.md');
   expect(held.some((name) => name.includes('settings.local.json'))).toBe(false);
 });
+
+// A take-in (ADR-0013) brings a sibling's landed configuration into the
+// worktree. The task did not write it, but the user never consented to it
+// either: a worktree is compared with the run's base, never the task's fork
+// point, so what a landing added holds the start as it would have unmerged.
+it('holds runner configuration a task took in from a sibling\'s landing, compared with the run\'s base', async () => {
+  const top = realpathSync.native(checkout());
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' }).trim();
+  writeFileSync(join(top, 'README.md'), 'x\n');
+  git(top, 'init', '-q', '-b', 'main');
+  git(top, 'add', '-A');
+  git(top, 'commit', '-qm', 'base');
+  const base = git(top, 'rev-parse', 'HEAD');
+  git(top, 'branch', 'integration');
+  const sibling = join(realpathSync.native(checkout()), 'sibling');
+  git(top, 'worktree', 'add', '-q', '-b', 'b/t2', sibling, base);
+  writeFileSync(join(sibling, '.mcp.json'), '{"mcpServers":{}}\n');
+  git(sibling, 'add', '-A');
+  git(sibling, 'commit', '-qm', 'sibling');
+  const landing = join(realpathSync.native(checkout()), 'integration');
+  git(top, 'worktree', 'add', '-q', landing, 'integration');
+  git(landing, 'merge', '-q', '--no-ff', '-m', 'Merge: sibling', 'b/t2');
+  const worktree = join(realpathSync.native(checkout()), 'wt');
+  git(top, 'worktree', 'add', '-q', '-b', 'b/t1', worktree, base);
+  writeFileSync(join(worktree, 'parser.py'), 'parse\n');
+  git(worktree, 'add', '-A');
+  git(worktree, 'commit', '-qm', 'own');
+  git(worktree, 'merge', '-q', '--no-edit', '-m', 'Merge: own (take in landed work)', 'integration');
+  const runs: StartConfigRuns = {
+    taskRepos: () => [{ path: '.', root: top, baseRef: base, worktree, branch: 'b/t1', integrationBranch: 'integration', linked: [] }],
+    workspaceOf: () => worktree,
+  };
+
+  expect(await new TaskStartConfig().check(runs, 't1', { epoch: 1, root: top, cwd: worktree, worktree: true })).toEqual(['.mcp.json']);
+});

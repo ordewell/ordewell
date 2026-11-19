@@ -8,6 +8,7 @@ import type { TaskTools } from './taskTools';
 import { Compactor, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
 import { REPEAT_FAIL_AT, REPEAT_NUDGE_AT, RepeatGuard, repeatFailure, repeatNudge } from './repeatGuard';
+import { writtenToolCall } from './textCall';
 
 /**
  * SEAM (b), the step boundary: called before every step's request, with the
@@ -129,6 +130,8 @@ interface StepResult {
   interrupted: boolean;
   repeated?: string;
   cutOffAt?: number;
+  /** The tool a reply with no call wrote out as text instead of calling. */
+  writtenCall?: string;
 }
 
 /** A step whose stream failed: what it left behind, and whether any event had reached the loop. */
@@ -150,6 +153,18 @@ function cutOffLog(limit: number, calls: number, inARow: number): string {
   return calls > 0
     ? `[Ordewell] The model's reply stopped at the output limit of ${limit} tokens; its ${calls} complete tool call${calls === 1 ? ' runs' : 's run'} and the turn goes on.`
     : `[Ordewell] The model's reply stopped at the output limit of ${limit} tokens with no tool call (cut-off ${inARow} of ${CUT_OFF_FAIL_AT} in a row); the turn goes on.`;
+}
+
+function writtenCallNote(name: string): string {
+  return `[Ordewell] Your last reply wrote a tool call (${name}) as text, so it was not made. Make the call through the tool-calling interface, not in your reply text, and go on with the task.`;
+}
+
+function writtenCallLog(name: string, inARow: number): string {
+  return `[Ordewell] The model's reply wrote a ${name} call as text instead of making it (${inARow} of ${CUT_OFF_FAIL_AT} in a row); the turn goes on.`;
+}
+
+function writtenCallFailure(name: string): string {
+  return `The model wrote its ${name} call as text in its reply ${CUT_OFF_FAIL_AT} times in a row instead of making it through the tool-calling interface, so the built-in runner ended the attempt.`;
 }
 
 function cutOffFailure(limit: number): string {
@@ -240,6 +255,8 @@ export class OrdewellLoop {
 
     // A reply cut off at the output limit is not a finished one: the turn goes on, within the step limit, until CUT_OFF_FAIL_AT in a row.
     let cutOffs = 0;
+    // A reply that writes a call out as text is no finished one either, and is bounded the same way.
+    let writtenCalls = 0;
     for (let turnSteps = 0; ; turnSteps++) {
       if (signals.stop.aborted || signals.hard.aborted) return { interrupted: true };
       step += 1;
@@ -279,6 +296,7 @@ export class OrdewellLoop {
         const limit = result.cutOffAt;
         if (result.calls > 0) {
           cutOffs = 0;
+          writtenCalls = 0;
           this.emit({ type: 'command_output', text: cutOffLog(limit, result.calls, 0) });
           continue;
         }
@@ -296,6 +314,19 @@ export class OrdewellLoop {
         continue;
       }
       cutOffs = 0;
+      if (result.writtenCall !== undefined && !this.reported) {
+        writtenCalls += 1;
+        if (writtenCalls >= CUT_OFF_FAIL_AT) {
+          const reason = writtenCallFailure(result.writtenCall);
+          await this.endAttempt(step, reason, signals);
+          return { interrupted: false, failed: reason };
+        }
+        this.emit({ type: 'command_output', text: writtenCallLog(result.writtenCall, writtenCalls) });
+        if (this.limitReached()) return this.endAtLimit(step, signals);
+        await this.recordMessage(step, { role: 'user', text: writtenCallNote(result.writtenCall) });
+        continue;
+      }
+      writtenCalls = 0;
       if (result.calls === 0) return this.limitReached() ? this.endAtLimit(step, signals) : { interrupted: false };
     }
   }
@@ -495,9 +526,12 @@ export class OrdewellLoop {
     } else {
       await this.recordStep(step, text, calls, providerState, running);
     }
+    // Only a reply that ended on its own and made no call: never the text of an interrupted or cut-off one.
+    const writtenCall = calls.length === 0 && !cutOff && !aborted && !signals.stop.aborted ? writtenToolCall(text, new Set(request.tools.map((tool) => tool.name))) : undefined;
     return {
       calls: calls.length,
       interrupted: aborted || signals.stop.aborted,
+      ...(writtenCall !== undefined ? { writtenCall } : {}),
       ...(repeated !== undefined ? { repeated } : {}),
       ...(cutOff ? { cutOffAt: request.maxOutputTokens ?? this.compactor.replyTokens } : {}),
     };
@@ -554,6 +588,8 @@ export class OrdewellLoop {
       ...(usage.cacheReadTokens !== undefined ? { cachedInputTokens: usage.cacheReadTokens } : {}),
       // Only the provider's own figure (ADR-0070): no price table makes one up.
       ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
+      ...(usage.provider ? { provider: usage.provider } : {}),
+      ...(usage.generationId ? { generationId: usage.generationId } : {}),
       // Always: compaction acts on this window, so the meter must read the same one, an assumed one or one an overflow shrank included.
       contextWindow: this.compactor.contextWindow,
       ...(this.compactor.windowAssumed ? { contextWindowAssumed: true } : {}),

@@ -86,6 +86,13 @@ describe('wakeUpDigest', () => {
         .toBe('- task #4 "Task t4" has run long: 1h 00m running, past its 1h 00m threshold (the 30m 00s floor, doubled after each earlier flag)');
     });
 
+    it('names the earlier attempt a retry\'s threshold was its running time of', () => {
+      const event = runningLong('t4', { elapsedMs: 42 * MINUTE, thresholdMs: 42 * MINUTE, attempt: 2, retryOf: { attempt: 1, runningMs: 42 * MINUTE, outcome: 'failed' } });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4" has run long: 42m 00s running, past its 42m 00s threshold (the 42m 00s attempt 1 ran before it failed)');
+    });
+
     it('names an automatic compaction of its runner\'s session, whatever the time', () => {
       const event = runningLong('t4', { reason: 'compaction', elapsedMs: 12 * MINUTE, thresholdMs: 30 * MINUTE, contextTokens: 30_000, contextWindow: 200_000, peakContextTokens: 190_000, compactions: 2 });
 
@@ -620,6 +627,16 @@ describe('Supervisor', () => {
     expect(turn.refused('plan')).toMatch(/^A whole new plan is refused in a wake-up turn: .*edit_plan/);
     expect(turn.brief?.whole).toMatch(/At Act you may act/);
     expect(turn.brief?.whole).toMatch(/up to 3 times/);
+  });
+
+  it('tells a wake-up turn at Act to narrow a task that failed part-way to what works, rather than retry the same goal (ADR-0029)', () => {
+    const whole = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn().brief?.whole ?? '';
+
+    expect(whole).toMatch(/report shows part of its brief working and committed, with evidence that the rest cannot be done from what the workspace holds, do not retry the same goal/);
+    expect(whole).toMatch(/edit_plan it so its done criterion is what works, name the rest as a follow-up task or in the task that checks the whole, then retry it/);
+    expect(whole).toMatch(/Never give a retry a done criterion its own limits cannot meet/);
+    expect(whole).toMatch(/nor call the rest solvable without evidence from the report/);
+    expect(whole).toMatch(/The verdict is still its runner's task_complete, and nothing lands without a pass/);
   });
 
   it('tells a wake-up turn at Act that it answers checkpoints, and leaves the ones that need the user\'s judgement to them', () => {

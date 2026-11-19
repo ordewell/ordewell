@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { IsolationRun } from '../interfaces/IWorktreeIsolation';
 import { git, tryGit, type GitInvoker } from './gitExec';
+import { integratedIn } from './LandingLedger';
 import { stateRootOf } from './stateRoot';
 import { realPathOf } from '../utils/realPath';
 import type { HandoffPatch } from '../models/Handoff';
@@ -197,6 +198,50 @@ export function readSavedPatch(patch: Buffer | undefined, saved: Pick<HandoffPat
   return { available: true, text: head + files.map((f) => `[repo .] ${f.path}: ${f.added === '-' ? 'binary change' : `+${f.added} -${f.removed}`}\n`).join('') };
 }
 
+/** What a task's fork point is read from in one repository: where it started, where its work is now, and what it lands on. */
+export interface ForkPointOf {
+  /** The integration tip its worktree was cut from, as its record holds it. */
+  start: string;
+  /** Its work: `HEAD` in its live worktree, else its branch's tip. */
+  head: string;
+  /**
+   * The integration commits the run recorded in this repository, the merges
+   * that landed its tasks and the commits its reverts made (`integratedIn`):
+   * a take-in past a revert holds one. Never the integration branch itself:
+   * a runner shares the repository's refs and can move it.
+   */
+  integrated?: readonly string[];
+  /** The integration tip right after it landed here, once it has. */
+  landedTip?: string;
+}
+
+/**
+ * Where a task's own work starts in a repository: the newest commit of the
+ * integration branch its branch holds. That is the commit its worktree was cut
+ * from, unless it merged the branch in since, taking in what landed beside it
+ * or a repair's merge (ADR-0013, ADR-0015): that work is its siblings', and is
+ * never read as its own. Once it landed, the branch holds its own landing, so
+ * it is read against the tip that landing merged onto. Before it lands, the
+ * newest commit it holds of those the run recorded, and only one past where it
+ * was cut: a fork point read from a ref its runner can move would let it hide
+ * its own work from the verdict's protected-path check (ADR-0055 D7). The
+ * recorded starting commit when git cannot say. The one reading for every
+ * view of a task's own work: its diff, which a verdict checks, and the host's
+ * (ADR-0064).
+ */
+export async function taskForkPoint(invoker: GitInvoker, cwd: string, common: readonly string[], of: ForkPointOf): Promise<string> {
+  const sha = /^[a-f0-9]{40,64}$/;
+  const onto = of.landedTip ? [`${of.landedTip}^1`] : (of.integrated ?? []).filter((commit) => sha.test(commit));
+  if (onto.length === 0) return of.start;
+  // With several commits after the first, git answers for the first against any of them: the newest it holds.
+  const found = await tryGit(invoker, cwd, [...common, 'merge-base', of.head, ...onto]);
+  const base = found.ok ? found.stdout.trim() : '';
+  if (!sha.test(base) || base === of.start) return of.start;
+  if (of.landedTip) return base;
+  const past = await tryGit(invoker, cwd, [...common, 'merge-base', '--is-ancestor', of.start, base]);
+  return past.ok ? base : of.start;
+}
+
 export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult> {
   const record = run.tasks[taskId];
   if (!record) return taskDiffUnavailable('no-record', TASK_DIFF_NO_RECORD);
@@ -241,10 +286,12 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         if (!/^[a-f0-9]{40,64}$/.test(tip)) throw new Error('Invalid task commit.');
         target = [tip];
       }
+      // A merged task's branch is in the integration branch, which no longer says where it began: a record from before landed tips were kept is read from its start.
+      const base = await taskForkPoint(reader, cwd, common, { start: entry.baseRef, head: live ? 'HEAD' : target[0], landedTip: entry.landedTip, ...(record.status === 'merged' ? {} : { integrated: integratedIn(run, repo.path) }) });
       const ordewells = (file: string) => entry.linked.some((linked) => file === linked || file.startsWith(`${linked}/`))
         || run.shared.some((shared) => repo.path === '.' && (file === shared || file.startsWith(`${shared}/`)));
       if (options.names) {
-        const tracked = stats(await git(reader, cwd, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative=', entry.baseRef, ...target, '--numstat', '-z']));
+        const tracked = stats(await git(reader, cwd, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--relative=', base, ...target, '--numstat', '-z']));
         const fresh = live ? (await git(reader, cwd, [...common, 'ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean) : [];
         const work = fresh.filter((f) => !(f.startsWith(prefix) && ordewells(f.slice(prefix.length))));
         for (const file of [...tracked.map((f) => f.path), ...work]) {
@@ -253,7 +300,7 @@ export async function readTaskDiff(invoker: GitInvoker, run: IsolationRun, taskI
         continue;
       }
       const scope = prefix ? [`:(top,literal)${prefix.replace(/\/$/, '')}`] : [];
-      const diffArgs = [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, entry.baseRef, ...target];
+      const diffArgs = [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', `--relative=${prefix}`, base, ...target];
       const listed = stats(await git(reader, cwd, [...diffArgs, '--numstat', '-z', '--', ...scope]));
       const allowed = (file: string) => allowedPath(file) && !ordewells(file);
       // A tracked path is in the diff only because the task put it there: Ordewell's links are never committed.

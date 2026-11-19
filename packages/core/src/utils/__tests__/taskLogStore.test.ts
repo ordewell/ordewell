@@ -5,7 +5,7 @@ import * as path from 'path';
 import { listTaskLogAttempts, openTaskLog, prepareTaskOutputFile, readTaskLog, readTaskPatch, saveTaskPatch, type TaskLogLocation } from '../taskLogStore';
 import { deleteSession, saveSession, sessionDataDir } from '../sessionStore';
 import { createEmptyPlan } from '../../models/Task';
-import type { TaskLogEvent } from '../../models/TaskLog';
+import { toTaskLogEvent, type TaskLogEvent } from '../../models/TaskLog';
 
 describe('taskLogStore', () => {
   let baseDir: string;
@@ -52,6 +52,14 @@ describe('taskLogStore', () => {
     expect(readTaskLog(where, 'task-1', 1)).toEqual(turn);
     const raw = fs.readFileSync(path.join(sessionDataDir('session-abc', baseDir), 'tasks', 'task-1', '1.jsonl'), 'utf-8');
     expect(raw.trimEnd().split('\n')).toHaveLength(2);
+  });
+
+  it('keeps the upstream and generation id a usage record names across a save and a read', () => {
+    const record = { source: 'ordewell', model: 'deepseek/deepseek-v4.1-flash', inputTokens: 9000, cachedInputTokens: 8704, provider: 'DeepInfra', generationId: 'gen-1763400000-dsk' };
+    const logged = toTaskLogEvent({ type: 'usage', record });
+    expect(logged).not.toBeNull();
+    openTaskLog(where, 'task-1').append([logged as TaskLogEvent]);
+    expect(readTaskLog(where, 'task-1', 1)).toEqual([{ type: 'usage', record }]);
   });
 
   it('prepares a script attempt\u2019s whole-output file beside its log, which is not itself an attempt', () => {

@@ -25,7 +25,9 @@ const POLL_MS = 30_000;
 const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run | --rehearse <scenario>) --libs <file> [options]
 
   --jobs <n>               runs at once (default ${L.JOBS}); refused when n × --cpus exceeds the host's CPUs
-                           or n × --memory exceeds ${L.BATCH_MEMORY_SHARE * 100}% of its memory
+                           or n × --memory exceeds ${L.BATCH_MEMORY_SHARE * 100}% of its memory. With both arms
+                           and 2 or more, a library's A and B start together and the next library's pair
+                           starts only once both have ended
   --batch-budget-usd <usd> stop every run once the key's usage since the batch began reaches it
                            (required with --run)
   --only <a,b>             only these libraries of --libs
@@ -41,7 +43,10 @@ Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap
 --allow-stale-dist, --keep, --plan-only (node bench/commit0/drive.mjs --help).
 
 The batch takes the key's lock once; its runs and batch.json go in one directory under the
-bench data directory, and their results are appended to results.jsonl once every run has ended;
+bench data directory. batch.json is written whole when the batch starts and after every run
+ends, with the key's usage as read at each of those points when a key is present, so a host
+stop loses at most the runs that were going. Results are appended to results.jsonl once every
+run has ended;
 a dry run's, a rehearsal's and a plan-only run's never are (a plan-only run's go to plans.jsonl).`;
 
 const opts = (() => {
@@ -145,6 +150,7 @@ async function main() {
   const release = opts.run ? L.lockKey(dataDir) : () => {};
   process.on('exit', release);
   const startedAt = new Date().toISOString();
+  const keyReadings = [];
   let keyBeforeUsd = null;
   if (opts.run) {
     try {
@@ -153,6 +159,7 @@ async function main() {
       fs.rmdirSync(batchDir);
       throw err;
     }
+    keyReadings.push({ at: startedAt, usd: keyBeforeUsd, after: null });
   }
   let stoppedByBudget = null;
   const stopFile = path.join(batchDir, L.BATCH_STOP_FILE);
@@ -172,8 +179,35 @@ async function main() {
   })();
 
   const outcomes = [];
-  const queue = [...runs];
-  const worker = async () => {
+  /** batch.json as the outcomes so far make it, each run's result read from its directory. */
+  const writeRecord = ({ endedAt = null, keyAfterUsd = null } = {}) => {
+    const reported = [];
+    const results = [];
+    for (const o of outcomes) {
+      const found = findResult(batchDir, o.lib, o.arm);
+      if (found) results.push(found.result);
+      reported.push({
+        lib: o.lib, arm: o.arm, exit: o.exit, signal: o.signal ?? null, skipped: o.skipped ?? null,
+        resultDir: found?.dir ?? null,
+        startedAt: found?.result.startedAt ?? null,
+        endedAt: found?.result.endedAt ?? null,
+        recordedUsd: found?.result.recordedUsd ?? null,
+        billedUsd: found?.result.billedUsd ?? null,
+        billedSource: found?.result.billedSource ?? null,
+        valid: found?.result.valid ?? null,
+        planOnly: found?.result.planOnly ?? null,
+        planned: found?.result.planned ?? null,
+      });
+    }
+    const record = L.batchRecord({
+      keyBeforeUsd, keyAfterUsd, budgetUsd: opts.budgetUsd, stoppedByBudget, jobs: opts.jobs, overlapped,
+      seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, planOnly: opts.planOnly, startedAt, endedAt, keyReadings, runs: reported,
+    });
+    L.writeJsonAtomic(path.join(batchDir, 'batch.json'), record);
+    return { record, reported, results };
+  };
+  writeRecord();
+  const worker = async (queue) => {
     for (let r = queue.shift(); r; r = queue.shift()) {
       if (cancelledBy) {
         outcomes.push({ ...r, exit: null, skipped: `the batch was cancelled by ${cancelledBy} before it started` });
@@ -187,10 +221,17 @@ async function main() {
       const args = [...opts.driveArgs, '--only', r.lib, '--arm', r.arm, ...(opts.seed ? ['--seed', opts.seed] : []), '--batch-dir', batchDir, ...(overlapped ? ['--batch-shared'] : [])];
       const { code, signal } = await runChild(args, path.join(batchDir, `${tag}.log`), `[${r.lib} ${r.arm}]`);
       outcomes.push({ ...r, exit: code, signal: signal ?? null });
+      // Read once the run has ended and written before anything else can be lost: a host stop costs the runs still going.
+      if (opts.run) keyReadings.push({ at: new Date().toISOString(), usd: await L.keyUsage(key), after: `${r.lib} ${r.arm}` });
+      writeRecord();
     }
   };
   try {
-    await Promise.all(Array.from({ length: Math.min(opts.jobs, runs.length) }, worker));
+    // A wave ends before the next starts: a library's A and B are one wave when the jobs hold a pair.
+    for (const segment of L.batchSegments({ runs, jobs: opts.jobs })) {
+      const queue = [...segment.runs];
+      await Promise.all(Array.from({ length: Math.min(segment.jobs, queue.length) }, () => worker(queue)));
+    }
   } finally {
     running = false;
   }
@@ -198,27 +239,8 @@ async function main() {
   const keyAfterUsd = opts.run && keyBeforeUsd !== null ? await L.settledKeyUsage(key) : null;
   release();
 
-  const reported = [];
-  const results = [];
-  for (const o of outcomes) {
-    const found = findResult(batchDir, o.lib, o.arm);
-    if (found) results.push(found.result);
-    reported.push({
-      lib: o.lib, arm: o.arm, exit: o.exit, signal: o.signal ?? null, skipped: o.skipped ?? null,
-      resultDir: found?.dir ?? null,
-      recordedUsd: found?.result.recordedUsd ?? null,
-      billedUsd: found?.result.billedUsd ?? null,
-      billedSource: found?.result.billedSource ?? null,
-      valid: found?.result.valid ?? null,
-      planOnly: found?.result.planOnly ?? null,
-      planned: found?.result.planned ?? null,
-    });
-  }
-  const record = L.batchRecord({
-    keyBeforeUsd, keyAfterUsd, budgetUsd: opts.budgetUsd, stoppedByBudget, jobs: opts.jobs, overlapped,
-    seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(), runs: reported,
-  });
-  fs.writeFileSync(path.join(batchDir, 'batch.json'), `${JSON.stringify(record, null, 2)}\n`);
+  if (keyAfterUsd !== null) keyReadings.push({ at: new Date().toISOString(), usd: keyAfterUsd, after: 'settled' });
+  const { record, reported, results } = writeRecord({ endedAt: new Date().toISOString(), keyAfterUsd });
   // Appended here, one after another, so concurrent runs never interleave a line; only a paid run's are results,
   // and a plan-only run's go to a file of their own, since none of them is scored.
   if (opts.run) {

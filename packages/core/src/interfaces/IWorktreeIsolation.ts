@@ -323,6 +323,14 @@ export interface IsolationRun {
    * record left, and a retry starts from its tip.
    */
   reverted?: true;
+  /**
+   * The commits each revert made, by repo, oldest first. They are on the
+   * integration branch beside the landings, so a task that takes the branch in
+   * past one holds it, and its fork point has to know it: else what the revert
+   * took out reads as that task's own deletion (ADR-0013). Absent on a run saved
+   * before they were kept, and on one that reverted nothing.
+   */
+  revertCommits?: Record<string, string[]>;
 }
 
 /**
@@ -549,7 +557,7 @@ export interface RevertCommand {
  */
 export type LandedWork =
   | { ok: true; tasks: IsolationRevertTask[]; inBranch: RevertCommand[] }
-  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'git'; error: string };
+  | { ok: false; reason: 'no-own-merge' | 'checked-out' | 'live-dependent' | 'git'; error: string };
 
 /** What {@link IWorktreeIsolation.revert} asks of its caller, in its turn. */
 export interface RevertWatch {

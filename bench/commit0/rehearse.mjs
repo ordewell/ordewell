@@ -7,15 +7,26 @@
  * stops and scores a live one.
  *
  *   node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b] [--ordewell-root <dir>]
+ *                                   [--pairs <libA,libB> [--pair-scenario <name>] [--cpus <n>] [--memory <size>]]
  *
  * Each scenario's result.json is judged against what the scenario expects,
- * its batch.json must hold the run, results.jsonl must not grow, and no box or
- * network of the bench may be left behind. Exit 0 when all pass.
+ * its batch.json must hold the run and be marked finished, results.jsonl must
+ * not grow, and no box or network of the bench may be left behind. Exit 0 when
+ * all pass.
+ *
+ * --pairs adds one more batch: both arms of two libraries at --jobs 2, on a
+ * scenario (default a-done) whose script only one arm plays, since what it
+ * proves is the schedule and batch.json, not a run's score: each library's A
+ * and B start together, the next library's pair starts after both of the last
+ * have ended, and batch.json is whole and finished. The libraries' images must
+ * be on the host; --cpus and --memory size each run so that two pairs fit.
  */
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { checkedBenchDir } from '../lib/data-dir.mjs';
+import * as L from './lib.mjs';
 import * as R from './rehearsal.mjs';
 
 const arg = (name, fallback) => {
@@ -26,11 +37,13 @@ const libs = arg('--libs');
 const only = arg('--only', 'tlslite-ng');
 const ordewellRoot = arg('--ordewell-root');
 const names = (arg('--scenario') ?? R.scenarioNames().join(',')).split(',').filter(Boolean);
-if (!libs) {
-  console.error('usage: node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b] [--ordewell-root <dir>]');
+const pairLibs = (arg('--pairs') ?? '').split(',').filter(Boolean);
+const pairScenario = arg('--pair-scenario', 'a-done');
+if (!libs || (pairLibs.length && pairLibs.length !== 2)) {
+  console.error('usage: node bench/commit0/rehearse.mjs --libs <libraries.json> [--only <library>] [--scenario a,b] [--ordewell-root <dir>] [--pairs <libA,libB> [--pair-scenario <name>] [--cpus <n>] [--memory <size>]]');
   process.exit(2);
 }
-for (const n of names) R.scenario(n);
+for (const n of [...names, ...(pairLibs.length ? [pairScenario] : [])]) R.scenario(n);
 const keys = R.realKeysIn(process.env);
 if (keys.length) {
   console.error(`a rehearsal never runs with a real key in the environment: unset ${keys.join(', ')}`);
@@ -62,10 +75,24 @@ function strays(before, after, seed) {
   return [...after.containers, ...after.networks].filter((x) => !known.has(x.id) && x.name.includes(seed.toLowerCase())).map((x) => x.id);
 }
 
-/** The turns the fake played, from its request log. */
-function turnsOf(file) {
+/** The requests the fake heard, from its request log. */
+function requestsOf(file) {
   if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).turn).filter(Boolean);
+  return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/**
+ * The commits the copy of the arm's workdir ends on, or null when git cannot
+ * read them: `ordewell merge` has folded the integration branch into the
+ * workdir's own and deleted it, so its history is the base branch's. The copy
+ * is the box's own repository, so git reads it with no configuration of the
+ * host's or its own to run, and only to list commits.
+ */
+function historyOf(armDir) {
+  const env = { PATH: process.env.PATH, HOME: armDir, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*' };
+  const r = spawnSync('git', ['--git-dir', path.join(armDir, '.git'), 'log', '--format=%H%x09%P%x09%s', 'HEAD', '--'], { env, encoding: 'utf8' });
+  if (r.status !== 0) return null;
+  return r.stdout.split('\n').filter(Boolean).map((l) => { const [sha, parents, ...subject] = l.split('\t'); return { sha, parents: parents.split(' ').filter(Boolean), subject: subject.join('\t') }; });
 }
 
 /** The context the fake was started with, for reading its scripts back: only the step tools matter here. */
@@ -111,7 +138,14 @@ for (const name of names) {
   const failures = R.judgeRehearsal(name, result);
   failures.push(...R.judgeBatch(batchRecord, { lib: only, arm: s.arm, rehearsal: name }));
   if (resultsSize() !== sizeBefore) failures.push(`${resultsFile} grew: a rehearsal's result was appended to the paid runs' results`);
-  if (runDir) failures.push(...R.judgePlayed(name, turnsOf(path.join(runDir, 'rehearsal-requests.jsonl')), playCtx(libs, only)));
+  if (runDir) {
+    const requests = requestsOf(path.join(runDir, 'rehearsal-requests.jsonl'));
+    const ctx = playCtx(libs, only);
+    failures.push(...R.judgePlayed(name, requests.map((r) => r.turn).filter(Boolean), ctx));
+    const armDir = path.join(runDir, 'arm-workdir');
+    if (s.takeIn) failures.push(...R.judgeTakeIn(name, requests, ctx, historyOf(armDir)));
+    failures.push(...R.judgeLanded(name, (file) => fs.existsSync(path.join(armDir, file))));
+  }
   if (runDir && s.planOnly) {
     const digestFile = path.join(runDir, 'plan.json');
     failures.push(...R.judgePlanOnlyDir({
@@ -128,6 +162,29 @@ for (const name of names) {
   outcome.push({ name, passed: failures.length === 0, failures, runDir, exit, minutes });
   console.log(failures.length ? `   FAIL (${minutes} min, batch exit ${exit})\n     - ${failures.join('\n     - ')}` : `   pass (${minutes} min)`);
   if (runDir) console.log(`   ${R.describeResult(result)}`);
+}
+
+if (pairLibs.length) {
+  const name = pairScenario;
+  const s = R.scenario(name);
+  const seed = `rehearsal-pairs-${Date.now().toString(36)}`;
+  const argv = ['--rehearse', name, '--libs', libs, '--only', pairLibs.join(','), '--arm', 'both', '--seed', seed, '--jobs', '2', ...['--cpus', '--memory'].flatMap((f) => (arg(f) ? [f, arg(f)] : [])), ...(ordewellRoot ? ['--ordewell-root', ordewellRoot] : []), ...R.windowArgs(s)];
+  fs.mkdirSync(rehearsals, { recursive: true });
+  const log = path.join(rehearsals, `${seed}.log`);
+  console.log(`\n== pairs (${pairLibs.join(', ')}): each library's A and B start together, the next pair after both ended\n   node bench/commit0/batch.mjs ${argv.join(' ')}\n   log: ${log}`);
+  const startedAt = Date.now();
+  const sizeBefore = resultsSize();
+  const exit = await batch(argv, log);
+  const { batchDir, batchRecord } = findBatch(seed);
+  const failures = L.judgePairBatch(batchRecord, { libs: pairLibs, rehearsal: name });
+  // No batch.json left half-written beside the finished one: the write is by rename.
+  if (batchDir && fs.readdirSync(batchDir).some((f) => f.endsWith('.tmp'))) failures.push('a batch.json write was left half done: a .tmp file remains in the batch directory');
+  if (resultsSize() !== sizeBefore) failures.push(`${resultsFile} grew: a rehearsal's result was appended to the paid runs' results`);
+  const stray = strays(before, leftovers(), seed);
+  if (stray.length) failures.push(`left behind: ${stray.join(', ')}`);
+  const minutes = ((Date.now() - startedAt) / 60_000).toFixed(1);
+  outcome.push({ name: 'pairs', passed: failures.length === 0, failures, runDir: batchDir, exit, minutes });
+  console.log(failures.length ? `   FAIL (${minutes} min, batch exit ${exit})\n     - ${failures.join('\n     - ')}` : `   pass (${minutes} min)`);
 }
 
 console.log('\nRehearsal:');
