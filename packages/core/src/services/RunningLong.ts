@@ -154,6 +154,9 @@ export class RunningLongClock {
   /** The main model's context as the usage meter keeps it, by the same rules: a compaction or a model change clears it. */
   private meter: PlannerUsage = { totals: {} };
   private peak?: number;
+  /** The context a continued attempt started with, once its first call measured it: flags at or under it are its session's past, not this attempt's. */
+  private baseline?: number;
+  private awaitsBaseline: boolean;
   private stopped = false;
 
   constructor(
@@ -161,7 +164,11 @@ export class RunningLongClock {
     private readonly flag: (facts: RunningLongFacts) => void,
     /** The size Ordewell set the runner to compact at; none where the runner compacts near its model's own window. */
     private readonly compactWindow: () => number | undefined = () => undefined,
-  ) {}
+    /** The attempt resumes a saved runner session, whose context it starts with (ADR-0018 W1). */
+    opts: { continues?: boolean } = {},
+  ) {
+    this.awaitsBaseline = opts.continues === true;
+  }
 
   run(): void {
     if (this.stopped || this.since !== null) return;
@@ -189,13 +196,19 @@ export class RunningLongClock {
     // A peak is measured against one model's window: another model's does not carry over.
     if (before.model !== this.meter.model || before.source !== this.meter.source) this.peak = undefined;
     this.measure();
+    if (this.awaitsBaseline && this.meter.lastPromptTokens !== undefined) {
+      this.awaitsBaseline = false;
+      this.baseline = this.meter.lastPromptTokens;
+    }
     this.sized();
   }
 
   /**
    * One flag as the context first reaches its threshold, then one at each
    * doubling of it that is still under the effective window: a single call
-   * that jumps past two raises one.
+   * that jumps past two raises one. A continued attempt counts from its
+   * baseline: the first flag is the next doubling above it, since what the
+   * session carried in says nothing of how this attempt is going.
    */
   private sized(): void {
     const tokens = this.meter.lastPromptTokens;
@@ -204,7 +217,7 @@ export class RunningLongClock {
     let crossed: number | undefined;
     for (let due = threshold.tokens * 2 ** this.contextFlags; due < threshold.window && tokens >= due; due *= 2) {
       this.contextFlags += 1;
-      crossed = due;
+      if (this.baseline === undefined || due > this.baseline) crossed = due;
     }
     if (crossed !== undefined) this.flag({ ...this.facts('context', this.due()), contextThreshold: crossed });
   }

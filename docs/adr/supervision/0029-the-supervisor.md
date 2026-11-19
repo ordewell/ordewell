@@ -564,14 +564,21 @@ word of the note.
 The Act brief also says what a retry is for when a task failed part-way. When
 its report shows part of the brief working and committed, with evidence that
 the rest cannot be done from what the workspace holds, the supervisor does not
-retry the same goal: it edits the task so its done criterion is what works,
-names the rest as a follow-up task or in the task that checks the whole, and
-then retries it. It never gives a retry a done criterion the retry's own limits
+retry the same goal: it edits the task so its done criterion is what works and
+retries it. A rest the report shows cannot be done gets no task: it is
+recorded as a known gap, in the brief of the task that checks the whole and in
+the supervisor's message to the user. A follow-up task is only for a rest that
+can be done, and is given only that scope, and once the run's last task has
+ended no task is added unless new evidence makes its goal reachable. It never gives a retry a done criterion the retry's own limits
 cannot meet, nor calls the rest solvable without evidence from the report. The
 verdict is still the runner's `task_complete` on what the plan holds, and
 nothing lands without a pass. Seen live: a retry told both to cap its search
 at 45 minutes and that done meant fully green ran 117 minutes, committed the
-same files again and never called `task_complete`.
+same files again and never called `task_complete`. And: a narrowed closing
+check landed in a minute, but the remainder, 28 tests two reports had shown
+could not be derived from the repository, went to a new task with the original
+goal, which failed after 36 minutes, a fix loop spent 14 more, and a task for
+the same search was added after the run had ended.
 
 ### Failure handling: the run never depends on the supervisor
 
@@ -865,3 +872,4 @@ until #30 exists.
 - 2026-11-18 — the wake a closing turn owes for a task it left failed or held with work waiting holds `run_concluded` until its turn is over, so `ordewell run` waits for it too.
 - 2026-11-18 — what a closing turn left standing is judged once its retry is over too, so a closing turn that failed once still owes the wake, and the user's Stop of the closing turn or its retry owes none.
 - 2026-11-18 — the Act brief narrows a task that failed part-way, with evidence the rest cannot be done here, to what works before retrying it, and a model's `message_task` to a task not started since it ran is refused naming the retry's note.
+- 2026-11-19 — the Act brief records a remainder shown undoable as a known gap, in the closing check's brief and the message to the user, with no task; a follow-up task gets only a reachable remainder, and none is added after the run's last task has ended without new evidence.

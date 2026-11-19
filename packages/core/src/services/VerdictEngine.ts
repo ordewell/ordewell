@@ -234,8 +234,10 @@ export class VerdictEngine {
    * no runner to call it: its exit status is the evidence instead (ADR-0035).
    *
    * Returns the attempt's generation, what {@link signalComplete} is checked against.
+   * `continues` says the attempt resumes a saved runner session, whose context
+   * its running-long clock takes as its baseline (ADR-0018 W1).
    */
-  watch(task: Task, session: IRunnerSession): number {
+  watch(task: Task, session: IRunnerSession, opts: { continues?: boolean } = {}): number {
     const gen = this.bumpGeneration(task.id);
     // Silence counts from the start, not from the first output: a runner that
     // never prints went unflagged however long it stayed quiet (#117). Armed
@@ -253,7 +255,7 @@ export class VerdictEngine {
     const clock = task.type === 'ai' ? new RunningLongClock(() => this.runningLongThreshold(task.id), (facts) => {
       if (this.generations.get(task.id) !== gen) return;
       for (const l of this.runningLongListeners) l(task.id, facts);
-    }, () => compactWindowInForce(session)) : undefined;
+    }, () => compactWindowInForce(session), opts) : undefined;
     if (clock) {
       this.clocks.set(task.id, clock);
       clock.run();
