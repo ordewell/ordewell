@@ -24,6 +24,11 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **The built-in runner counts its model calls for the model.** The prompt
+  says the runner keeps the count and the model must not estimate it; the exact
+  count goes out every 50 calls and in each budget notice, and a `failed` or
+  `blocked` report that blames the budget before the first notice is due is
+  answered once with the real count, and the turn goes on.
 - **The supervisor narrows a task that failed part-way before retrying it.** A
   retry's running-long threshold counts from its last attempt, a running-long
   wake names the tasks blocked on a long one, and a message to a task that has
