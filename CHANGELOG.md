@@ -8,6 +8,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The built-in runner counts its model calls for the model.** The prompt
+  says the runner keeps the count and the model must not estimate it; the exact
+  count goes out every 50 calls and in each budget notice, and a `failed` or
+  `blocked` report that blames the budget before the first notice is due is
+  answered once with the real count, and the turn goes on.
+- **A remainder shown to be undoable is recorded as a known gap, not given a
+  task.** The supervisor puts it in the closing check's brief and in the message
+  to the user, and adds no task once the run's last task has ended without new
+  evidence. A continued attempt's first context flag is the next doubling above
+  the context it carried over, not at once.
+
 ## [0.14.4] - 2026-11-19
 
 ### Added
@@ -26,11 +39,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
-- **The built-in runner counts its model calls for the model.** The prompt
-  says the runner keeps the count and the model must not estimate it; the exact
-  count goes out every 50 calls and in each budget notice, and a `failed` or
-  `blocked` report that blames the budget before the first notice is due is
-  answered once with the real count, and the turn goes on.
 - **The supervisor narrows a task that failed part-way before retrying it.** A
   retry's running-long threshold counts from its last attempt, a running-long
   wake names the tasks blocked on a long one, and a message to a task that has
