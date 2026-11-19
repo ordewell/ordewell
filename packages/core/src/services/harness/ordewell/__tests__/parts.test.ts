@@ -117,6 +117,18 @@ describe('buildSystemPrompt', () => {
     expect(text(false)).toContain('a budget of 137 model calls for this attempt');
   });
 
+  it('says the runner counts the calls and the model must not, so it never stops on its own estimate', () => {
+    const text = buildSystemPrompt({ cwd: tempDir(), commits: true, stepLimit: 1000, now })[0]?.text ?? '';
+    const budget = text.split('\n').find((line) => line.includes('a budget of 1000 model calls')) ?? '';
+    expect(budget).toMatch(/the runner counts them/i);
+    expect(budget).toMatch(/exact count at fixed points/i);
+    expect(budget).toMatch(/until told otherwise you have calls left/i);
+    expect(budget).toMatch(/never estimate the count yourself/i);
+    expect(budget).not.toMatch(/you are told when it is nearly spent/);
+    // The near-the-end rule follows the runner's word, not the model's own reckoning.
+    expect(text).toMatch(/when you are told the budget is nearly spent/i);
+  });
+
   it('appends AGENTS.md, else CLAUDE.md, with the cache breakpoint on the last part', () => {
     const cwd = tempDir();
     expect(buildSystemPrompt({ cwd, commits: false, stepLimit: 200, now }).at(-1)?.text).toContain('Git repository: no');

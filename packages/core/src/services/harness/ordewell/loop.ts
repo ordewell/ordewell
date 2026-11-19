@@ -193,6 +193,8 @@ export class OrdewellLoop {
   private stops = 0;
   /** The budget notices this attempt has spent, each at most once (ADR-0070). */
   private readonly noticed = new Set<number>();
+  /** Whether a report giving up on a budget not yet near its end has been answered: once an attempt, so nothing loops. */
+  private budgetAnswered = false;
   /** Steps in a row whose stream failed part way, and when the first of them failed: the retry policy's attempt and window. */
   private cutStreams = { count: 0, since: 0 };
   private readonly neutral: readonly OrdewellTool[];
@@ -349,15 +351,35 @@ export class OrdewellLoop {
    * reportable state before the forced last call (ADR-0070). Each is spent once
    * sent; none goes out while a report stands, or on the last call, whose own
    * instruction says more. Two falling due together send only the later.
+   *
+   * Between them the exact count goes out every COUNT_EVERY calls, and each
+   * notice carries it too: a model left to keep its own tally overestimated it
+   * and reported failed with most of its budget unspent.
    */
   private budgetNotice(): string | undefined {
     const limit = this.limit();
     if (this.reported || !Number.isFinite(limit) || this.modelCalls >= limit - 1 || !this.options.taskTools.has('task_complete')) return undefined;
-    const due = BUDGET_NOTICES.filter((share) => !this.noticed.has(share) && this.modelCalls >= Math.max(1, Math.floor(limit * share)));
+    const due = BUDGET_NOTICES.filter((share) => !this.noticed.has(share) && this.modelCalls >= noticeAt(share, limit));
     for (const share of due) this.noticed.add(share);
     const latest = due.at(-1);
-    if (latest === undefined) return undefined;
-    return latest === BUDGET_NOTICES[0] ? midBudgetNotice(this.modelCalls, limit) : endBudgetNotice(limit - this.modelCalls, limit);
+    const count = countLine(this.modelCalls, limit);
+    if (latest === undefined) return this.modelCalls > 0 && this.modelCalls % COUNT_EVERY === 0 ? count : undefined;
+    const notice = latest === BUDGET_NOTICES[0] ? midBudgetNotice(this.modelCalls, limit) : endBudgetNotice(limit - this.modelCalls, limit);
+    return `${notice}\n${count}`;
+  }
+
+  /**
+   * The runner's answer to a report that gives the budget as why it stops
+   * while less of it is used than the first notice marks: the model's own
+   * tally, not the count, ended such attempts with most calls unspent. It is
+   * answered once an attempt with the count and not recorded; a second is
+   * recorded as it is, since only the model knows what else may stop it.
+   */
+  private answerEarlyGiveUp(args: unknown): string | undefined {
+    const limit = this.limit();
+    if (this.budgetAnswered || !Number.isFinite(limit) || this.modelCalls >= noticeAt(BUDGET_NOTICES[0], limit) || !citesBudget(args)) return undefined;
+    this.budgetAnswered = true;
+    return earlyGiveUpAnswer(this.modelCalls, limit);
   }
 
   /** The limit is spent: a report stands, or the runner makes the failed one itself. */
@@ -556,6 +578,8 @@ export class OrdewellLoop {
     if (call.argumentsError) return settle(`Invalid arguments for ${call.name}: ${call.argumentsError}`, true);
     try {
       if (this.options.taskTools.has(call.name)) {
+        const answer = call.name === 'task_complete' ? this.answerEarlyGiveUp(call.arguments) : undefined;
+        if (answer !== undefined) return settle(answer, true);
         const reply = await this.options.taskTools.call(call.name, call.arguments, signals.hard);
         if (call.name === 'task_complete' && reply.isError !== true) this.reported = true;
         return settle(reply.text, reply.isError === true);
@@ -637,6 +661,53 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 /** The shares of the step budget used at which the model is told so, in order. */
 const BUDGET_NOTICES = [0.8, 0.95] as const;
+
+/** Model calls between two exact counts sent to the model, notices aside. */
+const COUNT_EVERY = 50;
+
+/** The calls used at which a notice falls due. */
+function noticeAt(share: number, limit: number): number {
+  return Math.max(1, Math.floor(limit * share));
+}
+
+/**
+ * The phrases a report that blames the attempt's own budget uses. Phrases, not
+ * the bare words: a check's verdict ("calls save twice", "two steps remain")
+ * and a real block ("network calls", "the API call limit") use those for
+ * something else. A budget is the attempt's only unnamed, where a clause starts
+ * or after "the", "my" or "your", or named for calls, steps or the attempt:
+ * a bundle-size, performance or error budget is a check's subject.
+ */
+const BUDGET_OWNER = String.raw`(?:^|[.;:!?,]\s*|\b(?:the|my|your)\s+)`;
+const BUDGET_PHRASES = [
+  /\b(?:attempt|step|model[- ]call|call)s?\s+budget\b/i,
+  new RegExp(String.raw`${BUDGET_OWNER}budget\s+(?:is\s+|was\s+|has\s+)?(?:exhausted|spent|used|ran\s+out|running\s+out|nearly|almost|left|remain\w*)`, 'i'),
+  /\bout\s+of\s+(?:(?:the|my|your)\s+budget|(?:model\s+)?calls|steps)\b/i,
+  /\b(?:model[- ]call|step)s?\s+limit\b/i,
+  /\bmodel[- ]calls?\s+(?:left|remain\w*)\b/i,
+] as const;
+
+/**
+ * Whether a `task_complete` call's arguments end the attempt as `failed` or
+ * `blocked` and give the budget as why: one of BUDGET_PHRASES in its reason or
+ * its summary, whatever their case.
+ */
+export function citesBudget(args: unknown): boolean {
+  if (typeof args !== 'object' || args === null) return false;
+  const { status, reason, summary } = args as Record<string, unknown>;
+  if (status !== 'failed' && status !== 'blocked') return false;
+  return [reason, summary].some((text) => typeof text === 'string' && BUDGET_PHRASES.some((phrase) => phrase.test(text)));
+}
+
+/** Conditional, since the phrases can match a report that stopped for another reason and is owed its record. */
+function earlyGiveUpAnswer(used: number, limit: number): string {
+  return '[Ordewell] Not recorded: if you stopped because of the call budget, it is not spent, so go on with the brief. '
+    + `If you stopped for another reason, call task_complete again and that report is recorded.\n${countLine(used, limit)}`;
+}
+
+function countLine(used: number, limit: number): string {
+  return `[calls: ${used} of ${limit}]`;
+}
 
 function midBudgetNotice(used: number, limit: number): string {
   return `[Ordewell] You have used ${used} of the ${limit} model calls this attempt may make. Bring the part you are on to a working state and commit it, if your task lands as a commit, so it stands whenever the attempt ends; then go on with the brief in order.`;

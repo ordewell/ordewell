@@ -2160,6 +2160,109 @@ export function callStats(taskLogs) {
   return { calls, byUpstream, coldAfterCall, coldShare: COLD_CACHE_SHARE };
 }
 
+/** The usage records of an attempt's own calls, in order: no aggregate, no compaction, no subagent. */
+const ownCalls = (events) => events.filter((e) => e.type === 'usage' && e.record && !e.record.aggregate && !e.record.compacted && !e.record.subagentId && typeof e.record.inputTokens === 'number').map((e) => e.record);
+
+/**
+ * How often the upstream provider changed within an attempt, from the
+ * `provider` of the built-in runner's usage records. A record that names none
+ * is skipped, not read as a change; a subagent's calls are its own, and are
+ * left out. `withProvider` counts the attempts that name an upstream at all.
+ * Null without the logs.
+ */
+export function providerSwitches(taskLogs) {
+  if (!taskLogs) return null;
+  const out = { attempts: 0, withProvider: 0, attemptsSwitched: 0, switches: 0 };
+  for (const attempts of Object.values(taskLogs)) {
+    for (const events of Object.values(attempts)) {
+      out.attempts++;
+      const named = ownCalls(events).map((r) => r.provider).filter((p) => typeof p === 'string' && p);
+      if (named.length) out.withProvider++;
+      const changes = named.filter((p, i) => i > 0 && p !== named[i - 1]).length;
+      if (changes) out.attemptsSwitched++;
+      out.switches += changes;
+    }
+  }
+  return out;
+}
+
+/**
+ * What a task's last attempt told the runner's `task_complete` (status and
+ * reason as the runner gave them), else what the verdict kept of its status;
+ * null for a task nothing reported on (skipped, or never run).
+ */
+function reportOf(t, taskLogs) {
+  const attempts = taskLogs?.[t.id];
+  const last = attempts ? Object.keys(attempts).map(Number).sort((a, b) => a - b).at(-1) : undefined;
+  const call = last === undefined ? undefined : attempts[last].filter((e) => e.type === 'tool_call' && toolName(e.name, 'task_complete')).pop();
+  const args = call ? parseArgsJson(call.args) : null;
+  if (args?.status) return { status: args.status, reason: typeof args.reason === 'string' && args.reason ? args.reason : null };
+  return t.verdict?.reported ? { status: t.verdict.reported, reason: null } : null;
+}
+
+/** A task's `{status, reason}` for a record: what its runner reported, `done` for a completed task nothing else was kept for. */
+const reportedBy = (t, taskLogs) => {
+  const r = reportOf(t, taskLogs);
+  if (r) return r;
+  return t.status === 'completed' ? { status: 'done', reason: null } : null;
+};
+
+/**
+ * Arm A's model calls against the runner's call budget (the step limit, which
+ * is per attempt): its own calls per attempt, the busiest attempt and whether
+ * it used the whole limit, and a subagent's calls apart.
+ */
+function modelCallsOf(taskLogs, limit) {
+  if (!taskLogs) return null;
+  const perAttempt = [];
+  let subagentCalls = 0;
+  for (const attempts of Object.values(taskLogs)) {
+    for (const [n, events] of Object.entries(attempts)) {
+      perAttempt.push({ attempt: Number(n), calls: ownCalls(events).length });
+      subagentCalls += events.filter((e) => e.type === 'usage' && e.record?.subagentId && !e.record.aggregate && !e.record.compacted && typeof e.record.inputTokens === 'number').length;
+    }
+  }
+  const peakAttempt = Math.max(0, ...perAttempt.map((a) => a.calls));
+  return { used: perAttempt.reduce((n, a) => n + a.calls, 0), limitPerAttempt: limit, perAttempt, peakAttempt, reachedLimit: peakAttempt >= limit, subagentCalls };
+}
+
+/**
+ * How an arm's run ended, for result.json:
+ *  - `completion`: the arm's own word. `status` is `done` when every task
+ *    completed, else `blocked` when the failed ones were all reported blocked,
+ *    else `failed`, with the `reason` the runner gave in its `task_complete`
+ *    (the first such task's); `reports` has each task's own. A run that the
+ *    settle rule found holding only failed tasks, and tasks behind them, is
+ *    this too: the runner had reported, and nothing was left to move.
+ *  - `cap`: which one (`spend`, `wall-clock`, or the batch's `batch-budget`)
+ *    with the spend and the time it stopped at.
+ *  - `settle`: nothing moved for the settle time while some task was still
+ *    open for another cause, each listed with what held it.
+ *  - `stall` (a person waited on for --stall-min), `no-start` (no model call
+ *    in the first minutes) and `not-run` (a dry run or a plan-only run, or
+ *    no task) complete the cases.
+ * For arm A the model calls it used against the step limit; null for B and
+ * where the logs were not copied.
+ */
+export function runEnding({ arm, plan, taskLogs, stopped, stalled, ran = true, stepLimit = STEP_LIMIT }) {
+  if (!ran) return { by: 'not-run', modelCalls: null };
+  const modelCalls = arm === 'A' ? modelCallsOf(taskLogs, stepLimit) : null;
+  if (stopped?.why === 'no-start') return { by: 'no-start', detail: stopped.detail ?? null, modelCalls };
+  if (stopped) return { by: 'cap', cap: stopped.why, spentUsd: stopped.spentUsd ?? null, atMs: stopped.atMs ?? null, modelCalls };
+  const failedOnly = (stalled?.open ?? []).every((o) => o.held === 'nothing ready' && (o.reason === 'failed' || /^depends on /.test(o.reason ?? '')));
+  if (stalled?.why === 'settled' && !failedOnly) {
+    return { by: 'settle', quietMs: stalled.quietMs ?? null, open: stalled.open.map(({ order, title, status, held, reason }) => ({ order, title, status, held, reason })), modelCalls };
+  }
+  if (stalled && stalled.why !== 'settled') return { by: 'stall', waiting: stalled.waiting ?? null, modelCalls };
+  const tasks = allTasks(plan);
+  if (!tasks.length) return { by: 'not-run', modelCalls };
+  const reports = tasks.map((t) => ({ order: t.order ?? null, title: t.title ?? null, ...(reportedBy(t, taskLogs) ?? { status: null, reason: null }) }));
+  const undone = tasks.map((t, i) => ({ t, r: reports[i] })).filter(({ t }) => t.status !== 'completed' && t.status !== 'skipped');
+  const failing = undone.filter(({ r }) => r.status === 'failed' || r.status === 'blocked');
+  const status = !undone.length ? 'done' : failing.length && failing.every(({ r }) => r.status === 'blocked') ? 'blocked' : 'failed';
+  return { by: 'completion', status, reason: (failing[0] ?? undone[0])?.r.reason ?? null, reports, modelCalls };
+}
+
 /**
  * What the plan review said, from the research log's "chain review" lines (the
  * session records no structured field for it, core's reviewLongChain): the

@@ -955,7 +955,7 @@ export class Attempts {
     });
     session.onExit(() => this.woundDown(attempt, session));
     this.deps.output.attach(task.id, session);
-    this.verifier.watch(task, session);
+    this.verifier.watch(task, session, { continues: attempt.kind.kind === 'continuation' });
     session.onEvent((event) => {
       if (event.type === 'completion_received' || event.type === 'turn_start' || event.type === 'message_delivered') {
         this.noteReceipt(task.id, attempt, event.type === 'completion_received' ? event.status : null);
