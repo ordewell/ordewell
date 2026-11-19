@@ -640,12 +640,12 @@ describe('Supervisor', () => {
     expect(whole).toMatch(/The verdict is still its runner's task_complete, and nothing lands without a pass/);
   });
 
-  it('tells a wake-up turn at Act that a remainder shown undoable is a known gap with no task, and adds none once the run has ended (ADR-0029)', () => {
+  it('tells a wake-up turn at Act that a remainder shown undoable is a known gap with no task, and adds none for it once the run has ended (ADR-0029)', () => {
     const whole = new Supervisor({ ...host({ level: 'act' }), retryLimit: () => 3 }).wakeUpTurn().brief?.whole ?? '';
 
     expect(whole).toMatch(/A rest the report shows cannot be done gets no task: record it as a known gap in the brief of the task that checks the whole and in your message to the user/);
     expect(whole).toMatch(/A follow-up task is only for a rest that can be done, and gets only that scope/);
-    expect(whole).toMatch(/Once the run's last task has ended, add no task unless new evidence makes its goal reachable/);
+    expect(whole).toMatch(/Once the run's last task has ended, add no task for a rest shown undoable unless new evidence makes it reachable/);
   });
 
   it('tells a wake-up turn at Act that it answers checkpoints, and leaves the ones that need the user\'s judgement to them', () => {

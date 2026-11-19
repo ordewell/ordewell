@@ -568,8 +568,10 @@ retry the same goal: it edits the task so its done criterion is what works and
 retries it. A rest the report shows cannot be done gets no task: it is
 recorded as a known gap, in the brief of the task that checks the whole and in
 the supervisor's message to the user. A follow-up task is only for a rest that
-can be done, and is given only that scope, and once the run's last task has
-ended no task is added unless new evidence makes its goal reachable. It never gives a retry a done criterion the retry's own limits
+can be done, and is given only that scope; once the run's last task has
+ended, no task is added for a rest shown undoable unless new evidence makes it
+reachable, while a follow-up for a rest that can be done still may be. It never
+gives a retry a done criterion the retry's own limits
 cannot meet, nor calls the rest solvable without evidence from the report. The
 verdict is still the runner's `task_complete` on what the plan holds, and
 nothing lands without a pass. Seen live: a retry told both to cap its search
@@ -872,4 +874,4 @@ until #30 exists.
 - 2026-11-18 — the wake a closing turn owes for a task it left failed or held with work waiting holds `run_concluded` until its turn is over, so `ordewell run` waits for it too.
 - 2026-11-18 — what a closing turn left standing is judged once its retry is over too, so a closing turn that failed once still owes the wake, and the user's Stop of the closing turn or its retry owes none.
 - 2026-11-18 — the Act brief narrows a task that failed part-way, with evidence the rest cannot be done here, to what works before retrying it, and a model's `message_task` to a task not started since it ran is refused naming the retry's note.
-- 2026-11-19 — the Act brief records a remainder shown undoable as a known gap, in the closing check's brief and the message to the user, with no task; a follow-up task gets only a reachable remainder, and none is added after the run's last task has ended without new evidence.
+- 2026-11-19 — the Act brief records a remainder shown undoable as a known gap, in the closing check's brief and the message to the user, with no task; a follow-up task gets only a reachable remainder, and none is added for an undoable remainder after the run's last task has ended without new evidence.

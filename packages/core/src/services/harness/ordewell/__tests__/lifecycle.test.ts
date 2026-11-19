@@ -171,7 +171,7 @@ describe('a completion that cites the budget early', () => {
   const giveUp = (id: string, args: Record<string, unknown>): ScriptedStep => [call(id, 'task_complete', args), USAGE, STOP];
   const statuses = (calls: readonly { args: unknown }[]) => calls.map((c) => (c.args as { status: string }).status);
 
-  it('cites the budget when a failed or blocked report names budget, calls, steps or limit as a word', () => {
+  it('cites the budget when a failed or blocked report gives the budget as why, in a phrase that names it', () => {
     // The reasons three recorded attempts ended on, each with most of its calls unspent.
     expect(citesBudget({ status: 'failed', summary: 'Partial.', reason: 'Budget exhausted before the done criterion held' })).toBe(true);
     expect(citesBudget({ status: 'failed', summary: 'model-call budget exhausted' })).toBe(true);
@@ -184,7 +184,20 @@ describe('a completion that cites the budget early', () => {
     expect(citesBudget({ status: 'blocked', summary: 'The API is rate-limited.', reason: 'It recalls nothing.' })).toBe(false);
     expect(citesBudget({ status: 'failed', summary: 'One call failed.' })).toBe(false);
     expect(citesBudget({ status: 'failed', summary: 'x', findings: [{ title: 'budget' }] })).toBe(false);
+    // A check's verdict or a real block uses the same words for something else (review #382).
+    expect(citesBudget({ status: 'failed', summary: 'Confirmed 2 problems in the parser; steps to reproduce are in F1.' })).toBe(false);
+    expect(citesBudget({ status: 'failed', summary: 'The retry wrapper calls the endpoint twice on a 500.' })).toBe(false);
+    expect(citesBudget({ status: 'blocked', summary: 'Cannot install deps.', reason: 'The sandbox refuses all network calls.' })).toBe(false);
+    expect(citesBudget({ status: 'blocked', summary: 'x', reason: 'The provider rate limit is 0 for this key.' })).toBe(false);
+    expect(citesBudget({ status: 'failed', summary: 'The budget test in loop.test.ts still fails.' })).toBe(false);
     expect(citesBudget('budget')).toBe(false);
+  });
+
+  it('records a check\'s failed verdict on its first call, whose words are not about the budget', async () => {
+    const verdict = { status: 'failed', summary: 'Confirmed: the handler calls save twice.', findings: [{ severity: 'major', title: 'double save' }] };
+    const { loop, taskTools } = loopWith([giveUp('v', verdict), [STOP]], { stepLimit: 1000 });
+    await loop.runTurn('Review.', signals());
+    expect(taskTools.calls.map((c) => c.args)).toEqual([verdict]);
   });
 
   it('is answered once with the real count, not recorded, and the turn goes on', async () => {
