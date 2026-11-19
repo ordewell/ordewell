@@ -176,9 +176,10 @@ describe('a completion that cites the budget early', () => {
     expect(citesBudget({ status: 'failed', summary: 'Partial.', reason: 'Budget exhausted before the done criterion held' })).toBe(true);
     expect(citesBudget({ status: 'failed', summary: 'model-call budget exhausted' })).toBe(true);
     expect(citesBudget({ status: 'blocked', summary: 'x', reason: 'scope exceeds the attempt budget' })).toBe(true);
-    expect(citesBudget({ status: 'blocked', summary: 'Too few CALLS left.' })).toBe(true);
+    expect(citesBudget({ status: 'blocked', summary: 'Too few model CALLS left.' })).toBe(true);
     expect(citesBudget({ status: 'failed', summary: 'x', reason: 'about to hit the step limit' })).toBe(true);
-    expect(citesBudget({ status: 'failed', summary: '3 steps remain' })).toBe(true);
+    expect(citesBudget({ status: 'failed', summary: 'My budget ran out.' })).toBe(true);
+    expect(citesBudget({ status: 'failed', summary: 'Partial; out of model calls.' })).toBe(true);
     // Another status, other words, or the words inside others, are not.
     expect(citesBudget({ status: 'done', summary: 'Budget code done.' })).toBe(false);
     expect(citesBudget({ status: 'blocked', summary: 'The API is rate-limited.', reason: 'It recalls nothing.' })).toBe(false);
@@ -191,6 +192,26 @@ describe('a completion that cites the budget early', () => {
     expect(citesBudget({ status: 'blocked', summary: 'x', reason: 'The provider rate limit is 0 for this key.' })).toBe(false);
     expect(citesBudget({ status: 'failed', summary: 'The budget test in loop.test.ts still fails.' })).toBe(false);
     expect(citesBudget('budget')).toBe(false);
+  });
+
+  // A report that names a budget, a limit or what is left, but not the attempt's own (review #382, round 2).
+  it.each([
+    ['steps that remain of the work', { status: 'failed', summary: 'x', reason: 'Two steps remain: the migration and the docs; the schema change breaks the old reader.' }],
+    ['steps left that need what is missing', { status: 'failed', summary: 'x', reason: 'The importer works; three steps left that need the vendor SDK, which is not in the workspace.' }],
+    ['calls left over in the code', { status: 'failed', summary: 'x', reason: 'Two calls remain to the deprecated fetchUser; the tests still fail on them.' }],
+    ['few calls left, not named the model\'s', { status: 'blocked', summary: 'Too few calls left.' }],
+    ['a provider\'s call limit', { status: 'blocked', summary: 'x', reason: 'The GitHub API call limit was hit (403, X-RateLimit-Remaining: 0); retry after 15:00.' }],
+    ['a bundle-size budget', { status: 'failed', summary: 'x', reason: 'The bundle-size budget is exhausted: main.js is 412 KB against 400 KB.' }],
+    ['a performance budget', { status: 'failed', summary: 'The performance budget is spent on the first paint.' }],
+    ['an error budget', { status: 'blocked', summary: 'x', reason: 'The error budget was exhausted this week; deploys are frozen.' }],
+  ])('does not cite the budget for %s', (_what, args) => {
+    expect(citesBudget(args)).toBe(false);
+  });
+
+  it('cites it for a check\'s verdict whose subject is the call budget, a shape it shares with a recorded give-up', () => {
+    // "the call budget answer" and "exceeds the attempt budget" are both a named budget with no word of its use;
+    // telling them apart takes the verbs around it. The answer leaves such a report free to be sent again.
+    expect(citesBudget({ status: 'failed', summary: 'x', reason: 'The call budget answer still swallows a check verdict: citesBudget matches it.' })).toBe(true);
   });
 
   it('records a check\'s failed verdict on its first call, whose words are not about the budget', async () => {
@@ -212,17 +233,21 @@ describe('a completion that cites the budget early', () => {
     expect(statuses(taskTools.calls)).toEqual(['done']);
     expect(client.requests).toHaveLength(9);
     const answer = eventsOf(events, 'tool_result').find((r) => r.id === 'early');
-    expect(answer?.output).toContain('you have used 6 of 1000 model calls; the budget is not a reason to stop');
+    // It holds for a report that stopped for another reason too, so it asks for that one again rather than to go on.
+    expect(answer?.output).toBe(
+      '[Ordewell] Not recorded: if you stopped because of the call budget, it is not spent, so go on with the brief. '
+      + 'If you stopped for another reason, call task_complete again and that report is recorded.\n[calls: 6 of 1000]',
+    );
     expect(answer?.success).toBe(false);
     // The model reads the answer as the call's result in its next request.
-    expect(JSON.stringify(client.requests[6]?.messages.at(-1))).toContain('the budget is not a reason to stop');
+    expect(JSON.stringify(client.requests[6]?.messages.at(-1))).toContain('[calls: 6 of 1000]');
     // Its step is billed like any other.
     expect(eventsOf(events, 'usage')).toHaveLength(1);
   });
 
   it('is accepted as it is the second time in an attempt', async () => {
     const first = { status: 'blocked', summary: 'Scope exceeds the attempt budget.' };
-    const second = { status: 'blocked', summary: 'Still too many steps left.' };
+    const second = { status: 'blocked', summary: 'Still too few model calls left.' };
     const { loop, client, taskTools, events } = loopWith([giveUp('one', first), [glob('more'), STOP], giveUp('two', second), [STOP]], { stepLimit: 1000 });
     await loop.runTurn('Work.', signals());
 

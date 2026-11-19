@@ -671,15 +671,20 @@ function noticeAt(share: number, limit: number): number {
 }
 
 /**
- * The phrases a report that blames the budget uses. Phrases, not the bare
- * words: a check's verdict ("calls save twice", "steps to reproduce") and a
- * real block ("network calls", "rate limit") use those for something else.
+ * The phrases a report that blames the attempt's own budget uses. Phrases, not
+ * the bare words: a check's verdict ("calls save twice", "two steps remain")
+ * and a real block ("network calls", "the API call limit") use those for
+ * something else. A budget is the attempt's only unnamed, where a clause starts
+ * or after "the", "my" or "your", or named for calls, steps or the attempt:
+ * a bundle-size, performance or error budget is a check's subject.
  */
+const BUDGET_OWNER = String.raw`(?:^|[.;:!?,]\s*|\b(?:the|my|your)\s+)`;
 const BUDGET_PHRASES = [
-  /\b(?:attempt|call|step|model[- ]call|tool[- ]call)s?\s+budget\b/i,
-  /\bbudget\s+(?:is\s+|was\s+)?(?:exhausted|spent|used|ran\s+out|running\s+out|nearly|almost|left|remain\w*)/i,
-  /\bout\s+of\s+(?:the\s+)?(?:budget|(?:model\s+|tool\s+)?calls|steps)\b/i,
-  /\b(?:call|step)s?\s+(?:limit|left|remain\w*)\b/i,
+  /\b(?:attempt|step|model[- ]call|call)s?\s+budget\b/i,
+  new RegExp(String.raw`${BUDGET_OWNER}budget\s+(?:is\s+|was\s+|has\s+)?(?:exhausted|spent|used|ran\s+out|running\s+out|nearly|almost|left|remain\w*)`, 'i'),
+  /\bout\s+of\s+(?:(?:the|my|your)\s+budget|(?:model\s+)?calls|steps)\b/i,
+  /\b(?:model[- ]call|step)s?\s+limit\b/i,
+  /\bmodel[- ]calls?\s+(?:left|remain\w*)\b/i,
 ] as const;
 
 /**
@@ -694,8 +699,10 @@ export function citesBudget(args: unknown): boolean {
   return [reason, summary].some((text) => typeof text === 'string' && BUDGET_PHRASES.some((phrase) => phrase.test(text)));
 }
 
+/** Conditional, since the phrases can match a report that stopped for another reason and is owed its record. */
 function earlyGiveUpAnswer(used: number, limit: number): string {
-  return `[Ordewell] Not recorded: you have used ${used} of ${limit} model calls; the budget is not a reason to stop. The runner counts the calls and tells you when the budget is nearly spent, so go on with the brief. If something other than the budget stops you, call task_complete again and it is recorded as it is.`;
+  return '[Ordewell] Not recorded: if you stopped because of the call budget, it is not spent, so go on with the brief. '
+    + `If you stopped for another reason, call task_complete again and that report is recorded.\n${countLine(used, limit)}`;
 }
 
 function countLine(used: number, limit: number): string {
