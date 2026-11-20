@@ -293,7 +293,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     });
 
     const result = await this.runResearchLoop(researchChat, firstMessage, fs, onProgress, runners, undefined, fetcher, userDescription, runnerModes, autonomousDefault, signal);
-    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log);
+    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log, fs);
     if (result.tasks) return { tasks: await review(result.tasks, result.researchLog), researchLog: result.researchLog, researchResults: result.researchResults };
     const fallback = await this.generatePlanFallback(userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, result.researchLog, runnerModes, autonomousDefault, signal, modes);
     return { tasks: await review(fallback.tasks, fallback.researchLog), researchLog: fallback.researchLog, researchResults: result.researchResults };

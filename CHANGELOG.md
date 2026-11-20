@@ -26,6 +26,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   that comes before the old threshold; the wake line names the median, and the
   supervisor's advice covers a task stuck on what its done criterion does not
   need.
+- **A wide one-shot plan starts its largest slices first.** The slices of one
+  level are ordered by the lines of the test files their briefs name (or, with
+  none to read, of every file they name), largest first; nothing else in the
+  plan changes, and the research log says how many moved.
 
 ## [0.14.4] - 2026-11-19
 
