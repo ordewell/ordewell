@@ -1183,7 +1183,7 @@ compaction start*), never below 150k tokens, and again at each doubling of that
 below the window; an attempt that continues a saved session counts only the
 doublings above the context it started with. Time waiting on a
 person is left out of the running time. It
-carries the running time, the threshold and the task, attempt or median it came from,
+carries the running time, the threshold and the task, attempt, median or earlier flag it came from,
 the live and peak context, the model's window and the compactions so far, and
 its wake line names the tasks it blocks. The
 supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or

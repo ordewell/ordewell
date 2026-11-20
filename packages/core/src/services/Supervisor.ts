@@ -929,8 +929,11 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
       : basis
         ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(basis.runningMs)} task ${describe(basis.taskId)} passed in`
         : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
-  const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
-  return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${from}${doubled})${context}${compacted}`;
+  // A threshold lowered since the last flag, doubled, would come sooner than twice that flag, which is when this one came.
+  const why = facts.previousMs !== undefined
+    ? `twice the ${formatElapsed(facts.previousMs)} its last flag was due at, never sooner; ${from}`
+    : `${from}${facts.thresholdMs > base ? ', doubled after each earlier flag' : ''}`;
+  return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${why})${context}${compacted}`;
 }
 
 /** A context flag's size against the window it was measured by: a compaction window in force where it is the smaller, else the model's. */
