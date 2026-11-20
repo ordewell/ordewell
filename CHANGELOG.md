@@ -20,6 +20,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   to the user, and adds no task once the run's last task has ended without new
   evidence. A continued attempt's first context flag is the next doubling above
   the context it carried over, not at once.
+- **A task far slower than the run's passed tasks is flagged running long
+  sooner.** Once five AI tasks have passed, a first attempt is also flagged at
+  the larger of 19 minutes and three times their median running time, where
+  that comes before the old threshold; the wake line names the median, and the
+  supervisor's advice covers a task stuck on what its done criterion does not
+  need.
 
 ## [0.14.4] - 2026-11-19
 

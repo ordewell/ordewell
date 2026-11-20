@@ -10,11 +10,34 @@ export const RUNNING_LONG_FLOOR_MS = 30 * 60_000;
 /** How many times the longest passed AI task's running time an attempt may run before it is flagged. */
 export const RUNNING_LONG_FACTOR = 3;
 
+/**
+ * How many AI tasks must have passed before their median says how long a task
+ * of this plan takes: fewer, and one slow or quick pass would set it.
+ */
+export const RUNNING_LONG_MEDIAN_AFTER = 5;
+/**
+ * The median's own floor and factor. In a recorded run whose slices took a
+ * median of under 6 minutes, two ran on near 40 and were flagged only by
+ * their context, 41 minutes in. A floor of 10 flagged a fifth of another
+ * run's ordinary passes, whose first passes were quick; 19 flags those two at
+ * 19 minutes and at most one in ten ordinary passes of the runs replayed.
+ */
+export const RUNNING_LONG_MEDIAN_FLOOR_MS = 19 * 60_000;
+export const RUNNING_LONG_MEDIAN_FACTOR = 3;
+
 /** How long an attempt may run before it is flagged, and what set it, when the floor did not. */
 export interface RunningLongThreshold {
   ms: number;
   basis?: RunningLongBasis;
+  /** Set when the median rule came first: its floor or its multiple did. */
+  median?: RunningLongMedian;
   retryOf?: RunningLongRetry;
+}
+
+/** The median running time of the AI tasks that have passed, and how many have. */
+export interface RunningLongMedian {
+  passed: number;
+  runningMs: number;
 }
 
 /** The AI task that passed in the longest running time, which the threshold is a multiple of. */
@@ -33,7 +56,10 @@ export interface RunningLongRetry {
 /**
  * The larger of the floor and {@link RUNNING_LONG_FACTOR} times the longest
  * running time an AI task of this plan passed in, read from the attempt that
- * passed it. A script task has its own `timeoutMs`, and a failed attempt says
+ * passed it; once {@link RUNNING_LONG_MEDIAN_AFTER} have passed, the median
+ * rule's threshold instead when it comes first. The longest alone let a task
+ * run seven times the plan's median before it was flagged. A script task has
+ * its own `timeoutMs`, and a failed attempt says
  * nothing of how long the work takes, so neither counts. Its waits on a person
  * are left out, as the live clock leaves them out: a task that waited overnight
  * says nothing of how long the work takes either. An attempt saved before its
@@ -45,7 +71,7 @@ export interface RunningLongRetry {
  * ends differently.
  */
 export function runningLongThreshold(tasks: readonly Task[], taskId?: string): RunningLongThreshold {
-  let basis: RunningLongBasis | undefined;
+  const passes: RunningLongBasis[] = [];
   let retryOf: RunningLongRetry | undefined;
   for (const task of flattenTasks(tasks)) {
     if (task.id === taskId) retryOf = endedWithout(task);
@@ -53,12 +79,22 @@ export function runningLongThreshold(tasks: readonly Task[], taskId?: string): R
     const attempts = task.attemptUsage ?? [];
     const last = attempts[attempts.length - 1];
     if (!last?.endedAt) continue;
-    const runningMs = last.runningMs ?? last.wallTimeMs;
-    if (!basis || runningMs > basis.runningMs) basis = { taskId: task.id, runningMs };
+    passes.push({ taskId: task.id, runningMs: last.runningMs ?? last.wallTimeMs });
   }
   if (retryOf) return retryOf.runningMs > RUNNING_LONG_FLOOR_MS ? { ms: retryOf.runningMs, retryOf } : { ms: RUNNING_LONG_FLOOR_MS };
+  const basis = passes.reduce<RunningLongBasis | undefined>((longest, pass) => (!longest || pass.runningMs > longest.runningMs ? pass : longest), undefined);
   const scaled = basis ? basis.runningMs * RUNNING_LONG_FACTOR : 0;
-  return basis && scaled > RUNNING_LONG_FLOOR_MS ? { ms: scaled, basis } : { ms: RUNNING_LONG_FLOOR_MS };
+  const byLongest: RunningLongThreshold = basis && scaled > RUNNING_LONG_FLOOR_MS ? { ms: scaled, basis } : { ms: RUNNING_LONG_FLOOR_MS };
+  if (passes.length < RUNNING_LONG_MEDIAN_AFTER) return byLongest;
+  const median = { passed: passes.length, runningMs: medianOf(passes.map((pass) => pass.runningMs)) };
+  const ms = Math.max(RUNNING_LONG_MEDIAN_FLOOR_MS, median.runningMs * RUNNING_LONG_MEDIAN_FACTOR);
+  return ms < byLongest.ms ? { ms, median } : byLongest;
+}
+
+function medianOf(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /** The task's latest ended attempt, when it ended failed or stopped: the live one has not ended. */
@@ -79,6 +115,7 @@ export interface RunningLongFacts {
   /** The running time this flag was due at: the threshold, doubled for each duration flag before it. */
   thresholdMs: number;
   basis?: RunningLongBasis;
+  median?: RunningLongMedian;
   retryOf?: RunningLongRetry;
   /** On a context flag, the size it was due at: the context threshold, doubled for each context flag before it. */
   contextThreshold?: number;
@@ -135,8 +172,12 @@ export function contextThresholdOf(modelWindow: number | undefined, compactWindo
   return { tokens: Math.max(CONTEXT_FLOOR_TOKENS, window * CONTEXT_SHARE), window };
 }
 
-/** The longest delay a timer keeps: Node fires a longer one at once. */
-const MAX_TIMER_MS = 2 ** 31 - 1;
+/**
+ * The longest a clock waits before reading its threshold again. A pass can
+ * lower it as well as raise it, once the median rule applies, so a timer armed
+ * for the old threshold would fire late.
+ */
+const RECHECK_MS = 60_000;
 
 /**
  * One attempt's running time, and the flags it raises. Time counts only while
@@ -149,6 +190,8 @@ export class RunningLongClock {
   private since: number | null = null;
   private timer: NodeJS.Timeout | null = null;
   private flags = 0;
+  /** The running time the last duration flag was due at: the next is due at twice it at least. */
+  private flaggedAt = 0;
   private contextFlags = 0;
   private compactions = 0;
   /** The main model's context as the usage meter keeps it, by the same rules: a compaction or a model change clears it. */
@@ -255,14 +298,19 @@ export class RunningLongClock {
     return this.accrued + (this.since === null ? 0 : Date.now() - this.since);
   }
 
+  /**
+   * A pass that raised the threshold puts the next flag off. One that lowered
+   * it, as the median rule can, does not bring it closer than double the last:
+   * the supervisor heard of this task then.
+   */
   private due(): number {
-    return this.threshold().ms * 2 ** this.flags;
+    return Math.max(this.threshold().ms * 2 ** this.flags, this.flaggedAt * 2);
   }
 
   private arm(): void {
     this.disarm();
-    // A flag further off than a timer holds wakes early, and ripe() arms again.
-    this.timer = setTimeout(() => this.ripe(), Math.min(MAX_TIMER_MS, Math.max(0, this.due() - this.runningMs())));
+    // A flag further off wakes early, and ripe() reads the threshold and arms again.
+    this.timer = setTimeout(() => this.ripe(), Math.min(RECHECK_MS, Math.max(0, this.due() - this.runningMs())));
   }
 
   private disarm(): void {
@@ -270,7 +318,7 @@ export class RunningLongClock {
     this.timer = null;
   }
 
-  /** Read again when the timer fires: a task that passed in the meantime may have raised the threshold. */
+  /** Read again when the timer fires: a task that passed in the meantime may have moved the threshold. */
   private ripe(): void {
     this.timer = null;
     const due = this.due();
@@ -279,17 +327,19 @@ export class RunningLongClock {
       return;
     }
     this.flags += 1;
+    this.flaggedAt = due;
     this.flag(this.facts('duration', due));
     if (!this.stopped && this.since !== null) this.arm();
   }
 
   private facts(reason: RunningLongFacts['reason'], thresholdMs: number): RunningLongFacts {
-    const { basis, retryOf } = this.threshold();
+    const { basis, median, retryOf } = this.threshold();
     return {
       reason,
       elapsedMs: this.runningMs(),
       thresholdMs,
       ...(basis ? { basis } : {}),
+      ...(median ? { median } : {}),
       ...(retryOf ? { retryOf } : {}),
       ...(this.meter.lastPromptTokens !== undefined ? { contextTokens: this.meter.lastPromptTokens } : {}),
       ...(this.meter.contextWindow !== undefined ? { contextWindow: this.meter.contextWindow } : {}),
