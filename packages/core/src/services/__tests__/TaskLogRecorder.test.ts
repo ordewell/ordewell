@@ -8,6 +8,7 @@ import type { SessionMessage } from '../SessionMessage';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { EMPTY_TASK_LOG, reduceTaskLog, replayTaskLog } from '../../conversation/taskLog';
 import { toTaskLogEvent, type TaskLogEvent } from '../../models/TaskLog';
+import type { PromptPart } from '../../models/PromptPart';
 import { createTask, type LegacyPlanState } from '../../models/Task';
 import type { IRunner, IRunnerSession } from '../../interfaces/IRunner';
 import type { RunnerSpawnOptions } from '../AbstractRunner';
@@ -133,6 +134,45 @@ describe('TaskLogRecorder', () => {
     expect(replayTaskLog(first.saved).blocks[0]).toMatchObject({ type: 'message', role: 'system', text: 'Skills: tdd (/g/tdd/SKILL.md)' });
     // The file keeps the body; a surface is told which skill, never what it says.
     expect(taskLogs(sent)[0].events[0]).toEqual({ type: 'task_skills', skills: [{ name: 'tdd', source: 'global', path: '/g/tdd/SKILL.md' }] });
+  });
+
+  it('marks the parts of the attempt\'s first message, on its first turn alone, and sends them as it saves them', async () => {
+    const promptParts: PromptPart[] = [
+      { kind: 'unattended', title: 'Unattended run', text: 'Nobody is watching.' },
+      { kind: 'brief', title: 'Brief', text: 'Do it' },
+    ];
+    const prompt = 'Nobody is watching.\n\nDo it';
+    const file = memoryFile();
+    const sent: SessionMessage[] = [];
+    const recorder = new TaskLogRecorder({ broadcast: (m) => sent.push(m), location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
+    const session = new FakeRunnerSession('s1', 't1');
+    await recorder.wrap(handing(session)).spawn({ ...spawnOpts, prompt, promptParts });
+
+    session.emitEvent({ type: 'turn_start', text: prompt });
+    session.emitEvent({ type: 'turn_end', reason: 'completed' });
+    session.emitEvent({ type: 'turn_start', text: prompt });
+    vi.advanceTimersByTime(60);
+
+    const parts = [{ kind: 'unattended', title: 'Unattended run', start: 0, end: 19 }, { kind: 'brief', title: 'Brief', start: 21, end: 26 }];
+    expect(file.saved).toEqual([
+      { type: 'turn_start', message: prompt, startedAt: expect.any(String), parts },
+      { type: 'turn_end', reason: 'completed' },
+      { type: 'turn_start', message: prompt, startedAt: expect.any(String) },
+    ]);
+    expect(taskLogs(sent).flatMap((m) => m.events)).toEqual(file.saved);
+  });
+
+  it('marks no parts on a first message the runner sent otherwise than it was given', async () => {
+    const promptParts: PromptPart[] = [{ kind: 'unattended', title: 'Unattended run', text: 'Nobody.' }, { kind: 'brief', title: 'Brief', text: 'Do it' }];
+    const file = memoryFile();
+    const recorder = new TaskLogRecorder({ broadcast: () => {}, location: () => ({ baseDir: '/ws', sessionId: 'sess' }), open: () => file });
+    const session = new FakeRunnerSession('s1', 't1');
+    await recorder.wrap(handing(session)).spawn({ ...spawnOpts, prompt: 'Nobody.\n\nDo it', promptParts });
+
+    session.emitEvent({ type: 'turn_start', text: 'Contract.\n\nNobody.\n\nDo it' });
+    vi.advanceTimersByTime(60);
+
+    expect(file.saved).toEqual([{ type: 'turn_start', message: 'Contract.\n\nNobody.\n\nDo it', startedAt: expect.any(String) }]);
   });
 
   it('sends a turn’s end at once, without waiting out the batch', async () => {

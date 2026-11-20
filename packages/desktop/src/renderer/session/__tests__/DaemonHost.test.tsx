@@ -638,6 +638,33 @@ describe('DaemonHost task commands', () => {
     await vi.waitFor(() => expect(seen.filter((m) => m.type === 'taskCommands').at(-1)).toEqual({ type: 'taskCommands', taskId: 't1', commands: [REVIEW] }));
   });
 
+  it('hands a task log tab the sections of a first message whole, for the tab to fold', async () => {
+    const first = '## Prior task outputs\nTask 1 added the lexer.\n\nWire the parser in.';
+    const brief = 'Wire the parser in.';
+    const daemon = fakeDaemon({
+      ...logged(),
+      'sessions.taskLogAttempt': ok({ attempt: 1, events: [{
+        type: 'turn_start', message: first,
+        parts: [
+          { kind: 'priorOutputs', title: 'Prior task outputs', start: 0, end: first.indexOf('\n\n') },
+          { kind: 'brief', title: 'Brief', start: first.indexOf(brief), end: first.length },
+        ],
+      }] }),
+    });
+    const host = hostWith();
+    await opened(daemon, host);
+    const seen: Array<{ type: string; blocks?: unknown[] }> = [];
+    host.taskLog('t1').subscribe((msg) => seen.push(msg as { type: string; blocks?: unknown[] }));
+
+    host.taskLog('t1').post({ type: 'ready' });
+
+    await vi.waitFor(() => expect(seen.find((m) => m.type === 'init')).toBeTruthy());
+    expect(seen.find((m) => m.type === 'init')?.blocks).toEqual([expect.objectContaining({
+      role: 'user', text: brief,
+      sections: [{ title: 'Handoffs from earlier tasks', sections: [{ kind: 'priorOutputs', title: 'Prior task outputs', text: 'Task 1 added the lexer.' }] }],
+    })]);
+  });
+
   it('tells the cards when a runner loads its commands mid-run', async () => {
     const daemon = fakeDaemon(logged());
     const host = hostWith();

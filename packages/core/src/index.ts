@@ -51,6 +51,7 @@ export * from './models/Session';
 export * from './models/Usage';
 export * from './models/AccountLimits';
 export * from './models/TaskLog';
+export * from './models/PromptPart';
 export * from './models/Handoff';
 export { commandLine, scriptBodyOf, scriptBodyText, scriptTaskText, timeLimitText, DEFAULT_SCRIPT_TIMEOUT_MS, type ScriptBody } from './models/ScriptTask';
 export type { SkipOrigin } from './models/SkipOrigin';

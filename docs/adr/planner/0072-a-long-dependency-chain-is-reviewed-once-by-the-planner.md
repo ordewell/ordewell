@@ -30,7 +30,7 @@ dependency blocks the closing check that waits for it.
 wrote it is asked once to review the plan edge by edge, and only the planner
 decides what changes. The review asks that chain question and nothing else; a
 wide one-shot plan's fan-out shape is read by Ordewell and noted on each role's
-brief, never asked about.** The question names the chain, task by task, and asks of
+brief, never asked about, and its slices are started largest first.** The question names the chain, task by task, and asks of
 every dependency whether the dependent needs a file, name, signature or schema
 that does not exist in the repository until the other task writes it; it names
 the dependencies other rules require, so it never asks to drop them. How the
@@ -106,6 +106,26 @@ question is put depends on how the plan arrives.
   its loop when the check is a script or read-only, says to write the module of
   a slice that did not land. A brief that holds a `Plan shape:` note already
   gets none again. The research log records the shape whenever notes are added.
+- **A wide one-shot plan's slices start largest first (R6).** Ready tasks
+  start in plan order, `maxParallel` at a time, so a long slice the planner
+  listed late started late and set when the whole fan-out ended. On the plan R1
+  kept, before any `Plan shape:` note is written, `largestSlicesFirst`
+  (`PlanFanOut.ts`) sorts the slices of each level by size, largest first,
+  stably, each taking the place and `order` of the slice it displaced. Opening
+  tasks, the closing check, every other task and every dependency stay as they
+  are, and the notes, written after, list the slices in the order they start. A
+  slice's size is the lines of the test files its brief names (by the same
+  reading as the notes' table: the brief before any appended note, at most
+  `MAX_PATHS` paths), a file several slices name counted in equal shares; when
+  no slice names a test file that exists, the lines of every file its brief
+  names; when none of those exists, there is no size and nothing moves. The
+  lines are read through the planner's own file system, which
+  `researchAndPlan` hands to `reviewLongChain`: at most `MAX_SIZED_FILES` files
+  a plan, else nothing moves, a file past `MAX_SIZED_KB` or `MAX_SIZED_LINES`
+  counts as absent, a path that climbs out of the workspace is not read, and
+  no content reaches a prompt. The research log records the measure and how
+  many slices moved. Which slice finishes first is a guess from its files,
+  never a verdict: it changes when a slice starts, not what it must do.
 - **The one-shot prompt words two dependency rules its own way (R4).** It says a
   dependency is for something that does not exist yet, lets the task that
   restores the build edit whatever blocks it, and gives a four-level shape for a
@@ -127,7 +147,11 @@ messages are tested on plain tasks, and each message is pinned word for word,
 since the measured wording is the decision. `PlanFanOut` is too: the shape and
 the three notes, each pinned word for word, the slice table's bound on a plan of
 forty slices; that a slice can read the opening task's report is tested through
-a session. That a wide plan with a fault and a short chain makes no review call,
+a session. `largestSlicesFirst` is tested over a file system that answers reads as the
+planner's adapters do (numbered lines, a size cap, a line limit): its measure,
+its fallback, equal shares, the level it keeps and the bounds on reading; that
+the notes list the slices in their new order, and the log line, through
+`reviewLongChain`. That a wide plan with a fault and a short chain makes no review call,
 and a long one is asked R1's message word for word, is tested through
 `reviewLongChain`. `reviewLongChain` is tested through
 a `BaseAiService` whose `streamPlanText` answers from a queue and keeps what each
@@ -144,7 +168,8 @@ conversation's as they stand.
 - A plan whose work sits in one task. No chain review reaches it.
 - The harness one-shot path (`CliAgentAiService.oneShot`, where the review rides
   on `submit_plan`'s answer, R3): its plans are not read for their fan-out shape
-  and get no `Plan shape:` note yet. Neither does a conversation plan.
+  and get no `Plan shape:` note yet, and their slices keep the planner's
+  order. Neither does a conversation plan.
 - The run time: a failed slice still blocks the closing check (a skip releases
   it, and lands nothing), and the closing check cannot reach a failed slice's
   unlanded work. R5's slice note makes the slice end done instead wherever its
@@ -183,6 +208,15 @@ conversation's as they stand.
   rejected whole so the chain fix they carried was lost too, and one library's
   chains got longer. The role notes, which need no call, were present and right
   in every plan, so they stay.
+- **Another size: stubbed functions, tests counted, the brief's length.**
+  Rejected: measured against the recorded durations of unattended runs, the
+  lines of the test files a brief names predicted a slice's time better than
+  counts of stubbed functions or of tests. In one run, whose briefs' test files
+  did not tell slices apart, the lines of the files the brief names did better,
+  so they are the fallback.
+- **The planner asked to put its largest slices first.** Not taken: the
+  ordering needs no call, and a change to the one-shot prompt is measured on
+  its own (R4).
 - **A separate call for the shape.** Rejected: it costs a call for what the
   notes do without one, and the questions failed even on R1's call.
 - **The planner writes each role's done criterion.** Rejected: the criterion is
@@ -204,6 +238,11 @@ conversation's as they stand.
   change to either is measured on its own path.
 - The thresholds and the wording were measured on a few goals and models; watch
   plans whose closing check or restoring task is dropped.
+- A slice whose files misstate its work starts too early or too late; the
+  order is a guess from the repository, and a run whose planner already listed
+  its long slices first can do worse for it. Briefs that name test files by
+  bare name beside a full path, or more than `MAX_PATHS` paths, are sized by
+  the paths read and the rest count nothing.
 - A wide plan's shape costs no call: its faults are only recorded, so a plan
   with no opening task or no closing check keeps that fault unless the chain
   question's reply happens to mend it. `FAN_OUT_MIN` is not tuned yet, and the
@@ -218,3 +257,4 @@ conversation's as they stand.
 - 2026-11-18 — R5: a read-only check counts as the closing check only through a loop whose body edits; an added restoring task waits for what every slice waited for; R1's revision note has a slice name the tests it leaves in findings.
 - 2026-11-19 — R5: the fault questions and the tasks a reply could add are dropped after failing their measurement; R1 asks the chain question only, the notes go to the closing check no other waits for and the first opening task, and a slice's table is bounded.
 - 2026-11-19 — R5: a slice takes in a sibling's work once it has landed; a closing check with a task beside it is the closing check; a revision note's titles are no brief's paths.
+- 2026-11-20 — R6: a wide one-shot plan's slices of each level start largest first, sized by the lines of the files their briefs name.

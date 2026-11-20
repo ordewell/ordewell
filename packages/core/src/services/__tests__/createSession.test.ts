@@ -7,6 +7,7 @@ import { scriptedAdapter, fakeMcpServer, fakeSpawn, fixture } from './harnessTes
 import { CliAgentAiService } from '../harness/CliAgentAiService';
 import { IDLE_TIMEOUT_MS } from '../VerdictEngine';
 import type { IRunner } from '../../interfaces/IRunner';
+import { joinPromptParts, type PromptPart } from '../../models/PromptPart';
 import { parsePlanJson } from '../PlanValidator';
 import { PlannerTurnDiscardedError, PlannerTurnStoppedError } from '../PlannerConversation';
 import type { Session } from '../createSession';
@@ -336,6 +337,19 @@ describe('Session phase transitions', () => {
       expect(prompt).not.toContain('← you are here');
       expect(prompt).not.toContain('task_complete');
       expect(prompt).not.toContain('## Task skills');
+    });
+
+    it('hands the runner its first message with the parts it was joined from, the brief last, for the log to keep', async () => {
+      const runner = spyRunner();
+      const session = makeSession({ runner });
+      session.loadPlan(threeTaskPlan(), 'Test', '/repo');
+
+      await session.execute({ command: 'run_task', task: 't1' }, { kind: 'user' });
+
+      const opts = runner.spawn.mock.calls.find((c) => c[0].taskId === 't1')![0] as { prompt: string; promptParts?: PromptPart[] };
+      expect(opts.promptParts?.map((p) => p.kind)).toEqual(['unattended', 'brief']);
+      expect(joinPromptParts(opts.promptParts ?? [])).toBe(opts.prompt);
+      expect(opts.promptParts?.at(-1)?.text).toBe('one');
     });
 
     it('gives a task the skills attached to it, read from where it runs', async () => {

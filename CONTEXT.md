@@ -618,7 +618,9 @@ ops task, a push or a read-only check alone does not, and a change task the
 closing check waits for after every slice is a slice of the last level.
 Opening tasks in series, no opening task and no closing check are its faults,
 recorded in the research log and never asked about. A wide plan with a closing
-check gets a fixed `Plan shape:` note on each role's brief.
+check gets a fixed `Plan shape:` note on each role's brief. A wide plan's slices
+of one level start largest first, sized by the lines of the files their briefs
+name (ADR-0072 R6).
 *Avoid:* "gate" for the opening task (the merge gate is something else),
 "barrier".
 
@@ -1172,14 +1174,16 @@ approval" is derived from the task's pending approvals.
 **Running long** (ADR-0018, W1) — the advisory flag on an AI task's attempt
 whose running time passed max(30 min, 3× the longest running time of an AI
 task that passed in its plan, or, after a failed or stopped attempt of the
-same task, that attempt's running time), doubled after each flag, whose own runner session
+same task, that attempt's running time), or, on a first attempt once five AI
+tasks have passed, max(19 min, 3× their median running time) where that comes
+first, doubled after each flag, whose own runner session
 compacted its context by itself, or whose context first reached 40% of its effective
 window (the smaller of the model's and a compaction window in force; see *Task
 compaction start*), never below 150k tokens, and again at each doubling of that
 below the window; an attempt that continues a saved session counts only the
 doublings above the context it started with. Time waiting on a
 person is left out of the running time. It
-carries the running time, the threshold and the task or attempt it came from,
+carries the running time, the threshold and the task, attempt, median or earlier flag it came from,
 the live and peak context, the model's window and the compactions so far, and
 its wake line names the tasks it blocks. The
 supervisor weighs it as it weighs a quiet task (`task_idle`); it never stops or
@@ -1318,7 +1322,12 @@ one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike: each
 text run streams into a block of its own, which its complete copy settles
 wherever it now sits; a log saved before runs carried an id has one stream for
-every run, into the latest block only. Every runner exit records
+every run, into the latest block only. An attempt's first `turn_start` carries
+`parts`, where each piece Ordewell composed the message from sits in it
+(`PromptPartSpan`); its block shows the brief, after the attempt's retry note,
+and folds the rest into `sections`, the handoffs from earlier tasks and
+Ordewell's instructions to the runner. A log saved without parts shows the
+message whole. Every runner exit records
 `runner_ended`, which closes the view's turn and
 streaming blocks even when no tool call remains open. `followTaskLog` joins a
 saved attempt with live batches by the read's stream position: both surfaces

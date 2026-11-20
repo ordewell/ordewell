@@ -4,6 +4,7 @@ import type { ContextFill, ModelUsage, UsageTotals } from '../models/Usage';
 import type { ApprovalKind } from '../interfaces/IApproval';
 import type { ApprovalSource } from '../services/ApprovalPolicy';
 import type { RunnerCommand, RunnerMcpServer } from '../models/RunnerCommand';
+import type { PromptPartKind } from '../models/PromptPart';
 
 /**
  * What a surface draws for one planner conversation (#51): an ordered list of
@@ -41,6 +42,24 @@ export interface MessageBlock {
   skills?: readonly string[];
   /** A user's message that was force sent ("Send now"), stopping the turn before it (ADR-0023). */
   forced?: true;
+  /**
+   * A task's first message whose parts were logged: what Ordewell added
+   * around the brief `text` holds, grouped, for a surface to fold.
+   */
+  sections?: readonly MessageSectionGroup[];
+}
+
+/** One group of a first message's sections: "Handoffs from earlier tasks" or "Ordewell's instructions to the runner". */
+export interface MessageSectionGroup {
+  title: string;
+  sections: readonly MessageSection[];
+}
+
+/** A part of a task's first message, its heading left out: `title` names it. */
+export interface MessageSection {
+  kind: PromptPartKind;
+  title: string;
+  text: string;
 }
 
 export interface ThinkingDisplayBlock {

@@ -7312,6 +7312,43 @@ body.vscode-high-contrast-light .pending-message {
   display: block;
 }
 
+/* What Ordewell added around a task's brief: quiet lines above the brief's
+   bubble, each group opening on its own. A long section (a skill's body)
+   scrolls in its own box rather than pushing the brief out of view. */
+.message-sections {
+  margin: 0 0 4px;
+  font-size: 11px;
+}
+
+.message-sections-head.disclosure {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.message-sections-body {
+  margin-left: 16px;
+}
+
+.message-section-title {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.message-section-text {
+  margin: 2px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .runner-loaded-detail {
   margin-top: 4px;
   overflow-wrap: anywhere;
