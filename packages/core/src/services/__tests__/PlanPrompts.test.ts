@@ -394,7 +394,7 @@ describe('research tasks (ADR-0037)', () => {
 });
 
 describe('who explores: three tiers, search (ADR-0037 R5)', () => {
-  const ACP_PLANNERS = ['copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'] as const;
+  const NO_AGENT_PLANNERS = ['pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'] as const;
   const noAgents = /- A research task, for the rest: .*You have no agents of your own here: research tasks are how you delegate\./;
   const awaited = (agents: string) => new RegExp(`Use ${agents} and wait for its results inside this reply, never in the background: once your turn ends, nothing you say reaches the user\\.`);
   const backends = [
@@ -402,11 +402,11 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     { name: 'Claude Code', harness: true, runner: 'claude-code', inTurn: awaited('your Agent tool') },
     { name: 'Codex', harness: true, runner: 'codex', inTurn: awaited('your spawn_agent tool') },
     { name: 'OpenCode', harness: true, runner: 'opencode', inTurn: noAgents },
-    // ADR-0026: no ACP planner's own subagents are confirmed inside the envelope, so each is withheld and it delegates to research tasks.
-    ...ACP_PLANNERS.map((runner) => ({ name: runner, harness: true, runner, inTurn: noAgents })),
+    // ADR-0026: no ACP planner's own subagents are confirmed inside the envelope, so each is withheld and it delegates to research tasks. Pi, not ACP, has no subagents at all: its read/grep/find/ls and Ordewell's tools.
+    ...NO_AGENT_PLANNERS.map((runner) => ({ name: runner, harness: true, runner, inTurn: noAgents })),
     { name: 'an unnamed harness', harness: true, runner: undefined, inTurn: awaited('your own agents, if you have any,?') },
   ] as const;
-  const hasNoAgents = (runner: RunnerId | undefined) => runner === 'opencode' || (ACP_PLANNERS as readonly (string | undefined)[]).includes(runner);
+  const hasNoAgents = (runner: RunnerId | undefined) => runner === 'opencode' || (NO_AGENT_PLANNERS as readonly (string | undefined)[]).includes(runner);
   const prompt = (harness: boolean, runner?: RunnerId) => buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, runner });
   const section = (p: string, header: string) => {
     const at = p.indexOf(`\n${header}\n`);
@@ -419,7 +419,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
     expect(inTurnAgents(true, 'opencode', true, true)).toBe('spawn_research_agent');
     expect(inTurnAgents(true, 'opencode', true, false)).toBeNull();
     expect(inTurnAgents(true, 'opencode', false, true)).toBeNull();
-    for (const runner of ACP_PLANNERS) expect(inTurnAgents(true, runner, true, true)).toBeNull();
+    for (const runner of NO_AGENT_PLANNERS) expect(inTurnAgents(true, runner, true, true)).toBeNull();
     const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'opencode', researchAgent: true }), 'WHO EXPLORES:');
     expect(rule).toMatch(/- An agent, awaited, for the rest: .*Use spawn_research_agent, whose agents return within your tool round\./);
     expect(rule).not.toMatch(noAgents);
@@ -501,7 +501,7 @@ describe('who explores: three tiers, search (ADR-0037 R5)', () => {
 
   it.each([
     { name: 'OpenCode without the research agent', variant: { harness: true, runner: 'opencode' } },
-    ...ACP_PLANNERS.map((runner) => ({ name: runner, variant: { harness: true, runner } })),
+    ...NO_AGENT_PLANNERS.map((runner) => ({ name: runner, variant: { harness: true, runner } })),
     { name: 'an API planner with no subagents', variant: { harness: false, subagents: false } },
   ] as const)('gives each area a research task before reading inside it, for $name', ({ variant }) => {
     const rule = section(buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, variant), 'WHO EXPLORES:');

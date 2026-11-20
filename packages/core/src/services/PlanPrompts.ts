@@ -167,6 +167,8 @@ export function inTurnAgents(harness: boolean, runner?: RunnerId, subagents = tr
     // Ordewell's own agent, served over MCP where the session can run one; OpenCode's own subagents stay withheld (ADR-0026).
     case 'opencode': return research ? 'spawn_research_agent' : null;
     // No ACP planner's own subagents are confirmed inside the envelope, so each start withholds them (ADR-0026).
+    // Pi is not ACP and has none to withhold: it starts with read/grep/find/ls and Ordewell's tools, and is not offered the research agent.
+    case 'pi':
     case 'copilot-cli':
     case 'qwen-code':
     case 'cline':
