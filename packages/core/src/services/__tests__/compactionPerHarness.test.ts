@@ -346,7 +346,11 @@ const piCompactingTurn = [
 ].map((record) => `${JSON.stringify(record)}\n`).join('');
 
 async function piStart(opts: AgentStartOptions, answer = '') {
-  const spawned = silentSpawn((written, proc) => { if (answer && written.includes('"type":"prompt"')) proc.emitStdout(answer); });
+  const spawned = silentSpawn((written, proc) => {
+    // The resume check, answered as Pi does for a session it found.
+    if (written.includes('"type":"get_state"')) proc.emitStdout(`${JSON.stringify({ id: 'ordewell-resume-check', type: 'response', command: 'get_state', success: true, data: { messageCount: 2 } })}\n`);
+    if (answer && written.includes('"type":"prompt"')) proc.emitStdout(answer);
+  });
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   const adapter: TaskModeAgentAdapter = new PiAdapter(processDeps(spawned.spawn));
   await adapter.start(opts);
@@ -356,7 +360,7 @@ async function piStart(opts: AgentStartOptions, answer = '') {
 }
 
 const piTask = (): TaskStartOptions => task({ mode: 'agent', mcp: MCP, resumeSessionId: 'sess-1', flags: resolveTaskRunnerFlags(PI_MANIFEST, { mode: 'agent' }) });
-const PI_ARGS = ['--mode', 'rpc', '--session-id', 'sess-1', '-e', 'builtin:mcp', '-e', '<ordewell.ts>', '--append-system-prompt', '<instructions.md>'];
+const PI_ARGS = ['--mode', 'rpc', '--session-id', 'sess-1', '--session-dir', expect.any(String), '-e', 'builtin:mcp', '-e', '<ordewell.ts>', '--append-system-prompt', '<instructions.md>'];
 
 const piKind: Kind = {
   name: 'Pi',

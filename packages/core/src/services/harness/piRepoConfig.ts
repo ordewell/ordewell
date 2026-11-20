@@ -7,10 +7,12 @@ const CONTEXT_FILES = ['AGENTS.override.md', 'AGENTS.md', 'AGENTS.MD', 'CLAUDE.m
 /**
  * Pi's context files, and nothing else it would load from a repository: its
  * `.pi` settings, extensions, skills and MCP servers are configuration it
- * would run (ADR-0028), which a planner starts without (`--no-approve`), and
- * this reader offers none of its servers for approval. Pi reads one context
- * file at every level from the working directory up; the planner is given the
- * repository's, root first, as Pi orders them.
+ * would run (ADR-0028), which a planner and a read-only task start without
+ * (`--no-approve`; the adapter names the session directory itself, the one
+ * setting Pi takes from the repository even so), and this reader offers none
+ * of its servers for approval. Pi reads one context file at every level from
+ * the working directory up; a planner and a read-only task, which start with
+ * `--no-context-files`, are given the repository's, root first, as Pi orders them.
  */
 export const PI_REPO_CONFIG: RepoConfigReader = {
   instructions(workspace) {

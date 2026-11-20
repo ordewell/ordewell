@@ -144,6 +144,13 @@ describe('RunnerInstallation.runnerUsability', () => {
     expect(await inst.runnerUsability('copilot-cli')).toMatchObject({ usable: true, version: '1.1.0' });
   });
 
+  it('lists a Pi older than the version its connector was checked against, 1.5.2, as unavailable, and keeps 1.5.2 itself', async () => {
+    const usability = async (version: string) => new RunnerInstallation(registryWith(PI_MANIFEST), vi.fn(async () => ({ stdout: `${version}\n` })), Date.now, { launch: POSIX }).runnerUsability('pi');
+
+    expect(await usability('1.5.1')).toEqual({ usable: false, reason: 'Pi is too old for Ordewell: found 1.5.1, needs 1.5.2 or later.' });
+    expect(await usability('1.5.2')).toMatchObject({ usable: true, version: '1.5.2' });
+  });
+
   it('refuses a runner no manifest names', async () => {
     const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), vi.fn(async () => ({ stdout: '' })));
 

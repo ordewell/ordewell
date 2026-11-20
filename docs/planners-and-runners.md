@@ -110,8 +110,12 @@ alike: there is no Pi request for Ordewell to put to you. Pick a read-only mode,
 or another runner, for a task that should not change anything on its own.
 
 A Pi planner, and a read-only Pi task, start with Pi's `read`, `grep`, `find` and
-`ls` and Ordewell's tools alone, without your Pi extensions or the repository's
-`.pi/` settings, extensions and MCP servers. Each read asks Ordewell first. A
+`ls` and Ordewell's tools alone, without your Pi extensions, the repository's
+`.pi/` settings, extensions and MCP servers, or Pi's own context files: Ordewell
+hands them the repository's `AGENTS.md` and `CLAUDE.md` files as text instead,
+none from above the repository root or through a link out of it. Pi still starts
+the MCP servers in your own Pi `mcp.json` on these starts, but offers none of
+their tools. Each read asks Ordewell first. A
 planner's read inside the workspace runs; one outside it follows the approval
 policy for reads outside the workspace, which may allow it, ask you or refuse it.
 A read-only task reads inside its worktree and the session workspace, and a read
@@ -120,8 +124,18 @@ a read is judged.
 
 Ordewell hands Pi its MCP server, and the read checks, in a small extension it
 writes for each Pi process into a private directory outside the repository and
-loads with `-e`. It removes the file when the process ends, installs nothing into
-Pi and changes none of your Pi settings.
+loads with `-e`. It removes the file when the process ends, with Pi's
+compilation cache for it turned off, installs nothing into Pi and changes none of
+your Pi settings. A server named `ordewell` in your own Pi `mcp.json` would take
+the place of Ordewell's, so a Pi start fails at once and names that file until
+you rename or remove it.
+
+Every Pi start names its session directory: Pi's default for the directory it
+starts in, under its agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`),
+so a repository's `.pi/settings.json` cannot send the transcript elsewhere. A
+Continue, or a planner picked up again, checks that Pi found the saved session;
+a session Pi no longer has fails the Continue, and the planner picks the
+conversation up from its transcript.
 
 ## When a task's context compacts
 
