@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ConversationMessage } from '../models/Task';
 import type { UsageRecord } from '../models/Usage';
 import type { AiProvider } from '../interfaces/IConfig';
-import type { ResearchTurn, ToolResult } from './BaseAiService';
+import type { AbandonedPlanText, ResearchTurn, ToolResult } from './BaseAiService';
 import { BudgetedChat, type CallInput, type ChatCompaction } from './budgetedChat';
 import { messageChars, type CompactableMessage } from './contextCompaction';
 import type { SummaryCall } from './contextSummary';
@@ -10,11 +10,15 @@ import type { ChatBudget, ModelLimits } from './plannerContextBudget';
 import {
   createModelClient,
   isModelError,
+  ModelError,
+  retryDelay,
+  sleep,
   withRetry,
   type EffortLevel,
   type FinishReason,
   type ModelClient,
   type ModelClientOptions,
+  type ModelEvent,
   type ModelMessage,
   type ModelRequest,
   type ModelToolCall,
@@ -223,41 +227,109 @@ export interface StreamedReply {
   state?: ProviderState;
 }
 
-/** Stream one request to its end, handing text and thinking out as they arrive. */
+/** A reply that failed after it began streaming, which the planner drops whole. */
+export interface AbandonedReply {
+  /** What it streamed. Nothing of it is used; its usage is still the provider's bill. */
+  reply: StreamedReply;
+  error: ModelError;
+  /** The times the call has been sent, this one included. */
+  sends: number;
+  /** The pause before the call is sent again; absent when it is not, and the failure is thrown. */
+  resendInMs?: number;
+}
+
+export interface ReplyHooks {
+  onText?: (delta: string) => void;
+  onThinking?: (delta: string) => void;
+  /** Takes each abandoned reply before the call is sent again or fails: what it showed is the caller's to take back. */
+  onAbandoned?: (abandoned: AbandonedReply) => void;
+}
+
+/**
+ * Stream one request to its end, handing text and thinking out as they
+ * arrive. This is where every planner call decides what a stream that broke
+ * off part way means (a stall `withStreamTimeouts` cut, a dropped
+ * connection). A planner reply takes effect only once whole: its text is
+ * parsed and its tool calls run after it ends. So a reply that failed part way
+ * has done nothing yet, and the same request is sent again with it dropped,
+ * under the retry policy and limits the built-in runner's loop sends a cut
+ * step again under (ADR-0070). A failure before any event is `withRetry`'s,
+ * which has already retried it.
+ */
 export async function streamReply(
   client: ModelClient,
   request: ModelRequest,
   signal: AbortSignal | undefined,
-  hooks: { onText?: (delta: string) => void; onThinking?: (delta: string) => void } = {},
+  hooks: ReplyHooks = {},
 ): Promise<StreamedReply> {
-  const reply: StreamedReply = { text: '', reasoning: '', calls: [] };
-  for await (const event of client.stream(request, signal)) {
-    switch (event.type) {
-      case 'text-delta':
-        reply.text += event.text;
-        hooks.onText?.(event.text);
-        break;
-      case 'thinking-delta':
-        reply.reasoning += event.text;
-        hooks.onThinking?.(event.text);
-        break;
-      case 'tool-call-complete':
-        reply.calls.push(event.call);
-        break;
-      case 'usage':
-        reply.usage = event.usage;
-        break;
-      case 'provider-state':
-        reply.state = event.state;
-        break;
-      case 'finish':
-        reply.finish = event.reason;
-        break;
-      default:
-        break;
+  let firstCut = 0;
+  for (let sends = 1; ; sends++) {
+    const reply: StreamedReply = { text: '', reasoning: '', calls: [] };
+    let streamed = false;
+    try {
+      for await (const event of client.stream(request, signal)) {
+        streamed = true;
+        absorb(reply, event, hooks);
+      }
+      return reply;
+    } catch (err) {
+      if (!streamed || !isModelError(err) || signal?.aborted) throw err;
+      if (sends === 1) firstCut = Date.now();
+      const delayMs = retryDelay(err, sends, Date.now() - firstCut);
+      hooks.onAbandoned?.({ reply, error: err, sends, ...(delayMs !== undefined ? { resendInMs: delayMs } : {}) });
+      if (delayMs === undefined) throw sends > 1 ? gaveUp(err, sends) : err;
+      await sleep(delayMs, signal);
     }
   }
-  return reply;
+}
+
+function gaveUp(err: ModelError, sends: number): ModelError {
+  return new ModelError({
+    kind: err.kind,
+    message: `${err.message} The planner sent the call ${sends} times, and each reply broke off part way.`,
+    ...(err.status !== undefined ? { status: err.status } : {}),
+    cause: err,
+  });
+}
+
+/** The research log's line for a call sent again after its reply broke off; none for one that is not. */
+export function resendLine(abandoned: AbandonedReply): string | undefined {
+  if (abandoned.resendInMs === undefined) return undefined;
+  const wait = `${(abandoned.resendInMs / 1000).toFixed(1)} s`;
+  return `[Ordewell] The model request failed part way: ${abandoned.error.message} Its partial reply is dropped and the call is sent again in ${wait} (retry ${abandoned.sends}).`;
+}
+
+/** A plan-text call's account of an abandoned reply: what it cost, and its re-send's line. */
+export function abandonedPlanText(usage: UsageRecord | undefined, abandoned: AbandonedReply): AbandonedPlanText {
+  const line = resendLine(abandoned);
+  return { ...(usage ? { usage } : {}), ...(line ? { line } : {}) };
+}
+
+function absorb(reply: StreamedReply, event: ModelEvent, hooks: ReplyHooks): void {
+  switch (event.type) {
+    case 'text-delta':
+      reply.text += event.text;
+      hooks.onText?.(event.text);
+      break;
+    case 'thinking-delta':
+      reply.reasoning += event.text;
+      hooks.onThinking?.(event.text);
+      break;
+    case 'tool-call-complete':
+      reply.calls.push(event.call);
+      break;
+    case 'usage':
+      reply.usage = event.usage;
+      break;
+    case 'provider-state':
+      reply.state = event.state;
+      break;
+    case 'finish':
+      reply.finish = event.reason;
+      break;
+    default:
+      break;
+  }
 }
 
 /** A finish reason in the words the planner's loop and summaries read: `length` is a cut-off reply. */
@@ -282,9 +354,14 @@ export function modelSummaryCall(client: () => ModelClient, source: () => string
     const messages: PlannerMessage[] = asSystem
       ? [{ role: 'system', content: instructions }, { role: 'user', content: input }]
       : [{ role: 'user', content: `${instructions}\n\n${input}` }];
-    const reply = await streamReply(client(), plannerRequest(messages, { model, tools: [], maxOutputTokens }), signal);
-    const usage = usageRecordOf(source(), model, reply.usage, contextTokens);
-    if (usage) onUsage(usage);
+    const record = (usage: ModelUsage | undefined): void => {
+      const measured = usageRecordOf(source(), model, usage, contextTokens);
+      if (measured) onUsage(measured);
+    };
+    const reply = await streamReply(client(), plannerRequest(messages, { model, tools: [], maxOutputTokens }), signal, {
+      onAbandoned: (abandoned) => record(abandoned.reply.usage),
+    });
+    record(reply.usage);
     const finishReason = finishReasonOf(reply.finish);
     return { text: reply.text, ...(finishReason ? { finishReason } : {}) };
   };
@@ -324,6 +401,8 @@ export interface ModelPlannerChatOptions {
   onReasoning?: (delta: string, segmentId: string) => void;
   /** Live answer text, so a planner message streams into the chat as it is written. */
   onContent?: (delta: string, segmentId: string) => void;
+  /** Takes back a segment `onContent` streamed for a reply that broke off and is sent again. */
+  onRetracted?: (segmentId: string) => void;
   /** A call's thinking streams as a segment of its own, apart from its text: the Gemini planner's display. */
   thinkingSegment?: boolean;
   mergeSameRole?: boolean;
@@ -399,15 +478,24 @@ export class ModelPlannerChat extends BudgetedChat<PlannerMessage> {
     });
     // One call is one segment: the text a call streams ends where its tool
     // calls begin, and the next call's text starts a segment of its own.
-    const segmentId = uuidv4();
-    const thinkingId = this.opts.thinkingSegment ? uuidv4() : segmentId;
+    let segmentId = uuidv4();
+    let thinkingId = this.opts.thinkingSegment ? uuidv4() : segmentId;
+    const resends: string[] = [];
     const reply = await streamReply(this.opts.client(), request, signal, {
       onText: (delta) => this.opts.onContent?.(delta, segmentId),
       onThinking: (delta) => this.opts.onReasoning?.(delta, thinkingId),
+      onAbandoned: (abandoned) => {
+        this.recordUsage(model, abandoned.reply.usage);
+        if (abandoned.reply.text) this.opts.onRetracted?.(segmentId);
+        const line = resendLine(abandoned);
+        if (line) resends.push(line);
+        // The next send streams under ids of its own, so none of it runs on from what was taken back.
+        segmentId = uuidv4();
+        thinkingId = this.opts.thinkingSegment ? uuidv4() : segmentId;
+      },
     });
 
-    const usage = usageRecordOf(this.opts.source(), model, reply.usage, this.opts.contextTokens);
-    if (usage) this.opts.onUsage?.(usage);
+    this.recordUsage(model, reply.usage);
     const promptTokens = reply.usage?.inputTokens;
     this.opts.budget?.gauge.record(model, sentChars, promptTokens);
 
@@ -429,6 +517,12 @@ export class ModelPlannerChat extends BudgetedChat<PlannerMessage> {
       finishReason: finishReasonOf(reply.finish),
       promptTokens,
       segmentId,
+      ...(resends.length > 0 ? { resends } : {}),
     };
+  }
+
+  private recordUsage(model: string, usage: ModelUsage | undefined): void {
+    const record = usageRecordOf(this.opts.source(), model, usage, this.opts.contextTokens);
+    if (record) this.opts.onUsage?.(record);
   }
 }
