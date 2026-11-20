@@ -112,8 +112,13 @@ export interface RunningLongFacts {
   reason: 'duration' | 'compaction' | 'context';
   /** Time the attempt has spent running, waits on a person left out. */
   elapsedMs: number;
-  /** The running time this flag was due at: the threshold, doubled for each duration flag before it. */
+  /** The running time this flag was due at: the threshold, doubled for each duration flag before it, or twice {@link previousMs}. */
   thresholdMs: number;
+  /**
+   * The running time the last duration flag was due at, when twice it set
+   * this one: a threshold lowered since, doubled, would have come sooner.
+   */
+  previousMs?: number;
   basis?: RunningLongBasis;
   median?: RunningLongMedian;
   retryOf?: RunningLongRetry;
@@ -326,9 +331,10 @@ export class RunningLongClock {
       this.arm();
       return;
     }
+    const previous = due > this.threshold().ms * 2 ** this.flags ? this.flaggedAt : undefined;
     this.flags += 1;
     this.flaggedAt = due;
-    this.flag(this.facts('duration', due));
+    this.flag({ ...this.facts('duration', due), ...(previous !== undefined ? { previousMs: previous } : {}) });
     if (!this.stopped && this.since !== null) this.arm();
   }
 

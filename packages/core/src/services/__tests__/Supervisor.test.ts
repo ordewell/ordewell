@@ -100,6 +100,14 @@ describe('wakeUpDigest', () => {
         .toBe('- task #4 "Task t4" has run long: 38m 00s running, past its 38m 00s threshold (the 5 tasks that have passed took a median of 2m 00s; 3× that, 19m 00s at least, doubled after each earlier flag)');
     });
 
+    it('names the earlier flag when twice it, not the threshold doubled, set the one it names', () => {
+      // A flag at the 30-minute floor, then a fifth pass lowers the threshold to 19: the next is due at 60, not 38.
+      const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE, previousMs: 30 * MINUTE, median: { passed: 5, runningMs: 6 * MINUTE } });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4" has run long: 1h 00m running, past its 1h 00m threshold (twice the 30m 00s its last flag was due at, never sooner; the 5 tasks that have passed took a median of 6m 00s; 3× that, 19m 00s at least)');
+    });
+
     it('names the earlier attempt a retry\'s threshold was its running time of', () => {
       const event = runningLong('t4', { elapsedMs: 42 * MINUTE, thresholdMs: 42 * MINUTE, attempt: 2, retryOf: { attempt: 1, runningMs: 42 * MINUTE, outcome: 'failed' } });
 

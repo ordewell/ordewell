@@ -107,7 +107,8 @@ and completion evidence.
   put the flag off or bring it forward, and each flag doubles the time the
   next needs, never less than double the last flag's however a later pass
   lowers the threshold. The flag names which comparison fired: the longest
-  pass, or the median and how many passed. An attempt that follows one of the same task that failed or was
+  pass, or the median and how many passed, and, when double the last flag's
+  time came later than the lowered threshold doubled, that flag's time. An attempt that follows one of the same task that failed or was
   stopped (the ending is kept on that attempt's usage as `outcome`) is first
   flagged at the larger of 30 minutes and that attempt's running time instead:
   a retry already had that long once, and a retry of a task that failed after
@@ -780,3 +781,4 @@ transport is retained for take-over.
 - 2026-11-18 — W1: an attempt that follows a failed or stopped attempt of the same task is first flagged at max(30 min, that attempt's running time), not at 3× the plan's longest pass; the flag names that attempt.
 - 2026-11-19 — W1: an attempt that continues a saved session takes the context it starts with as its baseline, so its first context flag is the next doubling above it; fresh attempts and the time and compaction flags are unchanged.
 - 2026-11-20 — W1: once five AI tasks have passed, a first attempt is also flagged at max(19 min, 3× their median running time) where that comes first; the threshold is read each minute, the next flag is never under double the last, and the line names the median.
+- 2026-11-20 — W1: a flag set by double the last one's time names that time, not the lowered threshold's doubling.

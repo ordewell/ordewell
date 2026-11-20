@@ -119,6 +119,17 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
       expect(flags.map((f) => [f.elapsedMs / MINUTE, f.thresholdMs / MINUTE, f.median?.runningMs])).toEqual([[30, 30, undefined], [60, 60, 6 * MINUTE]]);
     });
 
+    it('names the earlier flag when twice it, not the lowered threshold doubled, set the next', () => {
+      const plan = [passed('b', 5), passed('c', 6), passed('d', 7), passed('e', 8)];
+      const { flags } = watched({ plan: () => plan });
+
+      vi.advanceTimersByTime(31 * MINUTE);
+      plan.push(passed('a', 4));
+      vi.advanceTimersByTime(29 * MINUTE);
+      // 19 doubled once is 38: the 60 is twice the 30 the first flag was due at.
+      expect(flags.map((f) => f.previousMs)).toEqual([undefined, 30 * MINUTE]);
+    });
+
     it('leaves a retry to its own rule: the running time of the attempt it follows', () => {
       const retried = buildTask({ id: 'r', status: 'in_progress' });
       retried.attemptUsage = [{ ...passed('r', 45).attemptUsage![0], outcome: 'failed' }];

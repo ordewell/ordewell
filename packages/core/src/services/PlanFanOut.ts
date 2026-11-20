@@ -1,3 +1,4 @@
+import * as path from 'path';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import { runsAsOps, type Task } from '../models/Task';
 
@@ -280,8 +281,9 @@ export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'r
   if (!shape.wide) return unchanged;
   const lines = new Map<string, number | undefined>();
   const sizes = async (counts: (path: string) => boolean): Promise<Map<string, number> | undefined> => {
-    // A path out of the workspace would ask the user to approve the read (ADR-0008).
-    const named = new Map(shape.slices.map((s) => [s.id, namedPaths(s).filter((p) => counts(p) && !p.split('/').includes('..'))]));
+    // A path out of the workspace would ask the user to approve the read (ADR-0008). The
+    // workspace check reads any path whose relative form starts `..` as out, `...tests/x.py` too.
+    const named = new Map(shape.slices.map((s) => [s.id, namedPaths(s).filter((p) => counts(p) && !path.posix.normalize(p).startsWith('..'))]));
     const owners = new Map<string, number>();
     for (const paths of named.values()) for (const p of paths) owners.set(p, (owners.get(p) ?? 0) + 1);
     const unread = [...owners.keys()].filter((p) => !lines.has(p));

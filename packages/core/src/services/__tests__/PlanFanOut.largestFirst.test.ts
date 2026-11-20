@@ -117,6 +117,14 @@ describe('largestSlicesFirst', () => {
       expect(reads.filter((p) => p.includes('..'))).toEqual([]);
     });
 
+    it('reads no path that resolves out of the workspace by a leading run of dots, as `...tests/x.py` does', async () => {
+      // `path.relative` gives such a path back starting `..`, which the workspace check reads as outside.
+      const dotted = plan().map((x) => (x.id === 's1' ? { ...x, prompt: 'Verify: ...tests/test_m1.py and ./.../tests/test_m1.py' } : x.id === 's4' ? { ...x, prompt: 'Fill in .../tests/test_m4.py' } : x));
+      const { fs, reads } = workspace({ 'tests/test_m2.py': lines(10) });
+      await largestSlicesFirst(dotted, fs);
+      expect(reads.filter((p) => p.includes('..'))).toEqual([]);
+    });
+
     it('sizes nothing by a read that throws, and keeps the plan', async () => {
       const before = plan();
       const fs = fakeFileSystem({ readFile: async () => { throw new Error('EACCES'); } });
