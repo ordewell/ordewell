@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Pi can run tasks and plan, on Pi 1.5.2 or later. A writable Pi task runs
+  Pi's own tools without asking; a planner or read-only task reads only what
+  Ordewell allows, and starts without Pi's context files, the repository's
+  instructions coming from Ordewell. Pi has its own badge name and colour.
+
 ## [0.14.4] - 2026-11-19
 
 ### Added

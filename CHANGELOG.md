@@ -8,6 +8,25 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Pi runs tasks and plans.** A plan can assign a task to `pi`, which
+  Ordewell drives over Pi's RPC mode with the Ordewell tools attached and its
+  models listed from `pi --list-models`; Pi 1.5.2 or later. A writable Pi task
+  runs Pi's own tools, its shell and file edits included, without asking: Pi
+  has no per-tool approval. A planner or read-only task starts with Pi's read
+  tools and Ordewell's alone, without the repository's `.pi/` extensions,
+  settings and MCP servers, the user's own extensions, or Pi's context files
+  (a read-only task gets the repository's instructions from Ordewell), and
+  asks Ordewell before each read: a read-only task's read outside its worktree
+  and the workspace is refused, and a planner's read outside the workspace
+  follows the approval policy for outside reads. Ordewell loads a small
+  extension of its own into each Pi process for this and changes nothing in
+  the user's Pi setup. Pi has its own badge name and colour, the installer
+  lists it among the coding agents it finds, and a Pi planner delegates
+  exploration through research tasks, having no agents of its own (#78, #192;
+  thanks @hskl18).
+
 ### Changed
 
 - **The built-in runner counts its model calls for the model.** The prompt

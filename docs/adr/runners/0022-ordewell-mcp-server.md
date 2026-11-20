@@ -97,7 +97,7 @@ A runner-facing tool joins the task side on the same mechanism.
 ### Scope
 
 - **Task runners and the coding-agent planners (S1).** Claude Code, Codex,
-  OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor, ACP runners
+  OpenCode, Pi (handed the server through Ordewell's own per-process extension), and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor, ACP runners
   ([ADR-0060](0060-acp-runners-are-data-on-one-connector.md)), use the
   required server, as task runners and as planners. An ACP agent
   that can take an HTTP MCP server neither in `session/new` nor from a
@@ -399,3 +399,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-14 — S2: an in-process runner's direct calls to the token's handlers are its tools (ADR-0070).
 - 2026-11-17 — V3: the status's description says `blocked` is an outside obstacle, not work remaining.
 - 2026-11-18 — P2: an accepted `submit_plan` whose longest chain is long answers with a `review` for the planner, once a turn (ADR-0072 R3).
+- 2026-11-20 — S1: Pi uses the server, through Ordewell's own per-process extension, as a task runner and a planner.
