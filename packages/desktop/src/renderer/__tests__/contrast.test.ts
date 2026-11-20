@@ -41,7 +41,7 @@ const SURFACES = ['bg-chrome', 'bg', 'bg-sidebar', 'bg-widget', 'bg-overlay', 'b
 const INSETS = ['bg-input', 'bg-code', 'surface-inset'];
 const STATUSES = ['idle', 'running', 'attention', 'passed', 'failed', 'blocked', 'merge', 'warning', 'warning-text', 'error'];
 const AREAS = ['planner', 'sessions', 'explorer', 'changes', 'git'];
-const RUNNERS = ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'];
+const RUNNERS = ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'pi'];
 const LANES = Array.from({ length: LANE_COLORS }, (_, at) => `lane-${at}`);
 
 const TEXT: Array<[string, string[]]> = [

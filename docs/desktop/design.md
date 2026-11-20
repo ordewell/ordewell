@@ -419,7 +419,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     - a relative time ("4 minutes ago"), with the full date in the tooltip;
     - a Forget button (`✕`), which appears on hover and focus.
   - *Runners,* one card for each coding agent core ships: Claude Code, Codex,
-    OpenCode, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor. Each
+    OpenCode, Pi, GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor. Each
     card shows:
     - the runner's badge, in its [runner colour](#visual-language);
     - its state: *Signed in*, *Signed out*, *Not checked* (unknown) or *Not
@@ -1713,14 +1713,14 @@ The rules:
 2. Area hues and runner colours sit in the part of the colour wheel farthest
    from the status colours they appear near. Runners sit on rows next to
    status shapes, so the first three take clay, ice and lime, which no status
-   uses, and the five added later (orchid, mint, rose, sky and sand) are each
+   uses, and the six added later (orchid, mint, rose, sky, sand and periwinkle) are each
    kept a measured distance from every status and from one another, which the
    token test checks. Areas
    only appear in the frame, where no status sits beside them.
 3. A runner badge is the runner's colour as text on a tint of that colour (14 %
    on dark, 10 % on light), with the runner's name: *Claude Code*, *Codex*,
-   *OpenCode*, *GitHub Copilot CLI*, *Qwen Code*, *Cline*, *Gemini CLI* and
-   *Cursor*. In a narrow row the name may shorten to *Claude*, but it is
+   *OpenCode*, *GitHub Copilot CLI*, *Qwen Code*, *Cline*, *Gemini CLI*,
+   *Cursor* and *Pi*. In a narrow row the name may shorten to *Claude*, but it is
    never dropped.
 4. Settings is neutral: it has no area hue, and its marker is `--ow-fg`.
 5. Status colours keep their meaning everywhere. Amber means Needs you, red
@@ -1861,12 +1861,14 @@ heading.
 | `--ow-runner-gemini-cli-tint` | `#28383E` | `#E7F0F3` |
 | `--ow-runner-cursor-agent` | `#D4C3A0` sand | `#6B5A35` |
 | `--ow-runner-cursor-agent-tint` | `#363635` | `#F0EFEB` |
+| `--ow-runner-pi` | `#99B3FF` periwinkle | `#4256A6` |
+| `--ow-runner-pi-tint` | `#2E3442` | `#ECEEF6` |
 
-The five added later keep clear of the status colours and of each other (the
+The six added later keep clear of the status colours and of each other (the
 test measures the distance in OKLab and fails under 5). A badge is a name on a
 tint, so none of them is read as a status shape. Their text against their tint, dark then light:
 Copilot 5.36 and 5.74, Qwen Code 6.96 and 5.38, Cline 5.55 and 5.34, Gemini
-6.86 and 5.32, Cursor 6.98 and 5.81. The mark (the colour as a graphic) reaches
+6.86 and 5.32, Cursor 6.98 and 5.81, Pi 6.08 and 5.82. The mark (the colour as a graphic) reaches
 3:1 on every surface it sits on.
 
 Badge text against its tint, at its lowest of the first three (drawn on raised

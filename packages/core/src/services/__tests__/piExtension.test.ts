@@ -171,6 +171,87 @@ describe('the extension Ordewell loads into Pi', () => {
     }
   });
 
+  describe('when the path changes while Ordewell is answering', () => {
+    const CHANGED = 'The path changed while Ordewell was deciding, so it was not read.';
+    const allow = () => JSON.stringify({ decision: 'allow' });
+    /** One read whose answer arrives only after `swap` has run, as a slow approval would let it. */
+    async function swapped(cwd: string, path: string, swap: () => void, tool = 'read') {
+      const [handler] = (await loaded({ server, asksReads: true })).handlers;
+      const event: ToolCall = { toolName: tool, toolCallId: 'c', input: { path } };
+      const blocked = await handler(event, { cwd, ui: { input: async () => { swap(); return allow(); } } });
+      return { blocked, given: event.input.path };
+    }
+
+    it('blocks a parent directory replaced by a link out after the file was approved', async () => {
+      const { dir, cwd } = site();
+      mkdirSync(join(cwd, 'src2'));
+      writeFileSync(join(cwd, 'src2', 'a.txt'), 'ok');
+      mkdirSync(join(dir, 'outside', 'src2'));
+      writeFileSync(join(dir, 'outside', 'src2', 'a.txt'), 'secret');
+
+      const { blocked, given } = await swapped(cwd, 'src2/a.txt', () => {
+        rmSync(join(cwd, 'src2'), { recursive: true });
+        symlinkSync(join(dir, 'outside', 'src2'), join(cwd, 'src2'), 'dir');
+      });
+
+      expect(blocked).toEqual({ block: true, reason: CHANGED });
+      expect(given).toBe('src2/a.txt');
+    });
+
+    it('blocks a link retargeted to a file outside', async () => {
+      const { dir, cwd } = site();
+
+      const { blocked, given } = await swapped(cwd, 'workspace-link.txt', () => {
+        rmSync(join(cwd, 'workspace-link.txt'));
+        symlinkSync(join(dir, 'outside', 'secret.txt'), join(cwd, 'workspace-link.txt'));
+      });
+
+      expect(blocked).toEqual({ block: true, reason: CHANGED });
+      expect(given).toBe('workspace-link.txt');
+    });
+
+    it('blocks a directory read whose directory was replaced by a link out', async () => {
+      const { dir, cwd } = site();
+      mkdirSync(join(cwd, 'sub'));
+
+      const { blocked } = await swapped(cwd, 'sub', () => {
+        rmSync(join(cwd, 'sub'), { recursive: true });
+        symlinkSync(join(dir, 'outside'), join(cwd, 'sub'), 'dir');
+      }, 'ls');
+
+      expect(blocked).toEqual({ block: true, reason: CHANGED });
+    });
+
+    it('blocks a file deleted and planted again under a near-identical name, which Pi would open as a near match', async () => {
+      const { dir, cwd } = site();
+      writeFileSync(join(cwd, "it's.txt"), 'ok');
+
+      const { blocked } = await swapped(cwd, "it's.txt", () => {
+        rmSync(join(cwd, "it's.txt"));
+        symlinkSync(join(dir, 'outside', 'secret.txt'), join(cwd, 'it’s.txt'));
+      });
+
+      expect(blocked).toEqual({ block: true, reason: CHANGED });
+    });
+
+    it('blocks a file that vanished', async () => {
+      const { cwd } = site();
+
+      const { blocked } = await swapped(cwd, 'inside.txt', () => rmSync(join(cwd, 'inside.txt')));
+
+      expect(blocked).toEqual({ block: true, reason: CHANGED });
+    });
+
+    it('still allows, and rewrites, a path nothing touched while it waited', async () => {
+      const { cwd } = site();
+
+      const { blocked, given } = await swapped(cwd, 'workspace-link.txt', () => undefined);
+
+      expect(blocked).toBeUndefined();
+      expect(given).toBe(realpathSync.native(join(cwd, 'workspace-link.txt')));
+    });
+  });
+
   it('puts a planner\'s read outside the workspace to the external_path policy, which may allow it (ADR-0026)', async () => {
     const { dir, cwd } = site();
     const [handler] = (await loaded({ server, asksReads: true })).handlers;

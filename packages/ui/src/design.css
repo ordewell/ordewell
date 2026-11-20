@@ -159,6 +159,7 @@
 .ow-runner-cline { background: var(--ow-runner-cline-tint); color: var(--ow-runner-cline); }
 .ow-runner-gemini-cli { background: var(--ow-runner-gemini-cli-tint); color: var(--ow-runner-gemini-cli); }
 .ow-runner-cursor-agent { background: var(--ow-runner-cursor-agent-tint); color: var(--ow-runner-cursor-agent); }
+.ow-runner-pi { background: var(--ow-runner-pi-tint); color: var(--ow-runner-pi); }
 
 /* A count sits in a box sized for three digits, so 9 becoming 10 moves nothing (checklist O6). */
 .ow-count {
