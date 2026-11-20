@@ -618,7 +618,9 @@ ops task, a push or a read-only check alone does not, and a change task the
 closing check waits for after every slice is a slice of the last level.
 Opening tasks in series, no opening task and no closing check are its faults,
 recorded in the research log and never asked about. A wide plan with a closing
-check gets a fixed `Plan shape:` note on each role's brief.
+check gets a fixed `Plan shape:` note on each role's brief. A wide plan's slices
+of one level start largest first, sized by the lines of the files their briefs
+name (ADR-0072 R6).
 *Avoid:* "gate" for the opening task (the merge gate is something else),
 "barrier".
 

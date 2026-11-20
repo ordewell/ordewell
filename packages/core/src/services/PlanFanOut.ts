@@ -1,3 +1,4 @@
+import type { IFileSystem } from '../interfaces/IFileSystem';
 import { runsAsOps, type Task } from '../models/Task';
 
 /**
@@ -232,4 +233,81 @@ export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(t
     return { ...t, prompt: `${t.prompt}\n\n${note}` };
   });
   return changed ? out : tasks;
+}
+
+/** What a slice's size was read from: the lines of the test files its brief names, or of every file it names. */
+export type SliceMeasure = 'test' | 'named';
+
+export interface SlicesOrdered {
+  /** The plan, its slices of each level largest first; the same array when nothing was sized. */
+  tasks: Task[];
+  /** Undefined when no file a slice's brief names could be read: nothing was reordered. */
+  measure?: SliceMeasure;
+  /** How many slices changed place. */
+  moved: number;
+}
+
+/** A file larger than this, in KB or in lines, is skipped: generated data or a vendored bundle says nothing of a slice's work. */
+const MAX_SIZED_KB = 512;
+const MAX_SIZED_LINES = 20_000;
+/** The most files a plan's slices are sized by; a plan that names more is left in the planner's order. */
+export const MAX_SIZED_FILES = 200;
+
+/** A test file by its name or a directory it sits in, in the usual layouts of the languages {@link PATH} reads. */
+const TEST_FILE = /(?:^|\/)(?:test[_.-][^/]*|[^/]*[_.-](?:test|spec)s?\.\w+|conftest\.py)$|(?:^|\/)(?:[\w-]*[_-])?(?:tests?|specs?|__tests__)\//;
+
+/** A file's lines as the planner's read reports them, numbered `N|`, or undefined when it was not read whole. */
+async function lineCount(fs: Pick<IFileSystem, 'readFile'>, path: string): Promise<number | undefined> {
+  // A read that throws sizes nothing: ordering must never cost the plan.
+  const r = await fs.readFile(path, { maxBytes: MAX_SIZED_KB, limit: MAX_SIZED_LINES }).catch(() => undefined);
+  if (!r?.success || r.truncated || r.refused) return undefined;
+  if (r.output === '') return 0;
+  const last = /^\s*(\d+)\|/.exec(r.output.slice(r.output.lastIndexOf('\n') + 1));
+  return last ? Number(last[1]) : undefined;
+}
+
+/**
+ * The plan with each level's slices started largest first: ready tasks start
+ * in plan order, a few at a time, so a long slice the planner listed late set
+ * when the whole fan-out ended (ADR-0072 R6). A slice's size is the lines of
+ * the test files its brief names, or of every file it names when no slice
+ * names a test file that exists; a file several briefs name is shared equally
+ * among them. Only the order of slices of one level changes, each taking the
+ * place and `order` of the one it displaced; ties keep the planner's order.
+ */
+export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesOrdered> {
+  const unchanged: SlicesOrdered = { tasks, moved: 0 };
+  if (!shape.wide) return unchanged;
+  const lines = new Map<string, number | undefined>();
+  const sizes = async (counts: (path: string) => boolean): Promise<Map<string, number> | undefined> => {
+    // A path out of the workspace would ask the user to approve the read (ADR-0008).
+    const named = new Map(shape.slices.map((s) => [s.id, namedPaths(s).filter((p) => counts(p) && !p.split('/').includes('..'))]));
+    const owners = new Map<string, number>();
+    for (const paths of named.values()) for (const p of paths) owners.set(p, (owners.get(p) ?? 0) + 1);
+    const unread = [...owners.keys()].filter((p) => !lines.has(p));
+    // Part of a plan's files would size the slices listed first and leave the rest at nothing.
+    if (lines.size + unread.length > MAX_SIZED_FILES) return undefined;
+    for (const p of unread) lines.set(p, await lineCount(fs, p));
+    if (![...owners.keys()].some((p) => lines.get(p) !== undefined)) return undefined;
+    return new Map([...named].map(([id, paths]) => [id, paths.reduce((sum, p) => sum + (lines.get(p) ?? 0) / owners.get(p)!, 0)]));
+  };
+  // On recorded runs the lines of a slice's test files predicted its time best;
+  // with no test file to read, the files its brief names come next.
+  const byTests = await sizes((p) => TEST_FILE.test(p));
+  const measure: SliceMeasure = byTests ? 'test' : 'named';
+  const size = byTests ?? await sizes(() => true);
+  if (!size) return unchanged;
+  const level = graph(tasks)!.level;
+  const out = [...tasks];
+  let moved = 0;
+  for (const l of new Set(shape.slices.map((s) => level.get(s.id)!))) {
+    const places = tasks.flatMap((t, i) => (size.has(t.id) && level.get(t.id) === l ? [i] : []));
+    const sorted = places.map((i) => tasks[i]).sort((a, b) => size.get(b.id)! - size.get(a.id)!);
+    places.forEach((i, k) => {
+      if (sorted[k] === tasks[i]) return;
+      moved++;
+      out[i] = { ...sorted[k], order: tasks[i].order };
+    });
+  }
+  return { tasks: moved ? out : tasks, measure, moved };
 }
