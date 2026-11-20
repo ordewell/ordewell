@@ -471,7 +471,7 @@ describe('Welcome: runners', () => {
     const runners = section('Runners');
     await waitFor(() => expect(runners.querySelectorAll('[data-runner]')).toHaveLength(9));
     // Pi has no badge of its own yet, so it is named by its id on the neutral one.
-    for (const name of ['Claude Code', 'Codex', 'OpenCode', 'pi', 'GitHub Copilot CLI', 'Qwen Code', 'Cline', 'Gemini CLI', 'Cursor']) {
+    for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'GitHub Copilot CLI', 'Qwen Code', 'Cline', 'Gemini CLI', 'Cursor']) {
       expect(within(runners).getByTitle(name)).toBeInTheDocument();
     }
     expect(within(runners).getAllByRole('button', { name: 'Docs' })).toHaveLength(9);

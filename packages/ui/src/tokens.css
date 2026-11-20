@@ -128,6 +128,8 @@
   --ow-runner-gemini-cli-tint: #28383e;
   --ow-runner-cursor-agent: #d4c3a0;
   --ow-runner-cursor-agent-tint: #363635;
+  --ow-runner-pi: #99b3ff;
+  --ow-runner-pi-tint: #2e3442;
 
   /* What a raised surface and an overlay drawer cast: scale.css composes them into elevations. */
   --ow-shadow-color: rgb(0 0 0 / 0.5);
