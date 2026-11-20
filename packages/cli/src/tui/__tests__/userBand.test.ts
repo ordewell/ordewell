@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { replayTaskLog, type DisplayBlock, type MessageBlock } from '@ordewell/core';
 import { stripAnsi, style, width } from '../ansi';
 import { conversationLines } from '../blocks';
-import { chatLayout } from '../layout';
+import { chatLayout, footerHints } from '../layout';
 import { initialState } from '../reducer';
 import type { TaskLogState, TaskView } from '../state';
 
@@ -116,5 +116,46 @@ describe('in the task view', () => {
     }
     expect(stripAnsi(lines[at - 1]).trim()).toBe('');
     expect(stripAnsi(lines[at + 1]).trim()).toBe('');
+  });
+});
+
+describe('a task\'s first message in the task view', () => {
+  const task: TaskView = { id: 't1', order: 1, title: 'Refactor', type: 'ai', status: 'in_progress', dependencies: [], assignedRunner: 'claude-code' };
+  const handoff = 'Task 1 built the parser.';
+  const brief = 'Wire the parser in.';
+  const message = `## Prior task outputs\n\n${handoff}\n\n${brief}`;
+  const stateWith = (over: Partial<ReturnType<typeof initialState>> = {}): ReturnType<typeof initialState> => initialState({
+    sessionId: 's1', focus: 'chat', rows: 40, cols: 100, tasks: [task], ...over,
+    taskView: {
+      taskId: 't1',
+      view: replayTaskLog([{
+        type: 'turn_start', message,
+        parts: [
+          { kind: 'priorOutputs', title: 'Prior task outputs', start: 0, end: 25 + handoff.length },
+          { kind: 'brief', title: 'Brief', start: message.length - brief.length, end: message.length },
+        ],
+      }]),
+      attempts: [1], attempt: 1, pending: [], loaded: true, followLatest: true, queuedIndex: 0,
+    },
+  });
+  const drawn = (state: ReturnType<typeof initialState>): string[] => chatLayout(state, 30, 100).lines.map(stripAnsi);
+
+  it('shows the brief on the band with the handoffs folded above it, and offers ctrl-o', () => {
+    const state = stateWith();
+    const out = drawn(state);
+    const at = out.findIndex((row) => row.startsWith('❯ Wire the parser in.'));
+    expect(at).toBeGreaterThan(0);
+    expect(out.slice(0, at).some((row) => row.startsWith('Handoffs from earlier tasks · 1 section'))).toBe(true);
+    expect(out.join('\n')).not.toContain(handoff);
+    expect(footerHints(state)).toContain('ctrl-o expand all');
+  });
+
+  it('opens the handoff under its title with detail on, and offers collapse', () => {
+    const state = stateWith({ detailAll: true });
+    const out = drawn(state);
+    expect(out.some((row) => row.trimEnd() === '  Prior task outputs')).toBe(true);
+    expect(out.some((row) => row.trimEnd() === `    ${handoff}`)).toBe(true);
+    expect(out.some((row) => row.startsWith('❯ Wire the parser in.'))).toBe(true);
+    expect(footerHints(state)).toContain('ctrl-o collapse all');
   });
 });
