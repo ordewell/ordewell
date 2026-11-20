@@ -41,10 +41,12 @@ export interface PiExtensionConfig {
  * spaces, a leading `@`, `~`, `file://`, a Git Bash drive on Windows), must
  * exist (Pi's read tries near matches for a missing one, which may be a link
  * out), and is followed through links. An allowed call is then given that real
- * path, so Pi reads exactly what was decided. `grep` and `find` start at their
- * path and follow no link below it, so the path bounds what they search. A call
- * the answer does not allow, or that nobody answered, is blocked with the
- * answer's reason, which the model reads as the tool's error.
+ * path, so Pi reads exactly what was decided; the real path is checked again
+ * once the answer is in, and a call whose path moved meanwhile is blocked.
+ * `grep` and `find` start at their path and follow no link below it, so the
+ * path bounds what they search. A call the answer does not allow, or that
+ * nobody answered, is blocked with the answer's reason, which the model reads
+ * as the tool's error.
  *
  * Plain JavaScript in a string: core ships bundled, as a single binary among
  * others, so the extension has no file of its own to point Pi at.
@@ -66,6 +68,7 @@ const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const MISSING = 'This path is not on disk, and Pi would read a near match in its place, so it was not read. Name a file or directory that exists.';
 const RESPACED = 'Pi would read this path with its spaces changed, which is not the file that was checked, so it was not read.';
 const UNANSWERED = 'Ordewell did not allow this read.';
+const CHANGED = 'The path changed while Ordewell was deciding, so it was not read.';
 
 function windowsShellPath(p) {
   if (!p.startsWith('/') || p.startsWith('//') || p.includes('\\')) return p;
@@ -82,6 +85,15 @@ function piPath(raw, cwd) {
   else if (p.startsWith('~/') || (process.platform === 'win32' && p.startsWith('~\\'))) p = join(homedir(), p.slice(2));
   else if (/^file:\/\//.test(p)) p = fileURLToPath(p);
   return isAbsolute(p) ? resolve(p) : resolve(cwd, p);
+}
+
+// The path's real path now, or null once it is gone.
+function realNow(abs) {
+  try {
+    return existsSync(abs) ? realpathSync.native(abs) : null;
+  } catch {
+    return null;
+  }
 }
 
 function decision(answer) {
@@ -109,6 +121,10 @@ export default function ordewell(pi) {
     if (answered?.decision !== 'allow' && answered?.decision !== 'allowForTask') {
       return { block: true, reason: typeof answered?.note === 'string' && answered.note ? answered.note : UNANSWERED };
     }
+    // The answer may have taken long enough for the path to be swapped, a link retargeted or
+    // the file replaced by a near match Pi would open. A tool_call hook cannot close the window
+    // before Pi opens the file, but this shrinks it from the wait for the answer to microseconds.
+    if (realNow(abs) !== real) return { block: true, reason: CHANGED };
     event.input.path = real;
   });
 }

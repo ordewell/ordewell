@@ -61,6 +61,7 @@ DESKTOP_SCRIPT_URL=https://raw.githubusercontent.com/$REPO/main/scripts/install/
 AGENTS='claude:Claude Code
 codex:Codex
 opencode:OpenCode
+pi:Pi
 copilot:GitHub Copilot CLI
 qwen:Qwen Code
 cline:Cline
