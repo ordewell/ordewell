@@ -51,7 +51,7 @@ describe('wakeUpDigest', () => {
       kind: 'running_long', taskId, at: 0,
       runningLong: { reason: 'duration', elapsedMs: 65 * MINUTE, thresholdMs: 60 * MINUTE, compactions: 0, attempt: 1, ...facts },
     });
-    const ADVICE = 'Running long is advice, never a verdict: read the task\'s output with task_output; if its brief\'s done criterion holds, message_task its runner to commit and call task_complete; if the brief is too large, stop_task it and split it; otherwise let it go on.';
+    const ADVICE = 'Running long is advice, never a verdict: read the task\'s output with task_output; if its brief\'s done criterion holds, or it is stuck on what that criterion does not need or the workspace cannot tell it, message_task it to commit what works, call task_complete and list the rest; if the brief is too large, stop_task it and split it; otherwise let it go on.';
 
     it('names its running time, the threshold and the task it was computed from, its context and its compactions, then what the supervisor can do', () => {
       const event = runningLong('t4', {
@@ -84,6 +84,20 @@ describe('wakeUpDigest', () => {
 
       expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
         .toBe('- task #4 "Task t4" has run long: 1h 00m running, past its 1h 00m threshold (the 30m 00s floor, doubled after each earlier flag)');
+    });
+
+    it('names the median the passed tasks took when it set the threshold, and still what the task holds back', () => {
+      const event = runningLong('t4', { elapsedMs: 22 * MINUTE, thresholdMs: 22 * MINUTE, median: { passed: 12, runningMs: 440_000 } });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask, () => ['t7']).split('\n')[1])
+        .toBe('- task #4 "Task t4" has run long: 22m 00s running, past its 22m 00s threshold (the 12 tasks that have passed took a median of 7m 20s; 3× that, 19m 00s at least); it blocks task #7 "Task t7"');
+    });
+
+    it('says a median threshold was doubled only once it was', () => {
+      const event = runningLong('t4', { elapsedMs: 38 * MINUTE, thresholdMs: 38 * MINUTE, median: { passed: 5, runningMs: 2 * MINUTE } });
+
+      expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
+        .toBe('- task #4 "Task t4" has run long: 38m 00s running, past its 38m 00s threshold (the 5 tasks that have passed took a median of 2m 00s; 3× that, 19m 00s at least, doubled after each earlier flag)');
     });
 
     it('names the earlier attempt a retry\'s threshold was its running time of', () => {
