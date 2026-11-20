@@ -101,3 +101,29 @@ describe('the task log tab tells the webview how the last turn ended', () => {
     expect(openedStatus(task({ status: 'in_progress' }), [{ type: 'turn_start', message: 'go' }, { type: 'turn_end', reason: 'interrupted' }]).lastTurnEnd).toBe('interrupted');
   });
 });
+
+describe('a task log tab opened on a first message whose parts were logged', () => {
+  it('hands the webview the sections whole, with the brief as the message', () => {
+    const first = '## Prior task outputs\nTask 1 added the lexer.\n\nWire the parser in.';
+    const brief = 'Wire the parser in.';
+    const events: TaskLogEvent[] = [{
+      type: 'turn_start', message: first,
+      parts: [
+        { kind: 'priorOutputs', title: 'Prior task outputs', start: 0, end: first.indexOf('\n\n') },
+        { kind: 'brief', title: 'Brief', start: first.indexOf(brief), end: first.length },
+      ],
+    }];
+    const panel = createFakeWebviewPanel('ordewell.taskLog', 'Task log');
+    const session = { taskLogAttempts: () => [1], taskLog: () => events, outstandingApprovals: () => [], isolationView: () => null } as unknown as TaskLogSession;
+    const t = task({});
+    new TaskLogPanel(panel as unknown as vscode.WebviewPanel, t.id, { session, getTask: () => t, openFile: () => undefined, log: () => undefined }, { toString: () => 'file:///ext' } as unknown as vscode.Uri, () => undefined);
+    panel.__receive({ type: 'ready' });
+
+    const init = panel.webview.postMessage.mock.calls.map(([m]) => m as HostToTaskLog).find((m) => m.type === 'init');
+    if (init?.type !== 'init') throw new Error('the panel posted no init');
+    expect(init.blocks).toEqual([expect.objectContaining({
+      role: 'user', text: brief,
+      sections: [{ title: 'Handoffs from earlier tasks', sections: [{ kind: 'priorOutputs', title: 'Prior task outputs', text: 'Task 1 added the lexer.' }] }],
+    })]);
+  });
+});

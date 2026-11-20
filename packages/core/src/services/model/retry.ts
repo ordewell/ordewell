@@ -102,7 +102,8 @@ export function withRetry(client: ModelClient, options: RetryOptions = {}): Mode
   };
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+/** A pause the signal cuts short, rejecting with its reason. */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(signal.reason); return; }
     const onAbort = () => { clearTimeout(timer); reject(signal?.reason); };

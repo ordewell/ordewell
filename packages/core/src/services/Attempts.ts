@@ -8,7 +8,7 @@ import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
 import type { LiveTail, LiveTailOptions, TaskOutputSource } from '../interfaces/TaskOutputSource';
 import type { PreviousWork, TreeSnapshot } from '../interfaces/IWorktreeIsolation';
 import { countedSessionCost, resumedSessionWindow } from '../models/Usage';
-import { composeCompactionNudge, delegatedWorkNote, landsBeside, LOOP_VERDICT_REMINDER, summarizeOutput, type LandingBeside } from './promptAugment';
+import { composeCompactionNudge, delegatedWorkNote, landsBeside, LOOP_VERDICT_REMINDER, summarizeOutput, withBoardPins, type LandingBeside } from './promptAugment';
 import { endedByExit, VerdictEngine } from './VerdictEngine';
 import { runningLongThreshold, type RunningLongEvent } from './RunningLong';
 import type { PlanStore } from './PlanStore';
@@ -20,7 +20,7 @@ import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
 import {
-  attemptPrompt, attemptWorkspace, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
+  composeAttemptPrompt, attemptWorkspace, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
   type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
@@ -1137,7 +1137,7 @@ export class Attempts {
       attempt.skills = resolveTaskSkills(task, this.deps.skillsAt(this.skillRoots(cwd)), worktree ? (name) => this.uncommittedSkillFolder(name) : undefined);
     }
     const board = await this.deps.board?.() ?? null;
-    const prompt = attemptPrompt(kind, {
+    const composed = composeAttemptPrompt(kind, {
       task,
       plan: store.planTasks,
       previousWork,
@@ -1149,8 +1149,7 @@ export class Attempts {
       ...(worktree && (kind.kind === 'change' || kind.kind === 'carryOver') ? this.landingBeside(task) : {}),
     });
     // The one push down a tree, and only to an attempt its plan's prompt starts: a continuing one was told at its start (ADR-0057 R10).
-    const pins = board && takesSkills(kind) ? board.pins() : [];
-    const finalPrompt = pins.length > 0 ? `${prompt}\n\n${pins.join('\n')}` : prompt;
+    const { prompt, parts } = withBoardPins(composed, board && takesSkills(kind) ? board.pins() : []);
     const env = await this.envForTask(cwd);
     attempt.env = env;
     if (landsNothing(kind)) {
@@ -1165,7 +1164,7 @@ export class Attempts {
     return this.deps.runner.spawn({
       taskId: task.id,
       runner: attempt.runner,
-      prompt: finalPrompt,
+      prompt,
       modelId: task.assignedModel?.modelId,
       thinkingEffort: task.assignedModel?.thinkingEffort,
       modelVariants: task.assignedModel?.availableVariants,
@@ -1180,6 +1179,7 @@ export class Attempts {
       resumeWindow: kind.kind === 'continuation' ? resumedSessionWindow(task.attemptUsage, attempt.runner, attempt.attempt, kind.resumeSessionId) : undefined,
       attempt: attempt.attempt,
       ...(attempt.skills.length > 0 ? { skills: attempt.skills } : {}),
+      ...(parts ? { promptParts: parts } : {}),
       ...(shell ? { shell } : {}),
       ...(attempt.opened?.placement ? { placement: attempt.opened.placement } : {}),
       ...(writesCommit(kind) ? { commits: true } : {}),

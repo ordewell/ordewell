@@ -531,6 +531,36 @@ describe('handlePlan', () => {
     srv.close();
   });
 
+  // A failed plan saves no session, so its spend survives only in what the command prints.
+  it('prints what the planner had spent when a one-shot plan fails', async () => {
+    const srv = await startServer((req, res) => {
+      const failed = (req.url || '').includes('/plans/');
+      res.writeHead(failed ? 500 : 200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(failed ? { error: 'The model stream sent nothing for 60 s, so the request was abandoned.' } : RUNNERS));
+    });
+    const usage = { type: 'planner_usage' as const, totals: { inputTokens: 182_000, outputTokens: 4_300, reportedCost: { USD: 0.4123 } } };
+    class Streaming extends ApiClient {
+      streamPlanning(_sessionId: string, onEvent: (event: Parameters<Parameters<ApiClient['streamPlanning']>[1]>[0]) => void) {
+        onEvent(usage);
+        return { ready: Promise.resolve(), close: () => {} };
+      }
+    }
+    const { handlePlan } = await import('../plan');
+    const { stderr, exitCode } = await capture(() =>
+      handlePlan(['--goal', 'ship it', '--workspace', '/tmp', '--no-chat'], { api: new Streaming(srv.port) }),
+    );
+    expect(stderr).toContain('Plan generation failed');
+    expect(stderr).toContain('The planner had spent 182k tokens in, 4.3k out, $0.4123 when it failed.');
+    expect(exitCode).toBe(1);
+    srv.close();
+  });
+
+  it('prints no spend line for a failure the planner reported none for', async () => {
+    const { failedPlanSpend } = await import('../plan');
+    expect(failedPlanSpend(undefined)).toBeNull();
+    expect(failedPlanSpend({ type: 'planner_usage', totals: {} })).toBeNull();
+  });
+
   it('rewords a planner-not-ready refusal with the headless commands, not the daemon\'s slash commands', async () => {
     const reason = { code: 'no_key', provider: 'openrouter', label: 'OpenRouter', keyEnvVar: 'OPENROUTER_API_KEY' };
     const srv = await startServer((req, res) => {

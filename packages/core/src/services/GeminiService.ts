@@ -25,6 +25,7 @@ import type { EffortLevel, ModelClient, ToolDefinition } from './model';
 import {
   ModelPlannerChat,
   PlannerClients,
+  abandonedPlanText,
   modelSummaryCall,
   plannerEffort,
   plannerRequest,
@@ -120,7 +121,7 @@ export class GeminiService extends BaseAiService implements IAiService {
    * turns of one role go as one, as Gemini takes a conversation, and a
    * call's thinking streams as a segment apart from its text.
    */
-  private chat(seed: PlannerMessage[], tools: ToolDefinition[], hooks: Pick<ModelPlannerChatOptions, 'onReasoning' | 'onContent' | 'onUsage' | 'compaction'>): ModelPlannerChat {
+  private chat(seed: PlannerMessage[], tools: ToolDefinition[], hooks: Pick<ModelPlannerChatOptions, 'onReasoning' | 'onContent' | 'onRetracted' | 'onUsage' | 'compaction'>): ModelPlannerChat {
     return new ModelPlannerChat(seed, {
       client: () => this.getClient(),
       model: () => this.plannerModel(),
@@ -197,6 +198,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     const researchChat = this.chat(seed, listsPost(req.plannerTools) ? BOARD_TOOL_DEFINITIONS : req.plannerTools ? CONVERSATION_TOOL_DEFINITIONS : TOOL_DEFINITIONS, {
       onReasoning: (text, segmentId) => currentProgress({ type: 'thinking', text, segmentId }),
       onContent: (text, segmentId) => currentProgress({ type: 'text_delta', text, segmentId }),
+      onRetracted: (segmentId) => currentProgress({ type: 'text_retracted', segmentId }),
       onUsage: (record) => currentProgress({ type: 'usage', record }),
       compaction: host && { host, summarize: this.summaryCall, onCompaction: (compaction) => currentProgress({ type: 'compaction', compaction }) },
     });
@@ -259,7 +261,11 @@ export class GeminiService extends BaseAiService implements IAiService {
         ...(effort ? { effort } : {}),
       }),
       signal,
-      { onText: onToken, ...(onReasoning ? { onThinking: onReasoning } : {}) },
+      {
+        onText: onToken,
+        ...(onReasoning ? { onThinking: onReasoning } : {}),
+        onAbandoned: (a) => call.onAbandoned?.(abandonedPlanText(usageRecordOf('google', model, a.reply.usage, promptAndAnswer), a)),
+      },
     );
     call.onReply?.({ usage: usageRecordOf('google', model, reply.usage, promptAndAnswer), cutOff: reply.finish === 'length' });
     return reply.text;
@@ -293,7 +299,7 @@ export class GeminiService extends BaseAiService implements IAiService {
     });
 
     const result = await this.runResearchLoop(researchChat, firstMessage, fs, onProgress, runners, undefined, fetcher, userDescription, runnerModes, autonomousDefault, signal);
-    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log);
+    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log, fs);
     if (result.tasks) return { tasks: await review(result.tasks, result.researchLog), researchLog: result.researchLog, researchResults: result.researchResults };
     const fallback = await this.generatePlanFallback(userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, result.researchLog, runnerModes, autonomousDefault, signal, modes);
     return { tasks: await review(fallback.tasks, fallback.researchLog), researchLog: fallback.researchLog, researchResults: result.researchResults };

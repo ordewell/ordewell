@@ -8,7 +8,7 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply, repairLoop } from './PlanRepair';
 import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain } from './PlanChainReview';
-import { fanOutShape, withShapeNotes } from './PlanFanOut';
+import { fanOutShape, largestSlicesFirst, withShapeNotes } from './PlanFanOut';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -33,10 +33,22 @@ export interface PlanTextReply {
   cutOff: boolean;
 }
 
+export interface AbandonedPlanText {
+  usage?: UsageRecord;
+  line?: string;
+}
+
+/** The research log's entry for a line Ordewell writes there itself. */
+export function systemEntry(content: string): ResearchLogEntry {
+  return { id: `sys-${uuidv4()}`, type: 'system', content, timestamp: new Date().toISOString() };
+}
+
 /** How one plan-text call departs from the planner's own settings. */
 export interface PlanTextCall {
   /** Takes the call's usage, for the planner's bill, and whether the reply was cut off at the output limit. */
   onReply?: (reply: PlanTextReply) => void;
+  /** Takes each reply that broke off part way: its usage, and the research log's line when the call is sent again. */
+  onAbandoned?: (abandoned: AbandonedPlanText) => void;
   /** Replaces the planner's dial for this call. */
   effort?: EffortLevel;
   /** Asks for the longest reply the model serves, not the planner's usual allowance. */
@@ -106,6 +118,8 @@ export interface ResearchTurn {
   promptTokens?: number;
   /** The segment `text` streamed under, where the provider streams it. */
   segmentId?: string;
+  /** One line for each time the call was sent again after its reply broke off part way, for the research log. */
+  resends?: string[];
 }
 
 export interface ResearchChat {
@@ -521,6 +535,7 @@ export abstract class BaseAiService {
     const call = async (send: () => Promise<ResearchTurn>): Promise<ResearchTurn> => {
       const startedAt = new Date().toISOString();
       const next = await send();
+      for (const line of next.resends ?? []) researchLog.push(systemEntry(line));
       if (last) narration.push({ ...last, narration: true });
       last = next.text.trim() ? { segmentId: next.segmentId ?? uuidv4(), text: next.text, startedAt } : undefined;
       return next;
@@ -598,7 +613,8 @@ export abstract class BaseAiService {
       // A spent usage limit ends the attempt as the provider's limit, with
       // the reset it stated, so the conversation waits for it and sends the
       // turn again (ADR-0044); any other failure fails the turn as before.
-      // A transient failure was already retried by the client, on Retry-After.
+      // A transient one reaches here only past its retries: the client's
+      // before any event, `streamReply`'s once the reply had begun.
       if (isModelError(err) && err.kind === 'usage-limit') {
         return {
           text: '',
@@ -688,7 +704,12 @@ export abstract class BaseAiService {
     let researchResults = '';
     const MAX_STEPS = this.config.researchMaxSteps;
 
-    let turn = await chat.sendMessage(firstMessage, signal);
+    const send = async (call: () => Promise<ResearchTurn>): Promise<ResearchTurn> => {
+      const next = await call();
+      for (const line of next.resends ?? []) researchLog.push(systemEntry(line));
+      return next;
+    };
+    let turn = await send(() => chat.sendMessage(firstMessage, signal));
 
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal?.aborted) {
@@ -717,7 +738,7 @@ export abstract class BaseAiService {
       researchResults += resultsText;
 
       BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'emit the plan JSON');
-      turn = await chat.sendToolResults(toolResults, signal);
+      turn = await send(() => chat.sendToolResults(toolResults, signal));
     }
 
     if (turn.text) {
@@ -747,13 +768,18 @@ export abstract class BaseAiService {
     signal?: AbortSignal,
     modes: PlannerModes = DEFAULT_PLANNER_MODES,
     log?: ResearchLogEntry[],
+    fs?: Pick<IFileSystem, 'readFile'>,
   ): Promise<Task[]> {
     const chain = longestChain(tasks);
     const note = (content: string) => log?.push({ id: `cr-${Date.now()}`, type: 'system', content, timestamp: new Date().toISOString() });
     // The role notes are Ordewell's, written on the plan that stands, at no call: nothing asks the planner about the fan-out (ADR-0072 R5).
-    const shaped = (final: Task[]) => {
-      const out = withShapeNotes(final);
-      if (out !== final) {
+    // The slices are ordered first, so every note that lists them lists them in the order they start (ADR-0072 R6).
+    const shaped = async (final: Task[]) => {
+      const shape = fanOutShape(final);
+      const sized = fs ? await largestSlicesFirst(final, fs, shape) : { tasks: final, moved: 0 };
+      if (sized.measure) note(`slice order: largest first by the lines of ${sized.measure === 'test' ? 'the test files' : 'every file'} their briefs name; ${sized.moved} of ${shape.slices.length} moved`);
+      const out = withShapeNotes(sized.tasks);
+      if (out !== sized.tasks) {
         const s = fanOutShape(out);
         note(`fan-out: ${s.width} at once, ${s.gates.length} before, ${s.closers.length} after${s.faults.length ? `, faults ${s.faults.join(', ')}` : ''}; role notes added`);
       }
@@ -778,6 +804,10 @@ export abstract class BaseAiService {
             cutOff = r.cutOff;
             if (r.usage?.outputTokens !== undefined) out = ` [reply ${r.usage.outputTokens} tokens out]`;
             if (r.usage) onProgress({ type: 'usage', record: { ...r.usage, aggregate: true } });
+          },
+          onAbandoned: (a) => {
+            if (a.usage) onProgress({ type: 'usage', record: { ...a.usage, aggregate: true } });
+            if (a.line) note(`chain review: ${a.line}`);
           },
           effort: 'low',
           largestReply,
@@ -844,7 +874,13 @@ export abstract class BaseAiService {
         (token) => onProgress({ type: 'plan_token', planToken: token }),
         (reasoning) => onProgress({ type: 'thinking', text: reasoning }),
         signal,
-        { onReply: (r) => { if (r.usage) onProgress({ type: 'usage', record: { ...r.usage, aggregate: true } }); } },
+        {
+          onReply: (r) => { if (r.usage) onProgress({ type: 'usage', record: { ...r.usage, aggregate: true } }); },
+          onAbandoned: (a) => {
+            if (a.usage) onProgress({ type: 'usage', record: { ...a.usage, aggregate: true } });
+            if (a.line) researchLog.push(systemEntry(a.line));
+          },
+        },
       ),
       runners,
       2,

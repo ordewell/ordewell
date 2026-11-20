@@ -3,6 +3,7 @@ import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { coalesceTaskLog, taskLogForSurface, toTaskLogEvent, type TaskLogEvent } from '../models/TaskLog';
 import { openTaskLog, type TaskLogFile, type TaskLogLocation } from '../utils/taskLogStore';
 import type { TaskSkillSnapshot } from '../models/Task';
+import { promptPartSpans, type PromptPart } from '../models/PromptPart';
 import type { SessionBroadcaster } from './SessionMessage';
 
 /** Long enough to gather a burst of deltas into one message, short enough to read as live. */
@@ -47,7 +48,7 @@ export class TaskLogRecorder {
         const session = await runner.spawn(opts);
         // Before returning: the first turn's events are emitted on the next
         // macrotask, and a listener attached later would miss them.
-        this.record(opts.taskId, session, opts.skills, opts.attempt);
+        this.record(opts.taskId, session, opts.skills, opts.attempt, opts.promptParts ? { prompt: opts.prompt, parts: opts.promptParts } : undefined);
         return session;
       },
       stop: (sessionId) => runner.stop(sessionId),
@@ -83,8 +84,13 @@ export class TaskLogRecorder {
     this.deps.broadcast({ type: 'task_log', taskId, attempt: file?.attempt ?? 0, events: taskLogForSurface([entry]) });
   }
 
-  /** Start a new attempt's log for `session`, opening with the skills it was given, and keep it until the session exits. */
-  record(taskId: string, session: IRunnerSession, skills: readonly TaskSkillSnapshot[] = [], attemptNumber?: number): void {
+  /**
+   * Start a new attempt's log for `session`, opening with the skills it was
+   * given, and keep it until the session exits. `first` is the message the
+   * attempt was spawned with and the parts it was joined from: its turn
+   * carries where each part sits.
+   */
+  record(taskId: string, session: IRunnerSession, skills: readonly TaskSkillSnapshot[] = [], attemptNumber?: number, first?: { prompt: string; parts: readonly PromptPart[] }): void {
     let file: TaskLogFile | null;
     try {
       file = this.open(this.deps.location(), taskId, attemptNumber);
@@ -96,6 +102,8 @@ export class TaskLogRecorder {
     let pending: TaskLogEvent[] = skills.length > 0 ? [{ type: 'task_skills', skills: [...skills] }] : [];
     let timer: ReturnType<typeof setTimeout> | null = null;
     let writeFailed = false;
+    // Matched by the text, not by being first: a runner may open a turn of its own before it delivers the message.
+    let firstMessage = first;
 
     const flush = (): void => {
       if (timer) { clearTimeout(timer); timer = null; }
@@ -122,7 +130,12 @@ export class TaskLogRecorder {
       if (!logged) return;
       // Dated here, where every runner's events meet the log, so a reload
       // knows when an open turn began (#81).
-      const entry = logged.type === 'turn_start' || logged.type === 'command' ? { ...logged, startedAt: new Date().toISOString() } : logged;
+      let entry = logged.type === 'turn_start' || logged.type === 'command' ? { ...logged, startedAt: new Date().toISOString() } : logged;
+      if (entry.type === 'turn_start' && firstMessage && entry.message === firstMessage.prompt) {
+        const parts = promptPartSpans(entry.message, firstMessage.parts);
+        firstMessage = undefined;
+        if (parts) entry = { ...entry, parts };
+      }
       pending.push(entry);
       // A turn's end is what a surface shows "waiting for input" on, an
       // approval is someone's to answer, and a script step's end settles its

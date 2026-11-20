@@ -8,6 +8,7 @@ import type { RunnerSessionCost } from '../models/Usage';
 import type { ScriptBody } from '../models/ScriptTask';
 import type { TaskShell } from './IFileSystem';
 import type { HandoffCheck } from '../models/Handoff';
+import type { PromptPart } from '../models/PromptPart';
 import type { TaskWebReads } from '../services/taskWebReads';
 import type { RunnerPlacement } from '../services/executionLease';
 import type { HeldSecrets } from '../services/HeldSecrets';
@@ -288,6 +289,11 @@ export interface IRunner {
      * attempt. Runners ignore it; it is for what wraps one to record (task logs).
      */
     skills?: readonly TaskSkillSnapshot[];
+    /**
+     * The parts `prompt` was joined from, when it is a task's first message.
+     * Runners ignore it; it is for what wraps one to record (task logs).
+     */
+    promptParts?: readonly PromptPart[];
     /** Where the attempt's lease put this runner, when not on this host (ADR-0059 L5). */
     placement?: RunnerPlacement;
     /** Something the user should know about how the spawn went that did not stop it — a respawn, most often. */

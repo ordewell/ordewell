@@ -247,3 +247,73 @@ describe('a run update that delivers a research report (ADR-0037 R2)', () => {
     expect(drawn('Run update:\n- task #4 "Fix it" failed: tests red', false)).toEqual(['↯ Run update:', '  - task #4 "Fix it" failed: tests red']);
   });
 });
+
+describe('a task\'s first message folds what Ordewell added around the brief', () => {
+  const sections: NonNullable<MessageBlock['sections']> = [
+    { title: 'Handoffs from earlier tasks', sections: [
+      { kind: 'priorOutputs', title: 'Prior task outputs', text: 'Task 1 built the parser.' },
+      { kind: 'carriedOver', title: 'Carried over', text: 'Left the lexer half done.' },
+    ] },
+    { title: 'Ordewell\'s instructions to the runner', sections: [
+      { kind: 'checkpoint', title: 'Checkpoint', text: 'Call checkpoint when blocked.' },
+    ] },
+  ];
+  const first = (over: Partial<MessageBlock> = {}): MessageBlock => ({ ...message('user', 'Fix the lexer'), sections, ...over });
+  const plain = (blocks: DisplayBlock[], cols: number, detail: boolean): string[] => conversationLines(blocks, cols, detail).map(stripAnsi);
+
+  it('draws one dim line per group with its section count, above the brief on its band', () => {
+    const out = plain([first()], 80, false);
+    expect(out.filter((row) => row.trim() !== '')).toEqual([
+      'Handoffs from earlier tasks · 2 sections (ctrl+o to expand)',
+      'Ordewell\'s instructions to the runner · 1 section (ctrl+o to expand)',
+      '❯ Fix the lexer'.padEnd(80),
+    ]);
+    expect(out.join('\n')).not.toContain('Task 1 built the parser.');
+    const lines = conversationLines([first()], 80, false);
+    expect(lines[0].startsWith('\x1b[90m')).toBe(true);
+  });
+
+  it('opens each group in place with detail on: every section under its title, wrapped', () => {
+    const out = plain([first({ sections: [{ title: 'Handoffs from earlier tasks', sections: [
+      { kind: 'priorOutputs', title: 'Prior task outputs', text: 'alpha beta gamma delta epsilon zeta' },
+    ] }] })], 30, true);
+    const at = out.findIndex((row) => row.includes('Handoffs from earlier tasks'));
+    expect(out.slice(at, at + 4).map((row) => row.trimEnd())).toEqual([
+      expect.stringContaining('Handoffs from earlier tasks'),
+      '  Prior task outputs',
+      '    alpha beta gamma delta',
+      '    epsilon zeta',
+    ]);
+    expect(out.some((row) => row.startsWith('❯ Fix the lexer'))).toBe(true);
+  });
+
+  it('cuts the brief by its own length only, never by how long the sections are', () => {
+    const huge = 'x '.repeat(60_000);
+    const block = first({ text: 'The brief ends here', sections: [{ title: 'Handoffs from earlier tasks', sections: [
+      { kind: 'priorOutputs', title: 'Prior task outputs', text: huge },
+    ] }] });
+    for (const detail of [false, true]) {
+      const out = plain([block], 60, detail).join('\n');
+      expect(out).toContain('The brief ends here');
+    }
+    expect(plain([block], 60, false).join('\n')).not.toContain('not shown');
+    const opened = plain([block], 60, true);
+    expect(opened.join('\n')).toContain('not shown');
+    expect(opened.length).toBeLessThan(5_000);
+  });
+
+  it('still cuts a brief past the display cap, as before', () => {
+    const out = plain([first({ text: `start ${'word '.repeat(40_000)}end` })], 60, false).join('\n');
+    expect(out).toContain('not shown');
+    expect(out).not.toContain('end\n');
+  });
+
+  it('draws a message without sections frame for frame as before, whatever the detail', () => {
+    const bare = message('user', 'Fix the lexer');
+    const empty = { ...bare, sections: [] };
+    for (const detail of [false, true]) {
+      expect(conversationLines([empty], 40, detail)).toEqual(conversationLines([bare], 40, detail));
+      expect(plain([bare], 40, detail)).toEqual([' '.repeat(40), `❯ Fix the lexer${' '.repeat(25)}`, ' '.repeat(40), '']);
+    }
+  });
+});

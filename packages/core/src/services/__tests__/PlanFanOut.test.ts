@@ -3,7 +3,8 @@ import { closingNote, fanOutShape, FAN_OUT_MIN, openingNote, sliceNote, withShap
 import { applyChainReview, chainReviewMessage, longestChain } from '../PlanChainReview';
 import { BaseAiService, type PlanTextCall, type PlanTextReply } from '../BaseAiService';
 import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../../models/Task';
-import { fakeConfig } from '../../testing';
+import { fakeConfig, fakeFileSystem } from '../../testing';
+import type { IFileSystem } from '../../interfaces/IFileSystem';
 import { applyTaskOps } from '../TaskOps';
 
 const RUNNERS: RunnerId[] = ['claude-code'];
@@ -275,8 +276,8 @@ class ReviewService extends BaseAiService {
     call?.onReply?.(r);
     return reply;
   }
-  review(tasks: Task[], log: ResearchLogEntry[]): Promise<Task[]> {
-    return this.reviewLongChain(tasks, 'goal', '', '', {}, RUNNERS, () => {}, undefined, undefined, undefined, log);
+  review(tasks: Task[], log: ResearchLogEntry[], fs?: IFileSystem): Promise<Task[]> {
+    return this.reviewLongChain(tasks, 'goal', '', '', {}, RUNNERS, () => {}, undefined, undefined, undefined, log, fs);
   }
 }
 
@@ -291,6 +292,28 @@ describe('reviewLongChain on a fan-out', () => {
     expect(svc.calls).toHaveLength(0);
     expect(out.find((x) => x.id === 's1')!.prompt).toContain('Plan shape: this task is one of 6 slices');
     expect(log.map(text)).toEqual(['fan-out: 6 at once, 1 before, 1 after; role notes added']);
+  });
+
+  // ADR-0072 R6: ready tasks start in plan order, so the slices that take longest start first.
+  it('starts the largest slices first, then notes their roles in that order, and logs the order once', async () => {
+    const testLines: Record<string, number> = { 'tests/test_s2.py': 80, 'tests/test_s5.py': 400, 'tests/test_s6.py': 80 };
+    // Numbered lines, as the planner's read answers.
+    const fs = fakeFileSystem({
+      readFile: async (p) => (p in testLines
+        ? { success: true, output: Array.from({ length: testLines[p] }, (_, i) => `${i + 1}|x`).join('\n'), truncated: false }
+        : { success: false, output: 'not found', truncated: false }),
+    });
+    const plan = good().map((x, i) => ({ ...x, order: i + 1, prompt: `${x.prompt} Verify: pytest tests/test_${x.id}.py` }));
+    const log: ResearchLogEntry[] = [];
+    const out = await new ReviewService([]).review(plan, log, fs);
+    expect(ids(out)).toEqual(['r', 's5', 's2', 's6', 's1', 's3', 's4', 'close']);
+    expect(out.map((x) => x.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const table = out.find((x) => x.id === 's1')!.prompt!.split('\n').filter((l) => l.startsWith('- "T s'));
+    expect(table.map((l) => /\((\w+)\)/.exec(l)![1])).toEqual(['s5', 's2', 's6', 's1', 's3', 's4']);
+    expect(log.map(text)).toEqual([
+      'slice order: largest first by the lines of the test files their briefs name; 5 of 6 moved',
+      'fan-out: 6 at once, 1 before, 1 after; role notes added',
+    ]);
   });
 
   it('makes no call on a fan-out with every fault and a short chain, and notes nothing without a closing check', async () => {

@@ -34,6 +34,7 @@ import type { EffortLevel, ModelClient } from './model';
 import {
   ModelPlannerChat,
   PlannerClients,
+  abandonedPlanText,
   modelSummaryCall,
   plannerEffort,
   plannerRequest,
@@ -178,7 +179,11 @@ export class OpenAiService extends BaseAiService implements IAiService {
       this.getClient(),
       plannerRequest(messages, { model, tools: [], maxOutputTokens: call.largestReply ? largestReplyTokens(limits) : replyTokens(limits), ...(effort ? { effort } : {}) }),
       signal,
-      { onText: onToken, ...(onReasoning ? { onThinking: onReasoning } : {}) },
+      {
+        onText: onToken,
+        ...(onReasoning ? { onThinking: onReasoning } : {}),
+        onAbandoned: (a) => call.onAbandoned?.(abandonedPlanText(usageRecordOf(this.config.aiProvider, model, a.reply.usage), a)),
+      },
     );
     call.onReply?.({ usage: usageRecordOf(this.config.aiProvider, model, reply.usage), cutOff: reply.finish === 'length' });
     return reply.text;
@@ -233,6 +238,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
       wantedReply: CONTEXT_BUDGET.defaultMaxOutputTokens,
       onReasoning: (delta, segmentId) => currentProgress({ type: 'thinking', text: delta, segmentId }),
       onContent: (delta, segmentId) => currentProgress({ type: 'text_delta', text: delta, segmentId }),
+      onRetracted: (segmentId) => currentProgress({ type: 'text_retracted', segmentId }),
       source: () => this.config.aiProvider,
       onUsage: (record) => currentProgress({ type: 'usage', record }),
       budget: this.plannerBudget(),
@@ -303,7 +309,7 @@ export class OpenAiService extends BaseAiService implements IAiService {
     });
 
     const result = await this.runResearchLoop(researchChat, firstMessage, fs, onProgress, runners, undefined, fetcher, userDescription, runnerModes, autonomousDefault, signal);
-    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log);
+    const review = (tasks: Task[], log: ResearchLogEntry[]) => this.reviewLongChain(tasks, userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, runnerModes, signal, modes, log, fs);
     if (result.tasks) return { tasks: await review(result.tasks, result.researchLog), researchLog: result.researchLog, researchResults: result.researchResults };
     const fallback = await this.generatePlanFallback(userDescription, contextStr, result.researchResults, modelsByRunner, runners, onProgress, result.researchLog, runnerModes, autonomousDefault, signal, modes);
     return { tasks: await review(fallback.tasks, fallback.researchLog), researchLog: fallback.researchLog, researchResults: result.researchResults };

@@ -4,7 +4,8 @@ import type { StoredHandoff } from '../models/Handoff';
 import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { LeaseWorkspaceIntent } from './executionLease';
 import type { RepairAttempt } from './Landing';
-import { composeAugmentedPrompt, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE, type LandingBeside } from './promptAugment';
+import { joinPromptParts, type PromptPart } from '../models/PromptPart';
+import { composePromptParts, composeContinuationPrompt, continuedWorkNote, READ_ONLY_CONTINUED_NOTE, type LandingBeside } from './promptAugment';
 
 /** A continue the user asked for: their message, and the runner session it resumes (ADR-0018, K1). */
 export interface Continuation {
@@ -190,6 +191,15 @@ export interface AttemptPromptSources {
  * verdict is watched for unchanged.
  */
 export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): string {
+  return composeAttemptPrompt(kind, src).prompt;
+}
+
+/**
+ * {@link attemptPrompt}, with the parts it is joined from when it is a task's
+ * first message. A continue's message and a subplanner's goal are one text,
+ * so they have none.
+ */
+export function composeAttemptPrompt(kind: AttemptKind, src: AttemptPromptSources): { prompt: string; parts?: PromptPart[] } {
   const { task, plan } = src;
   // At spawn the check is already in progress: repeat counted the round on
   // after betweenRounds held, and cleared the previous verdict and report.
@@ -205,27 +215,28 @@ export function attemptPrompt(kind: AttemptKind, src: AttemptPromptSources): str
       }
       : { round }
     : undefined;
+  const composed = (parts: PromptPart[]) => ({ prompt: joinPromptParts(parts), parts });
   switch (kind.kind) {
     case 'continuation': {
       const where = kind.work === 'readOnly' ? READ_ONLY_CONTINUED_NOTE : continuedWorkNote(src.previousWork);
-      return composeContinuationPrompt(task, `${kind.message}\n\n${where}`, { ops: kind.work === 'ops' });
+      return { prompt: composeContinuationPrompt(task, `${kind.message}\n\n${where}`, { ops: kind.work === 'ops' }) };
     }
     case 'repair':
       // A merge to resolve is not the task's own work, so its skills do not
       // apply, nor a check's verdict rule: the repair confirms no problem.
-      return composeAugmentedPrompt({ ...task, prompt: src.repairPrompt(task), loop: undefined, retryNote: undefined }, plan);
+      return composed(composePromptParts({ ...task, prompt: src.repairPrompt(task), loop: undefined, retryNote: undefined }, plan));
     case 'ops':
       // Its effects outlive a failed attempt and are never rolled back, so
       // the next one is told what the last one did.
-      return composeAugmentedPrompt(task, plan, { skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop });
+      return composed(composePromptParts(task, plan, { skills: src.skills, previousAttempt: src.previousAttempt(task.id), loop }));
     case 'change':
-      return composeAugmentedPrompt(task, plan, { skills: src.skills, loop, ...(src.beside ? { beside: src.beside } : {}) });
+      return composed(composePromptParts(task, plan, { skills: src.skills, loop, ...(src.beside ? { beside: src.beside } : {}) }));
     case 'readOnly':
-      return composeAugmentedPrompt(task, plan, { skills: src.skills, loop, readOnly: true });
+      return composed(composePromptParts(task, plan, { skills: src.skills, loop, readOnly: true }));
     case 'carryOver':
-      return composeAugmentedPrompt(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop, ...(src.beside ? { beside: src.beside } : {}) });
+      return composed(composePromptParts(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop, ...(src.beside ? { beside: src.beside } : {}) }));
     case 'delegated':
       // A subplanner reads its goal, not a runner's brief.
-      return task.goal ?? '';
+      return { prompt: task.goal ?? '' };
   }
 }

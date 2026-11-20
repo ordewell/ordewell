@@ -13,6 +13,7 @@ import {
   type BlockList, type Lane,
 } from './lanes';
 import { finishedTool, pendingTool, settledMessage } from './records';
+import { firstMessageView } from './firstMessage';
 
 /**
  * What a surface draws for one attempt of a structured task (ADR-0018, O1b):
@@ -257,11 +258,18 @@ function decideApproval(view: TaskLogView, { approvalId, decision, note }: Event
   return settleApproval(view, approvalId, (block) => answered(block, decision, note));
 }
 
-function startTurn(view: TaskLogView, { message, messageId, from, forced, startedAt }: Event<'turn_start'>): TaskLogView {
+function startTurn(view: TaskLogView, { message, messageId, from, forced, startedAt, parts }: Event<'turn_start'>): TaskLogView {
   const queued = messageId ? view.queued.filter((m) => m.id !== messageId) : view.queued;
   const working = { ...view, queued, working: true, turnStartedAt: startedAt, latestText: undefined };
   // A turn the runner opened itself has no user message to show.
-  return message ? append(working, (id) => ({ ...sentMessage(id, message, from), ...(forced ? { forced: true } : {}) })) : working;
+  if (!message) return working;
+  // Never guessed from headings: a log saved without parts shows its message whole.
+  const first = parts ? firstMessageView(message, parts) : null;
+  return append(working, (id) => ({
+    ...sentMessage(id, first?.text ?? message, from),
+    ...(first?.sections ? { sections: first.sections } : {}),
+    ...(forced ? { forced: true } : {}),
+  }));
 }
 
 /** A message to the runner, drawn as the user's unless Ordewell sent it (ADR-0018, W1). */
