@@ -874,12 +874,12 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
 
   describe('what it reports about coding agents', () => {
     it('lists the supported agents it finds on PATH, by the commands the runners use', () => {
-      const all = commands({ claude: 'true', codex: 'true', opencode: 'true', copilot: 'true', qwen: 'true', cline: 'true', gemini: 'true', 'cursor-agent': 'true' });
+      const all = commands({ claude: 'true', codex: 'true', opencode: 'true', pi: 'true', copilot: 'true', qwen: 'true', cline: 'true', gemini: 'true', 'cursor-agent': 'true' });
       const result = install([], { shims: [all] });
       assert.equal(result.status, 0, result.stderr);
       assert.match(
         result.stdout,
-        /Coding agents found: Claude Code \(claude\), Codex \(codex\), OpenCode \(opencode\), GitHub Copilot CLI \(copilot\), Qwen Code \(qwen\), Cline \(cline\), Gemini CLI \(gemini\), Cursor \(cursor-agent\)\./,
+        /Coding agents found: Claude Code \(claude\), Codex \(codex\), OpenCode \(opencode\), Pi \(pi\), GitHub Copilot CLI \(copilot\), Qwen Code \(qwen\), Cline \(cline\), Gemini CLI \(gemini\), Cursor \(cursor-agent\)\./,
       );
       assert.doesNotMatch(result.stdout, /No coding agent was found/);
     });

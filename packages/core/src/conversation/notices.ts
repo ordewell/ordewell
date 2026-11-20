@@ -12,6 +12,7 @@ const RUNNER_NAMES: Readonly<Record<string, string>> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'Pi',
 };
 
 /** The conversation line for a task starting, worded the same on every surface. */

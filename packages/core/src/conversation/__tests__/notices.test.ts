@@ -7,6 +7,7 @@ describe('task notices', () => {
   it('names the task and the runner it started on, by the runner\'s name', () => {
     expect(taskStartedNotice('Add a parser', 'claude-code')).toBe('Started "Add a parser" · Claude Code');
     expect(taskStartedNotice('Add a parser', 'opencode')).toBe('Started "Add a parser" · OpenCode');
+    expect(taskStartedNotice('Add a parser', 'pi')).toBe('Started "Add a parser" · Pi');
   });
 
   it('names a built-in runner by its provider', () => {
