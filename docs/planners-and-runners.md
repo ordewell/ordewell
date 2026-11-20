@@ -13,7 +13,7 @@ get their models and credentials in different ways, described below.
 VS Code, or the planner bar in VS Code, picks one. `/task-model` is a different command: it sets one task's model.
 
 A **harness planner** is a coding agent planning: pick a runner such as `claude-code`,
-`codex` or `opencode`, and the planner conversation runs through that agent
+`codex`, `opencode` or `pi`, and the planner conversation runs through that agent
 ([ADR-0009](adr/planner/0009-coding-agents-as-planners.md)). Ordewell asks for no API
 key, because the agent is signed in on its own and the account you already use with
 it pays for planning. The planner's models and effort levels come from the same list
@@ -25,6 +25,7 @@ agent has, so Ordewell denies them and offers its own read-only research agent i
 as the tool `spawn_research_agent`. The agent only reads the workspace: no shell, web or
 MCP tool, and no agent of its own
 ([ADR-0066](adr/planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
+A Pi planner has no agents of its own, so it delegates exploration through research tasks, as the ACP planners do.
 
 On OpenCode 2.x it needs no setting: it runs on your own OpenCode login and the
 planner's model, in a second `opencode serve` that Ordewell starts on the planner's
