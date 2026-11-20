@@ -24,6 +24,58 @@ describe('ChatMessage', () => {
     expect(container.querySelector('.chat-msg-user .chat-msg-content')!.textContent).toBe('use **JWT**');
   });
 
+  describe('a task\'s first message with sections', () => {
+    const sectioned = (): MessageBlock => message({
+      role: 'user', text: 'Build the login form.',
+      sections: [
+        { title: 'Handoffs from earlier tasks', sections: [
+          { kind: 'priorOutputs', title: 'Prior task outputs', text: 'Task 1 added <b>auth</b>.\nSecond line.' },
+          { kind: 'previousAttempt', title: 'Previous attempt', text: 'It stopped early.' },
+        ] },
+        { title: 'Ordewell\'s instructions to the runner', sections: [
+          { kind: 'checkpoint', title: 'Checkpoints', text: 'Call checkpoint when blocked.' },
+        ] },
+      ],
+    });
+    const heads = (c: HTMLElement) => [...c.querySelectorAll<HTMLButtonElement>('button.message-sections-head')];
+
+    it('folds each group above the brief, its name and count on the head', () => {
+      const { container } = render(<ChatMessage block={sectioned()} />);
+      expect(heads(container).map((h) => h.textContent)).toEqual(['Handoffs from earlier tasks · 2', 'Ordewell\'s instructions to the runner · 1']);
+      expect(heads(container).map((h) => h.getAttribute('aria-expanded'))).toEqual(['false', 'false']);
+      expect(container.querySelector('.message-section')).toBeNull();
+      expect(container.textContent).not.toContain('Task 1 added');
+    });
+
+    it('draws the brief as a user message is drawn, after the groups', () => {
+      const { container } = render(<ChatMessage block={sectioned()} />);
+      const content = container.querySelector('.chat-msg-user .chat-msg-content')!;
+      expect(content.textContent).toBe('Build the login form.');
+      const last = heads(container)[1];
+      expect(last.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('opens one group on its own, listing each section under its title, text as plain text', () => {
+      const { container } = render(<ChatMessage block={sectioned()} />);
+      fireEvent.click(heads(container)[0]);
+      expect(heads(container).map((h) => h.getAttribute('aria-expanded'))).toEqual(['true', 'false']);
+      expect(heads(container)[0].getAttribute('aria-controls')).toBe(container.querySelector('.message-sections-body')!.id);
+      expect([...container.querySelectorAll('.message-section-title')].map((t) => t.textContent)).toEqual(['Prior task outputs', 'Previous attempt']);
+      const body = container.querySelector('.message-section-text')!;
+      expect(body.tagName).toBe('PRE');
+      expect(body.textContent).toBe('Task 1 added <b>auth</b>.\nSecond line.');
+      expect(container.querySelector('.message-section-text b')).toBeNull();
+      fireEvent.click(heads(container)[0]);
+      expect(container.querySelector('.message-section')).toBeNull();
+    });
+
+    it('draws a message without sections exactly as before', () => {
+      const { container } = render(<ChatMessage block={message({ role: 'user', text: 'hello' })} />);
+      expect(container.querySelector('.message-sections')).toBeNull();
+      expect(container.querySelector('button')).toBeNull();
+    });
+  });
+
   it('marks a force-sent user line as sent now', () => {
     const { container } = render(<ChatMessage block={message({ role: 'user', text: 'stop, use Postgres', forced: true })} />);
     expect(container.querySelector('.chat-msg-user .chat-msg-forced')!.textContent).toBe('sent now');

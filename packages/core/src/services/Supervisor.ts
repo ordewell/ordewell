@@ -4,7 +4,7 @@ import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_AL
 import { classifyRunnerStop } from './runnerExit';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 import { LAND_KEPT_HINT } from './taskReport';
-import { CONTEXT_FLOOR_TOKENS, CONTEXT_SHARE, RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, contextThresholdOf, type RunningLongEvent } from './RunningLong';
+import { CONTEXT_FLOOR_TOKENS, CONTEXT_SHARE, RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, RUNNING_LONG_MEDIAN_FACTOR, RUNNING_LONG_MEDIAN_FLOOR_MS, contextThresholdOf, type RunningLongEvent } from './RunningLong';
 import { formatElapsed } from '../conversation/elapsed';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
 import { PlannerContextPausedError, PlannerTurnDiscardedError, PlannerTurnFailedError, PlannerTurnStoppedError, PlannerUsageLimitError, type PlanChange, type WakeBrief, type WakeUpTurn } from './PlannerConversation';
@@ -786,9 +786,12 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
 /**
  * What a supervisor can do about a task running long, said once a wake
  * (ADR-0018 W1): the wake text carries it, so the planner's system prompt does
- * not grow by it. Its level's brief says whether it acts or suggests.
+ * not grow by it. Its level's brief says whether it acts or suggests. A task
+ * stuck on a value its brief does not need, or its workspace does not explain,
+ * searches on until told to stop: two in a recorded run ran 40 minutes where
+ * the rest took 6, and finished within minutes of being told.
  */
-export const RUNNING_LONG_ADVICE = "Running long is advice, never a verdict: read the task's output with task_output; if its brief's done criterion holds, message_task its runner to commit and call task_complete; if the brief is too large, stop_task it and split it; otherwise let it go on.";
+export const RUNNING_LONG_ADVICE = "Running long is advice, never a verdict: read the task's output with task_output; if its brief's done criterion holds, or it is stuck on what that criterion does not need or the workspace cannot tell it, message_task it to commit what works, call task_complete and list the rest; if the brief is too large, stop_task it and split it; otherwise let it go on.";
 
 /** A running-long line carries its facts whole: they are what the supervisor weighs, and a ride-along line would cut them off. */
 const RUNNING_LONG_CHARS = 2 * TASK_NAME_CHARS + DETAIL_CHARS;
@@ -915,15 +918,22 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
   if (facts.reason === 'compaction') {
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
   }
-  const { basis, retryOf } = facts;
-  const base = retryOf ? retryOf.runningMs : basis ? basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
+  const { basis, median, retryOf } = facts;
+  const base = retryOf ? retryOf.runningMs
+    : median ? Math.max(RUNNING_LONG_MEDIAN_FLOOR_MS, median.runningMs * RUNNING_LONG_MEDIAN_FACTOR)
+      : basis ? basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
   const from = retryOf
     ? `the ${formatElapsed(retryOf.runningMs)} attempt ${retryOf.attempt} ran before it ${retryOf.outcome === 'failed' ? 'failed' : 'was stopped'}`
-    : basis
-      ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(basis.runningMs)} task ${describe(basis.taskId)} passed in`
-      : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
-  const doubled = facts.thresholdMs > base ? ', doubled after each earlier flag' : '';
-  return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${from}${doubled})${context}${compacted}`;
+    : median
+      ? `the ${median.passed} tasks that have passed took a median of ${formatElapsed(median.runningMs)}; ${RUNNING_LONG_MEDIAN_FACTOR}× that, ${formatElapsed(RUNNING_LONG_MEDIAN_FLOOR_MS)} at least`
+      : basis
+        ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(basis.runningMs)} task ${describe(basis.taskId)} passed in`
+        : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
+  // A threshold lowered since the last flag, doubled, would come sooner than twice that flag, which is when this one came.
+  const why = facts.previousMs !== undefined
+    ? `twice the ${formatElapsed(facts.previousMs)} its last flag was due at, never sooner; ${from}`
+    : `${from}${facts.thresholdMs > base ? ', doubled after each earlier flag' : ''}`;
+  return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${why})${context}${compacted}`;
 }
 
 /** A context flag's size against the window it was measured by: a compaction window in force where it is the smaller, else the model's. */

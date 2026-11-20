@@ -30,7 +30,8 @@ export const DEFAULT_STREAM_TIMEOUTS: Readonly<StreamTimeouts> = {
  * The client, aborting a request whose stream goes quiet past the timeouts and
  * failing it with a transient `ModelError`. Before any event `withRetry` sends
  * the request again; after one, the caller knows what the partial reply did
- * and decides (the Ordewell loop keeps the tool calls that ran, ADR-0070).
+ * and decides (ADR-0070): the Ordewell loop keeps the tool calls that ran,
+ * and the API planner's `streamReply` drops the partial reply and sends again.
  */
 export function withStreamTimeouts(client: ModelClient, timeouts: StreamTimeouts = DEFAULT_STREAM_TIMEOUTS): ModelClient {
   return {

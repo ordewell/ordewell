@@ -5,6 +5,7 @@ import type { SubagentOutcome, TaskSkillNotice, TaskSkillSnapshot } from './Task
 import type { UsageRecord } from './Usage';
 import type { RunnerCommand, RunnerMcpServer, RunnerModelRef } from './RunnerCommand';
 import type { StoredHandoff } from './Handoff';
+import type { PromptPartSpan } from './PromptPart';
 
 /**
  * One entry of a structured task's log (ADR-0018, P1): what a runner did,
@@ -27,9 +28,11 @@ export type TaskLogEvent =
    * queued, `forced` when it was force sent. `from` on this and the other
    * message events marks one Ordewell sent rather than the user. `startedAt`
    * (ISO) is when it began, which a reload needs to date its open turn (#81);
-   * a log saved before it was kept has none.
+   * a log saved before it was kept has none. `parts`, on an attempt's first
+   * turn only, says where each part Ordewell composed the message from sits
+   * in it; a log saved before they were kept has none.
    */
-  | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom; startedAt?: string }
+  | { type: 'turn_start'; message: string; messageId?: string; forced?: boolean; from?: TaskMessageFrom; startedAt?: string; parts?: PromptPartSpan[] }
   /**
    * A turn began by running the runner's own command `/name args` (#66): the
    * `turn_start` of a command turn. `messageId` names it when it had been queued.

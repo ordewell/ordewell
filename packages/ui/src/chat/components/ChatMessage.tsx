@@ -4,7 +4,7 @@ import TaskHandoff from './TaskHandoff';
 import ReportBody from './ReportBody';
 import type {
   CommandBlock, CompactionBlock, RunnerLoadedBlock,
-  ApprovalBlock, ApprovalDecision, DisplayBlock, MessageBlock, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
+  ApprovalBlock, ApprovalDecision, DisplayBlock, MessageBlock, MessageSectionGroup, PlanBlock, SkillLoadBlock, SubagentBlock, SubagentStatus,
   ThinkingDisplayBlock, ToolBlock, ToolStatus, DiffRow, DiffStat,
 } from '@ordewell/core';
 import { activitySummary, conversationItems } from '../activity';
@@ -76,6 +76,11 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
   if (block.role === 'user') {
     return (
       <div className="chat-msg chat-msg-user">
+        {block.sections && block.sections.length > 0 && (
+          <div className="message-sections">
+            {block.sections.map((group) => <MessageSectionsGroup key={group.title} group={group} />)}
+          </div>
+        )}
         <div className="chat-msg-bubble">
           {labelled && <span className="chat-msg-speaker">You</span>}
           {block.forced && <span className="chat-msg-forced" title="Sent now: it stopped the planner turn in flight">sent now</span>}
@@ -91,6 +96,32 @@ export default function ChatMessage({ block }: { block: MessageBlock }) {
           : labelled && <span className="chat-msg-speaker">Planner</span>}
         <MarkdownContent className="chat-msg-content" html={renderMarkdown(block.text.trim())} />
         {block.streaming && <span className="chat-msg-cursor" aria-hidden="true" />}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What Ordewell added around a task's brief, one group folded behind its name
+ * and count. Message blocks get no toggle from above, so the open state is the
+ * row's own, as a runner command's is. Section text is drawn as text in a
+ * `<pre>`, never parsed: a skill's body is the model's input, not markup.
+ */
+function MessageSectionsGroup({ group }: { group: MessageSectionGroup }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  return (
+    <div className={`message-sections-group${expanded ? ' expanded' : ''}`}>
+      <Head className="message-sections-head" expanded={expanded} controls={id} onToggle={() => setExpanded((v) => !v)}>
+        <span>{group.title} · {group.sections.length}</span>
+      </Head>
+      <div id={id} className="message-sections-body">
+        {expanded && group.sections.map((section, i) => (
+          <div key={`${section.kind}-${i}`} className="message-section">
+            <div className="message-section-title">{section.title}</div>
+            <pre className="message-section-text">{section.text}</pre>
+          </div>
+        ))}
       </div>
     </div>
   );

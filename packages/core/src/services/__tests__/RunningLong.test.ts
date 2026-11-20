@@ -78,6 +78,97 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
     expect(flags.map((f) => [f.elapsedMs / MINUTE, f.thresholdMs / MINUTE])).toEqual([[30, 30], [60, 60], [120, 120], [240, 240]]);
   });
 
+  describe('once five AI tasks have passed', () => {
+    // Passed in 6, 7, 8, 9 and 40 minutes: a median of 8, so 24 minutes, well before 3 × 40.
+    const five = () => [passed('a', 6), passed('b', 7), passed('c', 8), passed('d', 9), passed('e', 40)];
+
+    it('flags at three times the median running time of the AI tasks that passed, when that comes first', () => {
+      const { flags } = watched({ plan: five });
+
+      vi.advanceTimersByTime(24 * MINUTE - 1);
+      expect(flags).toEqual([]);
+      vi.advanceTimersByTime(1);
+
+      expect(flags).toEqual([{ taskId: 't1', reason: 'duration', elapsedMs: 24 * MINUTE, thresholdMs: 24 * MINUTE, median: { passed: 5, runningMs: 8 * MINUTE }, compactions: 0 }]);
+    });
+
+    it('brings the flag forward when the fifth pass comes while it runs, then doubles from it', () => {
+      const plan = five().slice(1);
+      const { flags } = watched({ plan: () => plan });
+
+      vi.advanceTimersByTime(12 * MINUTE);
+      plan.push(passed('a', 6));
+      vi.advanceTimersByTime(12 * MINUTE);
+      expect(flags.map((f) => [f.elapsedMs / MINUTE, f.thresholdMs / MINUTE])).toEqual([[24, 24]]);
+      vi.advanceTimersByTime(72 * MINUTE);
+
+      expect(flags.map((f) => [f.elapsedMs / MINUTE, f.thresholdMs / MINUTE])).toEqual([[24, 24], [48, 48], [96, 96]]);
+    });
+
+    it('doubles from the flag it raised when a later pass lowers the threshold, never flagging again sooner', () => {
+      // Four passes: the 30-minute floor, until the fifth puts the threshold at 19, under the flag already raised.
+      const plan = [passed('b', 5), passed('c', 6), passed('d', 7), passed('e', 8)];
+      const { flags } = watched({ plan: () => plan });
+
+      vi.advanceTimersByTime(31 * MINUTE);
+      plan.push(passed('a', 4));
+      vi.advanceTimersByTime(29 * MINUTE - 1);
+      expect(flags.map((f) => f.thresholdMs / MINUTE)).toEqual([30]);
+      vi.advanceTimersByTime(1);
+
+      expect(flags.map((f) => [f.elapsedMs / MINUTE, f.thresholdMs / MINUTE, f.median?.runningMs])).toEqual([[30, 30, undefined], [60, 60, 6 * MINUTE]]);
+    });
+
+    it('names the earlier flag when twice it, not the lowered threshold doubled, set the next', () => {
+      const plan = [passed('b', 5), passed('c', 6), passed('d', 7), passed('e', 8)];
+      const { flags } = watched({ plan: () => plan });
+
+      vi.advanceTimersByTime(31 * MINUTE);
+      plan.push(passed('a', 4));
+      vi.advanceTimersByTime(29 * MINUTE);
+      // 19 doubled once is 38: the 60 is twice the 30 the first flag was due at.
+      expect(flags.map((f) => f.previousMs)).toEqual([undefined, 30 * MINUTE]);
+    });
+
+    it('leaves a retry to its own rule: the running time of the attempt it follows', () => {
+      const retried = buildTask({ id: 'r', status: 'in_progress' });
+      retried.attemptUsage = [{ ...passed('r', 45).attemptUsage![0], outcome: 'failed' }];
+
+      expect(runningLongThreshold([...five(), retried], 'r')).toEqual({ ms: 45 * MINUTE, retryOf: { attempt: 1, runningMs: 45 * MINUTE, outcome: 'failed' } });
+    });
+
+    it('does not read a median of four: one slow or quick pass would set it', () => {
+      expect(runningLongThreshold(five().slice(1))).toEqual({ ms: 120 * MINUTE, basis: { taskId: 'e', runningMs: 40 * MINUTE } });
+    });
+
+    it('never flags under nineteen minutes, however quickly the others passed', () => {
+      // A median of 2 minutes: 6, held up to 19.
+      const quick = [passed('a', 1), passed('b', 2), passed('c', 2), passed('d', 3), passed('e', 3)];
+
+      expect(runningLongThreshold(quick)).toEqual({ ms: 19 * MINUTE, median: { passed: 5, runningMs: 2 * MINUTE } });
+    });
+
+    it('takes the earlier of the two thresholds, past the 30-minute floor too', () => {
+      // The median's 3 × 12 = 36 minutes comes before the longest's 3 × 13 = 39.
+      const close = [passed('a', 11), passed('b', 12), passed('c', 12), passed('d', 12), passed('e', 13)];
+
+      expect(runningLongThreshold(close)).toEqual({ ms: 36 * MINUTE, median: { passed: 5, runningMs: 12 * MINUTE } });
+    });
+
+    it('names the longest pass when the two thresholds fall together', () => {
+      const even = ['a', 'b', 'c', 'd', 'e'].map((id) => passed(id, 12));
+
+      expect(runningLongThreshold(even)).toEqual({ ms: 36 * MINUTE, basis: { taskId: 'a', runningMs: 12 * MINUTE } });
+    });
+
+    it('takes the middle two\'s mean for an even count', () => {
+      const six = [...five(), passed('f', 10)];
+
+      // 8 and 9 in the middle: 8.5, so 25.5 minutes.
+      expect(runningLongThreshold(six)).toEqual({ ms: 25.5 * MINUTE, median: { passed: 6, runningMs: 8.5 * MINUTE } });
+    });
+  });
+
   it('reads a task that passed while it ran, so a raised threshold puts the flag off', () => {
     const plan: Task[] = [];
     const { flags } = watched({ plan: () => plan });
@@ -414,9 +505,9 @@ describe('a running-long flag further off than a timer holds', () => {
       clock.run();
       const before = armed.mock.calls.length;
       await new Promise((resolve) => setTimeout(resolve, 100));
-      // The test's own timer is the one call expected.
+      // The test's own timer is the one call expected; the clock's waits a minute, then reads its threshold again.
       expect(armed.mock.calls.length - before).toBe(1);
-      expect(armed.mock.calls[0][1]).toBe(2 ** 31 - 1);
+      expect(armed.mock.calls[0][1]).toBe(MINUTE);
     } finally {
       clock.stop();
       armed.mockRestore();

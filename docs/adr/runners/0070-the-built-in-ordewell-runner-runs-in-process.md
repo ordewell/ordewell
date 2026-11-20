@@ -296,7 +296,12 @@ is one runner per API provider, under the provider's own id and name.**
   knows what ran: with no tool call started it drops the partial reply and
   sends the same request again; with one, the calls and their results are
   already recorded and the turn goes on to its next step from them. Either
-  retry follows the retry policy and leaves a line in the task log.
+  retry follows the retry policy and leaves a line in the task log. The API
+  planner, whose every call streams through `streamReply`, decides there: a
+  planner reply takes effect only once whole, so one that broke off has done
+  nothing, and the same request is sent again with it dropped, its streamed
+  text taken back, under the same policy, with a line in the research log;
+  once the policy gives up, the failure says how many times the call was sent.
 - **An aggregator's error is read for its upstream's.** OpenRouter wraps an
   upstream provider's failure in its own body, often a bare 400 "Provider
   returned error", with the upstream's name (`provider_name`), its verbatim body
@@ -460,3 +465,5 @@ comes from that call.
 - 2026-11-19 — an early give-up counts only a phrase about the attempt's own
   budget, and the answer asks a report that stopped for another reason to be
   sent again.
+- 2026-11-20 — the API planner sends a call whose stream broke off part way
+  again, the partial reply dropped, under the same retry policy.

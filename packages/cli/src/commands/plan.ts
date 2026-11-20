@@ -5,7 +5,7 @@ import { ApiClient } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
 import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
+import { costText, formatTokenCount, loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
 import { fail, headlessPlannerRefusal, headlessSignedOut, lostReplyHint } from './shared';
 
@@ -63,6 +63,24 @@ async function nextStep(api: ApiClient, plan: PlanBody, sessionId: string): Prom
   // second surface may have moved since.
   const autorun = await api.getSettings(sessionId).then((settings) => settings.run?.autorun === true, () => false);
   return autorun ? `Autorun started the plan. ${follow}` : `The plan is running. ${follow}`;
+}
+
+type PlannerUsageEvent = Extract<WsEvent, { type: 'planner_usage' }>;
+
+/**
+ * What the planner had spent when planning failed, from the last running
+ * ledger the daemon broadcast. A plan that fails saves no session, so this
+ * line is all that is left of its spend.
+ */
+export function failedPlanSpend(usage: PlannerUsageEvent | undefined): string | null {
+  if (!usage) return null;
+  const { inputTokens, outputTokens } = usage.totals;
+  const parts = [
+    inputTokens !== undefined ? `${formatTokenCount(inputTokens)} tokens in` : null,
+    outputTokens !== undefined ? `${formatTokenCount(outputTokens)} out` : null,
+    costText(usage.totals),
+  ].filter((p): p is string => p !== null);
+  return parts.length > 0 ? `The planner had spent ${parts.join(', ')} when it failed.` : null;
 }
 
 /** Answers for planner questions. `null` means stdin is exhausted — no answer is coming. */
@@ -299,7 +317,9 @@ export async function handlePlan(
     interactive: !oneShot && !!process.stdin.isTTY,
   });
 
+  let spent: PlannerUsageEvent | undefined;
   const stream = api.streamPlanning(sessionId, (event) => {
+    if (event.type === 'planner_usage') spent = event;
     renderStep(event);
     // A run snapshot or a child list is not a planner message; this stream ignores them.
     if (event.type !== 'run_snapshot' && event.type !== 'account_limits' && event.type !== 'child_tree') void handleApproval(event);
@@ -376,6 +396,8 @@ export async function handlePlan(
       const hint = lostReplyHint(err, sessionId);
       if (hint) console.error(hint);
     }
+    const spend = failedPlanSpend(spent);
+    if (spend) console.error(spend);
     process.exit(1);
   }
 }

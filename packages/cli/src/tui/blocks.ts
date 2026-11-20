@@ -1,7 +1,7 @@
 import {
   DELEGATION_OFFERED, subtreeView, accountLimitsText, contextMeterText, type AccountLimitSnapshot, approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
-  type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type PlanBlock,
+  type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type MessageSectionGroup, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
   type FindingSeverity, type HandoffBlock, type HandoffFinding, type SubtreeItemView, type SubtreeReport,
   type SkillLoadBlock, type SubagentBlock, type SubagentStatus, type ThinkingDisplayBlock, type ToolBlock,
@@ -33,12 +33,12 @@ function firstLine(text: string): string {
  */
 const TEXT_DISPLAY_CHARS = 32 * 1024;
 
-function shownText(text: string): { text: string; hiddenChars: number } {
-  if (text.length <= TEXT_DISPLAY_CHARS) return { text, hiddenChars: 0 };
+function shownText(text: string, limit = TEXT_DISPLAY_CHARS): { text: string; hiddenChars: number } {
+  if (text.length <= limit) return { text, hiddenChars: 0 };
   // Prefer a line boundary near the cap so the cut does not split a sentence
   // in the middle; a single unbroken line is cut where the budget ends.
-  const boundary = text.lastIndexOf('\n', TEXT_DISPLAY_CHARS);
-  const cut = boundary > TEXT_DISPLAY_CHARS - 2_000 ? boundary : TEXT_DISPLAY_CHARS;
+  const boundary = text.lastIndexOf('\n', limit);
+  const cut = boundary > limit - 2_000 ? boundary : limit;
   return { text: text.slice(0, cut), hiddenChars: text.length - cut };
 }
 
@@ -80,7 +80,35 @@ const ROLE_CONTINUATION: Partial<Record<MessageRole, Paint>> = {
   wake_up: style.yellow,
 };
 
-function messageLines(block: MessageBlock, cols: number): string[] {
+/**
+ * An opened section of a first message is read at its head like any long
+ * detail: its own bound, so a handoff of megabytes costs one cut note and the
+ * brief beneath it is never pushed out of the frame by it.
+ */
+const SECTION_DISPLAY_CHARS = 16 * 1024;
+
+/**
+ * What Ordewell put around a task's brief, one dim line per group. Folded it
+ * only counts, so a long session pays nothing for the text; opened, each
+ * section sits under its title, wrapped and cut at its own bound.
+ */
+function sectionGroupLines(groups: readonly MessageSectionGroup[], cols: number, detailAll: boolean): string[] {
+  const room = Math.max(1, cols - 4);
+  return groups.flatMap((group) => {
+    const head = `${group.title} · ${countOf(group.sections.length, 'section')}`;
+    if (!detailAll) return [style.grey(truncate(`${head} (ctrl+o to expand)`, cols))];
+    const rows = [style.grey(truncate(`${head} (ctrl+o to collapse)`, cols))];
+    for (const section of group.sections) {
+      const shown = shownText(section.text, SECTION_DISPLAY_CHARS);
+      rows.push(style.grey(truncate(`  ${sanitize(section.title)}`, cols)));
+      rows.push(...wrap(sanitize(shown.text).trim(), room).map((line) => style.grey(`    ${line}`)));
+      if (shown.hiddenChars > 0) rows.push(`    ${textCutNote(shown.hiddenChars)}`);
+    }
+    return rows;
+  });
+}
+
+function messageLines(block: MessageBlock, cols: number, detailAll = false): string[] {
   const shown = shownText(block.text);
   const text = sanitize(shown.text);
   const room = Math.max(1, cols - 2);
@@ -95,7 +123,8 @@ function messageLines(block: MessageBlock, cols: number): string[] {
     if (width(rows[0]) + width(note) <= cols) rows[0] += note;
     else rows.push(` ${note}`);
   }
-  return block.role === 'user' ? onBand(rows, cols) : rows;
+  if (block.role !== 'user') return rows;
+  return block.sections?.length ? [...sectionGroupLines(block.sections, cols, detailAll), ...onBand(rows, cols)] : onBand(rows, cols);
 }
 
 /**
@@ -774,7 +803,7 @@ function planLine(block: PlanBlock, cols: number): string {
 function blockLines(block: DisplayBlock, cols: number, detailAll: boolean): string[] {
   switch (block.type) {
     case 'message':
-      return (block.role === 'wake_up' ? reportUpdateLines(block, cols, detailAll) : null) ?? messageLines(block, cols);
+      return (block.role === 'wake_up' ? reportUpdateLines(block, cols, detailAll) : null) ?? messageLines(block, cols, detailAll);
     case 'thinking':
       return thinkingLines(block, cols, detailAll);
     case 'tool':

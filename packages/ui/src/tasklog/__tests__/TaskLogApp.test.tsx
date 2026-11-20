@@ -509,6 +509,58 @@ describe('the task log tab (ADR-0018, V1)', () => {
     expect(screen.getByText('Ordewell: Call task_complete.')).toBeTruthy();
   });
 
+  describe('a task\'s first message, as the log recorded its parts', () => {
+    // The spans are written out by hand, not computed: `message.slice(start, end)` is a part's text.
+    const brief = 'Wire the parser in.';
+    const prior = 'Task 1 added the lexer.';
+    const rule = 'Call task_complete when done.';
+    const first = `## Prior task outputs\n${prior}\n\n${brief}\n\n## Unattended\n${rule}`;
+    const start = (text: string) => first.indexOf(text);
+    const turn = (): DisplayBlock[] => [...replayTaskLog([{
+      type: 'turn_start', message: first,
+      parts: [
+        { kind: 'priorOutputs', title: 'Prior task outputs', start: 0, end: start(prior) + prior.length },
+        { kind: 'brief', title: 'Brief', start: start(brief), end: start(brief) + brief.length },
+        { kind: 'unattended', title: 'Unattended', start: start('## Unattended'), end: first.length },
+      ],
+    }]).blocks];
+
+    it('shows the brief, with what Ordewell added folded above it and counted', () => {
+      render(<TaskLogApp />);
+      init({}, turn());
+      expect(screen.getByText(brief)).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Handoffs from earlier tasks · 1' }).getAttribute('aria-expanded')).toBe('false');
+      expect(screen.getByRole('button', { name: 'Ordewell\'s instructions to the runner · 1' }).getAttribute('aria-expanded')).toBe('false');
+      expect(screen.queryByText(prior)).toBeNull();
+      expect(screen.queryByText(rule)).toBeNull();
+    });
+
+    it('opens one group, and only that one', () => {
+      render(<TaskLogApp />);
+      init({}, turn());
+      fireEvent.click(screen.getByRole('button', { name: 'Handoffs from earlier tasks · 1' }));
+      expect(screen.getByText(prior)).toBeTruthy();
+      expect(screen.getByText('Prior task outputs')).toBeTruthy();
+      expect(screen.queryByText(rule)).toBeNull();
+      expect(screen.getByRole('button', { name: 'Handoffs from earlier tasks · 1' }).getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('keeps a group open while the log goes on', () => {
+      render(<TaskLogApp />);
+      init({}, turn());
+      fireEvent.click(screen.getByRole('button', { name: 'Handoffs from earlier tasks · 1' }));
+      init({}, [...turn(), message('b2', 'on it')]);
+      expect(screen.getByText(prior)).toBeTruthy();
+    });
+
+    it('draws a first message logged without parts as one message, with nothing to open', () => {
+      render(<TaskLogApp />);
+      init({}, [...replayTaskLog([{ type: 'turn_start', message: 'Do the task' }]).blocks]);
+      expect(screen.getByText('Do the task')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /·/ })).toBeNull();
+    });
+  });
+
   it('stacks pending messages above the composer, with no heading, and takes one back', () => {
     render(<TaskLogApp />);
     init({ queued: [{ id: 'q1', text: 'then add tests' }] });
