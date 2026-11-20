@@ -4,6 +4,7 @@ import type { PreservedWork, PreviousWork } from '../interfaces/IWorktreeIsolati
 import { TASK_COMPLETE_TOOL } from './mcp/tools';
 import { SELF_REPO } from './isolationRecord';
 import { renderTaskSkills } from './taskSkills';
+import { joinPromptParts, type PromptPart } from '../models/PromptPart';
 import { betweenRounds, loopRoundOf, type TaskLoop } from '../models/Loop';
 import { quotedMessageArgs } from './landingMessage';
 import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, wordsFrom, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
@@ -370,41 +371,63 @@ function isHitlTask(task: Task): boolean {
  * save what a loop's check's status means, which only a check is told.
  */
 export function composeAugmentedPrompt(task: Task, allTasks: readonly Task[], opts?: ComposeOptions): string {
-  const basePrompt = task.prompt ?? '';
+  return joinPromptParts(composePromptParts(task, allTasks, opts));
+}
+
+/** {@link composeAugmentedPrompt}'s message as the parts it is joined from, in the order it joins them. */
+export function composePromptParts(task: Task, allTasks: readonly Task[], opts?: ComposeOptions): PromptPart[] {
   // First, as how the whole task is to be read: the dependencies' handoffs stay against the brief they inform.
-  const blocks: string[] = isHitlTask(task) ? [] : [UNATTENDED_INSTRUCTION];
+  const parts: PromptPart[] = isHitlTask(task) ? [] : [{ kind: 'unattended', title: 'Unattended run', text: UNATTENDED_INSTRUCTION }];
 
   if (opts?.loop && task.type === 'ai' && task.loop && opts.loop.round > 1) {
-    blocks.push(renderSinceLastRound(task, allTasks, opts.loop));
+    parts.push({ kind: 'sinceLastRound', title: 'Since your last round', text: renderSinceLastRound(task, allTasks, opts.loop) });
   }
 
   const outputs = collectDirectDependencyOutputs(task, allTasks);
-  if (outputs.length > 0) blocks.push(renderPriorOutputs(outputs));
+  if (outputs.length > 0) parts.push({ kind: 'priorOutputs', title: 'Prior task outputs', text: renderPriorOutputs(outputs) });
 
-  if (opts?.previousAttempt !== undefined) blocks.push(renderPreviousAttempt(opts.previousAttempt));
+  if (opts?.previousAttempt !== undefined) parts.push({ kind: 'previousAttempt', title: 'Previous attempt', text: renderPreviousAttempt(opts.previousAttempt) });
 
-  if (opts?.carriedOver) blocks.push(renderCarriedOver(opts.carriedOver.from, opts.carriedOver.work));
+  if (opts?.carriedOver) parts.push({ kind: 'carriedOver', title: 'Work carried over', text: renderCarriedOver(opts.carriedOver.from, opts.carriedOver.work) });
 
-  if (opts?.skills?.length) blocks.push(renderTaskSkills(opts.skills));
+  if (opts?.skills?.length) parts.push({ kind: 'skills', title: 'Task skills', text: renderTaskSkills(opts.skills) });
 
-  if (opts?.readOnly) blocks.push(READ_ONLY_PATCH_NOTE, READ_ONLY_WEB_NOTE);
+  if (opts?.readOnly) parts.push({ kind: 'readOnly', title: 'Read-only task', text: `${READ_ONLY_PATCH_NOTE}\n\n${READ_ONLY_WEB_NOTE}` });
 
-  if (opts?.beside) blocks.push(renderLandingBeside(opts.beside));
+  if (opts?.beside) parts.push({ kind: 'landingBeside', title: 'Work landing beside yours', text: renderLandingBeside(opts.beside) });
 
   // Near the brief it corrects, and marked as whose it is: the runner reads it as a correction to how, not a new task (ADR-0029).
-  if (task.retryNote) blocks.push(renderRetryNote(task.retryNote));
+  if (task.retryNote) parts.push({ kind: 'retryNote', title: retryNoteTitle(task.retryNote), text: renderRetryNote(task.retryNote) });
 
-  if (isHitlTask(task)) blocks.push(CHECKPOINT_INSTRUCTION);
+  if (isHitlTask(task)) parts.push({ kind: 'checkpoint', title: 'Human-in-the-loop checkpoints', text: CHECKPOINT_INSTRUCTION });
 
   // Last, against the check's own words: past its dependencies' handoffs, the block a runner reads just before its task is the one it acts on.
-  if (task.type === 'ai' && task.loop) blocks.push(renderLoopVerdict(task.loop, opts?.loop?.round));
+  if (task.type === 'ai' && task.loop) parts.push({ kind: 'loopCheck', title: 'You are this loop\'s check', text: renderLoopVerdict(task.loop, opts?.loop?.round) });
 
-  return `${blocks.join('\n\n')}\n\n${basePrompt}`;
+  parts.push({ kind: 'brief', title: 'Brief', text: task.prompt ?? '' });
+  return parts;
+}
+
+/**
+ * The board's pins after a first message (ADR-0057 R10), as their own part
+ * when the message has parts. Without pins the message is left as it was.
+ */
+export function withBoardPins(composed: { prompt: string; parts?: PromptPart[] }, pins: readonly string[]): { prompt: string; parts?: PromptPart[] } {
+  if (pins.length === 0) return composed;
+  const text = pins.join('\n');
+  return {
+    prompt: `${composed.prompt}\n\n${text}`,
+    ...(composed.parts ? { parts: [...composed.parts, { kind: 'boardPins', title: 'Board pins', text }] } : {}),
+  };
+}
+
+function retryNoteTitle(note: RetryNote): string {
+  return `The ${note.by === 'supervisor' ? 'supervisor' : 'planner'}'s note for this attempt`;
 }
 
 function renderRetryNote(note: RetryNote): string {
   const who = note.by === 'supervisor' ? 'supervisor' : 'planner';
-  return `## The ${who}'s note for this attempt\n\nThe last attempt at this task ended without passing, and the ${who} retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\n${note.text}`;
+  return `## ${retryNoteTitle(note)}\n\nThe last attempt at this task ended without passing, and the ${who} retried it with this note for this attempt. The task below is unchanged; read the note as a correction to how you go about it:\n\n${note.text}`;
 }
 
 /**
