@@ -1322,7 +1322,12 @@ one file per attempt, numbered from what is on disk. `reduceTaskLog` folds the
 same events into display blocks live and on reload, so the two draw alike: each
 text run streams into a block of its own, which its complete copy settles
 wherever it now sits; a log saved before runs carried an id has one stream for
-every run, into the latest block only. Every runner exit records
+every run, into the latest block only. An attempt's first `turn_start` carries
+`parts`, where each piece Ordewell composed the message from sits in it
+(`PromptPartSpan`); its block shows the brief, after the attempt's retry note,
+and folds the rest into `sections`, the handoffs from earlier tasks and
+Ordewell's instructions to the runner. A log saved without parts shows the
+message whole. Every runner exit records
 `runner_ended`, which closes the view's turn and
 streaming blocks even when no tool call remains open. `followTaskLog` joins a
 saved attempt with live batches by the read's stream position: both surfaces
