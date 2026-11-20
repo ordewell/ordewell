@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { realpathSync } from 'fs';
+import { readdirSync, realpathSync, statSync } from 'fs';
 import { homedir } from 'os';
 import * as path from 'path';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
@@ -19,6 +19,7 @@ import { TurnOutcome } from './turnOutcome';
 import { taskCompactAtOf } from '../taskCompactWindow';
 import { escapeRegex } from '../symbolPatterns';
 import { privateTempDir } from '../../utils/privateTempDir';
+import { stripAnsi } from '../../utils/shell';
 import { spawnedCommand } from '../../plugins/types';
 import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 
@@ -131,6 +132,8 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   private failure: string | null = null;
   /** Whether Pi is in a run: from its `agent_start` to its `agent_settled`. */
   private running = false;
+  /** The file of the session a resume forks into its cwd, saved under another; none where Pi takes it up by id. */
+  private forkedFrom: string | undefined;
   /** Takes Pi's answer to the resume check, while a resumed start waits for it. */
   private resumeAnswer: ((line: PiLine) => void) | null = null;
   /** Settles when the open turn has: Pi said `agent_settled`, refused the prompt, or exited. */
@@ -179,12 +182,19 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     const extension = dir.write('ordewell.ts', piExtensionSource({ server: { name, url, headers }, asksReads: this.restricted }));
     const prompt = dir.write('instructions.md', this.instructions(started));
     const effort = started.kind === 'planner' ? started.effort : started.flags.effort;
+    const sessions = this.sessionDir(started.cwd, agentDir);
+    const elsewhere = started.resumeSessionId && agentDir !== undefined ? savedElsewhere(agentDir, sessions, started.resumeSessionId) : undefined;
+    this.forkedFrom = elsewhere;
     const args = [
       '--mode', 'rpc',
       '--session-id', this.sessionId!,
       // Pi takes a `.pi/settings.json` sessionDir from the repository even under `--no-approve`, so a repository could
       // say where every transcript goes. Named here, the directory is Pi's own default, which every process of a session finds.
-      '--session-dir', this.sessionDir(started.cwd, agentDir),
+      '--session-dir', sessions,
+      // Pi finds a `--session-id` only among the cwd's own sessions, and a continuation after its run ended works in a new
+      // worktree. `--fork` copies the saved conversation into this cwd under the same id; `--session <file>` would open it
+      // in the worktree it was saved in, and exits when that one is gone.
+      ...(elsewhere ? ['--fork', elsewhere] : []),
       // Named even where built-ins load: a user who turned Pi's MCP support off would leave Ordewell's server unconnected.
       '-e', 'builtin:mcp',
       '-e', extension,
@@ -243,7 +253,7 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   }
 
   /**
-   * Pi answers a `--session-id` it cannot find under this directory with a new,
+   * Pi answers a `--session-id` it finds under no cwd's directory with a new,
    * empty session of that id, saying so on stderr alone. Asked before the
    * first prompt, an empty session is a resume that did not happen, refused as
    * the other runners refuse one, so the caller falls back: a task's Continue
@@ -258,10 +268,16 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
       timeoutMs: RESUME_CHECK_TIMEOUT_MS,
       onTimeout: () => { throw new Error(`Pi did not say within ${RESUME_CHECK_TIMEOUT_MS / 1000}s whether it found session ${id}.`); },
       ended: this.processEnded,
-      onEnded: () => { throw new RunnerStartupExit(this.exitMessage()); },
+      onEnded: () => {
+        const said = this.exitMessage();
+        // A saved file Pi cannot read a session from is as lost as one that is gone.
+        const unforkable = this.forkedFrom && /^.*Cannot fork:.*$/m.exec(stripAnsi(said));
+        if (unforkable) throw new SessionNotResumable(`Pi could not take up session ${id} from ${this.forkedFrom}: ${unforkable[0].trim()}`);
+        throw new RunnerStartupExit(said);
+      },
     }).finally(() => { this.resumeAnswer = null; });
     if (answer.success === false) throw new Error(`Pi could not say whether it found session ${id}: ${answer.error ?? 'get_state failed'}.`);
-    if (!answer.data?.messageCount) throw new SessionNotResumable(`Pi has no saved session ${id} for this directory to continue.`);
+    if (!answer.data?.messageCount) throw new SessionNotResumable(`Pi has no saved session ${id} to continue.`);
   }
 
   /** Pi warns on every fresh start that the id Ordewell chose names no session yet: that is the start working, not why it failed. */
@@ -449,6 +465,35 @@ function piAgentDir(cwd: string, set: string | undefined): string {
   if (set === '~') return homedir();
   if (set.startsWith('~/') || (process.platform === 'win32' && set.startsWith('~\\'))) return path.join(homedir(), set.slice(2));
   return path.resolve(realCwd(cwd), set);
+}
+
+/**
+ * The file a session other than `current`'s cwd saved as `id`, its latest
+ * where several did: Pi names each `<time>_<id>.jsonl` in the directory of
+ * the cwd it was saved in. None where the cwd's own directory has it, which
+ * Pi takes up by id, and none where no directory does, which the resume check
+ * then refuses.
+ */
+function savedElsewhere(agentDir: string, current: string, id: string): string | undefined {
+  const root = path.join(agentDir, 'sessions');
+  const saved: { file: string; at: number }[] = [];
+  for (const dir of entries(root)) {
+    for (const name of entries(path.join(root, dir))) {
+      if (!name.endsWith(`_${id}.jsonl`)) continue;
+      if (path.join(root, dir) === current) return undefined;
+      const file = path.join(root, dir, name);
+      saved.push({ file, at: statSync(file).mtimeMs });
+    }
+  }
+  return saved.sort((a, b) => b.at - a.at)[0]?.file;
+}
+
+function entries(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
 }
 
 /** The cwd as Pi's `process.cwd()` gives it, links followed; as given when it is not on disk. */
