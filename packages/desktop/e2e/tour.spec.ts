@@ -2061,9 +2061,9 @@ test('the visual tour', async () => {
   };
 
   await answerRunnersWith(NONE_INSTALLED);
-  await state(welcome3, 'welcome-none-installed', 'Welcome with no agent installed: all eight install cards', async () => {
-    await expect(welcome3.locator('.welcome-runner[data-state="missing"]')).toHaveCount(8, { timeout: 60_000 });
-    await expect(welcome3.getByRole('button', { name: 'Docs' })).toHaveCount(8);
+  await state(welcome3, 'welcome-none-installed', 'Welcome with no agent installed: all nine install cards', async () => {
+    await expect(welcome3.locator('.welcome-runner[data-state="missing"]')).toHaveCount(9, { timeout: 60_000 });
+    await expect(welcome3.getByRole('button', { name: 'Docs' })).toHaveCount(9);
     await expect(welcome3.locator('.welcome-recent[data-state="loading"]')).toHaveCount(0, { timeout: 30_000 });
   }, {
     ensure: async () => { await welcome3.locator('.welcome-runner[data-runner="cursor-agent"]').evaluate((el) => el.scrollIntoView({ block: 'end' })); },
@@ -2076,7 +2076,7 @@ test('the visual tour', async () => {
 
   await answerRunnersWith(MIXED);
   await state(welcome3, 'welcome-runners-mixed', 'Welcome with signed-in, signed-out (login and key), off and too-old runners', async () => {
-    await expect(welcome3.locator('.welcome-runner[data-state]')).toHaveCount(8, { timeout: 60_000 });
+    await expect(welcome3.locator('.welcome-runner[data-state]')).toHaveCount(9, { timeout: 60_000 });
     await expect(welcome3.locator('.welcome-runner[data-runner="codex"]').getByRole('button', { name: 'Log in' })).toBeVisible();
     await expect(welcome3.locator('.welcome-runner[data-runner="qwen-code"]').getByRole('button', { name: 'Set API key…' })).toBeVisible();
     await expect(welcome3.locator('.welcome-runner[data-runner="cline"]')).toContainText('older than');
@@ -2114,7 +2114,7 @@ test('the visual tour', async () => {
     await page.getByRole('button', { name: /^Settings/ }).first().click();
     await expect(settingsOf(page)).toBeVisible({ timeout: 30_000 });
     await settingsOf(page).scrollIntoViewIfNeeded();
-    await expect(page.locator('.settings-runner')).toHaveCount(8, { timeout: 30_000 });
+    await expect(page.locator('.settings-runner')).toHaveCount(9, { timeout: 30_000 });
     await pause(page, 600);
   }, { ensure: () => runnersToTop(need(win3)) });
 

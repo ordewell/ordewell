@@ -36,7 +36,7 @@ describe('removedPluginNotice', () => {
       return file;
     });
     expect(removedPluginNotice(directory)).toMatch(/^Plugin runners were removed;.*CHANGELOG\.$/);
-    expect(new RunnerRegistry().list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS]);
+    expect(new RunnerRegistry().list().map((entry) => entry.manifest.name)).toEqual(['claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS]);
     for (const file of files) expect(fs.readFileSync(file, 'utf8')).toBe('{invalid manifest');
   });
 

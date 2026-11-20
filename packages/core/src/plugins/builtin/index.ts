@@ -2,6 +2,7 @@ import type { RunnerManifest } from '../types';
 import { CLAUDE_CODE_MANIFEST } from './claude-code.manifest';
 import { CODEX_MANIFEST } from './codex.manifest';
 import { OPENCODE_MANIFEST } from './opencode.manifest';
+import { PI_MANIFEST } from './pi.manifest';
 import { COPILOT_CLI_MANIFEST } from './copilot-cli.manifest';
 import { QWEN_CODE_MANIFEST } from './qwen.manifest';
 import { CLINE_MANIFEST } from './cline.manifest';
@@ -19,6 +20,7 @@ export const BUILTIN_MANIFESTS: readonly RunnerManifest[] = [
   CLAUDE_CODE_MANIFEST,
   CODEX_MANIFEST,
   OPENCODE_MANIFEST,
+  PI_MANIFEST,
   COPILOT_CLI_MANIFEST,
   QWEN_CODE_MANIFEST,
   CLINE_MANIFEST,
