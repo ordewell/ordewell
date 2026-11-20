@@ -20,6 +20,7 @@ export const RUNNER_CATALOG: readonly RunnerCatalogEntry[] = [
   { id: 'claude-code', label: 'Claude Code', installDocs: 'https://docs.claude.com/en/docs/claude-code/setup' },
   { id: 'codex', label: 'Codex', installDocs: 'https://github.com/openai/codex' },
   { id: 'opencode', label: 'OpenCode', installDocs: 'https://opencode.ai/docs' },
+  { id: 'pi', label: 'Pi', installDocs: 'https://pi.dev/docs/latest' },
   { id: 'copilot-cli', label: 'GitHub Copilot CLI', installDocs: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli' },
   { id: 'qwen-code', label: 'Qwen Code', installDocs: 'https://github.com/QwenLM/qwen-code' },
   { id: 'cline', label: 'Cline', installDocs: 'https://docs.cline.bot/getting-started/installing-cline' },

@@ -1,5 +1,5 @@
 /** Where a runner looks for project configuration, relative to the directory it starts in. */
-export const RUNNER_CONFIG_ROOTS = ['.mcp.json', '.claude', '.claude-plugin', 'opencode.json', 'opencode.jsonc', '.opencode', '.codex'] as const;
+export const RUNNER_CONFIG_ROOTS = ['.mcp.json', '.claude', '.claude-plugin', 'opencode.json', 'opencode.jsonc', '.opencode', '.codex', '.pi'] as const;
 
 /** Select runner configuration that can run code or redirect a launch from paths relative to the directory the runner starts in. */
 export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] {
@@ -26,6 +26,12 @@ export function repositoryRunnerConfigPaths(paths: readonly string[]): string[] 
     /^(?:\.opencode\/)?opencode\.jsonc?$/.test(path) ||
     /^\.opencode\/(?:plugins?|tools?|agents?)\//.test(path) ||
     // Codex project config carries MCP servers, hooks and `notify` commands.
-    path.startsWith('.codex/')
+    path.startsWith('.codex/') ||
+    // Pi's project settings load packages and extensions, its extensions are
+    // code it runs, and its MCP config starts commands or reaches a URL.
+    path === '.pi/settings.json' ||
+    path === '.pi/mcp.json' ||
+    path === '.pi/extensions' ||
+    path.startsWith('.pi/extensions/')
   ))].sort();
 }

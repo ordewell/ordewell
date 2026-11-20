@@ -25,6 +25,7 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   'claude-code': (tool) => `mcp__ordewell__${tool}`,
   codex: (tool) => `mcp__ordewell__${tool}`,
   opencode: (tool) => `ordewell_${tool}`,
+  pi: (tool) => `mcp__ordewell__${tool}`,
   'copilot-cli': (tool) => `ordewell-${tool}`,
   'qwen-code': (tool) => `mcp__ordewell__${tool}`,
   cline: (tool) => `ordewell__${tool}`,
@@ -57,12 +58,19 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
   'claude-code': ['fetch', 'web_search'],
   codex: [],
   opencode: [],
+  pi: [],
   'copilot-cli': [],
   'qwen-code': [],
   cline: [],
   'gemini-cli': [],
   'cursor-agent': [],
 };
+
+/**
+ * The runners that ask about none of their own tools: a writable task runs
+ * each natively, as Pi does with no per-tool approval at all (#78; ADR-0001).
+ */
+const NATIVE_TOOLS_UNASKED = new Set(['pi']);
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
 const manifests = new RunnerRegistry();
@@ -144,7 +152,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
 
     expect(CONNECTORS[runner].ordewellTools!.toolNames(role, role === 'planner' ? hidden : [])).toEqual(tools.map((tool) => name(tool.name)));
     for (const tool of tools) expect(await fake.preAllows(name(tool.name)), tool.name).toBe(true);
-    expect(await fake.preAllows('bash')).toBe(false);
+    expect(await fake.preAllows('bash')).toBe(role === 'task' && NATIVE_TOOLS_UNASKED.has(runner));
     adapter.dispose();
   });
 

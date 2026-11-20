@@ -41,6 +41,14 @@ it('selects executable repository runner configuration in a changed-path list', 
     ['.claude/catalog/not-plugin.json', false],
     ['packages/x/.claude/settings.json', false],
     ['packages/x/.mcp.json', false],
+    ['.pi/settings.json', true],
+    ['.pi/mcp.json', true],
+    ['.pi/extensions', true],
+    ['.pi/extensions/hook.ts', true],
+    ['.pi/extensions-extra/hook.ts', false],
+    ['.pi/extensions/nested/index.ts', true],
+    ['.pi/prompts/review.md', false],
+    ['.pi/settings.json.bak', false],
   ];
   for (const [path, included] of cases) {
     expect(repositoryRunnerConfigPaths([path]), path).toEqual(included ? [path] : []);
