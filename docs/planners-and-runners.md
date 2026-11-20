@@ -133,10 +133,15 @@ you rename or remove it.
 
 Every Pi start names its session directory: Pi's default for the directory it
 starts in, under its agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`),
-so a repository's `.pi/settings.json` cannot send the transcript elsewhere. A
-Continue, or a planner picked up again, checks that Pi found the saved session;
-a session Pi no longer has fails the Continue, and the planner picks the
-conversation up from its transcript.
+so a repository's `.pi/settings.json` cannot send the transcript elsewhere.
+Pi resumes a session by id only from the directory it was saved in, and a
+Continue after its run ended works in a new worktree, so there Ordewell has Pi
+fork the latest saved copy of the session into the new worktree under the same
+id (`--fork`); the old worktree need not still exist. A Pi placed in a container
+is resumed by id alone. A Continue, or a planner picked up again, checks that Pi
+found the saved session; a session Pi no longer has, or whose file it cannot
+read, fails the Continue, and the planner picks the conversation up from its
+transcript.
 
 ## When a task's context compacts
 

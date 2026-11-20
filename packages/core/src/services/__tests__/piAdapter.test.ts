@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
-import { join, resolve, sep } from 'path';
+import { dirname, join, resolve, sep } from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -26,8 +26,8 @@ import { argvWithFiles, silentSpawn, type FakeAgentProcess, type FakeSpawnResult
  * (`fixtures/pi/`), with this adapter live on Ordewell's side: each line it
  * writes is answered with what Pi wrote after the same line in the recording.
  * The read-only, planner, repeated-completion, thinking-only and resume runs
- * were made on a scripted model, so Pi made exact calls; cancel and the
- * unreachable provider on Ollama's qwen3:8b.
+ * were made on a scripted model, so Pi made exact calls, the resume in a moved
+ * cwd on Pi 1.6.0; cancel and the unreachable provider on Ollama's qwen3:8b.
  */
 
 const FIXTURES = join(__dirname, 'fixtures/pi');
@@ -35,7 +35,9 @@ const FIXTURES = join(__dirname, 'fixtures/pi');
 const BASE = join(tmpdir(), `ordewell-pi-replay-${randomUUID()}`);
 const CWD = join(BASE, 'task');
 const WORKSPACE = join(BASE, 'workspace');
-const PLACES: Record<string, string> = { CWD, WORKSPACE, OUTSIDE: join(BASE, 'outside'), WORK: BASE, PRIVATE_DIR: join(BASE, 'private'), HOME: join(BASE, 'home') };
+/** Where a continuation runs after its run ended: a new worktree, not the cwd its session was saved in. */
+const MOVED = join(BASE, 'moved');
+const PLACES: Record<string, string> = { CWD, WORKSPACE, MOVED, OUTSIDE: join(BASE, 'outside'), WORK: BASE, PRIVATE_DIR: join(BASE, 'private'), HOME: join(BASE, 'home') };
 
 type PiRecord = Record<string, unknown> & { type?: string; id?: string; message?: unknown };
 type Recorded = { dir: 'in' | 'out'; ms: number; line: PiRecord } | { dir: 'note'; ms: number; event: string; args?: string[]; [key: string]: unknown };
@@ -123,6 +125,25 @@ afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+/** The directory Pi files a cwd's sessions in under an agent dir (Pi 1.6.0's getDefaultSessionDirPath). */
+const piSessions = (agent: string, cwd: string) => join(agent, 'sessions', `--${resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`);
+
+/** An agent dir of Pi's own on disk, holding session `id` as Pi files it for each cwd of `cwds`, the last written last. */
+function savedSessions(id: string, ...cwds: string[]): { agent: string; files: string[] } {
+  const agent = mkdtempSync(join(tmpdir(), 'ordewell-pi-agent-'));
+  temps.push(agent);
+  vi.stubEnv('PI_CODING_AGENT_DIR', agent);
+  const files = cwds.map((cwd, i) => {
+    const dir = piSessions(agent, cwd);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `2026-11-20T10-00-0${i}-000Z_${id}.jsonl`);
+    writeFileSync(file, `${JSON.stringify({ type: 'session', version: 3, id, cwd: resolve(cwd) })}\n`);
+    utimesSync(file, 1_000 + i, 1_000 + i);
+    return file;
+  });
+  return { agent, files };
+}
+
 async function started(kit: FakeSpawnResult, start: AgentStartOptions): Promise<PiAdapter> {
   const adapter = new PiAdapter(deps(kit));
   adapters.push(adapter);
@@ -207,8 +228,8 @@ describe('Pi\'s command line', () => {
     expect(args.slice(12, 16)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('readOnlyTask').join(',')}`]);
   });
 
-  /** The directory Pi files a cwd's sessions in by default (Pi 1.6.0's getDefaultSessionDirPath), for `/work/repo`. */
-  const defaultSessions = (agentDir: string) => join(agentDir, 'sessions', `--${resolve('/work/repo').replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`);
+  /** The directory Pi files `/work/repo`'s sessions in by default. */
+  const defaultSessions = (agentDir: string) => piSessions(agentDir, '/work/repo');
 
   it('names the session directory on every start, Pi\'s own default for the cwd, so a repository\'s .pi settings cannot move it', async () => {
     for (const start of [plannerStart({ cwd: '/work/repo' }), taskStart('plan', { cwd: '/work/repo', mcp: mcp({ readOnly: true }) }), taskStart('agent', { cwd: '/work/repo' })]) {
@@ -315,13 +336,58 @@ describe('Pi\'s command line', () => {
     expect(adapter.nativeSessionId()).toBe('sess-1');
   });
 
+  it('takes up a session saved under another cwd, a continuation\'s new worktree, by forking its file into the cwd it runs in under the same id', async () => {
+    const { agent, files: [saved] } = savedSessions('sess-1', '/work/run-1/task');
+    const kit = holding(4);
+    const adapter = await started(kit, taskStart('agent', { cwd: '/work/run-2/task', resumeSessionId: 'sess-1' }));
+
+    expect(kit.lastArgs().slice(2, 8)).toEqual(['--session-id', 'sess-1', '--session-dir', piSessions(agent, '/work/run-2/task'), '--fork', saved]);
+    expect(adapter.nativeSessionId()).toBe('sess-1');
+  });
+
+  it('forks the latest copy of a session continued in several worktrees, and none where the cwd has its own, which Pi takes up by id', async () => {
+    const { files } = savedSessions('sess-1', '/work/run-1/task', '/work/run-3/task', '/work/run-2/task');
+    const moved = holding(4);
+    await started(moved, taskStart('agent', { cwd: '/work/run-4/task', resumeSessionId: 'sess-1' }));
+    expect(moved.lastArgs()[moved.lastArgs().indexOf('--fork') + 1]).toBe(files[2]);
+
+    const home = holding(4);
+    await started(home, taskStart('agent', { cwd: '/work/run-3/task', resumeSessionId: 'sess-1' }));
+    expect(home.lastArgs()).not.toContain('--fork');
+  });
+
+  it('calls a session lost whose saved file Pi cannot fork, as it does one that is gone', async () => {
+    const { files: [saved] } = savedSessions('sess-1', '/work/run-1/task');
+    writeFileSync(saved, '');
+    // Pi 1.6.0's words for a file it cannot read a session from, before it answers anything.
+    const kit = silentSpawn((_text, proc) => {
+      proc.emitStderr(`Error: Cannot fork: source session file is empty or invalid: ${saved}\n`);
+      proc.exit(1);
+    });
+    const refused = new PiAdapter(deps(kit)).start(taskStart('agent', { cwd: '/work/run-2/task', resumeSessionId: 'sess-1' }));
+
+    await expect(refused).rejects.toBeInstanceOf(SessionNotResumable);
+    await expect(refused).rejects.toThrow(`Pi could not take up session sess-1 from ${saved}: Error: Cannot fork: source session file is empty or invalid`);
+  });
+
+  it('forks nothing on a fresh start, or for a session no cwd saved, which the resume check then refuses', async () => {
+    savedSessions('sess-1', '/work/run-1/task');
+    const fresh = silentSpawn(() => {});
+    await started(fresh, taskStart('agent', { cwd: '/work/run-2/task' }));
+    expect(fresh.lastArgs()).not.toContain('--fork');
+
+    const lost = holding(0);
+    await expect(new PiAdapter(deps(lost)).start(taskStart('agent', { cwd: '/work/run-2/task', resumeSessionId: 'sess-2' }))).rejects.toBeInstanceOf(SessionNotResumable);
+    expect(lost.lastArgs()).not.toContain('--fork');
+  });
+
   it('refuses a resume Pi answered with a new, empty session, which it does for an id it cannot find', async () => {
     for (const start of [taskStart('agent', { resumeSessionId: 'sess-1' }), plannerStart({ resumeSessionId: 'sess-1' })]) {
       const kit = holding(0);
       const refused = new PiAdapter(deps(kit)).start(start);
 
       await expect(refused).rejects.toBeInstanceOf(SessionNotResumable);
-      await expect(refused).rejects.toThrow('Pi has no saved session sess-1 for this directory to continue.');
+      await expect(refused).rejects.toThrow('Pi has no saved session sess-1 to continue.');
       expect(kit.processes[0].killed).toBe(true);
     }
   });
@@ -500,6 +566,29 @@ describe('Pi\'s recorded runs, replayed', () => {
     expect(kit.lastArgs().slice(2, 4)).toEqual(['--session-id', session.sessionId]);
     // The scripted model says what reached it: the history the resumed process gave it.
     expect(events.filter((e) => e.type === 'assistant_text').map((e) => e.type === 'assistant_text' && e.text)).toEqual([`2 user messages; the first: ${prompt('resume')}`]);
+  });
+
+  it('takes a session up again in a new process in another worktree, which answers from the history Pi forked into it', async () => {
+    const kit = replay('resume-moved');
+    const spawns = recording('resume-moved').filter((entry) => entry.dir === 'note' && entry.event === 'spawn').map((entry) => (entry as { args: string[] }).args);
+    const session = recording('resume-moved').find((entry) => entry.dir === 'note' && entry.event === 'session') as unknown as { sessionId: string };
+    // What the first process left on disk, which a replay does not: the file Pi saved the session in, under the first cwd's directory.
+    const { agent, files: [saved] } = savedSessions(session.sessionId, CWD);
+    const forked = join(dirname(saved), spawns[1][spawns[1].indexOf('--fork') + 1].split(/[/\\]/).at(-1)!);
+    renameSync(saved, forked);
+    const first = await started(kit, taskStart('agent'));
+    await first.send(prompt('resume-moved'), () => {});
+    first.endInput();
+
+    const second = await started(kit, taskStart('agent', { cwd: MOVED, resumeSessionId: session.sessionId }));
+    const events: AgentEvent[] = [];
+    await second.send(prompt('resume-moved', 1), (event) => events.push(event));
+
+    expect(spawns[1].slice(2, 4)).toEqual(['--session-id', session.sessionId]);
+    expect(kit.lastArgs().slice(2, 8)).toEqual(['--session-id', session.sessionId, '--session-dir', piSessions(agent, MOVED), '--fork', forked]);
+    expect([...written(kit.processes[0]), ...written(kit.processes[1])]).toEqual(outs(recording('resume-moved')));
+    // The scripted model says what reached it: the first process's prompt, carried into the new cwd.
+    expect(events.filter((e) => e.type === 'assistant_text').map((e) => e.type === 'assistant_text' && e.text)).toEqual([`2 user messages; the first: ${prompt('resume-moved')}`]);
   });
 
   it('fails a turn whose model call failed after Pi\'s retries, in Pi\'s words', async () => {

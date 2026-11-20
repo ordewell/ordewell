@@ -63,7 +63,7 @@ export default defineConfig({
         'src/services/harness/cursorProfile.ts': floor(100, 100, 100),
         'src/services/harness/jsonRpc.ts': floor(100, 94, 95),
         'src/services/harness/openCodeTransport.ts': floor(100, 97, 94),
-        'src/services/harness/PiAdapter.ts': floor(100, 88, 93),
+        'src/services/harness/PiAdapter.ts': floor(100, 89, 93),
         'src/services/harness/piExtension.ts': floor(100, 100, 100),
         'src/services/harness/piOrdewell.ts': floor(100, 100, 100),
         'src/services/harness/piRepoConfig.ts': floor(100, 100, 100),
