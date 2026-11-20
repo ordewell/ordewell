@@ -6,6 +6,8 @@ import { ClaudeCodeAdapter } from '../harness/ClaudeCodeAdapter';
 import { CodexAdapter } from '../harness/CodexAdapter';
 import { OpenCodeAdapter } from '../harness/OpenCodeAdapter';
 import { AcpAdapter } from '../harness/AcpAdapter';
+import { PiAdapter } from '../harness/PiAdapter';
+import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 import { OrdewellAdapter } from '../harness/ordewell/OrdewellAdapter';
 import { SUMMARY_HEADINGS } from '../harness/ordewell/compaction';
 import { MemoryTranscriptStore, call, scriptedClient, STOP } from '../harness/ordewell/__tests__/loopKit';
@@ -17,7 +19,7 @@ import type { RunnerManifest } from '../../plugins/types';
 import type { CompactionPoint } from '../../models/Usage';
 import { mcpClientConfig } from '../mcp/clientConfig';
 import type { ModelClient } from '../model';
-import { codexAnswer, fakeSpawn, fixture, sseResponse, type FakeEventStream } from './harnessTestKit';
+import { argvWithFiles, codexAnswer, fakeSpawn, fixture, silentSpawn, sseResponse, type FakeEventStream } from './harnessTestKit';
 import { fakeAcpSpawn, type FakeAcpStep } from './fakeAcpAgent';
 import { expectCompactionChain, type Flagged } from './compactionChainKit';
 
@@ -335,6 +337,55 @@ const acpKind: Kind = {
   },
 };
 
+/** A Pi run that reports one call's usage, compacts on its own, then reports the next call's, as its RPC events carry them. */
+const piUsage = (totalTokens: number) => ({ type: 'message_end', message: { role: 'assistant', content: [], provider: 'ollama', model: 'qwen3:8b', usage: { input: totalTokens - 100, output: 100, totalTokens } } });
+const piCompactingTurn = [
+  { type: 'agent_start' }, piUsage(150_000),
+  { type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 160_000, estimatedTokensAfter: 31_000 }, aborted: false, willRetry: false },
+  piUsage(31_000), { type: 'agent_settled', aborted: false },
+].map((record) => `${JSON.stringify(record)}\n`).join('');
+
+async function piStart(opts: AgentStartOptions, answer = '') {
+  const spawned = silentSpawn((written, proc) => {
+    // The resume check, answered as Pi does for a session it found.
+    if (written.includes('"type":"get_state"')) proc.emitStdout(`${JSON.stringify({ id: 'ordewell-resume-check', type: 'response', command: 'get_state', success: true, data: { messageCount: 2 } })}\n`);
+    if (answer && written.includes('"type":"prompt"')) proc.emitStdout(answer);
+  });
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const adapter: TaskModeAgentAdapter = new PiAdapter(processDeps(spawned.spawn));
+  await adapter.start(opts);
+  const said = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('taskCompactAt'));
+  warn.mockRestore();
+  return { adapter, spawned, said };
+}
+
+const piTask = (): TaskStartOptions => task({ mode: 'agent', mcp: MCP, resumeSessionId: 'sess-1', flags: resolveTaskRunnerFlags(PI_MANIFEST, { mode: 'agent' }) });
+const PI_ARGS = ['--mode', 'rpc', '--session-id', 'sess-1', '--session-dir', expect.any(String), '-e', 'builtin:mcp', '-e', '<ordewell.ts>', '--append-system-prompt', '<instructions.md>'];
+
+const piKind: Kind = {
+  name: 'Pi',
+  async launch() {
+    const { adapter, spawned, said } = await piStart(piTask());
+    // Nothing of the setting reaches Pi: its command line is the same under all four.
+    return { adapter, passed: { args: argvWithFiles(spawned.lastLaunch()).args }, window: adapter.compactWindowTokens, start: adapter.compactStartTokens, said };
+  },
+  async planner() {
+    const { adapter, spawned, said } = await piStart({ ...planner, mcp: MCP, resumeSessionId: 'sess-1' });
+    adapter.dispose();
+    return { args: argvWithFiles(spawned.lastLaunch()).args, said, window: adapter.compactWindowTokens };
+  },
+  async compaction() {
+    const { adapter } = await piStart(piTask(), piCompactingTurn);
+    return { adapter, events: await nextTurn(adapter) };
+  },
+  expected: {
+    auto: { passed: { args: PI_ARGS }, window: undefined, start: undefined, flagged: NEWS },
+    number: { passed: { args: PI_ARGS }, window: undefined, start: undefined, said: [/Pi: taskCompactAt cannot be honoured/], flagged: NEWS },
+    large: { passed: { args: PI_ARGS }, window: undefined, start: undefined, said: [/Pi: taskCompactAt cannot be honoured/], flagged: NEWS },
+    off: { passed: { args: PI_ARGS }, window: undefined, start: undefined, flagged: NEWS },
+  },
+};
+
 const BUILT_IN_KEY = 'sk-or-v1-pinning-test-key-0123456789';
 const FULL_SUMMARY = SUMMARY_HEADINGS.map((heading) => `${'#'.repeat(heading.level)} ${heading.name}\nbody of ${heading.name}`).join('\n\n');
 const builtInDirs: string[] = [];
@@ -408,6 +459,7 @@ const KINDS: Kind[] = [
   openCode1Kind,
   openCode2Kind,
   acpKind,
+  piKind,
   builtInKind,
 ];
 

@@ -11,7 +11,7 @@ import { inProcessProvider } from '../types';
 // host cannot start under another name.
 describe('the built-in runner catalog', () => {
   it('names every harness planner, with its label and an https install page', () => {
-    expect(CLI_PROVIDERS).toHaveLength(8);
+    expect(CLI_PROVIDERS).toHaveLength(9);
     expect(RUNNER_CATALOG.map((runner) => runner.id)).toEqual(CLI_PROVIDERS);
     for (const id of CLI_PROVIDERS) {
       expect(RUNNER_LABELS[id]).toBe(PROVIDER_LABEL[id]);

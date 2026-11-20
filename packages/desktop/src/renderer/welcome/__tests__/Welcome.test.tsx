@@ -469,11 +469,12 @@ describe('Welcome: runners', () => {
     installBridge({ routes: { 'runners.list': () => ok({ runners: [] }) } });
     render(<Welcome status={CONNECTED} />);
     const runners = section('Runners');
-    await waitFor(() => expect(runners.querySelectorAll('[data-runner]')).toHaveLength(8));
-    for (const name of ['Claude Code', 'Codex', 'OpenCode', 'GitHub Copilot CLI', 'Qwen Code', 'Cline', 'Gemini CLI', 'Cursor']) {
+    await waitFor(() => expect(runners.querySelectorAll('[data-runner]')).toHaveLength(9));
+    // Pi has no badge of its own yet, so it is named by its id on the neutral one.
+    for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'GitHub Copilot CLI', 'Qwen Code', 'Cline', 'Gemini CLI', 'Cursor']) {
       expect(within(runners).getByTitle(name)).toBeInTheDocument();
     }
-    expect(within(runners).getAllByRole('button', { name: 'Docs' })).toHaveLength(8);
+    expect(within(runners).getAllByRole('button', { name: 'Docs' })).toHaveLength(9);
   });
 
   it('shows skeleton runners until the daemon connects', () => {
@@ -527,4 +528,4 @@ describe('Welcome: runners', () => {
   });
 });
 
-const KNOWN_OFF = ['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'].map((id) => ({ id, enabled: false }));
+const KNOWN_OFF = ['claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'].map((id) => ({ id, enabled: false }));

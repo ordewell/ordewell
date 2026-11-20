@@ -13,7 +13,7 @@ get their models and credentials in different ways, described below.
 VS Code, or the planner bar in VS Code, picks one. `/task-model` is a different command: it sets one task's model.
 
 A **harness planner** is a coding agent planning: pick a runner such as `claude-code`,
-`codex` or `opencode`, and the planner conversation runs through that agent
+`codex`, `opencode` or `pi`, and the planner conversation runs through that agent
 ([ADR-0009](adr/planner/0009-coding-agents-as-planners.md)). Ordewell asks for no API
 key, because the agent is signed in on its own and the account you already use with
 it pays for planning. The planner's models and effort levels come from the same list
@@ -25,6 +25,7 @@ agent has, so Ordewell denies them and offers its own read-only research agent i
 as the tool `spawn_research_agent`. The agent only reads the workspace: no shell, web or
 MCP tool, and no agent of its own
 ([ADR-0066](adr/planner-envelope/0066-opencode-planners-get-ordewells-research-agent.md)).
+A Pi planner has no agents of its own, so it delegates exploration through research tasks, as the ACP planners do.
 
 On OpenCode 2.x it needs no setting: it runs on your own OpenCode login and the
 planner's model, in a second `opencode serve` that Ordewell starts on the planner's
@@ -96,6 +97,52 @@ The planner gives each AI task a runner, a model, a thinking effort and a mode, 
 you can change any of them before the run. A model an API planner can use is not
 thereby one a runner offers: pick a task's model from its runner's choices.
 
+## Pi
+
+[Pi](https://pi.dev/docs/latest) 1.5.2 or later runs tasks and plans, driven over
+its RPC mode (`pi --mode rpc`). Its models are the ones `pi --list-models` lists,
+from every provider you signed it in to (`pi auth login <provider>`, or the
+provider's own API key), named `<provider>/<model>`, with Pi's thinking levels as
+the efforts of a model that thinks.
+
+Pi asks before nothing, so a writable Pi task runs Pi's own tools, its shell and
+its file edits included, without a per-tool approval, under Full and Guarded
+alike: there is no Pi request for Ordewell to put to you. Pick a read-only mode,
+or another runner, for a task that should not change anything on its own.
+
+A Pi planner, and a read-only Pi task, start with Pi's `read`, `grep`, `find` and
+`ls` and Ordewell's tools alone, without your Pi extensions, the repository's
+`.pi/` settings, extensions and MCP servers, or Pi's own context files: Ordewell
+hands them the repository's `AGENTS.md` and `CLAUDE.md` files as text instead,
+none from above the repository root or through a link out of it. Pi still starts
+the MCP servers in your own Pi `mcp.json` on these starts, but offers none of
+their tools. Each read asks Ordewell first. A
+planner's read inside the workspace runs; one outside it follows the approval
+policy for reads outside the workspace, which may allow it, ask you or refuse it.
+A read-only task reads inside its worktree and the session workspace, and a read
+outside both is refused with the reason, never asked. Links are followed before
+a read is judged.
+
+Ordewell hands Pi its MCP server, and the read checks, in a small extension it
+writes for each Pi process into a private directory outside the repository and
+loads with `-e`. It removes the file when the process ends, with Pi's
+compilation cache for it turned off, installs nothing into Pi and changes none of
+your Pi settings. A server named `ordewell` in your own Pi `mcp.json` would take
+the place of Ordewell's, so a Pi start fails at once and names that file until
+you rename or remove it.
+
+Every Pi start names its session directory: Pi's default for the directory it
+starts in, under its agent directory (`~/.pi/agent`, or `PI_CODING_AGENT_DIR`),
+so a repository's `.pi/settings.json` cannot send the transcript elsewhere.
+Pi resumes a session by id only from the directory it was saved in, and a
+Continue after its run ended works in a new worktree, so there Ordewell has Pi
+fork the latest saved copy of the session into the new worktree under the same
+id (`--fork`); the old worktree need not still exist. A Pi placed in a container
+is resumed by id alone. A Continue, or a planner picked up again, checks that Pi
+found the saved session; a session Pi no longer has, or whose file it cannot
+read, fails the Continue, and the planner picks the conversation up from its
+transcript.
+
 ## When a task's context compacts
 
 Compaction is a capacity guard, not a quality tool: a runner replaces its
@@ -126,6 +173,7 @@ a message saying what is accepted.
 | Codex | Its own | Sets `model_auto_compact_token_limit` to N (scope total) when the thread starts, N at least 16,000; Codex compacts at 90% of its window at most, so once it reports the window a larger N is held there (a log line if either moves) | Sets nothing | Meter `compacts at N`; the log line; the badge |
 | OpenCode 1.x and 2.x | Its own | Sets `compaction.reserved` to the window less N, N held to 16,000 up to the window less 16,000; nothing, with a warning, when the model's window is unknown, as it is for a model with no input limit that only the bundled snapshot describes, of a provider some of whose models state one (the snapshot keeps no input limits); 1.x applies it only to models with an input limit, and for any other one line says N is not applied and OpenCode keeps its own start | Sets nothing; compaction room inherited in `OPENCODE_CONFIG_CONTENT` is dropped | Meter `compacts at N`; the log line; the badge |
 | ACP runners | The agent's own | Nothing to set: one warning that it cannot be honoured | Nothing | No `compacts at` (no window known); a compaction is inferred from a fall of more than half in the reported context from above 32,000 tokens (or half the window, if smaller), outside the agent's own commands, and logged; the badge |
+| Pi | Its own | Nothing to set: one warning that it cannot be honoured | Nothing | No `compacts at` (no window known); Pi's own compaction, with the sizes it reports, logged; the badge |
 | Built-in runner | The model's window less the runner's reserve (108,800 under the assumed 128,000) | Start N, held to between 32,000 (or the default, if lower) and the default (a log line if it moves) | Not honoured: compacts as `auto` does, with a line in the task log | Meter `compacts at N` under a number (lower once a refused request shrinks the window); the model's window otherwise; one `compaction` line per step; the badge |
 
 Whatever the harness, a compaction does the same three things. The runner gets a

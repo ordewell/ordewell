@@ -11,6 +11,7 @@ import { QWEN_CODE_MANIFEST } from '../../plugins/builtin/qwen.manifest';
 import { CLINE_MANIFEST } from '../../plugins/builtin/cline.manifest';
 import { GEMINI_CLI_MANIFEST } from '../../plugins/builtin/gemini-cli.manifest';
 import { CURSOR_AGENT_MANIFEST } from '../../plugins/builtin/cursor-agent.manifest';
+import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 import { CONNECTORS } from '../harness/connectors';
 import { recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import type { LaunchDeps } from '../../utils/launch';
@@ -143,6 +144,13 @@ describe('RunnerInstallation.runnerUsability', () => {
     expect(await inst.runnerUsability('copilot-cli')).toMatchObject({ usable: true, version: '1.1.0' });
   });
 
+  it('lists a Pi older than the version its connector was checked against, 1.5.2, as unavailable, and keeps 1.5.2 itself', async () => {
+    const usability = async (version: string) => new RunnerInstallation(registryWith(PI_MANIFEST), vi.fn(async () => ({ stdout: `${version}\n` })), Date.now, { launch: POSIX }).runnerUsability('pi');
+
+    expect(await usability('1.5.1')).toEqual({ usable: false, reason: 'Pi is too old for Ordewell: found 1.5.1, needs 1.5.2 or later.' });
+    expect(await usability('1.5.2')).toMatchObject({ usable: true, version: '1.5.2' });
+  });
+
   it('refuses a runner no manifest names', async () => {
     const inst = new RunnerInstallation(registryWith(COPILOT_CLI_MANIFEST), vi.fn(async () => ({ stdout: '' })));
 
@@ -198,7 +206,7 @@ describe('RunnerInstallation.plannerUsability (ADR-0009 preflight)', () => {
   it('plans with exactly the runners whose connectors plan', async () => {
     const exec: ExecImpl = vi.fn(async () => ({ stdout: 'ok' }));
     const authExec: RunnerAuthExec = vi.fn(async () => ({ code: -1, stdout: '', stderr: '' }));
-    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, CLINE_MANIFEST, GEMINI_CLI_MANIFEST, CURSOR_AGENT_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
+    const manifests = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST, PI_MANIFEST, COPILOT_CLI_MANIFEST, QWEN_CODE_MANIFEST, CLINE_MANIFEST, GEMINI_CLI_MANIFEST, CURSOR_AGENT_MANIFEST, { name: 'aider', runner: { command: 'aider' } }];
     const inst = new RunnerInstallation(registryWith(...manifests), exec, Date.now, { authExec, launch: POSIX });
 
     const plannable: string[] = [];

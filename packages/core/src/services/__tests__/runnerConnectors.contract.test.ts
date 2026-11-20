@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { CONNECTORS } from '../harness/connectors';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions } from '../harness/AgentAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
-import { OrdewellMcpServer, PLANNER_EXECUTION_TOOLS, PLANNER_TOOLS, TASK_TOOLS, mcpClientConfig } from '../mcp';
+import { OrdewellMcpServer, PLANNER_EXECUTION_TOOLS, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, mcpClientConfig } from '../mcp';
 import { CLI_PROVIDERS, providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -25,6 +25,7 @@ const RUNNER_NAME: Record<string, (tool: string) => string> = {
   'claude-code': (tool) => `mcp__ordewell__${tool}`,
   codex: (tool) => `mcp__ordewell__${tool}`,
   opencode: (tool) => `ordewell_${tool}`,
+  pi: (tool) => `mcp__ordewell__${tool}`,
   'copilot-cli': (tool) => `ordewell-${tool}`,
   'qwen-code': (tool) => `mcp__ordewell__${tool}`,
   cline: (tool) => `ordewell__${tool}`,
@@ -57,12 +58,19 @@ const NATIVE_INSTEAD: Record<string, string[]> = {
   'claude-code': ['fetch', 'web_search'],
   codex: [],
   opencode: [],
+  pi: [],
   'copilot-cli': [],
   'qwen-code': [],
   cline: [],
   'gemini-cli': [],
   'cursor-agent': [],
 };
+
+/**
+ * The runners that ask about none of their own tools: a writable task runs
+ * each natively, as Pi does with no per-tool approval at all (#78; ADR-0001).
+ */
+const NATIVE_TOOLS_UNASKED = new Set(['pi']);
 
 const mcp = mcpClientConfig({ url: 'http://127.0.0.1:4555/mcp', token: 'tok-secret' });
 const manifests = new RunnerRegistry();
@@ -144,7 +152,7 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
 
     expect(CONNECTORS[runner].ordewellTools!.toolNames(role, role === 'planner' ? hidden : [])).toEqual(tools.map((tool) => name(tool.name)));
     for (const tool of tools) expect(await fake.preAllows(name(tool.name)), tool.name).toBe(true);
-    expect(await fake.preAllows('bash')).toBe(false);
+    expect(await fake.preAllows('bash')).toBe(role === 'task' && NATIVE_TOOLS_UNASKED.has(runner));
     adapter.dispose();
   });
 
@@ -230,9 +238,12 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   });
 
   it.each(modeIds(manifests.get(runner)!.manifest))('allows a task\'s request for each Ordewell tool at once under %s', async (mode) => {
-    const { fake, adapter } = await opened(runner, taskStart(runner, mode));
+    // A read-only mode's task is handed a read-only token, as StructuredRunner issues it (ADR-0046).
+    const start = taskStart(runner, mode);
+    const readOnly = start.kind === 'task' && start.flags.readOnly === true;
+    const { fake, adapter } = await opened(runner, readOnly ? { ...start, mcp: { ...mcp, readOnly: true } } : start);
 
-    for (const tool of TASK_TOOLS) expect(await fake.askOrdewellTool(tool.name), tool.name).toBe('allow');
+    for (const tool of readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS) expect(await fake.askOrdewellTool(tool.name), tool.name).toBe('allow');
     adapter.dispose();
   });
 
