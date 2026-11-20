@@ -959,9 +959,10 @@ describe("G6's fixture and key", () => {
     assert.ok(all(fixture).every((f) => !/\.test\.mjs$/.test(f)), "bench's own glob, bench/**/*.test.mjs, must not run the failing fixture tests");
     assert.equal(JSON.parse(fs.readFileSync(path.join(fixture, 'package.json'), 'utf8')).scripts.test, 'node --test');
     // NODE_TEST_CONTEXT would make the child report to this run as a subtest, not print its own summary.
+    // TAP named, since Node 23 and later default to spec even when stdout is not a terminal.
     const env = { ...process.env, NODE_OPTIONS: '' };
     delete env.NODE_TEST_CONTEXT;
-    const r = spawnSync(process.execPath, ['--test'], { cwd: fixture, encoding: 'utf8', env, timeout: 60_000 });
+    const r = spawnSync(process.execPath, ['--test', '--test-reporter=tap'], { cwd: fixture, encoding: 'utf8', env, timeout: 60_000 });
     assert.notEqual(r.status, 0);
     assert.match(r.stdout, /# pass 0\b/);
     assert.match(r.stdout, /# fail [1-9]/);
