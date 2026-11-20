@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto';
-import { readFileSync, statSync } from 'fs';
-import { tmpdir } from 'os';
-import { join, sep } from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import { join, resolve, sep } from 'path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { PiAdapter } from '../harness/PiAdapter';
+import { SessionNotResumable } from '../harness/ordewellBinding';
+import { piMcpCollision } from '../harness/piOrdewell';
 import { PI_ORDEWELL } from '../harness/piOrdewell';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskStartOptions } from '../harness/AgentAdapter';
 import type { ApprovalRequest, IApproval } from '../../interfaces/IApproval';
@@ -113,7 +115,13 @@ function taskStart(mode: string, extra: Partial<TaskStartOptions> = {}): TaskSta
 const plannerStart = (extra: Partial<AgentStartOptions> = {}): AgentStartOptions => ({ kind: 'planner', cwd: CWD, systemPrompt: 'PLAN', mcp: mcp(), ...extra } as AgentStartOptions);
 
 const adapters: PiAdapter[] = [];
-afterEach(() => { for (const adapter of adapters.splice(0)) adapter.dispose(); });
+/** Directories a test made on disk, removed after it. */
+const temps: string[] = [];
+afterEach(() => {
+  vi.unstubAllEnvs();
+  for (const adapter of adapters.splice(0)) adapter.dispose();
+  for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 async function started(kit: FakeSpawnResult, start: AgentStartOptions): Promise<PiAdapter> {
   const adapter = new PiAdapter(deps(kit));
@@ -135,7 +143,7 @@ describe('Pi\'s command line', () => {
     const adapter = await started(kit, taskStart('agent', { model: 'anthropic/claude-sonnet-5.5', flags: { ...resolveTaskRunnerFlags(PI_MANIFEST, { mode: 'agent' }), effort: 'high' } }));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args).toEqual(['--mode', 'rpc', '--session-id', adapter.nativeSessionId(), '-e', 'builtin:mcp', '-e', '<ordewell.ts>', '--append-system-prompt', '<instructions.md>', '--model', 'anthropic/claude-sonnet-5.5', '--thinking', 'high']);
+    expect(args).toEqual(['--mode', 'rpc', '--session-id', adapter.nativeSessionId(), '--session-dir', expect.any(String), '-e', 'builtin:mcp', '-e', '<ordewell.ts>', '--append-system-prompt', '<instructions.md>', '--model', 'anthropic/claude-sonnet-5.5', '--thinking', 'high']);
     expect(kit.lastArgs().join(' ')).not.toContain('tok-secret');
     expect(files['ordewell.ts']).toContain('"url":"http://127.0.0.1:4555/mcp","headers":{"Authorization":"Bearer tok-secret"}},"asksReads":false');
     expect(files['instructions.md']).toContain('call the `task_complete` tool with status `done`');
@@ -145,16 +153,36 @@ describe('Pi\'s command line', () => {
     }
   });
 
-  it('starts a read-only task on Pi\'s read tools and Ordewell\'s, with nothing of the repository\'s or the user\'s that runs, its context files read', async () => {
+  it('starts a read-only task on Pi\'s read tools and Ordewell\'s, with nothing of the repository\'s or the user\'s that runs and no context file Pi finds itself', async () => {
     const kit = silentSpawn(() => {});
     await started(kit, taskStart('plan', { runnerConfig: 'minimal', mcp: mcp({ readOnly: true }) }));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('readOnlyTask').join(',')}`, '--no-skills', '--no-prompt-templates', '--model', 'script/read-only']);
+    expect(args.slice(12)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('readOnlyTask').join(',')}`, '--no-context-files', '--no-skills', '--no-prompt-templates', '--model', 'script/read-only']);
     expect(files['ordewell.ts']).toContain('"asksReads":true');
     expect(files['instructions.md']).toContain('This task is read-only');
     expect(files['instructions.md']).toContain('`mcp__ordewell__read` reads a task\'s handoff, not a file');
     expect(files['instructions.md']).toContain('call the `task_complete` tool with status `done`');
+  });
+
+  it('hands a read-only task its repository\'s instruction files as text, never one a link takes out of the repository (ADR-0028)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ordewell-pi-context-'));
+    temps.push(root);
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    mkdirSync(join(repo, 'pkg'));
+    writeFileSync(join(root, 'AGENTS.md'), 'OUTSIDE: the user\'s own notes');
+    writeFileSync(join(repo, 'AGENTS.md'), 'Use tabs.');
+    const links = process.platform !== 'win32';
+    if (links) symlinkSync(join(root, 'AGENTS.md'), join(repo, 'pkg', 'AGENTS.md'));
+    const kit = silentSpawn(() => {});
+    await started(kit, taskStart('plan', { cwd: join(repo, 'pkg'), mcp: mcp({ readOnly: true }) }));
+    const { args, files } = argvWithFiles(kit.lastLaunch());
+
+    expect(args).toContain('--no-context-files');
+    expect(files['instructions.md']).toContain('=== ../AGENTS.md ===\nUse tabs.');
+    expect(files['instructions.md']).toContain('they do not change what you may do in this read-only task');
+    if (links) expect(files['instructions.md']).not.toContain('OUTSIDE');
   });
 
   it('starts a planner restricted the same way, its prompt appended to Pi\'s own with its tools named (ADR-0009, T5)', async () => {
@@ -162,21 +190,182 @@ describe('Pi\'s command line', () => {
     await started(kit, plannerStart({ model: 'ollama/qwen3:8b', effort: 'low', mcp: mcp({ hidden: ['web_search'] }) } as Partial<AgentStartOptions>));
     const { args, files } = argvWithFiles(kit.lastLaunch());
 
-    expect(args.slice(10)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('planner', ['web_search']).join(',')}`, '--no-context-files', '--model', 'ollama/qwen3:8b', '--thinking', 'low']);
+    expect(args.slice(12)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('planner', ['web_search']).join(',')}`, '--no-context-files', '--model', 'ollama/qwen3:8b', '--thinking', 'low']);
     // Exact names: a pattern would let in the tools of a server named `ordewell__x`, which Pi names `mcp__ordewell__x__<tool>`.
-    expect(args[13].split(',').every((tool) => !tool.includes('*'))).toBe(true);
+    expect(args[15].split(',').every((tool) => !tool.includes('*'))).toBe(true);
     expect(files['instructions.md']).toMatch(/^PLAN\n\nYour Ordewell tools come from the `ordewell` MCP server: `mcp__ordewell__list_runners`/);
     expect(files['instructions.md']).toContain('read web pages with `mcp__ordewell__fetch`');
     expect(files['instructions.md']).not.toContain('web_search');
     expect(files['instructions.md']).not.toContain('task_complete');
   });
 
-  it('takes a session up again by the id it was started with (ADR-0018, K1)', async () => {
+  it('offers a task whose flags make it read-only the read-only token\'s tools, as it restricts it', async () => {
     const kit = silentSpawn(() => {});
+    await started(kit, taskStart('plan'));
+    const { args } = argvWithFiles(kit.lastLaunch());
+
+    expect(args.slice(12, 16)).toEqual(['--no-approve', '--no-extensions', '--tools', `read,grep,find,ls,${PI_ORDEWELL.toolNames('readOnlyTask').join(',')}`]);
+  });
+
+  /** The directory Pi files a cwd's sessions in by default (Pi 1.6.0's getDefaultSessionDirPath), for `/work/repo`. */
+  const defaultSessions = (agentDir: string) => join(agentDir, 'sessions', `--${resolve('/work/repo').replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`);
+
+  it('names the session directory on every start, Pi\'s own default for the cwd, so a repository\'s .pi settings cannot move it', async () => {
+    for (const start of [plannerStart({ cwd: '/work/repo' }), taskStart('plan', { cwd: '/work/repo', mcp: mcp({ readOnly: true }) }), taskStart('agent', { cwd: '/work/repo' })]) {
+      const kit = silentSpawn(() => {});
+      await started(kit, start);
+      const args = kit.lastArgs();
+      expect(args[args.indexOf('--session-dir') + 1]).toBe(defaultSessions(join(homedir(), '.pi', 'agent')));
+    }
+  });
+
+  it('files the sessions under the agent dir the workspace or the host names, as Pi does', async () => {
+    const agent = resolve('/agents/pi');
+    for (const [workspace, host, expected] of [
+      [{ PI_CODING_AGENT_DIR: agent }, 'ignored', agent],
+      [{}, agent, agent],
+      [{ PI_CODING_AGENT_DIR: '~/pi-agent' }, '', join(homedir(), 'pi-agent')],
+      [{ PI_CODING_AGENT_DIR: '~' }, '', homedir()],
+      // Relative, against the cwd Pi starts in.
+      [{ PI_CODING_AGENT_DIR: join('rel', 'agent') }, '', resolve('/work/repo', 'rel', 'agent')],
+    ] as const) {
+      vi.stubEnv('PI_CODING_AGENT_DIR', host);
+      const kit = silentSpawn(() => {});
+      const adapter = new PiAdapter({ ...deps(kit), workspaceEnv: async () => ({ ...workspace }) });
+      adapters.push(adapter);
+      await adapter.start(taskStart('agent', { cwd: '/work/repo' }));
+      const args = kit.lastArgs();
+      expect(args[args.indexOf('--session-dir') + 1]).toBe(defaultSessions(expected));
+    }
+  });
+
+  it('names a placed Pi\'s session directory where it runs, under that host\'s home, and reads no mcp.json of this one', async () => {
+    const agent = mkdtempSync(join(tmpdir(), 'ordewell-pi-agent-'));
+    temps.push(agent);
+    writeFileSync(join(agent, 'mcp.json'), JSON.stringify({ mcpServers: { ordewell: { command: 'x' } } }));
+    vi.stubEnv('PI_CODING_AGENT_DIR', agent);
+    const placed: { args: readonly string[] }[] = [];
+    const kit = silentSpawn(() => {});
+    const adapter = new PiAdapter({ ...deps(kit), placement: {
+      cwd: '/work/task',
+      place: async (launch) => { placed.push(launch); return { command: launch.command, args: [...launch.args], env: { ...launch.env }, stop: () => {}, ended: () => {} }; },
+      reach: async (url) => url,
+      blob: async () => undefined,
+    } });
+    adapters.push(adapter);
+    await adapter.start(taskStart('agent'));
+
+    expect(placed[0].args.slice(4, 6)).toEqual(['--session-dir', '~/.pi/agent/sessions/--work-task--']);
+  });
+
+  it('refuses to start, naming the file, when the user\'s own Pi mcp.json has a server that would displace Ordewell\'s', async () => {
+    const agent = mkdtempSync(join(tmpdir(), 'ordewell-pi-agent-'));
+    temps.push(agent);
+    writeFileSync(join(agent, 'mcp.json'), JSON.stringify({ mcpServers: { ordewell: { command: 'ordewell-mcp', enabled: false } } }));
+    vi.stubEnv('PI_CODING_AGENT_DIR', agent);
+    const kit = silentSpawn(() => {});
+
+    await expect(new PiAdapter(deps(kit)).start(plannerStart())).rejects.toThrow(`${join(agent, 'mcp.json')} defines an MCP server named "ordewell", which Pi starts in place of Ordewell's own`);
+    expect(kit.processes).toHaveLength(0);
+  });
+
+  it('finds a displacing server as Pi names servers, by namespace, and nothing else in the file', () => {
+    const agent = mkdtempSync(join(tmpdir(), 'ordewell-pi-agent-'));
+    temps.push(agent);
+    const file = join(agent, 'mcp.json');
+    const verdict = (servers: unknown, name = 'ordewell') => {
+      writeFileSync(file, typeof servers === 'string' ? servers : JSON.stringify({ mcpServers: servers }));
+      return piMcpCollision(agent, name);
+    };
+
+    expect(piMcpCollision(agent, 'ordewell')).toBeUndefined();
+    expect(verdict({ docs: { url: 'https://example.com/mcp' }, ordewell2: { command: 'x' } })).toBeUndefined();
+    expect(verdict({ ordewell: { url: 'https://example.com/mcp' } })).toBe('ordewell');
+    // Pi gives `-` and `_` one namespace.
+    expect(verdict({ ordewell_x: { command: 'x' } }, 'ordewell-x')).toBe('ordewell_x');
+    // An entry Pi refuses to load displaces nothing.
+    expect(verdict({ ordewell: { type: 'sse', url: 'https://example.com/sse' } })).toBeUndefined();
+    expect(verdict({ ordewell: { args: ['x'] } })).toBeUndefined();
+    expect(verdict({ ordewell: { type: 'stdio', command: 'x' } })).toBe('ordewell');
+    expect(verdict({ ordewell: { type: 'http', url: 'https://example.com/mcp' } })).toBe('ordewell');
+    expect(verdict({ ordewell: { type: 'streamable-http', url: 'https://example.com/mcp' } })).toBe('ordewell');
+    expect(verdict({ ordewell: { type: 'stdio', url: 'https://example.com/mcp' } })).toBeUndefined();
+    expect(verdict(`\uFEFF${JSON.stringify({ mcpServers: { ordewell: { command: 'x' } } })}`)).toBe('ordewell');
+    // A name Pi refuses outright.
+    expect(verdict({ 'ordewell.x': { command: 'x' } }, 'ordewell.x')).toBeUndefined();
+    expect(verdict('{ not json')).toBeUndefined();
+    expect(verdict('[]')).toBeUndefined();
+    expect(verdict('{}')).toBeUndefined();
+    expect(verdict({ ordewell: 'x' })).toBeUndefined();
+  });
+
+  /** A Pi that answers the resume check's `get_state` with `messageCount` messages in the session. */
+  const holding = (messageCount: number) => silentSpawn((text, proc) => {
+    for (const line of text.split('\n').filter(Boolean).map((raw) => JSON.parse(raw) as PiRecord)) {
+      if (line.type === 'get_state') proc.emitStdout(`${JSON.stringify({ id: line.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'sess-1', messageCount, isStreaming: false } })}\n`);
+    }
+  });
+
+  it('takes a session up again by the id it was started with, once Pi says the session holds its messages (ADR-0018, K1)', async () => {
+    const kit = holding(4);
     const adapter = await started(kit, taskStart('agent', { resumeSessionId: 'sess-1' }));
 
     expect(kit.lastArgs().slice(2, 4)).toEqual(['--session-id', 'sess-1']);
+    expect(written(kit.processes[0])).toEqual([{ id: 'ordewell-resume-check', type: 'get_state' }]);
     expect(adapter.nativeSessionId()).toBe('sess-1');
+  });
+
+  it('refuses a resume Pi answered with a new, empty session, which it does for an id it cannot find', async () => {
+    for (const start of [taskStart('agent', { resumeSessionId: 'sess-1' }), plannerStart({ resumeSessionId: 'sess-1' })]) {
+      const kit = holding(0);
+      const refused = new PiAdapter(deps(kit)).start(start);
+
+      await expect(refused).rejects.toBeInstanceOf(SessionNotResumable);
+      await expect(refused).rejects.toThrow('Pi has no saved session sess-1 for this directory to continue.');
+      expect(kit.processes[0].killed).toBe(true);
+    }
+  });
+
+  it('fails a resume Pi could not report on, or did not answer in time, without calling the session lost', async () => {
+    const refusing = silentSpawn((text, proc) => {
+      if (text.includes('get_state')) proc.emitStdout(`${JSON.stringify({ id: 'ordewell-resume-check', type: 'response', command: 'get_state', success: false, error: 'not ready' })}\n`);
+    });
+    const failed = new PiAdapter(deps(refusing)).start(taskStart('agent', { resumeSessionId: 'sess-1' }));
+    await expect(failed).rejects.toThrow('Pi could not say whether it found session sess-1: not ready.');
+    await expect(failed).rejects.not.toBeInstanceOf(SessionNotResumable);
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const silent = new PiAdapter(deps(silentSpawn(() => {}))).start(taskStart('agent', { resumeSessionId: 'sess-1' }));
+      const settled = silent.catch((err: Error) => err);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await settled).toMatchObject({ message: 'Pi did not say within 30s whether it found session sess-1.' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails a resume Pi exits on before it answers, in its own last words', async () => {
+    const kit = silentSpawn((text, proc) => {
+      if (text.includes('get_state')) {
+        proc.emitStderr('Error: the session file is corrupt\n');
+        proc.exit(1);
+      }
+    });
+
+    await expect(new PiAdapter(deps(kit)).start(taskStart('agent', { resumeSessionId: 'sess-1' }))).rejects.toThrow(/exited with code 1[\s\S]*the session file is corrupt/);
+  });
+
+  it('says nothing of Pi\'s warning that a fresh start\'s id is new, which every fresh start prints, when it fails', async () => {
+    const kit = silentSpawn(() => {});
+    const adapter = await started(kit, taskStart('agent'));
+    const events: AgentEvent[] = [];
+    const turn = adapter.send('go', (event) => events.push(event));
+    kit.processes[0].emitStderr(`Warning: No project session found with id '${adapter.nativeSessionId()}'; creating a new session with that id.\nError: No API key found for openai.\n`);
+    kit.processes[0].exit(1);
+    await turn;
+
+    expect(events).toEqual([{ type: 'error', message: 'The pi task runner exited with code 1.\n\nError: No API key found for openai.' }]);
   });
 
   it('names Ordewell\'s tools as Pi does under direct exposure, hides none from a planner and holds none of Pi\'s requests for them', () => {
@@ -184,6 +373,14 @@ describe('Pi\'s command line', () => {
     expect(PI_ORDEWELL.plannerHidden(plannerStart() as Extract<AgentStartOptions, { kind: 'planner' }>)).toEqual([]);
     expect(PI_ORDEWELL.isOrdewellAsk(undefined as never)).toBe(false);
     expect(['connected', 'failed', 'pending', undefined].map((status) => PI_ORDEWELL.attachState(status))).toEqual(['connected', 'failed', 'pending', 'pending']);
+  });
+
+  it('turns jiti\'s file cache off on every start, which would keep the extension and its token in the temp dir after Pi exits', async () => {
+    for (const start of [plannerStart(), taskStart('plan', { mcp: mcp({ readOnly: true }) }), taskStart('agent')]) {
+      const kit = silentSpawn(() => {});
+      await started(kit, start);
+      expect(kit.lastEnv().JITI_FS_CACHE).toBe('false');
+    }
   });
 
   it('refuses to start without Ordewell\'s server', async () => {

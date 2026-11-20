@@ -6,7 +6,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { CONNECTORS } from '../harness/connectors';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions } from '../harness/AgentAdapter';
 import { CliAgentAiService } from '../harness/CliAgentAiService';
-import { OrdewellMcpServer, PLANNER_EXECUTION_TOOLS, PLANNER_TOOLS, TASK_TOOLS, mcpClientConfig } from '../mcp';
+import { OrdewellMcpServer, PLANNER_EXECUTION_TOOLS, PLANNER_TOOLS, READ_ONLY_TASK_TOOLS, TASK_TOOLS, mcpClientConfig } from '../mcp';
 import { CLI_PROVIDERS, providerForRunner, runnerForProvider } from '../ProviderRegistry';
 import { RunnerRegistry } from '../../plugins/RunnerRegistry';
 import { resolveTaskRunnerFlags } from '../../plugins/resolveArgs';
@@ -238,9 +238,12 @@ describe.each(runners)('the %s connector and the Ordewell tools', (runner) => {
   });
 
   it.each(modeIds(manifests.get(runner)!.manifest))('allows a task\'s request for each Ordewell tool at once under %s', async (mode) => {
-    const { fake, adapter } = await opened(runner, taskStart(runner, mode));
+    // A read-only mode's task is handed a read-only token, as StructuredRunner issues it (ADR-0046).
+    const start = taskStart(runner, mode);
+    const readOnly = start.kind === 'task' && start.flags.readOnly === true;
+    const { fake, adapter } = await opened(runner, readOnly ? { ...start, mcp: { ...mcp, readOnly: true } } : start);
 
-    for (const tool of TASK_TOOLS) expect(await fake.askOrdewellTool(tool.name), tool.name).toBe('allow');
+    for (const tool of readOnly ? READ_ONLY_TASK_TOOLS : TASK_TOOLS) expect(await fake.askOrdewellTool(tool.name), tool.name).toBe('allow');
     adapter.dispose();
   });
 

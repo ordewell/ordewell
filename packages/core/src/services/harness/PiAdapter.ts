@@ -1,17 +1,23 @@
 import { randomUUID } from 'crypto';
+import { realpathSync } from 'fs';
+import { homedir } from 'os';
+import * as path from 'path';
 import type { AgentEvent, AgentProcessDeps, AgentStartOptions, TaskModeAgentAdapter } from './AgentAdapter';
 import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { StdioAgentAdapter, type SpawnSpec } from './StdioAgentAdapter';
 import { PermissionLedger } from './permissionLedger';
 import { readOnlyTask, readOnlyTaskPolicy } from './plannerPermissions';
-import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, type AttachState } from './ordewellBinding';
-import { PI_ORDEWELL } from './piOrdewell';
+import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, RunnerStartupExit, SessionNotResumable, type AttachState, type OrdewellToolRole } from './ordewellBinding';
+import { PI_ORDEWELL, piMcpCollision } from './piOrdewell';
+import { PI_REPO_CONFIG } from './piRepoConfig';
+import { instructionsBlock } from './repoConfig';
 import { piExtensionSource, piReadAsk } from './piExtension';
 import { taskCompletionContract, type McpClientConfig } from '../mcp';
 import { UsageRecordBuilder } from './usageBuilder';
 import { settleWithin } from './settleWithin';
 import { TurnOutcome } from './turnOutcome';
 import { taskCompactAtOf } from '../taskCompactWindow';
+import { escapeRegex } from '../symbolPatterns';
 import { privateTempDir } from '../../utils/privateTempDir';
 import { spawnedCommand } from '../../plugins/types';
 import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
@@ -21,6 +27,11 @@ const READ_TOOLS = ['read', 'grep', 'find', 'ls'];
 
 /** The id of the `get_state` that asks whether turn `n`'s prompt, which Pi handled itself, started a run. */
 const idleCheck = (n: number) => `ordewell-idle-check-${n}`;
+
+/** The id of the `get_state` that asks a resumed Pi whether it found the session. */
+const RESUME_CHECK = 'ordewell-resume-check';
+/** How long Pi has to answer it: Pi answers once it has started, before any prompt. */
+const RESUME_CHECK_TIMEOUT_MS = 30_000;
 
 /** Pi's dialogs that wait for an answer; the rest of its extension UI is fire-and-forget. */
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor']);
@@ -58,7 +69,7 @@ interface PiLine {
   success?: boolean;
   error?: string;
   /** A prompt's answer (`handled`: Pi ran it as a command), or Pi's state. */
-  data?: { disposition?: string; isStreaming?: boolean };
+  data?: { disposition?: string; isStreaming?: boolean; messageCount?: number };
   /** The message of a `message_*` event; the text of an extension's `confirm`. */
   message?: PiMessage | string;
   assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
@@ -86,9 +97,8 @@ type PiDialog = { id: string; kind: 'read' | 'confirm' };
  * writable task runs Pi's own tools natively, with no per-tool approval, as
  * ADR-0001 lets a writable mode under Full and Guarded. A planner and a
  * read-only task start with Pi's read tools and Ordewell's alone, without the
- * user's extensions or the repository's `.pi` files (ADR-0028), a planner
- * without its context files too, and with Ordewell's extension asking before
- * every read: the
+ * user's extensions, the repository's `.pi` files or Pi's context files
+ * (ADR-0028), and with Ordewell's extension asking before every read: the
  * planner's envelope decides a planner's (ADR-0026), and
  * `decideReadOnlyTaskPermission` a read-only task's, with nobody asked
  * (ADR-0046). The extension also hands Pi the Ordewell server; Pi connects to
@@ -102,7 +112,8 @@ type PiDialog = { id: string; kind: 'read' | 'confirm' };
 export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter {
   readonly agentId = PI_MANIFEST.name;
   private started: AgentStartOptions & { mcp: McpClientConfig } | null = null;
-  private restricted = false;
+  /** Whose token's tools the start is handed; decided once, so the tools a start offers and how far it is restricted cannot disagree. */
+  private toolRole: OrdewellToolRole = 'task';
   private readonly usage = new UsageRecordBuilder(PI_MANIFEST.name);
   private readonly ledger = new PermissionLedger<PiDialog>(
     (dialog, decision) => this.answerDialog(dialog, decision),
@@ -120,6 +131,8 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   private failure: string | null = null;
   /** Whether Pi is in a run: from its `agent_start` to its `agent_settled`. */
   private running = false;
+  /** Takes Pi's answer to the resume check, while a resumed start waits for it. */
+  private resumeAnswer: ((line: PiLine) => void) | null = null;
   /** Settles when the open turn has: Pi said `agent_settled`, refused the prompt, or exited. */
   private settled: Promise<void> | null = null;
   private settle: (() => void) | null = null;
@@ -129,13 +142,16 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     void this.processEnded.then(() => this.endTurnState());
   }
 
+  /** A planner or a read-only task: Pi's read tools and Ordewell's alone. */
+  private get restricted(): boolean { return this.toolRole !== 'task'; }
+
   override async start(opts: AgentStartOptions): Promise<void> {
     if (!opts.mcp) throw new Error('Pi cannot start without the Ordewell MCP server to carry its tools.');
     if (opts.kind === 'task' && typeof taskCompactAtOf() === 'number') {
       console.warn('Pi: taskCompactAt cannot be honoured: Pi compacts its context on its own terms, and Ordewell has nothing to set it with.');
     }
     this.started = { ...opts, mcp: opts.mcp };
-    this.restricted = opts.kind === 'planner' || readOnlyTask(opts);
+    this.toolRole = opts.kind === 'planner' ? 'planner' : readOnlyTask(opts) ? 'readOnlyTask' : 'task';
     this.sessionId = opts.resumeSessionId ?? randomUUID();
     // The token reaches Pi in a file, not its environment, so the process is told to keep it out of its messages too.
     this.runner.withhold(...Object.values(opts.mcp.headers).flatMap((value) => [value, value.replace(/^Bearer\s+/i, '')]));
@@ -149,8 +165,14 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
    * system prompt, never in its place (ADR-0009, T5). The session id is chosen
    * here, so a resume names the one a later process takes up (ADR-0018, K1).
    */
-  protected spawnSpec(): SpawnSpec {
+  protected spawnSpec(_opts: AgentStartOptions, workspace: Record<string, string>): SpawnSpec {
     const started = this.requireStarted();
+    // A placed Pi's agent dir is on the host it was placed on, which this one cannot read.
+    const agentDir = this.deps.placement ? undefined : piAgentDir(started.cwd, workspace.PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR);
+    const displacing = agentDir === undefined ? undefined : piMcpCollision(agentDir, started.mcp.name);
+    if (agentDir !== undefined && displacing !== undefined) {
+      throw new Error(`${path.join(agentDir, 'mcp.json')} defines an MCP server named "${displacing}", which Pi starts in place of Ordewell's own: rename or remove it there before starting Pi.`);
+    }
     const dir = privateTempDir('pi');
     this.own('private-dir', dir.remove);
     const { name, url, headers } = started.mcp;
@@ -160,19 +182,35 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     const args = [
       '--mode', 'rpc',
       '--session-id', this.sessionId!,
+      // Pi takes a `.pi/settings.json` sessionDir from the repository even under `--no-approve`, so a repository could
+      // say where every transcript goes. Named here, the directory is Pi's own default, which every process of a session finds.
+      '--session-dir', this.sessionDir(started.cwd, agentDir),
       // Named even where built-ins load: a user who turned Pi's MCP support off would leave Ordewell's server unconnected.
       '-e', 'builtin:mcp',
       '-e', extension,
       '--append-system-prompt', prompt,
       // The token's tools by exact name: `mcp__ordewell__*` would also admit a server named `ordewell__x`.
-      ...(this.restricted ? ['--no-approve', '--no-extensions', '--tools', [...READ_TOOLS, ...PI_ORDEWELL.toolNames(started.kind === 'planner' ? 'planner' : started.mcp.readOnly ? 'readOnlyTask' : 'task', started.mcp.hidden, started.mcp.extraTools)].join(',')] : []),
-      // A planner is given the repository's instruction files by Ordewell's reader, as text in its prompt (ADR-0028).
-      ...(started.kind === 'planner' ? ['--no-context-files'] : []),
+      // `--no-context-files` too: Pi would read every AGENTS.md from the cwd up to the root, its agent dir's and a link's out of the repository,
+      // past the read gate. Ordewell's reader hands it the repository's as text instead (ADR-0028).
+      ...(this.restricted ? ['--no-approve', '--no-extensions', '--tools', [...READ_TOOLS, ...PI_ORDEWELL.toolNames(this.toolRole, started.mcp.hidden, started.mcp.extraTools)].join(','), '--no-context-files'] : []),
       ...(started.runnerConfig === 'minimal' ? ['--no-skills', '--no-prompt-templates'] : []),
       ...(started.model ? ['--model', started.model] : []),
       ...(effort ? ['--thinking', effort] : []),
     ];
-    return { command: spawnedCommand(PI_MANIFEST), args, files: [extension, prompt] };
+    // Pi loads the extension through jiti, whose file cache would keep it, token and all, in the temp dir after Pi exits.
+    return { command: spawnedCommand(PI_MANIFEST), args, env: { JITI_FS_CACHE: 'false' }, files: [extension, prompt] };
+  }
+
+  /**
+   * Pi's default directory for a cwd's sessions (its `getDefaultSessionDirPath`).
+   * A placed Pi runs where its placement put it, under that host's home, which
+   * Pi expands the `~` against.
+   */
+  private sessionDir(cwd: string, agentDir: string | undefined): string {
+    const placed = this.deps.placement;
+    const at = placed ? placed.cwd : realCwd(cwd);
+    const name = `--${at.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+    return agentDir ? path.join(agentDir, 'sessions', name) : path.posix.join('~', '.pi', 'agent', 'sessions', name);
   }
 
   private instructions(started: AgentStartOptions & { mcp: McpClientConfig }): string {
@@ -199,7 +237,39 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
       // Ordewell's own `read` takes a task, not a path, and a small model reached for it in place of Pi's.
       `This task is read-only: your own file edits and shell are off. Run commands and tests with \`${toolName('run_command')}\`, read web pages with \`${toolName('fetch')}\` and search the web with \`${toolName('web_search')}\`. Read files with your read, grep, find and ls tools: \`${toolName('read')}\` reads a task's handoff, not a file. ${reads}`,
       contract,
-    ].join('\n\n');
+      // A planner's are in its system prompt already.
+      instructionsBlock(PI_REPO_CONFIG.instructions(started.cwd), 'in this read-only task'),
+    ].filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * Pi answers a `--session-id` it cannot find under this directory with a new,
+   * empty session of that id, saying so on stderr alone. Asked before the
+   * first prompt, an empty session is a resume that did not happen, refused as
+   * the other runners refuse one, so the caller falls back: a task's Continue
+   * fails and forgets the session, a planner replays its transcript (ADR-0018, K1).
+   */
+  protected override async handshake(opts: AgentStartOptions): Promise<void> {
+    const id = opts.resumeSessionId;
+    if (!id) return;
+    const answered = new Promise<PiLine>((resolve) => { this.resumeAnswer = resolve; });
+    this.writeLine({ id: RESUME_CHECK, type: 'get_state' });
+    const answer = await settleWithin(answered, {
+      timeoutMs: RESUME_CHECK_TIMEOUT_MS,
+      onTimeout: () => { throw new Error(`Pi did not say within ${RESUME_CHECK_TIMEOUT_MS / 1000}s whether it found session ${id}.`); },
+      ended: this.processEnded,
+      onEnded: () => { throw new RunnerStartupExit(this.exitMessage()); },
+    }).finally(() => { this.resumeAnswer = null; });
+    if (answer.success === false) throw new Error(`Pi could not say whether it found session ${id}: ${answer.error ?? 'get_state failed'}.`);
+    if (!answer.data?.messageCount) throw new SessionNotResumable(`Pi has no saved session ${id} for this directory to continue.`);
+  }
+
+  /** Pi warns on every fresh start that the id Ordewell chose names no session yet: that is the start working, not why it failed. */
+  protected override exitMessage(): string {
+    const message = super.exitMessage();
+    const id = this.started && !this.started.resumeSessionId ? this.sessionId : null;
+    if (!id) return message;
+    return message.replace(new RegExp(`^(?:\\x1b\\[[0-9;]*m)*Warning: No project session found with id '${escapeRegex(id)}'; creating a new session with that id\\.(?:\\x1b\\[[0-9;]*m)*(?:\\n|$)`, 'm'), '').trimEnd();
   }
 
   protected turnPayload(message: string): string {
@@ -215,6 +285,10 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
     if (!line) return;
     switch (line.type) {
       case 'response': {
+        if (line.id === RESUME_CHECK) {
+          this.resumeAnswer?.(line);
+          return;
+        }
         // Only the open turn's answers count: Pi may answer an earlier prompt's command late.
         const open = this.settled !== null;
         if (open && line.id === `turn-${this.turns}` && line.success === false) this.endTurn(emit, { type: 'error', message: line.error ?? 'Pi refused the prompt.' });
@@ -366,6 +440,23 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
   private requireStarted(): AgentStartOptions & { mcp: McpClientConfig } {
     if (!this.started) throw new Error('Pi has not been started.');
     return this.started;
+  }
+}
+
+/** Pi's agent directory as Pi resolves `PI_CODING_AGENT_DIR` against its cwd, `~` expanded; `~/.pi/agent` when unset. */
+function piAgentDir(cwd: string, set: string | undefined): string {
+  if (!set) return path.join(homedir(), '.pi', 'agent');
+  if (set === '~') return homedir();
+  if (set.startsWith('~/') || (process.platform === 'win32' && set.startsWith('~\\'))) return path.join(homedir(), set.slice(2));
+  return path.resolve(realCwd(cwd), set);
+}
+
+/** The cwd as Pi's `process.cwd()` gives it, links followed; as given when it is not on disk. */
+function realCwd(cwd: string): string {
+  try {
+    return realpathSync.native(cwd);
+  } catch {
+    return path.resolve(cwd);
   }
 }
 
