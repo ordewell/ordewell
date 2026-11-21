@@ -19,8 +19,24 @@ const UNIT_S: Record<string, number> = { '': 1, s: 1, m: 60, h: 3600, d: 86_400 
 /** A number as `sleep` reads one: `240`, `1.5`, `1e3`, or `inf`, which never ends. */
 const DURATION = /(inf(?:inity)?)\b|((?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([smhd]?)/g;
 
-/** `sleep` where a shell runs it: first on the line, after an operator, or after a keyword that runs what follows. */
-const SHELL_SLEEP = /(?:^|[;&|({`\n]|\$\(|\b(?:do|then|else|nohup|exec|time)[ \t])[ \t]*sleep[ \t]+((?:(?:inf(?:inity)?\b|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?)[ \t]*)+)/g;
+/**
+ * `sleep` with a duration anywhere in the code: not only first on the line but
+ * behind `timeout 700`, `env`, `sudo`, `nice` and the like, whose own
+ * arguments no pattern could tell from a command. The lookbehind keeps out a
+ * file named `sleep.ts` and a flag `--sleep 9`.
+ */
+const SHELL_SLEEP = /(?<![\w.-])sleep[ \t]+((?:(?:inf(?:inity)?\b|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?[smhd]?)[ \t]*)+)/g;
+
+/** A flag after which the quoted string is code: a shell's `-c` (also `-lc`, `-ic`), PowerShell's `-Command`, and `-e` of an interpreter. */
+const CODE_FLAG = /(?:^|\s)-(?:[a-z]*c|Command)\s+$/i;
+const EVAL_FLAG = /\b(?:perl|ruby|node|php)\b[^;&|\n]*\s-e\s+$/;
+/** Tools whose `-c` or `-e` takes a pattern or a count, never code: `grep -ic "sleep 45"`. */
+const SEARCH_TOOL = /(?:^|[;&|(\n])\s*(?:\S*\/)?(?:e|f)?grep\b[^;&|\n]*$|(?:^|[;&|(\n])\s*(?:rg|ag|ack|sed|awk|git)\b[^;&|\n]*$/;
+
+/** Whether the string that follows `before` is handed to a shell or an interpreter as code. */
+function isCodeArgument(before: string): boolean {
+  return (CODE_FLAG.test(before) && !SEARCH_TOOL.test(before)) || EVAL_FLAG.test(before);
+}
 
 /**
  * The part of a command line that runs: its quoted strings left out, since a
@@ -43,7 +59,7 @@ function codeOf(command: string, depth = 0): string {
       if (quote === '"' && command[j] === '\\' && j + 1 < command.length) j++;
       inner += command[j];
     }
-    code += depth < 2 && /(?:^|\s)-(?:c|Command)\s+$/i.test(code) ? `;${codeOf(inner, depth + 1)};` : ' ';
+    code += depth < 2 && isCodeArgument(code) ? `;${codeOf(inner, depth + 1)};` : ' ';
     i = j + 1;
   }
   return code;
