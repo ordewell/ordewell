@@ -315,6 +315,32 @@ describe('compaction in the loop', () => {
     expect(eventsOf(events, 'usage').every((e) => e.record.contextWindowAssumed === true)).toBe(true);
   });
 
+  it('tells the model plainly that work continues with room restored, and gives the new fill', async () => {
+    const client = splitClient(script);
+    const { loop, events } = loopWith(client);
+    await loop.runTurn('The task prompt.', abort());
+
+    const message = client.mainRequests[3]?.messages[1];
+    const text = message?.role === 'user' ? message.text : '';
+    const [event] = eventsOf(events, 'compaction');
+    const fill = /Work continues with room restored: your context now holds about (\d+)k of 100k tokens \((\d+)%\)/.exec(text);
+    expect(fill).not.toBeNull();
+    // The figure is the one the meter resets to, to the thousand.
+    expect(Math.abs(Number(fill?.[1]) - (event?.postTokens ?? 0) / 1_000)).toBeLessThanOrEqual(1);
+    expect(text).toContain('compacted for you again as it fills');
+    // Nothing in it reads as a call to wrap up.
+    expect(text).not.toMatch(/exhaust|wrap up|running out|nearly|limit|remain/i);
+  });
+
+  it('names where compaction starts again when a compaction point is in force', async () => {
+    const client = splitClient(script);
+    const { loop } = loopWith(client, { compactAt: 40_000 });
+    await loop.runTurn('The task prompt.', abort());
+
+    const message = client.mainRequests[2]?.messages[1];
+    expect(message?.role === 'user' ? message.text : '').toMatch(/of 100k tokens \(\d+%\), and compaction starts again at 40k\./);
+  });
+
   it('keeps the system prompt and tools byte-identical across steps, with a breakpoint on each prefix', async () => {
     const client = splitClient(script);
     const { loop } = loopWith(client);

@@ -282,6 +282,17 @@ is one runner per API provider, under the provider's own id and name.**
   a cut-off reply is a model call like any other: it counts against the limit,
   can carry a notice or the forced last call, and is compacted before like any
   step; a cut-off on the last allowed call ends the attempt at the step limit.
+  The count line carries the context fill beside the calls, `[calls: N of M;
+  context: 376k of 1.05M tokens (36%); compaction starts at 840k]` (the start
+  only when a `taskCompactAt` point is in force), and the summary a compaction
+  leaves says that work continues with room restored and gives the new fill: a
+  model told its context was compacted as it fills read that as running out, and
+  ended a task at 36% of its window. A `failed` or `blocked` report that gives
+  its own context or memory as exhausted ("my context window is full", "running
+  out of context"; not a library's context object, a tool's context-length
+  error or a test's out of memory) while the fill is under where compaction
+  starts, or under 70% of the window with no point in force, is answered once an
+  attempt with the real figures and goes on, as the budget one is.
   The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
@@ -467,3 +478,6 @@ comes from that call.
   sent again.
 - 2026-11-20 — the API planner sends a call whose stream broke off part way
   again, the partial reply dropped, under the same retry policy.
+- 2026-11-21 — the count line shows the context fill, a compaction's summary says
+  work continues with room restored, and a report citing the attempt's own
+  context as exhausted with room left is answered once.
