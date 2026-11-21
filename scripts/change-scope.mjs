@@ -287,6 +287,8 @@ const ROOT_OWNERS = [
   [/^bench\/lab\//, owes('bench')],
   // Where the harnesses keep their run data (data-dir.mjs): the planner-eval and the
   // live conversation harness read it, and its own test runs in bench.
+  // free-port.mjs picks the daemon's port in drive-binary.mjs, which the binary step runs.
+  [/^bench\/lib\/free-port(\.test)?\.mjs$/, owes('bench', 'binary')],
   [/^bench\/lib\//, owes('bench', 'planner')],
   // Run by hand against real models; only its offline tests run, in bench.
   [/^bench\/planner-eval\//, owes('bench')],
