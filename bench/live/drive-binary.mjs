@@ -42,10 +42,9 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { freePortApart } from '../lib/free-port.mjs';
 import { startMock } from './start-mock.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WIN = process.platform === 'win32';
 
 function arg(name, fallback) {
@@ -69,17 +68,6 @@ function portFree(port) {
     const srv = net.createServer();
     srv.once('error', () => resolve(false));
     srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(true)));
-  });
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
   });
 }
 
@@ -183,10 +171,11 @@ async function main() {
 
   daemonLog = path.join(home, '.ordewell', 'server.log');
 
-  const daemonPort = await freePort();
-  // The mock, which this script owns, on a port the OS picks.
+  // The mock first, on a port the OS picks, then the daemon's port apart from it: a port probed and
+  // released before the mock started was offered to the mock again (daemon and mock on one port).
   const { port: mockPort, child: mock } = await startMock();
   cleanups.push(() => { mock.kill(); });
+  const daemonPort = await freePortApart([mockPort]);
   const env = {
     PATH: pathDirs.join(path.delimiter),
     HOME: home,
