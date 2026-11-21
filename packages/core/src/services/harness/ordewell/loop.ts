@@ -204,11 +204,14 @@ export class OrdewellLoop {
   /** The budget notices this attempt has spent, each at most once (ADR-0070). */
   private readonly noticed = new Set<number>();
   /**
-   * Whether a report giving up on a budget not yet near its end, or on a
-   * context with room left, has been answered: once an attempt between them,
-   * since each answer promises that the next report is recorded.
+   * Whether a report giving up on a budget not yet near its end has been
+   * answered, and likewise one giving up on a context with room left: each
+   * once an attempt, since each answer promises that the next report is
+   * recorded. Separate flags, so a later, distinct give-up of the other kind
+   * is still answered; a report citing both sets both (see `answered`).
    */
-  private giveUpAnswered = false;
+  private budgetGiveUpAnswered = false;
+  private contextGiveUpAnswered = false;
   /** Steps in a row whose stream failed part way, and when the first of them failed: the retry policy's attempt and window. */
   private cutStreams = { count: 0, since: 0 };
   private readonly neutral: readonly OrdewellTool[];
@@ -392,15 +395,24 @@ export class OrdewellLoop {
    * The runner's answer to a report that gives the budget as why it stops
    * while less of it is used than the first notice marks: the model's own
    * tally, not the count, ended such attempts with most calls unspent. It is
-   * answered with the count and not recorded, once an attempt with the
+   * answered with the count and not recorded, once an attempt, apart from the
    * context's answer; the next report is recorded as it is, since only the
    * model knows what else may stop it.
    */
   private answerEarlyGiveUp(args: unknown): string | undefined {
     const limit = this.limit();
-    if (this.giveUpAnswered || !Number.isFinite(limit) || this.modelCalls >= noticeAt(BUDGET_NOTICES[0], limit) || !citesBudget(args)) return undefined;
-    this.giveUpAnswered = true;
+    if (this.budgetGiveUpAnswered || !Number.isFinite(limit) || this.modelCalls >= noticeAt(BUDGET_NOTICES[0], limit) || !citesBudget(args)) return undefined;
+    this.answered(args);
     return earlyGiveUpAnswer(this.modelCalls, limit);
+  }
+
+  /**
+   * A report citing both is held once: the answer given promises that the next
+   * report is recorded, which the other answer, given after it, would break.
+   */
+  private answered(args: unknown): void {
+    if (citesBudget(args)) this.budgetGiveUpAnswered = true;
+    if (citesContext(args)) this.contextGiveUpAnswered = true;
   }
 
   /**
@@ -408,16 +420,15 @@ export class OrdewellLoop {
    * while the fill is under where compaction starts (or, with no point set,
    * under CONTEXT_ROOM_SHARE of the window): a model that read "context is
    * compacted as it fills" as a warning ended an attempt at 36% of its window.
-   * With the real figures, once an attempt with the budget's answer: a report
-   * citing both is held back once, as each answer promises.
+   * With the real figures, once an attempt, apart from the budget's answer.
    */
   private async answerContextGiveUp(args: unknown): Promise<string | undefined> {
-    if (this.giveUpAnswered || !citesContext(args)) return undefined;
+    if (this.contextGiveUpAnswered || !citesContext(args)) return undefined;
     const transcript = await this.options.store.load();
     const fill = this.compactor.fillTokens(transcript);
     const window = this.compactor.contextWindow;
     if (fill >= (this.compactor.startTokens ?? Math.floor(window * CONTEXT_ROOM_SHARE))) return undefined;
-    this.giveUpAnswered = true;
+    this.answered(args);
     return contextGiveUpAnswer(fillOfWindow(fill, window), countLine(this.modelCalls, this.limit(), this.compactor.fillText(transcript)));
   }
 
@@ -767,7 +778,8 @@ const CONTEXT_ROOM_SHARE = 0.7;
  * not one that is full *of* something; an "out of context" with a verb of
  * running out before it; its context limit approached or reached; or too
  * little context left. "Reached" and "hit" count only of a limit, a budget or a
- * size: a context value reaches a handler. No bare "memory": it is a test's
+ * size: a context value reaches a handler. Approached or reached takes no "the":
+ * "the agent under test reached the context limit" is another model's. No bare "memory": it is a test's
  * subject too. Nor "exceeded" or "length", which a tool's error says.
  */
 const CONTEXT_STATE = String.raw`(?:(?:is|was|has\s+been|are|being|getting|becoming|now|nearly|almost|completely|fully|practically|currently)\s+)*(?:exhausted|full|used\s+up|spent|depleted|consumed|maxed\s+out|running\s+out|ran\s+out)\b`;
@@ -778,7 +790,7 @@ const CONTEXT_PHRASES = [
   new RegExp(String.raw`${CONTEXT_OWNED}(?:(?:\s+window)?\s+${CONTEXT_STATE}|${CONTEXT_CAP_GONE})`, 'i'),
   new RegExp(String.raw`${CLAUSE_CONTEXT}(?:(?:\s+window)?\s+${CONTEXT_STATE}(?!\s+(?:of|with)\b)|${CONTEXT_CAP_GONE})`, 'i'),
   /\b(?:(?:ran|run|running)\s+(?:out\s+of|low\s+on)|(?:am|i'm|im|is|are)\s+(?:nearly\s+|almost\s+)?(?:out\s+of|low\s+on))\s+(?:(?:my|the|available|remaining)\s+)*context\b/i,
-  /\b(?:approaching|nearing|near|close\s+to|reached|reaching|hit|hitting)\s+(?:my|your|our|the)\s+context(?:\s+window)?\s+(?:limit|budget|size)\b/i,
+  /\b(?:approaching|nearing|near|close\s+to|reached|reaching|hit|hitting)\s+(?:my|your|our)\s+context(?:\s+window)?\s+(?:limit|budget|size)\b/i,
   /\b(?:not\s+enough|insufficient|too\s+little|little|no)\s+(?:more\s+)?context(?:\s+window)?\s+(?:left|remaining)\b/i,
 ] as const;
 
