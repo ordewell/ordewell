@@ -948,9 +948,9 @@ async function realArm(lib, sb, arm, settings, runDir) {
    * Puts the fixed message into the arm's task. A task parked on input (its
    * turn ended in prose) gets it as the reply it waits for, `message_task`; a
    * finished task has its saved session continued through the CLI
-   * (`retry_task` from the session); and one whose session cannot be
-   * continued gets a fresh attempt in the same worktree with the message
-   * added, recorded as fresh.
+   * (`retry_task` from the session). One whose session cannot be continued is
+   * not retried: core would run a fresh attempt in a new worktree, and the arm
+   * is scored on the worktree its work is kept in.
    */
   const sendContinuation = async (task, ended) => {
     const ref = String(task.order ?? 1);
@@ -962,16 +962,14 @@ async function realArm(lib, sb, arm, settings, runDir) {
     };
     if (ended.status === 'awaiting_user') {
       log.write('\n[commit0] message_task <the continuation message>: the reply to the task parked on input\n');
-      return { ...(await execute({ command: 'message_task', task: ref, text: L.CONTINUE_MESSAGE })), fresh: false, via: 'message' };
+      return { ...(await execute({ command: 'message_task', task: ref, text: L.CONTINUE_MESSAGE })), via: 'message' };
     }
     const argv = ['ordewell', 'continue', ref, L.CONTINUE_MESSAGE, '--session-id', sessionId, '--workspace', lib.workdir];
     log.write(`\n[commit0] $ ordewell continue ${ref} <the continuation message> --session-id ${sessionId}\n`);
     const r = await inBox(sb, argv, { workdir: lib.workdir, log, timeoutMs: 120_000 });
-    if (r.code === 0) return { ok: true, fresh: false, via: 'continue' };
-    const said = `${r.stderr}\n${r.stdout}`.trim();
-    if (!/cannot be continued/.test(said)) return { ok: false, detail: said.slice(-300) || `exit ${r.code}` };
-    log.write('\n[commit0] the session cannot be continued: a fresh attempt in the same worktree, with the message\n');
-    return { ...(await execute({ command: 'retry_task', task: ref, from: 'fresh', message: L.CONTINUE_MESSAGE })), fresh: true, via: 'retry' };
+    if (r.code === 0) return { ok: true, via: 'continue' };
+    const refusal = L.continueRefusal(r);
+    return { ok: false, cannotContinue: refusal.cannotContinue, detail: refusal.detail };
   };
 
   /**
@@ -990,6 +988,11 @@ async function realArm(lib, sb, arm, settings, runDir) {
       return { over: `not continued (${step.why}) after ${cont.continuations.length} continuation${cont.continuations.length === 1 ? '' : 's'}, ${ended.verdict} at $${cap.spentUsd}` };
     }
     const sent = await sendContinuation(plan.tasks[0], ended);
+    if (!sent.ok && sent.cannotContinue) {
+      cont.stop = { why: 'cannot-continue', atMs: nowMs - started, spentUsd: cap.spentUsd, callsSoFar: transcripts.usageLines, detail: sent.detail };
+      endMs = Date.now();
+      return { over: `the session cannot be continued: ${sent.detail}` };
+    }
     if (!sent.ok) {
       // The message did not go in: the same end is read again at the next poll. Three refusals in a row end the run.
       refused += 1;
@@ -1000,8 +1003,8 @@ async function realArm(lib, sb, arm, settings, runDir) {
       return { over: `the continuation was refused three times: ${sent.detail}` };
     }
     refused = 0;
-    L.markSent(cont, step.record, { fingerprint, usageLines: transcripts.usageLines, attempts: ended.attempts }, { fresh: sent.fresh, via: sent.via });
-    console.log(`  continued (${sent.fresh ? 'fresh attempt' : sent.via === 'message' ? 'reply to the parked task' : 'saved session'}) after ${ended.verdict}: continuation ${step.record.n}, ${transcripts.usageLines} calls, $${cap.spentUsd}`);
+    L.markSent(cont, step.record, { fingerprint, usageLines: transcripts.usageLines, attempts: ended.attempts }, { via: sent.via });
+    console.log(`  continued (${sent.via === 'message' ? 'reply to the parked task' : 'saved session'}) after ${ended.verdict}: continuation ${step.record.n}, ${transcripts.usageLines} calls, $${cap.spentUsd}`);
     return { handled: true };
   };
 
