@@ -35,6 +35,8 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --fixture              a synthetic library built in --image, to prove the checks (dry run only)
   --image <image>        the image for --fixture
   --arm A|B|both         which arms (default both)
+  --effort-a <level>     the reasoning effort of arm A's task, plain or continued (${L.EFFORTS.join(', ')}); none is set without it, and B's
+                         tasks carry the effort the planner gave them. Recorded in every result (not with --arm B or --plan-only)
   --continue-a           arm A becomes the control arm, recorded as A-continued: the same single agent, continued with
                          one fixed message each time its attempt ends while the caps have room, until a cap, a bound
                          or the agent giving up (not with --arm B or --plan-only)
@@ -672,7 +674,7 @@ async function writeSettings(sb, arm, settings) {
 }
 
 async function createArmASession(lib, sb) {
-  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.ARM_A_PLAN_JS, lib.workdir, L.goalText(lib), L.MODEL_ID, L.MODEL_LABEL]);
+  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.ARM_A_PLAN_JS, lib.workdir, L.goalText(lib), L.MODEL_ID, L.MODEL_LABEL, opts.effortA ?? '']);
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
@@ -1541,7 +1543,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
         : record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
       transcripts: record.transcripts, stopped: record.arm?.stopped, stalled: record.arm?.stalled, truncated: record.truncated,
       scoredFrom: record.files?.scoredFrom, scoring: record.scoring, patches: record.files?.patches, validity,
-      providerPin: opts.providerPin, referenceSpend: reference, dryRun: opts.dryRun, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(),
+      providerPin: opts.providerPin, referenceSpend: reference, dryRun: opts.dryRun, planOnly: opts.planOnly,
+      effortA: L.isSingleAgent(arm.id) ? opts.effortA ?? null : null, efforts: L.effortCounts(plan), startedAt, endedAt: new Date().toISOString(),
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,

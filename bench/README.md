@@ -192,6 +192,7 @@ labelled containers and networks whose driver on this host is no longer running.
 | `--settle-min`, `--no-start-min`, `--poll-sec`, `--wall-min` | 5, 10, 30 s, 180 | the settle window, the no-start bound, the poll interval and the wall-clock cap, which a rehearsal shortens |
 | `--rehearse <scenario>` | | run the arms on the scripted fake provider (see Rehearsal) |
 | `--plan-only` | off | arm B's planning alone, then stop: nothing runs, merges or is scored (see Plan-only) |
+| `--effort-a <level>` | none set | the reasoning effort (`low`, `medium`, `high`, `xhigh` or `max`) of the single-agent arms' task, plain A and `A-continued` alike (see Reasoning effort); refused with `--arm B` or `--plan-only` |
 | `--continue-a` | off | arm A becomes the control arm, `A-continued`: its attempt is continued with one fixed message while the caps have room (see The control arm); refused with `--arm B` or `--plan-only` |
 | `--ordewell-root <dir>` | this tree | the built tree packed into the box |
 | `--allow-stale-dist` | off | run a dist older than its sources; the result is not valid |
@@ -286,6 +287,7 @@ or network of the bench is left behind:
 | `b-blocker` | B | the opening task lands its edits; two slices after it end done with a `blocker` finding that cites it; the first reports at once, the second is at work, and the closing check waits for both; the supervisor's wake answers with one edit that adds a fix task and makes the closing check wait for it | the wake the supervisor was sent holds the landed-blocker line for task #1, the closing check and the guidance; the supervisor answered it; the final plan holds 5 tasks, one the fix, which depends on the opening task and which the closing check waits for; the fix's last turn came before the closing check's first, and the check found the fix's file in its tree; `metrics.supervisor` counts exactly one `plan_edit` and every wake's trigger is one the harness reads; not truncated; 5 tasks completed; scored from merged work; more passed than the baseline |
 | `b-plan` | B, `--plan-only` | the planner returns a six-task plan with a research task, three changes, an ops task and a script that checks a loop; nothing else is scripted | marked `planOnly` and never valid; the shape the plan has (6 tasks, chain of 4, widest level 2, 6 edges, one gate, one loop check); a priced planner and a planning time; no `run` or `merge` step, no score, no tests; `plan.json` and `plan-saved.json` in the run's directory and no `arm-workdir/`; the fake heard no runner and no supervisor; `plans.jsonl` did not grow |
 | `a-continued` | A-continued | the task reports failed and ends its attempt; the harness continues the saved session with the fixed message; the agent makes the edits and reports done; three idle continuations follow (an attempt ending in prose with no report, answered with the message as the reply its parked task waits on, then a report and a word, twice) | valid; not truncated; scored from merged work; more passed than the baseline; the test edit excluded; 4 continuations, the verdicts they followed `failed`, `done`, `no report`, `done`, by `continue`, `continue`, `message`, `continue`; the first busy and the three after it idle; stopped by the give-up rule (`ending.by` `continuation`, `gave-up`); the fake heard the one message once per continuation in one attempt of one session, the task's own first message still the first |
+| `a-continued-effort` | A-continued, `--effort-a high` | `a-continued`'s script and judge, with the effort asked of the task | all of `a-continued`'s, and: every request the built-in runner made for the task, as the fake logged it, carried `reasoning.effort` `high` (OpenRouter's body field; the same scenario without the flag logs none), `effortA` is `high` and `efforts` is `{high: 1}` |
 | `a-continued-cap` | A-continued | the task spends, reports failed and ends its attempt, is continued, makes the edits and reports done, and is continued again; that attempt reports usage past `--cap-usd` mid-attempt | stopped by the spend cap across the continuations (`ending.by` `cap`); 2 continuations; the driver stopped `ordewell run`'s session, the merge ran; scored from merged work; more passed than the baseline |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
 
@@ -376,9 +378,27 @@ and `perArm`, and `pairs`. `--arm both --continue-a` runs `A-continued` and `B`
   a run that stopped by its own rule, with `why`. `ending.modelCalls` counts
   calls per attempt as for arm A, so `reachedLimit` shows an attempt that used
   its call budget.
+- **Reasoning effort.** B's tasks run at the effort the planner gave each; arm A's
+  one task, hand-written, has none unless `--effort-a <level>` sets it. See
+  [Reasoning effort](#reasoning-effort-of-the-single-agent-arms).
 - **Scoring** is arm A's (D2): the final working tree, merged or the task's kept
   worktree, in a fresh container. `timeline.mjs` reads a continued run like arm
   A's, over the commits of the task's branch across every attempt.
+
+### Reasoning effort of the single-agent arms
+
+The planner gives each of B's tasks a reasoning effort on its model, and the
+built-in runner sends it to OpenRouter as `reasoning.effort`; arm A's task is
+written by the harness and carried none, so the arms did not think at one
+level. `--effort-a <level>` (`low`, `medium`, `high`, `xhigh`, `max`; on
+`drive.mjs` and `batch.mjs`, which passes it to the single-agent runs only)
+writes the level into the arm's one-task session, on its assigned model, where a
+planned task carries its own. Without the flag no effort is set, as before. A
+run says what it ran at, for every arm: `effortA` (the flag; null for B and
+where absent) and `efforts`, the count of the final plan's AI tasks at each
+effort (`unset` for a task with none), such as `{"high": 1}` for arm A and
+`{"high": 5, "max": 2}` for B. `batch.json` repeats both in each run and totals
+`efforts` in `perArm`.
 
 ### What a run records of the supervisor
 
@@ -571,6 +591,7 @@ node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <provi
 | `--batch-budget-usd <usd>` | required with `--run` | stop every run when the key's usage since the batch began reaches it |
 | `--only`, `--arm` | every library, both arms | which runs |
 | `--continue-a` | off | the control arm in place of arm A (see The control arm) |
+| `--effort-a <level>` | none set | the reasoning effort of the single-agent arms' task (see Reasoning effort) |
 | `--plan-only` | off | arm B's plan alone, for every run of the batch (see Plan-only) |
 | `--seed <label>` | none | kept in each `result.json` and run directory's name |
 | `--sweep` | | sweep before the batch |

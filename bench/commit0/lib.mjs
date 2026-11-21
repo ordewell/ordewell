@@ -63,6 +63,25 @@ export const ARMS = Object.freeze({
   B: Object.freeze({ id: 'B', label: 'ordewell plan and run, supervisor at Act, automatic merging' }),
 });
 
+/** The reasoning efforts a task's model can be given (core's EffortLevel), which --effort-a takes one of. */
+export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * The efforts a plan's AI tasks carry, subtasks included, as a count per
+ * level (`unset` for a task with none): what a run records so that arms
+ * thinking at different levels show. Null where no plan was read.
+ */
+export function effortCounts(plan) {
+  if (!plan) return null;
+  const out = {};
+  for (const t of allTasks(plan)) {
+    if ((t.type ?? 'ai') !== 'ai') continue;
+    const level = t.assignedModel?.thinkingEffort || 'unset';
+    out[level] = (out[level] ?? 0) + 1;
+  }
+  return out;
+}
+
 /** Arm A, plain or continued: the arms that are one agent alone, in one task. */
 export const isSingleAgent = (armId) => armId === 'A' || armId === 'A-continued';
 
@@ -933,11 +952,12 @@ export function parseEvaluation(code, output) {
  * Arm A's plan, written in the box with the checkout's core as `ordewell plan`
  * would save one: one task on the built-in runner and the protocol's model,
  * its prompt the goal, approved, so `ordewell run` starts it with no planner
- * turn. Prints the session id.
+ * turn. `effort` (--effort-a, empty for none) is carried where a planned
+ * task's is, on its assigned model. Prints the session id.
  */
 export const ARM_A_PLAN_JS = String.raw`
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
-const [workspace, goal, modelId, modelLabel] = process.argv.slice(1);
+const [workspace, goal, modelId, modelLabel, effort] = process.argv.slice(1);
 const now = new Date().toISOString();
 const task = core.createTask({
   order: 1,
@@ -945,7 +965,7 @@ const task = core.createTask({
   description: goal,
   prompt: goal,
   assignedRunner: '${RUNNER}',
-  assignedModel: { modelId, modelLabel },
+  assignedModel: { modelId, modelLabel, ...(effort ? { thinkingEffort: effort } : {}) },
   taskMode: '${ARM_A_MODE}',
 });
 const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approved', runners: ['${RUNNER}'], lastUpdated: now }, goal, workspace);
@@ -1887,10 +1907,13 @@ export function baselineRecord(evaluation) {
 }
 
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, referenceSpend: reference = null, dryRun, planOnly = false, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, referenceSpend: reference = null, dryRun, planOnly = false, effortA = null, efforts = null, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
+    // The reasoning effort asked of arm A's task (--effort-a; null where none was, and for B), and the efforts the plan's tasks carried, counted per level.
+    effortA,
+    efforts,
     dryRun,
     planOnly,
     valid: validity?.valid ?? null,
@@ -2750,8 +2773,12 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
     const total = (key) => (sum(key).length ? round6(sum(key).reduce((a, b) => a + b, 0)) : null);
     const tokens = { freshInput: 0, cachedInput: 0, output: 0 };
     for (const r of own) for (const k of Object.keys(tokens)) tokens[k] += r.referenceTokens?.[k] ?? 0;
+    const efforts = {};
+    for (const r of own) for (const [level, n] of Object.entries(r.efforts ?? {})) efforts[level] = (efforts[level] ?? 0) + n;
     perArm[arm] = {
       runs: own.length, recordedUsd: total('recordedUsd'), referenceUsd: total('referenceUsd'), referenceTokens: tokens,
+      // Tasks at each reasoning effort, over the arm's runs.
+      efforts,
       unpricedAtReference: own.filter((r) => typeof r.referenceUsd !== 'number').map((r) => `${r.lib} ${r.arm}`),
     };
   }
@@ -2891,7 +2918,7 @@ export function parseArgs(argv) {
   const out = {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
     capUsd: CAP_USD, callBudget: STEP_LIMIT, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
-    seed: null, batchDir: null, batchShared: false, planOnly: false, continueA: false,
+    seed: null, batchDir: null, batchShared: false, planOnly: false, continueA: false, effortA: null,
     rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
   const number = (name, v, ok) => {
@@ -2936,6 +2963,7 @@ export function parseArgs(argv) {
     else if (a === '--allow-stale-dist') out.allowStaleDist = true;
     else if (a === '--plan-only') out.planOnly = true;
     else if (a === '--continue-a') out.continueA = true;
+    else if (a === '--effort-a') out.effortA = effortLevel(value());
     else if (a === '--sweep') out.sweep = true;
     else if (a === '--seed') out.seed = seedLabel(value());
     // Set by batch.mjs on each run it starts: the batch holds the key and its results.
@@ -2964,8 +2992,17 @@ export function parseArgs(argv) {
   return out;
 }
 
+function effortLevel(v) {
+  if (!EFFORTS.includes(v)) throw new Error(`--effort-a takes one of ${EFFORTS.join(', ')}, not ${v}`);
+  return v;
+}
+
 /** --continue-a is arm A's: with no arm A to continue, or no run to continue it in, it is refused rather than ignored. */
 export function continueAArms(o) {
+  if (o.effortA) {
+    if (o.planOnly) throw new Error('--effort-a sets the effort of arm A\'s task, and a plan-only run has no arm A: it has no plan to set it in');
+    if (o.arm === 'B') throw new Error('--effort-a sets the effort of arm A\'s task, and --arm B runs no arm A');
+  }
   if (!o.continueA) return;
   if (o.planOnly) throw new Error('--continue-a continues arm A\'s attempts, and a plan-only run has no arm A and runs no attempt: it has no plan to continue');
   if (o.arm === 'B') throw new Error('--continue-a continues arm A, and --arm B runs no arm A');
@@ -3004,7 +3041,7 @@ const BATCH_PASSED = Object.freeze({
  * passed on in `driveArgs`.
  */
 export function parseBatchArgs(argv) {
-  const own = { jobs: JOBS, budgetUsd: null, seed: null, only: [], arm: 'both', sweep: false, help: false, continueA: false };
+  const own = { jobs: JOBS, budgetUsd: null, seed: null, only: [], arm: 'both', sweep: false, help: false, continueA: false, effortA: null };
   const driveArgs = [];
   const positive = (name, v, ok, what) => {
     const n = Number(v);
@@ -3030,6 +3067,7 @@ export function parseBatchArgs(argv) {
     } else if (a === '--sweep') own.sweep = true;
     // Not passed on as given: each A run is started as arm A with the flag, each B run without it (driveArmArgs).
     else if (a === '--continue-a') own.continueA = true;
+    else if (a === '--effort-a') own.effortA = effortLevel(value());
     else if (a === '--libs') driveArgs.push(a, path.resolve(value()));
     else if (a === '--ordewell-root') driveArgs.push(a, path.resolve(value()));
     else if (BATCH_PASSED.flags.includes(a)) driveArgs.push(a);
@@ -3049,8 +3087,11 @@ export function parseBatchArgs(argv) {
 /** The arms to run: `continueA` swaps arm A for the continued control arm, and leaves B as it is. */
 export const armsOf = (arm, continueA = false) => (arm === 'both' ? [continueA ? ARMS['A-continued'] : ARMS.A, ARMS.B] : [arm === 'A' && continueA ? ARMS['A-continued'] : ARMS[arm]]);
 
-/** The arm's options for the drive.mjs that runs it: the continued arm is arm A with its flag. */
-export const driveArmArgs = (arm) => (arm.continued ? ['--arm', 'A', '--continue-a'] : ['--arm', arm.id]);
+/** The arm's options for the drive.mjs that runs it: the continued arm is arm A with its flag, and a single agent's task takes the effort asked of arm A (`opts.effortA`). */
+export const driveArmArgs = (arm, opts = {}) => [
+  ...(arm.continued ? ['--arm', 'A', '--continue-a'] : ['--arm', arm.id]),
+  ...(isSingleAgent(arm.id) && opts.effortA ? ['--effort-a', opts.effortA] : []),
+];
 
 export function shellQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;

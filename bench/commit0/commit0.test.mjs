@@ -3137,8 +3137,8 @@ test('a result carries referenceSpend beside the recorded spend, and batch.json 
     run('y', 'A', 2, 0.75, { freshInput: 10, cachedInput: 0, output: 5 }),
     run('y', 'B', 3, null, null),
   ] });
-  assert.deepEqual(b.perArm.A, { runs: 2, recordedUsd: 3, referenceUsd: 1, referenceTokens: { freshInput: 20, cachedInput: 20, output: 10 }, unpricedAtReference: [] });
-  assert.deepEqual(b.perArm.B, { runs: 2, recordedUsd: 7, referenceUsd: 0.5, referenceTokens: { freshInput: 1, cachedInput: 2, output: 3 }, unpricedAtReference: ['y B'] });
+  assert.deepEqual(b.perArm.A, { runs: 2, efforts: {}, recordedUsd: 3, referenceUsd: 1, referenceTokens: { freshInput: 20, cachedInput: 20, output: 10 }, unpricedAtReference: [] });
+  assert.deepEqual(b.perArm.B, { runs: 2, efforts: {}, recordedUsd: 7, referenceUsd: 0.5, referenceTokens: { freshInput: 1, cachedInput: 2, output: 3 }, unpricedAtReference: ['y B'] });
   assert.equal(b.referencePriceTable.id, L.REFERENCE_PRICES.id);
 });
 

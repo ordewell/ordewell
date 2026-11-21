@@ -196,7 +196,7 @@ const SHAPED_PLAN = [
  * a task's prompt carries, or `A` for arm A's one task), and what its
  * result.json must hold. `ctx` is { src, tests, longSec }.
  */
-export const SCENARIOS = Object.freeze({
+const SCENARIO_TABLE = {
   'b-plan': {
     arm: 'B',
     planOnly: true,
@@ -457,7 +457,16 @@ export const SCENARIOS = Object.freeze({
     playedOut: ['edit'],
     cutShort: ['spend'],
   },
-});
+};
+
+// The control arm again, asked (--effort-a) to think at a level: what is judged beyond a-continued is that the level reached the model's requests.
+SCENARIO_TABLE['a-continued-effort'] = {
+  ...SCENARIO_TABLE['a-continued'],
+  about: 'the control arm as a-continued, with --effort-a high: the task is planned with that effort and every request of the runner the fake provider hears carries it',
+  effortA: 'high',
+};
+
+export const SCENARIOS = Object.freeze(SCENARIO_TABLE);
 
 export const scenarioNames = () => Object.keys(SCENARIOS);
 
@@ -900,6 +909,22 @@ export function judgeContinued(name, result, requests, message) {
   if (mine.some((r) => users(r)[0] !== firstGoal)) f.push('a request does not open on the task\'s own first message: a continuation started a conversation of its own');
   if (mine.some((r) => r.turn.attempt !== 1)) f.push('the fake counted a second attempt: the saved session was not what was continued');
   return f;
+}
+
+/**
+ * The failures of a scenario that sets the single agent's reasoning effort
+ * (--effort-a): every request the runner made for the task carries it, as
+ * OpenRouter takes it, in the body's `reasoning.effort` (core's chat
+ * completions dialect), which the fake logs as `reasoning`.
+ */
+export function judgeEffort(name, requests) {
+  const want = scenario(name).effortA;
+  if (!want) return [];
+  const mine = requests.filter((r) => r.turn?.role === 'runner' && r.turn.key === 'A');
+  if (!mine.length) return ['the fake heard no request of the task, so the effort it ran at cannot be read'];
+  const carried = mine.filter((r) => r.reasoning?.effort === want).length;
+  const seen = [...new Set(mine.map((r) => JSON.stringify(r.reasoning ?? null)))].join(', ');
+  return carried === mine.length ? [] : [`${carried} of ${mine.length} requests of the task carried reasoning effort "${want}" (seen: ${seen})`];
 }
 
 /** The failures of a scenario that names files its merged work must hold; `present` says whether one is there. */
