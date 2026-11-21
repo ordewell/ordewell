@@ -97,6 +97,32 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **Ordewell started from inside a coding agent's session no longer makes
+  its runners part of that session.** A daemon started from a Claude Code
+  shell (the Claude Code plugin, or `ordewell run` in a Bash call) kept that
+  session's variables, and every planner and task session it started was
+  linked to it: its transcript recorded the parent, the parent's notes
+  directory got an entry, and the parent's messaging socket and token reached
+  every runner. The parent was the session that first started the daemon, not
+  the one asking. The daemon and every runner now leave behind what names a
+  parent agent session: Claude Code's `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
+  `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_CHILD_NOTES_DIR`,
+  `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_LAUNCHED_BY_SESSION_IDS`,
+  `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_STARTER_MAY_HOLD_CONNECTOR_FILE`,
+  `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`,
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_PID` and
+  `CLAUDE_EFFORT`; Codex's `CODEX_THREAD_ID` and `CODEX_TOOL_CALL_ID`; and
+  OpenCode's `OPENCODE_SESSION_ID`. What you set to configure an agent (base
+  URLs, models, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, proxies) still reaches it,
+  and a workspace's `.envrc` or `.ordewell/env` may still set any of these on
+  purpose.
+- **`ordewell run` on a plan whose manual tasks are all that is left says
+  so.** It said "Every task has already completed: there is nothing left to
+  run." Now it says "Nothing is left for a run to start: every AI and script
+  task has completed", names each manual task still to do, and says that a
+  person does it and marks it complete. A plan with a skipped task says
+  "completed or was skipped".
+
 - **A Claude Code task that cannot start in Auto mode says so and offers the
   next step.** Claude Code offers Auto only on some models (on Anthropic's API:
   Opus and Sonnet 4.6 or later, Haiku 5.5, the Fable models), and an

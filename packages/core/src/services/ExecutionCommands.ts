@@ -997,7 +997,7 @@ export class ExecutionCommands {
     }
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
     const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
-    if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
+    if (toRun.length === 0) return { refusal: nothingLeftToRun(all) };
     let approves: Located[] = [];
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is, and so is a start it lets a planner make in Full.
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) {
@@ -1914,6 +1914,23 @@ function describe({ task, ref }: Located): string {
 function named(tasks: readonly Located[]): string {
   const labels = tasks.map(describe);
   return labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * Why a run_plan finds nothing to start, which can be a plan whose AI and
+ * script tasks are done and whose manual tasks are not: no run starts a
+ * manual task, so a plan that still holds one has not "completed".
+ */
+function nothingLeftToRun(all: readonly Located[]): string {
+  const manual = all.filter(({ task }) => task.type === 'user' && task.status !== 'completed' && task.status !== 'skipped');
+  const agentTasks = all.filter(({ task }) => task.type !== 'user');
+  const skipped = (tasks: readonly Located[]) => tasks.some(({ task }) => task.status === 'skipped');
+  if (manual.length === 0) return `Every task has ${skipped(all) ? 'completed or was skipped' : 'already completed'}: there is nothing left to run.`;
+  const one = manual.length === 1;
+  const waits = `${named(manual)} ${one ? 'is a manual task' : 'are manual tasks'}: a person does ${one ? 'it' : 'them'} and marks ${one ? 'it' : 'them'} complete, and no run starts ${one ? 'it' : 'them'}.`;
+  return agentTasks.length === 0
+    ? `Nothing is left for a run to start: ${waits}`
+    : `Nothing is left for a run to start: every AI and script task has ${skipped(agentTasks) ? 'completed or was skipped' : 'completed'}. ${capitalize(waits)}`;
 }
 
 function capitalize(text: string): string {

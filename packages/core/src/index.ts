@@ -135,6 +135,7 @@ export type { RunnerInstallationOptions, RunnerUsability } from './services/Runn
 export { forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, rewordSignIn, runnerSignIn, signedOutFromFailure } from './services/runnerAuth';
 export type { RunnerAuth, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, ReadRunnerAuthOptions } from './services/runnerAuth';
 export { workspaceEnvOf } from './services/workspaceEnv';
+export { withoutParentSession } from './services/harness/runnerEnv';
 export { AccountLimitMonitor } from './services/AccountLimitMonitor';
 export type { AccountLimitCollector, AccountLimitReading, AccountLimitListener, AccountLimitMonitorOptions } from './services/AccountLimitMonitor';
 export { codexAccountLimitCollector } from './services/harness/codexAccountLimits';

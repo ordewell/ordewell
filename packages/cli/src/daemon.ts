@@ -15,6 +15,7 @@ import {
   resolveDaemonPort,
   stopDaemonAt,
   type DaemonProbe,
+  withoutParentSession,
 } from '@ordewell/core';
 import { flag } from './utils/args';
 import { cliVersion } from './version';
@@ -110,7 +111,7 @@ export async function startDaemon(
   const child = spawn(command.file, command.args, {
     detached,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env },
+    env: withoutParentSession(process.env),
     // A daemon owned by a workspace client must ask that workspace's account
     // about a login (ADR-0016), not the directory the client was launched from.
     ...(opts?.cwd ? { cwd: opts.cwd } : {}),
