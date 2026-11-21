@@ -3265,11 +3265,6 @@ test('the continuation record follows each attempt: when it ended, its verdict a
   assert.deepEqual(state.first, { verdict: 'failed', summary: 'cannot import', attempts: 1, atMs: 600_000, callsSoFar: 12, spentUsd: 0.4 });
   L.markSent(state, first.record, { fingerprint: 'tree-0', usageLines: 12, attempts: 1 });
 
-  // A session that could not be continued: the fresh attempt that took its place is recorded as fresh.
-  const other = L.createContinuation();
-  const fresh = L.markSent(other, { n: 1, mode: 'session' }, { fingerprint: 'x', usageLines: 1, attempts: 1 }, { fresh: true });
-  assert.deepEqual([fresh.mode, fresh.via], ['fresh', 'retry']);
-  assert.deepEqual(other.continuations.map((c) => c.mode), ['fresh']);
   assert.equal(L.markSent(L.createContinuation(), { n: 1 }, { fingerprint: 'x', usageLines: 1, attempts: 1 }).via, 'continue');
   assert.deepEqual(['session', 'message'], (() => { const r = L.markSent(L.createContinuation(), { n: 1 }, { fingerprint: 'x', usageLines: 1, attempts: 1 }, { via: 'message' }); return [r.mode, r.via]; })(), 'the reply to a parked task goes into the live session');
 
@@ -3461,4 +3456,20 @@ test('rejudge: a recorded run is judged again by today\'s rules and written besi
   const bare = rejudgeRun(dir);
   assert.deepEqual([bare.valid, bare.moduleSkipped, bare.scoreSource], [false, null, 'result.json']);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a session the CLI says cannot be continued ends the continuing: no fresh attempt is asked of core, which would score a new worktree', () => {
+  const said = { code: 1, stdout: '', stderr: 'Failed to continue task: Task "Third" cannot be continued: its runner left no saved session to resume. Use Retry instead.' };
+  const gone = L.continueRefusal(said);
+  assert.equal(gone.cannotContinue, true);
+  assert.match(gone.detail, /cannot be continued/);
+  const other = L.continueRefusal({ code: 2, stdout: '', stderr: 'connect ECONNREFUSED 127.0.0.1:3000' });
+  assert.equal(other.cannotContinue, false, 'any other failure is a refusal, read again at the next poll');
+  assert.match(other.detail, /ECONNREFUSED/);
+  assert.equal(L.continueRefusal({ code: 3, stdout: '', stderr: '' }).detail, 'exit 3');
+
+  // Core runs a fresh attempt in a new worktree cut from the integration tip; the arm is scored on the kept worktree.
+  const drive = fs.readFileSync(path.join(here, 'drive.mjs'), 'utf8');
+  assert.doesNotMatch(drive, /from: 'fresh'/, 'the control arm never asks for a fresh attempt');
+  assert.match(drive, /why: 'cannot-continue'/);
 });

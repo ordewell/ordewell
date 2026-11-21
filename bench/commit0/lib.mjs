@@ -1028,7 +1028,7 @@ const [workspace, sessionId] = process.argv.slice(1);
  * One command at the daemon's command seam (`POST
  * /api/plans/:sessionId/execute-command`, the call the CLI and the terminal UI
  * make), for what the CLI has no word for: `message_task`, the reply to a task
- * parked on input, and `retry_task` from a fresh attempt with a message. The
+ * parked on input. The
  * command is JSON in the third argument. Prints `{status, body}`, or `{error}`.
  */
 export const EXECUTE_COMMAND_JS = String.raw`
@@ -1070,7 +1070,7 @@ SPEC=". :(exclude).ordewell :(exclude).venv :(exclude).pytest_cache :(exclude,gl
   g for-each-ref --format='tree %(tree)' refs/heads
   g worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt; do
     g -C "$wt" diff HEAD -- $SPEC | sha1sum | sed 's/^/diff /'
-    g -C "$wt" ls-files -o --exclude-standard -z -- $SPEC | xargs -0 -r sha1sum
+    (cd "$wt" && g ls-files -o --exclude-standard -z -- $SPEC | xargs -0 -r sha1sum)
   done
 } 2>/dev/null | sort -u | sha1sum | cut -d' ' -f1`;
 
@@ -1575,6 +1575,17 @@ export function continueDecision({ history, elapsedMs, spentUsd, capUsd, wallCap
   return { go: true, why: null };
 }
 
+/**
+ * How `ordewell continue` failed. A session core cannot resume ends the
+ * continuing: the one other way on is a fresh attempt, which core runs in a new
+ * worktree cut from the integration tip, so the work the arm kept would be
+ * missing from what it is scored on. Any other failure is a refusal.
+ */
+export function continueRefusal({ code, stdout, stderr }) {
+  const said = `${stderr}\n${stdout}`.trim();
+  return { cannotContinue: /cannot be continued/.test(said), detail: said.slice(-300) || `exit ${code}` };
+}
+
 /** What the driver keeps of a continued run, poll to poll: see continuationStep. */
 export function createContinuation() {
   return { first: null, continuations: [], sent: null, stop: null, sawLive: false };
@@ -1618,13 +1629,12 @@ export function continuationStep(state, { ended, fingerprint, usageLines, spentU
 
 /**
  * The message went in. `via` is how: `continue` (a finished task's saved
- * session, resumed), `message` (the reply to a task parked on input, in its
- * live session), or, with `fresh`, `retry`: the session could not be
- * continued and a new attempt in the same worktree took its place.
+ * session, resumed) or `message` (the reply to a task parked on input, in its
+ * live session). Both go into the same session.
  */
-export function markSent(state, record, { fingerprint, usageLines, attempts }, { fresh = false, via = 'continue' } = {}) {
-  record.mode = fresh ? 'fresh' : 'session';
-  record.via = fresh ? 'retry' : via;
+export function markSent(state, record, { fingerprint, usageLines, attempts }, { via = 'continue' } = {}) {
+  record.mode = 'session';
+  record.via = via;
   state.continuations.push(record);
   state.sent = { record, fingerprint, usageLines, attempts };
   return record;
@@ -2570,7 +2580,7 @@ function modelCallsOf(taskLogs, limit) {
  *    open for another cause, each listed with what held it.
  *  - `continuation`: the control arm (A-continued) stopped continuing its
  *    attempt: `why` is `no-room-wall`, `no-room-spend` (the caps leave no room
- *    for another attempt), `max-continuations` or `gave-up` (CONTINUATION).
+ *    for another attempt), `max-continuations`, `gave-up`, `cannot-continue` or `continue-refused` (CONTINUATION).
  *  - `stall` (a person waited on for --stall-min), `no-start` (no model call
  *    in the first minutes) and `not-run` (a dry run or a plan-only run, or
  *    no task) complete the cases.
