@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeSmallSlices } from '../PlanFanOut';
+import { fanOutShape, mergeSmallSlices, shapeFanOut } from '../PlanFanOut';
 import { createTask, renumberTasks, type Task } from '../../models/Task';
 import { lines, workspace } from './planFanOutKit';
 
@@ -166,5 +166,51 @@ describe('mergeSmallSlices', () => {
     expect(find(out.tasks, 'b4')).toMatchObject({ mergedSlices: ['b5'], dependencies: ['a4'] });
     expect(find(out.tasks, 'close').dependencies).toEqual(['b1', 'b2', 'b3', 'b4']);
     expect(out.merged).toEqual({ from: 10, to: 8, measure: 'test' });
+  });
+
+  describe('keeps the shape the plan had before the merge', () => {
+    /** One slice of a thousand lines and nine of a hundred: the cap lets the nine merge into one bin. */
+    const BIG_AND_NINE = [1000, 100, 100, 100, 100, 100, 100, 100, 100, 100];
+    const noted = (ts: readonly Task[]) => ids(ts.filter((x) => x.prompt?.includes('Plan shape:')));
+
+    it('never merges a level below a fan-out, even at a parallel limit of one', async () => {
+      // Worked by hand: 2+3, 4+5, 6+7, 8+9, then 10 with 2+3, then 4+5 with 6+7 leaves four.
+      const plan = renumberTasks([
+        t('r', [], 'Make the package import.'),
+        ...BIG_AND_NINE.map((_, i) => t(`s${i + 1}`, ['r'], `Fill in src/m${i + 1}.py. Verify: pytest tests/test_m${i + 1}.py`)),
+        t('close', BIG_AND_NINE.map((_, i) => `s${i + 1}`), 'Run the suite and fix what fails.'),
+      ]);
+      const { fs } = workspace(Object.fromEntries(BIG_AND_NINE.map((n, i) => [`tests/test_m${i + 1}.py`, lines(n)])));
+      const out = await shapeFanOut(plan, fs, 1);
+      expect(ids(out.tasks)).toEqual(['r', 's1', 's4', 's2', 's8', 'close']);
+      expect(find(out.tasks, 's2').mergedSlices).toEqual(['s3', 's10']);
+      expect(find(out.tasks, 's4').mergedSlices).toEqual(['s5', 's6', 's7']);
+      expect(find(out.tasks, 's8').mergedSlices).toEqual(['s9']);
+      expect(out.log[0]).toBe('slice merge: 10 slices became 4, by the lines of the test files their briefs name, for 1 tasks at once');
+      expect(noted(out.tasks)).toEqual(ids(out.tasks));
+    });
+
+    it('stops short of a count that would move the fan-out to another level, so a task every slice waits for stays before them', async () => {
+      // G sits beside A1..A4, and the ten B slices wait for it. Merged to four, the B level would tie
+      // the A level, the shallower would read as the fan-out, and G as one of its slices; five keeps it.
+      const plan = renumberTasks([
+        t('core', [], 'Make the package import.'),
+        t('G', ['core'], 'Write src/g.py, the shared base. Verify: pytest tests/test_g.py'),
+        ...[1, 2, 3, 4].map((i) => t(`A${i}`, ['core'], `Fill in src/a${i}.py. Verify: pytest tests/test_a${i}.py`)),
+        ...BIG_AND_NINE.map((_, i) => t(`B${i + 1}`, ['core', 'G'], `Fill in src/b${i + 1}.py. Verify: pytest tests/test_b${i + 1}.py`)),
+        t('close', ['G', 'A1', 'A2', 'A3', 'A4', ...BIG_AND_NINE.map((_, i) => `B${i + 1}`)], 'Run the suite and fix what fails.'),
+      ]);
+      const files: Record<string, string> = { 'tests/test_g.py': lines(50) };
+      for (let i = 1; i <= 4; i++) files[`tests/test_a${i}.py`] = lines(300);
+      BIG_AND_NINE.forEach((n, i) => { files[`tests/test_b${i + 1}.py`] = lines(n); });
+      expect(ids(fanOutShape(plan).gates)).toEqual(['core', 'G']);
+      const merged = await mergeSmallSlices(plan, workspace(files).fs, 2);
+      expect(merged.merged).toEqual({ from: 10, to: 5, measure: 'test' });
+      expect(ids(merged.tasks.filter((x) => x.id.startsWith('B')))).toEqual(['B1', 'B2', 'B4', 'B6', 'B8']);
+      expect(ids(fanOutShape(merged.tasks).gates)).toEqual(['core', 'G']);
+      const out = await shapeFanOut(plan, workspace(files).fs, 2);
+      expect(find(out.tasks, 'G').prompt).toContain('Plan shape: 5 slices wait for this task to land before they start');
+      expect(find(out.tasks, 'B2').prompt).toContain('slices that start once "T core" (core) and "T G" (G) have landed');
+    });
   });
 });

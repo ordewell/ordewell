@@ -237,12 +237,13 @@ const SHOWN = 'run both, a collection-only run where the test runner has one, an
 /**
  * The opening task's note: the slices wait for it, so it is short, it leaves
  * the project importing and its tests collecting, whoever owns the file in
- * the way, and its report carries the map they start from.
+ * the way, unless what stops them is outside the repository's code, and its
+ * report carries the map they start from.
  */
 export function openingNote(shape: FanOutShape): string {
   const gate = shape.opening ?? shape.gates[0];
   return [
-    `Plan shape: ${gate ? waitingFor(shape, gate) : shape.slices.length} slices wait for this task to land before any of them starts, and they start from the tree you land. Besides your brief's own criterion, you are done only when the project builds or imports and ${COLLECTS}: ${SHOWN}. For that alone you may edit any file, whichever task below owns it: add only the smallest placeholder that lets it import (a missing name, a function that raises NotImplementedError or its like), and list each placeholder in your summary with the task that owns it. Leave everything else in a module a slice owns to that slice, and finish it as soon as your brief allows. End with status failed when the project still does not import or its tests do not collect, saying what stops them. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:`,
+    `Plan shape: ${gate ? waitingFor(shape, gate) : shape.slices.length} slices wait for this task to land before any of them starts, and they start from the tree you land. Besides your brief's own criterion, you are done only when the project builds or imports and ${COLLECTS}: ${SHOWN}. For that alone you may edit any file, whichever task below owns it: add only the smallest placeholder that lets it import (a missing name, a function that raises NotImplementedError or its like), and list each placeholder in your summary with the task that owns it. Leave everything else in a module a slice owns to that slice, and finish it as soon as your brief allows. End with status failed when the project still does not import or its tests do not collect for a cause in the repository's code, saying what stops them. A cause outside that code which no placeholder fixes, such as a dependency that is not installed, is not yours to fix: report it as a finding with the command and its output, and end with status done. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:`,
     ownershipTable(shape),
   ].join('\n');
 }
@@ -451,11 +452,11 @@ function mergedTask(members: readonly Task[]): Task {
 /**
  * Bins of one level's slices: the smallest bin is merged with the smallest
  * other of its kind, two at a time, while the pair is no larger than `cap`.
- * It stops at twice `limit`; where the cap stops it short of that, at the
- * multiple of `limit` nearest above the fewest bins the cap allows, so the
- * last wave of slots is full, unless that is no fewer than the level held.
+ * It stops at `least`; where the cap stops it short of that, at the multiple
+ * of `limit` nearest above the fewest bins the cap allows, so the last wave
+ * of slots is full, unless that is no fewer than the level held.
  */
-function pack(level: readonly Task[], size: (t: Task) => number, kind: (t: Task) => string | undefined, cap: number, limit: number): Task[][] {
+function pack(level: readonly Task[], size: (t: Task) => number, kind: (t: Task) => string | undefined, cap: number, limit: number, least: number): Task[][] {
   const run = (stopAt: number) => {
     const bins = level.map((t, at) => ({ members: [t], size: size(t), at, kind: kind(t) }));
     while (bins.length > stopAt) {
@@ -474,22 +475,29 @@ function pack(level: readonly Task[], size: (t: Task) => number, kind: (t: Task)
     }
     return bins.map((b) => b.members);
   };
-  const fewest = run(2 * limit).length;
+  const fewest = run(least).length;
   const full = Math.ceil(fewest / limit) * limit;
-  return run(fewest <= 2 * limit ? 2 * limit : full < level.length ? full : fewest);
+  return run(fewest <= least ? least : full < level.length ? full : fewest);
 }
+
+/** What the notes read besides the slices themselves: a merge that changes it would note a plan other than the planned one. */
+const roles = (shape: FanOutShape) => JSON.stringify([shape.wide, shape.gates.map((t) => t.id), shape.opening?.id, shape.closers.map((t) => t.id)]);
 
 /**
  * The plan with each crowded level's small slices merged (ADR-0072 R7). A
  * slice costs a fixed run of calls before it does any work, and slices past
  * the run's parallel limit only queue, so on a level of more than twice
  * `parallelLimit` slices, sized as {@link largestSlicesFirst} sizes them, the
- * smallest are merged until the level has about twice the limit. No bin grows
- * past the level's largest slice, which the planner judged one task, and a
- * slice at that size stays alone, as does one with no size. Only slices of one
- * kind merge: the same dependencies and dependents, runner, model, mode,
- * skills, autonomy and type. Every dependency on a merged slice now names the
- * task that covers it.
+ * smallest are merged until the level has about twice the limit, never fewer
+ * than {@link FAN_OUT_MIN}, so a limit of one still leaves a fan-out. No bin
+ * grows past the level's largest slice, which the planner judged one task, and
+ * a slice at that size stays alone, as does one with no size. Only slices of
+ * one kind merge: the same dependencies and dependents, runner, model, mode,
+ * skills, autonomy, type and slice type. A level stops
+ * merging a bin sooner while the merge would change the plan's shape: a level
+ * merged to as few slices as a shallower one would move the fan-out there, and
+ * a task every slice waited for would read as a slice. Every dependency on a
+ * merged slice now names the task that covers it.
  */
 export async function mergeSmallSlices(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, parallelLimit: number | undefined, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesMerged> {
   const unchanged: SlicesMerged = { tasks };
@@ -499,7 +507,8 @@ export async function mergeSmallSlices(tasks: Task[], fs: Pick<IFileSystem, 'rea
   const level = graph(tasks)!.level;
   const levels = new Map<number, Task[]>();
   for (const s of shape.slices) levels.set(level.get(s.id)!, [...(levels.get(level.get(s.id)!) ?? []), s]);
-  const crowded = [...levels.entries()].sort(([a], [b]) => a - b).map(([, l]) => l).filter((l) => l.length > 2 * parallelLimit);
+  const least = Math.max(2 * parallelLimit, FAN_OUT_MIN);
+  const crowded = [...levels.entries()].sort(([a], [b]) => a - b).map(([, l]) => l).filter((l) => l.length > least);
   if (crowded.length === 0) return unchanged;
   const sized = await sliceSizes(shape.slices, fs);
   if (!sized) return unchanged;
@@ -517,11 +526,16 @@ export async function mergeSmallSlices(tasks: Task[], fs: Pick<IFileSystem, 'rea
       ? undefined
       : JSON.stringify([[...new Set(t.dependencies)].sort(), (dependents.get(t.id) ?? []).sort(), t.type, t.assignedRunner, t.assignedModel ?? null,
         t.taskMode ?? null, [...(t.skills ?? [])].sort(), t.autonomy ?? null, t.sliceType ?? null]));
-    const bins = pack(slices, size, kind, cap, parallelLimit);
-    if (bins.length === slices.length) continue;
-    from += slices.length;
-    to += bins.length;
-    for (const bin of bins) if (bin.length > 1) out = replace(out, bin.map((t) => t.id), [mergedTask(bin)], bin[0].id);
+    for (let floor = least; floor < slices.length; floor++) {
+      const bins = pack(slices, size, kind, cap, parallelLimit, floor);
+      if (bins.length === slices.length) break;
+      const next = bins.reduce((o, bin) => (bin.length > 1 ? replace(o, bin.map((t) => t.id), [mergedTask(bin)], bin[0].id) : o), out);
+      if (roles(fanOutShape(next)) !== roles(shape)) continue;
+      out = next;
+      from += slices.length;
+      to += bins.length;
+      break;
+    }
   }
   return from ? { tasks: out, merged: { from, to, measure: sized.measure } } : unchanged;
 }

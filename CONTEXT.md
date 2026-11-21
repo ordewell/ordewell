@@ -625,7 +625,7 @@ recorded in the research log and never asked about. A wide plan with a closing
 check gets a fixed `Plan shape:` note on each role's brief. A wide plan's slices
 of one level start largest first, sized by the lines of the files their briefs
 name (ADR-0072 R6). On a level of more than twice the Parallel limit, small
-slices of one kind are first merged into one task each, a **merged task**,
+slices of one kind, short of a count that would change the plan's shape, are first merged into one task each, a **merged task**,
 which keeps one of their ids, lists the others in `mergedSlices` and gives each
 slice's brief whole under its own title (ADR-0072 R7).
 *Avoid:* "gate" for the opening task (the merge gate is something else),
