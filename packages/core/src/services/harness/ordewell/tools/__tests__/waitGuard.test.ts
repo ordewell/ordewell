@@ -55,6 +55,35 @@ describe('waitRefusal', () => {
     expect(waitRefusal('sleep 1e3', { parks: true })).toContain('sleeps for 1000 seconds');
   });
 
+  it.each([
+    'bash -lc "sleep 600"',
+    'bash -ic "sleep 600"',
+    "bash -lc 'while true; do sleep 60; done'",
+    'timeout 700 sleep 600',
+    'env sleep 600',
+    'sudo sleep 600',
+    'command sleep 600',
+    'nice sleep 600',
+    'stdbuf -oL sleep 600',
+    "perl -e 'sleep 600'",
+    'ruby -e "sleep 600"',
+    '/bin/sleep 600',
+  ])('still refuses a sleep behind a wrapper or an interpreter flag: %s', (command) => {
+    expect(waitRefusal(command, { parks: true })).not.toBeNull();
+  });
+
+  it.each([
+    'npx vitest run sleep.test.ts',
+    'cat src/sleep.ts',
+    'npm run build && npm run lint && npm test',
+    'grep -ic "sleep 45" src/*.ts',
+    'grep -e "sleep 45" -r src/',
+    "sed -e 's/sleep 600/sleep 1/' run.sh",
+    'make --jobs 600',
+  ])('runs a command that is no wait: %s', (command) => {
+    expect(waitRefusal(command, { parks: true })).toBeNull();
+  });
+
   it('adds up a command\'s sleeps', () => {
     expect(waitRefusal('sleep 20; make; sleep 20')).toContain('sleeps for 40 seconds');
   });
