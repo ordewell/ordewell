@@ -325,6 +325,9 @@ describe('a completion that cites the context being exhausted', () => {
     ['not enough of it left', failed('Not enough context left to continue.')],
     ['too little of it remaining', failed('Insufficient context remaining to finish the refactor.')],
     ['it getting full', failed('Context is getting full; stopping here.')],
+    ['its limit hit, owned by the model', failed('I have hit my context limit.')],
+    ['running low on it', failed('Running low on context, stopping.')],
+    ['its window nearly full, owned by the model', failed('My context window is nearly full.')],
   ])('cites it for %s', (_what, args) => {
     expect(citesContext(args)).toBe(true);
   });
@@ -344,6 +347,9 @@ describe('a completion that cites the context being exhausted', () => {
     ['a container\'s memory limit', failed('Our memory limit was hit by the CI container (OOM).')],
     ['a context window full of something', failed('The test failed: the context window is full of stale entries in the LRU cache.')],
     ['a context value that reached a handler', failed('Failed. Context reached the handler as undefined, so the middleware throws.')],
+    ['another model\'s limit, reached by the agent under test', failed('The integration test failed because the agent under test reached the context limit.')],
+    ['another model\'s limit, hit by an endpoint', failed('The summarize endpoint returns 400 after it hit the context limit of gpt-4o-mini.')],
+    ['another model\'s limit, near in a prompt', failed('Blocked: requests to the model fail once the prompt is near the context window limit; the truncation in prompt.ts is wrong.')],
     ['a finding that names it', { status: 'failed', summary: 'x', findings: [{ title: 'my context is exhausted' }] }],
     ['no arguments object', 'context exhausted'],
   ])('does not cite it for %s', (_what, args) => {
@@ -409,6 +415,22 @@ describe('a completion that cites the context being exhausted', () => {
     expect(eventsOf(events, 'tool_result').find((r) => r.id === 'one')?.output).toMatch(/^\[Ordewell\] Not recorded: if you stopped because of the call budget/);
     // The context answer, given after the budget's, would hold back the report the budget's promised to record.
     expect(eventsOf(events, 'tool_result').find((r) => r.id === 'two')).toMatchObject({ success: true, output: 'ok' });
+  });
+
+  it('answers a later, separate context give-up after an earlier budget give-up was answered and work went on', async () => {
+    const budget = failed('Budget exhausted before the done criterion held');
+    const context = failed('Context nearly exhausted; stopping with the parser half done.');
+    expect([citesBudget(budget), citesContext(budget)]).toEqual([true, false]);
+    const { loop, taskTools, events } = loopWith(
+      [giveUp('b', budget), ...working(5, 376_000), giveUp('c', context), giveUp('c2', context), [STOP]],
+      { stepLimit: 1000, model, compactAt: 840_000 },
+    );
+    await loop.runTurn('Work.', signals());
+
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'b')?.output).toMatch(/^\[Ordewell\] Not recorded: if you stopped because of the call budget/);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'c')?.output).toMatch(/^\[Ordewell\] Not recorded: if you stopped because your context is full/);
+    // Each answer promises that the next report is recorded.
+    expect(taskTools.calls.map((c) => c.args)).toEqual([context]);
   });
 
   it('records a report that stopped for another reason on its first call', async () => {
