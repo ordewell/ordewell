@@ -5,7 +5,7 @@ import { createChatCompletionsClient } from '../../../model/adapters/chatComplet
 import { BASE_REQUEST, failure, refusal, replay } from '../../../model/__tests__/replay';
 import { classifyRunnerStop, readUsageLimitReset } from '../../../runnerExit';
 import { defaultModelInfo } from '../models';
-import { citesBudget, OrdewellLoop, stepFailure, type LoopOptions } from '../loop';
+import { citesBudget, citesContext, OrdewellLoop, stepFailure, type LoopOptions } from '../loop';
 import { scratch } from '../tools/__tests__/helpers';
 import type { ModelEvent } from '../../../model';
 import { call, eventsOf, fakeTaskTools, MemoryTranscriptStore, scriptedClient, STOP, type ScriptedStep } from './loopKit';
@@ -118,8 +118,8 @@ describe('the budget notices', () => {
     expect(notes.get(39)).toMatch(/what is done and what remains/);
     expect(notes.get(40)).toMatch(/last model call/);
     // Each notice carries the exact count, so the model need not keep one.
-    expect(notes.get(33)).toContain('[calls: 32 of 40]');
-    expect(notes.get(39)).toContain('[calls: 38 of 40]');
+    expect(notes.get(33)).toContain('[calls: 32 of 40; context: ');
+    expect(notes.get(39)).toContain('[calls: 38 of 40; context: ');
   });
 
   it('sends the exact count every 50 calls, on the newest message only, so the model never keeps its own', async () => {
@@ -129,8 +129,31 @@ describe('the budget notices', () => {
     expect(client.requests).toHaveLength(111);
     const notes = notesOf(client.requests);
     expect([...notes.keys()]).toEqual([51, 101]);
-    expect(notes.get(51)).toBe('[calls: 50 of 1000]');
-    expect(notes.get(101)).toBe('[calls: 100 of 1000]');
+    expect(notes.get(51)).toMatch(/^\[calls: 50 of 1000; context: [^\]]+\]$/);
+    expect(notes.get(101)).toMatch(/^\[calls: 100 of 1000; context: [^\]]+\]$/);
+  });
+
+  describe('with the context fill beside the count', () => {
+    const WINDOW = 1_048_576;
+    const model = { ...defaultModelInfo('openrouter', 'mock/test'), contextWindow: WINDOW, contextWindowSource: 'catalog' as const };
+    /** Each step reports a prompt of 375,990 tokens and a 10-token reply: 376,000 in all. */
+    const filled = (steps: number): ScriptedStep[] => Array.from({ length: steps }, (_, i) => [
+      call(`g${i}`, 'glob', { pattern: `${i}/*.md` }),
+      { type: 'usage', usage: { inputTokens: 375_990, outputTokens: 10 } } as ModelEvent,
+      STOP,
+    ]);
+
+    it('says how many tokens the context holds of its window, so the model never estimates it', async () => {
+      const { loop, client } = loopWith([...filled(60), [STOP]], { stepLimit: 1000, model });
+      await loop.runTurn('Work.', signals());
+      expect(notesOf(client.requests).get(51)).toBe('[calls: 50 of 1000; context: 376k of 1.05M tokens (36%)]');
+    });
+
+    it('names where compaction starts when a compaction point is in force', async () => {
+      const { loop, client } = loopWith([...filled(60), [STOP]], { stepLimit: 1000, model, compactAt: 840_000 });
+      await loop.runTurn('Work.', signals());
+      expect(notesOf(client.requests).get(51)).toBe('[calls: 50 of 1000; context: 376k of 1.05M tokens (36%); compaction starts at 840k]');
+    });
   });
 
   it('changes nothing before the newest message, so each call reads the previous call\'s cached prefix', async () => {
@@ -145,7 +168,8 @@ describe('the budget notices', () => {
     }
     // The count lines were among what each later call carried unchanged.
     const last = client.requests.at(-1)?.messages ?? [];
-    expect(last.filter((m) => m.role === 'user' && 'text' in m && /^\[calls: /.test(m.text)).map((m) => ('text' in m ? m.text : ''))).toEqual(['[calls: 50 of 1000]', '[calls: 100 of 1000]']);
+    const counts = last.filter((m) => m.role === 'user' && 'text' in m && /^\[calls: /.test(m.text)).map((m) => ('text' in m ? m.text : ''));
+    expect(counts.map((text) => text.replace(/; context: [^\]]+/, ''))).toEqual(['[calls: 50 of 1000]', '[calls: 100 of 1000]']);
   });
 
   it('sends none once a report stands', async () => {
@@ -268,6 +292,129 @@ describe('a completion that cites the budget early', () => {
 
     expect(taskTools.calls.map((c) => c.args)).toEqual([args]);
     expect(eventsOf(events, 'tool_result').find((r) => r.id === 'r')).toMatchObject({ success: true, output: 'ok' });
+  });
+});
+
+describe('a completion that cites the context being exhausted', () => {
+  const WINDOW = 1_048_576;
+  const model = { ...defaultModelInfo('openrouter', 'mock/test'), contextWindow: WINDOW, contextWindowSource: 'catalog' as const };
+  /** Each step reports a prompt of `prompt` tokens and a 10-token reply. */
+  const working = (steps: number, prompt: number): ScriptedStep[] => Array.from({ length: steps }, (_, i) => [
+    call(`g${i}`, 'glob', { pattern: `${i}/*.md` }),
+    { type: 'usage', usage: { inputTokens: prompt - 10, outputTokens: 10 } } as ModelEvent,
+    STOP,
+  ]);
+  const giveUp = (id: string, args: Record<string, unknown>): ScriptedStep => [call(id, 'task_complete', args), STOP];
+  const statuses = (calls: readonly { args: unknown }[]) => calls.map((c) => (c.args as { status: string }).status);
+  const failed = (reason: string) => ({ status: 'failed', summary: 'Partial.', reason });
+
+  it.each([
+    ['the reason the recorded run ended on', failed('Context nearly exhausted; stopping with the parser half done.')],
+    ['my context window', failed('My context window is almost full.')],
+    ['the attempt\'s context', { status: 'blocked', summary: 'The attempt\'s context is exhausted.' }],
+    ['running out of context', failed('I am running out of context and cannot finish the migration.')],
+    ['having run out of context', { status: 'failed', summary: 'Ran out of context after the third file.' }],
+    ['my memory', failed('My memory is used up.')],
+    ['the context window as the clause\'s subject', failed('Stopped. The context window is full.')],
+    ['context exhaustion in the summary only', { status: 'failed', summary: 'Context exhausted.', reason: 'See summary.' }],
+    ['its limit reached', failed('Context limit reached.')],
+    ['its window\'s limit reached', failed('The context window limit was reached.')],
+    ['its budget exhausted', failed('Stopping: context budget exhausted.')],
+    ['its limit approached', failed('I am approaching my context limit and cannot finish.')],
+    ['its window nearly exhausted', failed('Context window nearly exhausted.')],
+    ['not enough of it left', failed('Not enough context left to continue.')],
+    ['too little of it remaining', failed('Insufficient context remaining to finish the refactor.')],
+    ['it getting full', failed('Context is getting full; stopping here.')],
+  ])('cites it for %s', (_what, args) => {
+    expect(citesContext(args)).toBe(true);
+  });
+
+  it.each([
+    ['a done report', { status: 'done', summary: 'Context handling is exhausted of edge cases, all fixed.' }],
+    ['a library\'s own context object', failed('The request context object is full of stale entries; the handler leaks it.')],
+    ['a lost async context', failed('The AsyncLocalStorage context was lost between the two calls, so the test fails.')],
+    ['a quote out of context', failed('The changelog test quotes the old text out of context.')],
+    ['a context-length error a tool returned', failed('read_task returned: maximum context length is 8192 tokens, however you requested 9000 tokens.')],
+    ['a tool\'s context_length_exceeded', failed('The embedding API refused the input: context_length_exceeded.')],
+    ['a tool\'s context window exceeded', failed('The summarizer rejected the diff: context window exceeded for its model.')],
+    ['an out-of-memory test', failed('jest: the parser test died, JavaScript heap out of memory.')],
+    ['a build that ran out of memory', failed('The CI build ran out of memory (OOM killed) while linking.')],
+    ['a test that names memory exhaustion', failed('The test "memory exhausted" still fails on the fixture.')],
+    ['another reason altogether', failed('The schema is invalid and the migration cannot run.')],
+    ['a container\'s memory limit', failed('Our memory limit was hit by the CI container (OOM).')],
+    ['a context window full of something', failed('The test failed: the context window is full of stale entries in the LRU cache.')],
+    ['a context value that reached a handler', failed('Failed. Context reached the handler as undefined, so the middleware throws.')],
+    ['a finding that names it', { status: 'failed', summary: 'x', findings: [{ title: 'my context is exhausted' }] }],
+    ['no arguments object', 'context exhausted'],
+  ])('does not cite it for %s', (_what, args) => {
+    expect(citesContext(args)).toBe(false);
+  });
+
+  it('is answered once with the real fill, not recorded, and the turn goes on', async () => {
+    const early = failed('Context nearly exhausted.');
+    const { loop, client, taskTools, events } = loopWith(
+      [...working(5, 376_000), giveUp('early', early), [glob('more'), STOP], [call('end', 'task_complete', { status: 'done', summary: 'ok' }), STOP], [STOP]],
+      { stepLimit: 1000, model, compactAt: 840_000 },
+    );
+    expect(await loop.runTurn('Work.', signals())).toEqual({ interrupted: false });
+
+    expect(statuses(taskTools.calls)).toEqual(['done']);
+    const answer = eventsOf(events, 'tool_result').find((r) => r.id === 'early');
+    expect(answer?.output).toBe(
+      '[Ordewell] Not recorded: if you stopped because your context is full, it is not: it holds 376k of 1.05M tokens (36%) and is compacted for you as it fills, so go on with the brief. '
+      + 'If you stopped for another reason, call task_complete again and that report is recorded.\n'
+      + '[calls: 6 of 1000; context: 376k of 1.05M tokens (36%); compaction starts at 840k]',
+    );
+    expect(answer?.success).toBe(false);
+    expect(JSON.stringify(client.requests[6]?.messages.at(-1))).toContain('compaction starts at 840k');
+  });
+
+  it('is accepted as it is the second time in an attempt', async () => {
+    const { loop, taskTools, events } = loopWith(
+      [...working(3, 376_000), giveUp('one', failed('Context exhausted.')), [glob('more'), STOP], giveUp('two', failed('Context is still exhausted.')), [STOP]],
+      { stepLimit: 1000, model, compactAt: 840_000 },
+    );
+    await loop.runTurn('Work.', signals());
+    expect(statuses(taskTools.calls)).toEqual(['failed']);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'two')).toMatchObject({ success: true });
+  });
+
+  it('answers with no compaction point in force while the fill is under 70% of the window', async () => {
+    const { loop, taskTools, events } = loopWith([...working(3, 376_000), giveUp('early', failed('My context is exhausted.')), [STOP]], { stepLimit: 1000, model });
+    await loop.runTurn('Work.', signals());
+    expect(taskTools.calls).toHaveLength(0);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'early')?.output).toMatch(/it holds 376k of 1\.05M tokens \(36%\)/);
+  });
+
+  it.each([
+    ['with no compaction point, at 70% of the window', 740_000, undefined],
+    ['at the compaction point', 840_000, 840_000],
+  ])('accepts it at once %s: the context is as full as it gets', async (_what, prompt, compactAt) => {
+    // A step between reports the fill, so the stop is judged on the figure the provider gave.
+    const { loop, taskTools } = loopWith(
+      [...working(3, prompt), giveUp('r', failed('Context nearly exhausted.')), [STOP]],
+      { stepLimit: 1000, model, ...(compactAt !== undefined ? { compactAt } : {}) },
+    );
+    await loop.runTurn('Work.', signals());
+    expect(statuses(taskTools.calls)).toEqual(['failed']);
+  });
+
+  it('holds back a report citing the budget and the context once, and records it the second time, as the answer promised', async () => {
+    const both = failed('Budget nearly exhausted and my context is nearly full.');
+    expect([citesBudget(both), citesContext(both)]).toEqual([true, true]);
+    const { loop, taskTools, events } = loopWith([giveUp('one', both), giveUp('two', both), [STOP]], { stepLimit: 1000, model, compactAt: 840_000 });
+    await loop.runTurn('Work.', signals());
+
+    expect(taskTools.calls.map((c) => c.args)).toEqual([both]);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'one')?.output).toMatch(/^\[Ordewell\] Not recorded: if you stopped because of the call budget/);
+    // The context answer, given after the budget's, would hold back the report the budget's promised to record.
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'two')).toMatchObject({ success: true, output: 'ok' });
+  });
+
+  it('records a report that stopped for another reason on its first call', async () => {
+    const { loop, taskTools } = loopWith([...working(3, 376_000), giveUp('r', failed('The jest run died: heap out of memory.')), [STOP]], { stepLimit: 1000, model });
+    await loop.runTurn('Work.', signals());
+    expect(statuses(taskTools.calls)).toEqual(['failed']);
   });
 });
 

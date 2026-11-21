@@ -79,6 +79,29 @@ export function compactionStart(window: number, at: TaskCompactAt, runner: strin
   return clampTaskCompactAt(at, { min: Math.min(COMPACT_AT_MIN_TOKENS, guard), max: guard }, runner, log);
 }
 
+/** `376k`, `1.05M`: a size as the model reads it, rounded, since the figures behind it are estimates past the last count. */
+export function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(2))}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return String(tokens);
+}
+
+/**
+ * What the model is shown of its own context: the fill, the window it is of
+ * and, when a compaction point is in force, where compaction starts. It is
+ * said as a fact so the model never has to guess how much room is left
+ * (ADR-0070).
+ */
+export function contextFillText(fill: number, window: number, compactAt?: number): string {
+  const start = compactAt !== undefined ? `; compaction starts at ${formatTokens(compactAt)}` : '';
+  return `context: ${fillOfWindow(fill, window)}${start}`;
+}
+
+/** `376k of 1.05M tokens (36%)`. */
+export function fillOfWindow(fill: number, window: number): string {
+  return `${formatTokens(fill)} of ${formatTokens(window)} tokens (${Math.round((fill / window) * 100)}%)`;
+}
+
 export function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
@@ -325,12 +348,22 @@ export async function summarize(
 
 const SUMMARY_PREFIX = 'Your context was compacted.';
 
+/** The context a compaction left: what the summary tells the model of its room. */
+export interface ContextFill {
+  tokens: number;
+  window: number;
+  /** Where compaction starts again, when a compaction point is in force. */
+  startAt?: number;
+}
+
 /** The user message the summary becomes: said once, so a later reader knows what it stands for. */
-export function summaryMessage(summary: string): Extract<ModelMessage, { role: 'user' }> {
+export function summaryMessage(summary: string, fill: ContextFill): Extract<ModelMessage, { role: 'user' }> {
+  const again = fill.startAt !== undefined ? `, and compaction starts again at ${formatTokens(fill.startAt)}` : ', and it is compacted for you again as it fills';
   return {
     role: 'user',
     text: [
-      `${SUMMARY_PREFIX} The task message above and the most recent messages below are exact; this summary, written from the messages between them, replaces them.`,
+      // Said as the routine it is: a model that read compaction as a sign it was running out ended a task with most of its window free.
+      `${SUMMARY_PREFIX} The task message above and the most recent messages below are exact; this summary, written from the messages between them, replaces them. Work continues with room restored: your context now holds about ${fillOfWindow(fill.tokens, fill.window)}${again}.`,
       '<summary>',
       summary,
       '</summary>',
@@ -406,6 +439,16 @@ export class Compactor {
     return this.options.model.contextWindowSource === 'assumed' && this.effectiveWindow === this.options.model.contextWindow;
   }
 
+  /** What the transcript holds as the next prompt: the provider's last count plus an estimate of what came after it. */
+  fillTokens(transcript: LoadedTranscript): number {
+    return estimatePromptTokens(transcript, this.fixedTokens(transcript));
+  }
+
+  /** The context line the model is shown: its fill of the window in force, and where compaction starts if a point is set. */
+  fillText(transcript: LoadedTranscript): string {
+    return contextFillText(this.fillTokens(transcript), this.effectiveWindow, this.startTokens);
+  }
+
   /** Compacts when the next prompt passes the threshold; the transcript as it now stands either way. */
   async beforeRequest(transcript: LoadedTranscript, step: number, signal: AbortSignal): Promise<LoadedTranscript> {
     const fixed = this.fixedTokens(transcript);
@@ -469,8 +512,15 @@ export class Compactor {
     const inputTokens = Math.floor(window * (plan.fraction ?? 0.8)) - estimateTokens(SUMMARY_SYSTEM.length) - SUMMARY_MAX_OUTPUT_TOKENS;
     const { summary, usage } = await summarize(client, model, middle, { maxInputChars: Math.max(2_000, inputTokens * CHARS_PER_TOKEN), signal });
 
-    const message = summaryMessage(summary);
-    const postTokens = fixed + headTokens + estimateMessageTokens(message) + sumTokens(tail);
+    // The window and start in force once this compaction stands: an overflow's shrink moves both.
+    const after = plan.fraction === undefined ? this.effectiveWindow : Math.floor(window * plan.fraction);
+    const startAt = this.options.startAt !== undefined ? Math.min(this.options.startAt, compactionThreshold(after)) : undefined;
+    const sized = (tokens: number): { message: ReturnType<typeof summaryMessage>; postTokens: number } => {
+      const message = summaryMessage(summary, { tokens, window: after, ...(startAt !== undefined ? { startAt } : {}) });
+      return { message, postTokens: fixed + headTokens + estimateMessageTokens(message) + sumTokens(tail) };
+    };
+    // The message states its own size, so it is sized once to know the figure and again with it.
+    const { message, postTokens } = sized(sized(0).postTokens);
     // A summary that is not smaller than what it replaces would only add a call to every compaction.
     if (postTokens >= plan.preTokens && plan.fraction === undefined) {
       this.retryAt = transcript.messages.length + RETRY_AFTER_MESSAGES;

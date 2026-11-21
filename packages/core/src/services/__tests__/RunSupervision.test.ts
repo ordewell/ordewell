@@ -579,6 +579,25 @@ describe('a blocker a task reports by the file it found broken (LandedBlockers)'
     expect(landedPaths.mock.calls.filter(([id]) => id === 't1')).toHaveLength(1);
   });
 
+  it('raises nothing for a report that cites a sibling still at work: it waits on that work, whatever landed file it names', async () => {
+    vi.useFakeTimers();
+    const landedPaths = vi.fn(async (taskId: string): Promise<readonly string[]> => (taskId === 't1' ? ['src/graph.ts'] : []));
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' }, {}, { landedPaths });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    tasks[0] = { ...tasks[0], status: 'completed', handoff: { summary: '', findings: [], findingCount: 0, attempt: 1 } };
+    tasks.push(task('t2', 2, { status: 'in_progress', dependencies: ['t1'] }));
+    tasks.push(task('t3', 3, {
+      status: 'completed',
+      dependencies: ['t1'],
+      handoff: { summary: '', findingCount: 1, attempt: 1, findings: [{ id: 'F1', severity: 'blocker', title: 'its tests wait on the graph', evidence: [{ kind: 'file', path: 'src/graph.ts' }, { kind: 'task', node: 'root', task: 't2' }] }] },
+    }));
+
+    supervision.taskSettled(tasks[2]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(host.deliver.mock.calls.map((call) => String(call[0])).join('\n')).not.toContain('reports a blocker');
+  });
+
   it('asks again at the next report for files the run could not say, and raises nothing on a read that failed', async () => {
     vi.useFakeTimers();
     let fails = true;
