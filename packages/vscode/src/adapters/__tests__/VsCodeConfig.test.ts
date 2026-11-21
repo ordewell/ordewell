@@ -622,7 +622,7 @@ describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', ()
     expect(config.apiKey).toBe('');
   });
 
-  // A key in the extension host's environment or in secret storage is not a choice to plan with it (ADR-0075).
+  // A key in the extension host's environment or in secret storage is not a choice to plan with it (ADR-0076).
   it('plans with the installed agent though a vendor key is in the environment', async () => {
     recordInstalledPlanner('claude-code');
     process.env.GEMINI_API_KEY = 'g-test';

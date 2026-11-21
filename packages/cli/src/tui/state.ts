@@ -547,7 +547,7 @@ export interface TuiState {
   plannerEffort: string;
   /**
    * The vendor whose key the daemon found but does not plan with, because the
-   * detected coding agent plans (ADR-0075); empty when none was passed over.
+   * detected coding agent plans (ADR-0076); empty when none was passed over.
    * The welcome says so once.
    */
   unusedPlanningKey: string;

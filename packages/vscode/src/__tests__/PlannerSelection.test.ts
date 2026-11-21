@@ -171,7 +171,7 @@ describe('PlannerSelection with a detected default planner', () => {
   });
   afterEach(() => resetInstalledPlanner());
 
-  // A key in the extension host's environment does not take planning from the agent (ADR-0075); the chat's first screen says so.
+  // A key in the extension host's environment does not take planning from the agent (ADR-0076); the chat's first screen says so.
   it('tells the webview which found key the detected agent plans past, and stops once the agent is picked', async () => {
     const saved = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'sk-openai-test';

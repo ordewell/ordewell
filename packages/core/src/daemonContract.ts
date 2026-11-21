@@ -455,7 +455,7 @@ export interface SettingsResponse {
   plannerThinkingEffort: string;
   /**
    * The vendor whose key was found but is not used for planning, because the
-   * coding agent detection found plans (ADR-0075): a surface's first screen
+   * coding agent detection found plans (ADR-0076): a surface's first screen
    * says so once. Absent when the user named the planner or no key was found.
    */
   unusedPlanningKey?: AiProvider;

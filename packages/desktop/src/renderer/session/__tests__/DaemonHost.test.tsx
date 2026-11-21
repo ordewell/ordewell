@@ -810,7 +810,7 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     expect(host.getSnapshot().state.modelsByRunner['claude-code']).toEqual([model]);
   });
 
-  // The daemon names a found key its detected agent plans past (ADR-0075); the chat's first screen says so.
+  // The daemon names a found key its detected agent plans past (ADR-0076); the chat's first screen says so.
   it('passes on the key the detected agent plans past, so the first screen can say who plans and why', async () => {
     fakeDaemon({
       'runners.list': ok({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }),

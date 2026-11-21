@@ -3,7 +3,7 @@ status: accepted
 amends: ["0009", "0038"]
 ---
 
-# 0075 — An installed coding agent outranks a found API key unless the user chose the key's vendor
+# 0076 — An installed coding agent outranks a found API key unless the user chose the key's vendor
 
 ## Problem
 

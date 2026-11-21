@@ -24,7 +24,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   key is passed over, the terminal UI's welcome, the desktop app and VS Code
   say once which planner is active and why: "Planning with Claude Code. An
   OpenAI key was found and is not used for planning; /planner changes that."
-  ([ADR-0075](docs/adr/planner/0075-an-installed-coding-agent-outranks-a-found-api-key.md)).
+  ([ADR-0076](docs/adr/planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md)).
 - **A coding agent with no model picked reads as working.** The terminal UI's
   Planner row says `agent default`, no longer `no model` in yellow; the chat's
   and the desktop app's planner model pickers say *Agent default* instead of

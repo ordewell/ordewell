@@ -254,7 +254,7 @@ export class VsCodeConfig extends BaseConfig {
     return this.rawAiProvider || super.namedPlanner();
   }
 
-  /** Gemini's own setting alone: `orchestratorModel` is every planner's, and routing reads it already (ADR-0075). */
+  /** Gemini's own setting alone: `orchestratorModel` is every planner's, and routing reads it already (ADR-0076). */
   protected savedGeminiModel(): string {
     return this.config.get<string>('geminiModel', '').trim() || super.savedGeminiModel();
   }

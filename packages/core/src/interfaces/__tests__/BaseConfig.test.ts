@@ -182,7 +182,7 @@ describe('BaseConfig', () => {
       expect(detect()).toBe('google');
     });
 
-    // A key in a developer's shell is not a decision to plan with it (ADR-0075).
+    // A key in a developer's shell is not a decision to plan with it (ADR-0076).
     it('an installed coding agent plans though a vendor key is in the environment', () => {
       recordInstalledPlanner('claude-code');
       process.env.OPENAI_API_KEY = 'sk-openai';
@@ -196,7 +196,7 @@ describe('BaseConfig', () => {
       expect(detect()).toBe('openai');
     });
 
-    describe('unusedPlanningKey: the found key a detected agent plans past (ADR-0075)', () => {
+    describe('unusedPlanningKey: the found key a detected agent plans past (ADR-0076)', () => {
       it('names the vendor whose key was found while the detected agent plans', () => {
         recordInstalledPlanner('claude-code');
         process.env.OPENAI_API_KEY = 'sk-openai';
@@ -215,7 +215,7 @@ describe('BaseConfig', () => {
       });
     });
 
-    describe('after an upgrade, a vendor the user already plans with keeps planning (ADR-0075)', () => {
+    describe('after an upgrade, a vendor the user already plans with keeps planning (ADR-0076)', () => {
       it('a model saved under the vendor\'s own prefix keeps that vendor over the installed agent', () => {
         recordInstalledPlanner('claude-code');
         process.env.OPENAI_API_KEY = 'sk-openai';

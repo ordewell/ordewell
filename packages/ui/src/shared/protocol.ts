@@ -320,7 +320,7 @@ export type HostToWebview =
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }
   /**
    * `unusedPlanningKey` names the vendor whose key the host found but does
-   * not plan with, because the coding agent it detected plans (ADR-0075); the
+   * not plan with, because the coding agent it detected plans (ADR-0076); the
    * first screen says so once. Absent when the user named the planner.
    */
   | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string; unusedPlanningKey?: AiProvider }

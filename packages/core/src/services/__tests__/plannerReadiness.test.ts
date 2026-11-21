@@ -170,7 +170,7 @@ describe('describePlannerNotReady', () => {
   });
 });
 
-describe('describeUnusedPlanningKey (ADR-0075)', () => {
+describe('describeUnusedPlanningKey (ADR-0076)', () => {
   it('says which agent plans and which found key it plans past, with the surface\'s command to change it', () => {
     expect(describeUnusedPlanningKey('claude-code', 'openai', TERMINAL_UI_COMMANDS.pickPlanner))
       .toBe('Planning with Claude Code. An OpenAI key was found and is not used for planning; /planner changes that.');

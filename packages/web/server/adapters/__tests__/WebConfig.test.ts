@@ -219,7 +219,7 @@ describe('WebConfig', () => {
       expect(config.aiProvider).toBe('claude-code');
     });
 
-    // A key in the shell or saved in Ordewell is not a choice to plan with it (ADR-0075).
+    // A key in the shell or saved in Ordewell is not a choice to plan with it (ADR-0076).
     it('the installed agent plans though a vendor key is set', () => {
       recordInstalledPlanner('claude-code');
       setEnv('OPENROUTER_API_KEY', 'sk-or-test');

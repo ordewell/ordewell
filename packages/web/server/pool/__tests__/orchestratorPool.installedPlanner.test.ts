@@ -326,7 +326,7 @@ describe('OrchestratorPool default planner', () => {
     expect(existsSync(settingsFile) ? readFileSync(settingsFile, 'utf8') : '').not.toContain('claude-code');
   });
 
-  // A key saved with /key-set (or found in the shell) is not a choice to plan with it (ADR-0075).
+  // A key saved with /key-set (or found in the shell) is not a choice to plan with it (ADR-0076).
   it('keeps the detected agent planning when a key is saved, and reports that key as not used for planning', async () => {
     const { installation, answer } = gatedInstallation();
     const pool = new OrchestratorPool({ runnerInstallation: installation });

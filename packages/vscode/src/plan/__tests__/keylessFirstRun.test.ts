@@ -375,7 +375,7 @@ describe('VS Code keyless first-run process boundary', () => {
     const h = harness();
     await selectionFor(h).setModel('sonnet');
     process.env.OPENROUTER_API_KEY = 'test-key';
-    // A key alone does not take planning from the agent, which keeps its own pick (ADR-0075).
+    // A key alone does not take planning from the agent, which keeps its own pick (ADR-0076).
     expect(h.config.aiProvider).toBe('claude-code');
     expect(h.config.orchestratorModel).toBe('sonnet');
 
@@ -393,7 +393,7 @@ describe('VS Code keyless first-run process boundary', () => {
     await selectionFor(h).setModel('openai/gpt-4o');
     delete process.env.OPENROUTER_API_KEY;
     process.env.GEMINI_API_KEY = 'gemini-key';
-    // OpenRouter's model with its key gone chooses no vendor, so the agent plans, without that model (ADR-0075).
+    // OpenRouter's model with its key gone chooses no vendor, so the agent plans, without that model (ADR-0076).
     expect(h.config.aiProvider).toBe('claude-code');
     expect(h.config.orchestratorModel).toBe('');
 

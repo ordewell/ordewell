@@ -9,7 +9,7 @@ const LINE = 'Planning with Claude Code. An OpenAI key was found and is not used
 
 /**
  * A key in the shell or saved in Ordewell does not take planning from the
- * detected agent (ADR-0075), so the first screen of the desktop app and of
+ * detected agent (ADR-0076), so the first screen of the desktop app and of
  * VS Code says, once, who plans and why.
  */
 describe('the first screen when a found key is not used for planning', () => {

@@ -235,7 +235,7 @@ export abstract class BaseConfig implements IConfig {
   get notifyCommand(): string[] { return parseNotifyCommand(process.env.ORDEWELL_NOTIFY_COMMAND); }
 
   /**
-   * Who plans when no surface setting names a planner (ADR-0075): an
+   * Who plans when no surface setting names a planner (ADR-0076): an
    * explicit AI_PROVIDER (a `/planner` pick persists as one); then a vendor
    * whose key is found and for which a model is saved; then an installed
    * coding agent that is not signed out (ADR-0009); then a vendor whose key
@@ -260,7 +260,7 @@ export abstract class BaseConfig implements IConfig {
 
   /**
    * The vendor whose key was found but is not used for planning, because the
-   * coding agent detection found plans instead (ADR-0075); null when the
+   * coding agent detection found plans instead (ADR-0076); null when the
    * user named the planner, when no key was found, or when the key's vendor
    * plans. A surface says so once, so a key in the shell is not a surprise.
    */
@@ -300,7 +300,7 @@ export abstract class BaseConfig implements IConfig {
    * The vendor a model configured beside a found key was saved for, when it
    * is not the installed agent's own: the vendor it plainly names, if that
    * vendor has its key, and for a bare id the vendor the key selects, as
-   * before an installed agent outranked a key (ADR-0075).
+   * before an installed agent outranked a key (ADR-0076).
    */
   private vendorSavedWith(agent: PlannerBackendId, model: string): AiProvider | null {
     if (isAgentsOwnModel(agent, model, () => this.agentCatalog(agent))) return null;

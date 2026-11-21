@@ -32,7 +32,7 @@ interface EmptyStateProps {
   isolationPreview?: IsolationPreview | null;
   /**
    * Which planner is active and why, when a found key is not used for
-   * planning because the detected agent plans (ADR-0075), worded by core.
+   * planning because the detected agent plans (ADR-0076), worded by core.
    */
   plannerNote?: string;
 }

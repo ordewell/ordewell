@@ -486,7 +486,7 @@ describe('keyless first-run entry points at the process boundary', () => {
   it('a model picked for the detected agent is not sent to a vendor whose key is added later', async () => {
     await client.updateSettings({ orchestratorModel: 'sonnet' });
     await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key', OPENROUTER_BASE_URL: vendorBase } });
-    // A key alone does not take planning from the agent (ADR-0075), which keeps its own pick.
+    // A key alone does not take planning from the agent (ADR-0076), which keeps its own pick.
     expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', orchestratorModel: 'sonnet', unusedPlanningKey: 'openrouter' });
 
     // Picked, the vendor plans with a model of its own, never the agent's.
@@ -510,7 +510,7 @@ describe('keyless first-run entry points at the process boundary', () => {
     await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key' } });
     await client.updateSettings({ orchestratorModel: 'openai/gpt-4o' });
     await client.updateSettings({ env: { OPENROUTER_API_KEY: '', GEMINI_API_KEY: 'gemini-key' } });
-    // OpenRouter's model with its key gone chooses no vendor, so the agent plans (ADR-0075).
+    // OpenRouter's model with its key gone chooses no vendor, so the agent plans (ADR-0076).
     expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', unusedPlanningKey: 'google' });
 
     await client.updateSettings({ env: { AI_PROVIDER: 'google' } });

@@ -66,7 +66,7 @@ own never switches planning to its provider, or spends its credit. That provider
 plans when you pick it with `/planner` (or `ordewell planner <id>`), when you saved a
 planner model for it, or when no coding agent is installed. When a key is passed
 over, the first screen says so once
-([ADR-0075](adr/planner/0075-an-installed-coding-agent-outranks-a-found-api-key.md)).
+([ADR-0076](adr/planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md)).
 
 A provider key adds an API planner and also lets the built-in runner run tasks on
 that provider's models; an installed coding-agent CLI is separate. A `DEEPSEEK_API_KEY` or

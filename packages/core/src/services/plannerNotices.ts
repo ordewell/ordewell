@@ -16,7 +16,7 @@ export const AGENT_DEFAULT_MODEL = 'agent default';
 
 /**
  * The one line a surface's first screen shows when a found key is not used
- * for planning because a detected coding agent plans (ADR-0075), so the user
+ * for planning because a detected coding agent plans (ADR-0076), so the user
  * learns which planner is active, why, and where to change it. `pickPlanner`
  * is the surface's own spelling of the planner picker.
  */

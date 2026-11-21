@@ -87,7 +87,7 @@ describe('the welcome while the coding agents are detected', () => {
 
 /**
  * A key in the shell or saved in Ordewell does not take planning from the
- * detected agent (ADR-0075), so the first screen says, once, who plans and why.
+ * detected agent (ADR-0076), so the first screen says, once, who plans and why.
  */
 describe('the welcome when a key was found but the detected agent plans', () => {
   const keyPassedOver = (unusedPlanningKey?: AiProvider): Action => ({

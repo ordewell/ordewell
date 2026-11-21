@@ -203,7 +203,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /**
    * Who can plan, who does plan, and that planner's effort — one message, so
    * the webview never renders a half-switched planner. `unusedPlanningKey` is
-   * a found key the detected agent plans past (ADR-0075), for the first screen.
+   * a found key the detected agent plans past (ADR-0076), for the first screen.
    */
   setPlannerBackends(backends: PlannerBackend[], provider: string, runner?: string, effort?: string, unusedPlanningKey?: AiProvider): void {
     this._plannerState = { backends, provider, runner, effort, unusedPlanningKey };
