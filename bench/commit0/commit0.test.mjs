@@ -706,7 +706,7 @@ test('resultRecord carries every field the comparison reports', () => {
   assert.equal(r.contextWindow, 1048576);
   assert.equal(r.pr177Merge, L.PR177_MERGE);
   assert.equal(r.ordewellSha, 'abc');
-  assert.deepEqual(r.tests, { passed: 7, collected: 9, failed: 2, errors: 0, skipped: 0, collectionErrors: [], exit: 1, timedOut: false });
+  assert.deepEqual(r.tests, { passed: 7, collected: 9, failed: 2, errors: 0, skipped: 0, moduleSkipped: null, collectionErrors: [], exit: 1, timedOut: false });
   assert.equal(r.networkDeselected, 2);
   assert.equal(r.billedUsd, 1.5);
   assert.equal(r.capUsd, L.CAP_USD);
@@ -3086,4 +3086,92 @@ test('the rehearsal fails a result that does not record the call budget it ran w
   assert.match(f({}), /no spend at the reference price table/);
   const fields = { callBudget: 10, stepLimit: 10, referenceUsd: 0.1, referenceSpend: { priceTable: L.REFERENCE_PRICES } };
   assert.doesNotMatch(f(fields), /budget the arm|reference price table/);
+});
+
+// --- Module-level skips are not test outcomes --------------------------------
+// pytest reports a module that calls pytest.importorskip at import as one
+// skipped outcome, though none of its tests is a collected item. The numbers
+// below are synthetic: a library of 10 collected tests plus 3 such modules.
+
+const progress = (chars) => chars.match(/.{1,6}/g).map((l, i, all) => `${l.padEnd(6)} [${String(Math.round(((i + 1) / all.length) * 100)).padStart(3)}%]`).join('\n');
+const pytestOutput = (chars, summary) => `${progress(chars)}\n\n=== warnings summary ===\nx.py:1: Warning\n\n${summary}\n`;
+
+test('judgeValidity: a reference-like score, every collected test reporting plus module-level skips, is valid', () => {
+  // 10 collected: 8 pass, 1 fails, 1 skips in the test; 3 modules skip at import: 4 skipped in all.
+  const out = pytestOutput('........Fs', '1 failed, 8 passed, 4 skipped, 2 warnings in 1.20s');
+  const tests = { ...L.parseEvaluation(1, out), collected: 10 };
+  assert.equal(tests.moduleSkipped, 3, 'a skipped outcome the progress line never printed is a module\'s');
+  assert.deepEqual(L.judgeValidity({ aborted: null, checks: [], tests, freshness: { stale: false } }), { valid: true, invalidReasons: [] });
+});
+
+test('judgeValidity: more per-test outcomes than collected ids is still invalid, whatever module-level skips there are', () => {
+  const out = pytestOutput('.........Fs', '1 failed, 9 passed, 4 skipped in 1.20s');
+  const tests = { ...L.parseEvaluation(1, out), collected: 10 };
+  assert.equal(tests.moduleSkipped, 3);
+  const v = L.judgeValidity({ aborted: null, checks: [], tests, freshness: { stale: false } });
+  assert.equal(v.valid, false);
+  assert.deepEqual(v.invalidReasons, ['more outcomes than the reference collected: 11 > 10 (3 module-level skips not counted)']);
+});
+
+test('judgeValidity: fewer outcomes than collected is valid, with or without module-level skips', () => {
+  const some = { ...L.parseEvaluation(1, pytestOutput('.....F', '1 failed, 5 passed, 2 skipped in 0.5s')), collected: 10 };
+  assert.equal(some.moduleSkipped, 2);
+  assert.equal(L.judgeValidity({ aborted: null, checks: [], tests: some, freshness: { stale: false } }).valid, true);
+  const none = { ...L.parseEvaluation(1, pytestOutput('.....F', '1 failed, 5 passed in 0.5s')), collected: 10 };
+  assert.equal(none.moduleSkipped, 0);
+  assert.equal(L.judgeValidity({ aborted: null, checks: [], tests: none, freshness: { stale: false } }).valid, true);
+});
+
+test('judgeValidity: skipped outcomes it cannot place stay counted, so a tree it cannot read is never loosened', () => {
+  // No progress lines: nothing says which skips belong to a module.
+  const bare = { ...L.parseEvaluation(1, '1 failed, 9 passed, 3 skipped in 1.2s'), collected: 10 };
+  assert.equal(bare.moduleSkipped, null);
+  assert.deepEqual(L.judgeValidity({ aborted: null, checks: [], tests: bare, freshness: { stale: false } }).invalidReasons, ['more outcomes than the reference collected: 13 > 10']);
+  // Progress characters that disagree with the summary (3 dots, 5 passed) are not read.
+  const odd = L.parseEvaluation(0, pytestOutput('...', '5 passed in 0.1s'));
+  assert.equal(odd.moduleSkipped, null);
+  // The records of runs made before the count was taken carry none.
+  assert.equal(L.judgeValidity({ aborted: null, checks: [], tests: { passed: 8, failed: 1, skipped: 4, collected: 10 }, freshness: { stale: false } }).valid, false);
+});
+
+test('parseEvaluation: module-level skips are the summary\'s skipped outcomes the progress lines did not print', () => {
+  const out = pytestOutput('.x.Xs.Fs.', '1 failed, 4 passed, 3 skipped, 1 xfailed, 1 xpassed in 0.3s');
+  const t = L.parseEvaluation(1, out);
+  assert.deepEqual([t.passed, t.failed, t.skipped, t.xfailed, t.xpassed, t.moduleSkipped], [4, 1, 3, 1, 1, 1]);
+});
+
+test('judgeScore: the dry run\'s reference score is judged by the function a real run is', () => {
+  const ok = { ...L.parseEvaluation(0, pytestOutput('.....s', '5 passed, 4 skipped in 0.1s')), collected: 6 };
+  assert.deepEqual(L.judgeScore(ok), []);
+  const tooMany = { passed: 7, failed: 0, skipped: 0, xfailed: 0, xpassed: 0, collected: 6, moduleSkipped: 0 };
+  assert.deepEqual(L.judgeScore(tooMany), ['more outcomes than the reference collected: 7 > 6']);
+  // A dry run reports the score's reasons beside its own.
+  assert.deepEqual(L.judgeValidity({ checks: [], tests: tooMany, freshness: { stale: false }, dryRun: true }).invalidReasons,
+    ['dry run: no arm ran', 'more outcomes than the reference collected: 7 > 6']);
+});
+
+test('rejudge: a recorded run is judged again by today\'s rules and written beside its result, which stays as it was', async () => {
+  const { rejudgeRun } = await import('./rejudge.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-'));
+  // As the run recorded it: judged invalid by the rule before module-level skips were told apart.
+  const result = { library: 'synthetic', arm: 'B', dryRun: false, planOnly: false, valid: false,
+    invalidReasons: ['more outcomes than the reference collected: 13 > 10'],
+    tests: { passed: 8, collected: 10, failed: 1, errors: 0, skipped: 4, exit: 1, timedOut: false },
+    checks: [{ ok: true, scope: 'synthetic', name: 'egress' }], distFreshness: { stale: false }, stopped: null, aborted: null, scoredSource: { ok: true, failures: [] } };
+  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(result));
+  fs.writeFileSync(path.join(dir, 'tests.log'), pytestOutput('........Fs', '1 failed, 8 passed, 4 skipped in 1.20s'));
+  const before = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  const r = rejudgeRun(dir);
+  assert.deepEqual([r.valid, r.invalidReasons, r.was.valid, r.moduleSkipped], [true, [], false, 3]);
+  assert.equal(fs.readFileSync(path.join(dir, 'result.json'), 'utf8'), before, 'the recorded result is never rewritten');
+  const written = JSON.parse(fs.readFileSync(path.join(dir, 'rejudged.json'), 'utf8'));
+  assert.deepEqual([written.valid, written.invalidReasons], [true, []]);
+  // A real excess is still invalid, with the reason.
+  fs.writeFileSync(path.join(dir, 'tests.log'), pytestOutput('.........Fs', '1 failed, 9 passed, 4 skipped in 1.20s'));
+  assert.deepEqual(rejudgeRun(dir).invalidReasons, ['more outcomes than the reference collected: 11 > 10 (3 module-level skips not counted)']);
+  // Without the log nothing places a skip: the recorded counts are judged as they stand.
+  fs.rmSync(path.join(dir, 'tests.log'));
+  const bare = rejudgeRun(dir);
+  assert.deepEqual([bare.valid, bare.moduleSkipped, bare.scoreSource], [false, null, 'result.json']);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

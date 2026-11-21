@@ -1315,7 +1315,7 @@ async function fixtureArm(lib, sb, refFiles, arm) {
 }
 
 /** Whether the fresh eval counted the fixture arm's source and nothing else of its box. */
-async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline) {
+async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline, collected) {
   const failures = [];
   for (const p of [fixture.module, fixture.init]) if (!scored.copied.includes(p)) failures.push(`${p} did not cross`);
   if (!scored.excluded.some((e) => e.path === fixture.test && /test/.test(e.reason))) failures.push(`${fixture.test} was not left out as a test`);
@@ -1330,6 +1330,10 @@ async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline) {
   if (broken.length) failures.push(`collection errors name ${DRY_MODULE}: ${broken.slice(0, 2).join(' | ')}`);
   check(lib.name, 'fresh eval counts the fixture arm\'s source alone', failures.length === 0, failures.length ? failures
     : `${t.passed} passed against the baseline's ${baseline?.passed ?? 0}: the source edit and ${fixture.module} counted; the test edit, the filters and core.fsmonitor did not reach the eval`);
+  // The fixture arm's score is the reference's own, so a library whose reference a real run would judge invalid fails here, with the run's reason.
+  const reasons = L.judgeScore({ ...t, collected });
+  check(lib.name, 'the reference\'s own score is judged valid', reasons.length === 0, reasons.length ? reasons
+    : `${t.passed} passed, ${t.failed} failed, ${t.skipped} skipped${t.moduleSkipped ? ` (${t.moduleSkipped} of them module-level)` : ''} of ${collected} collected`);
 }
 
 async function copyOut(sb, from, to) {
@@ -1409,7 +1413,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       const copy = await copyArmWorkdir(lib, sb, path.join(runDir, 'arm-workdir'));
       record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? fixture?.plan ?? null);
       if (fixture?.plan) checkHiddenWorktree(lib, arm, copy, fixture.plan);
-      const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline) : null;
+      const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline, record.network.collected) : null;
       record.scoring = await scoreInFreshBox(lib, record.files.dir, { runId, settings, runDir, inspect });
       if (record.scoring.patchError) record.files.patches[0].error = record.scoring.patchError;
       record.tests = record.scoring.tests ? { ...record.scoring.tests, collected: record.network.collected } : null;

@@ -5,7 +5,7 @@ import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCal
 import { ordewellTools, runTool, type OrdewellTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
-import { Compactor, OVERFLOW_FRACTIONS } from './compaction';
+import { Compactor, fillOfWindow, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
 import { REPEAT_FAIL_AT, REPEAT_NUDGE_AT, RepeatGuard, repeatFailure, repeatNudge } from './repeatGuard';
 import { writtenToolCall } from './textCall';
@@ -195,6 +195,8 @@ export class OrdewellLoop {
   private readonly noticed = new Set<number>();
   /** Whether a report giving up on a budget not yet near its end has been answered: once an attempt, so nothing loops. */
   private budgetAnswered = false;
+  /** The same, once an attempt, for a report giving up on a context with room left. */
+  private contextAnswered = false;
   /** Steps in a row whose stream failed part way, and when the first of them failed: the retry policy's attempt and window. */
   private cutStreams = { count: 0, since: 0 };
   private readonly neutral: readonly OrdewellTool[];
@@ -274,7 +276,7 @@ export class OrdewellLoop {
         for (const text of plan.inject) await this.recordMessage(step, { role: 'user', text });
       }
       let toolChoice = plan.toolChoice;
-      const notice = this.budgetNotice();
+      const notice = this.budgetNotice(transcript);
       if (this.isLastCall() && this.options.taskTools.has('task_complete')) {
         // Every tool stays offered, so the cached prefix holds; only the choice narrows.
         toolChoice = { name: 'task_complete' };
@@ -356,13 +358,13 @@ export class OrdewellLoop {
    * notice carries it too: a model left to keep its own tally overestimated it
    * and reported failed with most of its budget unspent.
    */
-  private budgetNotice(): string | undefined {
+  private budgetNotice(transcript: LoadedTranscript): string | undefined {
     const limit = this.limit();
     if (this.reported || !Number.isFinite(limit) || this.modelCalls >= limit - 1 || !this.options.taskTools.has('task_complete')) return undefined;
     const due = BUDGET_NOTICES.filter((share) => !this.noticed.has(share) && this.modelCalls >= noticeAt(share, limit));
     for (const share of due) this.noticed.add(share);
     const latest = due.at(-1);
-    const count = countLine(this.modelCalls, limit);
+    const count = countLine(this.modelCalls, limit, this.compactor.fillText(transcript));
     if (latest === undefined) return this.modelCalls > 0 && this.modelCalls % COUNT_EVERY === 0 ? count : undefined;
     const notice = latest === BUDGET_NOTICES[0] ? midBudgetNotice(this.modelCalls, limit) : endBudgetNotice(limit - this.modelCalls, limit);
     return `${notice}\n${count}`;
@@ -380,6 +382,23 @@ export class OrdewellLoop {
     if (this.budgetAnswered || !Number.isFinite(limit) || this.modelCalls >= noticeAt(BUDGET_NOTICES[0], limit) || !citesBudget(args)) return undefined;
     this.budgetAnswered = true;
     return earlyGiveUpAnswer(this.modelCalls, limit);
+  }
+
+  /**
+   * The runner's answer to a report that gives its own context as exhausted
+   * while the fill is under where compaction starts (or, with no point set,
+   * under CONTEXT_ROOM_SHARE of the window): a model that read "context is
+   * compacted as it fills" as a warning ended an attempt at 36% of its window.
+   * Once an attempt, with the real figures; a second is recorded as it is.
+   */
+  private async answerContextGiveUp(args: unknown): Promise<string | undefined> {
+    if (this.contextAnswered || !citesContext(args)) return undefined;
+    const transcript = await this.options.store.load();
+    const fill = this.compactor.fillTokens(transcript);
+    const window = this.compactor.contextWindow;
+    if (fill >= (this.compactor.startTokens ?? Math.floor(window * CONTEXT_ROOM_SHARE))) return undefined;
+    this.contextAnswered = true;
+    return contextGiveUpAnswer(fillOfWindow(fill, window), countLine(this.modelCalls, this.limit(), this.compactor.fillText(transcript)));
   }
 
   /** The limit is spent: a report stands, or the runner makes the failed one itself. */
@@ -578,7 +597,7 @@ export class OrdewellLoop {
     if (call.argumentsError) return settle(`Invalid arguments for ${call.name}: ${call.argumentsError}`, true);
     try {
       if (this.options.taskTools.has(call.name)) {
-        const answer = call.name === 'task_complete' ? this.answerEarlyGiveUp(call.arguments) : undefined;
+        const answer = call.name === 'task_complete' ? this.answerEarlyGiveUp(call.arguments) ?? await this.answerContextGiveUp(call.arguments) : undefined;
         if (answer !== undefined) return settle(answer, true);
         const reply = await this.options.taskTools.call(call.name, call.arguments, signals.hard);
         if (call.name === 'task_complete' && reply.isError !== true) this.reported = true;
@@ -705,8 +724,50 @@ function earlyGiveUpAnswer(used: number, limit: number): string {
     + `If you stopped for another reason, call task_complete again and that report is recorded.\n${countLine(used, limit)}`;
 }
 
-function countLine(used: number, limit: number): string {
-  return `[calls: ${used} of ${limit}]`;
+/** The one status line the model is shown: the call count, and its context fill beside it, one line so the cached prefix pays for one. */
+function countLine(used: number, limit: number, context?: string): string {
+  const calls = Number.isFinite(limit) ? `calls: ${used} of ${limit}` : undefined;
+  return `[${[calls, context].filter((part) => part !== undefined).join('; ')}]`;
+}
+
+/**
+ * The share of the window under which a context with no compaction point in
+ * force is far from full: compaction acts at the capacity guard, well above it.
+ */
+const CONTEXT_ROOM_SHARE = 0.7;
+
+/**
+ * The phrases a report that blames the attempt's own context or memory uses.
+ * Phrases, not the bare words: a library's context object, a context-length
+ * error a tool returned and a test's "out of memory" are not the model's own
+ * window. The model's own is named by "my", "your" or "the attempt's"; a clause
+ * that opens on "context" or "the context window" (its usual shorthand) or an
+ * "out of context" with a verb of running out before it. No bare "memory": it
+ * is a test's subject too. Nor "exceeded" or "length", which a tool's error says.
+ */
+const CONTEXT_GONE = String.raw`(?:(?:is|was|has\s+been|are|being|now|nearly|almost|completely|fully|practically|currently)\s+)*(?:exhausted|full|used\s+up|spent|depleted|consumed|maxed\s+out|running\s+out|ran\s+out|reached|hit)\b`;
+const CONTEXT_PHRASES = [
+  new RegExp(String.raw`\b(?:my|your|our|(?:the|this)\s+attempt'?s?)\s+(?:remaining\s+)?(?:context|memory)(?:\s+(?:window|budget|limit))?\s+${CONTEXT_GONE}`, 'i'),
+  new RegExp(String.raw`(?:^|[.;:!?,]\s*)(?:the\s+)?context(?:\s+window)?\s+${CONTEXT_GONE}`, 'i'),
+  /\b(?:(?:ran|run|running)\s+(?:out\s+of|low\s+on)|(?:am|i'm|im|is|are)\s+(?:nearly\s+|almost\s+)?(?:out\s+of|low\s+on))\s+(?:(?:my|the|available|remaining)\s+)*context\b/i,
+] as const;
+
+/**
+ * Whether a `task_complete` call's arguments end the attempt as `failed` or
+ * `blocked` and give its own context as why: one of CONTEXT_PHRASES in its
+ * reason or its summary, whatever their case.
+ */
+export function citesContext(args: unknown): boolean {
+  if (typeof args !== 'object' || args === null) return false;
+  const { status, reason, summary } = args as Record<string, unknown>;
+  if (status !== 'failed' && status !== 'blocked') return false;
+  return [reason, summary].some((text) => typeof text === 'string' && CONTEXT_PHRASES.some((phrase) => phrase.test(text)));
+}
+
+/** Conditional, like the budget's: the phrases can match a report that stopped for another reason and is owed its record. */
+function contextGiveUpAnswer(fill: string, status: string): string {
+  return `[Ordewell] Not recorded: if you stopped because your context is full, it is not: it holds ${fill} and is compacted for you as it fills, so go on with the brief. `
+    + `If you stopped for another reason, call task_complete again and that report is recorded.\n${status}`;
 }
 
 function midBudgetNotice(used: number, limit: number): string {
