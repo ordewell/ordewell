@@ -223,6 +223,18 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
   Cursor's own `plan`), from a private directory with a config home of its
   own whose settings deny Cursor's reads, writes and shell; Cursor refuses
   those itself, and it reads through `run_command`.
+- **Pi** starts with its `read`, `grep`, `find` and `ls` tools and Ordewell's
+  alone (`--tools`), so it has no write, edit or shell tool to call, and
+  without the user's extensions, the repository's `.pi/` files or its own
+  context files, which it would read from every directory up to the root and
+  past the read check; Ordewell hands it the repository's as text (ADR-0028).
+  Pi asks before nothing, so the extension Ordewell writes for the process,
+  owner-only and outside the worktree, asks before each of those reads: it
+  resolves the path as Pi would, requires it on disk and follows its links,
+  and Ordewell answers with `decideReadOnlyTaskPermission` against the task
+  worktree and session workspace, nobody asked. A read outside both fails with
+  that reason and shows no approval card; an allowed one runs on the real path
+  that was decided (#78).
 - **Native web tools are refused.** A runner's own fetch and search run
   outside Ordewell's pinned transport, and a provider-side search outside its
   secret check and budget too, with nobody there to approve one. Claude's
@@ -494,4 +506,6 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-04 — Gemini CLI runs read-only tasks, from a private start directory, under a policy file that denies its own write, shell and web tools (ADR-0060 R3).
 - 2026-11-04 — Cursor runs read-only tasks, from a private start directory, its own reads, writes and shell denied (ADR-0060 R3).
 - 2026-11-05 — a read-only task's Cline reads by the one path its arguments name (ADR-0060 R3).
+- 2026-11-18 — Pi runs read-only tasks on its read tools and Ordewell's, each read decided by `decideReadOnlyTaskPermission` through the extension Ordewell loads into it (#78).
+- 2026-11-20 — a read-only task's Pi starts with `--no-context-files`, the repository's instruction files handed to it as text (#78).
 - 2026-11-21 — a plan change that brings a read-only AI task on a host with no sandbox says, in its answer, that the task can run no test, build or script.

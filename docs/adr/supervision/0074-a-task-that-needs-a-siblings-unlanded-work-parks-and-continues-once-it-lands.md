@@ -91,7 +91,7 @@ next start continues its saved session, on its branch, once they have landed.**
 ### Which runners have it
 
 Every runner that runs a change task through the task token: Claude Code,
-Codex, OpenCode and the ACP runners over MCP, and the built-in runner
+Codex, OpenCode, Pi and the ACP runners over MCP, and the built-in runner
 in-process (ADR-0070), whose tool list the token decides. A runner that cannot
 resume a session still parks; its next start is the carry-over of P4. Not a
 read-only task, whose token never lists it: it lands nothing, and its worktree
@@ -140,3 +140,4 @@ its merge gate for what it depends on (ADR-0020).
   continuation's message and the built-in runner's guard prototyped.
 - 2026-11-21 — accepted and implemented: a runner without a resumable session parks and starts as a carry-over, a lost wait goes on without it (P7), and a Stop holds a parked task (P8).
 - 2026-11-21 — the cycle check counts containment and parks still ending, a park survives a failed spawn, and the shell guard reads only sleeps that run.
+- 2026-11-21 — Pi, which joined the task runners beside this decision, is among the runners that have it.

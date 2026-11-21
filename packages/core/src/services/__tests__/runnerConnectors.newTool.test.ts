@@ -27,6 +27,7 @@ const RUNNER_NAME: Record<string, string> = {
   'claude-code': 'mcp__ordewell__board_post',
   codex: 'mcp__ordewell__board_post',
   opencode: 'ordewell_board_post',
+  pi: 'mcp__ordewell__board_post',
   'copilot-cli': 'ordewell-board_post',
   'qwen-code': 'mcp__ordewell__board_post',
   cline: 'ordewell__board_post',

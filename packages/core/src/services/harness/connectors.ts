@@ -2,15 +2,18 @@ import { TaskModeUnsupportedError, type AgentAdapter, type AgentProcessDeps, typ
 import { ClaudeCodeAdapter } from './ClaudeCodeAdapter';
 import { CodexAdapter } from './CodexAdapter';
 import { OpenCodeAdapter } from './OpenCodeAdapter';
+import { PiAdapter } from './PiAdapter';
 import { CLAUDE_ORDEWELL } from './claudeOrdewell';
 import { CODEX_ORDEWELL } from './codexOrdewell';
 import { OPENCODE_ORDEWELL } from './openCodeOrdewell';
+import { PI_ORDEWELL } from './piOrdewell';
 import type { OrdewellToolBinding } from './ordewellBinding';
 import type { RepoConfigReader } from './repoConfig';
 import type { KeySignInRoute } from '../signInHint';
 import { CLAUDE_REPO_CONFIG } from './claudeRepoConfig';
 import { CODEX_REPO_CONFIG } from './codexRepoConfig';
 import { OPENCODE_REPO_CONFIG } from './openCodeRepoConfig';
+import { PI_REPO_CONFIG } from './piRepoConfig';
 import { claudeUsageLimitReset } from './claudeUsageLimit';
 import { codexUsageLimitReset } from './codexUsageLimit';
 import { acpConnector } from './acpProfiles';
@@ -108,6 +111,8 @@ export const CONNECTORS: Readonly<Record<string, RunnerConnector>> = {
   'claude-code': { create: (deps) => new ClaudeCodeAdapter(deps), plans: true, ordewellTools: CLAUDE_ORDEWELL, repoConfig: CLAUDE_REPO_CONFIG, usageLimitReset: claudeUsageLimitReset, promptCacheTtlMs: FIVE_MINUTES },
   codex: { create: (deps) => new CodexAdapter(deps), plans: true, ordewellTools: CODEX_ORDEWELL, repoConfig: CODEX_REPO_CONFIG, usageLimitReset: codexUsageLimitReset, promptCacheTtlMs: FIVE_MINUTES },
   opencode: { create: (deps) => new OpenCodeAdapter(deps), plans: true, ordewellTools: OPENCODE_ORDEWELL, repoConfig: OPENCODE_REPO_CONFIG },
+  // Checked against Pi 1.5.2, the version its recordings were made with (#78).
+  pi: { create: (deps) => new PiAdapter(deps), plans: true, ordewellTools: PI_ORDEWELL, repoConfig: PI_REPO_CONFIG, minVersion: '1.5.2' },
   'copilot-cli': acpConnector(COPILOT_CLI_PROFILE),
   'qwen-code': acpConnector(QWEN_CODE_PROFILE),
   cline: acpConnector(CLINE_PROFILE),

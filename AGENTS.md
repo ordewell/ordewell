@@ -5,7 +5,7 @@ Context for coding agents working in this repository. Humans want
 
 Ordewell is an open-source terminal tool that turns one goal into an ordered
 plan of coding-agent tasks, each with its own runner, model and mode, then
-executes and verifies them. Claude Code, Codex, OpenCode and GitHub Copilot CLI
+executes and verifies them. Claude Code, Codex, OpenCode, Pi and GitHub Copilot CLI
 (over ACP) can all be running targets, and so can the built-in runner, one per
 API provider, which runs inside Ordewell on that provider's key alone.
 

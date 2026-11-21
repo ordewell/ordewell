@@ -644,6 +644,38 @@ describe('OpenCode instruction file choice (ADR-0028)', () => {
   });
 });
 
+describe('Pi instruction file choice (ADR-0028)', () => {
+  const reader = CONNECTORS.pi.repoConfig;
+
+  it('reads one context file per level, root first, the override in place of the plain file', () => {
+    const root = repo({ 'AGENTS.md': 'ROOT', 'AGENTS.override.md': 'ROOT-OVERRIDE', 'pkg/CLAUDE.md': 'PKG-CLAUDE' });
+
+    expect(reader.instructions(join(root, 'pkg'))).toEqual([
+      { path: '../AGENTS.override.md', text: 'ROOT-OVERRIDE' },
+      { path: 'CLAUDE.md', text: 'PKG-CLAUDE' },
+    ]);
+  });
+
+  it('moves on to the next name when the first links outside the repository', () => {
+    const outside = repo({ 'secret.md': 'USER-SECRET' });
+    const root = repo({ 'CLAUDE.md': 'REPO-CLAUDE' });
+    symlinkSync(join(outside, 'secret.md'), join(root, 'AGENTS.md'));
+
+    expect(reader.instructions(root)).toEqual([{ path: 'CLAUDE.md', text: 'REPO-CLAUDE' }]);
+  });
+
+  it('offers none of the repository\'s .pi servers, extensions or settings', () => {
+    const root = repo({
+      '.pi/mcp.json': JSON.stringify({ mcpServers: { probe: { command: './serve.sh' } } }),
+      '.pi/settings.json': JSON.stringify({ extensions: ['./hook.ts'] }),
+      '.pi/extensions/hook.ts': 'export default function () {}',
+    });
+
+    expect(reader.projectServers(root)).toEqual({ servers: [], unreadable: [] });
+    expect(reader.instructions(root)).toEqual([]);
+  });
+});
+
 /**
  * Copilot loads instruction files and runs hooks from the directory it starts
  * in, so a restricted start begins in a private directory instead (ADR-0060,

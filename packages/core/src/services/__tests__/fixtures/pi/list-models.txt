@@ -1,0 +1,2 @@
+provider  model     context  max-out  thinking  images
+ollama    qwen3:8b  32.8K    4.1K     no        no    

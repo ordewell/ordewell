@@ -50,8 +50,9 @@ describe('pinnedShellcheck', { skip: process.platform === 'win32' ? 'no shellche
   });
 
   it('turns the installers\' lint test from a skip into a failure under the flag', () => {
-    // NODE_OPTIONS cleared: CI's names spec and the annotation reporter, and this reads TAP.
-    const run = (env) => spawnSync(process.execPath, ['--test', '--test-name-pattern=shellcheck', join('scripts', 'install', 'desktop.test.mjs')], {
+    // NODE_OPTIONS cleared: CI's names spec and the annotation reporter, and this reads TAP, which it
+    // names, since Node 23 and later default to spec even when stdout is not a terminal.
+    const run = (env) => spawnSync(process.execPath, ['--test', '--test-reporter=tap', '--test-name-pattern=shellcheck', join('scripts', 'install', 'desktop.test.mjs')], {
       encoding: 'utf8',
       env: { ...process.env, NODE_TEST_CONTEXT: undefined, NODE_OPTIONS: '', ORDEWELL_SHELLCHECK: nowhere, ...env },
     });

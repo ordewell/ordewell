@@ -70,11 +70,11 @@ vi.mock('../../services/harness/connectors', async (importOriginal) => {
 describe('a built-in runner declared by manifest and connector only', () => {
   it('is in the runner list core exposes, after the shipped runners', () => {
     const ids = new RunnerRegistry().list().map((entry) => entry.manifest.name);
-    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS, 'acme', 'tasker', 'inhouse']);
+    expect(ids).toEqual(['claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', ...PROVIDER_RUNNER_IDS, 'acme', 'tasker', 'inhouse']);
   });
 
   it('can plan: it is a harness planner, labelled from its manifest', () => {
-    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'acme']);
+    expect(CLI_PROVIDERS).toEqual(['claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'acme']);
     expect(isCliProvider('acme')).toBe(true);
     expect(runnerForProvider('acme')).toBe('acme');
     expect(providerForRunner('acme')).toBe('acme');
