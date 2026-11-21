@@ -11,6 +11,7 @@ export type {
   ModelToolCall,
   ModelUsage,
   ProviderState,
+  ReasoningHint,
   SystemPart,
   ToolChoice,
   ToolDefinition,

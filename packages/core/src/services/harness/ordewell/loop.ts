@@ -7,6 +7,7 @@ import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
 import { Compactor, fillOfWindow, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
+import { reasoningHintOf, type TaskReasoningKept } from './reasoningWindow';
 import { REPEAT_FAIL_AT, REPEAT_NUDGE_AT, RepeatGuard, repeatFailure, repeatNudge } from './repeatGuard';
 import { writtenToolCall } from './textCall';
 
@@ -52,6 +53,8 @@ export interface AssemblyInput {
   tools: readonly ToolDefinition[];
   toolChoice?: ToolChoice;
   effort?: EffortLevel;
+  /** How many latest calls send their reasoning back (`taskReasoningKept`); `all` when absent. */
+  reasoningKept?: TaskReasoningKept;
 }
 
 /**
@@ -67,16 +70,21 @@ function withSystemBreakpoint(system: readonly SystemPart[]): SystemPart[] {
   return system.map((part, i) => (i === system.length - 1 ? { ...part, cacheBreakpoint: true } : part));
 }
 
-export const assembleRequest: RequestAssembler = (input) => ({
-  model: input.model.model,
-  system: withSystemBreakpoint(input.system),
-  messages: [...input.transcript.messages],
-  tools: [...input.tools],
-  ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
-  ...(input.effort ? { effort: input.effort } : {}),
-  maxOutputTokens: input.model.maxOutputTokens,
-  cache: { afterTools: true, atLastMessage: true },
-});
+export const assembleRequest: RequestAssembler = (input) => {
+  // A hint, never a rewrite: which reasoning may go is each dialect's to decide (ADR-0070).
+  const reasoning = reasoningHintOf(input.transcript.messages, input.reasoningKept ?? 'all');
+  return {
+    model: input.model.model,
+    system: withSystemBreakpoint(input.system),
+    messages: [...input.transcript.messages],
+    tools: [...input.tools],
+    ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
+    ...(input.effort ? { effort: input.effort } : {}),
+    maxOutputTokens: input.model.maxOutputTokens,
+    cache: { afterTools: true, atLastMessage: true },
+    ...(reasoning ? { reasoning } : {}),
+  };
+};
 
 export interface LoopOptions {
   client: ModelClient;
@@ -100,6 +108,8 @@ export interface LoopOptions {
   stepLimit?: number;
   /** Where compaction starts, from a `taskCompactAt` number held within bounds; the capacity guard alone when absent. */
   compactAt?: number;
+  /** How many latest calls send their reasoning back, from `taskReasoningKept`; `all` when absent. */
+  reasoningKept?: TaskReasoningKept;
   /**
    * The policy a step whose stream failed part way is sent again under; the
    * client's `withRetry` should share it, as it retries the failures before any
@@ -446,6 +456,7 @@ export class OrdewellLoop {
       tools: this.tools,
       ...(plan.toolChoice ? { toolChoice: plan.toolChoice } : {}),
       ...(this.options.effort ? { effort: this.options.effort } : {}),
+      ...(this.options.reasoningKept !== undefined ? { reasoningKept: this.options.reasoningKept } : {}),
     });
   }
 
