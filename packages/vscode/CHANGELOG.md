@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+- An installed coding agent plans ahead of an API key found in the
+  environment or saved in VS Code, unless the agent is signed out or you chose
+  that provider: picked it with `/planner` or the `aiProvider` setting, or saved
+  a planner model for it (`orchestratorModel`, or `geminiModel` for Gemini). A
+  key alone used to take planning from the agent and refuse the first goal for
+  having no model. If you already plan with a provider, nothing changes. When a
+  key is passed over, the chat's first screen says which planner is active and
+  why.
+- A coding agent with no model picked reads as *Agent default* in the planner
+  picker, the `orchestratorModel` setting no longer calls the model required,
+  and `/planner` offers *Agent default* first for an agent and no longer gives
+  up when the agent lists no models.
+- A planner refused for having no model says to run `/planner` and pick a
+  model for that provider.
+
 ## [0.14.5] - 2026-11-21
 
 ### Added

@@ -30,6 +30,11 @@ interface EmptyStateProps {
   signedOut?: SignedOutPlannerRow[];
   /** The repositories and branches the host found; see {@link IsolationNotice}. */
   isolationPreview?: IsolationPreview | null;
+  /**
+   * Which planner is active and why, when a found key is not used for
+   * planning because the detected agent plans (ADR-0075), worded by core.
+   */
+  plannerNote?: string;
 }
 
 /** One Setup row: what is set, and the command that changes it. */
@@ -62,7 +67,7 @@ function afterLabel(row: SignedOutPlannerRow): string {
   return said.startsWith(row.label) ? said.slice(row.label.length) : ` ${said}`;
 }
 
-export default function EmptyState({ onLoadSession, runSettings, signedOut, isolationPreview }: EmptyStateProps) {
+export default function EmptyState({ onLoadSession, runSettings, signedOut, isolationPreview, plannerNote }: EmptyStateProps) {
   return (
     <div className="empty-state">
       <div className="empty-state-logo">
@@ -115,6 +120,12 @@ export default function EmptyState({ onLoadSession, runSettings, signedOut, isol
         </p>
       </div>
       <PlanApprovalNote runSettings={runSettings} />
+      {/* The approval note's margin-note look: it explains a working state, it warns of nothing. */}
+      {plannerNote && (
+        <div className="plan-approval-note planner-key-note" role="note">
+          <p className="plan-approval-text">{plannerNote}</p>
+        </div>
+      )}
       <IsolationNotice preview={isolationPreview} />
       {runSettings && (
         <div className="empty-state-setup">

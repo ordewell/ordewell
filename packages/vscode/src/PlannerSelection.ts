@@ -145,6 +145,7 @@ export class PlannerSelection {
       provider,
       runnerForProvider(provider) ?? undefined,
       this.deps.config.plannerThinkingEffort,
+      this.deps.config.unusedPlanningKey() ?? undefined,
     );
   }
 }

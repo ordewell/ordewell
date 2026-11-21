@@ -167,6 +167,7 @@ function fakeConfig() {
     get openaiCompatibleBaseUrl() { return values.openaiCompatibleBaseUrl as string; },
     get configuredProviders() { return values.configuredProviders as ApiProvider[]; },
     get maxParallelSessions() { return values.maxParallelSessions as number; },
+    unusedPlanningKey: () => null,
     update: vi.fn(async (key: string, value: unknown) => { values[key] = value; }),
     onDidChange: vi.fn((listener: () => void) => { listeners.push(listener); return { dispose: vi.fn() }; }),
   };
@@ -575,7 +576,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(h.chat.provider.setRunSettings).toHaveBeenCalledWith(expect.any(Boolean), RUN_SETTINGS_DEFAULTS, 2);
     await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'claude-code', usable: true })]),
-      'openrouter', undefined, '',
+      'openrouter', undefined, '', undefined,
     ));
   });
 

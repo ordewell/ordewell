@@ -275,8 +275,9 @@ function setPlanner(state: TuiState, args: string[]): Step {
   }
   const opened = openStepper(state, plannerStepper);
   // The model step lists the chosen backend's catalog, so fetch it fresh; the
-  // open stepper refills when it lands.
-  return { ...opened, effects: [...opened.effects, { type: 'loadModels' }] };
+  // runner list re-probes the installed agents, so one installed while the TUI
+  // runs is offered without /refresh. The open stepper refills as each lands.
+  return { ...opened, effects: [...opened.effects, { type: 'loadModels' }, { type: 'loadRunners' }] };
 }
 
 /** The provider whose endpoint, not a key, is what sets it up: a local server takes no key. */

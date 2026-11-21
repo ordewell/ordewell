@@ -1275,6 +1275,18 @@ describe('settings', () => {
     expect(loaded?.runners.map((r) => [r.id, r.name])).toEqual([['openrouter', 'OpenRouter']]);
   });
 
+  // Bug: the planner row kept the planner from before the key until a goal was refused (F10).
+  it('applies the daemon\'s settings answer once a key is stored, so the planner row shows who plans now', async () => {
+    const h = harness();
+    h.api.updateSettings.mockResolvedValue({
+      aiProvider: 'claude-code', orchestratorModel: '', plannerThinkingEffort: '', unusedPlanningKey: 'openrouter',
+      autonomousMode: false, maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS },
+    });
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+    const loaded = h.actions.find((a) => a.type === 'settingsLoaded') as Extract<Action, { type: 'settingsLoaded' }> | undefined;
+    expect(loaded?.settings).toMatchObject({ aiProvider: 'claude-code', unusedPlanningKey: 'openrouter' });
+  });
+
   it('never puts an api key in a message the transcript would show', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-secret' }, h.deps);

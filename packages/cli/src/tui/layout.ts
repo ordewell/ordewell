@@ -5,7 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLength, conversati
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
+import { AGENT_DEFAULT_MODEL, DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
 import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -1145,7 +1145,11 @@ function plannerRowValue(state: TuiState, label: string): string {
   const alarm = state.runners.find((row) => row.id === runnerForProvider(state.plannerProvider));
   const paint = alarm && signedOutWithWayIn(alarm) ? style.red : (text: string) => text;
   const effort = plannerEffortLabel(state);
-  const model = state.orchestratorModel ? paint(state.orchestratorModel) : style.yellow('no model');
+  // An agent with no model picked plans with its own default, a working
+  // state; only a vendor, which has no default, is missing something.
+  const model = state.orchestratorModel
+    ? paint(state.orchestratorModel)
+    : isCliProvider(state.plannerProvider) ? paint(AGENT_DEFAULT_MODEL) : style.yellow('no model');
   return [paint(label), model, ...(effort ? [paint(effort)] : [])].join(style.grey(' · '));
 }
 
@@ -1201,6 +1205,10 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
       ),
       '',
     ];
+  // Once, here, and grey like the version notice: it explains a working state.
+  const keyPassedOver = !detecting && planner.ready && state.unusedPlanningKey && isApiProvider(state.unusedPlanningKey)
+    ? [...wrap(style.grey(describeUnusedPlanningKey(state.plannerProvider, state.unusedPlanningKey, TERMINAL_UI_COMMANDS.pickPlanner)), Math.max(1, cols - 1)), '']
+    : [];
   const versionCheck = state.versionCheckNotice
     ? [...wrap(style.grey(state.versionCheckNotice), Math.max(1, cols - 1)), '']
     : [];
@@ -1209,6 +1217,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     : [];
   const tail = [
     ...notice,
+    ...keyPassedOver,
     ...versionCheck,
     ...update,
     style.grey('/help   all commands'),

@@ -51,10 +51,24 @@ describe('the welcome while the coding agents are detected', () => {
   it('settles on the detected agent', () => {
     const state = after(settings('claude-code'), runners(['claude-code', 'Claude Code']));
 
-    expect(row(state, 'Planner')).toMatch(/^\s*Planner\s+Claude Code · no model\s+\/planner\s*$/);
+    expect(row(state, 'Planner')).toMatch(/^\s*Planner\s+Claude Code · agent default\s+\/planner\s*$/);
     expect(row(state, 'Runners')).toMatch(/^\s*Runners\s+Claude Code\s+\/runners\s*$/);
     expect(rows(state).join('\n')).not.toMatch(NOTICE);
     expect(rows(state).join('\n')).not.toContain('Detecting');
+  });
+
+  // An agent with no model picked plans with its own default: a working state, not a warning.
+  it('paints an agent planner\'s own default model plainly, and only a vendor\'s missing model in yellow', () => {
+    style.enabled = true;
+    try {
+      const agent = render(after(settings('claude-code'), runners(['claude-code', 'Claude Code']))).find((l) => stripAnsi(l).trimStart().startsWith('Planner')) ?? '';
+      expect(agent).toContain('agent default');
+      expect(agent).not.toContain(style.yellow('agent default'));
+      const vendor = render(after(settings('openai'), runners(['claude-code', 'Claude Code']), models(['openai']))).find((l) => stripAnsi(l).trimStart().startsWith('Planner')) ?? '';
+      expect(vendor).toContain(style.yellow('no model'));
+    } finally {
+      style.enabled = false;
+    }
   });
 
   it('shows the notice once detection found nothing that can plan', () => {
@@ -68,5 +82,27 @@ describe('the welcome while the coding agents are detected', () => {
   it('waits for the configured providers before saying a key is missing', () => {
     expect(rows(after(settings('openrouter'), runners())).join('\n')).not.toMatch(NOTICE);
     expect(rows(after(settings('openrouter'), runners(), models(['openrouter']))).join('\n')).not.toMatch(NOTICE);
+  });
+});
+
+/**
+ * A key in the shell or saved in Ordewell does not take planning from the
+ * detected agent (ADR-0075), so the first screen says, once, who plans and why.
+ */
+describe('the welcome when a key was found but the detected agent plans', () => {
+  const keyPassedOver = (unusedPlanningKey?: AiProvider): Action => ({
+    type: 'settingsLoaded',
+    settings: { aiProvider: 'claude-code', orchestratorModel: '', plannerThinkingEffort: '', ...(unusedPlanningKey ? { unusedPlanningKey } : {}), maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS } },
+  });
+  const LINE = 'Planning with Claude Code. An OpenAI key was found and is not used for planning; /planner changes that.';
+
+  it('says which planner is active and which key it plans past, once', () => {
+    const text = rows(after(keyPassedOver('openai'), runners(['claude-code', 'Claude Code']))).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain(LINE);
+    expect(text.split(LINE)).toHaveLength(2);
+  });
+
+  it('says nothing when no key was passed over', () => {
+    expect(rows(after(keyPassedOver(), runners(['claude-code', 'Claude Code']))).join(' ')).not.toContain('not used for planning');
   });
 });

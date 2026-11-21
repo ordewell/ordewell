@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerReadinessConfig } from '../plannerReadiness';
 import { recordRunnerAuth, resetRunnerAuth, runnerSignIn, type RunnerAuth } from '../runnerAuth';
+import { describeUnusedPlanningKey } from '../plannerNotices';
 
 function config(over: Partial<PlannerReadinessConfig> & { key?: string }): PlannerReadinessConfig {
   const { key = '', ...rest } = over;
@@ -129,11 +130,14 @@ describe('describePlannerNotReady', () => {
     expect(text).toContain('OPENAI_COMPATIBLE_BASE_URL');
   });
 
-  it('tells a model-less vendor to pick a model, in the surface\'s spelling', () => {
+  // An API planner has no default model on purpose, so the refusal stays and names the one next step.
+  it('tells a model-less vendor exactly where to pick its model, in the surface\'s spelling', () => {
     const reason = plannerNotReady(config({ key: 'sk', planningModel: '' }))!;
-    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe('No planner model selected for OpenRouter. Pick one with /planner.');
-    expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe('No planner model selected for OpenRouter. Pick one with /planner.');
-    expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toContain('ordewell model set <id>');
+    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe('No planner model selected for OpenRouter. Run /planner and pick a model for OpenRouter.');
+    expect(describePlannerNotReady(reason, CHAT_COMMANDS)).toBe('No planner model selected for OpenRouter. Run /planner and pick a model for OpenRouter.');
+    expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
+      'No planner model selected for OpenRouter. List its models with ordewell models, then pick one with ordewell model set <id>, or switch planner with ordewell planner <id>.',
+    );
   });
 
   // The planner path: every built-in's hint, as the readiness gate words it.
@@ -163,5 +167,16 @@ describe('describePlannerNotReady', () => {
     expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
       'Claude Code is not signed in. Run claude auth login to sign in. Then try again.',
     );
+  });
+});
+
+describe('describeUnusedPlanningKey (ADR-0075)', () => {
+  it('says which agent plans and which found key it plans past, with the surface\'s command to change it', () => {
+    expect(describeUnusedPlanningKey('claude-code', 'openai', TERMINAL_UI_COMMANDS.pickPlanner))
+      .toBe('Planning with Claude Code. An OpenAI key was found and is not used for planning; /planner changes that.');
+    expect(describeUnusedPlanningKey('codex', 'google', HEADLESS_CLI_COMMANDS.pickPlanner))
+      .toBe('Planning with Codex. A Google Gemini key was found and is not used for planning; ordewell planner <id> changes that.');
+    expect(describeUnusedPlanningKey('claude-code', 'openai_compatible', CHAT_COMMANDS.pickPlanner))
+      .toBe('Planning with Claude Code. A Custom endpoint was found and is not used for planning; /planner changes that.');
   });
 });

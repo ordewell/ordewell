@@ -6,11 +6,12 @@ import { withHostCredentials } from './hostCredentials';
 import type { RunnerInstallation } from './RunnerInstallation';
 
 /**
- * The planner a host falls back to when the user chose none and no vendor key
- * is in the environment (ADR-0009): an installed coding agent, so a first run
- * needs no API key. Derived at startup and again on a runner-list refresh, and
- * never saved, so a key added later or a `/planner` pick still wins, and an
- * agent installed while a host runs is found without a restart (ADR-0039).
+ * The planner a host falls back to when the user chose none (ADR-0009): an
+ * installed coding agent, so a first run needs no API key, ahead of a found
+ * vendor key the user chose nothing for (ADR-0075). Derived at startup and
+ * again on a runner-list refresh, and never saved, so a `/planner` pick still
+ * wins, and an agent installed while a host runs is found without a restart
+ * (ADR-0039).
  *
  * Held per process because `BaseConfig.detectProvider` is sync, read on every
  * `aiProvider`, while finding an agent spawns its binary; a host probes at

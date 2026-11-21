@@ -321,9 +321,27 @@ describe('OrchestratorPool default planner', () => {
     await pool.detectInstalledPlanner();
 
     expect(pool.getSettings().aiProvider).toBe('claude-code');
-    // Derived on each start, so a key installed later still wins.
+    // Derived on each start and never saved, so a later /planner pick still wins.
     const settingsFile = join(dir, 'settings.json');
     expect(existsSync(settingsFile) ? readFileSync(settingsFile, 'utf8') : '').not.toContain('claude-code');
+  });
+
+  // A key saved with /key-set (or found in the shell) is not a choice to plan with it (ADR-0075).
+  it('keeps the detected agent planning when a key is saved, and reports that key as not used for planning', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    answer();
+    await pool.detectInstalledPlanner();
+    expect(pool.getSettings().unusedPlanningKey).toBeUndefined();
+
+    const saved = pool.updateSettings({ env: { OPENAI_API_KEY: 'sk-openai-test' } });
+
+    expect(saved.aiProvider).toBe('claude-code');
+    expect(saved.unusedPlanningKey).toBe('openai');
+    expect(pool.getSettings().unusedPlanningKey).toBe('openai');
+    pool.updateSettings({ env: { AI_PROVIDER: 'claude-code' } });
+    expect(pool.getSettings().unusedPlanningKey).toBeUndefined();
+    pool.destroyAll();
   });
 
   it('probes once at startup, not once for each planning turn', async () => {

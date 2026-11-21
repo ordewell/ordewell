@@ -8,6 +8,41 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **An installed coding agent plans ahead of an API key Ordewell finds.** A
+  Claude Code or Codex user with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or
+  another provider's key in their shell, or one saved in Ordewell (VS Code's
+  secret storage, the desktop app's *Set API key…*, `/key-set`), had their
+  first goal refused with "No planner model selected": the key took planning
+  from the agent, and an API planner has no default model. Now the agent plans,
+  unless it is signed out or you chose that provider: picked it with `/planner`
+  or `ordewell planner <id>`, or saved a planner model for it
+  (`ORCHESTRATOR_MODEL`, VS Code's `orchestratorModel`, or `GEMINI_MODEL` and
+  `geminiModel` for Gemini). If you already plan with a provider, nothing
+  changes. With no agent installed, a key's provider plans as before. When a
+  key is passed over, the terminal UI's welcome, the desktop app and VS Code
+  say once which planner is active and why: "Planning with Claude Code. An
+  OpenAI key was found and is not used for planning; /planner changes that."
+  ([ADR-0075](docs/adr/planner/0075-an-installed-coding-agent-outranks-a-found-api-key.md)).
+- **A coding agent with no model picked reads as working.** The terminal UI's
+  Planner row says `agent default`, no longer `no model` in yellow; the chat's
+  and the desktop app's planner model pickers say *Agent default* instead of
+  *Select model...* or a blank; VS Code's `orchestratorModel` setting no longer
+  calls the model required; and VS Code's `/planner` offers *Agent default*
+  first for an agent and no longer gives up when the agent's catalog is empty.
+- **A planner refused for having no model names the exact step.** "Run
+  /planner and pick a model for OpenAI" in the terminal UI, the desktop app and
+  VS Code; from the command line, list the models with `ordewell models`, then
+  `ordewell model set <id>`.
+
+### Fixed
+
+- **The terminal UI's Planner row is current after `/key-set`,** which now
+  applies the daemon's answer at once instead of showing the old planner until
+  a goal was refused, and **`/planner` probes the installed coding agents
+  again**, so one installed while the TUI runs is offered without `/refresh`.
+
 ## [0.14.5] - 2026-11-21
 
 ### Added

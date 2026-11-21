@@ -486,12 +486,19 @@ describe('keyless first-run entry points at the process boundary', () => {
   it('a model picked for the detected agent is not sent to a vendor whose key is added later', async () => {
     await client.updateSettings({ orchestratorModel: 'sonnet' });
     await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key', OPENROUTER_BASE_URL: vendorBase } });
-    expect(await client.getSettings()).toMatchObject({ aiProvider: 'openrouter', orchestratorModel: '' });
+    // A key alone does not take planning from the agent (ADR-0075), which keeps its own pick.
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', orchestratorModel: 'sonnet', unusedPlanningKey: 'openrouter' });
 
-    await expect(client.startConversation('agent-pick', 'Build a cache', ['claude-code'], workspace))
-      .rejects.toMatchObject({ plannerNotReady: { code: 'no_model', provider: 'openrouter' } });
-    expect(vendorRequests).toEqual([]);
+    // Picked, the vendor plans with a model of its own, never the agent's.
+    await client.updateSettings({ env: { AI_PROVIDER: 'openrouter' } });
+    const switched = await client.getSettings();
+    expect(switched.aiProvider).toBe('openrouter');
+    expect(switched.orchestratorModel).not.toBe('sonnet');
+
+    await client.startConversation('agent-pick', 'Build a cache', ['claude-code'], workspace);
     expect(argvs).toEqual([]);
+    expect(vendorRequests).toHaveLength(1);
+    expect(JSON.parse(vendorRequests[0].body).model).not.toBe('sonnet');
   });
 
   it('a model picked for OpenRouter is not sent to Google when the key is swapped for a Gemini one', async () => {
@@ -503,6 +510,10 @@ describe('keyless first-run entry points at the process boundary', () => {
     await client.updateSettings({ env: { OPENROUTER_API_KEY: 'test-key' } });
     await client.updateSettings({ orchestratorModel: 'openai/gpt-4o' });
     await client.updateSettings({ env: { OPENROUTER_API_KEY: '', GEMINI_API_KEY: 'gemini-key' } });
+    // OpenRouter's model with its key gone chooses no vendor, so the agent plans (ADR-0075).
+    expect(await client.getSettings()).toMatchObject({ aiProvider: 'claude-code', unusedPlanningKey: 'google' });
+
+    await client.updateSettings({ env: { AI_PROVIDER: 'google' } });
     expect(await client.getSettings()).toMatchObject({ aiProvider: 'google', orchestratorModel: '' });
 
     await expect(client.startConversation('swapped', 'Build a cache', ['claude-code'], workspace))

@@ -568,7 +568,8 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const env: Record<string, string> = endpoint
         ? { [endpoint.name]: endpoint.url, [meta.apiKeyEnvVar]: effect.key }
         : effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {};
-      await api.updateSettings({ env });
+      // The answer says who plans with the key saved, so the planner row is current at once.
+      dispatchSettings(deps, await api.updateSettings({ env }));
       for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
       const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';

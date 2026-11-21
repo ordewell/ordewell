@@ -453,6 +453,12 @@ export interface SettingsResponse {
   /** Who plans (ADR-0009) — a vendor id, or a runner serving as a harness planner. */
   aiProvider: PlannerBackendId;
   plannerThinkingEffort: string;
+  /**
+   * The vendor whose key was found but is not used for planning, because the
+   * coding agent detection found plans (ADR-0075): a surface's first screen
+   * says so once. Absent when the user named the planner or no key was found.
+   */
+  unusedPlanningKey?: AiProvider;
   /** Full (true) or Guarded (false), ADR-0001; the user's saved level (ADR-0030). */
   autonomousMode: boolean;
   maxParallel: number;

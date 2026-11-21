@@ -25,7 +25,7 @@ import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, compactionText, describeRunnerSignIn, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock, withRunStatus } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -68,6 +68,10 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
 }
 
 const DETECTING = 'Detecting coding agents…';
+/** The chat's planner picker, as the desktop app and VS Code both spell it. */
+const CHAT_PICK_PLANNER = '/planner';
+/** A coding-agent planner's model while none is picked: its own default, a working state. */
+const AGENT_DEFAULT_LABEL = AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT_MODEL.slice(1);
 
 /**
  * "Detecting coding agents…" while the host's detection is under way, or why
@@ -1277,6 +1281,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                 onChange={handleOrchestratorModelChange}
                 label={planner.runner ? 'Model & thinking effort' : 'Model'}
                 unavailable={switchingTo ? `Switching to ${switchingTo}…` : undefined}
+                unassigned={planner.runner ? AGENT_DEFAULT_LABEL : undefined}
               />
               {!switchingTo && modelDiscovery?.state === 'failed' && (
                 <div className="model-discovery-error" role="alert">
@@ -1420,7 +1425,13 @@ export default function App({ layout = 'chat', selection, goal }: {
         )}
 
         {emptyStateShown && (
-          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanners} isolationPreview={host.isolationPreview} />
+          <EmptyState
+            onLoadSession={handleLoadSession}
+            runSettings={host.runSettings}
+            signedOut={signedOutPlanners}
+            isolationPreview={host.isolationPreview}
+            plannerNote={planner.unusedPlanningKey && planner.runner ? describeUnusedPlanningKey(planner.provider, planner.unusedPlanningKey, CHAT_PICK_PLANNER) : undefined}
+          />
         )}
 
         {error && (

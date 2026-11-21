@@ -642,6 +642,7 @@ export class OrchestratorPool {
     const config = this.plannerConfig(undefined, this.settingsWorkspace(sessionId, workspace));
     const userSettings = this.settingsService.getAll();
     const live = sessionId ? this.live(sessionId, workspace) : undefined;
+    const unusedPlanningKey = config.unusedPlanningKey();
     return {
       orchestratorModel: config.orchestratorModel,
       // Who plans (ADR-0009) — a vendor id, or one of the three harness
@@ -652,6 +653,7 @@ export class OrchestratorPool {
       // to render the current level; without it the picker shows "default"
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
+      ...(unusedPlanningKey ? { unusedPlanningKey } : {}),
       // The saved level, read through the service so an environment override
       // is reported the way the next plan will read it (ADR-0001, ADR-0030).
       autonomousMode: this.settingsService.autonomousMode(),

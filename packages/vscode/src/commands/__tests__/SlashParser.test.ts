@@ -101,7 +101,8 @@ describe('/planner', () => {
     });
 
     const done = handleSlashCommand('/planner', deps);
-    for (const index of [0, 0, 1]) {
+    // Claude Code, then Claude Opus 5.5 past the agent's own default, then High.
+    for (const index of [0, 1, 1]) {
       await new Promise((resolve) => setImmediate(resolve));
       __quickPicks[0].__accept(index);
     }

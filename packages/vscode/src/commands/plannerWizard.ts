@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { PlannerBackendId, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
+import { AGENT_DEFAULT_MODEL, type PlannerBackendId, type DiscoveredModel, type PlannerModelRecall } from '@ordewell/core';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 
@@ -43,6 +43,18 @@ interface Candidate {
 }
 
 const RUNNER_DEFAULT = '';
+
+/**
+ * A coding agent's own default model, offered first: an agent with no model
+ * picked plans, so the step must not read as a setting still missing, and an
+ * empty catalog leaves it as the one choice rather than ending the wizard.
+ */
+const AGENT_DEFAULT: Candidate = {
+  id: '',
+  label: AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT_MODEL.slice(1),
+  detail: "The agent's own default model and effort",
+  variants: [],
+};
 
 /**
  * Harness → Model → Effort as one quick pick. Nothing is written until the
@@ -98,6 +110,7 @@ export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
           recall = catalog.recall;
         }
         backend = picked;
+        // Only a vendor can have nothing to offer: an agent always has its own default.
         if (candidates.length === 0) {
           vscode.window.showWarningMessage(`No ${picked.label} models discovered yet. Run /refresh.`);
           return;
@@ -169,14 +182,14 @@ async function loadCatalog(
   if (backend.kind === 'harness' && backend.runner) {
     const models = await deps.modelsForRunner(backend.runner);
     return {
-      candidates: models.map((m) => ({
+      candidates: [AGENT_DEFAULT, ...models.map((m) => ({
         id: m.modelId,
         label: m.modelLabel,
         detail: m.variants.length > 0
           ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}`
           : 'runner default effort',
         variants: m.variants.map((v) => ({ id: v.id, label: v.label })),
-      })),
+      }))],
       recall: deps.recall(backend.id, models, undefined),
     };
   }

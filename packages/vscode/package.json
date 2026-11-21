@@ -215,7 +215,7 @@
         "ordewell.aiProvider": {
           "type": "string",
           "default": "",
-          "description": "Who plans: an API provider (google, openrouter, openai_compatible, or another vendor), or the id of a coding-agent runner installed on this machine, which plans on its own subscription with no API key. Auto-detected from the API keys you have set if left blank. The runner ids are the ones /runners lists; an unknown value is reported when it is set. Set it from the planner picker (/planner) rather than by hand."
+          "description": "Who plans: an API provider (google, openrouter, openai_compatible, or another vendor), or the id of a coding-agent runner installed on this machine, which plans on its own subscription with no API key. Left blank, an installed coding agent plans, and an API key you have set plans only when no agent is installed or you saved a model for its provider. The runner ids are the ones /runners lists; an unknown value is reported when it is set. Set it from the planner picker (/planner) rather than by hand."
         },
         "ordewell.plannerThinkingEffort": {
           "type": "string",
@@ -225,7 +225,7 @@
         "ordewell.orchestratorModel": {
           "type": "string",
           "default": "",
-          "description": "Main planning model (required. Use /planner or the Planner section to choose one)"
+          "description": "The planner's model. Left empty, a coding-agent planner uses the agent's own default; an API provider has no default, so it needs one. Use /planner or the Planner section to choose one."
         },
         "ordewell.geminiModel": {
           "type": "string",

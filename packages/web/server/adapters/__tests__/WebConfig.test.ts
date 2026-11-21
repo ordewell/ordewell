@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, resetInstalledPlanner } from '@ordewell/core';
+import { getProviderMeta, PROVIDER_DETECT_PRIORITY, recordInstalledPlanner, recordRunnerAuth, resetInstalledPlanner, resetRunnerAuth } from '@ordewell/core';
 import { WebConfig } from '../WebConfig';
 
 const originalEnv = { ...process.env };
@@ -219,10 +219,24 @@ describe('WebConfig', () => {
       expect(config.aiProvider).toBe('claude-code');
     });
 
-    it('a vendor key still wins over the installed agent', () => {
+    // A key in the shell or saved in Ordewell is not a choice to plan with it (ADR-0075).
+    it('the installed agent plans though a vendor key is set', () => {
       recordInstalledPlanner('claude-code');
       setEnv('OPENROUTER_API_KEY', 'sk-or-test');
-      expect(new WebConfig().aiProvider).toBe('openrouter');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('claude-code');
+      expect(config.orchestratorModel).toBe('');
+    });
+
+    it('a planner picked with /planner and persisted keeps its vendor and model after the upgrade', () => {
+      // What the terminal UI's /planner writes to ~/.ordewell/.env for a vendor.
+      recordInstalledPlanner('claude-code');
+      setEnv('OPENAI_API_KEY', 'sk-openai-test');
+      setEnv('AI_PROVIDER', 'openai');
+      setEnv('ORCHESTRATOR_MODEL', 'openai:gpt-4o');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openai');
+      expect(config.orchestratorModel).toBe('openai:gpt-4o');
     });
 
     it('keeps an explicit keyless OpenRouter choice instead of replacing it with the agent', () => {
@@ -271,11 +285,24 @@ describe('WebConfig', () => {
       expect(new WebConfig({ providerModelLists: lists }).aiProvider).toBe('openrouter');
     });
 
-    it('a vendor key with no model still wins over the installed agent', () => {
+    it('a vendor key with no model saved for it leaves planning to the installed agent', () => {
       recordInstalledPlanner('claude-code');
       setEnv('GEMINI_API_KEY', 'sk-gem-test');
       const config = new WebConfig({ providerModelLists: { openrouter: ['openai/gpt-4o'], google: ['gemini-2.5-pro'], openai_compatible: [] } });
-      expect(config.aiProvider).toBe('google');
+      expect(config.aiProvider).toBe('claude-code');
+    });
+
+    it('a model saved for a vendor whose catalog is still cold keeps that vendor, as it will once the catalog lists it', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      setEnv('ORCHESTRATOR_MODEL', 'openai/gpt-4o');
+      const discovered: { lists?: Record<string, string[]> } = {};
+      const config = new WebConfig({ providerModelLists: () => discovered.lists });
+      expect(config.aiProvider).toBe('openrouter');
+
+      discovered.lists = { openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] };
+
+      expect(config.aiProvider).toBe('openrouter');
     });
 
     it('with no installed agent a keyless vendor model still names its vendor', () => {
@@ -324,14 +351,29 @@ describe('WebConfig', () => {
     });
 
     it('the same instance follows an endpoint set after a read, as a fresh one does', () => {
-      recordInstalledPlanner('claude-code');
       const config = new WebConfig();
-      expect(config.aiProvider).toBe('claude-code');
+      expect(config.aiProvider).toBe('openrouter');
 
       setEnv('OPENAI_COMPATIBLE_BASE_URL', 'http://localhost:9999/v1');
 
       expect(config.aiProvider).toBe(new WebConfig().aiProvider);
       expect(config.aiProvider).toBe('openai_compatible');
+    });
+
+    it('the same instance follows the agent signing out, as a fresh one does', () => {
+      recordInstalledPlanner('claude-code');
+      setEnv('OPENROUTER_API_KEY', 'sk-or-test');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('claude-code');
+
+      recordRunnerAuth('claude-code', { state: 'signed-out' });
+
+      try {
+        expect(config.aiProvider).toBe('openrouter');
+        expect(config.aiProvider).toBe(new WebConfig().aiProvider);
+      } finally {
+        resetRunnerAuth();
+      }
     });
   });
 });

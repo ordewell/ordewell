@@ -36,6 +36,6 @@ describe('reportPlannerError', () => {
   it('words a planner the session refused with the chat\'s own commands, not as a failure', () => {
     const { deps, showError } = harness();
     reportPlannerError(new PlannerNotReadyError({ code: 'no_model', provider: 'openrouter', label: 'OpenRouter' }), deps);
-    expect(showError).toHaveBeenCalledWith('No planner model selected for OpenRouter. Pick one with /planner.');
+    expect(showError).toHaveBeenCalledWith('No planner model selected for OpenRouter. Run /planner and pick a model for OpenRouter.');
   });
 });

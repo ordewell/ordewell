@@ -72,7 +72,7 @@ export interface HostState {
   /** Whether the host has said which providers are configured: until then an empty list means not yet told. */
   providersKnown: boolean;
   /** Who plans (ADR-0009): the backends offered, the one in use, and its runner + effort. */
-  planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
+  planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string; unusedPlanningKey?: AiProvider };
   /**
    * Whether the host has said who can plan, and which agents are installed.
    * Both come from its probe for coding agents, after the catalog may already
@@ -508,6 +508,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
           provider: action.provider ?? '',
           runner: action.runner,
           effort: action.effort || undefined,
+          unusedPlanningKey: action.unusedPlanningKey,
         },
       };
 

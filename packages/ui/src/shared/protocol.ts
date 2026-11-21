@@ -318,7 +318,12 @@ export type HostToWebview =
   /** `notice` is the one line the runner list shows while a runner's modes are off on this host, and the page that explains it. */
   | { type: 'setModesByRunner'; modesByRunner: Record<string, RunnerModeMeta[]>; notice?: { line: string; docs: string } | null }
   | { type: 'setModelConfig'; modelConfig: { orchestrator: string; orchestratorProvider?: string } }
-  | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string }
+  /**
+   * `unusedPlanningKey` names the vendor whose key the host found but does
+   * not plan with, because the coding agent it detected plans (ADR-0075); the
+   * first screen says so once. Absent when the user named the planner.
+   */
+  | { type: 'setPlannerBackends'; backends: PlannerBackend[]; provider: string; runner?: string; effort?: string; unusedPlanningKey?: AiProvider }
   /**
    * Where the host's detection of the coding agents stands: under way, or
    * failed with why, which the chat shows with a Retry (`refreshModels`) in

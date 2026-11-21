@@ -72,6 +72,17 @@ describe('/planner', () => {
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['claude-code', 'codex', 'opencode', 'openrouter']);
   });
 
+  // Bug: an agent installed while the TUI ran was not offered until /refresh (F10).
+  it('asks the daemon to probe the installed agents again, and lists one found while it is open', () => {
+    const opened = run('/planner', { ...ready, runners: [{ id: 'codex', name: 'Codex', enabled: true }] });
+    expect(opened.effects).toContainEqual({ type: 'loadRunners' });
+    expect(stepperOf(opened.state).items.map((i) => i.id)).not.toContain('claude-code');
+
+    const probed = reduce(opened.state, { type: 'runnersLoaded', runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'codex', name: 'Codex', enabled: true }] }).state;
+
+    expect(stepperOf(probed).items.map((i) => i.id)).toContain('claude-code');
+  });
+
   it('says a coding agent needs no API key', () => {
     const { state } = run('/planner', ready);
     expect(stepperOf(state).items.find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
