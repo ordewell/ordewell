@@ -8,24 +8,39 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-11-21
+
 ### Added
 
 - **Pi runs tasks and plans.** A plan can assign a task to `pi`, which
   Ordewell drives over Pi's RPC mode with the Ordewell tools attached and its
-  models listed from `pi --list-models`; Pi 1.5.2 or later. A writable Pi task
-  runs Pi's own tools, its shell and file edits included, without asking: Pi
-  has no per-tool approval. A planner or read-only task starts with Pi's read
-  tools and Ordewell's alone, without the repository's `.pi/` extensions,
-  settings and MCP servers, the user's own extensions, or Pi's context files
-  (a read-only task gets the repository's instructions from Ordewell), and
-  asks Ordewell before each read: a read-only task's read outside its worktree
-  and the workspace is refused, and a planner's read outside the workspace
-  follows the approval policy for outside reads. Ordewell loads a small
-  extension of its own into each Pi process for this and changes nothing in
-  the user's Pi setup. Pi has its own badge name and colour, the installer
-  lists it among the coding agents it finds, and a Pi planner delegates
-  exploration through research tasks, having no agents of its own (#78, #192;
-  thanks @hskl18).
+  models listed from `pi --list-models`; Pi 1.5.2 or later. There is nothing to
+  switch on: Pi is offered as a runner and a planner once `pi` is installed on
+  your PATH, like the other coding agents Ordewell finds. A writable Pi task,
+  Pi's one writable mode, runs Pi's own tools, its shell commands and file
+  edits included, without asking, under Guarded as well as Full: Pi has no
+  per-tool approval, so there is no request for Ordewell to put to you. Pick a
+  read-only mode, or another runner, for a task that should not change anything
+  on its own. A planner or read-only task starts with Pi's read tools and
+  Ordewell's alone, without the repository's `.pi/` extensions, settings and
+  MCP servers, the user's own extensions, or Pi's context files (a read-only
+  task gets the repository's instructions from Ordewell), and asks Ordewell
+  before each read: a read-only task's read outside its worktree and the
+  workspace is refused, and a planner's read outside the workspace follows the
+  approval policy for outside reads. Ordewell loads a small extension of its
+  own into each Pi process for this and changes nothing in the user's Pi
+  setup. On Windows every Pi process starts with the current directory out of
+  its program search, so a repository's own `rg.exe` or `fd.exe` is not run by
+  Pi's search. Pi does not run in a container: a session that runs its tasks in
+  containers refuses a Pi task and names the runners that do. Pi has its own
+  badge name and colour, the installer lists it among the coding agents it
+  finds, and a Pi planner delegates exploration through research tasks, having
+  no agents of its own (#78, #192, #204; thanks @hskl18).
+- **A task's first message shows its brief first.** The VS Code, Desktop and
+  terminal task views show the brief as the message and fold the handoffs and
+  Ordewell's instructions into counted groups (ctrl+o opens each section in the
+  terminal UI). The text the runner receives is unchanged, and an older client
+  shows the whole message.
 
 ### Changed
 
@@ -49,6 +64,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   level are ordered by the lines of the test files their briefs name (or, with
   none to read, of every file they name), largest first; nothing else in the
   plan changes, and the research log says how many moved.
+
+### Fixed
+
+- **An API planner sends a model call again when its stream stalls part way.**
+  An unattended `ordewell plan --no-chat` could die in its research with "The
+  model stream sent nothing", leaving no plan and no session, while the
+  built-in runner sent such a call again. The planner now drops the broken
+  reply whole, which has done nothing, and re-sends the same request, up to
+  six sends in all, as the runner does; a conversation's streamed text from the
+  broken reply is taken back, each re-send leaves a line in the research log,
+  and the error that ends a call that kept stalling says how many times it was
+  sent. A usage limit or other failure is thrown as before. `ordewell plan` now
+  also prints what the planner spent when planning fails.
 
 ## [0.14.4] - 2026-11-19
 
@@ -4844,7 +4872,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2

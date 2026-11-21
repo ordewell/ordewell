@@ -2,12 +2,33 @@
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-11-21
+
 ### Added
 
-- Pi can run tasks and plan, on Pi 1.5.2 or later. A writable Pi task runs
-  Pi's own tools without asking; a planner or read-only task reads only what
-  Ordewell allows, and starts without Pi's context files, the repository's
-  instructions coming from Ordewell. Pi has its own badge name and colour.
+- Pi can run tasks and plan, on Pi 1.5.2 or later, and is offered once `pi` is
+  installed on your PATH. A writable Pi task, its one writable mode, runs Pi's
+  own tools, shell commands and file edits included, without asking, under
+  Guarded as well as Full: Pi has no per-tool approval. A planner or read-only
+  task reads only what Ordewell allows, and starts without Pi's context files,
+  the repository's instructions coming from Ordewell. Pi does not run in a
+  container. Pi has its own badge name and colour.
+- A task's first message shows its brief first, with the handoffs and
+  Ordewell's instructions folded into counted groups. The text the runner
+  receives is unchanged.
+
+### Changed
+
+- The built-in runner counts its model calls for the model, and a remainder
+  shown to be undoable is recorded as a known gap instead of being given a
+  task.
+- A task far slower than the run's passed tasks is flagged running long
+  sooner, and a wide one-shot plan starts its largest slices first.
+
+### Fixed
+
+- An API planner sends a model call again when its stream stalls part way,
+  instead of ending the plan.
 
 ## [0.14.4] - 2026-11-19
 
@@ -1766,7 +1787,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/ordewell/ordewell/compare/v0.14.1...v0.14.2
