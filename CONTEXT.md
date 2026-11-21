@@ -1183,7 +1183,7 @@ whose running time passed max(30 min, 3× the longest running time of an AI
 task that passed in its plan, or, after a failed or stopped attempt of the
 same task, that attempt's running time), or, on a first attempt once five AI
 tasks have passed, max(19 min, 3× their median running time) where that comes
-first, doubled after each flag, whose own runner session
+first, then at twice each flag's running time, whose own runner session
 compacted its context by itself, or whose context first reached 40% of its effective
 window (the smaller of the model's and a compaction window in force; see *Task
 compaction start*), never below 150k tokens, and again at each doubling of that
@@ -1692,6 +1692,14 @@ evidence.
 *Avoid:* "issue" (that is a GitHub issue), "check" (a verdict's *Check* or a
 *Loop check*), "error".
 
+**Landed blocker** (ADR-0073) — a `blocker` *Finding* that cites a task whose
+work had landed when it was reported: by a task reference with no finding id,
+or by the first file it names that a landing changed, the last landing of that
+file before the report. Counted per cited task across the plan's handoffs,
+never stored, and raised to the supervisor as `landed_blocker` when that count
+reaches 1, 2, 4, 8…; the supervisor writes the one fix. *Avoid:* "regression"
+(nothing says it worked before), "bug report".
+
 **Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
 task produced, of the same four kinds as an *Evidence reference*, or a `patch`
 that only Ordewell adds, for a *Patch handoff* (ADR-0050). It is in the
@@ -1723,8 +1731,9 @@ saved), "export".
 **Evidence reference** (ADR-0047) — how a *Finding* points at what supports it:
 a `file` (a repository path, optional line), a `commit` (a sha, the repo
 optional), a `task` (a task reference, optional finding id) or a `url` (`http`
-or `https` only). A `task` reference must resolve to a task the producer may
-read and is refused at the call otherwise, and so is any other URL scheme; a
+or `https` only). A `task` reference may name any task of the plan, and a
+finding id only one of a task the producer may read; either is refused at the
+call otherwise, and so is any other URL scheme; a
 `file` or `commit` is a claim about a tree, resolved lazily when read and shown
 unresolved, not refused, when it cannot be.
 *Avoid:* "proof" or "citation" — a reader weighs a reference, and it settles

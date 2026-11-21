@@ -58,7 +58,8 @@ export function editSteps({ src, tests }) {
   ];
 }
 
-export const longStep = (sec) => shell(`sleep ${sec} && echo slept ${sec}s`, { timeout: (sec + 120) * 1000 });
+// Not a `sleep`: the built-in runner's shell refuses a change task's long sleep as a wait (core's waitGuard), and this stands for work that takes time.
+export const longStep = (sec) => shell(`timeout ${sec} tail -f /dev/null; echo slept ${sec}s`, { timeout: (sec + 120) * 1000 });
 
 const done = (subject, extra = {}) => ({ tool: 'task_complete', args: { status: 'done', summary: `${subject}.`, commit: { subject }, ...extra } });
 const failed = (why) => ({ tool: 'task_complete', args: { status: 'failed', summary: why, reason: why } });

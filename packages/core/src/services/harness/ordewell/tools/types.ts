@@ -33,6 +33,12 @@ export interface ToolContext {
    * mode allows it. Never writable: `edit` and `write` stay in the worktree.
    */
   extraReadRoots?: readonly string[];
+  /**
+   * A change task's: `shell` refuses a command that waits (`waitGuard`), since
+   * another task's work is what such a wait is for, and an ops task's wait on
+   * a deploy is its work. `parks` when the task's tools hold `wait_for`.
+   */
+  waits?: { refused: true; parks?: boolean };
 }
 
 export interface ToolResult {

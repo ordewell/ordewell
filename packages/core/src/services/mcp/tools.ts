@@ -36,9 +36,9 @@ const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('task'),
     task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String).pipe(z.string().max(HANDOFF_LIMITS.reference))
-      .describe('A task you may read — this one, one it depends on, or another task of its loop: "#order", "#4/F3", its id or its title.'),
+      .describe('A task of this plan: "#order", "#4/F3", its id or its title.'),
     finding: z.string().max(HANDOFF_LIMITS.reference).regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
-      .describe('One of that task\'s findings, as "F3".'),
+      .describe('One of its findings, as "F3", for a task you may read.'),
   }),
   z.object({
     kind: z.literal('url'),
@@ -599,7 +599,7 @@ export const TASK_COMPLETE_TOOL = 'task_complete';
 export const TASK_COMPLETION_CONTRACT = [
   `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and your handoff. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead. Call it once, as your last action. Once your brief's done criterion holds, commit (if your work lands as a commit) and call \`${TASK_COMPLETE_TOOL}\`: work beyond your brief belongs to other tasks, so name it in your handoff (an open question or a follow-up) instead of doing it.`,
   `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed and the decisions behind it; the interfaces and paths a dependent relies on; the assumptions you acted on; what is left or open. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
-  `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
+  `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. A finding about work another task has landed cites that task, and the file the defect is in as its first file: that is how a blocker in it reaches a fix while the run goes on. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
   `Work from your brief and the prior task outputs you were given; pull more with \`read\` only when you need it, and read the code your task touches, not the whole repository.`,
   `To wait for a command, wait on the PID of a process you started yourself, never by matching its command name (\`pgrep -f\`), which also matches the same command another task is running.`,
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand, so a number you measured that a later task may need (a timing, a count, a size) goes in the summary or a finding, not only in the report. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,

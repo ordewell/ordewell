@@ -839,13 +839,20 @@ function pinIn(scope: ReferenceScope, producer: { id: string; attempt?: number; 
   }
   const target = resolved.task;
   const named = titledTaskRefOf(plan, target.id) ?? target.id;
-  if (!readable.has(target.id)) {
-    refuse(`${field}.task: ${JSON.stringify(written)} is ${named}, which this task may not read: only itself, a task it depends on, or another task of its loop.`);
-    return undefined;
-  }
   const given = oneFinding(resolved.finding);
   if (!given) return undefined;
   const { finding } = given;
+  // Any task of the plan may be cited: a slice names the sibling whose landed work it found broken, which is how that
+  // reaches a fix (ADR-0073). Only a finding is the producer's to have read, and it reads only its readable set.
+  if (!readable.has(target.id)) {
+    if (finding !== undefined) {
+      refuse(`${field}.finding: ${JSON.stringify(written)} names a finding of ${named}, whose findings this task may not read: cite the task alone, without the finding.`);
+      return undefined;
+    }
+    // Pinned to the attempt it saw, as any reference is (ADR-0057 R1): a later attempt's work is not what it found broken.
+    const { latest } = latestHandoff(target, logs);
+    return { kind: 'task', node, task: target.id, ...(latest !== undefined ? { attempt: latest } : {}), ...labelled(target.id) };
+  }
   const { latest, digest } = latestHandoff(target, logs);
   // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
   const own = target.id === producer.id && producer.attempt !== undefined && (resolved.attempt ?? producer.attempt) === producer.attempt;

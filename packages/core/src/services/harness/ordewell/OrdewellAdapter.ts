@@ -193,19 +193,22 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     // Its requests carry the command line, which may spell out a key the model read (ADR-0061).
     this.guard = mode === 'guarded' ? new GuardedShell((event) => emit(this.held.hideIn(event))) : null;
     const gate = composeGates(this.options.gate, this.guard?.gate);
+    const taskTools = inProcess ? taskToolsOf(inProcess) : { definitions: [], has: () => false, call: async () => ({ text: 'No task tools in this session.', isError: true }) };
     this.loop = new OrdewellLoop({
       client,
       model,
       system,
       store,
       tools: toolsOf(mode),
-      taskTools: inProcess ? taskToolsOf(inProcess) : { definitions: [], has: () => false, call: async () => ({ text: 'No task tools in this session.', isError: true }) },
+      taskTools,
       toolContext: {
         worktree: opts.cwd,
         // The tools filter keys out of the shell's env themselves (Full: no key reaches a child).
         env,
         outputDir: path.join(store.dir, 'tool-output'),
         ...(opts.workspaceRoot && path.resolve(opts.workspaceRoot) !== path.resolve(opts.cwd) ? { extraReadRoots: [opts.workspaceRoot] } : {}),
+        // Only a task whose work lands as a commit: what it would wait for is a sibling's work, never its own deploy.
+        ...(opts.commits === true ? { waits: { refused: true as const, ...(taskTools.has('wait_for') ? { parks: true } : {}) } } : {}),
       },
       ...(gate ? { gate } : {}),
       onStepBoundary: (boundary) => this.atBoundary(boundary),

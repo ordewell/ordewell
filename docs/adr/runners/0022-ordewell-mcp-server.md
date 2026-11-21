@@ -4,6 +4,8 @@ status: accepted
 
 # 0022 — The Ordewell MCP server: task and planner tools behind per-caller tokens
 
+*Pending:* [ADR-0074](../supervision/0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md) — a change task's token gains `wait_for`.
+
 ## Problem
 
 Task completion and checkpoints need signals bound to the current attempt,

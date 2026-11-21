@@ -17,6 +17,7 @@ import { reportEnded, researchReport, runUpdateReport } from './taskReport';
 import { researchReportTo } from './ResearchTasks';
 import { heldBy, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey } from './runHolds';
 import { taskRefOf } from './TaskRefs';
+import { landedBlockers } from './LandedBlockers';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -96,6 +97,12 @@ export interface RunSupervisionHost extends Pick<SupervisorHost, 'deliver' | 'pu
    * owed could not run: the planner waits on its usage limit or its context.
    */
   runConcluded(held?: string): void;
+  /**
+   * The files a landed task's work changed, for a blocker that cites a file
+   * rather than the task (LandedBlockers): a recorded run's slices named the
+   * broken file and never the task. Rejects where the run cannot say.
+   */
+  landedPaths?(taskId: string): Promise<readonly string[]>;
 }
 
 /**
@@ -131,6 +138,8 @@ export class RunSupervision {
    * {@link judgeClosing}.
    */
   private closingOwed = false;
+  /** The files each landed task's work changed, by the landing that changed them: a landing's files never change, so each is read once. */
+  private readonly landedPathsRead = new Map<string, Promise<readonly string[] | undefined>>();
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
     this.supervisor = new Supervisor({
@@ -329,6 +338,41 @@ export class RunSupervision {
     }
     const event = this.settledEvent(task);
     if (event) this.supervisor.observe(event);
+    void this.raiseLandedBlockers(task.id);
+  }
+
+  /**
+   * Whatever a task ended as, a blocker it found in another task's landed work
+   * is owed a fix while the run can still land one. Its files are matched
+   * against what each landing changed only when one of its blockers cites a
+   * file, which needs git; a task reference alone is answered at once.
+   */
+  private async raiseLandedBlockers(reporterId: string): Promise<void> {
+    const reporter = flattenTasks([...this.host.tasks()]).find((t) => t.id === reporterId);
+    const citesFile = reporter?.handoff?.findings.some((f) => f.severity === 'blocker' && f.evidence?.some((ref) => ref.kind === 'file'));
+    const paths = citesFile && this.host.landedPaths ? await this.landedPathsOf() : undefined;
+    for (const landedBlocker of landedBlockers(this.host.tasks(), reporterId, paths && ((id) => paths.get(id)))) {
+      this.supervisor.observe({ kind: 'landed_blocker', taskId: landedBlocker.owner, landedBlocker });
+    }
+  }
+
+  /** The files every landed task changed, as far as the run can say. */
+  private async landedPathsOf(): Promise<Map<string, readonly string[]>> {
+    const read = this.host.landedPaths;
+    const landed = flattenTasks([...this.host.tasks()]).filter((t) => t.status === 'completed');
+    const out = new Map<string, readonly string[]>();
+    await Promise.all(landed.map(async (t) => {
+      const key = `${t.id}@${t.verdict?.decidedAt ?? ''}`;
+      let paths = this.landedPathsRead.get(key);
+      if (!paths) {
+        // A read that failed is tried again at the next report: the run may say once its record is back.
+        paths = read ? read(t.id).catch(() => { this.landedPathsRead.delete(key); return undefined; }) : Promise.resolve(undefined);
+        this.landedPathsRead.set(key, paths);
+      }
+      const got = await paths;
+      if (got) out.set(t.id, got);
+    }));
+    return out;
   }
 
   /**

@@ -130,6 +130,18 @@ describe('a running attempt that runs long (ADR-0018 W1)', () => {
       expect(flags.map((f) => f.previousMs)).toEqual([undefined, 30 * MINUTE]);
     });
 
+    it('flags a second time at twice the first, however far later passes raise the threshold', () => {
+      // Five quick passes: the median's 19-minute floor. Six slower ones then put the median at 20, so the threshold at 60.
+      const plan = ['a', 'b', 'c', 'd', 'e'].map((id) => passed(id, 6));
+      const { flags } = watched({ plan: () => plan });
+
+      vi.advanceTimersByTime(19 * MINUTE);
+      plan.push(...['f', 'g', 'h', 'i', 'j', 'k'].map((id) => passed(id, 20)));
+      vi.advanceTimersByTime(19 * MINUTE);
+
+      expect(flags.map((f) => [f.elapsedMs / MINUTE, f.thresholdMs / MINUTE, (f.previousMs ?? 0) / MINUTE])).toEqual([[19, 19, 0], [38, 38, 19]]);
+    });
+
     it('leaves a retry to its own rule: the running time of the attempt it follows', () => {
       const retried = buildTask({ id: 'r', status: 'in_progress' });
       retried.attemptUsage = [{ ...passed('r', 45).attemptUsage![0], outcome: 'failed' }];

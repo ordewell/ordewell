@@ -452,7 +452,9 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - A failed or stopped read-only attempt leaves its log and its report to look
   at, and no worktree, even one a sealed run left with a macOS immutable flag.
 - Where no sandbox runs, a read-only task runs only the classifier's read-only
-  commands and what the allowlist covers.
+  commands and what the allowlist covers, and a plan change that brings one
+  says so in its answer: a supervisor that added one to run code saw it fail
+  twelve minutes later with nothing to say this host could not.
 - Research tasks can build on this profile for their start without approval
   (ADR-0037 R4); their lifecycle is separate. The planner is told a read-only
   task can run commands.
@@ -492,3 +494,4 @@ The plan flag stays `readOnly`, and means a task that lands nothing.
 - 2026-11-04 — Gemini CLI runs read-only tasks, from a private start directory, under a policy file that denies its own write, shell and web tools (ADR-0060 R3).
 - 2026-11-04 — Cursor runs read-only tasks, from a private start directory, its own reads, writes and shell denied (ADR-0060 R3).
 - 2026-11-05 — a read-only task's Cline reads by the one path its arguments name (ADR-0060 R3).
+- 2026-11-21 — a plan change that brings a read-only AI task on a host with no sandbox says, in its answer, that the task can run no test, build or script.

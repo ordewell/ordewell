@@ -5,6 +5,8 @@ amends: ["0013", "0015", "0029"]
 
 # 0034 — A failed task blocks only its dependents
 
+*Pending:* [ADR-0074](0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md) — a parked task ends its attempt with no verdict and blocks nothing.
+
 ## Problem
 
 A task fails when its attempt ends without the evidence a pass needs: the

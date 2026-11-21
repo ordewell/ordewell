@@ -408,17 +408,17 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
     expect(get('t1').handoff).toBeUndefined();
   });
 
-  it('names a cited task by its id, and refuses a task this one may not read, one not in the plan, or a finding it never had', async () => {
+  it('names a cited task by its id, and refuses a finding of a task this one may not read, one not in the plan, or a finding it never had', async () => {
     const done = task('t1', 1, { status: 'completed', handoff: { summary: 'Wrote it.', findings: [], findingCount: 2 } });
     const { complete, get } = await completing([done, task('t2', 2, { dependencies: ['t1'] }), task('t3', 3)], 't2');
 
     const refused = await complete({
       summary: 'Checked.',
-      findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#3' }, { kind: 'task', task: '#9' }, { kind: 'task', task: '#1', finding: 'F3' }] }],
+      findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#3/F1' }, { kind: 'task', task: '#9' }, { kind: 'task', task: '#1', finding: 'F3' }] }],
     });
 
     expect(refused.isError).toBe(true);
-    expect(text(refused)).toContain('findings[0].evidence[0].task: "#3" is #3 Task t3, which this task may not read: only itself, a task it depends on, or another task of its loop.');
+    expect(text(refused)).toContain('findings[0].evidence[0].finding: "#3/F1" names a finding of #3 Task t3, whose findings this task may not read: cite the task alone, without the finding.');
     expect(text(refused)).toContain('findings[0].evidence[1].task: "#9" names no task in the plan');
     expect(text(refused)).toContain('findings[0].evidence[2].finding: "F3" is not a finding of #1 Task t1: its latest handoff has F1 to F2.');
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -426,12 +426,13 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
 
     const accepted = await complete({
       summary: 'Checked.',
-      findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#1', finding: 'F2' }] }],
+      // A sibling it may not read is cited by the task alone: the slice whose landed work it found broken.
+      findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#1', finding: 'F2' }, { kind: 'task', task: '#3' }] }],
       artifacts: [{ kind: 'task', task: 't2' }],
     });
     expect(accepted.isError).toBe(false);
     await vi.waitFor(() => expect(get('t2').status).toBe('completed'));
-    expect(get('t2').handoff?.findings[0].evidence).toEqual([{ kind: 'task', node: 'root', task: 't1', finding: 'F2' }]);
+    expect(get('t2').handoff?.findings[0].evidence).toEqual([{ kind: 'task', node: 'root', task: 't1', finding: 'F2' }, { kind: 'task', node: 'root', task: 't3' }]);
     expect(get('t2').handoff?.artifacts).toEqual([{ kind: 'task', node: 'root', task: 't2', attempt: 1 }]);
   });
 
