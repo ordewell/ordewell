@@ -207,6 +207,10 @@ recorded data is committed, and fixtures are synthetic.
 - A slice that cites a file before the file it found broken, or a defect in a
   file nobody landed, raises nothing, or raises the wrong task: the contract
   asks for the file first, and nothing enforces it.
+- A blocker that cites, by task reference, a sibling whose work landed between
+  the reporter's start and its report is raised against that sibling: the plan
+  cannot tell that case from a defect found after taking the sibling's work in,
+  and the reference counts work landed by the report.
 - Whether a small model acts on the line is not shown by any test: a paid run
   is.
 - A report against work no fix touches keeps doubling to at most log2 of the
@@ -219,3 +223,4 @@ recorded data is committed, and fixtures are synthetic.
 - 2026-11-21 — one owner per finding, owners that land work only, a loop's check between rounds left to its loop, and an unreadable citation marked so it passes nothing on.
 - 2026-11-21 — only a defect in landed work: a citation of work still to come is a wait notice, work counts from the reporting attempt's start, a file a later landing changed names no one, and the slice note and contract ask for a wait as `info`.
 - 2026-11-21 — a task reference counts work landed by the report, a file's report is overtaken by a landing after its attempt started, and no task that depends on the reporter, or skipped or failed, is a wait.
+- 2026-11-21 — a consequence recorded: a task reference to a sibling that landed mid-attempt is raised against it.
