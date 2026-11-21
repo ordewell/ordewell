@@ -1161,11 +1161,16 @@ function noPlannerNotice(cols: number): string[] {
   const room = Math.max(1, cols - 1);
   const routes = agentInstallRoutes(process.platform === 'win32' ? 'windows' : 'posix');
   const labelCols = Math.max(...routes.map((route) => width(route.label))) + 2;
+  // Wrapped under the label, never cut: a command shown with an ellipsis is
+  // one nobody can run, and Codex's Windows installer is past 80 columns.
+  const indent = ' '.repeat(2 + labelCols);
+  const hanging = (text: string, lead: string): string[] =>
+    wrap(text, Math.max(1, room - indent.length)).map((line, i) => `${i === 0 ? lead : indent}${line}`);
   return [
     ...wrap(style.yellow('No planner yet. Install a coding agent (no API key needed), then run /refresh to detect it again:'), room),
     ...routes.flatMap((route) => [
-      truncate(`  ${pad(route.label, labelCols)}${route.command}`, room),
-      truncate(`  ${' '.repeat(labelCols)}${style.grey(route.docs)}`, room),
+      ...hanging(route.command, `  ${pad(route.label, labelCols)}`),
+      ...hanging(style.grey(route.docs), indent),
     ]),
     ...wrap(style.grey(AGENT_SIGN_IN_NOTE), room),
     ...wrap(style.grey(`Any agent /planner lists plans once installed: ${plannerNamesOr()}.`), room),

@@ -455,7 +455,9 @@ describe('OrchestratorPool default planner', () => {
     const now = () => clock;
     const pool = new OrchestratorPool({ codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } });
     const internals = pool as unknown as { registry: ConstructorParameters<typeof RunnerInstallation>[0]; runnerInstallation: RunnerInstallation; workspaceInstallations: Map<string, RunnerInstallation> };
-    const probe = () => new RunnerInstallation(internals.registry, exec, now, { authExec: async () => ({ code: 0, stdout: '{"loggedIn":true}', stderr: '' }) });
+    // Judged as on POSIX: the fake `exec` installs no file a Windows direct
+    // spawn could find, and this test is about the refresh, not that check.
+    const probe = () => new RunnerInstallation(internals.registry, exec, now, { authExec: async () => ({ code: 0, stdout: '{"loggedIn":true}', stderr: '' }), launch: { platform: 'linux' } });
     internals.runnerInstallation = probe();
     internals.workspaceInstallations.set(resolve(workspace), probe());
     await pool.detectInstalledPlanner();

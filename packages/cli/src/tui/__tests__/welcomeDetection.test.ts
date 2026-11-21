@@ -104,6 +104,17 @@ describe('the welcome while the coding agents are detected', () => {
     ]) expect(text).toContain(expected);
   });
 
+  it('wraps an install command too long for the pane under its label, never cutting it', () => {
+    const narrow = after(settings('openrouter'), runners(), models(), { type: 'resize', rows: 40, cols: 64 });
+    const lines = rows(narrow);
+    const text = lines.map((l) => l.trim()).join(' ').replace(/\s+/g, ' ');
+    const commands = process.platform === 'win32'
+      ? ['powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"']
+      : ['curl -fsSL https://chatgpt.com/codex/install.sh | sh'];
+    for (const command of commands) expect(text).toContain(command);
+    expect(lines.filter((l) => /install|chatgpt|codex/i.test(l)).some((l) => l.includes('…'))).toBe(false);
+  });
+
   it('keeps naming a planner that cannot plan while something else can', () => {
     const state = after(settings('openrouter'), runners(['claude-code', 'Claude Code']), models());
     expect(row(state, 'Planner')).toMatch(/^\s*Planner\s+OpenRouter \(unavailable\)\s+\/planner\s*$/);
