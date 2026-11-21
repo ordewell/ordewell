@@ -11,12 +11,15 @@ import { fanOutShape } from './PlanFanOut';
  * in a dozen calls 147 minutes in, too late to land.
  *
  * What counts is mechanical, and reads no words: a finding of severity
- * `blocker` whose evidence cites a task that had landed when it was reported,
- * by task reference pinned to the attempt that landed or unpinned, or by a file
- * that landed work changed. The second is the one a recorded run needed: of its
- * 65 blockers, 61 cited only files and commits. Reports are grouped by the task
- * whose work they name, so 21 reports are one fact, and counted from the plan,
- * never stored, so a retry that lands again starts the count over (ADR-0034's
+ * `blocker` whose evidence cites a task that had landed when the reporting
+ * attempt started, by task reference pinned to the attempt that landed or
+ * unpinned, or by a file that landed work changed and no other task's landing
+ * changed after the report. The second is the one a recorded run needed: of its
+ * 65 blockers, 61 cited only files and commits. A finding that also cites a
+ * task yet to land is waiting on it, not blocked by what landed. Reports are
+ * grouped by the task whose work they name, so 21 reports are one fact, and
+ * counted from the plan, never stored, so a retry that lands again starts the
+ * count over and a report a later landing overtook stops counting (ADR-0034's
  * derived rule).
  * Ordewell writes no brief from a report: a runner's words are data, never
  * another task's brief (ADR-0057 R3), so the fix is the supervisor's to write
@@ -65,7 +68,7 @@ export type LandedPaths = (taskId: string) => readonly string[] | undefined;
  * citing every slice is one defect, not a fix owed by each.
  */
 function ownerNamed(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>, landedPaths?: LandedPaths): string | undefined {
-  if (finding.severity !== 'blocker') return undefined;
+  if (finding.severity !== 'blocker' || waitsOn(finding, reporter, byId)) return undefined;
   for (const ref of finding.evidence ?? []) {
     const owner = ref.kind === 'task' ? landedOwner(ref, reporter, byId) : undefined;
     if (owner) return owner;
@@ -74,28 +77,66 @@ function ownerNamed(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<s
 }
 
 /**
- * Whether `owner`'s work had landed when `reporter` reported on it. A report
- * made before is about work that was not there, so the count never jumps past
- * its first raise when the work it named lands later; and a retry that lands
- * again starts the count over.
+ * Whether a finding cites, by task reference, work of this plan still to come
+ * when it was reported: a wait notice, never a blocker in landed work, whatever
+ * files it cites: those may be the placeholders a landed task left for the
+ * work it waits on.
+ */
+function waitsOn(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>): boolean {
+  const reportedAt = settledAt(reporter) ?? Infinity;
+  return (finding.evidence ?? []).some((ref) => {
+    if (ref.kind !== 'task' || ref.finding !== undefined || (ref.node !== undefined && ref.node !== ROOT_NODE)) return false;
+    const cited = byId.get(ref.task);
+    if (!cited || cited.id === reporter.id || !landsOnBranch(cited)) return false;
+    return cited.status !== 'completed' || (settledAt(cited) ?? -Infinity) > reportedAt;
+  });
+}
+
+/**
+ * Whether `owner`'s work had landed when the attempt that wrote `reporter`'s
+ * handoff started. Work that landed after is work it may never have taken in,
+ * so the count never jumps past its first raise when the work it named lands
+ * later; and a retry that lands again starts the count over.
  */
 function landedBefore(owner: Task, reporter: Task): boolean {
-  return owner.id !== reporter.id && owner.status === 'completed' && landsOnBranch(owner) && (settledAt(owner) ?? -Infinity) <= (settledAt(reporter) ?? Infinity);
+  return owner.id !== reporter.id && owner.status === 'completed' && landsOnBranch(owner) && (settledAt(owner) ?? -Infinity) <= heldFrom(reporter);
+}
+
+/**
+ * When the reporting attempt started, which is when its tree last held what
+ * had landed: a take-in later is the runner's own merge, with no time on the
+ * plan (ADR-0013). Without the attempt's record, when it reported.
+ */
+function heldFrom(reporter: Task): number {
+  const attempt = reporter.handoff?.attempt;
+  const usage = attempt === undefined ? undefined : reporter.attemptUsage?.find((u) => u.attempt === attempt);
+  const started = Date.parse(usage?.startedAt ?? '');
+  return Number.isNaN(started) ? settledAt(reporter) ?? Infinity : started;
 }
 
 /**
  * The landed task a finding's files name: the first file it cites that landed
  * work changed, where the defect is, not the callers it shows in after it. Of
- * several landings that changed that file, the last before the report, which is
- * the work the reporter's tree held.
+ * several landings that changed that file, the last before the attempt started,
+ * which is the work the reporter's tree held.
+ *
+ * None, once another task's landing after the report changed that file: what
+ * the report complained of was still being written, as a placeholder the
+ * opening task left for a slice is. Counted afresh at each report, so one made
+ * before that landing stops counting from then on.
  */
 function fileOwner(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>, landedPaths: LandedPaths): string | undefined {
-  const landed = [...byId.values()].filter((t) => landedBefore(t, reporter));
+  const completed = [...byId.values()].filter((t) => t.id !== reporter.id && t.status === 'completed' && landsOnBranch(t));
+  const landed = completed.filter((t) => landedBefore(t, reporter));
+  const reportedAt = settledAt(reporter) ?? Infinity;
   for (const ref of finding.evidence ?? []) {
     if (ref.kind !== 'file') continue;
     const path = ref.path.replace(/\\/g, '/').replace(/^\.\//, '');
-    const owners = landed.filter((t) => landedPaths(t.id)?.includes(path));
-    if (owners.length > 0) return owners.reduce((last, t) => ((settledAt(t) ?? -Infinity) > (settledAt(last) ?? -Infinity) ? t : last)).id;
+    const changed = (t: Task) => landedPaths(t.id)?.includes(path) === true;
+    const owners = landed.filter(changed);
+    if (owners.length === 0) continue;
+    const owner = owners.reduce((last, t) => ((settledAt(t) ?? -Infinity) > (settledAt(last) ?? -Infinity) ? t : last));
+    return completed.some((t) => t.id !== owner.id && (settledAt(t) ?? -Infinity) > reportedAt && changed(t)) ? undefined : owner.id;
   }
   return undefined;
 }
