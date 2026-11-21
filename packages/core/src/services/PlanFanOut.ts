@@ -390,7 +390,8 @@ async function filesUnder(fs: SizingFileSystem, dir: string, pattern: string, mo
   return [...new Set(r.output.split('\n').flatMap((row) => {
     const p = row.trim().replace(/\\/g, '/');
     if (!p || path.posix.isAbsolute(p) || /^[A-Za-z]:/.test(p) || p.startsWith('..')) return [];
-    const full = `${dir}/${p}`;
+    // Joined, not concatenated: a row listed from `.` must read as the same file found from a deeper directory.
+    const full = path.posix.join(dir, p);
     return FILE.test(full) ? [full] : [];
   }))];
 }

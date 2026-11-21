@@ -24,7 +24,8 @@ export function workspace(files: Record<string, string>) {
     glob: async (pattern: string, opts?: GlobOptions): Promise<ToolOutcome> => {
       const dir = opts?.path ?? '.';
       globs.push(pattern === '**/*' ? dir : `${dir} ${pattern}`);
-      const under = Object.keys(files).filter((p) => p.startsWith(`${dir}/`)).map((p) => p.slice(dir.length + 1));
+      // The workspace root lists its rows with no `./`: formatSearchOutput strips `<root>/`.
+      const under = dir === '.' ? Object.keys(files) : Object.keys(files).filter((p) => p.startsWith(`${dir}/`)).map((p) => p.slice(dir.length + 1));
       if (under.length === 0) return { success: false, output: `Glob failed: find: '/ws/${dir}': No such file or directory`, truncated: false };
       const name = nameMatcher(pattern);
       const rows = under.filter((p) => name.test(p.split('/').pop()!));
