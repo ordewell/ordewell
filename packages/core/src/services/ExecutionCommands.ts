@@ -260,6 +260,13 @@ export interface ExecutionHost {
   resolveConflict(taskId: string): Promise<boolean>;
   /** Replay the run a dirty checkout turned away, stashing first or for this run without isolation. */
   continueRun(how: 'stash' | 'shared'): Promise<void>;
+  /**
+   * Switch a task its runner started in another mode to the mode it did
+   * start in, with the tasks held behind the same refusal, and let those go
+   * (ADR-0018 B2): the user's own edit, never made for them (ADR-0001). The
+   * mode switched to and how many tasks; null when it failed on no such refusal.
+   */
+  switchMode(taskId: string): Promise<{ label: string; count: number } | null>;
   /** The end of a task's output, as a planner turn is told it; see {@link taskReport}. */
   reportTail(taskId: string): string | undefined;
 }
@@ -492,6 +499,7 @@ export class ExecutionCommands {
     if (chosen.confirm && !confirmed) return refused(`${chosen.confirm} Nothing was changed: it needs your explicit yes.`);
     const act = escalationAct(escalation, chosen.id, note, raiseTokens);
     if (act.kind === 'command') return this.run(act.command, { kind: 'user' });
+    if (act.kind === 'switch-mode') return this.switchModeAndRetry(escalation, act.task);
     try {
       if (act.kind === 'continue-run') {
         await this.host.continueRun(act.how);
@@ -503,6 +511,21 @@ export class ExecutionCommands {
     } catch (err) {
       return refused(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /** The mode switch, then the retry the option names, both as the user: the retry keeps every check the Retry button has. */
+  private async switchModeAndRetry(escalation: Escalation, taskId: string): Promise<CommandOutcome> {
+    const label = `task ${escalation.task?.ref} "${escalation.task?.title}"`;
+    let switched: { label: string; count: number } | null;
+    try {
+      switched = await this.host.switchMode(taskId);
+    } catch (err) {
+      return { ok: false, outcome: 'refused', message: err instanceof Error ? err.message : String(err) };
+    }
+    if (!switched) return { ok: false, outcome: 'refused', message: `${capitalize(label)} has no mode left to switch: it did not fail on its mode, or that mode is gone. Nothing was changed.` };
+    const retried = await this.run({ command: 'retry_task', task: taskId, from: 'fresh' }, { kind: 'user' });
+    const what = switched.count === 1 ? `${capitalize(label)}` : `${switched.count} tasks`;
+    return { ...retried, message: `Switched ${what} to ${switched.label}. ${retried.message}` };
   }
 
   /** A valid, consented call, from the user's answer where one is needed to the act and its record. */

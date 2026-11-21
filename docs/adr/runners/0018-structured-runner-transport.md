@@ -363,9 +363,22 @@ and completion evidence.
   assigned to it; queued input waits for the adapter to release its send.
 - **The plan's mode is held (B2).** `--permission-mode auto` on a model or
   account without auto mode is not refused: the CLI starts in `default` and
-  asks about every write. The connector compares the mode `init` reports with
-  the one the plan asked for and fails the turn in plain words on a mismatch
-  (ADR-0001).
+  asks about every write. Claude Code's documentation offers Auto on every
+  plan, but only for some models (on Anthropic's API, Opus and Sonnet 4.6 or
+  later, Haiku 5.5 and the Fable models; fewer on Bedrock, Vertex and
+  Foundry), and an administrator or Anthropic's server can turn it off. The
+  connector compares the mode `init` reports with the one the plan asked for
+  and fails the turn in plain words on a mismatch (ADR-0001), naming both
+  modes in the error event (`modeRefused`). Nothing ran, so the attempt ends
+  at once: its verdict says what happened in the user's words and, where the
+  mode the runner did start in is another the manifest lists (never its
+  read-only profile), offers it. The offer is the user's own switch, the
+  escalation option `switch-mode`: a hand edit of the task's mode, then a
+  retry. Nothing switches a mode for the user. Every task not started that
+  would meet the same refusal (the same runner, mode and model, since the
+  runner decides by model and account) is held before it starts, and the run
+  is told once. The failed task's one escalation lists them and its switch
+  takes them along; each one's own hold is left out of the list while it does.
 - **Lifetime (L1).** The process ends with its attempt, and at a verdict as
   soon as the verdict is accepted, not once the work has landed: the log lives
   in Ordewell, and work after the verdict would go unverified. It ends the way
@@ -792,3 +805,4 @@ transport is retained for take-over.
 - 2026-11-20 — W1: a flag set by double the last one's time names that time, not the lowered threshold's doubling.
 - 2026-11-21 — W1: after the first running-long flag the next is due at twice the last, the threshold no longer read again for it; a flag still waiting when its attempt ends is dropped.
 - 2026-11-21 — U1: a park ends its attempt as a pause does and its next start continues the saved session, or carries its files over where none can be resumed (ADR-0074).
+- 2026-11-21 — B2: a mode refusal fails its task in the user's words and offers the mode the runner started in as the user's switch; the tasks that would meet it too are held before they start, told once for the run.

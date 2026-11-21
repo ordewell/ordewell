@@ -2034,7 +2034,8 @@ evidence; a reason in plain words; and the options that wait's own card or
 command offers, each with the question its card asks first where it has one.
 It has no deadline and no default answer. What resolves itself is left out, and
 a task whose cause is listed: a blocked task's failure is listed once, not its
-dependents. Answered only by the user, through `answerEscalation` on the
+dependents, and a task held behind a *Mode refusal* is listed in the refused
+task's entry, not its own. Answered only by the user, through `answerEscalation` on the
 *Command seam*, which derives the list afresh, refuses a stale id, and
 dispatches to the existing command for that wait, so it adds no authority. Every
 status update carries the list whole, and it is in the *Run view*. A surface's
@@ -2046,6 +2047,17 @@ or parked start, which stay in memory.
 made); "blocked" for one — that is a dependency term, and a blocked task is not
 listed; a stored or raised escalation — nothing raises one, it holds or it does
 not.
+
+**Mode refusal** (`modeRefused` on a turn's error, `Verdict.modeRefusal`,
+`services/modeRefusal.ts`; ADR-0018 B2) — a runner that started in another mode
+than the task's, as Claude Code does in `default` when `auto` is not offered to
+the model or account. The task fails with nothing run, in the user's words. Its
+verdict names the runner, the mode asked for and, when the runner started in
+another mode its manifest lists, that mode as the *offer*. The offer is the
+escalation option `switch-mode`: the user's own edit of the task's mode, then a
+retry. Every task not started on the same runner, mode and model is held before
+it starts and switched along with it, and the run is told once.
+*Avoid:* "fallback" — nothing falls back by itself; "downgrade".
 
 **Notify command** (`IConfig.notifyCommand`, `ORDEWELL_NOTIFY_COMMAND`,
 `ordewell.notifyCommand`, `EscalationNotifier`, `services/escalationNotifier.ts`;

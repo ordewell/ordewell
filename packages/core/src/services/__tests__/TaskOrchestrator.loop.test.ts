@@ -470,7 +470,7 @@ describe('a loop: a check that repeats with its fix until it passes (ADR-0045)',
     expect(h.spawns('fix')).toHaveLength(0);
     expect(h.get('fix')).toMatchObject({ status: 'skipped', skipReason: 'not needed' });
     expect(h.orchestrator.getBlockedBy('ship')).toEqual(['review']);
-    expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('Task "Task review" failed verification'));
+    expect(h.notifications.error).toHaveBeenCalledWith(expect.stringContaining('Task "Task review" failed.'));
   });
 
   it.each(['user', 'supervisor'] as const)('keeps a body skip by the %s whose reason reads like the loop\'s own: the loop is stopped, and the fix does not run', async (by) => {

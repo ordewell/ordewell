@@ -59,6 +59,25 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A Claude Code task that cannot start in Auto mode says so and offers the
+  next step.** Claude Code offers Auto only on some models (on Anthropic's API:
+  Opus and Sonnet 4.6 or later, Haiku 5.5, the Fable models), and an
+  administrator can turn it off. Elsewhere it starts in *Ask before edits* without saying why, and the
+  task failed with "the runner exited cleanly but never called task_complete".
+  Now the task fails with "Claude Code started in Ask before edits mode, not
+  Auto, the mode this task asked for…", and its entry in the inbox (the desktop
+  app's *Needs you*, VS Code's and the terminal UI's inbox) offers *Use Ask
+  before edits and retry*. Nothing changes the mode until you pick that. The
+  run's other Claude Code tasks in Auto on the same model are held before they
+  start and named once in the notice. The same option switches them too
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md) B2).
+- **A failed task says why on its row.** The desktop app's plan card and VS
+  Code's task card and row show the first sentence of the reason while
+  collapsed, the whole reason on hover. The failure notice no longer says
+  "failed verification: Failed verification:", and a runner that stops without
+  reporting now reads "The runner stopped before reporting the task done, so
+  nothing it did counts yet. Open its chat to see where it stopped, then retry
+  it."
 - **An agent installed while Ordewell runs is found on the next detection.**
   *Detect again*, `/refresh`, the runner list and a no-planner error's *Try
   Again* now ask the login shell for its PATH again, so an installer that adds

@@ -27,6 +27,13 @@
 
 ### Fixed
 
+- A Claude Code task that cannot start in Auto mode, on a model or account
+  without it, now fails saying so, and its inbox entry offers *Use Ask before
+  edits and retry*. Nothing changes the mode until you pick that. The run's
+  other Claude Code tasks in Auto on the same model wait on hold rather than
+  each failing the same way, and the same option switches them too.
+- A failed task shows the first sentence of why it failed on its card and row,
+  and its notice no longer repeats "failed verification".
 - An agent installed while VS Code is open is found on *Detect again*,
   `/refresh` or a no-planner error's *Try Again*, which now detects again:
   Ordewell reads the login shell's PATH again on each detection.

@@ -490,3 +490,49 @@ describe('a planner reply to a wake-up that waits on the user (ADR-0053, ADR-002
     expect(listFor([task('t1', 1, { status: 'completed' })], { run })).toEqual([]);
   });
 });
+
+describe('a task its runner started in another mode (ADR-0018 B2)', () => {
+  const refusal = { runner: 'claude-code', runnerLabel: 'Claude Code', asked: { mode: 'auto', label: 'Auto' }, offered: { mode: 'default', label: 'Ask before edits' } };
+  const refused = (over: Partial<Task> = {}) => task('t1', 1, {
+    assignedRunner: 'claude-code', taskMode: 'auto', status: 'failed',
+    verdict: { outcome: 'fail', reason: 'Claude Code started in Ask before edits mode, not Auto.', checks: [], decidedAt: '2026-11-21T00:00:00Z', modeRefusal: refusal },
+    ...over,
+  });
+  const alike = (id: string, order: number) => task(id, order, { assignedRunner: 'claude-code', taskMode: 'auto' });
+  const hold = 'Claude Code did not start #1 in Auto mode, so this task would fail the same way: switch it to Ask before edits, or retry it';
+
+  it('offers the mode the runner started in first, as the user\'s own switch, beside a plain retry', () => {
+    const [entry] = listFor([refused()], { attempts: { t1: 1 } });
+
+    expect(entry).toMatchObject({ kind: 'failed', reason: 'Claude Code started in Ask before edits mode, not Auto.' });
+    expect(entry.options.map((o) => [o.id, o.label])).toEqual([
+      ['switch-mode', 'Use Ask before edits and retry'],
+      ['retry', 'Retry'],
+      ['skip', 'Skip'],
+      ['complete', 'Mark complete'],
+    ]);
+  });
+
+  it('lists the tasks held behind it once, in its own entry, and its switch takes them along', () => {
+    const list = listFor([refused(), alike('t2', 2), alike('t3', 3), task('t4', 4, { assignedRunner: 'claude-code', taskMode: 'auto' })], {
+      attempts: { t1: 1 }, onHold: { t2: hold, t3: hold, t4: 'reverted; retry or force start to run it again' },
+    });
+
+    expect(list.map((e) => [e.kind, e.task?.id])).toEqual([['failed', 't1'], ['on-hold', 't4']]);
+    expect(list[0].reason).toBe('Claude Code started in Ask before edits mode, not Auto. #2 and #3 use Auto on Claude Code too, and wait on hold.');
+    expect(list[0].options[0]).toEqual({ id: 'switch-mode', label: 'Use Ask before edits for all 3 and retry' });
+  });
+
+  it('offers no switch when the runner started in no mode the task may take', () => {
+    const noOffer = { runner: refusal.runner, runnerLabel: refusal.runnerLabel, asked: refusal.asked };
+    const [entry] = listFor([refused({ verdict: { outcome: 'fail', reason: 'r', checks: [], decidedAt: '2026-11-21T00:00:00Z', modeRefusal: noOffer } })], { attempts: { t1: 1 } });
+
+    expect(entry.options.map((o) => o.id)).not.toContain('switch-mode');
+  });
+
+  it('comes to switching the mode, a Session operation of the user\'s alone', () => {
+    const [entry] = listFor([refused()], { attempts: { t1: 1 } });
+
+    expect(escalationAct(entry, 'switch-mode')).toEqual({ kind: 'switch-mode', task: 't1' });
+  });
+});

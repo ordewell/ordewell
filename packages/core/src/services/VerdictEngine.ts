@@ -491,9 +491,8 @@ function exitVerdict(exitCode: number): Verdict {
   const exitOk = normalized === 0;
   return {
     outcome: 'fail',
-    reason: exitOk
-      ? 'Failed verification: the runner exited cleanly but never called task_complete.'
-      : `Failed verification: the runner exited with code ${normalized} without calling task_complete.`,
+    // For the user first: the check below keeps the exact terms.
+    reason: `The runner stopped ${exitOk ? '' : `with exit code ${normalized} `}before reporting the task done, so nothing it did counts yet. Open its chat to see where it stopped, then retry it.`,
     checks: [
       { name: 'task_complete', passed: false, skipped: false, detail: 'the runner exited before calling task_complete' },
       { name: EXIT_CHECK, passed: exitOk, skipped: false, detail: exitOk ? 'the runner exited cleanly (code 0)' : `the runner exited with code ${normalized}` },

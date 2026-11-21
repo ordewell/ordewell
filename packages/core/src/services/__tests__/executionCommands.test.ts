@@ -1058,7 +1058,7 @@ describe('the command seam\'s extension points', () => {
       runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), stopAsked: vi.fn(), startAsked: vi.fn(),
       answerRequest: vi.fn(), mergeAll: vi.fn(), runMerged: () => false, record: vi.fn(), guardTripped: vi.fn(), turnHandle: () => undefined,
       draftScript: () => ({ ok: false, errors: ['not here'] }), addScript: vi.fn(), awaitEnd: vi.fn(async () => {}), owe: vi.fn(), reportTail: () => undefined,
-      escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(), checksDelegatedTask: () => false, raiseChild: async () => null, mergeHold: () => [], opsInCheckout: () => [],
+      escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(), switchMode: async () => null, checksDelegatedTask: () => false, raiseChild: async () => null, mergeHold: () => [], opsInCheckout: () => [],
       ...over.host,
     };
     const orchestrator: RunReads = {

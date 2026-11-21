@@ -3643,6 +3643,18 @@ body.vscode-high-contrast-light .task-card.expanded {
   color: var(--text-secondary);
 }
 
+/* Why a failed task failed, its first sentence, while the card or row is collapsed (F7). */
+.task-failure-peek {
+  display: block;
+  padding: 3px 14px 6px 14px;
+  font-size: 12px;
+  color: var(--red);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
 .task-handoff {
   min-width: 0;
   padding: 10px 12px;

@@ -593,9 +593,16 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
           {asRow && approvalsButton}
         </TaskSummary>
 
+        {/* Collapsed, a failed task says why first, as a row too: its badge says only that it failed (F7). */}
+        {!expanded && row.failure && (
+          <div className="task-failure-peek" onClick={() => setExpanded(true)} title={(run?.verdict ?? task.verdict)?.reason ?? row.failure}>
+            {row.failure}
+          </div>
+        )}
+
         {/* Collapsed, the newest line is the whole signal — "which test is it on"
             without having to open the card. A row's status line says enough. */}
-        {!expanded && !asRow && output && (
+        {!expanded && !asRow && !row.failure && output && (
           <div className="task-output-peek" onClick={() => setExpanded(true)} title="Show the full tail">
             {lastLine(output)}
           </div>

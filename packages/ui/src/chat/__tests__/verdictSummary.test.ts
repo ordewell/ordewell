@@ -7,9 +7,12 @@ describe('verdictSummary', () => {
       .toBe('Verified: the runner reported completion through task_complete.');
     expect(verdictSummary({ outcome: 'pass', reason: 'Manually marked complete by user.' }))
       .toBe('Verified: Manually marked complete by user.');
-    expect(verdictSummary({ outcome: 'fail', reason: 'Failed verification: the runner exited cleanly but never called task_complete.' }))
-      .toBe('Failed verification: the runner exited cleanly but never called task_complete.');
+  });
+
+  it('gives a failure\'s reason as it is: it says what failed itself, for the user (F7)', () => {
+    expect(verdictSummary({ outcome: 'fail', reason: 'The runner stopped before reporting the task done, so nothing it did counts yet.' }))
+      .toBe('The runner stopped before reporting the task done, so nothing it did counts yet.');
     expect(verdictSummary({ outcome: 'fail', reason: 'The script failed: exit 1.' }))
-      .toBe('Failed verification: The script failed: exit 1.');
+      .toBe('The script failed: exit 1.');
   });
 });

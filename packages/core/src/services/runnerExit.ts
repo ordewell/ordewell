@@ -4,7 +4,7 @@
  */
 
 import { connectorFor } from './harness/connectors';
-import type { UsageLimitSignal } from './harness/AgentAdapter';
+import type { ModeRefused, UsageLimitSignal } from './harness/AgentAdapter';
 
 /**
  * Why a runner stopped, as far as the tail of its own output says. `usage-limit`
@@ -62,13 +62,15 @@ export const PROVIDER_RETRY_DELAYS_MS: readonly number[] = [30_000, 60_000, 120_
 const USAGE_LIMIT_TAIL = 4096;
 
 /**
- * A turn's failure as its runner reported it: its words, and `usageLimit`
+ * A turn's failure as its runner reported it: its words, `usageLimit`
  * where its protocol also says in a field whether it was the limit (Codex's
- * `codexErrorInfo`).
+ * `codexErrorInfo`), and `modeRefused` where it started in another mode.
  */
 export interface TurnFailure {
   message: string;
   usageLimit?: UsageLimitSignal | false;
+  /** The runner started in another mode than the one asked for (ADR-0018 B2). */
+  modeRefused?: ModeRefused;
 }
 
 /**

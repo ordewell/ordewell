@@ -218,3 +218,24 @@ describe('TaskCard: a line too narrow for the assignment', () => {
     }
   });
 });
+
+describe('a failed task\'s card (F7)', () => {
+  const failed = () => nodeOf(runTask({
+    id: 'a', order: 1, title: 'Port the parser', type: 'ai', assignedRunner: 'claude-code', status: 'failed',
+    verdict: { outcome: 'fail', reason: 'Claude Code started in Ask before edits mode, not Auto, the mode this task asked for. Switch this task to Ask before edits and retry it.', checks: [] },
+  }));
+
+  it.each(['comfortable', 'compact'] as const)('says why it failed on the card itself at %s density, its whole reason a hover away', (density) => {
+    const { q } = card(failed(), density);
+
+    const line = q('.graph-card-failure');
+    expect(line?.textContent).toBe('Claude Code started in Ask before edits mode, not Auto, the mode this task asked for.');
+    expect(line?.title).toBe('Claude Code started in Ask before edits mode, not Auto, the mode this task asked for. Switch this task to Ask before edits and retry it.');
+  });
+
+  it('shows no failure line on a task that has not failed', () => {
+    const { q } = card(nodeOf(runTask({ id: 'a', order: 1, title: 'Port the parser', type: 'ai', assignedRunner: 'claude-code', status: 'completed' })), 'comfortable');
+
+    expect(q('.graph-card-failure')).toBeNull();
+  });
+});

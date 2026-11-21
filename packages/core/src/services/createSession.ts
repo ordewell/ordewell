@@ -71,6 +71,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
 import { taskRefOf } from './TaskRefs';
+import { heldBehindRefusal } from './modeRefusal';
 import { standingBlock, standingWords } from './runHolds';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { withTaskRunnerConfig } from './taskRunnerConfig';
@@ -1285,7 +1286,25 @@ export class Session {
       escalations: () => this.escalations(),
       resolveConflict: async (taskId) => (await this.resolveConflictAsTask(taskId)) !== null,
       continueRun: (how) => (how === 'stash' ? this.continueWithStash() : this.continueWithoutIsolation()),
+      switchMode: (taskId) => this.switchRefusedMode(taskId),
     };
+  }
+
+  /**
+   * The user's switch of a task its runner started in another mode to the
+   * mode it did start in, and of the tasks held behind the same refusal
+   * (ADR-0018 B2): a hand edit of each, which no level rewrites (ADR-0001),
+   * then those held are let go. The retry is the caller's.
+   */
+  private async switchRefusedMode(taskId: string): Promise<{ label: string; count: number } | null> {
+    const failed = this.store.get(taskId);
+    const refusal = failed?.status === 'failed' ? failed.verdict?.modeRefusal : undefined;
+    if (!failed || !refusal?.offered) return null;
+    const ref = taskRefOf(this.store.planTasks, taskId) ?? `#${failed.order}`;
+    const held = heldBehindRefusal({ ...failed, refusal }, ref, this.store.allTasks, (id) => this.orchestrator.holdReason(id));
+    for (const task of [failed, ...held]) await this.editor.updateTask(task.id, { taskMode: refusal.offered.mode });
+    this.orchestrator.releaseSwitched(held.map((t) => t.id));
+    return { label: refusal.offered.label, count: held.length + 1 };
   }
 
   /**
