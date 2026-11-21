@@ -95,6 +95,18 @@ function historyOf(armDir) {
   return r.stdout.split('\n').filter(Boolean).map((l) => { const [sha, parents, ...subject] = l.split('\t'); return { sha, parents: parents.split(' ').filter(Boolean), subject: subject.join('\t') }; });
 }
 
+/** The tasks of the session's final plan, by order, from the copy of the workspace's saved session; null when it cannot be read. */
+function finalPlanOf(runDir) {
+  const dir = path.join(runDir, 'workspace-ordewell', 'sessions');
+  try {
+    const file = fs.readdirSync(dir).find((f) => f.endsWith('.json'));
+    const tasks = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')).plan?.tasks;
+    return Array.isArray(tasks) ? [...tasks].sort((a, b) => a.order - b.order) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The context the fake was started with, for reading its scripts back: only the step tools matter here. */
 function playCtx(file, name) {
   const lib = JSON.parse(fs.readFileSync(file, 'utf8')).libraries.find((l) => l.name === name) ?? {};
@@ -144,6 +156,11 @@ for (const name of names) {
     failures.push(...R.judgePlayed(name, requests.map((r) => r.turn).filter(Boolean), ctx));
     const armDir = path.join(runDir, 'arm-workdir');
     if (s.takeIn) failures.push(...R.judgeTakeIn(name, requests, ctx, historyOf(armDir)));
+    failures.push(...R.judgeRefusals(name, requests, ctx));
+    if (s.wait || s.blocker) {
+      const plan = finalPlanOf(runDir);
+      failures.push(...R.judgeWait(name, requests, ctx, plan), ...R.judgeBlocker(name, requests, ctx, plan));
+    }
     failures.push(...R.judgeLanded(name, (file) => fs.existsSync(path.join(armDir, file))));
   }
   if (runDir && s.planOnly) {

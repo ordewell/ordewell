@@ -65,6 +65,13 @@ const done = (subject, extra = {}) => ({ tool: 'task_complete', args: { status: 
 const failed = (why) => ({ tool: 'task_complete', args: { status: 'failed', summary: why, reason: why } });
 
 const checkpoint = (question) => ({ tool: 'checkpoint', args: { question } });
+/** The call that parks a change task on a sibling's unlanded work (core's wait_for, ADR-0074). */
+const waitFor = (tasks, reason) => ({ tool: 'wait_for', args: { tasks, reason } });
+/** A turn the model ends in prose: how a granted wait_for's attempt ends, and where the continuation picks up. */
+const say = (content) => ({ say: content });
+/** A shell step the built-in runner's guard must refuse before it runs (core's waitRefusal): the reply names wait_for. */
+const refused = (command) => ({ ...shell(command), refused: true });
+export const WAIT_REFUSAL = /Not run: this command sleeps for 300 seconds\./;
 /** A file outside the library and its tests: work that lands without moving the score. */
 const note = (file) => ({ tool: 'write', args: { path: file, content: 'Written by the rehearsal.\n' } });
 
@@ -80,6 +87,7 @@ export const TAKE_IN_SUBJECT = /^Merge: .+ \(take in landed work\)$/;
 /** A shell step whose command the fake reads out of the task's own first user message: its first capture. */
 const fromPrompt = (pattern) => ({ tool: 'shell', fromPrompt: pattern, exit0: true });
 const CONSUMER_NOTE = 'commit0-rehearsal-consumer.md';
+const FIX_FILE = 'commit0-rehearsal-fix.md';
 const CONSUMER_COMMIT = 'Note the rehearsal consumer';
 
 /** Deterministic task ids, so a plan and its dependencies read back the same on every run. */
@@ -136,7 +144,30 @@ const EDIT_REPLY = `The rehearsal edits task #1 and retries nothing.\n\`\`\`json
 /** What the second wake, raised for a failure the closing turn left standing, is told (core's standingDetail). */
 const STILL_FAILED = /is still failed after your turn/;
 const APPROVE = { tool: 'answer_checkpoint', args: { task: '#2', answer: 'approve', reason: 'Follow the tests.' } };
-const FAILS_ON_PURPOSE = 'The rehearsal fails this task on purpose.';
+/** The line a wake holds for a blocker reported in landed work (core's landedBlockerLine), as it reads for one reporter. */
+const LANDED_BLOCKER_LINE = /task #1 "Implement the library" has landed, and 1 task reports a blocker in its work/i;
+/** The start of the one line of guidance that line carries (core's LANDED_BLOCKER_ADVICE). */
+const LANDED_BLOCKER_ADVICE = /A blocker reported in landed work is fixed once, by one task/;
+/**
+ * The supervisor's answer to that wake: one edit that adds the one fix task
+ * (beside the opening, which landed) and makes the closing check wait on it
+ * too. Its prompt carries the key the fake routes by.
+ */
+const FIX_REPLY = `The rehearsal adds one fix task for the opening task's defect.\n\`\`\`json\n${JSON.stringify({
+  taskOps: [
+    {
+      op: 'add', handle: 'fix',
+      task: {
+        title: 'Fix the opening task\'s defect', description: 'Fix the defect two slices report in the opening task\'s landed work.',
+        prompt: 'Fix the defect two slices report in the opening task\'s landed work (#2/F1, #3/F1). [rehearsal:fix]',
+        dependencies: ['#1'], assignedRunner: 'openrouter',
+        assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
+      },
+    },
+    { op: 'update', taskId: '#4', changes: { dependencies: ['#2', '#3', 'fix'] } },
+  ],
+}, null, 2)}\n\`\`\``;
+const FAILS_ON_PURPOSE ='The rehearsal fails this task on purpose.';
 const LEFT_PLAN = [
   { key: 'edit', title: 'Implement the library' },
   { key: 'after', title: 'Note the rehearsal', after: ['edit'] },
@@ -180,7 +211,8 @@ export const SCENARIOS = Object.freeze({
   'a-done': {
     arm: 'A',
     about: 'arm A: its one task makes the edits and reports done; `ordewell run` returns by itself',
-    attempts: (ctx) => ({ A: [[...editSteps(ctx), done('Implement the library')]] }),
+    // The first step sleeps for five minutes, as a model waiting on work does: the built-in shell refuses it before it runs, and the reply names wait_for.
+    attempts: (ctx) => ({ A: [[refused('sleep 300; echo slept'), ...editSteps(ctx), done('Implement the library')]] }),
     ending: { by: 'completion', status: 'done', reason: null, calls: true },
     expect: { valid: true, runExit: 0, truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 } },
     playedOut: ['A'],
@@ -280,6 +312,70 @@ export const SCENARIOS = Object.freeze({
     playedOut: ['producer', 'consumer'],
     takeIn: { key: 'consumer', ownSubject: CONSUMER_COMMIT, landed: 'Implement the library' },
   },
+  'b-wait': {
+    arm: 'B',
+    about: 'arm B at two at once: the consumer calls wait_for on the producer, which is still at work, and parks; its slot goes to a third task queued behind the limit; once the producer lands the consumer continues, told what landed, and lands too',
+    windows: { parallel: 2 },
+    plan: () => rehearsalPlan([
+      { key: 'producer', title: 'Implement the library' },
+      { key: 'consumer', title: 'Build on the library' },
+      { key: 'small', title: 'Note the rehearsal' },
+    ]),
+    attempts: (ctx) => {
+      // What the consumer does once it goes on, with the work it waited for in its worktree.
+      const after = [
+        note(CONSUMER_NOTE),
+        { ...shell(`test -f ${ctx.src}/${REHEARSAL_MODULE}.py && echo taken in`), exit0: true },
+        done('Build on the library'),
+      ];
+      return {
+        // The long step keeps the producer at work while the consumer parks and the third task takes the slot.
+        producer: [[longStep(ctx.longSec), ...editSteps(ctx), done('Implement the library')]],
+        // Its session resumes, so the continuation is round 2 of the same attempt; a runner that could not resume would start attempt 2, which has no wait of its own.
+        consumer: [[waitFor(['#1'], 'My tests import the library the producer is still writing.'), say('Waiting for the producer.'), ...after], after],
+        small: [[note('commit0-rehearsal-small.md'), done('Note the rehearsal')]],
+      };
+    },
+    ending: { by: 'completion', status: 'done', reason: null },
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 3 }, parallel: 2 },
+    playedOut: ['producer', 'small'],
+    wait: { parker: 'consumer', awaited: 'producer', other: 'small', landed: 'Implement the library' },
+  },
+  'b-blocker': {
+    arm: 'B',
+    about: 'arm B: the opening task lands a defect and two slices report a blocker citing it; the supervisor\'s wake holds the landed-blocker line, it adds one fix task, and the fix lands before the task that checks the whole starts',
+    plan: () => rehearsalPlan([
+      { key: 'edit', title: 'Implement the library' },
+      { key: 'slice-a', title: 'Slice A', after: ['edit'] },
+      { key: 'slice-b', title: 'Slice B', after: ['edit'] },
+      { key: 'check', title: 'Check the whole', after: ['slice-a', 'slice-b'] },
+    ]),
+    attempts: (ctx) => {
+      const blocker = (what) => ({
+        findings: [{
+          severity: 'blocker', title: `The opening task's landed module breaks ${what}`,
+          detail: 'Its module is imported by the package and the import fails: the slice cannot finish its own checks.',
+          evidence: [{ kind: 'task', task: '#1' }],
+        }],
+      });
+      return {
+        edit: [[...editSteps(ctx), done('Implement the library')]],
+        // The first slice reports at once, so the wake comes while the second is at work and the closing check cannot start.
+        'slice-a': [[note('commit0-rehearsal-slice-a.md'), done('Do slice A', blocker('slice A'))]],
+        'slice-b': [[longStep(ctx.longSec), note('commit0-rehearsal-slice-b.md'), done('Do slice B', blocker('slice B'))]],
+        fix: [[note(FIX_FILE), done('Fix the opening task\'s defect')]],
+        // The fix's file is in the tree the check starts from only if the fix landed first.
+        check: [[{ ...shell(`test -f ${FIX_FILE} && echo fixed`), exit0: true }, note('commit0-rehearsal-check.md'), done('Check the whole')]],
+      };
+    },
+    supervisor: [{ when: LANDED_BLOCKER_LINE, say: FIX_REPLY }],
+    ending: { by: 'completion', status: 'done', reason: null },
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 5 } },
+    playedOut: ['edit', 'slice-a', 'slice-b', 'fix', 'check'],
+    spoke: [/adds one fix task/],
+    supervision: { acts: ['plan_edit'], closingWakes: 0 },
+    blocker: { owner: '#1', closing: '#4', fix: 'Fix the opening task\'s defect', check: 'check', fixKey: 'fix' },
+  },
   'b-cap': {
     arm: 'B',
     about: 'arm B: task 1 lands its edits, then task 2 reports usage past the spend cap mid-attempt: the stop, the merge and the scoring all happen',
@@ -310,6 +406,7 @@ export function windowArgs(s) {
   return [
     '--settle-min', String(w.settleMin), '--poll-sec', String(w.pollSec), '--no-start-min', String(w.noStartMin),
     '--stall-min', String(w.stallMin), '--wall-min', String(w.wallMin), ...(s.capUsd ? ['--cap-usd', String(s.capUsd)] : []),
+    ...(w.parallel ? ['--parallel', String(w.parallel)] : []),
   ];
 }
 
@@ -373,8 +470,12 @@ export function taskKeyOf(messages) {
   return 'A';
 }
 
-/** How many tool rounds this attempt has had: its next step's index. */
-export const roundsOf = (messages) => (messages ?? []).filter((m) => m.role === 'assistant' && m.tool_calls?.length).length;
+/**
+ * How many turns of its own the model has had in this attempt: its next
+ * step's index. A turn in prose counts as one, so that a session that resumes
+ * after a granted wait_for goes on from the step after it.
+ */
+export const roundsOf = (messages) => (messages ?? []).filter((m) => m.role === 'assistant' && (m.tool_calls?.length || (typeof m.content === 'string' && m.content.length > 0))).length;
 
 /**
  * The fake's state across requests: how many attempts each task has started.
@@ -403,6 +504,8 @@ export function turnFor(name, request, state, ctx) {
     const steps = scripts[Math.min(attempt, scripts.length) - 1] ?? [];
     const step = steps[round];
     if (!step) return { content: 'Done.', costUsd: TURN_COST_USD, role, key, attempt, round };
+    // A turn the model ends in prose, as a granted wait_for's attempt does; the round it counts is the one a resumed session replays.
+    if (step.say) return { content: step.say, costUsd: TURN_COST_USD, role, key, attempt, round };
     if (step.fromPrompt) {
       // The command is whatever the task's own first message gives; a message that gives none makes a step that fails, which the judge reads.
       const first = messages.find((m) => m.role === 'user');
@@ -542,6 +645,142 @@ export function judgeTakeIn(name, requests, ctx, history) {
   if (own !== s.takeIn.ownSubject) f.push(`the take-in's first parent is "${own}", wanted the consumer's own commit "${s.takeIn.ownSubject}"`);
   if (!landed.includes(s.takeIn.landed)) f.push(`the take-in's second parent is "${landed}", wanted the landing of "${s.takeIn.landed}"`);
   if (!history.some((c) => c.parents.includes(take.sha))) f.push('nothing in the merged work has the take-in as a parent: the consumer\'s landing does not hold it');
+  return f;
+}
+
+const runnerTurns = (requests, key) => requests.filter((r) => r.turn?.role === 'runner' && r.turn.key === key);
+const atOf = (r) => Date.parse(r.at);
+const lastUser = (r) => text([...(r.messages ?? [])].reverse().find((m) => m.role === 'user'));
+/** The request that answers a step: the next turn of its attempt. */
+const answerTo = (turns, ask) => turns.find((r) => r.turn.attempt === ask.turn.attempt && r.turn.round === ask.turn.round + 1);
+/** The script a request's attempt plays, as the fake picks it (the last one serves any later attempt). */
+const scriptOf = (s, ctx, key, attempt) => { const all = s.attempts(ctx)[key] ?? []; return all[Math.min(attempt, all.length) - 1] ?? []; };
+
+/**
+ * The failures of every step a scenario scripts as `refused`: the built-in
+ * shell's guard must answer it, before it runs, with the reason and the call
+ * to make instead, so the attempt does not sleep for the time the step names.
+ */
+export function judgeRefusals(name, requests, ctx) {
+  const s = scenario(name);
+  const f = [];
+  for (const key of Object.keys(s.attempts?.(ctx) ?? {})) {
+    scriptOf(s, ctx, key, 1).forEach((step, round) => {
+      if (!step.refused) return;
+      const mine = runnerTurns(requests, key).filter((r) => r.turn.attempt === 1);
+      const asked = mine.find((r) => r.turn.round === round);
+      const answered = mine.find((r) => r.turn.round === round + 1);
+      const said = text((answered?.messages ?? []).at(-1));
+      if (!asked || !answered) f.push(`task ${key}: the step ${JSON.stringify(step.args.command)} was never answered`);
+      else if (!WAIT_REFUSAL.test(said)) f.push(`task ${key}: ${JSON.stringify(step.args.command)} was not refused as a wait (the reply: ${said.slice(0, 200)})`);
+      else if (!said.includes('`wait_for`')) f.push(`task ${key}: the refusal does not name wait_for: ${said.slice(0, 300)}`);
+      else if (atOf(answered) - atOf(asked) > 30_000) f.push(`task ${key}: the refused command took ${Math.round((atOf(answered) - atOf(asked)) / 1000)} s to answer, so something ran`);
+    });
+  }
+  return f;
+}
+
+/**
+ * The failures of a wait scenario, from the fake's request log (each line
+ * { at, messages, turn }) and the session's final plan (its tasks, by order):
+ * the parker's wait_for is granted and its attempt ends in prose with no
+ * verdict; the plan holds the edge; the slot goes to the third task while the
+ * awaited one is still at work; the parker goes on only after the awaited
+ * task's last turn, in the same session, told what landed; and it lands.
+ */
+export function judgeWait(name, requests, ctx, plan) {
+  const s = scenario(name);
+  if (!s.wait) return [];
+  const w = s.wait;
+  const f = [];
+  const parker = runnerTurns(requests, w.parker);
+  const awaited = runnerTurns(requests, w.awaited);
+  const other = runnerTurns(requests, w.other);
+  const call = parker.find((r) => r.turn.toolCall?.name === 'wait_for');
+  if (!call) return [`task ${w.parker} never called wait_for`];
+  const reply = text((answerTo(parker, call)?.messages ?? []).at(-1));
+  if (!new RegExp(`Waiting for [^"]*"${w.landed}"`).test(reply)) f.push(`wait_for was not granted for "${w.landed}": ${reply.slice(0, 300) || 'no answer reached the fake'}`);
+  const ended = awaited.find((r) => r.turn.toolCall?.name === 'task_complete');
+  if (!ended) f.push(`task ${w.awaited} never reported`);
+  const cont = parker.find((r) => atOf(r) > atOf(call) && (r.turn.attempt > call.turn.attempt || r.turn.round > call.turn.round + 1));
+  if (!cont) return [...f, `task ${w.parker} never went on after its wait`];
+  // No verdict: the attempt said its last in prose, and nothing it reports counted before it was continued.
+  const early = parker.find((r) => r.turn.toolCall?.name === 'task_complete' && atOf(r) < atOf(cont));
+  if (early) f.push(`task ${w.parker} reported before it was continued, so its attempt did not end without a verdict`);
+  if (ended && !(atOf(cont) > atOf(ended))) f.push(`task ${w.parker} went on (${cont.at}) before task ${w.awaited}'s last turn (${ended.at}): the work had not landed`);
+  if (cont.turn.attempt !== call.turn.attempt) f.push(`task ${w.parker} did not continue its session: it started attempt ${cont.turn.attempt} (a fresh one)`);
+  const told = (cont.messages ?? []).filter((m) => m.role === 'user').map(text).find((t) => /The work you waited for has landed/.test(t)) ?? '';
+  if (!told.includes(`"${w.landed}"`)) f.push(`task ${w.parker}'s request after the wait does not say what landed ("${w.landed}"): ${lastUser(cont).slice(0, 300)}`);
+  // The slot: the third task, queued behind the limit, starts after the park and before the awaited task is done.
+  const first = other.find((r) => r.turn.attempt === 1 && r.turn.round === 0);
+  if (!first) f.push(`task ${w.other} never started`);
+  else {
+    if (!(atOf(first) > atOf(call))) f.push(`task ${w.other} started (${first.at}) before ${w.parker}'s wait_for (${call.at}): it was never queued behind the limit`);
+    if (ended && !(atOf(first) < atOf(ended))) f.push(`task ${w.other} started (${first.at}) only after task ${w.awaited}'s last turn (${ended.at}): the slot was not free while it waited`);
+  }
+  // It makes its edit and lands: every step it must see exit 0 did, and its last step was played.
+  const steps = scriptOf(s, ctx, w.parker, cont.turn.attempt);
+  steps.forEach((step, round) => {
+    if (!step.exit0) return;
+    const mine = parker.filter((r) => r.turn.attempt === cont.turn.attempt);
+    const answered = mine.find((r) => r.turn.round === round + 1);
+    if (!answered) f.push(`task ${w.parker}: no answer to ${step.args?.command} reached the fake`);
+    else if (exitOf((answered.messages ?? []).at(-1)) !== 0) f.push(`task ${w.parker}: ${step.args?.command} exited ${exitOf((answered.messages ?? []).at(-1))}, wanted 0: ${text((answered.messages ?? []).at(-1)).slice(-300)}`);
+  });
+  if (!parker.some((r) => r.turn.toolCall?.name === 'task_complete' && atOf(r) > atOf(cont))) f.push(`task ${w.parker} never reported after it went on`);
+  // The plan: the parker depends on the awaited task, and holds the wait it saved.
+  const [first1, second] = [plan?.[0], plan?.[1]];
+  if (!first1 || !second) return [...f, 'the session\'s final plan could not be read'];
+  if (!(second.dependencies ?? []).includes(first1.id)) f.push(`the plan does not show task #2 depending on #1: its dependencies are ${JSON.stringify(second.dependencies)}`);
+  if ((first1.dependencies ?? []).length > 0) f.push(`the awaited task #1 gained dependencies: ${JSON.stringify(first1.dependencies)}`);
+  if (!(second.parked?.waitsOn ?? []).includes(first1.id)) f.push(`task #2 holds no park on #1 (parked: ${JSON.stringify(second.parked ?? null)})`);
+  return f;
+}
+
+/**
+ * The failures of the landed-blocker scenario: the first supervisor request
+ * whose newest message holds the landed-blocker line also holds the closing
+ * check and the advice, and the supervisor answered it; the final plan holds
+ * exactly one added fix task that depends on the opening task, which the
+ * closing check waits for; and the fix's last turn came before the closing
+ * check's first, whose own check of the fix's file saw it.
+ */
+export function judgeBlocker(name, requests, ctx, plan) {
+  const s = scenario(name);
+  if (!s.blocker) return [];
+  const b = s.blocker;
+  const f = [];
+  const wake = requests.find((r) => r.turn?.role === 'supervisor' && LANDED_BLOCKER_LINE.test(lastUser(r)));
+  if (!wake) f.push('no supervisor request held the landed-blocker line (a wake naming #1 landed and 1 task reporting a blocker)');
+  else {
+    const said = lastUser(wake);
+    if (!said.includes(`the closing check is ${b.closing}`)) f.push(`the wake does not name the closing check ${b.closing}: ${(LANDED_BLOCKER_LINE.exec(said)?.input ?? said).slice(0, 400)}`);
+    if (!LANDED_BLOCKER_ADVICE.test(said)) f.push('the wake holds the line but not the guidance (fix it once, by one task)');
+    if (wake.turn.rule === undefined) f.push('the supervisor did not answer the wake with the scenario\'s edit');
+  }
+  const fixes = (plan ?? []).filter((t) => t.title === b.fix);
+  const [opening, , , closing] = plan ?? [];
+  if (!plan || !opening || !closing) return [...f, 'the session\'s final plan could not be read'];
+  if (plan.length !== 5 || fixes.length !== 1) f.push(`the plan holds ${plan.length} tasks, ${fixes.length} of them the fix; wanted 5 with one`);
+  const fix = fixes[0];
+  if (fix) {
+    if (!(fix.dependencies ?? []).includes(opening.id)) f.push(`the fix does not depend on the opening task: ${JSON.stringify(fix.dependencies)}`);
+    if (!(closing.dependencies ?? []).includes(fix.id)) f.push(`the closing check does not wait for the fix: ${JSON.stringify(closing.dependencies)}`);
+    if (fix.status !== 'completed') f.push(`the fix is ${fix.status}, not completed`);
+  }
+  const fixTurns = runnerTurns(requests, b.fixKey);
+  const checkTurns = runnerTurns(requests, b.check);
+  const fixEnd = fixTurns.find((r) => r.turn.toolCall?.name === 'task_complete');
+  const checkStart = checkTurns.find((r) => r.turn.attempt === 1 && r.turn.round === 0);
+  if (!fixEnd) f.push('the fix never reported');
+  else if (!checkStart) f.push('the closing check never started');
+  else if (!(atOf(checkStart) > atOf(fixEnd))) f.push(`the closing check started (${checkStart.at}) before the fix's last turn (${fixEnd.at})`);
+  scriptOf(s, ctx, b.check, 1).forEach((step, round) => {
+    if (!step.exit0) return;
+    const answered = checkTurns.find((r) => r.turn.attempt === 1 && r.turn.round === round + 1);
+    if (!answered) f.push(`the closing check: no answer to ${step.args?.command} reached the fake`);
+    else if (exitOf((answered.messages ?? []).at(-1)) !== 0) f.push(`the closing check: ${step.args?.command} exited ${exitOf((answered.messages ?? []).at(-1))}, wanted 0: the fix had not landed in its tree`);
+  });
   return f;
 }
 
@@ -689,6 +928,7 @@ export function judgeRehearsal(name, result) {
   if (e.truncatedWhy) want(e.truncatedWhy.test(result.truncated?.why ?? ''), `truncated because "${result.truncated?.why}", wanted ${e.truncatedWhy}`);
   if ('stoppedWhy' in e) want((result.stopped?.why ?? null) === e.stoppedWhy, `stopped by ${result.stopped?.why ?? 'nothing'}, wanted ${e.stoppedWhy ?? 'nothing'}`);
   if ('stalled' in e) want(Boolean(result.stalled) === e.stalled, `stalled is ${JSON.stringify(result.stalled ?? null)}, wanted ${e.stalled ? 'a record' : 'none'}`);
+  if (e.parallel !== undefined) want(result.parallel === e.parallel, `the run's parallel limit is ${JSON.stringify(result.parallel)}, wanted ${e.parallel}`);
   if (e.heldOpen !== undefined) want((result.stalled?.open ?? []).length === e.heldOpen, `${(result.stalled?.open ?? []).length} task(s) held open, wanted ${e.heldOpen} (${JSON.stringify(result.stalled?.open ?? null)})`);
   if (e.mergeExit !== undefined) want(result.steps?.merge?.exit === e.mergeExit, `the merge step ${JSON.stringify(result.steps?.merge ?? null)}, wanted exit ${e.mergeExit}`);
   if (e.tasks) {

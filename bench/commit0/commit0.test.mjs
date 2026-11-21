@@ -2102,6 +2102,157 @@ test('judgeTakeIn wants the heading and the command in the consumer\'s first mes
   assert.deepEqual([e.scoredFrom, e.tasks, e.passedAboveBaseline, e.truncated], ['merged', { completed: 2 }, true, false]);
 });
 
+test('b-wait\'s consumer parks on its first step and goes on from the step after the prose turn that ends the attempt', () => {
+  const s = R.scenario('b-wait');
+  const [parkAttempt, freshAttempt] = s.attempts(playCtx).consumer;
+  assert.deepEqual([parkAttempt[0].tool, parkAttempt[0].args.tasks], ['wait_for', ['#1']], 'the first step is the call, naming the producer by its order');
+  assert.ok(parkAttempt[0].args.reason);
+  assert.ok(parkAttempt[1].say, 'the attempt ends in prose, as a granted wait asks');
+  assert.deepEqual(parkAttempt.slice(2), freshAttempt, 'a session that cannot resume plays the same work without the wait');
+  assert.equal(s.windows.parallel, 2);
+  assert.deepEqual(R.windowArgs(s).slice(-2), ['--parallel', '2']);
+  assert.equal(L.parseArgs(['--rehearse', 'b-wait', '--libs', 'x.json', '--arm', 'B', ...R.windowArgs(s)]).parallel, 2);
+  assert.equal(R.windowArgs(R.scenario('b-take-in')).includes('--parallel'), false, 'only a scenario that sets a limit passes one');
+  // The producer is still at work when the consumer calls: its long step comes first.
+  assert.match(s.attempts(playCtx).producer[0][0].args.command, /^timeout 85 tail/);
+  const plan = s.plan();
+  assert.deepEqual(plan.tasks.map((t) => t.dependencies), [[], [], []], 'three tasks side by side: the wait is added by the call, never planned');
+
+  // The fake plays the steps by the turns a task has had, so a resumed session goes on after its prose turn.
+  const state = R.createState();
+  const brief = { role: 'user', content: 'Build on the library. [rehearsal:consumer]' };
+  const asked = (messages) => R.turnFor('b-wait', runnerRequest(messages), state, playCtx);
+  const first = asked([brief]);
+  assert.deepEqual([first.toolCall.name, first.round, first.attempt], ['wait_for', 0, 1]);
+  const waiting = [brief, ...toolRound('wait_for')];
+  const prose = asked(waiting);
+  assert.deepEqual([prose.content, prose.toolCall, prose.round], ['Waiting for the producer.', undefined, 1]);
+  const resumed = asked([...waiting, { role: 'assistant', content: prose.content }, { role: 'user', content: '(Ordewell) The work you waited for has landed: #1 "Implement the library".' }]);
+  assert.deepEqual([resumed.round, resumed.attempt, resumed.toolCall.name], [2, 1, 'write'], 'the continuation is the same attempt, past the park');
+  // A fresh start (a runner that cannot resume) is attempt 2, which does not wait again.
+  const fresh = asked([brief]);
+  assert.deepEqual([fresh.attempt, fresh.toolCall.name], [2, 'write']);
+});
+
+test('judgeWait wants the wait granted, the edge in the plan, the slot used meanwhile, and the continuation after the producer lands, told what landed', () => {
+  const at = (s) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
+  const stepsOf = R.scenario('b-wait').attempts(playCtx).consumer[0];
+  const req = (key, attempt, round, secs, toolCall, extra = {}) => ({ at: at(secs), messages: [{ role: 'user', content: `x [rehearsal:${key}]` }], turn: { role: 'runner', key, attempt, round, toolCall, ...extra.turn }, ...extra.top });
+  const log = ({ cont = 100, other = 20, ended = 90, told = 'The work you waited for has landed: #1 "Implement the library".', reply = 'Waiting for #1 "Implement the library". This attempt ends with your turn.', contAttempt = 1, early = null } = {}) => [
+    req('producer', 1, 0, 1, { name: 'shell' }),
+    req('consumer', 1, 0, 5, { name: 'wait_for' }),
+    { ...req('consumer', 1, 1, 6, undefined), messages: [{ role: 'user', content: 'x' }, { role: 'tool', content: reply }] },
+    req('small', 1, 0, other, { name: 'write' }),
+    req('producer', 1, 5, ended, { name: 'task_complete' }),
+    ...(early ? [req('consumer', 1, 1, early, { name: 'task_complete' })] : []),
+    { ...req('consumer', contAttempt, 2, cont, { name: 'write' }), messages: [{ role: 'user', content: 'x' }, { role: 'user', content: told }] },
+    ...stepsOf.map((st, i) => (i < 2 ? null : { ...req('consumer', contAttempt, i + 1, cont + i, { name: st.tool }), messages: [{ role: 'tool', content: i === 3 ? 'taken in\n[exit code 0]' : 'ok' }] })).filter(Boolean),
+  ];
+  const plan = [
+    { id: 'p', order: 1, dependencies: [] },
+    { id: 'c', order: 2, dependencies: ['p'], parked: { attempt: 1, waitsOn: ['p'], added: ['p'], count: 1 } },
+  ];
+  assert.deepEqual(R.judgeWait('b-wait', log(), playCtx, plan), []);
+  assert.match(R.judgeWait('b-wait', log({ reply: 'wait_for is for a change task' }), playCtx, plan).join(), /wait_for was not granted for "Implement the library"/);
+  assert.match(R.judgeWait('b-wait', log({ cont: 60 }), playCtx, plan).join(), /went on .* before task producer's last turn/);
+  assert.match(R.judgeWait('b-wait', log({ early: 50 }), playCtx, plan).join(), /reported before it was continued/);
+  assert.match(R.judgeWait('b-wait', log({ told: 'Go on with your brief.' }), playCtx, plan).join(), /does not say what landed/);
+  assert.match(R.judgeWait('b-wait', log({ contAttempt: 2 }), playCtx, plan).join(), /did not continue its session/);
+  // The third task must start while the producer is at work, and only after the park: before it, it was never queued.
+  assert.match(R.judgeWait('b-wait', log({ other: 95 }), playCtx, plan).join(), /only after task producer's last turn.*the slot was not free/);
+  assert.match(R.judgeWait('b-wait', log({ other: 2 }), playCtx, plan).join(), /never queued behind the limit/);
+  assert.match(R.judgeWait('b-wait', log().filter((r) => r.turn.key !== 'consumer'), playCtx, plan).join(), /never called wait_for/);
+  assert.match(R.judgeWait('b-wait', log().filter((r) => r.turn.key !== 'small'), playCtx, plan).join(), /task small never started/);
+  assert.match(R.judgeWait('b-wait', log().filter((r) => !(r.turn.key === 'consumer' && r.turn.round > 2)), playCtx, plan).join(), /never reported after it went on|no answer to/);
+  // The plan must show the edge, and the wait the task saved.
+  assert.match(R.judgeWait('b-wait', log(), playCtx, [plan[0], { ...plan[1], dependencies: [] }]).join(), /does not show task #2 depending on #1/);
+  assert.match(R.judgeWait('b-wait', log(), playCtx, [plan[0], { ...plan[1], parked: undefined }]).join(), /holds no park on #1/);
+  assert.match(R.judgeWait('b-wait', log(), playCtx, null).join(), /plan could not be read/);
+  assert.deepEqual(R.judgeWait('b-cap', [], playCtx, null), [], 'a scenario with no wait has nothing to judge');
+  const e = R.scenario('b-wait').expect;
+  assert.deepEqual([e.scoredFrom, e.tasks, e.passedAboveBaseline, e.truncated, e.parallel], ['merged', { completed: 3 }, true, false, 2]);
+  assert.match(R.judgeRehearsal('b-wait', { scoredFrom: 'merged', parallel: 8 }).join(), /parallel limit is 8, wanted 2/);
+});
+
+test('b-blocker\'s plan, supervisor and judge: one fix task, which the closing check waits for, lands before the check starts', () => {
+  const s = R.scenario('b-blocker');
+  const tasks = s.plan().tasks;
+  assert.deepEqual(tasks.map((t) => t.title), ['Implement the library', 'Slice A', 'Slice B', 'Check the whole']);
+  assert.deepEqual(tasks.map((t) => t.dependencies.length), [0, 1, 1, 2]);
+  const scripts = s.attempts(playCtx);
+  for (const slice of ['slice-a', 'slice-b']) {
+    const [done] = scripts[slice][0].slice(-1);
+    assert.equal(done.args.findings[0].severity, 'blocker');
+    assert.deepEqual(done.args.findings[0].evidence, [{ kind: 'task', task: '#1' }], 'a task reference with no finding id: how the landed-blocker count reads it');
+  }
+  assert.match(scripts['slice-b'][0][0].args.command, /^timeout 85 tail/, 'the second slice is at work while the supervisor is woken');
+  assert.equal(scripts.check[0][0].exit0, true);
+
+  // The wake the first report raises, and the one reply: a JSON edit that adds the fix and makes the check wait for it.
+  const state = R.createState();
+  state.planned = true;
+  const wake = 'Run update:\n- task #1 "Implement the library" has landed, and 1 task reports a blocker in its work: #2/F1 "x"; the closing check is #4 "Check the whole"\nA blocker reported in landed work is fixed once, by one task, never once per report.';
+  const turn = R.turnFor('b-blocker', { tools: [], messages: [{ role: 'user', content: wake }] }, state, playCtx);
+  assert.equal(turn.role, 'supervisor');
+  assert.equal(turn.toolCall, undefined, 'the built-in planner edits by a JSON reply');
+  const ops = JSON.parse(/```json\n([\s\S]*)\n```/.exec(turn.content)[1]).taskOps;
+  assert.deepEqual(ops.map((o) => o.op), ['add', 'update'], 'one fix task, then the closing check made to wait for it');
+  assert.match(ops[0].task.prompt, /\[rehearsal:fix\]/);
+  assert.deepEqual([ops[0].task.dependencies, ops[1].taskId, ops[1].changes.dependencies], [['#1'], '#4', ['#2', '#3', 'fix']]);
+  assert.equal(R.turnFor('b-blocker', { tools: [], messages: [{ role: 'user', content: `${wake}\nand 2 tasks report` }] }, state, playCtx).toolCall, undefined, 'a rule plays once');
+  assert.deepEqual(L.wakeTriggers(wake).map((t) => t.kind), ['landed_blocker'], 'the harness reads the line');
+
+  const at = (n) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
+  const run = (key, attempt, round, secs, toolCall, messages = [{ role: 'user', content: 'x' }]) => ({ at: at(secs), messages, turn: { role: 'runner', key, attempt, round, toolCall } });
+  const log = ({ fixEnd = 40, checkStart = 50, exit = 0, line = wake } = {}) => [
+    { at: at(30), messages: [{ role: 'user', content: line }], turn: { role: 'supervisor', rule: 0 } },
+    run('fix', 1, 1, fixEnd, { name: 'task_complete' }),
+    run('check', 1, 0, checkStart, { name: 'shell' }),
+    run('check', 1, 1, checkStart + 1, { name: 'write' }, [{ role: 'tool', content: `fixed\n[exit code ${exit}]` }]),
+  ];
+  const plan = [
+    { id: 'o', order: 1, title: 'Implement the library', dependencies: [], status: 'completed' },
+    { id: 'a', order: 2, dependencies: ['o'] }, { id: 'b', order: 3, dependencies: ['o'] },
+    { id: 'c', order: 4, dependencies: ['a', 'b', 'f'] },
+    { id: 'f', order: 5, title: 'Fix the opening task\'s defect', dependencies: ['o'], status: 'completed' },
+  ];
+  assert.deepEqual(R.judgeBlocker('b-blocker', log(), playCtx, plan), []);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: 'Run update:\n- the run finished' }), playCtx, plan).join(), /no supervisor request held the landed-blocker line/);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('the closing check is #4 "Check the whole"', '') }), playCtx, plan).join(), /does not name the closing check #4/);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('A blocker reported', 'A thing reported') }), playCtx, plan).join(), /not the guidance/);
+  assert.match(R.judgeBlocker('b-blocker', log().map((r, i) => (i === 0 ? { ...r, turn: { role: 'supervisor' } } : r)), playCtx, plan).join(), /did not answer the wake/);
+  assert.match(R.judgeBlocker('b-blocker', log({ checkStart: 35 }), playCtx, plan).join(), /closing check started .* before the fix's last turn/);
+  assert.match(R.judgeBlocker('b-blocker', log({ exit: 1 }), playCtx, plan).join(), /exited 1, wanted 0: the fix had not landed/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, [...plan, { ...plan[4], id: 'g', order: 6 }]).join(), /6 tasks, 2 of them the fix/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'c' ? { ...t, dependencies: ['a', 'b'] } : t))).join(), /closing check does not wait for the fix/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'f' ? { ...t, dependencies: [] } : t))).join(), /fix does not depend on the opening task/);
+  assert.match(R.judgeBlocker('b-blocker', log().slice(0, 1), playCtx, plan).join(), /fix never reported/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, null).join(), /plan could not be read/);
+  assert.deepEqual(R.judgeBlocker('b-cap', [], playCtx, null), []);
+  assert.deepEqual(s.supervision, { acts: ['plan_edit'], closingWakes: 0 });
+  assert.deepEqual(R.judgeSupervision(s.supervision, { wakeUps: 2, wakes: [{ at: at(31), updates: 1, triggers: [{ kind: 'landed_blocker', task: '#1' }] }], actions: [{ kind: 'plan_edit', at: at(32), outcome: 'done' }] }), []);
+});
+
+test('a-done scripts a five-minute sleep as its first step, and judgeRefusals wants the guard\'s refusal naming wait_for, answered at once', () => {
+  const steps = R.scenario('a-done').attempts(playCtx).A[0];
+  assert.deepEqual([steps[0].tool, steps[0].args.command, steps[0].refused], ['shell', 'sleep 300; echo slept', true]);
+  assert.equal(steps.slice(1).some((s) => s.refused), false);
+  const at = (n) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
+  const refusal = 'Not run: this command sleeps for 300 seconds. Waiting inside a task holds one of the run\'s slots. If you are waiting for work another task has not landed yet, call `wait_for` with those tasks.';
+  const log = ({ reply = refusal, gap = 1 } = {}) => [
+    { at: at(0), messages: [], turn: { role: 'runner', key: 'A', attempt: 1, round: 0 } },
+    { at: at(gap), messages: [{ role: 'tool', content: reply }], turn: { role: 'runner', key: 'A', attempt: 1, round: 1 } },
+  ];
+  assert.deepEqual(R.judgeRefusals('a-done', log(), playCtx), []);
+  assert.match(R.judgeRefusals('a-done', log({ reply: 'slept\n[exit code 0]' }), playCtx).join(), /was not refused as a wait/);
+  assert.match(R.judgeRefusals('a-done', log({ reply: 'Not run: this command sleeps for 300 seconds. Finish your own part.' }), playCtx).join(), /does not name wait_for/);
+  assert.match(R.judgeRefusals('a-done', log({ gap: 300 }), playCtx).join(), /took 300 s to answer, so something ran/);
+  assert.match(R.judgeRefusals('a-done', log().slice(0, 1), playCtx).join(), /was never answered/);
+  assert.deepEqual(R.judgeRefusals('a-failed', [], playCtx), [], 'a scenario that scripts no refusal has nothing to judge');
+  // The rest of the scenario is unmoved: the edits and the verdict follow it.
+  assert.equal(steps.at(-1).args.status, 'done');
+  assert.equal(R.roundsOf([{ role: 'assistant', content: '' }, { role: 'assistant', content: 'Waiting.' }, { role: 'assistant', tool_calls: [{}] }, { role: 'user', content: 'x' }]), 2, 'a prose turn is a round; an empty one is not');
+});
 test('a task that ends done with a finding must still land: b-edit-retry names its note, and judgeLanded misses it when absent', () => {
   const s = R.scenario('b-edit-retry');
   const closing = s.attempts(playCtx).after[0].at(-1);
