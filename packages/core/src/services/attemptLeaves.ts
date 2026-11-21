@@ -10,6 +10,7 @@ import type { AttemptKind } from './attemptKind';
  * - `cancelled`: the task's Stop. `released`: the task left the plan.
  * - `failed`: a failed verdict. `unsettled`: settling its verdict threw.
  * - `usage-limit`: its runner's limit paused it (ADR-0018, U1).
+ * - `parked`: it waits for a sibling's work with `wait_for` (ADR-0074).
  * - `skipped`, `retried`: the user's Skip and Retry of the task.
  * - `abandoned`: a spawn whose ender left its task in progress, as a load does.
  *
@@ -17,7 +18,7 @@ import type { AttemptKind } from './attemptKind';
  * (`SpawnFailure`), not by the end alone.
  */
 export type AttemptEnding =
-  | 'stopped' | 'loaded' | 'cancelled' | 'released' | 'failed' | 'unsettled' | 'usage-limit' | 'skipped' | 'retried' | 'abandoned';
+  | 'stopped' | 'loaded' | 'cancelled' | 'released' | 'failed' | 'unsettled' | 'usage-limit' | 'parked' | 'skipped' | 'retried' | 'abandoned';
 
 /** The start hold a cancelled task is put on, so the scheduler does not start it again at once. */
 export const CANCELLED_HOLD = 'cancelled; retry or force start to run it again';
@@ -69,6 +70,8 @@ const left = (
  * cancelled one on a hold. A failed verdict and a verdict that could not be
  * settled fail the task.
  *
+ * A park is back to not started with no hold, its new dependencies holding
+ * it instead (ADR-0074), and keeps its worktree for the attempt that goes on.
  * A Stop, a cancel, a failure, a Skip and a limit's pause keep the worktree:
  * a runner is often stopped because it looked stuck after doing the work,
  * which Mark complete can still land. A Retry and a delete remove it: a retry
@@ -95,6 +98,8 @@ export function attemptLeaves(ending: AttemptEnding, kind: AttemptKind | null): 
       return left(repair ? 'conflict' : 'failed', 'keep', 'attempt', false, 'unsettled');
     case 'usage-limit':
       return left(null, 'keep', 'attempt', false, 'usage limit');
+    case 'parked':
+      return left('pending', 'keep', 'attempt', false, 'parked');
     case 'skipped':
       return left(null, 'keep', 'task', true, 'skipped');
     case 'retried':

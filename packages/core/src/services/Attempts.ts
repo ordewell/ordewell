@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { resolveDefaultMode, taggedReadOnlyMode, unavailableTaskModeMessage } from './ModeResolver';
 import { McpAttachError, McpAttachTimeout, RunnerStartupExit, SessionNotResumable } from './harness/ordewellBinding';
-import type { RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, TurnAuthority, Verdict } from '../models/Task';
+import type { Parked, RunnerId, Task, TaskOutputSummary, TaskSkillSnapshot, TurnAuthority, Verdict } from '../models/Task';
 import type { INotification } from '../interfaces/INotification';
 import type { IRunner, IRunnerSession, QueuedTaskMessage, StructuredTurnEnd } from '../interfaces/IRunner';
 import type { TaskShell, TaskShellSite } from '../interfaces/IFileSystem';
@@ -39,7 +39,9 @@ import { isBoardRef } from '../models/Board';
 import { defaultExecFile, type GitInvoker } from './gitExec';
 import { augmentedPath } from '../utils/shellPath';
 import { redactAgentText } from '../utils/redactSecrets';
-import type { ApplyPatchArgs, McpToolReply, PostArgs } from './mcp/tools';
+import type { ApplyPatchArgs, McpToolReply, PostArgs, WaitForArgs } from './mcp/tools';
+import { parkDecision, parkResume } from './Parking';
+import { sessionOwner } from './continuation';
 import { TaskControlError } from './TaskControlError';
 import { TaskWebReader } from './taskWebReads';
 import { attemptLeaves, endKeeps, keptLate } from './attemptLeaves';
@@ -166,6 +168,10 @@ interface TaskAttempt extends EndedAttempt {
   attaching: 1 | 2 | null;
   /** Its latest running-long flag (ADR-0018 W1), advisory: null until it runs long or compacts on its own. */
   runningLong: RunningLongEvent | null;
+  /** The park its `wait_for` was granted (ADR-0074), which ends it as its turn ends; null otherwise. */
+  parking: GrantedPark | null;
+  /** Ends a granted park whose runner keeps its turn open past {@link PARK_GRACE_MS}. */
+  parkTimer: ReturnType<typeof setTimeout> | null;
   /**
    * Aborted as the attempt ends, so a runner still starting — waiting for its
    * tools to attach, or respawning — is taken back then, not once it reports.
@@ -245,6 +251,8 @@ export type SpawnFailure =
  *   error, or by refusing its start — which is a pause, not a verdict
  *   (ADR-0018, U1). `said` is what the runner reported; `output` what the
  *   attempt printed.
+ * - `parked`: its `wait_for` was granted and its turn ended (ADR-0074): no
+ *   verdict, and `parked` is what the task saves for the start that goes on.
  * - `spawn-failed`: it never ran; see {@link SpawnFailure}.
  * - `unsettled`: applying its verdict threw. `attempt` when it was still live
  *   and has been ended for it; null when it had settled and what followed threw.
@@ -255,6 +263,7 @@ export type AttemptEnded =
   | { kind: 'failed'; task: Task; attempt: EndedAttempt; verdict: Verdict; unresumed: string | null; signedOut: string | null }
   | { kind: 'repaired'; task: Task; attempt: EndedAttempt; verdict: Verdict; landing: LandingOutcome }
   | { kind: 'usage-limited'; taskId: string; attempt: EndedAttempt; said: string | TurnFailure; output: string }
+  | { kind: 'parked'; taskId: string; attempt: EndedAttempt; parked: Parked; reason: string }
   | { kind: 'spawn-failed'; task: Task; attempt: EndedAttempt; failure: SpawnFailure }
   | { kind: 'unsettled'; taskId: string; attempt: EndedAttempt | null; reason: string };
 
@@ -537,9 +546,13 @@ export class Attempts {
    */
   start(task: Task, claim: AttemptClaim): Promise<void> {
     const { store } = this.deps;
-    const continuation = claim.continuation ?? null;
+    const work = this.workOf(task);
+    // A parked task goes on from its park: in its session where its runner left one, else afresh from its files (ADR-0074).
+    const resume = claim.continuation || work !== 'change' ? null : parkResume(task, store.planTasks);
+    const continuation = claim.continuation ?? (resume?.resumeSessionId ? { message: resume.message, resumeSessionId: resume.resumeSessionId } : null);
+    const parked = resume && !resume.resumeSessionId ? { from: sessionOwner(task) ?? store.resolveTaskRunner(task), message: resume.message } : null;
     const script = task.type === 'script';
-    const kind = classifyAttempt(this.workOf(task), { repair: this.deps.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom });
+    const kind = classifyAttempt(work, { repair: this.deps.landing.nextRepair(task.id), continuation, carriedFrom: task.carriedFrom, parked });
     // A repair edits files, which a subplanner never does: it is a plain runner's (ADR-0055 D14).
     const delegated = task.type === 'delegated' && kind.kind !== 'repair';
     const attempt: TaskAttempt = {
@@ -576,6 +589,8 @@ export class Attempts {
       receipt: null,
       attaching: null,
       runningLong: null,
+      parking: null,
+      parkTimer: null,
       spawning: new AbortController(),
       lease: claim.lease,
       // A child plan's sessions hold their own; this one is no session (ADR-0056 M5).
@@ -634,6 +649,7 @@ export class Attempts {
       attempt.endKeeps = how?.keep ?? false;
       attempt.spawning.abort();
       dropProviderRetry(attempt);
+      dropParkTimer(attempt);
       store.endAttemptUsage(taskId, attempt.attempt, new Date().toISOString(), session?.sessionCost?.() ?? undefined, nativeSessionId ?? undefined, how?.runningMs ?? this.verifier.runningMs(taskId));
       if (reason === 'cancel' || reason === 'stop') store.setAttemptOutcome(taskId, attempt.attempt, 'stopped');
       this.deps.output.detach(taskId);
@@ -1192,6 +1208,8 @@ export class Attempts {
       ...(shell ? { savePatch: (signal: AbortSignal) => this.savePatch(task, attempt, signal) } : {}),
       ...(web ? { webReads: web } : {}),
       applyPatch: (args) => this.applyPatch(task, attempt, args),
+      // A read-only attempt, the one given a shell, lands nothing to wait beside, and its token lists no `wait_for`.
+      ...(shell ? {} : { waitFor: (args: WaitForArgs) => Promise.resolve(this.waitFor(task.id, attempt, args)) }),
       workspaceRoot: this.deps.workspaceRoot(),
       onNotice: (message) => this.host.tell('warn', `Task "${task.title}": ${message}`),
       cancelled: attempt.spawning.signal,
@@ -1465,6 +1483,10 @@ export class Attempts {
    */
   private turnEnded(taskId: string, attempt: TaskAttempt, session: IRunnerSession, reason: StructuredTurnEnd): void {
     const { store } = this.deps;
+    if (attempt.parking && this.live.get(taskId) === attempt) {
+      if (session.turnState() !== 'working') this.endParked(taskId, attempt);
+      return;
+    }
     if (this.live.get(taskId) !== attempt || attempt.phase !== 'running' || attempt.decided) return;
     if (session.turnState() === 'working') {
       this.host.emit('onTaskChanged');
@@ -1532,6 +1554,44 @@ export class Attempts {
   }
 
   /**
+   * A change attempt's `wait_for` (ADR-0074). Granted, the attempt is decided:
+   * nothing it reports from here counts, and it ends as parked once its turn
+   * does, so the runner's session holds the reply it goes on from, or past
+   * {@link PARK_GRACE_MS} if the runner keeps the turn open. Refused, nothing
+   * changes and the reply says what to do instead.
+   */
+  private waitFor(taskId: string, attempt: TaskAttempt, args: WaitForArgs): McpToolReply {
+    const { store } = this.deps;
+    const task = store.get(taskId);
+    if (attempt.parking) return { text: 'This attempt already waits for that work: end your turn now.', isError: true };
+    if (!task || this.live.get(taskId) !== attempt || attempt.decided || attempt.phase !== 'running') {
+      return { text: 'This attempt is not running, so it cannot wait: end your turn.', isError: true };
+    }
+    if (!parks(attempt.kind)) {
+      return { text: 'wait_for is for a change task, whose work lands when it passes. This attempt\'s is not, so finish it as your brief says.', isError: true };
+    }
+    const before = task.parked?.count ?? 0;
+    const decision = parkDecision(store.planTasks, taskId, args.tasks, { parkedBefore: before });
+    if (!decision.ok) return { text: decision.refusal, isError: true };
+    attempt.decided = true;
+    attempt.parking = { waitsOn: decision.waitsOn, added: decision.added, count: before + 1, reason: args.reason };
+    attempt.parkTimer = setTimeout(() => this.endParked(taskId, attempt), PARK_GRACE_MS);
+    attempt.parkTimer.unref?.();
+    this.verifier.pauseIdle(taskId);
+    const names = decision.waitsOn.map((id) => `${taskRefOf(store.planTasks, id) ?? id} "${store.get(id)?.title ?? id}"`);
+    return { text: `Waiting for ${names.join(', ')}. This attempt ends with your turn and its slot goes to other work; Ordewell continues this session once that work has landed. End your turn now.` };
+  }
+
+  /** A granted park, ended: no verdict, and the task saves what it waits for (ADR-0074). */
+  private endParked(taskId: string, attempt: TaskAttempt): void {
+    const parking = attempt.parking;
+    if (!parking || this.live.get(taskId) !== attempt) return;
+    const { reason, ...waits } = parking;
+    this.end(taskId, 'park');
+    this.host.unawaited(this.host.settle({ kind: 'parked', taskId, attempt, parked: { attempt: attempt.attempt, ...waits }, reason }), `Could not park task "${this.deps.store.get(taskId)?.title ?? taskId}"`);
+  }
+
+  /**
    * The limit arrived as the turn's error with the runner still up: the
    * attempt ends here, as its verdict would have ended it, so a resume is a
    * continue in a fresh process (ADR-0018, L1/K1).
@@ -1581,6 +1641,8 @@ export class Attempts {
     const task = store.get(taskId);
     const attempt = this.live.get(taskId);
     if (!task || !attempt) return;
+    // Its runner exited, or reported, after its park was granted: the park stands, and nothing it said since counts.
+    if (attempt.parking) return this.endParked(taskId, attempt);
     attempt.decided = true;
     // Read before anything is awaited: the turn an exit cut short ends a moment later.
     const stoppedMidTurn = endedByExit(verdict) ? saidInFlight(attempt) : null;
@@ -1766,6 +1828,22 @@ const clip = (text: string): string => (text.length > PROVIDER_ERROR_CLIP ? `${t
 
 function providerRetryMessage(error: string): string {
   return `Your last turn failed on a provider error, not on the task: ${error}. Continue the task from where you left off.`;
+}
+
+function dropParkTimer(attempt: TaskAttempt): void {
+  if (attempt.parkTimer) clearTimeout(attempt.parkTimer);
+  attempt.parkTimer = null;
+}
+
+/** What an attempt waits for once its park is granted, until it ends. */
+type GrantedPark = Omit<Parked, 'attempt'> & { reason: string };
+
+/** How long a runner whose park was granted may keep its turn open before the attempt ends under it. */
+const PARK_GRACE_MS = 30_000;
+
+/** Only a change task's work lands, and so only it may wait for another's (ADR-0074). */
+function parks(kind: AttemptKind): boolean {
+  return kind.kind === 'change' || kind.kind === 'carryOver' || (kind.kind === 'continuation' && kind.work === 'change');
 }
 
 function dropProviderRetry(attempt: TaskAttempt): void {

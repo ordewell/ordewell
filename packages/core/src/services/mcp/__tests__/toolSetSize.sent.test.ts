@@ -21,10 +21,11 @@ describe('the tool list a runner is actually sent', () => {
     ['PLANNER_TOOLS', PLANNER_TOOLS, 24_600],
     // `checkpoint` says when to ask, since its description is all some runners read as they choose: a call stops the task and what waits on it.
     // `task_complete` says, where it is filled in, that `blocked` is an outside obstacle and not work left, and where a summary over its limit goes: runners stopped on a large brief, and overran the limit up to five times a run.
-    ['TASK_TOOLS', TASK_TOOLS, 8_600],
+    // `wait_for` (ADR-0074), 1,042 bytes and the ceiling raised by exactly that: a task parks on a sibling's work instead of sleeping and polling inside its attempt, which held a slot for over an hour in a recorded run.
+    ['TASK_TOOLS', TASK_TOOLS, 9_642],
     ['READ_ONLY_TASK_TOOLS', READ_ONLY_TASK_TOOLS, 11_250],
     // A board's cost to a runner in a subtree (ADR-0057 R8, R11): `post` and nothing else, `read` taking "board" as it stands.
-    ['a task on a board', taskToolSet({ board: true }), 9_700],
+    ['a task on a board', taskToolSet({ board: true }), 10_742],
     ['a read-only task on a board', taskToolSet({ readOnly: true, board: true }), 12_350],
     // Delegation's cost, past the flat list (ADR-0057 R11): what `submit_plan` adds to take a delegated task, `read`, `post`, and a raise on `answer_checkpoint` (ADR-0056 M5).
     ['a delegating planner', plannerToolSet({ delegates: true }), 28_120],

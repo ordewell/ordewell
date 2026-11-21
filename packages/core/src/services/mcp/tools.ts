@@ -166,6 +166,11 @@ const applyPatchInput = z.object({
   attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
 });
 
+const waitForInput = z.object({
+  tasks: z.array(taskRef).min(1).max(HANDOFF_LIMITS.evidence).describe('The tasks whose work you need.'),
+  reason: z.string().trim().min(1).max(HANDOFF_LIMITS.title).refine(oneLine, 'A reason is one line.').describe('What of their work you need, in one line.'),
+});
+
 // One table shapes a task's fields for every route (`TaskSpec`), so this tool
 // and a text reply take the same tasks; what a field means is the plan's rules'
 // to judge (`PlanChangeCheck`, ADR-0022 P2), by the message that says why.
@@ -259,6 +264,7 @@ export type ReadTaskArgs = z.infer<typeof readTaskInput>;
 export type PostArgs = z.infer<typeof plannerPostInput>;
 export type SavePatchArgs = z.infer<typeof savePatchInput>;
 export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
+export type WaitForArgs = z.infer<typeof waitForInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
@@ -340,6 +346,8 @@ export interface TaskToolHandler {
   savePatch?: Run<SavePatchArgs>;
   /** A saved patch applied into the task's own worktree (ADR-0050); a read-only task's token does not list `apply_patch`. */
   applyPatch?: Run<ApplyPatchArgs>;
+  /** A change task's park on work it needs that has not landed (ADR-0074); a read-only task's token does not list `wait_for`. */
+  waitFor?: Run<WaitForArgs>;
   /** A read-only task's web reads, decided by the session's web-read policy (ADR-0046, ADR-0027); only its token lists `fetch` and `web_search`. */
   fetch?: Run<FetchArgs>;
   webSearch?: Run<WebSearchArgs>;
@@ -645,13 +653,17 @@ const POST_TEXT = `Leave an entry on your plan's board: \`read\` with task "${BO
 const TASK_POST = tool<TaskToolHandler, typeof taskPostInput>('post', POST_TEXT, taskPostInput, (h) => h.post?.bind(h) as Run<z.infer<typeof taskPostInput>> | undefined, { readOnlyHint: true });
 
 /**
- * A task that works in the tree: the shared tools, and `apply_patch`, which
- * brings a prototype a read-only task saved (ADR-0050) into its worktree.
+ * A task that works in the tree: the shared tools, `apply_patch`, which
+ * brings a prototype a read-only task saved (ADR-0050) into its worktree, and
+ * `wait_for`, which parks it on a sibling's work instead of a wait inside its
+ * attempt (ADR-0074).
  */
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...SHARED_TASK_TOOLS,
   tool('apply_patch', "Apply the patch that a task you may read (the same ones `read` reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
     applyPatchInput, (h) => h.applyPatch?.bind(h)),
+  tool('wait_for', "Wait for other tasks' work you cannot finish or check without, which has not landed. This attempt ends with no verdict, those tasks become this one's dependencies, its slot goes to other work, and Ordewell continues this session once they land, their work in your tree. Refused, with what to do instead, for work that has landed, failed or lands nothing, a task that waits for this one, and a third wait. Never sleep or poll for another task's work instead.",
+    waitForInput, (h) => h.waitFor?.bind(h)),
 ];
 
 /**

@@ -4,8 +4,6 @@ status: accepted
 
 # 0018 — Structured runner transport: drive task runners through their programmatic protocol
 
-*Pending:* [ADR-0074](../supervision/0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md) — U1: a parked attempt ends as a usage-limit pause does and continues its session once the work it waits for lands.
-
 *Pending:* [ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md) — Continue of a delegated task reopens its child session, and its `runnerSessionId` names that session.
 
 ## Problem
@@ -462,7 +460,12 @@ and completion evidence.
   exhausted limit. However the limit arrived, the pause is one rule
   (`LimitPauses`): no verdict is recorded and nothing goes to the execution
   log, the task's summary names the limit, its worktree is kept for the
-  resume, and what follows is what follows a verdict. A held run stays open
+  resume, and what follows is what follows a verdict. A park
+  ([ADR-0074](../supervision/0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md)) ends its attempt
+  the same way, holding no run and with no reason waiting on the user: the
+  task is not started, and its next start continues the saved session once the
+  work it waits for lands, or, where its runner saved none it can resume, is a
+  carry-over of the parked attempt's files. A held run stays open
   ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)):
   with nothing left at work it is neither handed over nor merged at its end,
   and sends no `execution_complete`. The hold is held from whatever the run
@@ -788,3 +791,4 @@ transport is retained for take-over.
 - 2026-11-20 — W1: once five AI tasks have passed, a first attempt is also flagged at max(19 min, 3× their median running time) where that comes first; the threshold is read each minute, the next flag is never under double the last, and the line names the median.
 - 2026-11-20 — W1: a flag set by double the last one's time names that time, not the lowered threshold's doubling.
 - 2026-11-21 — W1: after the first running-long flag the next is due at twice the last, the threshold no longer read again for it; a flag still waiting when its attempt ends is dropped.
+- 2026-11-21 — U1: a park ends its attempt as a pause does and its next start continues the saved session, or carries its files over where none can be resumed (ADR-0074).

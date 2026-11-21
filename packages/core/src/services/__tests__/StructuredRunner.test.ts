@@ -215,7 +215,7 @@ describe('StructuredRunner spawn', () => {
       '--resume', 'sess-prev',
       '--append-system-prompt-file', '<system-prompt.md>',
       '--mcp-config', '<mcp.json>',
-      '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch',
+      '--allowedTools', 'mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch,mcp__ordewell__wait_for',
     ]);
     expect(files['system-prompt.md']).toBe(TASK_COMPLETION_CONTRACT);
     session.kill();

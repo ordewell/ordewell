@@ -1291,6 +1291,21 @@ until the attempt runs; a Retry after a move sets it from the session's owner,
 and any other retry clears it. An ops task carries nothing over.
 *Avoid:* "continue" or "resume" for it — no session is resumed.
 
+**Parked task** (`wait_for`, `Task.parked`, `services/Parking.ts`; ADR-0074) —
+a change task whose `wait_for` call was granted: it needs work a sibling has
+not landed, so its attempt ended with no verdict, the tasks it named became its
+dependencies, an edit of Ordewell's, and its slot went to whatever was ready.
+It is not started and on no hold, so it blocks nothing, and the start rule
+holds it until that work has landed. Its next start, whoever makes it,
+continues the saved session with a first message naming what landed, or,
+where its runner saved no session it can resume, is a *Carry-over* of the
+parked attempt's files. Work it waits for that fails, is blocked, skipped or
+removed is taken out of its dependencies, and it goes on without it, told so.
+A Stop holds it; a Retry starts afresh, the park let go and the edges kept. It
+parks at most twice between fresh attempts.
+*Avoid:* "blocked", "paused" or "waiting for input" for it — no failure, limit
+or person is waited on; "sleeping" — it holds no slot.
+
 **In-flight rule** (`saidInFlight`, `classifyRunnerStop`; ADR-0018, U1;
 ADR-0044) — a usage limit is acted on only when it ended a turn Ordewell
 started, or refused one it was starting. Limit words left by a turn that had

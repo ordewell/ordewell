@@ -46,6 +46,7 @@ export const TASK_FIELDS = {
   waitsEnded: 'execution',
   resumeAt: 'attempt',
   carriedFrom: 'attempt',
+  parked: 'attempt',
   retryNote: 'attempt',
   skipReason: 'attempt',
   skipOrigin: 'attempt',
