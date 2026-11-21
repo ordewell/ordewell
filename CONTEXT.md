@@ -1710,11 +1710,12 @@ evidence.
 *Loop check*), "error".
 
 **Landed blocker** (ADR-0073) — a `blocker` *Finding* that cites a task whose
-work had landed when the reporting attempt started: by a task reference with no
-finding id, or by the first file it names that a landing changed, the last
-landing of that file before the attempt started, and none once another task's
-landing after the report changed it. A finding that also cites, by task
-reference, a task yet to land is a *wait notice*, never a landed blocker.
+work had landed: by a task reference with no finding id, landed when it was
+reported, or by the first file it names that a landing changed, the last
+landing of that file before the reporting attempt started, and none once
+another task's landing after that start changed it. A finding that also cites,
+by task reference, a task yet to land, neither skipped nor failed nor waiting
+for the reporter, is a *wait notice*, never a landed blocker.
 Counted per cited task across the plan's handoffs, never stored, and raised to
 the supervisor as `landed_blocker` when that count reaches 1, 2, 4, 8…; the
 supervisor writes the one fix. *Avoid:* "regression" (nothing says it worked

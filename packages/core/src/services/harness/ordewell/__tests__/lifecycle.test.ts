@@ -317,6 +317,14 @@ describe('a completion that cites the context being exhausted', () => {
     ['my memory', failed('My memory is used up.')],
     ['the context window as the clause\'s subject', failed('Stopped. The context window is full.')],
     ['context exhaustion in the summary only', { status: 'failed', summary: 'Context exhausted.', reason: 'See summary.' }],
+    ['its limit reached', failed('Context limit reached.')],
+    ['its window\'s limit reached', failed('The context window limit was reached.')],
+    ['its budget exhausted', failed('Stopping: context budget exhausted.')],
+    ['its limit approached', failed('I am approaching my context limit and cannot finish.')],
+    ['its window nearly exhausted', failed('Context window nearly exhausted.')],
+    ['not enough of it left', failed('Not enough context left to continue.')],
+    ['too little of it remaining', failed('Insufficient context remaining to finish the refactor.')],
+    ['it getting full', failed('Context is getting full; stopping here.')],
   ])('cites it for %s', (_what, args) => {
     expect(citesContext(args)).toBe(true);
   });
@@ -333,6 +341,9 @@ describe('a completion that cites the context being exhausted', () => {
     ['a build that ran out of memory', failed('The CI build ran out of memory (OOM killed) while linking.')],
     ['a test that names memory exhaustion', failed('The test "memory exhausted" still fails on the fixture.')],
     ['another reason altogether', failed('The schema is invalid and the migration cannot run.')],
+    ['a container\'s memory limit', failed('Our memory limit was hit by the CI container (OOM).')],
+    ['a context window full of something', failed('The test failed: the context window is full of stale entries in the LRU cache.')],
+    ['a context value that reached a handler', failed('Failed. Context reached the handler as undefined, so the middleware throws.')],
     ['a finding that names it', { status: 'failed', summary: 'x', findings: [{ title: 'my context is exhausted' }] }],
     ['no arguments object', 'context exhausted'],
   ])('does not cite it for %s', (_what, args) => {
@@ -386,6 +397,18 @@ describe('a completion that cites the context being exhausted', () => {
     );
     await loop.runTurn('Work.', signals());
     expect(statuses(taskTools.calls)).toEqual(['failed']);
+  });
+
+  it('holds back a report citing the budget and the context once, and records it the second time, as the answer promised', async () => {
+    const both = failed('Budget nearly exhausted and my context is nearly full.');
+    expect([citesBudget(both), citesContext(both)]).toEqual([true, true]);
+    const { loop, taskTools, events } = loopWith([giveUp('one', both), giveUp('two', both), [STOP]], { stepLimit: 1000, model, compactAt: 840_000 });
+    await loop.runTurn('Work.', signals());
+
+    expect(taskTools.calls.map((c) => c.args)).toEqual([both]);
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'one')?.output).toMatch(/^\[Ordewell\] Not recorded: if you stopped because of the call budget/);
+    // The context answer, given after the budget's, would hold back the report the budget's promised to record.
+    expect(eventsOf(events, 'tool_result').find((r) => r.id === 'two')).toMatchObject({ success: true, output: 'ok' });
   });
 
   it('records a report that stopped for another reason on its first call', async () => {
