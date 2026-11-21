@@ -78,6 +78,8 @@ export { HttpWebFetcher } from './services/HttpWebFetcher';
 export type { HttpWebFetcherOptions, WebResponse, WebTransport } from './services/HttpWebFetcher';
 export { startVersionCheck, VERSION_CHECK_URL, VERSION_CHECK_NOTICE } from './services/VersionCheck';
 export type { PingFetch, VersionCheck, VersionCheckOptions } from './services/VersionCheck';
+export { claimFirstRunFeedback, type FirstRunFeedbackOptions } from './services/FirstRunFeedback';
+export { FIRST_RUN_FEEDBACK, FEEDBACK_DISCUSSION_URL, REPOSITORY_URL, type FeedbackAction } from './services/feedbackNotice';
 export type { ApprovalMode, ApprovalModeSetting, ApprovalPolicyOptions, ApprovalSource } from './services/ApprovalPolicy';
 export { DEFAULT_PLANNER_ALLOWLIST, parseAllowlist, commandAllowedBy, toolAllowed, scopeAllowed } from './services/plannerAllowlist';
 export type { PlannerAllowlist, CommandWords } from './services/plannerAllowlist';
@@ -272,7 +274,7 @@ export type {
 export { EMPTY_RUN, reduceRun } from './services/runView';
 export { ChildDirectory, type ChildFrame, type ChildPlanHandle } from './services/ChildDirectory';
 export { IDLE_ACTIVITY } from './services/SessionMessage';
-export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
+export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, everyTaskPassed, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
 export { notifyCommandOf } from './services/escalationNotifier';
 export { escalations, type Escalation, type EscalationInput, type EscalationKind, type EscalationOption, type EscalationOptionId, type EscalationRun } from './services/escalations';

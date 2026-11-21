@@ -23,6 +23,8 @@ const TUI_ONLY: Record<string, string> = {
   mouse: 'it configures the full-screen terminal, which only the TUI holds (ORDEWELL_TUI_MOUSE persists it)',
   login: 'it hands the full-screen terminal to the coding agent\'s own login command; on a shell, run that command directly',
   'key-set': '`ordewell key set <provider> <key>`, the same words; its old name `/key` is the subcommand\'s',
+  feedback: 'it opens, in a browser, the page the full-screen terminal\'s first-run notice offers (ADR-0075); a headless command opens no browser, and the README links the same page',
+  star: 'it opens, in a browser, the page the full-screen terminal\'s first-run notice offers (ADR-0075); a headless command opens no browser, and the README links the same page',
 };
 
 /** CLI-only commands: a daemon, a wizard or a catalog has no slash equivalent, or the TUI's `/settings` and `/planner` panels cover it. */

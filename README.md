@@ -272,6 +272,14 @@ ordewell.ai. To turn the check off, set `ORDEWELL_NO_VERSION_CHECK=1` or
 Settings, or turn off VS Code's telemetry for the extension. See
 [version check details](https://ordewell.ai/docs#version-check).
 
+The first time a run on your machine ends with every task passed, the terminal
+UI, the desktop app or VS Code asks once how it went, with links to the
+[feedback discussion](https://github.com/ordewell/ordewell/discussions/115) and
+the repository. It sends nothing: a browser opens only if you pick a link. It is
+recorded in `~/.ordewell/first-run-feedback.json`, so it never appears again on
+that machine, and never in CI or a headless command. Set
+`ORDEWELL_NO_FEEDBACK_NOTICE=1` to turn it off.
+
 A signed desktop build downloads its own updates from GitHub Releases, and
 contacts GitHub only when you ask: when you press **Update** or choose **Check
 for updates…**. See the

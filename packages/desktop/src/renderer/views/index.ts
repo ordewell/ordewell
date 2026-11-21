@@ -4,6 +4,7 @@ import * as diffTab from './changes/DiffTab';
 import * as checkoutGroup from './checkout/CheckoutGroup';
 import * as connectionBanners from './connection/ConnectionBanners';
 import * as explorerSidebar from './explorer/ExplorerSidebar';
+import * as firstRunFeedback from './feedback/FirstRunFeedback';
 import * as fileTab from './explorer/FileTab';
 import * as commitDiffTab from './git/CommitDiffTab';
 import * as commitGraphTab from './git/CommitGraphTab';
@@ -30,7 +31,7 @@ const VIEWS: ReadonlyArray<{ register(api: FrameApi): Unregister }> = [
   explorerSidebar, fileTab, scopeSwitcher,
   changesSidebar, diffTab, checkoutGroup,
   gitSidebar, commitGraphTab, commitDiffTab,
-  terminalPanel, liveWork, updateNotice,
+  terminalPanel, liveWork, updateNotice, firstRunFeedback,
 ];
 
 export function registerViews(api: FrameApi): Unregister {

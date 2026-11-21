@@ -755,6 +755,15 @@ export function executionSummary(tasks: readonly BlockingSubject[]): ExecutionSu
   };
 }
 
+/**
+ * The run ended with every task of the plan completed: the end the
+ * orchestrator words "All tasks completed" (`PlanStore.isAllComplete`). A
+ * skipped task is not a pass, and a plan with no task passed nothing.
+ */
+export function everyTaskPassed({ total, completed }: ExecutionSummary): boolean {
+  return total > 0 && completed === total;
+}
+
 export const CHECKPOINT_TRUNCATE_LENGTH = 120;
 
 /** Truncate a checkpoint summary to a single line of at most CHECKPOINT_TRUNCATE_LENGTH chars. */

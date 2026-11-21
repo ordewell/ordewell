@@ -1,5 +1,5 @@
-import type { ApprovalRequestMessage, RunView, SessionMessage } from '@ordewell/core';
-import { runNotice } from '@ordewell/core/plan-utils';
+import type { ApprovalRequestMessage, ExecutionSummary, RunView, SessionMessage } from '@ordewell/core';
+import { everyTaskPassed, runNotice } from '@ordewell/core/plan-utils';
 import type { HostToWebview } from '../shared/protocol';
 import { ConversationViewHost, type SavedConversation } from './ConversationViewHost';
 import { RunViewHost } from './RunViewHost';
@@ -22,7 +22,12 @@ export type SessionCue =
   | { type: 'settled'; dock?: 'draft' }
   | { type: 'confirm'; request: ConfirmationRequest<IsolationBlockedChoice> }
   /** A runner loaded the commands a task's composer offers; the host reads them off the task's latest log. */
-  | { type: 'commands'; taskId: string };
+  | { type: 'commands'; taskId: string }
+  /**
+   * The run's end stands with every task passed: a host that shows the
+   * first-run feedback notice asks whether this machine still owes it (ADR-0075).
+   */
+  | { type: 'passed'; summary: ExecutionSummary };
 
 /** What a session holds now, for a view that joins it or rejoins it: the stream goes on from here. */
 export interface SessionSnapshot {
@@ -94,6 +99,9 @@ export class SessionView {
         return { type: 'confirm', request: isolationBlockedConfirmation(msg.message) };
       case 'task_log':
         return msg.events.some((event) => event.type === 'runner_loaded') ? { type: 'commands', taskId: msg.taskId } : null;
+      // After `execution_complete`, once no closing turn can continue the run.
+      case 'run_concluded':
+        return everyTaskPassed(msg.summary) ? { type: 'passed', summary: msg.summary } : null;
       // Drawn by the conversation or the run view above, or not by a chat at
       // all. Named so a new variant fails to compile until someone decides
       // what it means here.
@@ -101,7 +109,6 @@ export class SessionView {
       case 'isolation_handoff':
       case 'isolation_merge':
       case 'run_closed':
-      case 'run_concluded':
       case 'planner_message':
       case 'plan_token':
       case 'planner_text_delta':

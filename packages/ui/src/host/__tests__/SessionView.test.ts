@@ -105,6 +105,15 @@ describe('SessionView', () => {
       expect(session.receive({ type: 'review_approved' })).toBeNull();
     });
 
+    // The first-run feedback notice waits for the end to stand (ADR-0075): a
+    // closing turn after `execution_complete` may still continue the run.
+    it('says a run passed once its end stands with every task completed, and only then', () => {
+      const passed = { total: 2, completed: 2, failed: 0, blocked: 0, skipped: 0 };
+      expect(session.receive({ type: 'run_concluded', summary: passed })).toEqual({ type: 'passed', summary: passed });
+      expect(session.receive({ type: 'run_concluded', summary: { total: 2, completed: 1, failed: 1, blocked: 0, skipped: 0 } })).toBeNull();
+      expect(session.receive({ type: 'run_concluded', summary: { total: 2, completed: 1, failed: 0, blocked: 0, skipped: 1 } })).toBeNull();
+    });
+
     // A status tick re-reads the plan only when the dock moved, so a field
     // patch (an edit on another surface, a model the session follows) is the
     // one cue that tells the host its plan's task fields changed.

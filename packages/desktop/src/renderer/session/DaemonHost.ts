@@ -1,5 +1,5 @@
 import type {
-  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
+  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, ExecutionSummary, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
   SessionHeld, SessionMessage, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
   SurfacePlanState, Task,
 } from '@ordewell/core';
@@ -265,6 +265,7 @@ export class DaemonHost {
   private readonly sticky = new Map<HostToWebview['type'], HostToWebview>();
   private readonly taskLogs = new Map<string, TaskLogHost>();
   private readonly storeListeners = new Set<() => void>();
+  private readonly passedListeners = new Set<(summary: ExecutionSummary) => void>();
   private readonly reread = new Coalesced(() => this.readPlan());
   private snapshot: SessionSnapshotView;
   private stream: SessionStream | null = null;
@@ -352,6 +353,16 @@ export class DaemonHost {
     this.storeListeners.add(listener);
     return () => this.storeListeners.delete(listener);
   };
+
+  /**
+   * A run of this session ended, its end standing, with every task passed:
+   * the first-run feedback notice's cue (ADR-0075). An event, not state: a
+   * window that opens the session later did not see it end.
+   */
+  onRunPassed(listener: (summary: ExecutionSummary) => void): () => void {
+    this.passedListeners.add(listener);
+    return () => { this.passedListeners.delete(listener); };
+  }
 
   readonly getSnapshot = (): SessionSnapshotView => this.snapshot;
 
@@ -1656,6 +1667,9 @@ export class DaemonHost {
         return;
       case 'commands':
         void this.postTaskCommands(cue.taskId);
+        return;
+      case 'passed':
+        for (const listener of [...this.passedListeners]) listener(cue.summary);
         return;
     }
   }

@@ -10,6 +10,7 @@ import type { AttentionNotifier } from './notifications';
 import { validPref, type PrefsStore } from './prefs';
 import { readClipboard, writeClipboard } from './clipboard';
 import { droppedFolder } from './droppedFolder';
+import { claimForWindow } from './firstRunFeedback';
 import type { ProjectOpener } from './projectOpener';
 import type { RecentsStore } from './recents';
 import { Shell } from './shell';
@@ -245,6 +246,8 @@ export function registerIpc(deps: IpcDeps): void {
   handle(CHANNELS.updateDownload, () => deps.updates.download());
   handle(CHANNELS.updateRestart, () => deps.restartToUpdate());
   handle(CHANNELS.updateDismissNotice, () => { deps.updates.dismissNotice(); });
+  // A hidden test run has no one to show it to (ADR-0075).
+  handle(CHANNELS.feedbackClaim, (_event, summary) => claimForWindow(summary, { interactive: !windowsHidden() }));
 
   handle(CHANNELS.notifyShow, (event, raw) => {
     const request = notificationRequest(raw);

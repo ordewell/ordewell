@@ -7,6 +7,7 @@ import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
 import { startExtensionVersionCheck } from './versionCheck';
+import { showFirstRunFeedback } from './firstRunFeedback';
 
 const UPDATE_POPUP_KEY = 'ordewell.updatePopupShownAt';
 import { createExtension, type ExtensionHost } from './ExtensionHost';
@@ -87,6 +88,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       chatProvider: new ChatViewProvider(context.extensionUri),
       isolationPreview: createIsolationPreview({ config }),
       sessionFactory: createSession,
+      // An extension host under test has no one at it (ADR-0075).
+      firstRunFeedback: (summary) => { void showFirstRunFeedback(vscode, summary, { interactive: context.extensionMode !== vscode.ExtensionMode.Test }); },
       // Codex's account is read over the same app-server its model discovery
       // uses (ADR-0004); Claude Code's on a control-only process of its own;
       // OpenCode Go's from OpenCode's selected login, with no process at all

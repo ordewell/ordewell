@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot } from '@ordewell/core';
-import type { AiProvider, ChildPlanEntry, ChildPlanView, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, IsolationPreview, PlannerUsage, ResearchLogEntry, RunView, SerializedConversationMessage, SerializedPendingTurn, SessionMessage, SettingsResponse, GlobalRunSettings, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
+import type { AiProvider, ChildPlanEntry, ChildPlanView, ApprovalDecision, ApprovalRequestMessage, DaemonErrorCode, ExecutionSummary, IsolationPreview, PlannerUsage, ResearchLogEntry, RunView, SerializedConversationMessage, SerializedPendingTurn, SessionMessage, SettingsResponse, GlobalRunSettings, StreamStamp, TaskAction, TaskRevertPreview, TaskLogEvent, TaskStatus } from '@ordewell/core';
 import type { Key } from '../keys';
 import type {
   LandedTaskView, ModelView, ModeView, RewindTargetView, RunnerView, SessionView,
@@ -135,6 +135,10 @@ export type Effect =
   | { type: 'messageChildTask'; rootId: string; childId: string; taskId: string; text: string }
   /** `question` is the whole of what the task waits on, as the daemon compares it. */
   | { type: 'answerChildCheckpoint'; rootId: string; childId: string; taskId: string; answer: 'approve' | 'reject'; question: string; reason?: string }
+  /** A run's end stood with every task passed: show the first-run feedback notice if this machine still owes it (ADR-0075). */
+  | { type: 'firstRunFeedback'; summary: ExecutionSummary }
+  /** Opens a page in the browser: only ever because the person typed the command that names it. */
+  | { type: 'openLink'; url: string }
   | { type: 'exit' };
 
 /** A delegated task, named by the plan that holds it: a task's id means nothing outside its plan. */
@@ -263,6 +267,8 @@ export type Action =
    */
   /** `sessionId` names the session a notice is about, so one the user has left is not shown on another. */
   | { type: 'notice'; message: string; level?: 'info' | 'warn' | 'error'; holdPlace?: boolean; sessionId?: string }
+  /** The run's end stands (`run_concluded`): no turn of the supervisor's can continue it. */
+  | { type: 'runConcluded'; summary: ExecutionSummary; sessionId: string }
   /** What `/update` would run, or why it runs nothing (`status` non-zero when that is a failure). */
   /** The version check named a newer version; `line` is its full sentence, as the transcript shows it. */
   | { type: 'updateKnown'; latest: string; line: string }

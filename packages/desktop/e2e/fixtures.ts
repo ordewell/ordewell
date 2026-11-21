@@ -114,6 +114,8 @@ export function appEnv(sandbox: Sandbox, daemonPort: number, mockPort: number, o
     PATH: hermeticPath(sandbox),
     ORDEWELL_PORT: String(daemonPort),
     ORDEWELL_NO_VERSION_CHECK: '1',
+    // A spec's plan passes on a fresh HOME, which owes the notice; a screenshot is no place for it (ADR-0075).
+    ORDEWELL_NO_FEEDBACK_NOTICE: '1',
     ORDEWELL_ENABLED_RUNNERS: options.runners ?? 'claude-code',
     ...(options.noProvider ? {} : {
       AI_PROVIDER: 'openrouter',
