@@ -57,6 +57,8 @@ const server = http.createServer((req, res) => {
     }
     heard({
       url: req.url, model: request.model, stream: request.stream, toolChoice: request.tool_choice ?? null,
+      // The reasoning effort the caller asked for (OpenRouter's `reasoning` object, or `reasoning_effort` where a dialect takes that).
+      reasoning: request.reasoning ?? (request.reasoning_effort ? { effort: request.reasoning_effort } : null),
       tools: (request.tools ?? []).map((t) => t.function?.name ?? t.name),
       messages: (request.messages ?? []).map((m) => ({ role: m.role, content: String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '')), toolCalls: m.tool_calls?.map((c) => c.function?.name) })),
       turn,

@@ -1855,9 +1855,9 @@ test('the long command outlasts the settle window by more than two polls, and ev
   for (const w of [R.WINDOWS, { settleMin: 5, pollSec: 30 }]) assert.ok(R.longCommandSec(w) > w.settleMin * 60 + 2 * w.pollSec);
   for (const name of R.scenarioNames()) {
     const s = R.scenario(name);
-    assert.ok(['A', 'B'].includes(s.arm), name);
+    assert.ok(['A', 'A-continued', 'B'].includes(s.arm), name);
     const args = R.windowArgs(s);
-    const o = L.parseArgs(['--rehearse', name, '--libs', 'x.json', '--arm', s.arm, ...args]);
+    const o = L.parseArgs(['--rehearse', name, '--libs', 'x.json', ...L.driveArmArgs(L.ARMS[s.arm]), ...args]);
     assert.equal(o.settleMin, R.WINDOWS.settleMin, name);
     if (s.capUsd) assert.equal(o.capUsd, s.capUsd, name);
     assert.ok(R.longCommandSec(R.WINDOWS) < (s.windows?.wallMin ?? R.WINDOWS.wallMin) * 60, `${name}: the long command outlasts the wall cap`);
@@ -2638,6 +2638,27 @@ function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, 
       for (const b of git(0, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/ordewell').split('\n').filter(Boolean)) git(0, 'branch', '-q', '-D', b);
       git(0, 'update-ref', 'refs/remotes/origin/ordewell/r1/integration', first);
     }
+  } else if (arm === 'A-continued') {
+    // The control arm: each attempt's worktree is cut again, over what landed so far, and every one that reported done lands; the last is left unlanded.
+    git(0, 'checkout', '-q', '-b', 'ordewell/r2/integration');
+    let firstAttempt = null;
+    minutes.forEach((m, i) => {
+      git(m - 1, 'checkout', '-q', '-B', 'ordewell/r2/1-implement', 'ordewell/r2/integration');
+      write(`v${m}`);
+      git(m, 'commit', '-q', '-m', `attempt ${i + 1}`);
+      firstAttempt ??= git(m, 'rev-parse', 'HEAD').trim();
+      if (i < minutes.length - 1 || merged) {
+        git(m + 1, 'checkout', '-q', 'ordewell/r2/integration');
+        git(m + 1, 'merge', '-q', '--no-ff', '-m', `land attempt ${i + 1}`, 'ordewell/r2/1-implement');
+      }
+    });
+    if (merged) {
+      // The end-of-run merge: commit0-base takes the integration branch, the task's branch is gone, and the only one left is the first attempt's, kept as work in progress.
+      git(0, 'checkout', '-q', 'commit0-base');
+      git(minutes.at(-1) + 1, 'merge', '-q', '--ff-only', 'ordewell/r2/integration');
+      for (const b of git(0, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/ordewell').split('\n').filter(Boolean)) git(0, 'branch', '-q', '-D', b);
+      git(0, 'branch', 'ordewell-preserved/r2/1-implement', firstAttempt);
+    }
   } else {
     git(0, 'checkout', '-q', '-b', 'ordewell/r2/1-implement');
     for (const m of minutes) {
@@ -2648,7 +2669,7 @@ function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, 
   fs.mkdirSync(path.join(dir, 'workspace-ordewell', 'sessions'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'workspace-ordewell', 'sessions', 's.json'), JSON.stringify({ meta: { id: 's', createdAt: minutesAfter(0) }, ...(plan ? { plan } : {}) }));
   fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify({
-    library: 'tinylib', arm, wallClockMs: wall * 60_000, startedAt: minutesAfter(-2), tests, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000,
+    library: 'tinylib', arm, ...(merged && arm !== 'B' ? { scoredFrom: 'merged' } : {}), wallClockMs: wall * 60_000, startedAt: minutesAfter(-2), tests, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000,
   }));
   return dir;
 }
@@ -2677,6 +2698,48 @@ test('runHistory maps arm B\'s landings to their committer times and arm A\'s br
   } finally {
     fs.rmSync(b, { recursive: true, force: true });
     fs.rmSync(a, { recursive: true, force: true });
+  }
+});
+
+test('the timeline reads a continued run, whose history spans several attempts: the commits of each attempt and the landings between, the final tree the last attempt\'s', { skip: !hasGit && 'needs git' }, async () => {
+  const dir = fixtureRun('A-continued', [5, 20, 40, 70]);
+  try {
+    const h = T.runHistory(dir, { arm: 'A-continued' });
+    assert.equal(h.branch, 'ordewell/r2/1-implement', 'the task\'s branch, never the integration one');
+    assert.deepEqual(h.commits.map((c) => c.subject), ['attempt 1', 'land attempt 1', 'attempt 2', 'land attempt 2', 'attempt 3', 'land attempt 3', 'attempt 4']);
+    assert.equal(h.final, h.commits.at(-1).sha, 'the last attempt\'s own commit, landed or not');
+    assert.equal(h.lastLanding, null);
+    const chosen = T.chooseTimelinePoints(dir, { arm: 'A-continued', points: 8 }).chosen;
+    assert.equal(chosen.at(-1).sha, h.final);
+    assert.equal(new Set(chosen.map((p) => p.sha)).size, chosen.length);
+    // The arm's own label is the one scoring reads: it settles like arm A, not B.
+    const drive = await import('./drive.mjs');
+    const seen = [];
+    const driver = { materialize: drive.materialize, scoreInFreshBox: async (lib, tree, o) => { seen.push(o.settings); return { treeCheck: { ok: true }, tests: { passed: 7, failed: 1, errors: 0 }, copied: [], removed: [], needsInspection: [], patchError: null }; } };
+    const { timeline } = await T.scoreTimeline({ runDir: dir, libraries: tinyLibs, points: 4, jobs: 1, driver });
+    assert.equal(timeline.verified, true);
+    assert.equal(seen.length, 3, "four points less the final's own slot, and the final");
+    assert.deepEqual([seen[0].supervisorLevel, seen[0].parallel], ['off', 1], 'arm A\'s settings, not arm B\'s');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the timeline of a continued run scored from its merged work ends on commit0-base, never on the attempt branch the merge left behind', { skip: !hasGit && 'needs git' }, () => {
+  const dir = fixtureRun('A-continued', [5, 20, 40], { merged: true });
+  try {
+    // After the end-of-run merge the workdir holds commit0-base and the first attempt's kept branch: an early point of the run, not its final tree.
+    const h = T.runHistory(dir, { arm: 'A-continued', merged: true });
+    assert.equal(h.branch, 'commit0-base');
+    assert.deepEqual(h.commits.map((c) => c.subject), ['attempt 1', 'land attempt 1', 'attempt 2', 'land attempt 2', 'attempt 3', 'land attempt 3']);
+    assert.equal(h.final, h.commits.at(-1).sha);
+    // The run's own word on where it was scored from decides, and a run scored from a worktree keeps reading the task's newest branch.
+    assert.equal(T.chooseTimelinePoints(dir, { arm: 'A-continued', points: 8 }).history.branch, 'commit0-base');
+    assert.equal(T.runHistory(dir, { arm: 'A-continued' }).branch, 'ordewell-preserved/r2/1-implement');
+    assert.equal(T.runHistory(dir, { arm: 'A-continued', merged: true, branch: 'ordewell-preserved/r2/1-implement' }).branch, 'ordewell-preserved/r2/1-implement', 'a branch named is the branch read');
+    assert.equal(T.chooseTimelinePoints(dir, { arm: 'A-continued', points: 8 }).chosen.at(-1).sha, h.final);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -3074,8 +3137,8 @@ test('a result carries referenceSpend beside the recorded spend, and batch.json 
     run('y', 'A', 2, 0.75, { freshInput: 10, cachedInput: 0, output: 5 }),
     run('y', 'B', 3, null, null),
   ] });
-  assert.deepEqual(b.perArm.A, { runs: 2, recordedUsd: 3, referenceUsd: 1, referenceTokens: { freshInput: 20, cachedInput: 20, output: 10 }, unpricedAtReference: [] });
-  assert.deepEqual(b.perArm.B, { runs: 2, recordedUsd: 7, referenceUsd: 0.5, referenceTokens: { freshInput: 1, cachedInput: 2, output: 3 }, unpricedAtReference: ['y B'] });
+  assert.deepEqual(b.perArm.A, { runs: 2, efforts: {}, recordedUsd: 3, referenceUsd: 1, referenceTokens: { freshInput: 20, cachedInput: 20, output: 10 }, unpricedAtReference: [] });
+  assert.deepEqual(b.perArm.B, { runs: 2, efforts: {}, recordedUsd: 7, referenceUsd: 0.5, referenceTokens: { freshInput: 1, cachedInput: 2, output: 3 }, unpricedAtReference: ['y B'] });
   assert.equal(b.referencePriceTable.id, L.REFERENCE_PRICES.id);
 });
 
@@ -3086,6 +3149,230 @@ test('the rehearsal fails a result that does not record the call budget it ran w
   assert.match(f({}), /no spend at the reference price table/);
   const fields = { callBudget: 10, stepLimit: 10, referenceUsd: 0.1, referenceSpend: { priceTable: L.REFERENCE_PRICES } };
   assert.doesNotMatch(f(fields), /budget the arm|reference price table/);
+});
+
+// --- The control arm: arm A, continued until the caps -------------------------
+
+test('--continue-a makes arm A a continued arm under its own label, which no run of plain A can carry', () => {
+  const d = L.parseArgs(['--dry-run', '--libs', 'l.json', '--continue-a']);
+  assert.equal(d.continueA, true);
+  assert.equal(L.parseArgs(['--dry-run', '--libs', 'l.json']).continueA, false);
+  assert.deepEqual(L.armsOf('both', true).map((a) => a.id), ['A-continued', 'B']);
+  assert.deepEqual(L.armsOf('A', true).map((a) => a.id), ['A-continued']);
+  assert.deepEqual(L.armsOf('both').map((a) => a.id), ['A', 'B'], 'without the flag nothing changes');
+  assert.deepEqual(L.armsOf('B', true).map((a) => a.id), ['B'], 'the flag has nothing to continue in arm B');
+  // Arm A's box: the same settings, supervisor off, nothing merged on its behalf.
+  const settings = L.armSettings(L.ARMS['A-continued']);
+  assert.deepEqual(settings, L.armSettings(L.ARMS.A));
+  assert.deepEqual(L.boxSettings(L.ARMS['A-continued']), L.boxSettings(L.ARMS.A));
+  assert.ok(L.isSingleAgent('A') && L.isSingleAgent('A-continued') && !L.isSingleAgent('B'));
+  assert.notEqual(L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'A-continued' }), L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'A' }));
+  assert.equal(L.runIdFor({ stamp: '2026-01-01T00-00-00', lib: 'x', arm: 'A-continued' }), '2026-01-01t00-00-00-x-a-continued');
+  // It is arm A's flag: asked of arm B alone, or of a plan, it is refused rather than ignored.
+  assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'l.json', '--continue-a', '--arm', 'B']), /--continue-a.*arm A/);
+  assert.throws(() => L.parseArgs(['--run', '--libs', 'l.json', '--provider-pin', 'p', '--continue-a', '--plan-only']), /--continue-a.*no plan/);
+  // A batch carries it to each A run as the flag, and to none of B's.
+  const b = L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--continue-a']);
+  assert.equal(b.continueA, true);
+  assert.deepEqual(L.armsOf(b.arm, b.continueA).map((a) => a.id), ['A-continued', 'B']);
+  assert.deepEqual(L.driveArmArgs(L.ARMS['A-continued']), ['--arm', 'A', '--continue-a']);
+  assert.deepEqual(L.driveArmArgs(L.ARMS.A), ['--arm', 'A']);
+  assert.deepEqual(L.driveArmArgs(L.ARMS.B), ['--arm', 'B']);
+  const cmds = (arm) => L.armCommands(arm, { workspace: '/w', goal: 'g', sessionId: 's1' }).map((c) => c.join(' '));
+  assert.equal(cmds(L.ARMS['A-continued']).length, cmds(L.ARMS.A).length + 1);
+  assert.match(cmds(L.ARMS['A-continued'])[2], /^ordewell continue 1 <the continuation message.*> --session-id s1 --workspace \/w$/);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--continue-a', '--arm', 'B']), /--continue-a.*arm A/);
+});
+
+test('the continuation message is one neutral constant: the limits are not reached, context compacts by itself, calls remain, keep going', () => {
+  assert.equal(typeof L.CONTINUE_MESSAGE, 'string');
+  assert.match(L.CONTINUE_MESSAGE, /time and spend limits/i);
+  assert.match(L.CONTINUE_MESSAGE, /not been reached/i);
+  assert.match(L.CONTINUE_MESSAGE, /context is compacted automatically/i);
+  assert.match(L.CONTINUE_MESSAGE, /calls remain/i);
+  assert.match(L.CONTINUE_MESSAGE, /continue the task until its goal is met/i);
+  // It names nothing of the work or of another arm: no library, test, file, plan or task.
+  assert.doesNotMatch(L.CONTINUE_MESSAGE, /implement|tests?\b|fail|\.py|module|planner|ordewell|\barm\b|parallel/i);
+  assert.ok(L.CONTINUE_MESSAGE.length < 400);
+});
+
+test('attemptEnded reads an attempt that has ended with a verdict, never one at work or waiting on a person', () => {
+  const task = (over = {}) => ({ id: 't1', order: 1, title: 'Implement', type: 'ai', status: 'failed', dependencies: [], attemptUsage: [{ attempt: 1 }], verdict: { outcome: 'fail', reported: 'failed' }, handoff: { summary: 'the imports do not resolve' }, ...over });
+  const ended = (t, activity = null) => L.attemptEnded({ plan: { tasks: [t], approved: true }, activity });
+  assert.deepEqual(ended(task()), { verdict: 'failed', summary: 'the imports do not resolve', attempts: 1, status: 'failed' });
+  assert.equal(ended(task({ status: 'completed', verdict: { outcome: 'pass', reported: 'done' } })).verdict, 'done');
+  assert.equal(ended(task({ verdict: { outcome: 'fail', reported: 'blocked' } })).verdict, 'blocked');
+  // No report: an attempt that ended in prose, the runner having said nothing through task_complete.
+  const none = ended(task({ verdict: { outcome: 'fail', reason: 'no report' }, handoff: undefined, outputSummary: { report: 'I think I am done.', reviewReason: '', logTail: '', capturedAt: 'x' } }));
+  assert.deepEqual([none.verdict, none.summary], ['no report', 'I think I am done.']);
+  assert.equal(ended(task({ status: 'completed', verdict: undefined })).verdict, 'done', 'a completed task nothing else was kept for reports done, as the ending reads it');
+  assert.equal(ended(task({ handoff: undefined, outputSummary: undefined })).summary, null);
+  assert.equal(ended(task({ handoff: { summary: 'x'.repeat(2000) } })).summary.length, 600);
+  // Not ended: at work, starting, waiting to advance on its own, parked on a person, or not begun.
+  assert.equal(ended(task({ status: 'in_progress' })), null);
+  assert.equal(ended(task(), { running: true }), null);
+  assert.equal(ended(task(), { starting: true }), null);
+  assert.equal(ended(task(), { advancesOnItsOwn: true }), null);
+  assert.equal(ended(task(), { advancesOnItsOwn: false }).verdict, 'failed');
+  assert.equal(ended(task({ status: 'awaiting_user', awaitingReason: 'checkpoint' })), null, 'a checkpoint is the agent asking, which the stall rule judges');
+  // A turn that ended in prose with no report leaves the built-in runner's task parked on input: an end with no report, which a reply continues.
+  const parked = ended(task({ status: 'awaiting_user', awaitingReason: 'input', verdict: undefined, handoff: undefined, outputSummary: { report: 'Nothing to report.', reviewReason: '', logTail: '', capturedAt: 'x' } }));
+  assert.deepEqual(parked, { verdict: 'no report', summary: 'Nothing to report.', attempts: 1, status: 'awaiting_user' });
+  assert.equal(ended(task({ status: 'awaiting_user', awaitingReason: 'input' }), { running: true }).verdict, 'no report', 'the parked task holds its live session, which the run view counts as running');
+  assert.equal(ended(task({ status: 'awaiting_user', awaitingReason: 'usage-limit' })), null, 'a usage limit waits on the clock');
+  assert.equal(ended(task({ status: 'pending', attemptUsage: [] })), null);
+  assert.equal(L.attemptEnded({ plan: null, activity: null }), null);
+  assert.equal(L.attemptEnded({ plan: { tasks: [task(), task({ id: 't2', order: 2 })] }, activity: null }), null, 'arm A is one task: two is not its shape');
+});
+
+test('continueDecision keeps room for a call, bounds the continuations, and gives up on three that do nothing', () => {
+  const room = { elapsedMs: 60 * 60_000, spentUsd: 2, capUsd: 8, wallCapMs: 3 * 60 * 60_000 };
+  const idle = { calls: 2, treeChanged: false };
+  const busy = { calls: 40, treeChanged: true };
+  assert.deepEqual(L.CONTINUATION, { minWallMs: 180_000, minUsd: 0.1, max: 40, giveUpRun: 3, giveUpCalls: 2 });
+  assert.deepEqual(L.continueDecision({ ...room, history: [] }), { go: true, why: null });
+  // The margins are inclusive: exactly 3 minutes and exactly $0.10 left is room.
+  assert.equal(L.continueDecision({ ...room, history: [], elapsedMs: 3 * 60 * 60_000 - 180_000 }).go, true);
+  assert.deepEqual(L.continueDecision({ ...room, history: [], elapsedMs: 3 * 60 * 60_000 - 179_999 }), { go: false, why: 'no-room-wall' });
+  assert.equal(L.continueDecision({ ...room, history: [], spentUsd: 7.9 }).go, true);
+  assert.deepEqual(L.continueDecision({ ...room, history: [], spentUsd: 7.901 }), { go: false, why: 'no-room-spend' });
+  // At most 40 continuations.
+  assert.equal(L.continueDecision({ ...room, history: Array.from({ length: 39 }, () => busy) }).go, true);
+  assert.deepEqual(L.continueDecision({ ...room, history: Array.from({ length: 40 }, () => busy) }), { go: false, why: 'max-continuations' });
+  // Three in a row within two calls and the tree unchanged: given up. One that did something, or a busy one among them, is not.
+  assert.deepEqual(L.continueDecision({ ...room, history: [busy, idle, idle, idle] }), { go: false, why: 'gave-up' });
+  assert.equal(L.continueDecision({ ...room, history: [idle, idle] }).go, true, 'two are not three');
+  assert.equal(L.continueDecision({ ...room, history: [idle, idle, { calls: 2, treeChanged: true }] }).go, true, 'a changed tree is work');
+  assert.equal(L.continueDecision({ ...room, history: [idle, idle, { calls: 3, treeChanged: false }] }).go, true, 'three calls are not within two');
+  assert.equal(L.continueDecision({ ...room, history: [idle, idle, idle, busy] }).go, true, 'it is the last three in a row');
+  assert.equal(L.continueDecision({ ...room, history: [{ calls: 0, treeChanged: false }, { calls: 1, treeChanged: false }, idle] }).go, false);
+  // An attempt whose calls or tree could not be read is not evidence of idleness.
+  assert.equal(L.continueDecision({ ...room, history: [idle, idle, { calls: null, treeChanged: null }] }).go, true);
+  // The caps come first: no room is no room, however idle.
+  assert.equal(L.continueDecision({ ...room, history: [idle, idle, idle], spentUsd: 7.95 }).why, 'no-room-spend');
+});
+
+test('the continuation record follows each attempt: when it ended, its verdict and summary, calls and spend so far, and what the next one did', () => {
+  const state = L.createContinuation();
+  const end = (over = {}) => ({ verdict: 'failed', summary: 'cannot import', attempts: 1, ...over });
+  const at = (n) => `2026-11-21T10:0${n}:00.000Z`;
+  const step = (over) => L.continuationStep(state, { ended: end(), fingerprint: 'tree-0', usageLines: 12, spentUsd: 0.4, elapsedMs: 600_000, capUsd: 8, wallCapMs: 3 * 3_600_000, now: at(0), ...over });
+
+  // The first attempt ended failed with 12 calls: continue, and say so.
+  const first = step();
+  assert.equal(first.action, 'send');
+  assert.deepEqual(first.record, { n: 1, at: at(0), atMs: 600_000, mode: 'session', after: { attempt: 1, verdict: 'failed', summary: 'cannot import' }, callsSoFar: 12, spentUsd: 0.4, calls: null, treeChanged: null });
+  assert.deepEqual(state.first, { verdict: 'failed', summary: 'cannot import', attempts: 1, atMs: 600_000, callsSoFar: 12, spentUsd: 0.4 });
+  L.markSent(state, first.record, { fingerprint: 'tree-0', usageLines: 12, attempts: 1 });
+
+  // A session that could not be continued: the fresh attempt that took its place is recorded as fresh.
+  const other = L.createContinuation();
+  const fresh = L.markSent(other, { n: 1, mode: 'session' }, { fingerprint: 'x', usageLines: 1, attempts: 1 }, { fresh: true });
+  assert.deepEqual([fresh.mode, fresh.via], ['fresh', 'retry']);
+  assert.deepEqual(other.continuations.map((c) => c.mode), ['fresh']);
+  assert.equal(L.markSent(L.createContinuation(), { n: 1 }, { fingerprint: 'x', usageLines: 1, attempts: 1 }).via, 'continue');
+  assert.deepEqual(['session', 'message'], (() => { const r = L.markSent(L.createContinuation(), { n: 1 }, { fingerprint: 'x', usageLines: 1, attempts: 1 }, { via: 'message' }); return [r.mode, r.via]; })(), 'the reply to a parked task goes into the live session');
+
+  // The new attempt has not begun (its status is still the old one's): wait.
+  assert.deepEqual(step({ ended: end() }), { action: 'wait' });
+  // It began and ended: 40 calls, the tree changed; the second continuation names that attempt's verdict.
+  const second = step({ ended: end({ attempts: 2, verdict: 'done', summary: 'all done' }), fingerprint: 'tree-1', usageLines: 52, spentUsd: 1.1, elapsedMs: 1_200_000, now: at(1) });
+  assert.equal(second.action, 'send');
+  assert.deepEqual([first.record.calls, first.record.treeChanged], [40, true], 'the first continuation is closed with what its attempt did');
+  assert.deepEqual(second.record.after, { attempt: 2, verdict: 'done', summary: 'all done' });
+  assert.deepEqual([second.record.n, second.record.callsSoFar, second.record.spentUsd], [2, 52, 1.1]);
+  L.markSent(state, second.record, { fingerprint: 'tree-1', usageLines: 52, attempts: 2 });
+
+  // A running attempt seen in between counts as begun even where its count and calls have not moved yet.
+  state.sawLive = true;
+  assert.equal(step({ ended: end({ attempts: 2 }), fingerprint: 'tree-1', usageLines: 52 }).action, 'send');
+});
+
+test('the continuation record gives up on three idle attempts and stops where the caps leave no room', () => {
+  const idle = (calls = 1) => ({ calls, treeChanged: false });
+  const run = (history, over = {}) => {
+    const state = L.createContinuation();
+    state.continuations = history.map((h, i) => ({ n: i + 1, ...h }));
+    if (history.length) state.sent = { record: state.continuations.at(-1), fingerprint: 'same', usageLines: 100, attempts: history.length };
+    state.continuations.at(-1) && Object.assign(state.continuations.at(-1), { calls: null, treeChanged: null });
+    return [state, L.continuationStep(state, { ended: { verdict: 'done', summary: 's', attempts: history.length + 1 }, fingerprint: 'same', usageLines: 100 + (over.lastCalls ?? 1), spentUsd: 1, elapsedMs: 1000, capUsd: 8, wallCapMs: 3 * 3_600_000, now: 't', ...over })];
+  };
+  // The last attempt made one call and left the tree: with two idle before it, three in a row.
+  const [state, d] = run([idle(), idle(), { calls: null, treeChanged: null }]);
+  assert.deepEqual([d.action, d.why], ['stop', 'gave-up']);
+  assert.deepEqual(state.stop, { why: 'gave-up', atMs: 1000, spentUsd: 1, callsSoFar: 101 });
+  assert.equal(run([idle(), idle(), { calls: null, treeChanged: null }], { lastCalls: 5 })[1].action, 'send', 'five calls are work');
+  assert.equal(run([idle(), { calls: null, treeChanged: null }])[1].action, 'send', 'two idle attempts are not three');
+  assert.equal(run([{ calls: null, treeChanged: null }], { spentUsd: 7.95 })[1].why, 'no-room-spend');
+  assert.equal(run([{ calls: null, treeChanged: null }], { elapsedMs: 3 * 3_600_000 - 1000 })[1].why, 'no-room-wall');
+  // No tree reading (the box could not be asked) is not an idle attempt.
+  assert.equal(run([idle(), idle(), { calls: null, treeChanged: null }], { fingerprint: null })[1].action, 'send');
+});
+
+test('continuationRecord is what result.json holds of a continued run, the message and margins included', () => {
+  const state = L.createContinuation();
+  assert.deepEqual(L.continuationRecord(state), { message: L.CONTINUE_MESSAGE, margins: L.CONTINUATION, first: null, continuations: [], count: 0, fresh: 0, stop: null });
+  state.continuations = [{ n: 1, mode: 'session' }, { n: 2, mode: 'fresh' }, { n: 3, mode: 'session' }];
+  state.stop = { why: 'gave-up' };
+  const r = L.continuationRecord(state);
+  assert.deepEqual([r.count, r.fresh, r.stop.why], [3, 1, 'gave-up']);
+  assert.equal(L.continuationRecord(null), null, 'a plain arm has none');
+});
+
+test('runEnding says a continued run ended by its own continuation rule, apart from a cap, and counts its attempts\' calls like arm A\'s', () => {
+  const use = (n) => Array.from({ length: n }, () => ({ type: 'usage', record: { source: 'openrouter', inputTokens: 5 } }));
+  const plan = { tasks: [{ id: 't1', order: 1, title: 'task 1', type: 'ai', status: 'failed', dependencies: [], attemptUsage: [], verdict: { outcome: 'fail', reported: 'failed' } }] };
+  const taskLogs = { t1: { 1: use(3), 2: use(2), 3: use(1) } };
+  const stop = { why: 'gave-up', atMs: 5000, spentUsd: 1.25, callsSoFar: 6 };
+  const e = L.runEnding({ arm: 'A-continued', plan, taskLogs, stopped: null, stalled: null, continuation: { stop, count: 2 } });
+  assert.deepEqual([e.by, e.why, e.continuations, e.spentUsd, e.atMs], ['continuation', 'gave-up', 2, 1.25, 5000]);
+  assert.deepEqual(e.modelCalls.perAttempt, [{ attempt: 1, calls: 3 }, { attempt: 2, calls: 2 }, { attempt: 3, calls: 1 }]);
+  assert.equal(e.modelCalls.used, 6);
+  // A cap still names itself: the existing stop rules win across continuations.
+  assert.equal(L.runEnding({ arm: 'A-continued', plan, taskLogs, stopped: { why: 'spend', atMs: 9, spentUsd: 8.01 }, stalled: null, continuation: { stop: null, count: 4 } }).by, 'cap');
+  // A continued run that ended with no continuation rule reads like arm A's: its completion.
+  assert.equal(L.runEnding({ arm: 'A-continued', plan, taskLogs, stopped: null, stalled: null, continuation: { stop: null, count: 0 } }).by, 'completion');
+});
+
+test('the control arm\'s rehearsal scenarios run arm A-continued, and the judge reads what each continuation recorded and what the runner was sent', () => {
+  for (const name of ['a-continued', 'a-continued-cap']) {
+    assert.equal(R.scenario(name).arm, 'A-continued');
+    // The scripted agent ends its attempt early and is continued in the same attempt: one script, the steps after its last turn.
+    assert.equal(R.scenario(name).attempts({ src: 'pkg', tests: 'tests', longSec: 1 }).A.length, 1);
+  }
+  const message = L.CONTINUE_MESSAGE;
+  const rec = (n, verdict, extra = {}) => ({ n, at: `2026-11-21T10:0${n}:00.000Z`, atMs: n * 1000, mode: 'session', via: n === 3 ? 'message' : 'continue', after: { attempt: n, verdict, summary: verdict === 'no report' ? null : 's' }, callsSoFar: n * 10, spentUsd: n / 10, calls: 12, treeChanged: true, ...extra });
+  const result = {
+    arm: 'A-continued',
+    continuation: {
+      message, margins: L.CONTINUATION, first: { verdict: 'failed' }, count: 4, fresh: 0, stop: { why: 'gave-up' },
+      continuations: [rec(1, 'failed'), rec(2, 'done', { calls: 1, treeChanged: false }), rec(3, 'no report', { calls: 1, treeChanged: false }), rec(4, 'done', { calls: 2, treeChanged: false })],
+    },
+  };
+  const goal = 'Implement the library.';
+  const request = (users, attempt = 1) => ({ turn: { role: 'runner', key: 'A', attempt, round: 0 }, messages: [{ role: 'system', content: 's' }, ...users.map((content) => ({ role: 'user', content }))] });
+  const requests = [request([goal]), request([goal, message]), request([goal, message, message, message, message])];
+  assert.deepEqual(R.judgeContinued('a-continued', result, requests, message), []);
+  assert.deepEqual(R.judgeContinued('a-done', result, requests, message), [], 'a scenario that continues nothing has nothing to judge');
+
+  const f = (r, reqs = requests, name = 'a-continued') => R.judgeContinued(name, r, reqs, message).join('\n');
+  assert.match(f({ ...result, arm: 'A' }), /not A-continued/);
+  assert.match(f({ ...result, continuation: undefined }), /no continuation record/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, message: 'Please continue.' } }), /not the harness's constant/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, continuations: result.continuation.continuations.slice(0, 3) } }), /followed \["failed","done","no report"\]/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, continuations: result.continuation.continuations.map((c, i) => (i === 1 ? { ...c, mode: 'fresh', via: 'retry' } : c)) } }), /continuation 2 was fresh \(retry\)/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, continuations: result.continuation.continuations.map((c, i) => (i === 2 ? { ...c, via: 'continue' } : c)) } }), /continuation 3 went in by "continue", wanted "message"/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, continuations: result.continuation.continuations.map((c, i) => (i === 0 ? { ...c, after: { verdict: 'failed', summary: null } } : c)) } }), /continuation 1 records no summary/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, continuations: result.continuation.continuations.map((c, i) => (i === 3 ? { ...c, calls: 9 } : c)) } }), /continuation 4's attempt made 9 calls.*busy, wanted idle/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, continuations: result.continuation.continuations.map((c, i) => (i === 2 ? { ...c, callsSoFar: 5 } : c)) } }), /continuation 3: 5 calls so far/);
+  assert.match(f({ ...result, continuation: { ...result.continuation, stop: null } }), /stopped for null, wanted "gave-up"/);
+  // The runner: the message once per continuation, in the one session whose first message stays the task's.
+  assert.match(f(result, [request([goal]), request([goal, message])]), /sent the message 1 time\(s\) in its session, wanted 4/);
+  assert.match(f(result, [request([goal]), request(['another goal', message, message, message, message])]), /does not open on the task's own first message/);
+  assert.match(f(result, requests.map((r, i) => (i === 2 ? request([goal, message, message, message, message], 2) : r))), /second attempt/);
+  // The cap scenario stops on a cap, so it holds no continuation rule's stop, and its last continuation is cut.
+  const capped = { ...result, continuation: { ...result.continuation, count: 2, stop: null, continuations: [rec(1, 'failed'), rec(2, 'done', { calls: null, treeChanged: null })] } };
+  assert.deepEqual(R.judgeContinued('a-continued-cap', capped, [request([goal]), request([goal, message, message])], message), []);
 });
 
 // --- Module-level skips are not test outcomes --------------------------------
