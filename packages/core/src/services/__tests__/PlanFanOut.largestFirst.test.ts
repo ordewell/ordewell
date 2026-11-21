@@ -100,6 +100,23 @@ describe('largestSlicesFirst', () => {
     expect(globs.filter((g) => g.includes('test_a.py'))).toEqual([]);
   });
 
+  it('reads a bare test name found both from the workspace root and from a deeper directory as one file', async () => {
+    const bare = renumberTasks([
+      t('r', [], 'Make it import.'),
+      // `./setup_tools.py` puts `.` among the directories the bare name is looked for under.
+      t('s1', ['r'], 'Fill in ./setup_tools.py and lib/flow/maxflow.py. Tests: test_maxflow.py.'),
+      t('s2', ['r'], 'Fill in lib/b.py. Verify: pytest lib/tests/test_b.py'),
+      t('s3', ['r'], 'Fill in lib/c.py. Verify: pytest lib/tests/test_c.py'),
+      t('s4', ['r'], 'Fill in lib/d.py. Verify: pytest lib/tests/test_d.py'),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const { fs } = workspace({
+      'setup_tools.py': lines(1), 'lib/flow/maxflow.py': lines(1), 'lib/flow/tests/test_maxflow.py': lines(900),
+      'lib/tests/test_b.py': lines(10), 'lib/tests/test_c.py': lines(20), 'lib/tests/test_d.py': lines(30),
+    });
+    expect(ids((await largestSlicesFirst(bare, fs)).tasks)).toEqual(['r', 's1', 's4', 's3', 's2', 'close']);
+  });
+
   it(`lists nothing for a plan that would need more than ${MAX_SIZED_LISTINGS} listings, and sizes it by the paths its briefs name whole`, async () => {
     const many = renumberTasks([
       t('r', [], 'Make the package import.'),
