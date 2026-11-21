@@ -135,7 +135,11 @@ node bench/commit0/drive.mjs --sweep
 
 - **D1. One budget.** Both arms get the same wall-clock cap (3 hours) and the
   same spend cap, `--cap-usd` (default 8). A run that meets either is stopped
-  and labelled `stopped: {why: 'spend' | 'wall-clock'}`.
+  and labelled `stopped: {why: 'spend' | 'wall-clock'}`. The built-in runner's
+  budget of model calls per attempt is the same for both arms too, `--call-budget`
+  (default 1000): every `result.json` records it as `callBudget`, and a pair whose
+  arms ran with different ones is not valid (`pairs` in `batch.json`, and the
+  rehearsal's pair check).
 - **D2. Arm A is one agent alone**: supervisor off, one task, mode `full`,
   nothing started or merged on its behalf. It is scored on its working tree's
   final state whether or not its task passed: when the task did not land, the
@@ -175,6 +179,7 @@ labelled containers and networks whose driver on this host is no longer running.
 | Option | Default | |
 | --- | --- | --- |
 | `--cap-usd <usd>` | 8 | the spend cap, both arms |
+| `--call-budget <n>` | 1000 | the built-in runner's model calls per attempt (core's `ordewellStepLimit`), both arms; a single agent that ends its attempt for want of it shows in `ending.modelCalls` |
 | `--parallel <n>` | 8 | arm B's `ORDEWELL_MAX_PARALLEL`; arm A runs one task |
 | `--cpus <n>` | 8 | the box's CPU quota |
 | `--memory <size>` | `12g` | the box's memory quota |
@@ -388,7 +393,12 @@ Each step that would call the model is reported UNVERIFIED. `--run` runs the
 arms and spends on the key in `OPENROUTER_API_KEY`. That key must be one the
 run has to itself, its limit set to the cap and its provider pinned in the
 OpenRouter account, since a request cannot pin it. Pass that provider as
-`--provider-pin` so every result records it.
+`--provider-pin` so every result records it. The flag only records: the built-in runner has no
+setting that names an upstream (it sends OpenRouter a `provider` field only to
+prefer the upstream that served the conversation's last turn, with fallbacks on,
+or a fixed order for Anthropic models; the `:nitro` and `:floor` model suffixes sort
+by speed or price, and none picks one), so a run is pinned only by the key's
+account setting, and `providerSwitches` and `metrics.calls.byUpstream` show what served it.
 `libraries.example.json` shows the shape of a library list. Results, per library
 and arm, go to `<bench dir>/commit0/` (`dry-runs/`, `runs/`, `results.jsonl`),
 and so does the packed runtime (`runtime/<sha>-<dist build>`). A library's `testCmd` defaults
@@ -444,6 +454,8 @@ scored (`arm.patch` is always the scored diff); `evalBox: 'fresh'`,
 | `metrics.perTask[].attempts[].runningMs` | an attempt a stop cut has a running clock of 0; its `wallTimeMs` is then its running time, and the attempt says `runningFrom: 'wallTimeMs'` (that time includes any wait on a person) |
 | `metrics.calls` | from the attempts' logs: `calls`, `byUpstream` (the `provider` of each of the built-in runner's usage records; `unreported` for one without it) and `coldAfterCall`: calls billed with under `coldShare` (5%) of their input cached straight after another call of the same attempt (a subagent's calls are counted, never judged). Null without the logs |
 | `ending` | how the arm stopped, in `by`: `completion` (the arm's own word: `status` `done`, `failed` or `blocked` and the `reason` text the runner gave in `task_complete`, with each task's own in `reports`; a run the settle rule found holding only failed tasks and the tasks behind them is this too, the runner having reported and nothing left to move), `cap` (`cap` is `spend`, `wall-clock` or `batch-budget`, with `spentUsd` and `atMs`), `settle` (nothing moved for the settle window while a task was still open for another cause: `open` lists each with what held it, and `quietMs`), `stall` (a person waited on for `--stall-min`), `no-start`, or `not-run` (a dry run, a plan-only run or no task). For arm A `modelCalls`: `used` (the attempts' own calls, a subagent's apart in `subagentCalls`), `perAttempt`, `peakAttempt` and `reachedLimit` against `limitPerAttempt`, the runner's step limit, which is per attempt; null for arm B and without the logs |
+| `callBudget` | the built-in runner's model calls per attempt this run ran with (`--call-budget`; `stepLimit` is the same number under its older name) |
+| `referenceUsd`, `referenceSpend` | the run's spend recomputed from its token counts at one price table kept in `lib.mjs` (`REFERENCE_PRICES`, `priceTable` in the record; the model's list price per million tokens in core's offline catalog), so that the dollars of two runs and two arms compare: the upstream providers behind one OpenRouter model charged prices that differed several-fold between runs. `planner` (its ledger holds the supervisor's wake-up turns too) and each of `attempts` (`task`, `attempt`, subtasks included) give `freshInputTokens`, `cachedInputTokens`, `outputTokens` and `usd`; `tokens` and `usd` are the sums. An attempt with no token counts is counted in `unmeasured` and priced at nothing. `recordedUsd` and `billedUsd` stay what the providers charged |
 | `providerSwitches` | from the same usage records' `provider`: `attempts` read, `withProvider` (those naming an upstream), `attemptsSwitched` (attempts whose upstream changed at least once) and `switches` (the changes; a record naming no upstream is skipped, a subagent's calls are left out). Null without the logs, as in a dry run, which shows `ending.by: 'not-run'`; the rehearsal's fake names no upstream, so it shows no switch |
 
 A stub
@@ -510,7 +522,10 @@ host stop loses at most the runs that were going. With both arms and `--jobs`
 2 or more, a library's A and B start together, and the next library's pair
 starts only when both have ended (`--jobs 4` takes two libraries at a time). When runs
 overlapped, a run's `billedUsd` is null and `billedSource` says why; a run
-alone keeps its key delta.
+alone keeps its key delta. Beside the recorded sum, `perArm` holds each arm's
+`recordedUsd`, `referenceUsd` (at the one reference price table, `referencePriceTable`) and
+`referenceTokens`, and `pairs` says for each library with both arms whether they
+ran under one call budget.
 
 ### Score over time
 
@@ -542,7 +557,14 @@ writes `timeline.json` into the run directory (`timeline/<point>/` holds each
 point's `score.json`, `arm.patch` and `tests.log`). The final point must score
 as `result.json` does (passed, failed, errors); when it does not, the timeline
 says `verified: false` and why, and the exit is non-zero, as it is when a point
-could not be scored. `commit0.test.mjs` tests the choice of points and the
+could not be scored. Arm B's history is the first-parent line of its integration
+branch, and once the end-of-run merge has left only `commit0-base` in the
+workdir, of that, which holds every landing; with `--branch` too it is the
+first-parent line, never a full `git log`, which would reach a slice's own commit.
+A point whose pytest was killed (exit 137) and printed no counts has no score: it
+fails, is tried once more alone, and if it is killed again stays `ok: false`,
+`killed: true` and out of `crossings`, the first point at which the passed tests
+reach 25, 50, 75, 90 and 100% of those collected. `commit0.test.mjs` tests the choice of points and the
 commit-to-time mapping on a repository it builds, the closing check's landing included, and the container call
 through a fake `docker` on `PATH`.
 

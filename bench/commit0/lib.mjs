@@ -65,7 +65,8 @@ export const ARMS = Object.freeze({
  * Both arms take the same step limit. The default (200 per attempt) would be
  * the binding cap on A's one long task while B's several tasks each get 200,
  * so it would measure the limit, not the arms; set high, the wall-clock and
- * spend caps bind instead.
+ * spend caps bind instead. `--call-budget` sets it for both arms alike; this
+ * is its default.
  */
 export const STEP_LIMIT = 1000;
 
@@ -1080,7 +1081,7 @@ const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', 
  * (D2): no supervisor to answer for it, nothing started or merged on its
  * behalf, one task at a time. B is Ordewell as its user runs it (D3).
  */
-export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = MEMORY, capUsd = CAP_USD, wallCapMs = WALL_CAP_MS } = {}) {
+export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = MEMORY, capUsd = CAP_USD, wallCapMs = WALL_CAP_MS, callBudget = STEP_LIMIT } = {}) {
   const b = arm.id === 'B';
   return {
     supervisorLevel: b ? 'act' : 'off',
@@ -1091,6 +1092,8 @@ export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = ME
     memory,
     capUsd,
     wallCapMs,
+    // The built-in runner's model calls per attempt: the same for both arms, or the pair measures the budget.
+    callBudget,
   };
 }
 
@@ -1104,7 +1107,7 @@ export function boxSettings(arm, settings = armSettings(arm)) {
     autonomousMode: true,
     enabledRunners: [RUNNER],
     modelAllowlist: { [RUNNER]: [MODEL_ID] },
-    ordewellStepLimit: STEP_LIMIT,
+    ordewellStepLimit: settings.callBudget,
     supervisorLevel: settings.supervisorLevel,
     autorun: settings.autorun,
     mergeAtGatesAutomatically: settings.automerge,
@@ -1646,7 +1649,7 @@ export function baselineRecord(evaluation) {
 }
 
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, dryRun, planOnly = false, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, referenceSpend: reference = null, dryRun, planOnly = false, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
@@ -1671,6 +1674,9 @@ export function resultRecord({ lib, arm, settings = armSettings(arm), window, or
     wallClockMs: wallClockMs ?? null,
     billedUsd: spend?.billedUsd ?? null,
     billedSource: spend?.source ?? null,
+    // The spend again from the token counts at one fixed price table (REFERENCE_PRICES): the dollars that compare between runs and arms.
+    referenceUsd: reference?.usd ?? null,
+    referenceSpend: reference,
     runnerReportedUsd: transcripts?.spendUsd ?? null,
     peakContext: transcripts?.peakContext ?? null,
     compactions: transcripts?.compactions ?? null,
@@ -1683,7 +1689,7 @@ export function resultRecord({ lib, arm, settings = armSettings(arm), window, or
     excluded: scoring?.excluded ?? [],
     needsInspection: scoring?.needsInspection ?? [],
     patches: patches ?? [],
-    stepLimit: STEP_LIMIT,
+    stepLimit: settings.callBudget,
     startedAt,
     endedAt,
   };
@@ -1721,6 +1727,68 @@ export function recordedSpend(plan) {
   }
   const usd = plannerUsd === null && attemptsUsd === null ? null : round6((plannerUsd ?? 0) + (attemptsUsd ?? 0));
   return { usd, plannerUsd, attemptsUsd: attemptsUsd === null ? null : round6(attemptsUsd), attempts, unpriced };
+}
+
+/**
+ * The one price table every run's token counts are priced at, so that the
+ * dollars of two runs compare. The upstream providers behind one OpenRouter
+ * model charge different prices per token, and a run's own spend (recordedUsd,
+ * billedUsd) is at whichever upstream served each call. USD per million
+ * tokens, the model's list price in core's offline catalog
+ * (modelDetailsSnapshot.json): a reference to compare by, never what any
+ * provider billed. Change a price and the id changes with it, so results
+ * priced at different tables are never mixed.
+ */
+export const REFERENCE_PRICES = Object.freeze({
+  id: 'ref-1',
+  model: PROVIDER_MODEL,
+  usdPerMTok: Object.freeze({ freshInput: 0.3, cachedInput: 0.006, output: 1.2 }),
+});
+
+/**
+ * What one usage ledger's token counts cost at REFERENCE_PRICES. Input tokens
+ * hold the cached share (`cachedInputTokens` is part of `inputTokens`), so the
+ * fresh input is the rest. Null where the ledger counted neither input nor
+ * output: a ledger with no counts is unmeasured, not free.
+ */
+function pricedTokens(totals) {
+  const num = (n) => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0);
+  if (typeof totals?.inputTokens !== 'number' && typeof totals?.outputTokens !== 'number') return null;
+  const cachedInputTokens = Math.min(num(totals.cachedInputTokens), num(totals.inputTokens));
+  const freshInputTokens = num(totals.inputTokens) - cachedInputTokens;
+  const outputTokens = num(totals.outputTokens);
+  const p = REFERENCE_PRICES.usdPerMTok;
+  return { freshInputTokens, cachedInputTokens, outputTokens, usd: round6((freshInputTokens * p.freshInput + cachedInputTokens * p.cachedInput + outputTokens * p.output) / 1e6) };
+}
+
+/**
+ * A run's spend recomputed from its token counts at REFERENCE_PRICES: the
+ * planner's ledger (the supervisor's wake-up turns are in it, as in
+ * recordedSpend) and each attempt's, subtasks included. An attempt with no
+ * counts is `unmeasured`, and the total leaves it out. A run with no plan
+ * (a dry run) holds the table and no spend.
+ */
+export function referenceSpend(plan) {
+  const planner = pricedTokens(plan?.plannerUsage?.totals);
+  const attempts = [];
+  let unmeasured = 0;
+  for (const t of allTasks(plan)) {
+    for (const u of t.attemptUsage ?? []) {
+      const priced = pricedTokens(u.totals);
+      if (priced) attempts.push({ task: t.id, attempt: u.attempt, runner: u.runner ?? null, ...priced });
+      else unmeasured++;
+    }
+  }
+  const all = [...(planner ? [planner] : []), ...attempts];
+  const sum = (key) => all.reduce((n, x) => n + x[key], 0);
+  return {
+    priceTable: REFERENCE_PRICES,
+    usd: all.length ? round6(sum('usd')) : null,
+    tokens: { freshInput: sum('freshInputTokens'), cachedInput: sum('cachedInputTokens'), output: sum('outputTokens') },
+    planner,
+    attempts,
+    unmeasured,
+  };
 }
 
 /**
@@ -2399,6 +2467,28 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
 }
 
 /**
+ * Whether a library's two arms ran under one call budget (`--call-budget`):
+ * with different ones the pair measures the budget, not the arms. A result
+ * written before the flag ran with the default.
+ */
+export function judgeArmPair(a, b) {
+  const budget = (r) => r.callBudget ?? STEP_LIMIT;
+  const invalidReasons = budget(a) === budget(b) ? [] : [`arm ${a.arm} ran with a call budget of ${budget(a)}, arm ${b.arm} with ${budget(b)}: the pair measures the budget, not the arms`];
+  return { valid: invalidReasons.length === 0, invalidReasons };
+}
+
+/** Each library that has both arms among `runs`, with `judgeArmPair`'s verdict on its two. */
+function armPairs(runs) {
+  const out = [];
+  for (const lib of [...new Set(runs.map((r) => r.lib))]) {
+    const a = runs.find((r) => r.lib === lib && r.arm === 'A');
+    const b = runs.find((r) => r.lib === lib && r.arm === 'B');
+    if (a && b) out.push({ lib, ...judgeArmPair(a, b) });
+  }
+  return out;
+}
+
+/**
  * batch.json: the key's usage around the batch against the sum of what
  * Ordewell recorded for its runs. The gap is what the records do not explain
  * (a run's unpriced calls, or a call outside the batch on the same key). When
@@ -2407,6 +2497,20 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
 export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, planOnly = false, startedAt, endedAt, keyReadings = [], runs }) {
   const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
+  // Each arm's spend at the one reference price table, beside what was recorded at the upstreams' own prices.
+  const perArm = {};
+  for (const arm of ['A', 'B']) {
+    const own = runs.filter((r) => r.arm === arm);
+    if (!own.length) continue;
+    const sum = (key) => own.map((r) => r[key]).filter((n) => typeof n === 'number');
+    const total = (key) => (sum(key).length ? round6(sum(key).reduce((a, b) => a + b, 0)) : null);
+    const tokens = { freshInput: 0, cachedInput: 0, output: 0 };
+    for (const r of own) for (const k of Object.keys(tokens)) tokens[k] += r.referenceTokens?.[k] ?? 0;
+    perArm[arm] = {
+      runs: own.length, recordedUsd: total('recordedUsd'), referenceUsd: total('referenceUsd'), referenceTokens: tokens,
+      unpricedAtReference: own.filter((r) => typeof r.referenceUsd !== 'number').map((r) => `${r.lib} ${r.arm}`),
+    };
+  }
   // A batch still running has no end reading: its delta is as of the latest one taken.
   const latestUsd = keyAfterUsd ?? keyReadings.filter((k) => typeof k.usd === 'number').at(-1)?.usd ?? null;
   const keyDeltaUsd = keyBeforeUsd != null && latestUsd !== null ? round6(latestUsd - keyBeforeUsd) : null;
@@ -2423,6 +2527,10 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
     gapUsd: keyDeltaUsd !== null && recordedSumUsd !== null ? round6(keyDeltaUsd - recordedSumUsd) : null,
     budgetUsd: budgetUsd ?? null,
     stoppedByBudget,
+    referencePriceTable: REFERENCE_PRICES,
+    perArm,
+    // Whether each library's two arms ran under one call budget.
+    pairs: armPairs(runs),
     perRunKeyBilled: overlapped ? 'not available: the runs overlapped on one key' : 'each run\'s result.json, its key delta',
     runs,
   };
@@ -2529,6 +2637,7 @@ export function judgePairBatch(record, { libs, rehearsal }) {
     if (r.skipped) f.push(`the batch skipped ${r.lib} ${r.arm}: ${r.skipped}`);
     else if (!r.resultDir) f.push(`the batch found no result directory for ${r.lib} ${r.arm}`);
   }
+  for (const p of armPairs(runs)) if (!p.valid) f.push(`${p.lib}: ${p.invalidReasons.join('; ')}`);
   return [...f, ...(f.length ? [] : judgePairing(runs, { jobs: record.jobs }))];
 }
 
@@ -2537,7 +2646,7 @@ export function judgePairBatch(record, { libs, rehearsal }) {
 export function parseArgs(argv) {
   const out = {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
-    capUsd: CAP_USD, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
+    capUsd: CAP_USD, callBudget: STEP_LIMIT, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
     seed: null, batchDir: null, batchShared: false, planOnly: false,
     rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
@@ -2567,7 +2676,12 @@ export function parseArgs(argv) {
     else if (a === '--image') out.image = value();
     else if (a === '--provider-pin') out.providerPin = value();
     else if (a === '--cap-usd') out.capUsd = number(a, value(), (n) => n > 0);
-    else if (a === '--parallel') out.parallel = number(a, value(), (n) => Number.isInteger(n) && n >= 1);
+    else if (a === '--call-budget') {
+      const v = value();
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 1) throw new Error(`--call-budget takes a whole number, 1 or more, not ${v}`);
+      out.callBudget = n;
+    } else if (a === '--parallel') out.parallel = number(a, value(), (n) => Number.isInteger(n) && n >= 1);
     else if (a === '--cpus') out.cpus = number(a, value(), (n) => n > 0);
     else if (a === '--memory') {
       const v = value();
@@ -2627,7 +2741,7 @@ function seedLabel(v) {
 /** What batch.mjs passes on to each run as given, beside the libraries file. */
 const BATCH_PASSED = Object.freeze({
   flags: ['--dry-run', '--run', '--allow-stale-dist', '--keep', '--plan-only'],
-  values: ['--provider-pin', '--cap-usd', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root',
+  values: ['--provider-pin', '--cap-usd', '--call-budget', '--parallel', '--cpus', '--memory', '--stall-min', '--ordewell-root',
     '--rehearse', '--settle-min', '--no-start-min', '--poll-sec', '--wall-min'],
 });
 

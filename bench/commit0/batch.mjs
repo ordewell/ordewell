@@ -38,7 +38,7 @@ const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run | --rehears
   --seed <label>           a label for this repetition, in every run's result.json and directory name
   --sweep                  sweep boxes and networks of drivers no longer running before the batch
 
-Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap-usd, --parallel, --cpus,
+Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap-usd, --call-budget, --parallel, --cpus,
 --memory, --stall-min, --settle-min, --no-start-min, --poll-sec, --wall-min, --ordewell-root,
 --allow-stale-dist, --keep, --plan-only (node bench/commit0/drive.mjs --help).
 
@@ -192,9 +192,12 @@ async function main() {
         startedAt: found?.result.startedAt ?? null,
         endedAt: found?.result.endedAt ?? null,
         recordedUsd: found?.result.recordedUsd ?? null,
+        referenceUsd: found?.result.referenceUsd ?? null,
+        referenceTokens: found?.result.referenceSpend?.tokens ?? null,
         billedUsd: found?.result.billedUsd ?? null,
         billedSource: found?.result.billedSource ?? null,
         valid: found?.result.valid ?? null,
+        callBudget: found?.result.callBudget ?? null,
         planOnly: found?.result.planOnly ?? null,
         planned: found?.result.planned ?? null,
       });
@@ -251,8 +254,11 @@ async function main() {
   for (const r of reported) {
     console.log(`  ${r.lib} ${r.arm}: ${r.skipped ?? `exit ${r.exit ?? r.signal}`}${r.recordedUsd !== null ? `, recorded $${r.recordedUsd}` : ''}${r.planOnly ? `; ${L.describePlanned(r.planned)}` : r.valid === null ? '' : r.valid ? ', valid' : ', not valid'}`);
   }
-  if (opts.run) console.log(`  key: $${record.keyDeltaUsd ?? '?'} spent; recorded $${record.recordedSumUsd ?? '?'}; gap $${record.gapUsd ?? '?'}${stoppedByBudget ? '; stopped by the batch budget' : ''}`);
-  process.exitCode = reported.some((r) => r.exit !== 0) ? 1 : 0;
+  const badPairs = record.pairs.filter((p) => !p.valid);
+  for (const [arm, t] of Object.entries(record.perArm)) console.log(`  arm ${arm}: recorded ${t.recordedUsd ?? '?'}, at the reference prices (${record.referencePriceTable.id}) ${t.referenceUsd ?? '?'}`);
+  for (const p of badPairs) console.log(`  ${p.lib}: the pair is not valid: ${p.invalidReasons.join('; ')}`);
+  if (opts.run) console.log(`  key:$${record.keyDeltaUsd ?? '?'} spent; recorded $${record.recordedSumUsd ?? '?'}; gap $${record.gapUsd ?? '?'}${stoppedByBudget ? '; stopped by the batch budget' : ''}`);
+  process.exitCode = reported.some((r) => r.exit !== 0) || badPairs.length ? 1 : 0;
 }
 
 main().catch((err) => {
