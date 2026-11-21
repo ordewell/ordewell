@@ -174,7 +174,7 @@ describe('the Settings view', () => {
     const planner = await screen.findByRole('combobox', { name: 'Planner' });
     const options = within(planner).getAllByRole('option');
     expect(options.map((option) => option.getAttribute('value'))).toEqual([
-      'claude-code', 'codex', 'opencode', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'openrouter',
+      'claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent', 'openrouter',
     ]);
     const qwen = options.find((option) => option.getAttribute('value') === 'qwen-code') as HTMLOptionElement;
     expect(qwen).toBeDisabled();
@@ -347,7 +347,7 @@ describe('the Settings view', () => {
       const planner = await screen.findByRole('combobox', { name: 'Planner' });
       const values = within(planner).getAllByRole('option').map((option) => option.getAttribute('value'));
       expect(values.filter((value) => value === 'openrouter')).toHaveLength(1);
-      expect(values).toHaveLength(9);
+      expect(values).toHaveLength(10);
     });
 
     it('leaves the OpenRouter API planner its own catalog, not the runner\'s under the same id', async () => {

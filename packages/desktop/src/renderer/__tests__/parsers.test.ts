@@ -16,6 +16,7 @@ describe('parseRunners', () => {
       { id: 'claude-code', name: 'Claude Code', state: 'signed-in' },
       { id: 'codex', name: 'Codex', state: 'signed-out', detail: 'run codex login' },
       { id: 'opencode', name: 'OpenCode', state: 'missing' },
+      { id: 'pi', name: 'Pi', state: 'missing' },
       { id: 'copilot-cli', name: 'GitHub Copilot CLI', state: 'missing' },
       { id: 'qwen-code', name: 'Qwen Code', state: 'missing' },
       { id: 'cline', name: 'Cline', state: 'missing' },
@@ -64,7 +65,7 @@ describe('parseRunners', () => {
       { id: 'aider', name: 'Aider', enabled: true, provider: 'not-a-vendor' },
     ] };
     const lines = parseRunners(data) ?? [];
-    expect(lines.slice(8)).toEqual([
+    expect(lines.slice(9)).toEqual([
       { id: 'openrouter', name: 'OpenRouter', state: 'signed-in', provider: 'openrouter' },
       { id: 'aider', name: 'Aider', state: 'unknown' },
     ]);

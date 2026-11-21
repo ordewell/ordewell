@@ -932,8 +932,9 @@ the directive to attach.
 
 **Executor / Runner** — a coding agent that runs *one task* in its own session
 through a structured connector: either an external CLI (Claude Code, Codex,
-OpenCode, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor over
-ACP) or the **Built-in runner**, which runs inside Ordewell and has no command.
+OpenCode, Pi, and GitHub Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor
+over ACP) or the **Built-in runner**, which runs inside Ordewell and has no
+command.
 `RunnerRegistry` holds their built-in manifests: identity, command (none for the
 built-in runner), model discovery and mode settings. External plugin manifests
 are ignored with one notice at host startup.
@@ -1614,7 +1615,8 @@ runner loads at launch and that can run code or redirect its traffic: Claude
 Code's `.mcp.json`, `.claude/settings.json`, `.claude/settings.local.json`,
 `.claude/hooks/`, `.claude/plugins/`, `.claude-plugin/`, and the `plugin.json`
 and `marketplace.json` manifests under `.claude/`; OpenCode's `opencode.json`
-and its plugin and tool directories; Codex's `.codex/`
+and its plugin and tool directories; Codex's `.codex/`; Pi's
+`.pi/settings.json`, `.pi/mcp.json` and `.pi/extensions/`
 (`repositoryRunnerConfigPaths`). A *planner* loads none of it (ADR-0028); a
 change or ops task loads it as its runner does, so a start whose runner
 directory differs from where the run started in one of these paths is held

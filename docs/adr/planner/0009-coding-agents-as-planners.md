@@ -39,6 +39,7 @@ per-agent adapter:
 | Claude Code | `-p --input-format stream-json --output-format stream-json --verbose --include-partial-messages` | `--permission-mode default` + `--permission-prompt-tool stdio`, direct edit, shell and native plan-mode tools disallowed (ADR-0008, ADR-0026) |
 | Codex | `app-server` stdio JSON-RPC: `initialize` → `thread/start` → `turn/start` | `sandbox: read-only`, `approvalPolicy: on-request` with only MCP tool approvals held for Ordewell (ADR-0026) |
 | OpenCode | `serve` (headless HTTP) + SSE event stream — 1.x `/event`, 2.x `/api/event` | `agent: plan`, shell and subagent tools withheld, and Ordewell's permission policy for the server (ADR-0026) |
+| Pi | `pi --mode rpc`, with Ordewell's own extension loaded into the process | Pi's read tools and Ordewell's alone, no context files, repository extensions or settings; the extension asks Ordewell before each read ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)) |
 | an ACP agent | ACP over stdio: `initialize` → `session/new` → `session/prompt` | only where its profile claims the planner role on evidence ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md) R3); GitHub Copilot CLI's own write, shell and web tools denied, Qwen Code made to ask before each write and command, Cline made to ask before each of its own tools, Gemini CLI's own write, shell and web tools denied by a policy file it is handed, Cursor's own reads, writes and shell denied by a settings file of the start's own, each started in a private directory, every edit, delete, move and command request refused |
 
 Three details in that table were corrected during implementation, against the
@@ -414,4 +415,5 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-11-16 — T5: Claude Code's planner prompt is appended from a file the process owns (`--append-system-prompt-file`), no longer as text on its command line ([ADR-0010](../platform/0010-windows-support.md) §1).
 - 2026-11-05 — Cline plans ([ADR-0060](../runners/0060-acp-runners-are-data-on-one-connector.md)).
 - 2026-11-10 — an OpenCode planner's in-turn agent is Ordewell's research agent over MCP, where its workspace names the model (ADR-0066).
+- 2026-11-20 — Pi plans, over its RPC mode; it has no in-turn agents, so it delegates through research tasks (#78).
 - 2026-11-16 — only a runner that plans keeps off the vendors' ids; the built-in runner's runners take their vendor's id by design and never plan ([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)).

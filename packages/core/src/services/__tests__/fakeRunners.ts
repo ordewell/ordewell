@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from 'fs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { join } from 'path';
 import type { AgentProcessDeps, AgentStartOptions, SpawnFn } from '../harness/AgentAdapter';
 import { FakeAcpAgent, type FakeAcpStep } from './fakeAcpAgent';
-import { fakeSpawn, fixture, flagFile, respondingSpawn, sseResponse, type FakeAgentProcess, type FakeEventStream, type FakeLaunch, type FakeSpawnResult } from './harnessTestKit';
+import { fakeSpawn, fixture, flagFile, respondingSpawn, silentSpawn, sseResponse, type FakeAgentProcess, type FakeEventStream, type FakeLaunch, type FakeSpawnResult } from './harnessTestKit';
 
 /**
  * One fake per built-in runner, each speaking that runner's own protocol, so a
@@ -800,11 +802,95 @@ function cursorAgent(script: FakeRunnerScript): FakeRunner {
   };
 }
 
+/**
+ * Pi over its RPC mode, as the recordings in `fixtures/pi/` show it: a
+ * `prompt` opens a run that `agent_settled` ends, Ordewell's server comes
+ * from the extension file `-e` names, and Pi asks about nothing: a tool runs
+ * when its start's `--tools` list holds it, or always without one. Its only
+ * questions are an extension's dialogs, as a `confirm` before a write.
+ */
+function pi(script: FakeRunnerScript): FakeRunner {
+  const servers: Array<{ url: string; headers: Record<string, string> } | null> = [];
+  const answers = new Map<string, Record<string, unknown>>();
+  let asks = 0;
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+  const kit: FakeSpawnResult = silentSpawn((written, proc) => {
+    for (const text of written.split('\n').filter(Boolean)) {
+      const msg = JSON.parse(text) as { id?: string; type?: string };
+      if (msg.type === 'extension_ui_response' && msg.id) answers.set(msg.id, msg);
+      if (msg.type !== 'prompt') continue;
+      proc.emitStdout(line({ id: msg.id, type: 'response', command: 'prompt', success: true }) + line({ type: 'agent_start' }));
+      if (script.reply !== undefined) {
+        const message = { role: 'assistant', content: [{ type: 'text', text: script.reply }] };
+        proc.emitStdout(line({ type: 'message_start', message }) + line({ type: 'message_end', message }) + line({ type: 'agent_settled', aborted: false }));
+      }
+    }
+  });
+  // The extension is read at spawn, as Pi loads it: it is removed with the process.
+  const serverOf = (launch: FakeLaunch): { url: string; headers: Record<string, string> } | null => {
+    const extension = [...launch.files].find(([file]) => file.endsWith('ordewell.ts'))?.[1];
+    const config = extension ? /const CONFIG = (.*);/.exec(extension)?.[1] : undefined;
+    return config ? (JSON.parse(config) as { server: { url: string; headers: Record<string, string> } }).server : null;
+  };
+  const spawn: SpawnFn = (cmd, argv, options) => {
+    const proc = kit.spawn(cmd, argv, options);
+    const server = serverOf(kit.lastLaunch());
+    servers.push(server);
+    // Pi connects to the server its extension registers as the session starts, which is the attach.
+    if (server && script.attach === 'connected') {
+      const client = new Client({ name: 'pi', version: '1.5.2' });
+      void client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } })).then(() => client.listTools()).catch(() => undefined);
+    }
+    return proc;
+  };
+  const proc = () => kit.processes[kit.processes.length - 1];
+  const preAllows = (name: string): boolean => {
+    const args = kit.lastArgs();
+    const at = args.indexOf('--tools');
+    return at < 0 || args[at + 1].split(',').some((entry) => (entry.endsWith('*') ? name.startsWith(entry.slice(0, -1)) : name === entry));
+  };
+  const say = (text: string) => {
+    const message = { role: 'assistant', content: [{ type: 'text', text }] };
+    proc().emitStdout(line({ type: 'message_start', message }) + line({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: text } }) + line({ type: 'message_end', message }));
+  };
+  return {
+    deps: baseDeps(spawn, noHttp),
+    launches: () => kit.processes.length,
+    injectedUrl: (n = servers.length - 1) => servers[n]?.url ?? null,
+    commandLine: () => kit.lastArgs().join(' '),
+    launched: () => kit.launches(),
+    received: () => writtenStrings(kit.processes),
+    preAllows,
+    instructions: () => flagFile(kit.lastLaunch(), '--append-system-prompt') ?? '',
+    turnOpen: async () => { await answered(() => (proc()?.written.some((w) => w.includes('"type":"prompt"')) ? true : undefined)); },
+    callOrdewellTool: (tool) => {
+      proc().emitStdout(line({ type: 'tool_execution_start', toolCallId: `call_${tool}`, toolName: `mcp__ordewell__${tool}`, args: {} }));
+    },
+    // Pi asks about no tool: one its start allows runs, and there is no other.
+    askOrdewellTool: async (tool) => (preAllows(`mcp__ordewell__${tool}`) ? 'allow' : 'deny'),
+    // An extension's gate before a write, Pi's only way to ask.
+    askWrite: async () => {
+      const id = `confirm-${++asks}`;
+      proc().emitStdout(line({ type: 'extension_ui_request', id, method: 'confirm', title: 'Write a.txt?', message: 'An extension asks before each write.' }));
+      const answer = await answered(() => answers.get(id));
+      return answer === undefined ? 'open' : answer.confirmed === true ? 'allow' : 'deny';
+    },
+    say,
+    killed: (n) => kit.processes[n]?.killed ?? false,
+    withServer: (start) => {
+      if (!start.mcp) return start;
+      const used = script.attach === 'connected';
+      return { ...start, mcp: { ...start.mcp, contact: { contacted: () => used, whenContacted: async () => used } } };
+    },
+  };
+}
+
 /** A fake for every built-in runner, by runner id. */
 export const FAKE_RUNNERS: Record<string, (script: FakeRunnerScript) => FakeRunner> = {
   'claude-code': claudeCode,
   codex,
   opencode: openCode,
+  pi,
   'copilot-cli': copilotCli,
   'qwen-code': qwenCode,
   cline,

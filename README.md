@@ -44,7 +44,7 @@ Use it in the [desktop app](#download-the-desktop-app), the
 [terminal](#install-the-terminal-app), [VS Code](#vs-code) or from the command
 line. Every one drives the same plans, runners and settings.
 
-This README describes 0.14.4. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.5. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Why Ordewell
@@ -53,7 +53,7 @@ for versions available to install and their release notes.
    repository, asks what is vague and writes tasks with dependencies. Change any
    prompt, dependency, agent, model, effort or mode before it runs. The desktop
    app shows the plan as a list or as a graph.
-2. **Every task picks its own agent.** Claude Code, Codex, OpenCode, GitHub
+2. **Every task picks its own agent.** Claude Code, Codex, OpenCode, Pi, GitHub
    Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the
    box and mix freely in one plan. Signed-in agents need no extra API key. A
    provider API key adds the built-in runner, which needs no coding agent

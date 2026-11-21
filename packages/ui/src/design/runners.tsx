@@ -14,6 +14,7 @@ export const RUNNER_NAMES: Readonly<Record<string, string>> = {
   'gemini-cli': 'Gemini CLI',
   'cursor-agent': 'Cursor',
   cline: 'Cline',
+  pi: 'Pi',
 };
 
 /** The shortest a name may get in a narrow row: shortened, never dropped. */

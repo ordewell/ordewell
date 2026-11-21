@@ -98,6 +98,8 @@
     --ow-runner-gemini-cli-tint: #e7f0f3;
     --ow-runner-cursor-agent: #6b5a35;
     --ow-runner-cursor-agent-tint: #f0efeb;
+    --ow-runner-pi: #4256a6;
+    --ow-runner-pi-tint: #eceef6;
 
     /* The commit graph's lanes (lanes.ts LANE_COLORS). Only the desktop draws a graph, so tokens.css declares none. */
     --ow-lane-0: #008bc7;
@@ -209,6 +211,8 @@
     --ow-runner-gemini-cli-tint: #28383e;
     --ow-runner-cursor-agent: #d4c3a0;
     --ow-runner-cursor-agent-tint: #363635;
+    --ow-runner-pi: #99b3ff;
+    --ow-runner-pi-tint: #2e3442;
 
     --ow-lane-0: #52d6ff;
     --ow-lane-1: #ecb6a0;

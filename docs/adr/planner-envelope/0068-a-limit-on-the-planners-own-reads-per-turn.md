@@ -76,7 +76,7 @@ session builds one and every path below asks it.
 | --- | --- |
 | API planner's read tools and `bash` | `BaseAiService.executeToolCalls`, in call order before any runs |
 | `run_command` from a harness planner | the session's own command path (`ownCommand`), unless `PlannerReadLimit.owns` finds the call a subagent's: Codex's `_meta` names a parent thread, or Claude Code's `claudecode/toolUseId` is a tool use `CliAgentAiService` saw a subagent ask about (`delegated`) |
-| A harness's native reads (Claude Code, OpenCode, ACP) | the permission request, at `CliAgentAiService`, when its ask is `path`, `native-shell` or `native-read` and it is not a subagent's (`bySubagent`, or a call announced under a subagent); bytes at its `tool_result` |
+| A harness's native reads (Claude Code, OpenCode, Pi, ACP) | the permission request, at `CliAgentAiService`, when its ask is `path`, `native-shell` or `native-read` and it is not a subagent's (`bySubagent`, or a call announced under a subagent); bytes at its `tool_result` |
 | A Codex planner's reads | `ownCommand`: with the limit on, Codex's own shell and `view_image` are off, so every read is a `run_command`; its native subagents' are left out as above |
 | An ACP read that was never asked | `PlannerReadLimit.record`, from its `tool_result` marked `unaskedRead`: counted, not refused |
 | OpenCode's `read`, `glob`, `grep`, `list`, `lsp` | made to ask (`readsAsk`) while the limit is on, both in 1.x's config and in 2.x's session rules, and asked as `native-read`, which the envelope allows |
@@ -144,3 +144,4 @@ session builds one and every path below asks it.
 - 2026-11-12 — native reads of Claude Code (`LSP`), Codex and ACP counted and refused where the harness allows; two gaps remain.
 - 2026-11-15 — a Claude Code subagent's native reads, told apart by its permission request's `agent_id`, are neither counted nor refused.
 - 2026-11-15 — a Codex or Claude Code subagent's `run_command`, told apart by the runner's tools/call `_meta`, is neither counted nor refused.
+- 2026-11-20 — a Pi planner's reads arrive as `path` asks from Ordewell's extension and are counted like a harness's native reads.
