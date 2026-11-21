@@ -40,6 +40,13 @@ describe('the welcome while the coding agents are detected', () => {
     expect(rows(state).join('\n')).not.toMatch(/not set|none enabled/);
   });
 
+  // The first frame can wait a while on a cold machine's probe: say what it is doing, once, under Setup (F4).
+  it('says what the probe does while it runs, and drops the line once the agents are in', () => {
+    const detail = 'Looking for coding agents on your PATH, then asking each one whether it is signed in.';
+    expect(rows(after()).join(' ')).toContain(detail);
+    expect(rows(after(settings('claude-code'), runners(['claude-code', 'Claude Code']))).join(' ')).not.toContain(detail);
+  });
+
   it('keeps detecting until both the planner and the runner list are in', () => {
     for (const state of [after(settings('claude-code')), after(runners(['claude-code', 'Claude Code']))]) {
       expect(row(state, 'Planner')).toContain('Detecting coding agents…');

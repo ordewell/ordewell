@@ -95,6 +95,11 @@ manifest's `signIn` clause for an agent whose login only it can run. One functio
 |---|---|---|
 | TUI, VS Code chat, daemon | `Sign in with /login cursor-agent, or run cursor-agent login.` | `Run /key-set and choose OpenRouter (or any OpenAI-compatible provider) to hand it a key` |
 | Headless CLI | `Run cursor-agent login to sign in.` | `Run ordewell key set openrouter <key> …` |
+| Desktop welcome window | `Sign in with the Log in button, or run cursor-agent login.` | `Use the Set API key… button and choose OpenRouter … to hand it a key` |
+
+The desktop app's welcome window has no composer, so its runner cards name
+their own buttons rather than `/login` and `/key-set`; a syntax's `keyVerb`
+("run" unless it says otherwise) lets it say "use" a button.
 
 So `Cursor is not signed in. Sign in with /login cursor-agent, or run
 cursor-agent login.`, `Qwen Code is not signed in. Run /key-set and choose OpenRouter
@@ -346,3 +351,5 @@ art for the TTL and the refresh trigger.
 - 2026-11-05 — Gemini CLI names Ordewell's Google key route in its signed-out
   hint, beside its own sign-in, now that a saved Google key signs it in.
 - 2026-11-16 — the key entry is `/key-set` (`/key` still opens it); the built-in runner is no key-based signed-out agent: a provider runner is listed only with its key, signed in, with no sign-in route ([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)).
+- 2026-11-21 — the desktop welcome window words its runner cards with a syntax of
+  its own that names the card's buttons; `SignInSyntax` gains `keyVerb`.

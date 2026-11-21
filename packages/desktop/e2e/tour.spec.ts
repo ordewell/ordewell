@@ -2061,7 +2061,7 @@ test('the visual tour', async () => {
   };
 
   await answerRunnersWith(NONE_INSTALLED);
-  await state(welcome3, 'welcome-none-installed', 'Welcome with no agent installed: all nine install cards', async () => {
+  await state(welcome3, 'welcome-none-installed', 'Welcome with no agent installed: all nine install cards, More agents open', async () => {
     await expect(welcome3.locator('.welcome-runner[data-state="missing"]')).toHaveCount(9, { timeout: 60_000 });
     await expect(welcome3.getByRole('button', { name: 'Docs' })).toHaveCount(9);
     await expect(welcome3.locator('.welcome-recent[data-state="loading"]')).toHaveCount(0, { timeout: 30_000 });
@@ -2082,8 +2082,8 @@ test('the visual tour', async () => {
     await expect(welcome3.locator('.welcome-runner[data-runner="cline"]')).toContainText('older than');
     await expect(welcome3.locator('.welcome-recent[data-state="loading"]')).toHaveCount(0, { timeout: 30_000 });
   }, {
-    // At 1280x800 the last two rows of runner cards are below the fold, and they hold the key and too-old cards.
-    ensure: async () => { await welcome3.locator('.welcome-runner[data-runner="cursor-agent"]').evaluate((el) => el.scrollIntoView({ block: 'end' })); },
+    // At 1280x800 the last rows of runner cards are below the fold, and they hold the key and too-old cards; More agents (Pi) ends the row.
+    ensure: async () => { await welcome3.locator('.welcome-more').evaluate((el) => el.scrollIntoView({ block: 'end' })); },
   });
 
   await state(welcome3, 'key-dialog', 'The key entry open over the welcome window, for Qwen Code', async () => {

@@ -2309,6 +2309,13 @@ section.isolation-notice {
   color: var(--text-secondary);
 }
 
+.loading-state .loading-detail {
+  max-width: 36ch;
+  margin-top: -8px;
+  text-align: center;
+  color: var(--text-muted, var(--text-secondary));
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }

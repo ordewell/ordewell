@@ -113,6 +113,27 @@ describe('webview messages reach the session through one entry point each', () =
     fs.rmSync(h.workspace, { recursive: true, force: true });
   });
 
+  describe('the walkthrough (F5)', () => {
+    const marked = (key: string) => vi.mocked(vscode.commands.executeCommand).mock.calls
+      .some(([command, name, value]) => command === 'setContext' && name === `ordewell.walkthrough.${key}` && value === true);
+    beforeEach(() => vi.mocked(vscode.commands.executeCommand).mockClear());
+
+    it('completes its goal step on a goal sent to the planner, not on a slash command', async () => {
+      await h.route({ type: 'sendMessage', text: '/help', typed: true });
+      expect(marked('goalGiven')).toBe(false);
+      vi.spyOn(h.session, 'startPlanning').mockResolvedValue(undefined as never);
+      await h.route({ type: 'sendMessage', text: 'add a --json flag to the CLI', typed: true });
+      expect(marked('goalGiven')).toBe(true);
+    });
+
+    it('completes its approval step when the plan is approved', async () => {
+      vi.spyOn(h.session, 'execute').mockResolvedValue({ ok: true, message: 'done' });
+      expect(marked('planApproved')).toBe(false);
+      await h.route({ type: 'sendSystemCommand', command: 'executePlan', taskId: '' });
+      expect(marked('planApproved')).toBe(true);
+    });
+  });
+
   it('hands an install guide the first screen links to the extension, to open in the browser', async () => {
     await h.route({ type: 'openLink', url: 'https://github.com/openai/codex' });
     expect(h.deps.extension.openLink).toHaveBeenCalledWith('https://github.com/openai/codex');

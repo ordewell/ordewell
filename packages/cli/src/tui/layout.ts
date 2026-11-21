@@ -5,7 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLength, conversati
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
+import { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, DELEGATION_OFFERED, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
 import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -421,7 +421,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   if (!tv) {
     if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
-    const label = state.plannerDetecting ? DETECTING : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
+    const label = state.plannerDetecting ? DETECTING_AGENTS : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     // A compaction or a wait for the planner opens no turn of its own.
     const since = state.turnGate.open !== null ? state.turnGate.openedAt : undefined;
     return since ? { label, busy: true, since } : { label, busy: true };
@@ -1089,7 +1089,6 @@ function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
     .find((lines) => lines.every((line) => width(line) <= cols - 1) && lines.length + restRows <= rows) ?? [];
 }
 
-const DETECTING = 'Detecting coding agents…';
 const CHECKING_REPOSITORIES = 'Checking repositories…';
 
 /**
@@ -1188,7 +1187,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   // With nothing that can plan, the provider named is only the fallback, never
   // the user's choice: name none rather than one to set up.
   const plannerValue = detecting
-    ? style.grey(DETECTING)
+    ? style.grey(DETECTING_AGENTS)
     : planner.ready
       ? plannerRowValue(state, planner.label)
       : !canPlan
@@ -1210,7 +1209,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     setupRow(
       'Runners',
       detecting
-        ? style.grey(DETECTING)
+        ? style.grey(DETECTING_AGENTS)
         : enabledRunners.length > 0
           ? enabledRunners.map((row) => (signedOutWithWayIn(row) ? style.red(row.name) : row.name)).join(', ')
           : style.yellow('none enabled'),
@@ -1222,7 +1221,10 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
-  const notice = canPlan || detecting || !state.providersKnown ? [] : noPlannerNotice(cols);
+  // While the probe runs, the same spot says what it is doing: a cold first probe is slow.
+  const notice = detecting
+    ? [...wrap(style.grey(DETECTING_AGENTS_DETAIL), Math.max(1, cols - 1)), '']
+    : canPlan || !state.providersKnown ? [] : noPlannerNotice(cols);
   // Once, here, and grey like the version notice: it explains a working state.
   const keyPassedOver = !detecting && planner.ready && state.unusedPlanningKey && isApiProvider(state.unusedPlanningKey)
     ? [...wrap(style.grey(describeUnusedPlanningKey(state.plannerProvider, state.unusedPlanningKey, TERMINAL_UI_COMMANDS.pickPlanner)), Math.max(1, cols - 1)), '']

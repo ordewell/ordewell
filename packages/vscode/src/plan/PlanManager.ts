@@ -15,6 +15,7 @@ import {
   removeTaskConfirmation, TaskActions, TaskControls, type SessionCue, type TaskActionPort, type TaskControlPort, type TurnOutcome,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
+import { markWalkthroughStep } from '../firstRun';
 import { handleIsolationBlocked } from './isolation';
 import { taskFromDraft } from './taskEdit';
 
@@ -64,7 +65,7 @@ export function resolveRunnerSet(
 ): RunnerId[] | null {
   const enabled = enabledRunners(deps.config).filter((r) => deps.runnerRegistry.get(r));
   if (enabled.length === 0) {
-    deps.chatProvider.showError('No runner is enabled. Toggle runners in the chat header first.');
+    deps.chatProvider.showError("No runner is enabled. Turn one on under Runners in the chat's Settings panel, or install a coding agent such as Claude Code or Codex and run /refresh.");
     return null;
   }
   if (pendingRunners && pendingRunners.length > 0) {
@@ -285,6 +286,7 @@ export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: numbe
       deps.sendRunSettings();
     }
     deps.chatProvider.planApproved();
+    markWalkthroughStep('planApproved');
     saveState(plan, deps.fsAdapter.getWorkspaceRoot(), session.sessionId);
     deps.saveCurrentSession();
     try {

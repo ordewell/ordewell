@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- The first activation after install opens the Ordewell view, and the *Get
+  started with Ordewell* walkthrough has three steps: open the view, give it a
+  goal, approve the plan. Each step ticks itself off when you do it.
+- The extension declares that it does not run in Restricted Mode and says why:
+  it runs coding agents in the folder. Trust the folder to use it.
+
 ### Changed
 
 - An installed coding agent plans ahead of an API key found in the
@@ -24,6 +32,11 @@
 - Saving a key whose provider then plans with no model picked opens the
   planner picker on that provider's models, from `/key-set`, *Add API key* and
   the *Configure API Key* command.
+
+- While the chat waits for the first detection, it shows "Detecting coding
+  agents…" and what that probe does, in place of a bare "Loading…".
+- "No runner is enabled" points to Runners in the chat's Settings panel, and
+  the guide names the *Execute Plan* button.
 
 ### Fixed
 

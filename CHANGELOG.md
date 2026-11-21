@@ -8,7 +8,45 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **VS Code opens Ordewell once after install, with a walkthrough.** The first
+  activation reveals the Ordewell view, and *Get started with Ordewell*
+  (**Welcome: Open Walkthrough...**) has three steps: open the view, give it a
+  goal, approve the plan. Each step ticks itself off when you do it. The
+  extension now declares that it does not run in Restricted Mode, and says why
+  there: it runs coding agents in the folder and reads its `.envrc`,
+  `.ordewell/env` and worktree setup command, so trust the folder to use it.
+
 ### Changed
+
+- **The desktop welcome shows the agents that work first.** Signed-in agents
+  come first, then installed ones with something to fix, then those off or too
+  old. Agents this machine does not have fold under *More agents (N)*, in a
+  neutral tone, not red. With none installed, the fold starts open, since the
+  install pages are the next step. A signed-out agent's hint names the card's
+  own *Log in* and *Set API key…* buttons, not `/login` and `/key-set`, which
+  that window has no composer for.
+- **Each surface names what it is waiting for at startup.** The desktop
+  welcome's runner row says, from the first frame, "Starting Ordewell's daemon
+  on port N…" while the app starts its own daemon, "Connecting to…" while it
+  looks for one, and then "Looking for coding agents on your PATH, then asking
+  each one whether it is signed in." Before, it showed blank skeletons, with
+  "Loading runners …" only after two seconds. The footer and the status bar
+  say *starting* rather than *connecting* while the app starts its daemon. The
+  chat in the desktop app and VS Code shows "Detecting coding agents…" and the
+  same line in place of a bare "Loading…". The terminal UI's welcome adds that
+  line under Setup while it detects. If the daemon has not answered after
+  about five seconds, `ordewell` says it is still waiting and where the
+  daemon's log is. No timeout changed.
+- **Docs and messages that misdirected a first run are corrected.** The README's
+  terminal quick start no longer suggests `/planner` and `/runners` are setup
+  steps. Troubleshooting says releases from 0.14.1 are signed and notarized,
+  and names the card as the app shows it, *Could not authenticate with the
+  daemon*. The desktop guide says *Approve plan* starts the run in one click.
+  The VS Code guide names the *Execute Plan* button, and says a saved key plans
+  only when no agent can, or when you choose its provider. VS Code's "No runner
+  is enabled" now points to Runners in the chat's Settings panel, not a header.
 
 - **An installed coding agent plans ahead of an API key Ordewell finds.** A
   Claude Code or Codex user with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or

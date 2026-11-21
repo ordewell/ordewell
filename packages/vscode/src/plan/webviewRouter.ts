@@ -4,6 +4,7 @@ import type { RunnerId } from '@ordewell/core';
 import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '@ordewell/ui/protocol';
 import { ChatSessionHost } from '@ordewell/ui/host';
 import { isKnownSlashCommand } from '../commands/SlashParser';
+import { markWalkthroughStep } from '../firstRun';
 import { handleIsolationAction, mergePort } from './isolation';
 import {
   handleAddTask, handleCheckpointAnswer, handleEscalationAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
@@ -224,6 +225,7 @@ function chatSession(deps: WebviewRouterDeps): ChatSessionHost {
     // The Session's busy state is the turn itself, with no frame to trail it.
     answering: () => deps.isGeneratingPlan(),
     converse: async (text, turn) => {
+      markWalkthroughStep('goalGiven');
       if (turn.now) return handleSendMessageNow(text, deps);
       await handleSendMessage(text, deps, turn.runners ? [...turn.runners] : deps.getPendingRunners(), deps.setPendingRunners);
       // Only a Send now's outcome is read, for its give-back; this turn reported its own failure.

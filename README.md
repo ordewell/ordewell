@@ -184,8 +184,8 @@ which agents it found and whether each is signed in. See the
 [desktop guide](docs/desktop/README.md).
 
 **Terminal:** run `ordewell` in your project to open the terminal UI, then type a
-goal. The first run lets you pick a planner and runners with `/planner` and
-`/runners`.
+goal. It finds your installed coding agents and plans with the first one signed
+in, so there is nothing to set up; `/planner` and `/runners` change the choice.
 
 **VS Code:** open your project folder and the Ordewell panel, then type a goal.
 See the [extension guide](packages/vscode/README.md) for setup.

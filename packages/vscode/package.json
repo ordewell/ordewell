@@ -44,6 +44,16 @@
     "onWebviewPanel:ordewellChildTaskLog"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Ordewell runs coding agents that read and change this folder, and reads its .envrc, .ordewell/env and worktree setup command. Trust the folder to use it."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Ordewell runs coding agents and git on files on this machine."
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "tsup && vite build && node scripts/copy-skills.mjs && node scripts/verify-bundle.mjs && node ../../scripts/generate-third-party-notices.mjs vscode",
@@ -76,6 +86,36 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "ordewell.firstRun",
+        "title": "Get started with Ordewell",
+        "description": "From a goal to a plan of coding-agent tasks, run when you approve it.",
+        "steps": [
+          {
+            "id": "openView",
+            "title": "Open the Ordewell view",
+            "description": "Ordewell lives in the activity bar. Its view says which coding agent plans and which ones run tasks.\n[Open Ordewell](command:ordewell.focusChat)",
+            "media": { "markdown": "media/walkthrough/open-view.md" },
+            "completionEvents": ["onView:ordewellChatView"]
+          },
+          {
+            "id": "giveGoal",
+            "title": "Give it a goal",
+            "description": "Type what you want done in the chat and send it. The planner reads the repository, may ask a question, and proposes a plan of tasks. Nothing runs yet.\n[Open the chat](command:ordewell.focusChat)",
+            "media": { "markdown": "media/walkthrough/give-goal.md" },
+            "completionEvents": ["onContext:ordewell.walkthrough.goalGiven"]
+          },
+          {
+            "id": "approvePlan",
+            "title": "Approve the plan",
+            "description": "Read the plan: each task names its runner, model and mode. Click Execute Plan to approve it and start the run, or tell the planner what to change.\n[Open the chat](command:ordewell.focusChat)",
+            "media": { "markdown": "media/walkthrough/approve-plan.md" },
+            "completionEvents": ["onContext:ordewell.walkthrough.planApproved"]
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "ordewell.forkConversation",
