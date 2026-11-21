@@ -10,10 +10,10 @@ const sliceIds = (n) => Array.from({ length: n }, (_, i) => `s${i + 1}`);
 test('library 1: one opening task, slices at once, one closing check', () => {
   const plan = { tasks: [t('r', []), ...slices(6, ['r']), t('close', sliceIds(6))] };
   const p = fanOutProperties(plan, { baseBroken: true });
-  assert.deepEqual(p.numbers, { slices: 6, width: 6, levels: 3, gates: 1, closers: 1, shared: 0, sliceEdges: 0, faults: [] });
+  assert.deepEqual(p.numbers, { slices: 6, width: 6, levels: 3, gates: 1, opening: 'r', closers: 1, shared: 0, sliceEdges: 0, faults: [] });
   assert.equal(p.P1_oneOpening && p.P3_slicesParallel && p.P4_closingCheck, true);
   // Written before the role notes, the briefs carry none of them.
-  assert.equal(p.P5_ownScopeDone || p.P6_closingToldOfUnlanded || p.P7_openingHandsOffMap, false);
+  assert.equal(p.P5_ownScopeDone || p.P6_closingToldOfUnlanded || p.P7_openingHandsOffMap || p.P8_beforeSlicesImport, false);
 });
 
 test('library 2: three opening tasks in series fail P1 and P2', () => {
@@ -83,11 +83,39 @@ test('as core: a closing check with an editing task beside it is the closing che
   assert.deepEqual(s.faults, []);
   assert.equal(fanOutProperties(plan).P4_closingCheck, true);
   const later = { tasks: [t('r', []), ...['m1', 'm2', 'm3', 'm4'].map((m) => t(m, ['r'])), ...slices(5, ['m1', 'm2', 'm3', 'm4'])] };
-  assert.deepEqual(fanOutShape(later).slices.map((x) => x.id), ['m1', 'm2', 'm3', 'm4', ...sliceIds(5)]);
+  // As core: every slice waits for every shared module, so they run before the fan-out.
+  assert.deepEqual(fanOutShape(later).gates.map((x) => x.id), ['r', 'm1', 'm2', 'm3', 'm4']);
+  assert.deepEqual(fanOutShape(later).slices.map((x) => x.id), sliceIds(5));
   assert.deepEqual(fanOutShape(later).faults, ['no-closing']);
 });
 
 test('as core: a loop check whose body names no task is no closing check, and reading it does not throw', () => {
   const plan = { tasks: [t('r', []), ...slices(4, ['r']), t('check', sliceIds(4), { type: 'script', commands: [['pytest']], loop: { body: ['gone'] } })] };
   assert.deepEqual(fanOutShape(plan).faults, ['no-closing']);
+});
+
+// Recorded: five tasks before 31 slices, which waited for the first and the last; the reader took the last as a slice.
+test('as core: a task every slice of the fan-out waits for is a task before the slices, though tasks beside it do not wait for it', () => {
+  const plan = { tasks: [t('o1', []), ...['o2', 'o3', 'o4', 'o5'].map((id) => t(id, ['o1'])), ...slices(31, ['o1', 'o5']), t('close', ['o2', 'o3', 'o4', ...sliceIds(31)])] };
+  const p = fanOutProperties(plan, { baseBroken: true });
+  assert.deepEqual([p.numbers.gates, p.numbers.opening, p.numbers.width, p.numbers.slices, p.numbers.faults], [2, 'o1', 31, 34, []]);
+  assert.equal(p.P1_oneOpening, true);
+  // The same plan with a second task before the slices that waits for the others beside it: tasks in series.
+  const serial = { tasks: plan.tasks.map((x) => (x.id === 'o5' ? { ...x, dependencies: ['o1', 'o2', 'o3', 'o4'] } : x)) };
+  assert.deepEqual(fanOutProperties(serial, { baseBroken: true }).numbers.faults, ['serial-opening']);
+});
+
+test('as core: a core task beside a few slices that every slice of the fan-out waits for is the opening task', () => {
+  const plan = { tasks: [t('core', []), t('x1', []), t('x2', []), ...slices(8, ['core']), t('close', ['x1', 'x2', ...sliceIds(8)])] };
+  const p = fanOutProperties(plan, { baseBroken: true });
+  assert.equal(p.numbers.opening, 'core');
+  assert.deepEqual(p.numbers.faults, []);
+});
+
+test('P8: every task before the slices carries the import criterion, and the opening task may edit any file for it', () => {
+  const opening = 'Plan shape: 5 slices wait for this task to land before any of them starts, … collects its tests without an error … For that alone you may edit any file …';
+  const shared = 'Plan shape: 5 slices wait for this task to land before they start, … collects its tests without an error …';
+  const plan = (coreNote) => ({ tasks: [t('r', [], { prompt: `Restore.\n\n${opening}` }), t('core', ['r'], { prompt: `Core.${coreNote}` }), ...slices(5, ['core']), t('close', sliceIds(5))] });
+  assert.equal(fanOutProperties(plan(`\n\n${shared}`)).P8_beforeSlicesImport, true);
+  assert.equal(fanOutProperties(plan('')).P8_beforeSlicesImport, false);
 });

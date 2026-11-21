@@ -60,6 +60,24 @@ describe('largestSlicesFirst', () => {
     expect(reads).toEqual([]);
   });
 
+  // A core task most slices wait for, listed after the slices beside it, would wait for a slot while they run.
+  it('starts a task the slices wait for ahead of the slices of its level, sized or not', async () => {
+    const beside = renumberTasks([
+      ...[1, 2, 3, 4, 5].map((n) => t(`x${n}`, [], `Fill in src/x${n}.py. Verify: pytest tests/test_x${n}.py`)),
+      t('core', [], 'Fill in src/core.py.'),
+      ...[1, 2, 3, 4, 5, 6].map((n) => t(`s${n}`, ['core'], `Fill in src/s${n}.py.`)),
+      t('close', ['x1', 'x2', 'x3', 'x4', 'x5', 's1', 's2', 's3', 's4', 's5', 's6'], 'Run the suite.'),
+    ]);
+    const unsized = await largestSlicesFirst(beside, workspace({}).fs);
+    expect(ids(unsized.tasks).slice(0, 6)).toEqual(['core', 'x1', 'x2', 'x3', 'x4', 'x5']);
+    expect(unsized).toMatchObject({ moved: 5, gatesFirst: 1 });
+    expect(unsized.measure).toBeUndefined();
+    expect(unsized.tasks.map((x) => x.order)).toEqual(beside.map((x) => x.order));
+    const sized = await largestSlicesFirst(beside, workspace({ 'tests/test_x4.py': lines(50) }).fs);
+    expect(ids(sized.tasks).slice(0, 6)).toEqual(['core', 'x4', 'x1', 'x2', 'x3', 'x5']);
+    expect(sized.measure).toBe('test');
+  });
+
   it('reorders slices only among those of their own level, and leaves every other task where it was', async () => {
     const levels = renumberTasks([
       t('r', [], 'Make the package import.'),

@@ -27,8 +27,16 @@ export interface FanOutShape {
   wide: boolean;
   /** The most slices one level holds. */
   width: number;
-  /** Change tasks every slice waits for, first to last: what runs before the fan-out. The first is the opening task; one after it is a shared module. */
+  /**
+   * Change tasks that run before the fan-out, first to last: those ordered
+   * against every other change task that every slice waits for, and those
+   * every slice of the fan-out's level waits for (ADR-0072 R5).
+   */
   gates: Task[];
+  /** The first gate when every other gate waits for it: the task that makes the project import. A gate after it is a shared module. */
+  opening?: Task;
+  /** The gates each slice waits for, by slice id, first to last. */
+  waits: ReadonlyMap<string, readonly Task[]>;
   /** Change tasks that are not ordered against every other change task, then a change task the closing check waits for that waits for all of those. */
   slices: Task[];
   /** Tasks that wait for every slice and can fix, a loop's check among them: the closing check, which no other waits for, first. */
@@ -38,7 +46,7 @@ export interface FanOutShape {
   faults: FanOutFault[];
 }
 
-const NONE: FanOutShape = { wide: false, width: 0, gates: [], slices: [], closers: [], sliceEdges: 0, faults: [] };
+const NONE: FanOutShape = { wide: false, width: 0, gates: [], waits: new Map(), slices: [], closers: [], sliceEdges: 0, faults: [] };
 
 /** Every top-level task's ancestors and level, or null for a cycle. Dependencies on no task are left out. */
 function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: Map<string, number> } | null {
@@ -74,7 +82,11 @@ function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: 
  * task is an AI task that edits the repository and is neither research, an
  * ops task, a loop's check nor in a loop's body. The change tasks ordered
  * against every other one are its spine: those every slice waits for are its
- * gates, the rest of the change tasks are its slices. A closer is a task that
+ * gates. So is a change task every slice of the fan-out's level waits for (the
+ * level holding the most of the rest, the first on a tie, not counting a task
+ * every deeper one waits for), though tasks beside it do not wait for it: a
+ * shared module set beside ones the slices do not all need, or a core module
+ * beside a few slices. The rest of the change tasks are its slices. A closer is a task that
  * waits for every slice and can fix what still fails: an AI task that edits,
  * or a loop's check whose body holds one. An ops task, a manual one and a
  * script that is not a loop's check never count, since a script after
@@ -107,7 +119,22 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
     const rest = parallel.filter((t) => !ends.includes(t));
     if (ends.length < FAN_OUT_MIN && rest.length > 0 && ends.every(closes(rest))) parallel = rest;
   }
-  const gates = [...spine].filter((t) => parallel.every((s) => anc(s).has(t.id))).sort(byLevel);
+  // A task every slice of the fan-out's level waits for runs before the fan-out,
+  // whatever runs beside it: a slice would read it as one of them. The level is
+  // the one holding the most of the rest, the first on a tie, counted without the
+  // tasks every deeper one waits for, and only a level of a fan-out takes any.
+  const lv = (t: Task) => g.level.get(t.id)!;
+  const deeperAll = new Set(parallel.filter((t) => {
+    const deeper = parallel.filter((s) => lv(s) > lv(t));
+    return deeper.length > 0 && deeper.every((s) => anc(s).has(t.id));
+  }));
+  const count = new Map<number, number>();
+  for (const s of parallel) if (!deeperAll.has(s)) count.set(lv(s), (count.get(lv(s)) ?? 0) + 1);
+  const [fan, most] = [...count].reduce((best, c) => (c[1] > best[1] || (c[1] === best[1] && c[0] < best[0]) ? c : best), [0, 0]);
+  const fanned = parallel.filter((s) => lv(s) === fan && !deeperAll.has(s));
+  const before = new Set(most >= FAN_OUT_MIN ? parallel.filter((t) => lv(t) < fan && fanned.every((s) => anc(s).has(t.id))) : []);
+  parallel = parallel.filter((t) => !before.has(t));
+  const gates = [...[...spine].filter((t) => parallel.every((s) => anc(s).has(t.id))), ...before].sort(byLevel);
   const candidates = tasks.filter(closes(parallel)).sort(byLevel);
   // The closing check is the candidate nothing else after the slices waits for, the
   // deepest if several. A change task it waits for only implements one more module
@@ -124,18 +151,24 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   const sliceEdges = slices.reduce((n, s) => n + new Set(s.dependencies.filter((d) => sliceIds.has(d))).size, 0);
   const wide = width >= FAN_OUT_MIN;
   if (!wide) return { ...NONE, width };
+  const opening = gates.length > 0 && gates.slice(1).every((t) => anc(t).has(gates[0].id)) ? gates[0] : undefined;
+  const waits = new Map(slices.map((s) => [s.id, gates.filter((t) => anc(s).has(t.id))]));
   const faults: FanOutFault[] = [];
   // A later gate that waits for the opening task alone (an install or a manual step
   // aside) is a shared module the slices build on, not a second opening task.
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const outside = (id: string) => { const d = byId.get(id); return !d || runsAsOps(d) || d.type === 'user'; };
-  if (gates.slice(1).some((t) => !t.dependencies.every((d) => d === gates[0].id || outside(d)))) faults.push('serial-opening');
-  if (gates.length === 0) faults.push('no-opening');
+  if (opening && gates.slice(1).some((t) => !t.dependencies.every((d) => d === opening.id || outside(d)))) faults.push('serial-opening');
+  if (!opening) faults.push('no-opening');
   if (closers.length === 0) faults.push('no-closing');
-  return { wide, width, gates, slices, closers, sliceEdges, faults };
+  return { wide, width, gates, ...(opening ? { opening } : {}), waits, slices, closers, sliceEdges, faults };
 }
 
 const ref = (t: Pick<Task, 'title' | 'id'>) => `"${t.title}" (${t.id})`;
+const refs = (ts: readonly Pick<Task, 'title' | 'id'>[]) => (ts.length < 2 ? ts.map(ref).join('') : `${ts.slice(0, -1).map(ref).join(', ')} and ${ref(ts[ts.length - 1])}`);
+
+/** How many slices wait for a gate. */
+const waitingFor = (shape: FanOutShape, gate: Task) => shape.slices.filter((s) => shape.waits.get(s.id)?.includes(gate)).length;
 
 /** Repository paths a brief names, for the slices' map of who owns what. */
 const PATH = /(?<![\w/.-])(?:[\w.-]+\/)*[\w-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|rb|php|c|h|cc|cpp|hpp|cs|swift|scala)\b/g;
@@ -184,7 +217,7 @@ function sliceTable(shape: FanOutShape): string {
     const [first] = namedPaths(t);
     return `- ${ref(t)}${first ? `: ${first}` : ''}`;
   });
-  const gate = shape.gates[0];
+  const gate = shape.opening;
   const more = (n: number) => (gate
     ? `- … and ${n} more, each with the paths it owns in the module map at the end of ${ref(gate)}'s report.`
     : `- … and ${n} more, not listed here: a module your brief does not name is another task's.`);
@@ -197,20 +230,39 @@ function sliceTable(shape: FanOutShape): string {
   return [...kept, more(lines.length - kept.length)].join('\n');
 }
 
-/** The first gate's note: the slices wait for it, so it is short, and its report carries the map they start from. */
+/** What every task before the slices is done by, besides its brief: the slices start from the tree it lands. */
+const COLLECTS = 'the test command the slices\' briefs run (the project\'s own, if they name none) collects its tests without an error, though tests may still fail';
+const SHOWN = 'run both, a collection-only run where the test runner has one, and put each command and the last lines of its output in your report';
+
+/**
+ * The opening task's note: the slices wait for it, so it is short, it leaves
+ * the project importing and its tests collecting, whoever owns the file in
+ * the way, and its report carries the map they start from.
+ */
 export function openingNote(shape: FanOutShape): string {
+  const gate = shape.opening ?? shape.gates[0];
   return [
-    `Plan shape: ${shape.slices.length} slices wait for this task to land before any of them starts, so finish it as soon as your brief allows and leave every module a slice owns to that slice. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:`,
+    `Plan shape: ${gate ? waitingFor(shape, gate) : shape.slices.length} slices wait for this task to land before any of them starts, and they start from the tree you land. Besides your brief's own criterion, you are done only when the project builds or imports and ${COLLECTS}: ${SHOWN}. For that alone you may edit any file, whichever task below owns it: add only the smallest placeholder that lets it import (a missing name, a function that raises NotImplementedError or its like), and list each placeholder in your summary with the task that owns it. Leave everything else in a module a slice owns to that slice, and finish it as soon as your brief allows. End with status failed when the project still does not import or its tests do not collect, saying what stops them. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:`,
     ownershipTable(shape),
   ].join('\n');
 }
 
-/** A slice's note: its own scope is its done criterion, and what needs another slice's work is the closing check's. */
-export function sliceNote(shape: FanOutShape): string {
-  const gate = shape.gates[0];
+/** Another task before the slices: they start from the tree it lands too, so it leaves the import and the collection no worse than it found them. */
+export function gateNote(shape: FanOutShape, gate: Task): string {
+  return `Plan shape: ${waitingFor(shape, gate)} slices wait for this task to land before they start, and they start from the tree you land, so finish as soon as your brief allows and leave every module a slice owns to that slice. Besides your brief's own criterion, you are done only when your change leaves the project building or importing and ${COLLECTS}, as it did when you started or better: ${SHOWN}.`;
+}
+
+/**
+ * A slice's note: its own scope is its done criterion, and what needs another
+ * slice's work is the closing check's. It names the tasks before the slices
+ * that this slice waits for; with no slice given, those every slice waits for.
+ */
+export function sliceNote(shape: FanOutShape, slice?: Task): string {
+  const after = slice ? shape.waits.get(slice.id) ?? [] : shape.gates.filter((t) => shape.slices.every((s) => shape.waits.get(s.id)?.includes(t)));
+  const map = shape.opening && after.includes(shape.opening) ? shape.opening : undefined;
   const closer = shape.closers[0];
   return [
-    `Plan shape: this task is one of ${shape.slices.length} slices${gate ? ` that start once ${ref(gate)} has landed` : ''}, and ${ref(closer)} runs the whole test suite once every slice has ended.${gate ? ` Read the module map at the end of ${ref(gate)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
+    `Plan shape: this task is one of ${shape.slices.length} slices${after.length ? ` that start once ${refs(after)} ${after.length === 1 ? 'has' : 'have'} landed` : ''}, and ${ref(closer)} runs the whole test suite once every slice has ended.${map ? ` Read the module map at the end of ${ref(map)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
     sliceTable(shape),
     `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are ${ref(closer)}'s. Take in another slice's work once it has landed. Do not write, stub or shim another slice's code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
   ].join('\n');
@@ -223,7 +275,7 @@ export function closingNote(shape: FanOutShape): string {
 
 /**
  * The plan with each role's note appended to its brief, last, as a revision
- * note is: the first gate's, every slice's, and the closing check's, or the
+ * note is: the opening task's, every other gate's, every slice's, and the closing check's, or the
  * AI tasks of its loop's body when the check is a script or read-only. Only a
  * plan that fans out with a closing check is noted, since the slices' note
  * leaves work to it; any other plan comes back as the same array.
@@ -234,9 +286,8 @@ export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(t
   // A check that cannot edit leaves the fixing to its loop's body.
   const closing = new Set(closer.type === 'ai' && !closer.readOnly ? [closer.id] : closer.loop?.body ?? []);
   const notes = new Map<string, string>();
-  if (shape.gates[0]) notes.set(shape.gates[0].id, openingNote(shape));
-  const slice = sliceNote(shape);
-  for (const s of shape.slices) notes.set(s.id, slice);
+  for (const g of shape.gates) notes.set(g.id, g === shape.opening ? openingNote(shape) : gateNote(shape, g));
+  for (const s of shape.slices) notes.set(s.id, sliceNote(shape, s));
   const close = closingNote(shape);
   for (const id of closing) notes.set(id, close);
   let changed = false;
@@ -259,6 +310,8 @@ export interface SlicesOrdered {
   measure?: SliceMeasure;
   /** How many slices changed place. */
   moved: number;
+  /** How many tasks before the slices moved ahead of the slices of their level. */
+  gatesFirst?: number;
 }
 
 /** A file larger than this, in KB or in lines, is skipped: generated data or a vendored bundle says nothing of a slice's work. */
@@ -325,27 +378,35 @@ async function sliceSizes(slices: readonly Task[], fs: Pick<IFileSystem, 'readFi
  * in plan order, a few at a time, so a long slice the planner listed late set
  * when the whole fan-out ended (ADR-0072 R6). Sized by {@link sliceSizes}.
  * Only the order of slices of one level changes, each taking the place and
- * `order` of the one it displaced; ties keep the planner's order.
+ * `order` of the one it displaced; ties keep the planner's order. A task
+ * before the slices that sits at a level with slices beside it starts ahead
+ * of them, sized or not: they wait for it, and it would wait for a slot.
  */
 export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesOrdered> {
   const unchanged: SlicesOrdered = { tasks, moved: 0 };
   if (!shape.wide) return unchanged;
   const sized = await sliceSizes(shape.slices, fs);
-  if (!sized) return unchanged;
-  const { size, measure } = sized;
+  const size = sized?.size;
+  const measure = sized?.measure;
   const level = graph(tasks)!.level;
+  const gates = new Set(shape.gates.map((t) => t.id));
+  const sliceIds = new Set(shape.slices.map((s) => s.id));
   const out = [...tasks];
   let moved = 0;
+  let gatesFirst = 0;
   for (const l of new Set(shape.slices.map((s) => level.get(s.id)!))) {
-    const places = tasks.flatMap((t, i) => (size.has(t.id) && level.get(t.id) === l ? [i] : []));
-    const sorted = places.map((i) => tasks[i]).sort((a, b) => size.get(b.id)! - size.get(a.id)!);
+    const places = tasks.flatMap((t, i) => ((sliceIds.has(t.id) || gates.has(t.id)) && level.get(t.id) === l ? [i] : []));
+    const rank = (t: Task) => (gates.has(t.id) ? Infinity : size?.get(t.id) ?? 0);
+    const sorted = places.map((i) => tasks[i]).sort((a, b) => rank(b) - rank(a) || 0);
     places.forEach((i, k) => {
       if (sorted[k] === tasks[i]) return;
-      moved++;
+      if (gates.has(sorted[k].id)) gatesFirst++;
+      else moved++;
       out[i] = { ...sorted[k], order: tasks[i].order };
     });
   }
-  return { tasks: moved ? out : tasks, measure, moved };
+  if (!moved && !gatesFirst) return { ...unchanged, ...(measure ? { measure } : {}) };
+  return { tasks: out, ...(measure ? { measure } : {}), moved, ...(gatesFirst ? { gatesFirst } : {}) };
 }
 
 export interface SlicesMerged {
@@ -463,4 +524,39 @@ export async function mergeSmallSlices(tasks: Task[], fs: Pick<IFileSystem, 'rea
     for (const bin of bins) if (bin.length > 1) out = replace(out, bin.map((t) => t.id), [mergedTask(bin)], bin[0].id);
   }
   return from ? { tasks: out, merged: { from, to, measure: sized.measure } } : unchanged;
+}
+
+export interface FanOutShaped {
+  /** The plan as it runs; the same array when nothing was merged, moved or noted. */
+  tasks: Task[];
+  /** The research log's lines, one a step that changed the plan, in the order the steps ran. */
+  log: string[];
+}
+
+const measured = (m: SliceMeasure) => `the lines of ${m === 'test' ? 'the test files' : 'every file'} their briefs name`;
+
+/**
+ * A one-shot plan shaped as it is to run, at no call (ADR-0072 R5-R7). One
+ * order, each step reading the plan the step before it left, so the notes and
+ * the log describe the plan that runs: small sibling slices are merged (R7), on
+ * the shape read before any merge; the shape is read again, the tasks before
+ * the slices with it (R5); those tasks start ahead of the slices beside them,
+ * then the slices largest first (R6); then each role's note is written (R5).
+ * With no file system, a caller with no repository to read, it is only noted.
+ */
+export async function shapeFanOut(tasks: Task[], fs: Pick<IFileSystem, 'readFile'> | undefined, parallelLimit: number | undefined): Promise<FanOutShaped> {
+  const log: string[] = [];
+  const planned = fanOutShape(tasks);
+  const merged = fs ? await mergeSmallSlices(tasks, fs, parallelLimit, planned) : { tasks };
+  if (merged.merged) log.push(`slice merge: ${merged.merged.from} slices became ${merged.merged.to}, by ${measured(merged.merged.measure)}, for ${parallelLimit} tasks at once`);
+  const shape = merged.tasks === tasks ? planned : fanOutShape(merged.tasks);
+  const sized: SlicesOrdered = fs ? await largestSlicesFirst(merged.tasks, fs, shape) : { tasks: merged.tasks, moved: 0 };
+  if (sized.measure) log.push(`slice order: largest first by ${measured(sized.measure)}; ${sized.moved} of ${shape.slices.length} moved`);
+  if (sized.gatesFirst) log.push(`slice order: ${sized.gatesFirst} task${sized.gatesFirst === 1 ? '' : 's'} the slices wait for moved ahead of the slices beside ${sized.gatesFirst === 1 ? 'it' : 'them'}`);
+  const out = withShapeNotes(sized.tasks);
+  if (out !== sized.tasks) {
+    const s = fanOutShape(out);
+    log.push(`fan-out: ${s.width} at once, ${s.gates.length} before, ${s.closers.length} after${s.faults.length ? `, faults ${s.faults.join(', ')}` : ''}; role notes added`);
+  }
+  return { tasks: out, log };
 }

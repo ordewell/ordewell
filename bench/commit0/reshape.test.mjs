@@ -1,0 +1,65 @@
+// The offline check on the shapes the recorded runs had, through this build's core.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { loadCore, reshape } from './reshape.mjs';
+
+const core = await loadCore();
+const t = (id, deps) => ({ id, order: 0, title: `Implement ${id}`, description: '', type: 'ai', status: 'pending', dependencies: deps, prompt: `Fill in src/lib/${id}.py.`, subtasks: [], assignedRunner: 'claude-code' });
+const slices = (n, deps) => Array.from({ length: n }, (_, i) => t(`s${i + 1}`, deps));
+const sliceIds = (n) => Array.from({ length: n }, (_, i) => `s${i + 1}`);
+const numbered = (tasks) => tasks.map((x, i) => ({ ...x, order: i + 1 }));
+
+test('the 31-slice plan: two tasks before the slices, the second moved ahead of the tasks beside it, every check holds', async () => {
+  const recorded = { tasks: numbered([t('o1', []), ...['o2', 'o3', 'o4', 'o5'].map((id) => t(id, ['o1'])), ...slices(31, ['o1', 'o5']), t('close', ['o2', 'o3', 'o4', ...sliceIds(31)])]) };
+  const r = await reshape(core, recorded, { baseBroken: true });
+  assert.deepEqual(r.now.before, ['o1', 'o5']);
+  assert.equal(r.gatesFirst, 1);
+  assert.deepEqual(r.renoted.tasks.slice(0, 3).map((x) => x.id), ['o1', 'o5', 'o2']);
+  assert.deepEqual(r.failed, []);
+  assert.equal(r.properties.P8_beforeSlicesImport, true);
+});
+
+test('a recorded brief is cut at its note and noted once again', async () => {
+  const plan = numbered([t('r', []), ...slices(5, ['r']), t('close', sliceIds(5))]);
+  const once = await reshape(core, { tasks: plan });
+  const twice = await reshape(core, once.renoted);
+  assert.deepEqual(twice.renoted.tasks.map((x) => x.prompt), once.renoted.tasks.map((x) => x.prompt));
+  assert.equal(twice.checks.slicesUnchanged, true);
+  for (const x of twice.renoted.tasks) assert.ok(x.prompt.split('Plan shape:').length <= 2);
+});
+
+test('a plan with nothing before its slices is reported, not failed: nothing restores its import', async () => {
+  const r = await reshape(core, { tasks: numbered([...slices(6, []), t('close', sliceIds(6))]) });
+  assert.deepEqual(r.now.faults, ['no-opening']);
+  assert.equal(r.checks.importCriterion, null);
+  assert.deepEqual(r.failed, []);
+});
+
+test('with a parallel limit and the run\'s repository, small slices merge before the shape is read, and the graph is the merged one', async () => {
+  const SIZES = [100, 90, 10, 10, 20, 20, 30, 30, 40, 50];
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'reshape-repo-'));
+  fs.mkdirSync(path.join(repo, 'tests'));
+  SIZES.forEach((n, i) => fs.writeFileSync(path.join(repo, 'tests', `test_m${i + 1}.py`), 'x = 1\n'.repeat(n)));
+  const brief = (i) => ({ prompt: `Fill in src/m${i}.py. Verify: pytest tests/test_m${i}.py` });
+  const recorded = { tasks: numbered([t('r', []), ...slices(10, ['r']).map((s, i) => ({ ...s, ...brief(i + 1) })), t('close', sliceIds(10))]) };
+  const r = await reshape(core, recorded, { workdir: repo, limit: 2 }).finally(() => fs.rmSync(repo, { recursive: true, force: true }));
+  assert.deepEqual(r.log, [
+    'slice merge: 10 slices became 6, by the lines of the test files their briefs name, for 2 tasks at once',
+    'slice order: largest first by the lines of the test files their briefs name; 2 of 6 moved',
+    'fan-out: 6 at once, 1 before, 1 after; role notes added',
+  ]);
+  assert.equal(r.renoted.tasks.length, 8);
+  assert.deepEqual(r.renoted.tasks.find((x) => x.id === 'close').dependencies.slice().sort(), ['s1', 's10', 's2', 's3', 's6', 's9']);
+  assert.equal(r.checks.sameGraph, true);
+  assert.deepEqual(r.failed, []);
+});
+
+test('only the opening task carries the licence to edit any file', async () => {
+  const recorded = { tasks: numbered([t('o1', []), ...['o2', 'o3', 'o4', 'o5'].map((id) => t(id, ['o1'])), ...slices(31, ['o1', 'o5']), t('close', ['o2', 'o3', 'o4', ...sliceIds(31)])]) };
+  const r = await reshape(core, recorded);
+  assert.deepEqual(r.licensed, ['o1']);
+  assert.equal(r.checks.licenceOnOpening, true);
+});
