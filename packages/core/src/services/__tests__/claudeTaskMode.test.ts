@@ -962,7 +962,7 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     });
     if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(args.some((arg) => arg.includes('tok-secret'))).toBe(false);
-    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch']);
+    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch,mcp__ordewell__wait_for']);
     adapter.dispose();
   });
 
@@ -980,7 +980,7 @@ describe('ClaudeCodeAdapter with the Ordewell MCP server (ADR-0022)', () => {
     await until(() => sent(spawned).length === 2);
     const args = spawned.lastArgs();
 
-    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch']);
+    expect(args.flatMap((arg, i) => (arg === '--allowedTools' ? [args[i + 1]] : []))).toEqual(['mcp__ordewell__task_complete,mcp__ordewell__checkpoint,mcp__ordewell__read,mcp__ordewell__apply_patch,mcp__ordewell__wait_for']);
     expect(args.some((arg) => arg.includes('tok-secret'))).toBe(false);
     expect(JSON.parse(sent(spawned)[1]).response.response.behavior).toBe('allow');
     expect(events.find((e) => e.type === 'permission_request')).toMatchObject({ decided: { decision: 'allow' } });

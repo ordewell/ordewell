@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createTask, type Task } from '../../models/Task';
-import { MAX_PARKS, parkDecision, parkResumeMessage } from '../Parking';
+import { MAX_PARKS, lostWaits, owedPark, parkDecision, parkResume } from '../Parking';
 
-const task = (id: string, order: number, extra: Partial<Task> = {}): Task => createTask({ id, order, title: `Task ${id}`, taskMode: 'build', ...extra });
+// Spread over `createTask`, which drops the fields only a run sets.
+const task = (id: string, order: number, extra: Partial<Task> = {}): Task => ({ ...createTask({ id, order, title: `Task ${id}`, taskMode: 'build', ...extra }), ...extra });
 
 /** An opening task, three slices after it, and a closing check after them. */
 const plan = (extra: Record<string, Partial<Task>> = {}): Task[] => [
@@ -13,41 +14,40 @@ const plan = (extra: Record<string, Partial<Task>> = {}): Task[] => [
   task('close', 5, { dependencies: ['a', 'b', 'c'], ...extra.close }),
 ];
 
-const ok = { resumable: true, parkedBefore: 0 };
+const ok = { parkedBefore: 0 };
+const refusal = (decision: ReturnType<typeof parkDecision>) => (decision.ok ? '' : decision.refusal);
 
 describe('parkDecision', () => {
-  it('adds the siblings it waits for to its dependencies, keeping its own', () => {
-    expect(parkDecision(plan(), 'a', ['b', 'c'], ok)).toEqual({ ok: true, dependencies: ['open', 'b', 'c'] });
+  it('waits for the siblings named, by reference, id or title, adding those its dependencies lack', () => {
+    expect(parkDecision(plan(), 'a', ['#3', 'Task c'], ok)).toEqual({ ok: true, waitsOn: ['b', 'c'], added: ['b', 'c'] });
+    expect(parkDecision(plan({ a: { dependencies: ['open', 'b'] } }), 'a', ['b'], ok)).toEqual({ ok: true, waitsOn: ['b'], added: [] });
   });
 
   it('refuses work that has landed, telling it to take that in', () => {
-    const refused = parkDecision(plan(), 'a', ['open'], ok);
-    expect(refused).toMatchObject({ ok: false });
-    expect(refused.ok ? '' : refused.refusal).toContain('#1 "Task open" has landed: take its work in now');
+    expect(refusal(parkDecision(plan(), 'a', ['open'], ok))).toContain('#1 "Task open" has landed: take its work in now');
   });
 
   it('refuses work that may never land: failed, skipped, or landing nothing', () => {
     const tasks = plan({ b: { status: 'failed' }, c: { status: 'skipped' } });
-    const readOnly = [...plan(), task('r', 6, { readOnly: true })];
-    const both = parkDecision(tasks, 'a', ['b', 'c'], ok);
-    expect(both.ok ? '' : both.refusal).toMatch(/#3 "Task b" failed, so its work may never land[\s\S]*#4 "Task c" was skipped/);
-    const nothing = parkDecision(readOnly, 'a', ['r'], ok);
-    expect(nothing.ok ? '' : nothing.refusal).toContain('lands no work');
+    expect(refusal(parkDecision(tasks, 'a', ['b', 'c'], ok))).toMatch(/#3 "Task b" failed, so its work may never land[\s\S]*#4 "Task c" was skipped/);
+    expect(refusal(parkDecision([...plan(), task('r', 6, { readOnly: true })], 'a', ['r'], ok))).toContain('lands no work');
   });
 
   it('refuses a task that waits for this one, which could never land first', () => {
-    const waits = parkDecision(plan(), 'a', ['close'], ok);
-    expect(waits.ok ? '' : waits.refusal).toContain('#5 "Task close" waits for this task');
+    expect(refusal(parkDecision(plan(), 'a', ['close'], ok))).toContain('#5 "Task close" waits for this task');
     // b already waits for a: a cannot wait for b.
-    const cycle = parkDecision(plan({ b: { dependencies: ['open', 'a'] } }), 'a', ['b'], ok);
-    expect(cycle.ok).toBe(false);
+    expect(parkDecision(plan({ b: { dependencies: ['open', 'a'] } }), 'a', ['b'], ok).ok).toBe(false);
   });
 
-  it('refuses a runner that cannot continue its session, and a task that has waited its share', () => {
-    const noSession = parkDecision(plan(), 'a', ['b'], { resumable: false, parkedBefore: 0 });
-    expect(noSession.ok ? '' : noSession.refusal).toContain('cannot continue its session');
-    const twice = parkDecision(plan(), 'a', ['b'], { resumable: true, parkedBefore: MAX_PARKS });
-    expect(twice.ok ? '' : twice.refusal).toContain(`waited ${MAX_PARKS} times this run`);
+  it('refuses itself, a task it holds and a task that holds it', () => {
+    const tree = [task('p', 1, { subtasks: [task('s', 1)] }), task('q', 2)];
+    expect(refusal(parkDecision(tree, 'p', ['p'], ok))).toContain('is this task');
+    expect(refusal(parkDecision(tree, 's', ['p'], ok))).toContain('#1 "Task p" holds this task');
+    expect(refusal(parkDecision(tree, 'p', ['#1.1'], ok))).toContain('#1.1 "Task s" is part of this task');
+  });
+
+  it(`refuses a task that has waited ${MAX_PARKS} times`, () => {
+    expect(refusal(parkDecision(plan(), 'a', ['b'], { parkedBefore: MAX_PARKS }))).toContain(`waited ${MAX_PARKS} times since it last started afresh`);
   });
 
   it('refuses the whole call when one task is refused, so nothing changes', () => {
@@ -55,9 +55,43 @@ describe('parkDecision', () => {
   });
 });
 
-describe('parkResumeMessage', () => {
-  it('names what landed and how to take it in', () => {
-    expect(parkResumeMessage(['#3 "Task b"'], 'Commit your work and take it in with `git merge --no-edit ordewell/run`'))
-      .toBe('(Ordewell) The work you waited for has landed: #3 "Task b". Commit your work and take it in with `git merge --no-edit ordewell/run`, resolving any conflict so that both sides\' intent survives, then go on with your brief from where you stopped.');
+describe('a park, once it is saved', () => {
+  const parked = (status: Task['status'], over: Partial<Task> = {}) => plan({
+    a: { status, dependencies: ['open', 'b'], parked: { attempt: 1, waitsOn: ['b'], added: ['b'], count: 1 }, attemptUsage: [{ attempt: 1, runner: 'claude-code', startedAt: '2026-11-21T10:00:00.000Z', wallTimeMs: 0, totals: {}, byModel: [] }], runnerSessionId: 'native-a', runnerSessionOwner: 'claude-code', ...over },
+  });
+
+  it('is owed to the next start until another attempt has run', () => {
+    expect(owedPark(parked('pending')[1])).toMatchObject({ attempt: 1 });
+    const later = parked('in_progress', { attemptUsage: [...parked('pending')[1].attemptUsage!, { attempt: 2, runner: 'claude-code', startedAt: '2026-11-21T10:05:00.000Z', wallTimeMs: 0, totals: {}, byModel: [] }] });
+    expect(owedPark(later[1])).toBeNull();
+  });
+
+  it('continues the saved session, told what landed', () => {
+    const tasks = parked('pending', {});
+    tasks[2] = { ...tasks[2], status: 'completed' };
+    expect(parkResume(tasks[1], tasks)).toEqual({
+      message: '(Ordewell) The work you waited for has landed: #3 "Task b". It is in your working tree now, beside your own work. Go on with your brief from where you stopped.',
+      resumeSessionId: 'native-a',
+    });
+  });
+
+  it('starts afresh where the session is another runner\'s, or none was saved', () => {
+    const moved = parked('pending', { assignedRunner: 'codex' });
+    expect(parkResume(moved[1], moved)?.resumeSessionId).toBeUndefined();
+    const none = parked('pending', { runnerSessionId: undefined });
+    expect(parkResume(none[1], none)?.resumeSessionId).toBeUndefined();
+  });
+
+  it('is over for work that failed, was skipped or is blocked, but not for a loop\'s check between rounds', () => {
+    expect(lostWaits(parked('pending'))).toEqual(new Map());
+    expect(lostWaits(parked('pending', {}).map((t) => (t.id === 'b' ? { ...t, status: 'failed' as const } : t)))).toEqual(new Map([['a', ['b']]]));
+    expect(lostWaits(parked('pending', {}).map((t) => (t.id === 'b' ? { ...t, status: 'skipped' as const } : t)))).toEqual(new Map([['a', ['b']]]));
+    const blocked = parked('pending', {}).map((t) => (t.id === 'b' ? { ...t, status: 'pending' as const, dependencies: ['x'] } : t));
+    expect(lostWaits([...blocked, task('x', 9, { status: 'failed' })])).toEqual(new Map([['a', ['b']]]));
+  });
+
+  it('tells a start after a lost wait what will not land, and to finish its part', () => {
+    const tasks = parked('pending', { dependencies: ['open'] }).map((t) => (t.id === 'b' ? { ...t, status: 'failed' as const } : t));
+    expect(parkResume(tasks[1], tasks)?.message).toBe('(Ordewell) The work you waited for will not land now: #3 "Task b" failed. Finish your own part and end as your brief says, naming each check that needs that work, and the task whose work it needs, in a finding. Go on with your brief from where you stopped.');
   });
 });

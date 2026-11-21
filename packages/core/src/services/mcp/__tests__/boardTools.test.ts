@@ -43,8 +43,8 @@ describe('a task\'s token', () => {
     expect(flat.extraTools).toBeUndefined();
     expect(flatReadOnly.extraTools).toBeUndefined();
     expect(onBoard.extraTools).toEqual(['post']);
-    expect(await names(await connect(flat))).toEqual(['task_complete', 'checkpoint', 'read', 'apply_patch']);
-    expect(await names(await connect(onBoard))).toEqual(['task_complete', 'checkpoint', 'read', 'post', 'apply_patch']);
+    expect(await names(await connect(flat))).toEqual(['task_complete', 'checkpoint', 'read', 'apply_patch', 'wait_for']);
+    expect(await names(await connect(onBoard))).toEqual(['task_complete', 'checkpoint', 'read', 'post', 'apply_patch', 'wait_for']);
     expect(await names(await connect(readOnlyOnBoard))).toEqual(['task_complete', 'checkpoint', 'read', 'post', 'run_command', 'save_patch', 'fetch', 'web_search']);
     await (await connect(onBoard)).callTool({ name: 'post', arguments: { type: 'claim', title: 'It holds' } });
     expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: 'claim', title: 'It holds' }), expect.anything());

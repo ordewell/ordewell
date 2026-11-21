@@ -171,7 +171,7 @@ export interface WaitingRequest {
 export type RunReads = Pick<TaskOrchestrator,
   | 'isScheduling' | 'startsHeld' | 'hasLiveWork' | 'runHeld' | 'scheduledRun' | 'startsPending' | 'loopCarried' | 'awaitsResume' | 'advancesOnItsOwn'
   | 'getAttempt' | 'holdsSlot' | 'repairWait' | 'loopRunsOn' | 'startWaits' | 'revertScope' | 'awaitsCheckpoint'
-  | 'admitStart' | 'readyFailed' | 'startAtGate'>;
+  | 'admitStart' | 'readyFailed' | 'startAtGate' | 'parkedNow'>;
 
 /** Who approved what to run (ADR-0029, ADR-0035); a start the seam consented to approves before it acts. */
 export type ApprovalReads = Pick<ApprovalRecord, 'planApproved' | 'isApproved' | 'waitsForApproval' | 'approve' | 'approvePlan'>;
@@ -1408,7 +1408,8 @@ export class ExecutionCommands {
     const label = describe(located);
     const completing = this.completingRefusal(located);
     if (completing) return { refusal: completing };
-    if (this.orchestrator.repairWait(task.id) === null && !this.running(task.id) && task.status !== 'in_progress') {
+    const parked = this.orchestrator.parkedNow(task);
+    if (this.orchestrator.repairWait(task.id) === null && !this.running(task.id) && task.status !== 'in_progress' && !parked) {
       return { refusal: `${capitalize(label)} is not running (it ${statusWords(task)}): there is nothing to stop.${this.conflictNext(task)}` };
     }
     return {
@@ -1416,6 +1417,7 @@ export class ExecutionCommands {
         await this.host.stopTask(task.id, actor);
         const now = this.located(task.id)?.task;
         if (now?.status === 'awaiting_user' && now.awaitingReason === 'conflict') return { message: `Stopped the repair of ${label}: its merge conflict waits for you, and its work is kept. ${CONFLICT_ANSWERS}` };
+        if (parked) return { message: `Stopped ${label}: it waited for other tasks' work and no longer goes on once that lands. It is held until it is retried or force started; a force start goes on in its session.` };
         if (task.type === 'script') return { message: `Stopped ${label}: what it was running was ended, and it is back to not started and held until it is retried. A retry runs its body again from the first step.` };
         return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}` };
       },

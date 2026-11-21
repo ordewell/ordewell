@@ -108,10 +108,31 @@ export interface TaskModelAssignment {
 
 export type RunnerId = string;
 
+/** What a task saves as it parks (ADR-0074); see {@link Task.parked}. */
+export interface Parked {
+  /** The attempt that parked, which the next start goes on from. */
+  attempt: number;
+  /** The tasks it waits for, by id. */
+  waitsOn: string[];
+  /** Those of them its dependencies did not already hold: Ordewell's edit, which a wait that ends without them takes back. */
+  added: string[];
+  /** Times it has parked since its last fresh attempt, this one included. */
+  count: number;
+}
+
 /** A model's note for one fresh attempt: `by` is whose turn wrote it, the supervisor's or the planner's in the user's turn. */
 export interface RetryNote {
   by: 'supervisor' | 'planner';
   text: string;
+}
+
+const isIds = (value: unknown): value is string[] => Array.isArray(value) && value.every((id) => typeof id === 'string');
+
+/** A saved park as this build reads it: one it cannot read is dropped, and the task starts afresh. */
+function isParked(value: unknown): value is Parked {
+  if (typeof value !== 'object' || value === null) return false;
+  const { attempt, waitsOn, added, count } = value as Record<string, unknown>;
+  return Number.isInteger(attempt) && isIds(waitsOn) && isIds(added) && Number.isInteger(count);
 }
 
 /**
@@ -125,6 +146,7 @@ export function migrateLoadedTasks(tasks: readonly Task[]): void {
   for (const task of tasks) {
     if (typeof task.runnerSessionId !== 'string') delete task.runnerSessionId;
     if (typeof task.carriedFrom !== 'string') delete task.carriedFrom;
+    if (!isParked(task.parked)) delete task.parked;
     if (typeof task.retryNote?.text !== 'string') delete task.retryNote;
     if (typeof task.runnerSessionOwner !== 'string') delete task.runnerSessionOwner;
     const legacy = task as Task & { transport?: { kind?: unknown; nativeSessionId?: unknown } };
@@ -376,6 +398,14 @@ export interface Task {
    * attempt's files. Cleared once that attempt runs, and by a retry or a rearm.
    */
   carriedFrom?: RunnerId;
+  /**
+   * The task parked with `wait_for` (ADR-0074): its attempt `attempt` ended
+   * with no verdict to wait for `waitsOn`, which `added` put in its
+   * dependencies. Its next start continues that attempt's session while no
+   * attempt has run since (`owedPark`); kept after, so `count` bounds the
+   * parks. Cleared by a fresh attempt.
+   */
+  parked?: Parked;
   /**
    * The note a model's fresh `retry_task` gave this attempt (ADR-0029): the
    * runner reads it with its brief, and the identical-retry guard counts it as

@@ -6,8 +6,6 @@ note: "Settles #34, and #36 and #38 as far as this goes. Built behind ADR-0055 D
 
 # 0057 — Information moves by reference: reports stay one size at every level, and code decides when a planner wakes
 
-*Pending:* [ADR-0074](0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md) — R7: a task waits for a sibling only through a plan edge, by `wait_for`.
-
 ## Problem
 
 [ADR-0047](0047-structured-task-handoffs.md) settled what one task tells the next in a
@@ -304,7 +302,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - **No sibling chat, lock, wait or broadcast (R7).** Sibling messages (#38) stay out. They come back
   only if replays of real trees show both of these: conflicts or duplicated work between siblings
   that scope lines and the board do not lower; and, on the same goals, messages on costing fewer
-  tokens per landed task than messages off, not just fewer conflicts.
+  tokens per landed task than messages off, not just fewer conflicts. A task that needs a sibling's
+  unlanded work waits only through an edge of the plan: `wait_for` ends its attempt and adds the
+  dependency, and the start rule continues it once that work lands
+  ([ADR-0074](0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md)).
+  It holds no lock on the sibling and hears nothing from it.
 
 ### The board
 
@@ -525,3 +527,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-18 — R5: a `running_long` line names the tasks it blocks, by the rule a failure's line uses as though it had failed, subtasks included, and nothing when it blocks nothing.
 - 2026-11-21 — R4: a running-long flag still held when its task passes or fails is dropped from the batch.
 - 2026-11-21 — R4 holds `landed_blocker`, one per landed task, the latest count replacing a queued one; R5: its line is whole, never a ride-along (ADR-0073).
+- 2026-11-21 — R7: a task waits for a sibling's unlanded work only through a plan edge, by `wait_for` (ADR-0074).
