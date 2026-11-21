@@ -109,7 +109,10 @@ question is put depends on how the plan arrives.
   shows each command and the end of its output. The opening task's note says
   so, lets it edit any file for that alone, whichever task owns it, adding the
   smallest placeholder and listing each one with its owner, says to end
-  `failed` when the project still does not import or collect, says to stay
+  `failed` when the project still does not import or collect for a cause in
+  the repository's code, and to report a cause outside it that no placeholder
+  fixes (a dependency that is not installed) as a finding and end `done`,
+  since the slices would wait on a failure no task of the plan can mend, says to stay
   short and to end its report with a module map, and lists every
   task with the paths its brief names, read before any note Ordewell appended,
   since a `Plan revision:` note names other tasks by title. Every other task
@@ -160,9 +163,11 @@ question is put depends on how the plan arrives.
   `PlannerModes.parallelLimit`, set where the session builds the planner's
   modes, a fact about the run that no prompt reads. On the plan R1 kept,
   before R6's order and R5's notes, `mergeSmallSlices` (`PlanFanOut.ts`)
-  takes each level holding more than twice the limit in slices and merges its
+  takes each level holding more than twice the limit in slices, and more than
+  `FAN_OUT_MIN`, and merges its
   smallest, by R6's size, into bins: the smallest bin with the smallest other
-  of its kind, two at a time, until the level has twice the limit, or, where
+  of its kind, two at a time, until the level has twice the limit, never
+  fewer than `FAN_OUT_MIN`, so a limit of one leaves the plan wide, or, where
   the cap below stops it short of that, the multiple of the limit just above
   the fewest it allows, so the last wave is full, unless that is no fewer
   than the level held, when it stops at the fewest. A bin never grows past the
@@ -171,7 +176,12 @@ question is put depends on how the plan arrives.
   brief names was read), since a size of nothing would put any number of them
   in one bin. When no slice is sized, nothing is merged. Only slices of one
   kind merge: the same dependencies and dependents, type, runner, model, mode,
-  skills and autonomy. A merged task keeps the id of its first slice in plan
+  skills, autonomy and slice type (`sliceType`). A level stops one bin sooner,
+  and again, while the merged plan would read another shape: another answer
+  to whether it is wide, its tasks before the slices, its opening task or its
+  closers. Merged to as few slices as a shallower level, the fan-out's level
+  would move there, and a task every merged slice waits for would read as a
+  slice. A merged task keeps the id of its first slice in plan
   order, in that slice's place, and records the others in `mergedSlices`;
   every dependency on them now names it. Its title joins the slices' titles;
   its brief says it covers the listed slices the planner wrote separately and
@@ -181,7 +191,7 @@ question is put depends on how the plan arrives.
   read a merged brief slice by slice, so its paths and its size are its
   slices' together. The research log records how many slices became how
   many. A plan already noted, a plan that is not wide, a level of at most
-  twice the limit and a conversation planner's plan are not touched: the
+  twice the limit or `FAN_OUT_MIN`, and a conversation planner's plan are not touched: the
   plan comes back as the same array. Which slices merge is a guess from the
   repository's files, like R6's order, never a verdict.
 - **The shaping runs in one order, each step on the plan the step before it
@@ -219,13 +229,15 @@ planner's adapters do (numbered lines, a size cap, a line limit): its measure,
 its fallback, equal shares, the level it keeps and the bounds on reading; that
 the notes list the slices in their new order, and the log line, through
 `reviewLongChain`. `mergeSmallSlices` is tested over the same file system: a
-level worked by hand (which pairs merge and where it stops), the merged task
+level worked by hand (which pairs merge and where it stops), that it stops at
+`FAN_OUT_MIN` at a limit of one and short of a count that would move the
+fan-out's level, the merged task
 pinned word for word, each kind that keeps slices apart, the plans it leaves as
 the same array, and a later level merged on the dependencies an earlier merge
 rewrote; that the order and notes are the merged plan's, and the log line,
 through `reviewLongChain`, and that the session hands the planner its limit
 through `generatePlan`. The tasks before the slices are tested on the shape of
-a recorded plan whose 31 slices waited for two of them, the opening note and
+a recorded plan whose slices waited for two of them, the opening note and
 the other tasks' note pinned word for word; that the merge never takes such a
 task, that it starts ahead of the slices beside it and that the notes and log
 lines are the merged plan's, through `reviewLongChain`.
@@ -322,12 +334,12 @@ conversation's as they stand.
 - **Only the first task every slice waits for is the opening task, the rest
   read from the spine.** Replaced: a task every slice waited for, set beside
   tasks the slices did not need, read as a slice, so a recorded plan logged
-  one task before 31 slices that waited for two, and that task got a slice's
+  one task before slices that waited for two, and that task got a slice's
   note.
 - **The opening task's note leaves every module a slice owns to that slice.**
   Replaced: with a brief limited to two files, the opening task left a package
   whose `__init__` imports every module, and whose stubs lack private helpers
-  sibling modules import, not importing at any landing for over two hours, and
+  sibling modules import, not importing at any landing of the run, and
   most slices built stand-ins outside their worktrees to run their tests.
 - **Ordewell adds an opening task to a wide plan with none.** Not taken: it
   costs a serial task on every wide plan whose slices need nothing first, and
@@ -383,3 +395,4 @@ conversation's as they stand.
 - 2026-11-20 — R6: a wide one-shot plan's slices of each level start largest first, sized by the lines of the files their briefs name.
 - 2026-11-21 — R7: a wide one-shot plan's small sibling slices are merged toward twice the run's parallel limit, before the order and the notes; telling the planner the limit is not taken.
 - 2026-11-21 — R5: a task every slice of the fan-out's level waits for runs before the slices; every task before the slices is done only when the project imports and its tests collect, and the opening task may edit any file for that alone. R6: such a task starts ahead of the slices beside it.
+- 2026-11-21 — R7: a level is never merged below `FAN_OUT_MIN`, nor to a count that changes the plan's shape. R5: the opening task ends done, with a finding, when what stops the import is outside the repository's code.
