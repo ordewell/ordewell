@@ -61,6 +61,7 @@ import {
   runnerForProvider,
   PlannerModelMemory,
   selectPlanner,
+  isAgentPick,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
   removesCredential,
@@ -819,6 +820,12 @@ export class OrchestratorPool {
     const selection = changesPlanner(plannerChange)
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
+    // A pick with no switch is the agent's own when it plans now, and is
+    // remembered for it before the model is written: routing reads that memory,
+    // and a found key would otherwise claim a bare id its vendor also names.
+    const agentPick = selection?.remember && selection.remember.provider === current.provider
+      && isAgentPick(current.provider, selection.remember.model) ? selection.remember : undefined;
+    if (agentPick) this.plannerModelMemory.remember(agentPick.provider, agentPick.model, agentPick.effort);
 
     let unsavedEnvKeys: string[] = [];
     if (envChanges) {
@@ -891,7 +898,7 @@ export class OrchestratorPool {
 
     if (envChanges) for (const monitor of this.accountLimits.values()) monitor.refresh();
 
-    if (selection?.remember) {
+    if (selection?.remember && !agentPick) {
       const { provider, model, effort } = selection.remember;
       // Without a switch a vendor pick is keyed by the provider its model id
       // resolves to now, which the env written above already reflects.

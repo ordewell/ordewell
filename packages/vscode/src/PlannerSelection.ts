@@ -1,5 +1,5 @@
 import {
-  CLI_PROVIDERS, getProviderMeta, plannerBackendEntries, runnerForProvider, selectPlanner,
+  CLI_PROVIDERS, getProviderMeta, isAgentPick, plannerBackendEntries, runnerForProvider, selectPlanner,
   type PlannerBackendId, type ModelResolver, type PlannerModelMemory,
   type PlannerSelectionChange, type PlannerSelectionResult, type PlannerUsability, type RunnerInstallation,
 } from '@ordewell/core';
@@ -117,13 +117,19 @@ export class PlannerSelection {
     // later must not find written over `orchestratorModel`.
     const saveModel = saveProvider || change.model !== undefined;
     if (!result.remember && !result.recall && !saveModel && change.effort === undefined) return result;
+    // A pick with no switch is the agent's own when it plans now, and is
+    // remembered for it before the model is written: routing reads that memory,
+    // and a found key would otherwise claim a bare id its vendor also names.
+    const remember = result.remember;
+    const agentPick = remember && remember.provider === current.provider && isAgentPick(current.provider, remember.model);
+    if (agentPick) plannerModelMemory.remember(remember.provider, remember.model, remember.effort);
     if (saveProvider) await config.update('aiProvider', next.provider);
     if (saveModel) await config.update('orchestratorModel', next.model);
     // Read after the writes above: the pick is for whoever they route to.
     if (change.model !== undefined) config.notePlannerPick(next.model, config.aiProvider);
     await config.update('plannerThinkingEffort', next.effort);
-    if (result.remember) {
-      const { provider, model, effort } = result.remember;
+    if (remember && !agentPick) {
+      const { provider, model, effort } = remember;
       // A vendor planner is resolved from its model id, so without a switch the
       // pick is keyed by the provider that model now resolves to.
       plannerModelMemory.remember(provider !== current.provider ? provider : config.aiProvider, model, effort);

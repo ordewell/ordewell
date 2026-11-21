@@ -57,8 +57,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   unless it is signed out or you chose that provider: picked it with `/planner`
   or `ordewell planner <id>`, or saved a planner model for it
   (`ORCHESTRATOR_MODEL`, VS Code's `orchestratorModel`, or `GEMINI_MODEL`,
-  `geminiModel` and the older `planningModel` for Gemini). If you already plan
-  with a provider, nothing
+  `geminiModel` and the older `planningModel` for Gemini). A model you pick
+  while the agent plans (desktop Settings or chat, `ordewell model set`,
+  VS Code's `/model`) stays the agent's, even one the key's provider also
+  names, such as `gpt-5.5`. If you already plan with a provider, nothing
   changes. With no agent installed, a key's provider plans as before. When a
   key is passed over, the terminal UI's welcome, the desktop app and VS Code
   say once which planner is active and why: "Planning with Claude Code. An

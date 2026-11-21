@@ -50,7 +50,10 @@ A bare id was picked for the agent only when it is the agent's remembered pick;
 such a model never chooses a vendor. The agent's stable aliases and its
 discovered catalog are no evidence: a vendor names many of the same ids
 (Codex's `gpt-5.5` is OpenAI's too), and a catalog that arrives mid-session
-would move the planner between one goal and the next.
+would move the planner between one goal and the next. A model picked with no
+planner named while the agent plans is that agent's pick, unless it is plainly
+a vendor's (`isAgentPick`): every surface remembers it for the agent before the
+model is written, so the routing that reads it never sees a bare id unclaimed.
 A vendor model whose vendor has no key never hands planning to another
 vendor's key.
 

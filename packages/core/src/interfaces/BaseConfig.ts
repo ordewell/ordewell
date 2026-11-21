@@ -457,6 +457,17 @@ export function isVendorModelFor(agent: PlannerBackendId, model: string): boolea
 }
 
 /**
+ * Whether a model picked with no switch, while `planner` plans, is that coding
+ * agent's pick: any model but one plainly a vendor's. A surface remembers such
+ * a pick for the agent before routing reads the model, since only the agent's
+ * remembered pick keeps a found key from claiming a bare id its vendor also
+ * names (ADR-0076): picking a model is no choice of who plans.
+ */
+export function isAgentPick(planner: PlannerBackendId, model: string): boolean {
+  return isCliProvider(planner) && !isVendorModelFor(planner, model);
+}
+
+/**
  * A model the user picked for `agent`: its remembered pick. Its stable aliases
  * and its catalog are no evidence, since a vendor names many of the same ids
  * (Codex's `gpt-5.5` is OpenAI's too), and a catalog that arrives mid-session

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlannerModelMemory, recordInstalledPlanner, resetInstalledPlanner, runnerForProvider, type PlannerBackendId, type PlannerModelStore, type PlannerUsability, type RunnerAuth } from '@ordewell/core';
+import { PlannerModelMemory, SettingsService, recordInstalledPlanner, resetInstalledPlanner, runnerForProvider, type PlannerBackendId, type PlannerModelStore, type PlannerUsability, type RunnerAuth } from '@ordewell/core';
 import { __resetConfig, __setConfig, configUpdates } from '../test/vscode.mock';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { PlannerSelection } from '../PlannerSelection';
@@ -8,9 +8,11 @@ function setup(
   runnerModels: Record<string, { modelId: string; variants: { id: string }[] }[]> = {},
   auth?: RunnerAuth,
   usability?: PlannerUsability,
+  /** The extension's own store, the settings file routing reads, for a test about who a pick routes to. */
+  settingsStore?: PlannerModelStore,
 ) {
   const stored: Record<string, { model: string; effort?: string }> = {};
-  const store: PlannerModelStore = {
+  const store: PlannerModelStore = settingsStore ?? {
     getPlannerModel: (p) => stored[p],
     setPlannerModel: (p, e) => { if (e) stored[p] = e; else delete stored[p]; },
   };
@@ -217,6 +219,30 @@ describe('PlannerSelection with a detected default planner', () => {
     await selection.apply('codex');
 
     expect(configUpdates).toContainEqual({ key: 'aiProvider', value: 'codex' });
+  });
+
+  // The /model command sends the model alone: picking one for the agent
+  // planning now is no choice of the vendor whose key is in the environment.
+  it.each([
+    ['claude-code', 'opus'],
+    ['codex', 'gpt-5.5'],
+  ] as const)('keeps %s planning when the user picks %s with a key in the environment', async (agent, model) => {
+    resetInstalledPlanner();
+    recordInstalledPlanner(agent);
+    const saved = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    try {
+      const { selection } = setup({}, undefined, undefined, new SettingsService());
+      expect(new VsCodeConfig().aiProvider).toBe(agent);
+
+      await selection.setModel(model);
+
+      const after = new VsCodeConfig();
+      expect([after.aiProvider, after.orchestratorModel]).toEqual([agent, model]);
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = saved;
+    }
   });
 
   it('leaves the provider unsaved when only the model changes', async () => {

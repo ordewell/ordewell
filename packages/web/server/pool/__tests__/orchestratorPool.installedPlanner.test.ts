@@ -344,6 +344,47 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
+  // Desktop Settings, the desktop chat and `ordewell model set` send the model
+  // alone: picking one for the agent planning now is no choice of the vendor
+  // whose key is in the shell, even where that vendor names the same id.
+  it.each([
+    ['claude-code', 'opus'],
+    ['claude-code', 'claude-opus-4-5'],
+    ['codex', 'gpt-5.5'],
+  ] as const)('keeps %s planning when the user picks %s with a key in the shell, and after a restart', async (agent, model) => {
+    const installation = {
+      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === agent })),
+      runnerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === agent })),
+      filterInstalled: vi.fn(async () => []),
+    };
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    await pool.detectInstalledPlanner();
+    expect(pool.getSettings().aiProvider).toBe(agent);
+
+    const picked = pool.updateSettings({ orchestratorModel: model });
+
+    expect(picked.aiProvider).toBe(agent);
+    expect(picked.orchestratorModel).toBe(model);
+    pool.destroyAll();
+    resetInstalledPlanner();
+    const restarted = new OrchestratorPool({ runnerInstallation: installation });
+    await restarted.detectInstalledPlanner();
+    expect(restarted.getSettings()).toMatchObject({ aiProvider: agent, orchestratorModel: model });
+    restarted.destroyAll();
+  });
+
+  it('a model plainly a vendor\'s, picked while the agent plans, still goes to that vendor\'s key', async () => {
+    const { installation, answer } = gatedInstallation();
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    answer();
+    await pool.detectInstalledPlanner();
+
+    expect(pool.updateSettings({ orchestratorModel: 'openai:gpt-4o' }).aiProvider).toBe('openai');
+    pool.destroyAll();
+  });
+
   it('probes once at startup, not once for each planning turn', async () => {
     const installation = {
       plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === 'codex' })),
