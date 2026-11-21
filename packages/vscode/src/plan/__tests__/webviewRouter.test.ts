@@ -86,6 +86,7 @@ function harness(aiService: Partial<IAiService> = { hasActiveConversation: () =>
       setPlannerModel: vi.fn(async () => {}),
       openTaskLog: vi.fn(),
       openFile: vi.fn(),
+      openLink: vi.fn(),
       setPlanDockHeight: vi.fn(),
       changeSettings: vi.fn(async () => {}),
       setRunnerEnabled: vi.fn(async () => {}),
@@ -110,6 +111,11 @@ describe('webview messages reach the session through one entry point each', () =
   afterEach(() => {
     vi.useRealTimers();
     fs.rmSync(h.workspace, { recursive: true, force: true });
+  });
+
+  it('hands an install guide the first screen links to the extension, to open in the browser', async () => {
+    await h.route({ type: 'openLink', url: 'https://github.com/openai/codex' });
+    expect(h.deps.extension.openLink).toHaveBeenCalledWith('https://github.com/openai/codex');
   });
 
   it('answers a task command catalog request from the Session without planner commands', async () => {

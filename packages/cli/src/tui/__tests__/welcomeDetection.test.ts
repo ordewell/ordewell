@@ -71,12 +71,35 @@ describe('the welcome while the coding agents are detected', () => {
     }
   });
 
-  it('shows the notice once detection found nothing that can plan', () => {
+  // First-run audit F2: OpenRouter is only the fallback name, never a choice the user made.
+  it('says there is no planner yet, not a provider the user never chose, once detection found nothing that can plan', () => {
     const state = after(settings('openrouter'), runners(), models());
 
-    expect(row(state, 'Planner')).toMatch(/^\s*Planner\s+OpenRouter \(unavailable\)\s+\/planner\s*$/);
+    expect(row(state, 'Planner')).toMatch(/^\s*Planner\s+none yet\s+\/planner\s*$/);
+    expect(rows(state).join('\n')).not.toContain('OpenRouter');
     expect(row(state, 'Runners')).toMatch(/^\s*Runners\s+none enabled\s+\/runners\s*$/);
     expect(rows(state).join('\n')).toMatch(NOTICE);
+  });
+
+  it('gives both routes: each agent\'s install command and page, where signing in happens, /refresh, and /key-set', () => {
+    // Read as one paragraph: a long line wraps at the pane's width.
+    const text = rows(after(settings('openrouter'), runners(), models())).map((l) => l.trim()).join(' ').replace(/\s+/g, ' ');
+
+    const commands = process.platform === 'win32'
+      ? ['irm https://claude.ai/install.ps1 | iex', 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"']
+      : ['curl -fsSL https://claude.ai/install.sh | bash', 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'];
+    for (const expected of [
+      'No planner yet. Install a coding agent (no API key needed), then run /refresh to detect it again:',
+      commands[0], 'https://code.claude.com/docs/en/setup',
+      commands[1], 'https://github.com/openai/codex',
+      'Signing in happens in the agent itself: run claude or codex once in a terminal and follow its sign-in prompt.',
+      'Or add an API key with /key-set, then pick its planner model.',
+    ]) expect(text).toContain(expected);
+  });
+
+  it('keeps naming a planner that cannot plan while something else can', () => {
+    const state = after(settings('openrouter'), runners(['claude-code', 'Claude Code']), models());
+    expect(row(state, 'Planner')).toMatch(/^\s*Planner\s+OpenRouter \(unavailable\)\s+\/planner\s*$/);
   });
 
   it('waits for the configured providers before saying a key is missing', () => {

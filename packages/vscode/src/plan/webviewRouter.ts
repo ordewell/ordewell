@@ -28,6 +28,8 @@ export interface ExtensionHandlers {
   openChildTaskLog(childId: string, taskId: string): Promise<void>;
   /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
   openFile(path: string): void;
+  /** Open an https page, such as an agent's install guide, in the user's browser. */
+  openLink(url: string): void;
   setPlanDockHeight(height: number): void;
   changeSettings(change: SettingsChange): Promise<void>;
   /** Sign a coding agent in with its own login in a terminal; no runner means the active planner. */
@@ -171,6 +173,9 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
       return;
     case 'openFile':
       deps.extension.openFile(msg.path);
+      return;
+    case 'openLink':
+      deps.extension.openLink(msg.url);
       return;
     case 'setPlanDockHeight':
       deps.extension.setPlanDockHeight(msg.height);

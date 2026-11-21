@@ -51,6 +51,7 @@ import { PlannerReadLimit, plannerReadLimitOf } from './plannerReadLimit';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
+import { RUNNER_LABELS } from './runnerCatalog';
 import { VENDORS } from './apiProviders';
 import type { HeldValue } from '../utils/redactSecrets';
 import { ModelResolver } from './ModelResolver';
@@ -2162,7 +2163,7 @@ export class Session {
   private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
     const enabled = this.catalog.enabledRunners();
     const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
-    if (chosen.length === 0) throw new Error('None of the requested runners are enabled');
+    if (chosen.length === 0) throw new Error(noRunnerEnabled(enabled));
     return chosen;
   }
 
@@ -3240,4 +3241,20 @@ export class Session {
   plannerSettingsChanged(): void {
     this.backend.settingsChanged();
   }
+}
+
+/**
+ * The refusal of a goal with no enabled runner to plan for, with the way on:
+ * the runners that are enabled when the request named others, else where to
+ * turn one on or how to get one. Every surface shows it as it is.
+ */
+function noRunnerEnabled(enabled: readonly RunnerId[]): string {
+  const lead = 'None of the requested runners are enabled.';
+  const switchOn = 'under Runners (/runners in the terminal UI)';
+  if (enabled.length === 0) {
+    return `${lead} Turn one on ${switchOn}, or install a coding agent such as Claude Code or Codex and run /refresh.`;
+  }
+  const names = enabled.map((id) => RUNNER_LABELS[id] ?? id);
+  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  return `${lead} Send the goal again to plan for the enabled ${names.length === 1 ? 'one' : 'ones'} (${listed}), or turn on another ${switchOn}.`;
 }

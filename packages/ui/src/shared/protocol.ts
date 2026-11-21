@@ -167,8 +167,15 @@ export type WebviewToHost =
   | { type: 'ready' }
   /** The user's answer to an escalation in the inbox; the host asks the Session and replies with `escalationAnswered`. */
   | ({ type: 'answerEscalation' } & EscalationAnswer)
-  /** A per-task model dropdown opened — re-discover so a stale/degraded catalog self-heals. */
+  /**
+   * Detect coding agents and re-discover models: a per-task model dropdown
+   * opened, so a stale or degraded catalog self-heals, or the first screen's
+   * Detect again and a no-planner error's Try Again, for an agent installed
+   * since the last look.
+   */
   | { type: 'refreshModels' }
+  /** Open an https page in the user's browser, such as an agent's install guide: a desktop window does not follow a link itself. */
+  | { type: 'openLink'; url: string }
   | { type: 'stopResearch' }
   | { type: 'newSession' }
   /** A notice the webview raised (a task action, the watchdog) — the conversation belongs to the host. */
@@ -275,7 +282,8 @@ export type HostToWebview =
   | { type: 'heldPrompts'; prompts: PromptHold }
   /** Queued text the host gave back, to go above whatever is in the input. */
   | { type: 'promptUnsent'; text: string }
-  | { type: 'showError'; error: string }
+  /** `code` names an error whose way out is detecting again: no planner was ready for the goal. */
+  | { type: 'showError'; error: string; code?: 'planner_not_ready' }
   | { type: 'setModels'; models: DiscoveredModel[] }
   | { type: 'setRunners'; runners: RunnerMeta[] }
   /**

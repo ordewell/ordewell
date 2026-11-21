@@ -197,7 +197,8 @@ export class ModelDiscovery {
     return options;
   }
 
-  async runApiKeyWizard(preselected?: ApiProvider): Promise<void> {
+  /** The provider whose key or endpoint was saved; undefined when the user dismissed a step. */
+  async runApiKeyWizard(preselected?: ApiProvider): Promise<ApiProvider | undefined> {
     const { vscodeApi } = this.deps;
     const { validateApiKey } = await import('./adapters/ApiKeyValidator');
     let provider = preselected;
@@ -278,7 +279,7 @@ export class ModelDiscovery {
       vscodeApi.window.showInformationMessage(endpoint === undefined
         ? `API key configured for ${providerLabel}.`
         : `${key ? 'Endpoint and API key' : 'Endpoint'} configured for ${providerLabel}.`);
-      return;
+      return provider;
     }
   }
 }

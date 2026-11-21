@@ -163,7 +163,7 @@ export interface DaemonHostOptions {
 
 /** What a read-only view may still ask: local navigation, the catalog, and leaving for a new session. */
 const READ_ONLY_ALLOWED: ReadonlySet<WebviewToHost['type']> = new Set<WebviewToHost['type']>([
-  'ready', 'refreshModels', 'openTaskLog', 'openFile', 'getTaskCommands', 'newSession',
+  'ready', 'refreshModels', 'openLink', 'openTaskLog', 'openFile', 'getTaskCommands', 'newSession',
 ]);
 
 function mintSessionId(): string {
@@ -440,6 +440,13 @@ export class DaemonHost {
     const unsaved = unsavedKeyWarning(saved, answer.provider);
     if (unsaved) this.view.conversation.note('system', unsaved);
     await this.refreshCatalog();
+    // A vendor that now plans has no default model, so the next goal would be
+    // refused for want of one: the key route goes on to that pick. A coding
+    // agent that still plans needs none (ADR-0076).
+    if (saved.aiProvider === answer.provider && !saved.orchestratorModel) {
+      this.view.conversation.note('system', `${VENDORS[answer.provider].label} now plans. Pick its planner model in Settings, under Planner, before your first goal.`);
+      this.navigator?.showSettings?.();
+    }
   }
 
   /** Whether a review of the run can be shown, so Review & Merge all has a review step to take. */
@@ -987,6 +994,10 @@ export class DaemonHost {
         return;
       case 'openFile':
         this.navigator?.openFile(msg.path);
+        return;
+      case 'openLink':
+        // main opens https pages only, and answers with why it did not.
+        void window.ordewell.shell.openExternal(msg.url);
         return;
       case 'setPlanDockHeight':
         storeItem(PLAN_DOCK_HEIGHT_KEY, String(msg.height));
@@ -1632,7 +1643,9 @@ export class DaemonHost {
   }
 
   private showError(error: unknown): void {
-    this.emit({ type: 'showError', error: messageOf(error) });
+    // No planner ready is the one refusal whose Try Again means detecting again.
+    const noPlanner = error instanceof DaemonRefusal && error.code === 'planner_not_ready';
+    this.emit({ type: 'showError', error: messageOf(error), ...(noPlanner ? { code: 'planner_not_ready' as const } : {}) });
   }
 
   private cue(cue: SessionCue): void {

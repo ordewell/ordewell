@@ -640,6 +640,25 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     }
   });
 
+  // First-run audit F2: Detect again's first answer must not be a "not installed" cached before the install.
+  it('asks the install probe afresh, PATH included, before judging who plans on Detect again', async () => {
+    const installation = fakeRunnerInstallation(['claude-code']);
+    const local = harness({ runnerInstallation: installation });
+    try {
+      await local.host.start();
+      installation.refresh.mockClear();
+      installation.plannerUsability.mockClear();
+
+      local.chat.messages.fire({ type: 'refreshModels' });
+
+      await vi.waitFor(() => expect(installation.plannerUsability).toHaveBeenCalled());
+      expect(installation.refresh).toHaveBeenCalled();
+      expect(installation.refresh.mock.invocationCallOrder[0]).toBeLessThan(installation.plannerUsability.mock.invocationCallOrder[0]);
+    } finally {
+      fs.rmSync(local.workspace, { recursive: true, force: true });
+    }
+  });
+
   it('seeds the run view when the webview reconnects, so a task waiting on a runner approval keeps its badge', async () => {
     await h.host.start();
     h.chat.messages.fire({ type: 'sendMessage', text: 'build a parser', typed: true });

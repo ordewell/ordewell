@@ -5,7 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLength, conversati
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { AGENT_DEFAULT_MODEL, DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
+import { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
 import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -1153,6 +1153,28 @@ function plannerRowValue(state: TuiState, label: string): string {
   return [paint(label), model, ...(effort ? [paint(effort)] : [])].join(style.grey(' · '));
 }
 
+/**
+ * The welcome's way on when nothing can plan: an agent's exact install command
+ * and page, that it signs in on its own, `/refresh` to look again, and the key
+ * route second, which `/key-set` carries on to the planner model.
+ */
+function noPlannerNotice(cols: number): string[] {
+  const room = Math.max(1, cols - 1);
+  const routes = agentInstallRoutes(process.platform === 'win32' ? 'windows' : 'posix');
+  const labelCols = Math.max(...routes.map((route) => width(route.label))) + 2;
+  return [
+    ...wrap(style.yellow('No planner yet. Install a coding agent (no API key needed), then run /refresh to detect it again:'), room),
+    ...routes.flatMap((route) => [
+      truncate(`  ${pad(route.label, labelCols)}${route.command}`, room),
+      truncate(`  ${' '.repeat(labelCols)}${style.grey(route.docs)}`, room),
+    ]),
+    ...wrap(style.grey(AGENT_SIGN_IN_NOTE), room),
+    ...wrap(style.grey(`Any agent /planner lists plans once installed: ${plannerNamesOr()}.`), room),
+    ...wrap(style.yellow('Or add an API key with /key-set, then pick its planner model.'), room),
+    '',
+  ];
+}
+
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
@@ -1163,11 +1185,15 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
 
   // Both rows wait on the daemon's probe for coding agents, as its answers do.
   const detecting = !state.plannerKnown || !state.runnersKnown;
+  // With nothing that can plan, the provider named is only the fallback, never
+  // the user's choice: name none rather than one to set up.
   const plannerValue = detecting
     ? style.grey(DETECTING)
     : planner.ready
       ? plannerRowValue(state, planner.label)
-      : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
+      : !canPlan
+        ? style.yellow('none yet')
+        : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
   // Only true while autorun is off (ADR-0030); with it on, the same spot warns
@@ -1196,15 +1222,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
-  const notice = canPlan || detecting || !state.providersKnown
-    ? []
-    : [
-      ...wrap(
-        style.yellow(`Install a coding agent (${plannerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key-set and choose your provider.`),
-        Math.max(1, cols - 1),
-      ),
-      '',
-    ];
+  const notice = canPlan || detecting || !state.providersKnown ? [] : noPlannerNotice(cols);
   // Once, here, and grey like the version notice: it explains a working state.
   const keyPassedOver = !detecting && planner.ready && state.unusedPlanningKey && isApiProvider(state.unusedPlanningKey)
     ? [...wrap(style.grey(describeUnusedPlanningKey(state.plannerProvider, state.unusedPlanningKey, TERMINAL_UI_COMMANDS.pickPlanner)), Math.max(1, cols - 1)), '']

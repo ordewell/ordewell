@@ -120,7 +120,7 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   // The session refuses a turn on a planner that cannot plan; the chat says
   // so with its own commands, and as the way out rather than a failure.
   if (err instanceof PlannerNotReadyError) {
-    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS));
+    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS), 'planner_not_ready');
     return;
   }
   const message = err instanceof Error ? err.message : String(err);

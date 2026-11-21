@@ -73,7 +73,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     else void vscode.commands.executeCommand('ordewellChatView.focus');
   }
   setState(state: ChatState): void { this.postMessage({ type: 'setState', state }); }
-  showError(error: string): void { this.postMessage({ type: 'showError', error }); }
+  /** `code` marks an error whose Try Again detects coding agents again. */
+  showError(error: string, code?: 'planner_not_ready'): void { this.postMessage({ type: 'showError', error, ...(code ? { code } : {}) }); }
   /**
    * The session's own plan stays with the extension host (it persists and
    * resumes from there); the webview is sent it without skill bodies. The plan

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState, { type SignedOutPlannerRow } from './components/EmptyState';
 import PlannerLoginAction from './components/PlannerLogin';
-import GetStarted from './components/GetStarted';
+import GetStarted, { type RedetectState } from './components/GetStarted';
 import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
 import ElapsedTime from './components/ElapsedTime';
@@ -465,6 +465,29 @@ export default function App({ layout = 'chat', selection, goal }: {
   // task's model dropdown opens, same as the TUI does.
   const handleModelsRefreshNeeded = useCallback(() => {
     bridge.post({ type: 'refreshModels' });
+  }, []);
+
+  // The host's refresh re-probes every agent and re-reads the login shell's
+  // PATH, so an agent installed while the window was open is found; the next
+  // planner list or failure is its answer.
+  const [redetect, setRedetect] = useState<RedetectState>('idle');
+  const handleDetectAgain = useCallback(() => {
+    setRedetect('running');
+    bridge.post({ type: 'refreshModels' });
+  }, []);
+  useEffect(() => {
+    setRedetect((current) => (current === 'running' ? 'none-found' : current));
+  }, [planner, detectionError]);
+
+  // No planner was ready: its way out (an install, a sign-in) happens outside
+  // the window, so trying again means looking again, not only closing the box.
+  const handleTryAgain = useCallback(() => {
+    if (host.errorCode === 'planner_not_ready') bridge.post({ type: 'refreshModels' });
+    setError('');
+  }, [host.errorCode, setError]);
+
+  const handleOpenLink = useCallback((url: string) => {
+    bridge.post({ type: 'openLink', url });
   }, []);
 
   const handleModelChange = useCallback((taskId: string, assignment: TaskModelAssignment) => {
@@ -1421,7 +1444,15 @@ export default function App({ layout = 'chat', selection, goal }: {
         )}
 
         {!hasContent && isReady && !canPlan && plannerKnown && (
-          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} isolationPreview={host.isolationPreview} />
+          <GetStarted
+            runnerNames={agentNames}
+            onConfigure={handleConfigureApiKey}
+            onDetectAgain={handleDetectAgain}
+            redetect={redetect}
+            onOpenLink={handleOpenLink}
+            runSettings={host.runSettings}
+            isolationPreview={host.isolationPreview}
+          />
         )}
 
         {emptyStateShown && (
@@ -1438,7 +1469,7 @@ export default function App({ layout = 'chat', selection, goal }: {
           <div className="error-state">
             <div className="error-icon">!</div>
             <p className="error-message">{error}</p>
-            <button onClick={() => setError('')}>Try Again</button>
+            <button onClick={handleTryAgain}>Try Again</button>
           </div>
         )}
 

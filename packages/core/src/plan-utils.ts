@@ -58,7 +58,7 @@ export { scriptTaskText } from './models/ScriptTask';
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from './services/signInHint';
 // The vendors' labels and key variables, pure data a webview may hold: the key entry names the vendor it is for.
 export { VENDORS, PROVIDER_PRIORITY, endpointUrlProblem, type ProviderRegistration } from './services/apiProviders';
-export { AGENT_DEFAULT_MODEL, describeUnusedPlanningKey } from './services/plannerNotices';
+export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';
 // The built-in runner is one runner per provider, under the provider's id and name (ADR-0070): a surface
 // tells such a runner from a coding agent here, and never offers it as a harness planner or a Log in.
 export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed, configuredProviderRunners } from './services/providerRunners';

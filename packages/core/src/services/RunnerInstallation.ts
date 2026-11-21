@@ -3,7 +3,7 @@ import { promisify } from 'util';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import { inProcessProvider, runnerCommand, type RunnerManifest } from '../plugins/types';
 import type { AiProvider } from '../interfaces/IConfig';
-import { augmentedPath, withPath } from '../utils/shellPath';
+import { augmentedPath, clearAugmentedPathCache, withPath } from '../utils/shellPath';
 import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../utils/launch';
 import { compareVersions } from '../utils/version';
 import type { ExecImpl } from './ModelDiscovery';
@@ -161,10 +161,13 @@ export class RunnerInstallation {
    * runner-list refresh calls this, so a CLI installed, upgraded or removed
    * while the host runs is offered, or refused, without a restart: the
    * version decides whether an ACP agent is new enough, so a present binary
-   * can go stale too.
+   * can go stale too, and so can the PATH the probes search.
    */
   refresh(): void {
     this.cache.clear();
+    // The login shell's PATH is part of every verdict: an installer that adds
+    // a directory to the profile is only seen once the shell is asked again.
+    clearAugmentedPathCache();
     // A login can change in either direction while a host runs, and a refresh
     // is the moment the user expects a fixed one to show.
     this.authCache.clear();

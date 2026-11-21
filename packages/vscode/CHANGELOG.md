@@ -18,6 +18,18 @@
   up when the agent lists no models.
 - A planner refused for having no model says to run `/planner` and pick a
   model for that provider.
+- With no coding agent and no key, the chat's first screen gives the install
+  command and install guide for Claude Code and for Codex, says that signing in
+  happens in the agent, and offers *Detect again* beside *Add API key*.
+- Saving a key whose provider then plans with no model picked opens the
+  planner picker on that provider's models, from `/key-set`, *Add API key* and
+  the *Configure API Key* command.
+
+### Fixed
+
+- An agent installed while VS Code is open is found on *Detect again*,
+  `/refresh` or a no-planner error's *Try Again*, which now detects again:
+  Ordewell reads the login shell's PATH again on each detection.
 
 ## [0.14.5] - 2026-11-21
 

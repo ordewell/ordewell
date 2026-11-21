@@ -270,7 +270,7 @@ describe('VS Code keyless first-run process boundary', () => {
       }
       if (action === 'start') await handleStartPlanning('Build a ledger', h.deps);
       else await handleSendMessageNow('Use Postgres', h.deps);
-      expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('OPENAI_API_KEY') });
+      expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('OPENAI_API_KEY'), code: 'planner_not_ready' });
       expect(argvs).toEqual([]);
       expect(networks).not.toHaveBeenCalled();
     expect(vendorRequests).toEqual([]);

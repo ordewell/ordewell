@@ -569,7 +569,8 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         ? { [endpoint.name]: endpoint.url, [meta.apiKeyEnvVar]: effect.key }
         : effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {};
       // The answer says who plans with the key saved, so the planner row is current at once.
-      dispatchSettings(deps, await api.updateSettings({ env }));
+      const answer = await api.updateSettings({ env });
+      dispatchSettings(deps, answer);
       for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
       const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
@@ -579,6 +580,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       await loadModels(deps);
       // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
       await loadRunners(deps);
+      // A vendor that now plans has no default model, so the next goal would
+      // be refused for want of one: go on to that pick, its catalog now in. A
+      // coding agent that still plans needs none (ADR-0076).
+      if (answer.aiProvider === effect.provider && !answer.orchestratorModel) dispatch({ type: 'pickPlannerModel', provider: effect.provider });
       return;
     }
 

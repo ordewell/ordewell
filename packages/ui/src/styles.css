@@ -2224,6 +2224,62 @@ section.isolation-notice {
   filter: brightness(1.1);
 }
 
+.get-started-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  filter: none;
+}
+
+.get-started-btn.secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.get-started-installs {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: var(--first-screen-column);
+  width: 100%;
+  text-align: left;
+}
+
+.get-started-install {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.get-started-command {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.get-started-signin {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  max-width: var(--first-screen-column);
+}
+
+.get-started-status {
+  margin-top: 8px;
+  color: var(--warning-text);
+  font-size: 12px;
+  max-width: var(--first-screen-column);
+}
+
 /* ---- Loading State ---- */
 .loading-state {
   flex: 1;
@@ -3646,7 +3702,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-handoff-patch-saved {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -6160,7 +6216,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .task-isolation code {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -6194,7 +6250,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .isolation-handoff-branch {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--accent);
 }
@@ -6252,7 +6308,7 @@ body.vscode-high-contrast-light .task-card.expanded {
 }
 
 .isolation-handoff-repo-path {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-weight: 600;
   color: var(--accent);
 }
@@ -7780,7 +7836,7 @@ body.vscode-high-contrast-light .pending-message {
 }
 
 .decision-record-id {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 

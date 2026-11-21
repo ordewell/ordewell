@@ -1287,6 +1287,29 @@ describe('settings', () => {
     expect(loaded?.settings).toMatchObject({ aiProvider: 'claude-code', unusedPlanningKey: 'openrouter' });
   });
 
+  // First-run audit F2: a vendor that now plans has no default model, so the next goal would be refused for want of one.
+  it('goes on to the planner model step once the key\'s vendor plans with none picked, after its models are in', async () => {
+    const h = harness();
+    h.api.updateSettings.mockResolvedValue({
+      aiProvider: 'openrouter', orchestratorModel: '', plannerThinkingEffort: '',
+      autonomousMode: false, maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS },
+    });
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+    const kinds = h.actions.map((a) => a.type);
+    expect(kinds).toContain('pickPlannerModel');
+    expect(kinds.indexOf('modelsLoaded')).toBeLessThan(kinds.indexOf('pickPlannerModel'));
+    expect(h.actions.find((a) => a.type === 'pickPlannerModel')).toEqual({ type: 'pickPlannerModel', provider: 'openrouter' });
+  });
+
+  it('stops at the key while a coding agent plans, or the vendor has its model', async () => {
+    for (const answer of [{ aiProvider: 'claude-code', orchestratorModel: '' }, { aiProvider: 'openrouter', orchestratorModel: 'qwen/max' }]) {
+      const h = harness();
+      h.api.updateSettings.mockResolvedValue({ plannerThinkingEffort: '', autonomousMode: false, maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS }, ...answer });
+      await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+      expect(h.actions.map((a) => a.type)).not.toContain('pickPlannerModel');
+    }
+  });
+
   it('never puts an api key in a message the transcript would show', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-secret' }, h.deps);

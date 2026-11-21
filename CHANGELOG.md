@@ -36,8 +36,34 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   VS Code; from the command line, list the models with `ordewell models`, then
   `ordewell model set <id>`.
 
+- **With nothing that can plan, every first screen says exactly how to get a
+  planner.** The desktop app and VS Code show the install command and install
+  guide for Claude Code and for Codex, say that signing in happens in the agent
+  itself, and offer *Detect again*, with *Add API key* as the second route. The
+  terminal UI shows the same, with `/refresh` to look again, and its Planner
+  row says `none yet` instead of `OpenRouter (unavailable)`, a provider nobody
+  chose. The installer names both routes, an agent or an API key, with the two
+  agents' install commands, and ends with the next step: change to your
+  project and run `ordewell`.
+- **Adding a key goes on to the planner model.** When the key's provider now
+  plans and has no model picked, `/key-set` in the terminal UI opens
+  `/planner`'s model step for it, VS Code's key entry (`/key-set`, *Add API
+  key* and the *Configure API Key* command) opens the planner picker on that
+  provider's models, and the desktop app opens Settings at the planner. The
+  first goal is no longer refused for a missing model right after a key was
+  added. While a coding agent plans, nothing more is asked.
+- **"None of the requested runners are enabled" says what to do:** send the
+  goal again to plan for the runners that are on, or turn one on under Runners
+  (`/runners` in the terminal UI), or, with none enabled, install a coding agent
+  and run `/refresh`.
+
 ### Fixed
 
+- **An agent installed while Ordewell runs is found on the next detection.**
+  *Detect again*, `/refresh`, the runner list and a no-planner error's *Try
+  Again* now ask the login shell for its PATH again, so an installer that adds
+  a directory to your shell profile no longer needs Ordewell restarted. The
+  chat's *Try Again* on that error detects again instead of only closing it.
 - **The terminal UI's Planner row is current after `/key-set`,** which now
   applies the daemon's answer at once instead of showing the old planner until
   a goal was refused, and **`/planner` probes the installed coding agents

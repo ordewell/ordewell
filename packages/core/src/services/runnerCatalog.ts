@@ -17,7 +17,7 @@ export interface RunnerCatalogEntry {
 
 /** In manifest order, which is picker order on every surface. */
 export const RUNNER_CATALOG: readonly RunnerCatalogEntry[] = [
-  { id: 'claude-code', label: 'Claude Code', installDocs: 'https://docs.claude.com/en/docs/claude-code/setup' },
+  { id: 'claude-code', label: 'Claude Code', installDocs: 'https://code.claude.com/docs/en/setup' },
   { id: 'codex', label: 'Codex', installDocs: 'https://github.com/openai/codex' },
   { id: 'opencode', label: 'OpenCode', installDocs: 'https://opencode.ai/docs' },
   { id: 'pi', label: 'Pi', installDocs: 'https://pi.dev/docs/latest' },
