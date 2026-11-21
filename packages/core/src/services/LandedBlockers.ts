@@ -11,11 +11,11 @@ import { fanOutShape } from './PlanFanOut';
  * in a dozen calls 147 minutes in, too late to land.
  *
  * What counts is mechanical, and reads no words: a finding of severity
- * `blocker` whose evidence cites a task that had landed when the reporting
- * attempt started, by task reference pinned to the attempt that landed or
- * unpinned, or by a file that landed work changed and no other task's landing
- * changed after the report. The second is the one a recorded run needed: of its
- * 65 blockers, 61 cited only files and commits. A finding that also cites a
+ * `blocker` whose evidence cites a landed task, by task reference pinned to the
+ * attempt that landed or unpinned, landed when it was reported, or by a file
+ * that landed work changed before the reporting attempt started and no other
+ * task's landing changed since. The second is the one a recorded run needed: of
+ * its 65 blockers, 61 cited only files and commits. A finding that also cites a
  * task yet to land is waiting on it, not blocked by what landed. Reports are
  * grouped by the task whose work they name, so 21 reports are one fact, and
  * counted from the plan, never stored, so a retry that lands again starts the
@@ -80,32 +80,45 @@ function ownerNamed(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<s
  * Whether a finding cites, by task reference, work of this plan still to come
  * when it was reported: a wait notice, never a blocker in landed work, whatever
  * files it cites: those may be the placeholders a landed task left for the
- * work it waits on.
+ * work it waits on. Only a task that can still land before the reporter's
+ * work is wanted is work to come: one skipped or failed lands nothing, and one
+ * that waits for the reporter, as the closing check the slice note names as
+ * the one the work is for does, runs after it.
  */
 function waitsOn(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>): boolean {
   const reportedAt = settledAt(reporter) ?? Infinity;
   return (finding.evidence ?? []).some((ref) => {
     if (ref.kind !== 'task' || ref.finding !== undefined || (ref.node !== undefined && ref.node !== ROOT_NODE)) return false;
     const cited = byId.get(ref.task);
-    if (!cited || cited.id === reporter.id || !landsOnBranch(cited)) return false;
-    return cited.status !== 'completed' || (settledAt(cited) ?? -Infinity) > reportedAt;
+    if (!cited || cited.id === reporter.id || !landsOnBranch(cited) || waitsFor(cited, reporter.id, byId)) return false;
+    if (cited.status === 'completed') return (settledAt(cited) ?? -Infinity) > reportedAt;
+    return cited.status !== 'skipped' && cited.status !== 'failed';
   });
 }
 
-/**
- * Whether `owner`'s work had landed when the attempt that wrote `reporter`'s
- * handoff started. Work that landed after is work it may never have taken in,
- * so the count never jumps past its first raise when the work it named lands
- * later; and a retry that lands again starts the count over.
- */
-function landedBefore(owner: Task, reporter: Task): boolean {
-  return owner.id !== reporter.id && owner.status === 'completed' && landsOnBranch(owner) && (settledAt(owner) ?? -Infinity) <= heldFrom(reporter);
+/** Whether `task` depends, directly or not, on the task `id`. */
+function waitsFor(task: Task, id: string, byId: ReadonlyMap<string, Task>): boolean {
+  const seen = new Set<string>();
+  const queue = [...task.dependencies];
+  for (let dep = queue.pop(); dep !== undefined; dep = queue.pop()) {
+    if (dep === id) return true;
+    if (seen.has(dep)) continue;
+    seen.add(dep);
+    queue.push(...(byId.get(dep)?.dependencies ?? []));
+  }
+  return false;
+}
+
+/** Whether `owner`'s work had landed by `at`: a retry that lands again starts the count over. */
+function landedBy(owner: Task, reporter: Task, at: number): boolean {
+  return owner.id !== reporter.id && owner.status === 'completed' && landsOnBranch(owner) && (settledAt(owner) ?? -Infinity) <= at;
 }
 
 /**
  * When the reporting attempt started, which is when its tree last held what
- * had landed: a take-in later is the runner's own merge, with no time on the
- * plan (ADR-0013). Without the attempt's record, when it reported.
+ * had landed by the records: a take-in later is the runner's own merge, with
+ * no time on the plan (ADR-0013). Without the attempt's record, when it
+ * reported.
  */
 function heldFrom(reporter: Task): number {
   const attempt = reporter.handoff?.attempt;
@@ -117,18 +130,20 @@ function heldFrom(reporter: Task): number {
 /**
  * The landed task a finding's files name: the first file it cites that landed
  * work changed, where the defect is, not the callers it shows in after it. Of
- * several landings that changed that file, the last before the attempt started,
- * which is the work the reporter's tree held.
+ * several landings that changed that file, the last before the reporting
+ * attempt started, which is the work its tree held: a file says nothing of a
+ * take-in after, as a task reference does.
  *
- * None, once another task's landing after the report changed that file: what
+ * None, once another task's landing after that start changed that file: what
  * the report complained of was still being written, as a placeholder the
- * opening task left for a slice is. Counted afresh at each report, so one made
- * before that landing stops counting from then on.
+ * opening task left for a slice is. Every report from a tree cut before that
+ * landing is judged alike, whenever it was made, so the count does not fall
+ * and climb back through 1 and 2 on the reports that came after it.
  */
 function fileOwner(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>, landedPaths: LandedPaths): string | undefined {
   const completed = [...byId.values()].filter((t) => t.id !== reporter.id && t.status === 'completed' && landsOnBranch(t));
-  const landed = completed.filter((t) => landedBefore(t, reporter));
-  const reportedAt = settledAt(reporter) ?? Infinity;
+  const held = heldFrom(reporter);
+  const landed = completed.filter((t) => landedBy(t, reporter, held));
   for (const ref of finding.evidence ?? []) {
     if (ref.kind !== 'file') continue;
     const path = ref.path.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -136,7 +151,7 @@ function fileOwner(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<st
     const owners = landed.filter(changed);
     if (owners.length === 0) continue;
     const owner = owners.reduce((last, t) => ((settledAt(t) ?? -Infinity) > (settledAt(last) ?? -Infinity) ? t : last));
-    return completed.some((t) => t.id !== owner.id && (settledAt(t) ?? -Infinity) > reportedAt && changed(t)) ? undefined : owner.id;
+    return completed.some((t) => t.id !== owner.id && (settledAt(t) ?? -Infinity) > held && changed(t)) ? undefined : owner.id;
   }
   return undefined;
 }
@@ -147,13 +162,18 @@ function settledAt(task: Task): number | undefined {
   return Number.isNaN(at) ? undefined : at;
 }
 
+/**
+ * The landed task a reference names: landed by the time of the report, not of
+ * the attempt's start, since a reporter that names a task has its work, taken
+ * in mid-attempt as the slice note asks once it lands.
+ */
 function landedOwner(ref: TaskEvidence, reporter: Task, byId: ReadonlyMap<string, Task>): string | undefined {
   // A plan below this one is its own supervisor's: its tasks are not this plan's to fix.
   if (ref.node !== undefined && ref.node !== ROOT_NODE) return undefined;
   // A finding named cites that report, which may be about anyone's work: a recorded run's slices cited one on unlanded code.
   if (ref.finding !== undefined) return undefined;
   const owner = byId.get(ref.task);
-  if (!owner || !landedBefore(owner, reporter)) return undefined;
+  if (!owner || !landedBy(owner, reporter, settledAt(reporter) ?? Infinity)) return undefined;
   // A report against an attempt that a later one replaced says nothing of the work that landed.
   const landedAttempt = owner.handoff?.attempt;
   if (ref.attempt !== undefined && landedAttempt !== undefined && ref.attempt !== landedAttempt) return undefined;

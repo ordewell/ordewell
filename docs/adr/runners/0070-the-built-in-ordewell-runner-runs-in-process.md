@@ -287,12 +287,17 @@ is one runner per API provider, under the provider's own id and name.**
   only when a `taskCompactAt` point is in force), and the summary a compaction
   leaves says that work continues with room restored and gives the new fill: a
   model told its context was compacted as it fills read that as running out, and
-  ended a task at 36% of its window. A `failed` or `blocked` report that gives
-  its own context or memory as exhausted ("my context window is full", "running
-  out of context"; not a library's context object, a tool's context-length
-  error or a test's out of memory) while the fill is under where compaction
-  starts, or under 70% of the window with no point in force, is answered once an
-  attempt with the real figures and goes on, as the budget one is.
+  ended a task at 36% of its window. A notice on a step that compacts is
+  appended after the compaction, so its fill is the one the summary gives, not
+  the one it replaced. A `failed` or `blocked` report that gives its own
+  context or memory as exhausted ("my context window is full", "running out of
+  context", "context limit reached", "not enough context left"; not a library's
+  context object, a context full *of* something, a container's memory limit, a
+  tool's context-length error or a test's out of memory) while the fill is
+  under where compaction starts, or under 70% of the window with no point in
+  force, is answered with the real figures and goes on, as the budget one is.
+  The two answers are given once an attempt between them: each says the next
+  report is recorded, so a report citing both is held back once.
   The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
@@ -481,3 +486,4 @@ comes from that call.
 - 2026-11-21 — the count line shows the context fill, a compaction's summary says
   work continues with room restored, and a report citing the attempt's own
   context as exhausted with room left is answered once.
+- 2026-11-21 — a notice on a compacting step gives the fill after it, the context phrases take a limit reached or too little left, and the budget and context answers are given once between them.

@@ -519,3 +519,23 @@ describe('overflow recovery', () => {
     expect(client.summaryRequests).toHaveLength(0);
   });
 });
+
+describe('a notice on the step that compacts', () => {
+  it('gives the fill after the compaction, so the model\'s latest status agrees with the summary', async () => {
+    const client = splitClient((_request, index) => {
+      if (index < 4) return [call(`c${index + 1}`, 'note', { n: index }), usage([1_000, 26_000, 51_000, 62_000][index] ?? 0), STOP];
+      return [text('All done.'), usage(20_000), STOP];
+    });
+    // The 80% notice of a limit of 6 falls due at 4 calls used, on the request the 100k tool results compact.
+    const { loop, events } = loopWith(client, { stepLimit: 6, taskTools: fakeTaskTools(['note', 'task_complete'], async () => ({ text: chars(100_000) })) });
+    await loop.runTurn('The task prompt.', abort());
+
+    expect(eventsOf(events, 'compaction')).toHaveLength(1);
+    const texts = (client.mainRequests[4]?.messages ?? []).map((m) => (m.role === 'user' ? m.text : `<${m.role}>`));
+    const last = texts.at(-1) ?? '';
+    expect(last).toContain('[calls: 4 of 6; context: ');
+    const summaryPct = /\((\d+)%\)/.exec(texts.find((t) => t.includes('<summary>')) ?? '')?.[1];
+    expect(summaryPct).toBeDefined();
+    expect(/context: \d+k of 100k tokens \((\d+)%\)/.exec(last)?.[1]).toBe(summaryPct);
+  });
+});
