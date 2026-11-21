@@ -773,6 +773,34 @@ export function parsePytestSummary(text) {
 }
 
 /**
+ * How many of the summary's skipped outcomes belong to a module, not to a test.
+ * A module that calls `pytest.importorskip` at import is one skipped outcome in
+ * the summary, though none of its tests is a collected item, and pytest prints
+ * no progress character for it. Each test prints exactly one (`.` passed, `F`
+ * failed, `s` skipped, `x` xfailed, `X` xpassed; an `E` is an error, never an
+ * outcome), so the summary's skips less the `s` printed are the modules'.
+ * Null when the progress lines are absent or disagree with the summary, since
+ * nothing then says which skips are a module's.
+ */
+export function moduleLevelSkips(output, summary) {
+  const chars = { '.': 0, F: 0, s: 0, x: 0, X: 0 };
+  let seen = false;
+  for (const line of output.split('\n')) {
+    const m = /^([.FEsxX]+) *(?:\[ *\d+%\])?$/.exec(line.trimEnd());
+    if (!m) {
+      // The progress block is contiguous from the first run of tests; what follows it is not read.
+      if (seen && line.trim() !== '') break;
+      continue;
+    }
+    seen = true;
+    for (const c of m[1]) if (c in chars) chars[c]++;
+  }
+  if (!seen) return null;
+  if (chars['.'] !== summary.passed || chars.F !== summary.failed || chars.x !== summary.xfailed || chars.X !== summary.xpassed) return null;
+  return chars.s <= summary.skipped ? summary.skipped - chars.s : null;
+}
+
+/**
  * Flags the scoring run adds: a test file that fails to import is one error,
  * and pytest would otherwise stop at the first and run nothing, zeroing the
  * whole library for one file.
@@ -888,7 +916,7 @@ export function collectionErrorFiles(text) {
  */
 export function parseEvaluation(code, output) {
   const summary = parsePytestSummary(output);
-  if (summary) return { ...summary, collectionErrors: collectionErrorFiles(output) };
+  if (summary) return { ...summary, moduleSkipped: moduleLevelSkips(output, summary), collectionErrors: collectionErrorFiles(output) };
   const broke = /^(ImportError while loading conftest.*|Interrupted: \d+ errors? during collection.*)$/m.exec(output);
   if (!broke || code === 0) return null;
   return { passed: 0, failed: 0, errors: 0, skipped: 0, xfailed: 0, xpassed: 0, deselected: 0, collectionErrors: [], collectionError: broke[1].trim() };
@@ -1612,6 +1640,25 @@ export function distFreshness({ dists, sources, allowStale = false }) {
 /** A failed check is one that neither was expected to fail nor could not be verified. */
 export const failedCheck = (c) => !c.ok && !c.unverified && !c.expectedFailure;
 
+/**
+ * What is wrong with a scoring run's counts, as reasons. One function for a
+ * real run and for the dry run's reference, so a library whose reference
+ * would be judged invalid fails the dry run with that reason.
+ */
+export function judgeScore(tests) {
+  if (tests?.timedOut) return ['eval timed out'];
+  if (!tests || tests.passed === undefined) return ['eval gave no summary'];
+  if (typeof tests.collected !== 'number') return [];
+  // Each test has at most one call outcome; errors are left out, since a test
+  // that passes and then errors in teardown is counted under both. A module
+  // that skips at import is an outcome of no collected test (moduleLevelSkips).
+  const outcomes = ['passed', 'failed', 'skipped', 'xfailed', 'xpassed'].reduce((n, k) => n + (tests[k] ?? 0), 0);
+  const modules = tests.moduleSkipped ?? 0;
+  return outcomes - modules > tests.collected
+    ? [`more outcomes than the reference collected: ${outcomes - modules} > ${tests.collected}${modules ? ` (${modules} module-level skip${modules === 1 ? '' : 's'} not counted)` : ''}`]
+    : [];
+}
+
 /** Every reason a result is not one to compare. */
 export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false, planOnly = false, scoring = null }) {
   const reasons = [];
@@ -1620,17 +1667,14 @@ export function judgeValidity({ aborted, checks, tests, freshness, stopped = nul
   for (const c of checks ?? []) if (failedCheck(c)) reasons.push(`failed check: ${c.scope}: ${c.name}`);
   // The batch stops every run at one instant, so this arm got less time and spend than its pair (D1).
   if (stopped?.why === 'batch-budget') reasons.push('stopped by the batch budget');
-  if (dryRun) reasons.push('dry run: no arm ran');
-  // Whatever the plan was, nothing ran and nothing was scored: no plan-only result is one to compare.
-  else if (planOnly) reasons.push('plan-only: the plan was made and nothing ran, so nothing was scored');
-  else if (tests?.timedOut) reasons.push('eval timed out');
-  else if (!tests || tests.passed === undefined) reasons.push('eval gave no summary');
-  else if (typeof tests.collected === 'number') {
-    // Each test has at most one call outcome; errors are left out, since a test
-    // that passes and then errors in teardown is counted under both.
-    const outcomes = ['passed', 'failed', 'skipped', 'xfailed', 'xpassed'].reduce((n, k) => n + (tests[k] ?? 0), 0);
-    if (outcomes > tests.collected) reasons.push(`more outcomes than the reference collected: ${outcomes} > ${tests.collected}`);
-  }
+  if (dryRun) {
+    reasons.push('dry run: no arm ran');
+    // The fixture arm scores the reference's own source, so the score is one the same rules judge.
+    if (tests) reasons.push(...judgeScore(tests));
+  } else if (planOnly) {
+    // Whatever the plan was, nothing ran and nothing was scored: no plan-only result is one to compare.
+    reasons.push('plan-only: the plan was made and nothing ran, so nothing was scored');
+  } else reasons.push(...judgeScore(tests));
   if (freshness?.stale && freshness.allowed) reasons.push('stale dist allowed');
   return { valid: reasons.length === 0, invalidReasons: reasons };
 }
@@ -1669,7 +1713,7 @@ export function resultRecord({ lib, arm, settings = armSettings(arm), window, or
     egress,
     leak,
     networkDeselected: network?.deselected ?? null,
-    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, collectionErrors: tests.collectionErrors ?? [], exit: tests.exit ?? null, timedOut: tests.timedOut ?? false } : null,
+    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, moduleSkipped: tests.moduleSkipped ?? null, collectionErrors: tests.collectionErrors ?? [], exit: tests.exit ?? null, timedOut: tests.timedOut ?? false } : null,
     baseline: baseline ?? null,
     wallClockMs: wallClockMs ?? null,
     billedUsd: spend?.billedUsd ?? null,

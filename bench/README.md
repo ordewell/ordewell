@@ -572,6 +572,38 @@ reach 25, 50, 75, 90 and 100% of those collected. `commit0.test.mjs` tests the c
 commit-to-time mapping on a repository it builds, the closing check's landing included, and the container call
 through a fake `docker` on `PATH`.
 
+### Judging a score again
+
+A score is judged valid when no more outcomes were reported than the reference
+collected. A module that calls `pytest.importorskip` (or skips at module level)
+at import is one skipped outcome in pytest's summary, though none of its tests
+is a collected item, so a tree whose every collected test reports has more
+outcomes than the count whenever such a module is skipped. The scoring run's
+`-q` progress lines print one character for each test and none for a module, so
+the summary's skipped outcomes less the `s` printed are the modules'
+(`moduleSkipped` in `result.json`'s `tests`; `moduleLevelSkips` in `lib.mjs`).
+Those are left out of the count and nothing else is: a real excess of per-test
+outcomes is still invalid, with no tolerance. Where the progress lines are
+missing or disagree with the summary (a record made before the count was
+kept, with no `tests.log`), no skip is placed and every outcome counts, as it
+always did. The dry run's fixture arm scores the reference's own source, and
+judges that score with the same function (`judgeScore`): a library whose
+reference a real run would call invalid fails the dry run with the reason.
+
+A recorded run can be judged again by today's rules, offline and with no key or
+Docker:
+
+```bash
+node bench/commit0/rejudge.mjs <run dir | batch dir> ...
+```
+
+It reads each run directory's `result.json` (the checks, stop and freshness the
+run recorded, and the reference's collected count) and its `tests.log`, parses
+the counts afresh, and prints the verdict with its reasons and whether it
+differs from the record. It never rewrites `result.json`: the re-judgement is
+written beside it as `rejudged.json`. The exit is 1 when a run is judged invalid
+or has no `result.json`.
+
 ## Execution pipeline harness (`bench/pipeline/`)
 
 - `fake-claude/` — a deterministic stand-in for the `claude` CLI: no LLM, no
