@@ -607,11 +607,15 @@ planner's own next `submit_plan` changes the plan. Never a refusal.
 
 **Fan-out shape** (`PlanFanOut.ts`, ADR-0072 R5) — a one-shot plan's slices
 that run at once, four or more at one level, read from its dependencies alone,
-with the roles around them. The **opening task** is the first change task
-every slice waits for: the one that makes the project import and collect its
-tests. A later one that waits for it alone is a **shared module**, not a second
-opening task. The **slices** are the change tasks not ordered against every
-other one, each done when the code in its own scope is in place. The **closing
+with the roles around them. The tasks **before the slices** are the change
+tasks every slice waits for, and those every slice of the fan-out's level waits
+for though tasks beside them do not. The **opening task** is the first of them
+when every other waits for it: the one that makes the project import and
+collect its tests, and may edit any file for that alone. A later one that waits
+for it alone is a **shared module**, not a second opening task. Each is done
+only when the project still imports and its tests collect. The **slices** are
+the other change tasks not ordered against every other one, each done when the
+code in its own scope is in place. The **closing
 check** waits for every slice, runs the whole suite and can fix what fails, and
 no other such task waits for it: a loop's check counts when its body edits, an
 ops task, a push or a read-only check alone does not, and a change task the

@@ -30,8 +30,10 @@ dependency blocks the closing check that waits for it.
 wrote it is asked once to review the plan edge by edge, and only the planner
 decides what changes. The review asks that chain question and nothing else; a
 wide one-shot plan's fan-out shape is read by Ordewell and noted on each role's
-brief, never asked about, its small sibling slices are merged toward twice the
-run's parallel limit, and its slices are started largest first.** The question names the chain, task by task, and asks of
+brief, never asked about, the tasks every slice waits for are held to leaving
+the project importing and its tests collecting, its small sibling slices are
+merged toward twice the run's parallel limit, and the tasks before its slices,
+then its slices largest first, are started first.** The question names the chain, task by task, and asks of
 every dependency whether the dependent needs a file, name, signature or schema
 that does not exist in the repository until the other task writes it; it names
 the dependencies other rules require, so it never asks to drop them. How the
@@ -77,7 +79,15 @@ question is put depends on how the plan arrives.
   task, a loop's check or in a loop's body. Its *opening task* is the first
   change task every slice waits for; a later one that waits for it alone, or
   for an install or a manual step besides, is a shared module the slices build
-  on. Its *slices* are the change tasks not ordered against every other one.
+  on. A change task every slice of the fan-out's level waits for runs before
+  the slices too, though tasks beside it do not wait for it: the level is the
+  one holding the most change tasks not ordered against every other one, the
+  first on a tie, counted without a task every deeper one waits for, and only a
+  level of `FAN_OUT_MIN` or more takes any. These, first to last, are the tasks
+  *before the slices*; the opening task is the first of them only when every
+  other waits for it, and with none such the plan has no opening task. Its
+  *slices* are the change tasks not ordered against every other one and not
+  before the slices.
   Its *closing check* waits for every slice and can fix what still fails (an AI
   task that edits, or a loop's check whose body holds one; an ops task, a
   manual task, a script that may push and a read-only check with no such loop
@@ -91,10 +101,22 @@ question is put depends on how the plan arrives.
   The shape's faults (opening tasks in series, no opening task, no closing
   check) are recorded in the research log and asked of no one. After R1, at no
   call, a wide plan with a closing check gets a fixed `Plan shape:` note
-  appended to each role's brief, on the plan R1 kept. The opening task's note
-  says to stay short and to end its report with a module map, and lists every
+  appended to each role's brief, on the plan R1 kept. The slices start from the
+  tree the tasks before them land, so each of those is done, besides its own
+  brief's criterion, only when the project builds or imports and the test
+  command the slices' briefs run (the project's own, if they name none)
+  collects its tests without an error, tests may still fail, and its report
+  shows each command and the end of its output. The opening task's note says
+  so, lets it edit any file for that alone, whichever task owns it, adding the
+  smallest placeholder and listing each one with its owner, says to end
+  `failed` when the project still does not import or collect, says to stay
+  short and to end its report with a module map, and lists every
   task with the paths its brief names, read before any note Ordewell appended,
-  since a `Plan revision:` note names other tasks by title. A slice reads that map with `read` and
+  since a `Plan revision:` note names other tasks by title. Every other task
+  before the slices is told the slices wait for it and to leave the import and
+  the collection as it found them or better, with no licence beyond its brief.
+  A slice's note names the tasks before the slices that it waits for, and
+  only a slice that waits for the opening task reads its map, with `read` and
   `include_report`. A slice's note says its own scope is its done criterion: a
   test that fails only because a sibling's code has not landed yet, or that the
   repository does not let it derive, is listed as a finding and does not stop
@@ -112,9 +134,11 @@ question is put depends on how the plan arrives.
   listed late started late and set when the whole fan-out ended. On the plan R1
   kept, before any `Plan shape:` note is written, `largestSlicesFirst`
   (`PlanFanOut.ts`) sorts the slices of each level by size, largest first,
-  stably, each taking the place and `order` of the slice it displaced. Opening
-  tasks, the closing check, every other task and every dependency stay as they
-  are, and the notes, written after, list the slices in the order they start. A
+  stably, each taking the place and `order` of the slice it displaced. A task
+  before the slices at a level with slices beside it takes the first of those
+  places, sized or not, since every slice of the fan-out waits for it. The
+  closing check, every other task and every dependency stay as they are, and
+  the notes, written after, list the slices in the order they start. A
   slice's size is the lines of the test files its brief names (by the same
   reading as the notes' table: the brief before any appended note, at most
   `MAX_PATHS` paths), a file several slices name counted in equal shares; when
@@ -125,7 +149,7 @@ question is put depends on how the plan arrives.
   a plan, else nothing moves, a file past `MAX_SIZED_KB` or `MAX_SIZED_LINES`
   counts as absent, a path that climbs out of the workspace is not read, and
   no content reaches a prompt. The research log records the measure and how
-  many slices moved. Which slice finishes first is a guess from its files,
+  many slices moved, and how many tasks before the slices moved ahead of them. Which slice finishes first is a guess from its files,
   never a verdict: it changes when a slice starts, not what it must do.
 - **A wide one-shot plan's small sibling slices are merged (R7).** A slice
   pays a fixed run of calls before it does any work (finding its way, taking
@@ -160,6 +184,15 @@ question is put depends on how the plan arrives.
   twice the limit and a conversation planner's plan are not touched: the
   plan comes back as the same array. Which slices merge is a guess from the
   repository's files, like R6's order, never a verdict.
+- **The shaping runs in one order, each step on the plan the step before it
+  left (R5, R6, R7).** On the plan R1 kept, `shapeFanOut` (`PlanFanOut.ts`),
+  which `reviewLongChain` calls, merges small sibling slices (R7), on the shape
+  read before any merge; reads the
+  shape again, the tasks before the slices with it (R5); starts those tasks
+  ahead of the slices beside them, then the slices largest first (R6); then
+  writes each role's note (R5). So a task every slice waits for is never
+  merged as a slice, and the notes and the research log's lines describe the
+  plan that runs.
 - **The one-shot prompt words two dependency rules its own way (R4).** It says a
   dependency is for something that does not exist yet, lets the task that
   restores the build edit whatever blocks it, and gives a four-level shape for a
@@ -191,7 +224,13 @@ pinned word for word, each kind that keeps slices apart, the plans it leaves as
 the same array, and a later level merged on the dependencies an earlier merge
 rewrote; that the order and notes are the merged plan's, and the log line,
 through `reviewLongChain`, and that the session hands the planner its limit
-through `generatePlan`. That a wide plan with a fault and a short chain makes no review call,
+through `generatePlan`. The tasks before the slices are tested on the shape of
+a recorded plan whose 31 slices waited for two of them, the opening note and
+the other tasks' note pinned word for word; that the merge never takes such a
+task, that it starts ahead of the slices beside it and that the notes and log
+lines are the merged plan's, through `reviewLongChain`.
+`bench/commit0/reshape.mjs` shapes a recorded plan again through `shapeFanOut`,
+sized from its run's repository, and checks it offline. That a wide plan with a fault and a short chain makes no review call,
 and a long one is asked R1's message word for word, is tested through
 `reviewLongChain`. `reviewLongChain` is tested through
 a `BaseAiService` whose `streamPlanText` answers from a queue and keeps what each
@@ -210,6 +249,18 @@ conversation's as they stand.
   on `submit_plan`'s answer, R3): its plans are not read for their fan-out shape
   and get no `Plan shape:` note yet, their slices keep the planner's
   order and none is merged. Neither does a conversation plan.
+- Tasks before the slices in series: they are named (`serial-opening`) and
+  counted in the log, and the slices still wait for each. Cutting a slice's
+  dependency on a later one needs a slice that can wait for a sibling's landing
+  at run time without holding a slot.
+- A wide plan with no task before its slices gets none: nothing restores its
+  import, and the fault `no-opening` is recorded.
+- A gate Ordewell runs itself (a script after the opening task that must exit
+  0): only the planner writes a script's body
+  ([ADR-0035](../supervision/0035-effects-are-consented-and-recorded.md)), an
+  ops script waits for a merge into the user's branch
+  ([ADR-0020](../isolation/0020-ops-tasks-and-merge-gates.md)), and Ordewell
+  knows no test command a planner's read can prove.
 - The run time: a failed slice still blocks the closing check (a skip releases
   it, and lands nothing), and the closing check cannot reach a failed slice's
   unlanded work. R5's slice note makes the slice end done instead wherever its
@@ -268,6 +319,21 @@ conversation's as they stand.
 - **Merging every slice with no size, as a size of nothing.** Rejected: any
   number of them fit in one bin under the cap, so one task would take most of
   a level whose briefs name their test files past the paths read.
+- **Only the first task every slice waits for is the opening task, the rest
+  read from the spine.** Replaced: a task every slice waited for, set beside
+  tasks the slices did not need, read as a slice, so a recorded plan logged
+  one task before 31 slices that waited for two, and that task got a slice's
+  note.
+- **The opening task's note leaves every module a slice owns to that slice.**
+  Replaced: with a brief limited to two files, the opening task left a package
+  whose `__init__` imports every module, and whose stubs lack private helpers
+  sibling modules import, not importing at any landing for over two hours, and
+  most slices built stand-ins outside their worktrees to run their tests.
+- **Ordewell adds an opening task to a wide plan with none.** Not taken: it
+  costs a serial task on every wide plan whose slices need nothing first, and
+  needs a runner and model Ordewell does not choose elsewhere; the recorded
+  plan with none had a core task most slices waited for, which is now read as
+  its opening task.
 - **A separate call for the shape.** Rejected: it costs a call for what the
   notes do without one, and the questions failed even on R1's call.
 - **The planner writes each role's done criterion.** Rejected: the criterion is
@@ -316,3 +382,4 @@ conversation's as they stand.
 - 2026-11-19 — R5: a slice takes in a sibling's work once it has landed; a closing check with a task beside it is the closing check; a revision note's titles are no brief's paths.
 - 2026-11-20 — R6: a wide one-shot plan's slices of each level start largest first, sized by the lines of the files their briefs name.
 - 2026-11-21 — R7: a wide one-shot plan's small sibling slices are merged toward twice the run's parallel limit, before the order and the notes; telling the planner the limit is not taken.
+- 2026-11-21 — R5: a task every slice of the fan-out's level waits for runs before the slices; every task before the slices is done only when the project imports and its tests collect, and the opening task may edit any file for that alone. R6: such a task starts ahead of the slices beside it.

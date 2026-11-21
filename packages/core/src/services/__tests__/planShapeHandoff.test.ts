@@ -30,7 +30,9 @@ describe('the module map the opening task leaves in its report', () => {
     ];
     const shape = fanOutShape(written);
     const plan = withShapeNotes(written);
-    expect(shape.gates.map((g) => g.id)).toEqual(['r']);
+    // The shared modules every slice waits for run before the fan-out too; only the first is the opening task.
+    expect(shape.gates.map((g) => g.id)).toEqual(['r', 'm1', 'm2']);
+    expect(shape.opening?.id).toBe('r');
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-shape-handoff-'));
     const agents: FakeRunnerSession[] = [];
@@ -60,7 +62,8 @@ describe('the module map the opening task leaves in its report', () => {
       await vi.waitFor(() => expect(spawned('s1')).toBeDefined());
 
       const slice = spawned('s1')!;
-      expect(slice.prompt).toContain(sliceNote(shape));
+      expect(slice.prompt).toContain(sliceNote(shape, written.find((x) => x.id === 's1')));
+      expect(slice.prompt).toContain('that start once "T r" (r), "T m1" (m1) and "T m2" (m2) have landed');
       expect(slice.prompt).not.toContain('MODULE_MAP');
       const handoff = (await slice.readTask!({ task: 'r', include_report: true })).text;
       expect(handoff).toContain('The module map is in my report.');
