@@ -40,7 +40,9 @@ const HELP = `Usage: node bench/commit0/timeline.mjs <run dir> --libs <libraries
   --branch <ref>        the branch holding the run's work, when it is not the one found
 
 Scores each point in a fresh eval box on no network, with no key (any key is removed from the
-environment) and writes timeline.json into the run directory. The final point must equal the score
+environment) and writes timeline.json into the run directory. A point whose pytest was killed
+(exit 137) with no counts fails, is tried once more alone, and if killed again is left out of
+the threshold crossings. The final point must equal the score
 in result.json; when it does not, the timeline is marked unverified and the exit is non-zero.`;
 
 /** Every variable that holds a credential, taken out: this reads a finished run and calls no model. */
@@ -71,7 +73,12 @@ function noGlobalConfig() {
  * arm's own hooks beyond what reading history touches.
  *
  * Arm B: the first-parent commits of the integration branch, one per landing,
- * newest last; `lastLanding` the newest. Arm A: every commit of the task's
+ * newest last; `lastLanding` the newest. After the end-of-run merge the
+ * workdir holds no integration branch, only `commit0-base` (and a remote ref
+ * that may be behind), and the first-parent line of `commit0-base` holds every
+ * landing: that is read then, and for any `branch` named. Arm B never reads a
+ * full `git log`, which would reach a slice's own commit, a tree no landing
+ * produced; a tree off the first-parent line is never a point. Arm A: every commit of the task's
  * branch since the stubs (the newest `ordewell/<run>/<task>` branch, or a
  * preserved one). `final` is that branch's tip, the tree the run ended on.
  * The root, the stubs, is never a point of its own unless nothing landed.
@@ -90,10 +97,11 @@ export function runHistory(runDir, { arm, branch = null }) {
   const wanted = branch
     ? (n) => n === branch
     : arm === 'B' ? (n) => /^ordewell\/[^/]+\/integration$/.test(n) : (n) => /^ordewell(-preserved)?\/[^/]+\/(?!integration$).+/.test(n);
-  const tip = refs.filter((r) => wanted(r.name)).sort((a, b) => b.ct - a.ct)[0];
+  const tip = refs.filter((r) => wanted(r.name)).sort((a, b) => b.ct - a.ct)[0]
+    ?? (arm === 'B' && !branch ? refs.find((r) => r.name === 'commit0-base') : undefined);
   if (!tip) throw new Error(`no branch of the run's work in ${gitDir}: ${branch ?? (arm === 'B' ? 'ordewell/<run>/integration' : 'ordewell/<run>/<task>')}`);
   const format = '--format=%H\t%ct\t%P\t%s';
-  const lines = arm === 'B' && !branch
+  const lines = arm === 'B'
     ? git('log', '--first-parent', format, tip.sha)
     : git('log', format, `${root}..${tip.sha}`);
   const commits = lines.split('\n').filter(Boolean).map((l) => {
@@ -211,6 +219,30 @@ export function chooseTimelinePoints(runDir, { arm, result = null, points = DEFA
 
 const round1 = (x) => Math.round(x * 10) / 10;
 
+/**
+ * A test run the system killed (exit 137, an out-of-memory kill or a signal)
+ * that printed no summary: it counted nothing, which is not a count of zero.
+ * A summary that came out is read as it says, whatever the exit.
+ */
+export const isKilledRun = (tests) => Boolean(tests) && tests.exit === 137 && typeof tests.passed !== 'number';
+
+/** The shares of the tests collected whose first crossing the timeline reports. */
+export const CROSSING_SHARES = Object.freeze([0.25, 0.5, 0.75, 0.9, 1]);
+
+/**
+ * The first point, in time order, at which the passed tests reach each share
+ * of `collected`; null where none does, or where `collected` is not known.
+ * Only a point that was scored counts: one that failed, a killed run
+ * included, is no evidence of what the tree passed at that time.
+ */
+export function thresholdCrossings(points, collected, shares = CROSSING_SHARES) {
+  const scored = points.filter((p) => p.ok && !p.killed && typeof p.tests?.passed === 'number');
+  return shares.map((share) => {
+    const hit = Number.isFinite(collected) && collected > 0 ? scored.find((p) => p.tests.passed >= share * collected - 1e-9) : undefined;
+    return { share, atMin: hit?.atMin ?? null, label: hit?.label ?? null };
+  });
+}
+
 /** The numbers a score is read by, as result.json keeps them. */
 const scoreOf = (tests) => (tests ? { passed: tests.passed ?? 0, failed: tests.failed ?? 0, errors: tests.errors ?? 0 } : null);
 
@@ -247,7 +279,7 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
   const arm = result.arm === 'A' ? L.ARMS.A : L.ARMS.B;
   const { history, t0Ms, chosen } = chooseTimelinePoints(runDir, { arm: arm.id, result, points, minutes, branch });
   const d = driver ?? await loadDriver();
-  const settings = L.armSettings(arm, { parallel: result.parallel, cpus: result.cpus, memory: result.memory, capUsd: result.capUsd, wallCapMs: result.wallCapMs });
+  const settings = L.armSettings(arm, { parallel: result.parallel, cpus: result.cpus, memory: result.memory, capUsd: result.capUsd, wallCapMs: result.wallCapMs, callBudget: result.callBudget });
   const lib = { ...L.validateLibrary(raw), flatTree: history.armTree, flatCommit: history.root };
   const out = path.join(runDir, 'timeline');
   fs.mkdirSync(out, { recursive: true });
@@ -264,8 +296,10 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
       d.materialize(history.gitDir, p.sha, tree);
       const runId = `timescore-${path.basename(runDir)}-${label}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
       const scored = await d.scoreInFreshBox({ ...lib }, tree, { runId, settings, runDir: dir, inspect: null });
+      const killed = isKilledRun(scored.tests);
       Object.assign(rec, {
-        ok: Boolean(scored.treeCheck?.ok && scored.tests),
+        ok: Boolean(scored.treeCheck?.ok && scored.tests) && !killed,
+        ...(killed ? { killed: true, error: 'pytest was killed (exit 137) and printed no counts: the point has no score' } : {}),
         treeCheck: scored.treeCheck, tests: scored.tests ?? null, copied: scored.copied?.length ?? 0, removed: scored.removed?.length ?? 0,
         needsInspection: scored.needsInspection ?? [], patchError: scored.patchError ?? null,
       });
@@ -287,6 +321,13 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
     for (let i = next++; i < chosen.length; i = next++) scored[i] = await scoreOne(chosen[i], i);
   };
   await Promise.all(Array.from({ length: Math.min(jobs, chosen.length) }, worker));
+  // A kill is often the host's memory with several boxes up at once: each such point gets one more try, alone.
+  for (let i = 0; i < scored.length; i++) {
+    if (!scored[i].killed) continue;
+    const retry = await scoreOne(chosen[i], i);
+    scored[i] = { ...retry, retried: true };
+    L.writeJsonAtomic(path.join(out, retry.label, 'score.json'), scored[i]);
+  }
 
   const final = scored.find((p) => p.kind === 'final');
   const verdict = judgeFinal({ resultTests: result.tests, final });
@@ -297,6 +338,7 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
     verified: verdict.ok, unverified: verdict.ok ? null : verdict.reason,
     finalMatchesResult: verdict.ok,
     jobs, generatedAt: new Date().toISOString(),
+    crossings: thresholdCrossings(scored, result.tests?.collected),
     points: scored,
   };
   L.writeJsonAtomic(path.join(runDir, 'timeline.json'), timeline);

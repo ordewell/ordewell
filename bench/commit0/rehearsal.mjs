@@ -707,6 +707,8 @@ export function judgeRehearsal(name, result) {
     want(passed !== null && passed === base, `${passed} passed, not the baseline's ${base}: work that never landed was scored`);
   }
   f.push(...judgeEnding(scenario(name).ending, result));
+  want(Number.isInteger(result.callBudget) && result.callBudget >= 1 && result.stepLimit === result.callBudget, `callBudget is ${JSON.stringify(result.callBudget)} (stepLimit ${JSON.stringify(result.stepLimit)}): the budget the arm ran with is not recorded`);
+  want(typeof result.referenceSpend?.priceTable?.id === 'string' && 'referenceUsd' in result, `result.json holds no spend at the reference price table (referenceSpend ${JSON.stringify(result.referenceSpend ?? null)})`);
   if (scenario(name).supervision) f.push(...judgeSupervision(scenario(name).supervision, result.metrics?.supervisor));
   if (e.testExcluded) {
     want((result.excluded ?? []).some((x) => /test/.test(x.path ?? '') && /test/.test(x.reason ?? '')), `no test file in excluded (${JSON.stringify(result.excluded ?? null)}): the edited test was scored`);
