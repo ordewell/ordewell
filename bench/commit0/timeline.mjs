@@ -83,7 +83,7 @@ function noGlobalConfig() {
  * preserved one). `final` is that branch's tip, the tree the run ended on.
  * The root, the stubs, is never a point of its own unless nothing landed.
  */
-export function runHistory(runDir, { arm, branch = null }) {
+export function runHistory(runDir, { arm, branch = null, merged = false }) {
   const gitDir = path.join(runDir, 'arm-workdir', '.git');
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: noGlobalConfig() };
   const git = (...args) => {
@@ -97,7 +97,10 @@ export function runHistory(runDir, { arm, branch = null }) {
   const wanted = branch
     ? (n) => n === branch
     : arm === 'B' ? (n) => /^ordewell\/[^/]+\/integration$/.test(n) : (n) => /^ordewell(-preserved)?\/[^/]+\/(?!integration$).+/.test(n);
-  const tip = refs.filter((r) => wanted(r.name)).sort((a, b) => b.ct - a.ct)[0]
+  // A single agent scored from what was merged (a continued one lands each attempt that reports done, and the end-of-run merge folds them into
+  // commit0-base): its tree is commit0-base's, and the branch of an attempt left behind is an earlier point of it, never the final.
+  const tip = (merged && !branch && arm !== 'B' ? refs.find((r) => r.name === 'commit0-base') : undefined)
+    ?? refs.filter((r) => wanted(r.name)).sort((a, b) => b.ct - a.ct)[0]
     ?? (arm === 'B' && !branch ? refs.find((r) => r.name === 'commit0-base') : undefined);
   if (!tip) throw new Error(`no branch of the run's work in ${gitDir}: ${branch ?? (arm === 'B' ? 'ordewell/<run>/integration' : 'ordewell/<run>/<task>')}`);
   const format = '--format=%H\t%ct\t%P\t%s';
@@ -209,7 +212,7 @@ export function timelinePoints({ commits, finalSha, lastLanding = null, afterSli
 export function chooseTimelinePoints(runDir, { arm, result = null, points = DEFAULT_POINTS, minutes = null, branch = null }) {
   runDir = path.resolve(runDir);
   result ??= JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8'));
-  const history = runHistory(runDir, { arm, branch });
+  const history = runHistory(runDir, { arm, branch, merged: result.scoredFrom === 'merged' });
   const t0Ms = runStartMs(runDir, result);
   const endMs = t0Ms + (result.wallClockMs ?? 0);
   const afterSlices = arm === 'B' ? landingsAfterSlices({ commits: history.commits, plan: savedPlan(runDir, result.sessionId) }) : [];
@@ -276,7 +279,7 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
   const result = JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8'));
   const raw = libraries.find((l) => l.name === result.library);
   if (!raw) throw new Error(`the run's library ${result.library} is not in the libraries file`);
-  const arm = result.arm === 'A' ? L.ARMS.A : L.ARMS.B;
+  const arm = L.isSingleAgent(result.arm) ? L.ARMS[result.arm] : L.ARMS.B;
   const { history, t0Ms, chosen } = chooseTimelinePoints(runDir, { arm: arm.id, result, points, minutes, branch });
   const d = driver ?? await loadDriver();
   const settings = L.armSettings(arm, { parallel: result.parallel, cpus: result.cpus, memory: result.memory, capUsd: result.capUsd, wallCapMs: result.wallCapMs, callBudget: result.callBudget });
