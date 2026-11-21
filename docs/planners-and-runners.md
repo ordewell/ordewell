@@ -123,6 +123,15 @@ A read-only task reads inside its worktree and the session workspace, and a read
 outside both is refused with the reason, never asked. Links are followed before
 a read is judged.
 
+Pi's `grep` and `find` run ripgrep and fd. Pi uses its own copies from its tools
+directory (`~/.pi/agent/bin`) and otherwise the `rg` and `fd` on your PATH; with
+neither, Pi may download them on first use. Windows looks for a program
+started by name in the current directory before PATH, so a repository that
+ships an `rg.exe` or `fd.exe` could otherwise have it run by Pi's search. On
+Windows, Ordewell starts every Pi process with `NoDefaultCurrentDirectoryInExePath`
+set, which takes the current directory out of that search for Pi and what it
+starts.
+
 Ordewell hands Pi its MCP server, and the read checks, in a small extension it
 writes for each Pi process into a private directory outside the repository and
 loads with `-e`. It removes the file when the process ends, with Pi's
@@ -137,8 +146,9 @@ so a repository's `.pi/settings.json` cannot send the transcript elsewhere.
 Pi resumes a session by id only from the directory it was saved in, and a
 Continue after its run ended works in a new worktree, so there Ordewell has Pi
 fork the latest saved copy of the session into the new worktree under the same
-id (`--fork`); the old worktree need not still exist. A Pi placed in a container
-is resumed by id alone. A Continue, or a planner picked up again, checks that Pi
+id (`--fork`); the old worktree need not still exist. Pi does not run in a
+container: a session that runs its tasks in containers refuses a Pi task and
+names the runners that do. A Continue, or a planner picked up again, checks that Pi
 found the saved session; a session Pi no longer has, or whose file it cannot
 read, fails the Continue, and the planner picks the conversation up from its
 transcript.

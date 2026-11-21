@@ -449,6 +449,21 @@ describe('Pi\'s command line', () => {
     }
   });
 
+  it('starts every Pi on Windows with the current directory out of its program search, so a repository\'s rg.exe or fd.exe is never what Pi runs', async () => {
+    for (const start of [plannerStart(), taskStart('plan', { mcp: mcp({ readOnly: true }) }), taskStart('agent')]) {
+      const kit = silentSpawn(() => {});
+      const adapter = new PiAdapter({ ...deps(kit), platform: 'win32' });
+      adapters.push(adapter);
+      await adapter.start(start);
+      expect(kit.lastEnv().NoDefaultCurrentDirectoryInExePath).toBe('1');
+    }
+    // Elsewhere nothing adds it; the host's own value would otherwise pass through.
+    vi.stubEnv('NoDefaultCurrentDirectoryInExePath', undefined);
+    const kit = silentSpawn(() => {});
+    await started(kit, plannerStart());
+    expect(kit.lastEnv().NoDefaultCurrentDirectoryInExePath).toBeUndefined();
+  });
+
   it('refuses to start without Ordewell\'s server', async () => {
     await expect(new PiAdapter(deps(silentSpawn(() => {}))).start({ ...taskStart('agent'), mcp: undefined })).rejects.toThrow('cannot start without the Ordewell MCP server');
   });
