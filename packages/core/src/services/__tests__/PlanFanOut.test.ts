@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { closingNote, fanOutShape, FAN_OUT_MIN, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
+import { closingNote, fanOutShape, FAN_OUT_MIN, gateNote, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
 import { applyChainReview, chainReviewMessage, longestChain } from '../PlanChainReview';
 import { BaseAiService, type PlanTextCall, type PlanTextReply } from '../BaseAiService';
 import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../../models/Task';
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import { applyTaskOps } from '../TaskOps';
+import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
+import { lines, workspace } from './planFanOutKit';
 
 const RUNNERS: RunnerId[] = ['claude-code'];
 const t = (id: string, deps: string[], extra: Partial<Task> = {}): Task =>
@@ -45,8 +47,82 @@ describe('fanOutShape', () => {
     const plan = [t('r', []), t('m1', ['r']), t('m2', ['r']), ...slices(5, ['m1', 'm2']), t('close', [...sliceIds(5)])];
     const s = fanOutShape(plan);
     expect(s.faults).toEqual([]);
+    // Every slice waits for both shared modules: they run before the fan-out, after the opening task.
+    expect(ids(s.gates)).toEqual(['r', 'm1', 'm2']);
+    expect(s.opening?.id).toBe('r');
+    expect(ids(s.slices)).toEqual(sliceIds(5));
+    expect(s.sliceEdges).toBe(0);
+  });
+
+  // Recorded: one opening task, four more beside each other, and 31 slices that waited for the first and the last of those five.
+  // The reader logged "31 at once, 1 before" and took the last as a slice, so it got a slice's note and the slices were told they start after the first alone.
+  it('takes a task every slice of the fan-out waits for as a task before the slices, though tasks beside it do not wait for it', () => {
+    const plan = [t('o1', []), ...['o2', 'o3', 'o4', 'o5'].map((id) => t(id, ['o1'])), ...slices(31, ['o1', 'o5']), t('close', ['o2', 'o3', 'o4', ...sliceIds(31)])];
+    const s = fanOutShape(plan);
+    expect(ids(s.gates)).toEqual(['o1', 'o5']);
+    expect(s.opening?.id).toBe('o1');
+    expect(ids(s.slices)).toEqual(['o2', 'o3', 'o4', ...sliceIds(31)]);
+    expect(s.width).toBe(31);
+    expect(s.faults).toEqual([]);
+    expect(ids(s.waits.get('s1')!)).toEqual(['o1', 'o5']);
+    expect(ids(s.waits.get('o2')!)).toEqual(['o1']);
+    const out = withShapeNotes(plan);
+    const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+    expect(prompt('o1')).toContain('Plan shape: 34 slices wait for this task to land before any of them starts');
+    expect(prompt('o5')).toBe(`Fill in src/lib/o5.py.\n\n${gateNote(s, s.gates[1])}`);
+    expect(prompt('o5')).toContain('Plan shape: 31 slices wait for this task to land before they start');
+    expect(prompt('s1')).toContain('one of 34 slices that start once "T o1" (o1) and "T o5" (o5) have landed');
+    expect(prompt('o2')).toContain('one of 34 slices that start once "T o1" (o1) has landed');
+  });
+
+  // Recorded: the plan had no task before the slices, and a core slice most of them waited for ran beside the rest.
+  it('takes a core task beside some slices, which every slice of the fan-out waits for, as the opening task', () => {
+    const plan = [t('core', []), t('x1', []), t('x2', []), ...slices(8, ['core']), t('close', ['x1', 'x2', ...sliceIds(8)])];
+    const s = fanOutShape(plan);
+    expect(s.opening?.id).toBe('core');
+    expect(s.faults).toEqual([]);
+    const out = withShapeNotes(plan);
+    const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+    expect(prompt('core')).toContain('Plan shape: 8 slices wait for this task to land before any of them starts');
+    // A slice beside it starts before its map is written, so it is told neither.
+    expect(prompt('x1')).toContain('Plan shape: this task is one of 10 slices, and "T close" (close)');
+    expect(prompt('x1')).not.toContain('module map at the end');
+    expect(prompt('s1')).toContain('Read the module map at the end of "T core" (core)\'s report');
+  });
+
+  it('names no opening task when the tasks before the slices run beside each other, and tells each to keep the import', () => {
+    const plan = [t('m1', []), t('m2', []), ...slices(5, ['m1', 'm2']), t('close', sliceIds(5))];
+    const s = fanOutShape(plan);
+    expect(ids(s.gates)).toEqual(['m1', 'm2']);
+    expect(s.opening).toBeUndefined();
+    expect(s.faults).toEqual(['no-opening']);
+    const out = withShapeNotes(plan);
+    for (const id of ['m1', 'm2']) expect(out.find((x) => x.id === id)!.prompt).toBe(`Fill in src/lib/${id}.py.\n\n${gateNote(s, s.gates.find((g) => g.id === id)!)}`);
+    expect(out.find((x) => x.id === 's1')!.prompt).not.toContain('module map at the end');
+  });
+
+  it('takes a level every slice after it waits for whole as the tasks before the slices, and names no opening task among them', () => {
+    const plan = [...['a1', 'a2', 'a3', 'a4', 'a5', 'a6'].map((id) => t(id, [])), ...slices(6, ['a1', 'a2', 'a3', 'a4', 'a5', 'a6']), t('close', sliceIds(6))];
+    const s = fanOutShape(plan);
+    expect(s.gates).toHaveLength(6);
+    expect(ids(s.slices)).toEqual(sliceIds(6));
+    expect(s.faults).toEqual(['no-opening']);
+  });
+
+  // Fewer tasks than a fan-out after the rest would leave no fan-out: the rest stay the slices.
+  it('takes nothing before the slices when the level after them is narrower than a fan-out', () => {
+    const plan = [t('r', []), ...slices(6, ['r']), t('cli', sliceIds(6)), t('api', sliceIds(6)), t('close', [...sliceIds(6), 'cli', 'api'])];
+    const s = fanOutShape(plan);
     expect(ids(s.gates)).toEqual(['r']);
-    expect(s.sliceEdges).toBe(10);
+    expect(ids(s.slices)).toEqual([...sliceIds(6), 'cli', 'api']);
+    expect(s.width).toBe(6);
+  });
+
+  it('takes no task before the slices from the fan-out\'s level when its slices do not all wait for one', () => {
+    const plan = [t('r', []), ...['a1', 'a2', 'a3', 'a4'].map((id) => t(id, ['r'])), ...['a1', 'a2', 'a3', 'a4'].map((a, i) => t(`b${i + 1}`, [a])), t('close', ['b1', 'b2', 'b3', 'b4'])];
+    const s = fanOutShape(plan);
+    expect(ids(s.gates)).toEqual(['r']);
+    expect(s.slices).toHaveLength(8);
   });
 
   it('counts a script loop check as the closing check, its fix out of the slices', () => {
@@ -92,7 +168,9 @@ describe('fanOutShape', () => {
   it('keeps a fan-out of slices after shared modules as slices when nothing after them closes', () => {
     const plan = [t('r', []), ...['m1', 'm2', 'm3', 'm4'].map((m) => t(m, ['r'])), ...slices(5, ['m1', 'm2', 'm3', 'm4'])];
     const s = fanOutShape(plan);
-    expect(ids(s.slices)).toEqual(['m1', 'm2', 'm3', 'm4', ...sliceIds(5)]);
+    // Every slice waits for every shared module, so they run before the fan-out.
+    expect(ids(s.gates)).toEqual(['r', 'm1', 'm2', 'm3', 'm4']);
+    expect(ids(s.slices)).toEqual(sliceIds(5));
     expect(s.faults).toEqual(['no-closing']);
     expect(withShapeNotes(plan)).toBe(plan);
   });
@@ -164,7 +242,7 @@ describe('withShapeNotes', () => {
   it('words the opening and closing notes as measured', () => {
     const shape = fanOutShape(good());
     expect(openingNote(shape).split('\n')).toEqual([
-      'Plan shape: 6 slices wait for this task to land before any of them starts, so finish it as soon as your brief allows and leave every module a slice owns to that slice. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:',
+      'Plan shape: 6 slices wait for this task to land before any of them starts, and they start from the tree you land. Besides your brief\'s own criterion, you are done only when the project builds or imports and the test command the slices\' briefs run (the project\'s own, if they name none) collects its tests without an error, though tests may still fail: run both, a collection-only run where the test runner has one, and put each command and the last lines of its output in your report. For that alone you may edit any file, whichever task below owns it: add only the smallest placeholder that lets it import (a missing name, a function that raises NotImplementedError or its like), and list each placeholder in your summary with the task that owns it. Leave everything else in a module a slice owns to that slice, and finish it as soon as your brief allows. End with status failed when the project still does not import or its tests do not collect for a cause in the repository\'s code, saying what stops them. A cause outside that code which no placeholder fixes, such as a dependency that is not installed, is not yours to fix: report it as a finding with the command and its output, and end with status done. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:',
       '- "T r" (r): src/lib/r.py',
       ...sliceIds(6).map((id) => `- "T ${id}" (${id}): src/lib/${id}.py`),
     ]);
@@ -187,15 +265,17 @@ describe('withShapeNotes', () => {
   });
 
   // Measured: restore the import, then a core module every slice waits for. Only the first is the opening task.
-  it('takes a second task every slice waits for, which waits for the opening task alone, as a shared module: no opening note, no fault', () => {
+  it('takes a second task every slice waits for, which waits for the opening task alone, as a shared module: no opening note, no fault, and it keeps the import', () => {
     const plan = [t('r', [], { title: 'Restore import' }), t('core', ['r'], { title: 'Implement the core module' }), ...slices(5, ['core']), t('close', sliceIds(5))];
     const shape = fanOutShape(plan);
     expect(ids(shape.gates)).toEqual(['r', 'core']);
     expect(shape.faults).toEqual([]);
     const out = withShapeNotes(plan);
     const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
-    expect(prompt('r')).toContain('Plan shape: 5 slices wait for this task to land before any of them starts, so finish it as soon as your brief allows');
-    expect(prompt('core')).toBe('Fill in src/lib/core.py.');
+    expect(prompt('r')).toContain('Plan shape: 5 slices wait for this task to land before any of them starts, and they start from the tree you land.');
+    expect(prompt('core')).toBe(`Fill in src/lib/core.py.\n\n${gateNote(shape, shape.gates[1])}`);
+    expect(gateNote(shape, shape.gates[1])).toBe('Plan shape: 5 slices wait for this task to land before they start, and they start from the tree you land, so finish as soon as your brief allows and leave every module a slice owns to that slice. Besides your brief\'s own criterion, you are done only when your change leaves the project building or importing and the test command the slices\' briefs run (the project\'s own, if they name none) collects its tests without an error, though tests may still fail, as it did when you started or better: run both, a collection-only run where the test runner has one, and put each command and the last lines of its output in your report.');
+    for (const id of sliceIds(5)) expect(prompt(id)).toContain('that start once "Restore import" (r) and "Implement the core module" (core) have landed');
     for (const id of sliceIds(5)) expect(prompt(id)).toContain('Read the module map at the end of "Restore import" (r)\'s report (read, with include_report) before you explore.');
   });
 
@@ -276,8 +356,8 @@ class ReviewService extends BaseAiService {
     call?.onReply?.(r);
     return reply;
   }
-  review(tasks: Task[], log: ResearchLogEntry[], fs?: IFileSystem): Promise<Task[]> {
-    return this.reviewLongChain(tasks, 'goal', '', '', {}, RUNNERS, () => {}, undefined, undefined, undefined, log, fs);
+  review(tasks: Task[], log: ResearchLogEntry[], fs?: IFileSystem, modes?: PlannerModes): Promise<Task[]> {
+    return this.reviewLongChain(tasks, 'goal', '', '', {}, RUNNERS, () => {}, undefined, undefined, modes, log, fs);
   }
 }
 
@@ -292,6 +372,13 @@ describe('reviewLongChain on a fan-out', () => {
     expect(svc.calls).toHaveLength(0);
     expect(out.find((x) => x.id === 's1')!.prompt).toContain('Plan shape: this task is one of 6 slices');
     expect(log.map(text)).toEqual(['fan-out: 6 at once, 1 before, 1 after; role notes added']);
+  });
+
+  it('logs the tasks the recorded 31-slice plan waited for before its slices as two before', async () => {
+    const plan = [t('o1', []), ...['o2', 'o3', 'o4', 'o5'].map((id) => t(id, ['o1'])), ...slices(31, ['o1', 'o5']), t('close', ['o2', 'o3', 'o4', ...sliceIds(31)])];
+    const log: ResearchLogEntry[] = [];
+    await new ReviewService([]).review(plan, log);
+    expect(log.map(text)).toEqual(['fan-out: 31 at once, 2 before, 1 after; role notes added']);
   });
 
   // ADR-0072 R6: ready tasks start in plan order, so the slices that take longest start first.
@@ -314,6 +401,61 @@ describe('reviewLongChain on a fan-out', () => {
       'slice order: largest first by the lines of the test files their briefs name; 5 of 6 moved',
       'fan-out: 6 at once, 1 before, 1 after; role notes added',
     ]);
+  });
+
+  // ADR-0072 R7: slices past the parallel limit only queue, so the small ones are merged before the order and the notes.
+  describe('with a parallel limit', () => {
+    const SIZES = [100, 90, 10, 10, 20, 20, 30, 30, 40, 50];
+    const plan = () => [t('r', []), ...SIZES.map((_, i) => t(`s${i + 1}`, ['r'], { prompt: `Fill in src/m${i + 1}.py. Verify: pytest tests/test_m${i + 1}.py` })), t('close', sliceIds(10))]
+      .map((x, i) => ({ ...x, order: i + 1 }));
+    const files = () => workspace(Object.fromEntries(SIZES.map((n, i) => [`tests/test_m${i + 1}.py`, lines(n)]))).fs;
+    const limit = (parallelLimit: number): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, parallelLimit });
+
+    it('merges small slices, then orders and notes the merged plan, and logs how many slices became how many', async () => {
+      const log: ResearchLogEntry[] = [];
+      const out = await new ReviewService([]).review(plan(), log, files(), limit(2));
+      // Merged as PlanFanOut.merge.test.ts works it by hand, then sized as the sums of their slices: 100, 90, 70, 50, 50, 40.
+      expect(ids(out)).toEqual(['r', 's1', 's2', 's3', 's6', 's10', 's9', 'close']);
+      expect(out.find((x) => x.id === 's9')!.prompt).toContain('Plan shape: this task is one of 6 slices');
+      const opening = out.find((x) => x.id === 'r')!.prompt!;
+      expect(opening).toContain('- "T s3; T s4; T s5; T s8" (s3): src/m3.py, tests/test_m3.py, src/m4.py, tests/test_m4.py, src/m5.py, tests/test_m5.py, src/m8.py, tests/test_m8.py');
+      expect(log.map(text)).toEqual([
+        'slice merge: 10 slices became 6, by the lines of the test files their briefs name, for 2 tasks at once',
+        'slice order: largest first by the lines of the test files their briefs name; 2 of 6 moved',
+        'fan-out: 6 at once, 1 before, 1 after; role notes added',
+      ]);
+    });
+
+    // Merge, read the shape, order (tasks before the slices, then largest first), note: each on the plan the step before left.
+    it('never merges a task every slice waits for, starts it ahead of the slices beside it, and notes the merged plan', async () => {
+      const shared = t('g', ['r'], { prompt: 'Write src/shared.py, which every module imports.' });
+      const beside = ['a1', 'a2'].map((id, i) => t(id, ['r'], { prompt: `Fill in src/${id}.py. Verify: pytest tests/test_${id}.py`, order: i }));
+      const fanned = plan().slice(1, -1).map((x) => ({ ...x, dependencies: ['r', 'g'] }));
+      const wide = [t('r', []), ...beside, shared, ...fanned, t('close', ['a1', 'a2', ...sliceIds(10)])].map((x, i) => ({ ...x, order: i + 1 }));
+      const fs = workspace({ 'tests/test_a1.py': lines(8), 'tests/test_a2.py': lines(5), ...Object.fromEntries(SIZES.map((n, i) => [`tests/test_m${i + 1}.py`, lines(n)])) }).fs;
+      const log: ResearchLogEntry[] = [];
+      const out = await new ReviewService([]).review(wide, log, fs, limit(2));
+      expect(ids(out)).toEqual(['r', 'g', 'a1', 'a2', 's1', 's2', 's3', 's6', 's10', 's9', 'close']);
+      expect(out.map((x) => x.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+      expect(prompt('g')).toContain('Plan shape: 6 slices wait for this task to land before they start');
+      expect(prompt('g')).not.toContain('this task is one of');
+      expect(prompt('r')).toContain('Plan shape: 8 slices wait for this task to land before any of them starts');
+      expect(prompt('s9')).toContain('Plan shape: this task is one of 8 slices that start once "T r" (r) and "T g" (g) have landed');
+      expect(prompt('a1')).toContain('Plan shape: this task is one of 8 slices that start once "T r" (r) has landed');
+      expect(log.map(text)).toEqual([
+        'slice merge: 10 slices became 6, by the lines of the test files their briefs name, for 2 tasks at once',
+        'slice order: largest first by the lines of the test files their briefs name; 4 of 8 moved',
+        'slice order: 1 task the slices wait for moved ahead of the slices beside it',
+        'fan-out: 6 at once, 2 before, 1 after; role notes added',
+      ]);
+    });
+
+    it('changes nothing at a limit at or above the slices', async () => {
+      const [merged, kept] = [[] as ResearchLogEntry[], [] as ResearchLogEntry[]];
+      expect(await new ReviewService([]).review(plan(), merged, files(), limit(10))).toEqual(await new ReviewService([]).review(plan(), kept, files()));
+      expect(merged.map(text)).toEqual(kept.map(text));
+    });
   });
 
   it('makes no call on a fan-out with every fault and a short chain, and notes nothing without a closing check', async () => {

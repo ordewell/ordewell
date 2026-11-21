@@ -25,6 +25,7 @@ import type {
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
+import { lostWaits, owedPark, parkPastUnrun, waitsOnTask } from './Parking';
 import { IsolationRunController, isRefused, type IsolationDecision, type IsolationStart } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { LimitPauses, type LimitWait, type ResumeNow } from './LimitPauses';
@@ -38,7 +39,7 @@ import { loopRoundOf, outOfRounds } from '../models/Loop';
 import { LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED, LOOP_PASSED } from '../models/SkipOrigin';
 import { LEFT_UNDONE, LoopRounds } from './LoopRounds';
 import { decidesIsolation, handoffKept, mergeExcludes, type AttemptKind, type Continuation } from './attemptKind';
-import { attemptLeaves, endKeeps, type AttemptEnding } from './attemptLeaves';
+import { attemptLeaves, CANCELLED_HOLD, endKeeps, type AttemptEnding } from './attemptLeaves';
 import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
 import { capConflictFiles } from './conflictFiles';
@@ -1488,6 +1489,8 @@ export class TaskOrchestrator {
       case 'usage-limited':
         // A pause is no verdict, however the limit arrived (ADR-0018, U1).
         return this.limitPauses.pause(ended.taskId, ended.attempt, ended.said, ended.output);
+      case 'parked':
+        return this.settleParked(ended);
       case 'spawn-failed':
         return this.settleSpawnFailure(ended);
       case 'unsettled':
@@ -1556,12 +1559,64 @@ export class TaskOrchestrator {
   }
 
   /**
+   * A task parked on work it needs (ADR-0074): no verdict. The plan gains the
+   * edges before the task is pending again, so the start rule holds it with
+   * nothing new and its slot goes to whatever is ready; the edit is
+   * Ordewell's, on the task's behalf, and no model's to count against it.
+   */
+  private async settleParked({ taskId, attempt, parked, reason }: Extract<AttemptEnded, { kind: 'parked' }>): Promise<void> {
+    const task = this.store.get(taskId);
+    if (!task) return;
+    // An edge the plan gained since the park was granted may close a cycle with this one: the task goes on without that work, and its next start is told so.
+    const closes = waitsOnTask(this.store.planTasks);
+    const added = parked.added.filter((id) => this.store.get(id) && !task.dependencies.includes(id) && !closes(id, taskId));
+    // A second park's edges join the first's, which are still Ordewell's to take back.
+    const earlier = (task.parked?.added ?? []).filter((id) => task.dependencies.includes(id));
+    this.store.update(taskId, { dependencies: [...task.dependencies, ...added], parked: { ...parked, added: [...earlier, ...added] } });
+    const release = this.leave(taskId, 'parked', attempt);
+    const names = this.namedTasks(parked.waitsOn);
+    this.store.setTaskOutputSummary(taskId, summarizeOutput(`Waits for ${names}: ${reason}`, ''), handoffKept(this.store.get(taskId), attempt.kind));
+    this.tell('info', `Task "${task.title}" waits for ${names} (${reason}): its slot is free, and it goes on in its session once that work has landed.`);
+    await release;
+    await this.afterVerdict(taskId);
+  }
+
+  /**
+   * A parked task whose awaited work will not land now goes on without it
+   * (ADR-0074 P7), rather than wait for a retry nobody may make: the edges its
+   * park added for that work are taken back, Ordewell's edit as the park's
+   * was, and its next start is told why.
+   */
+  private endLostWaits(): boolean {
+    const ended = lostWaits(this.store.planTasks);
+    for (const [taskId, lost] of ended) {
+      const task = this.store.get(taskId);
+      if (!task) continue;
+      this.store.update(taskId, { dependencies: task.dependencies.filter((id) => !lost.includes(id)) });
+      this.tell('info', `Task "${task.title}" no longer waits for ${this.namedTasks(lost)}: that work will not land now, so it goes on without it.`);
+    }
+    return ended.size > 0;
+  }
+
+  /** Parked and not started since, with no attempt: what a Stop holds and its next start continues (ADR-0074). */
+  parkedNow(task: Readonly<Task>): boolean {
+    return (task.status === 'pending' || task.status === 'approved') && !this.attempts.has(task.id) && owedPark(task) !== null;
+  }
+
+  /** `#3 "Title"`, joined, as a notice names the tasks a park waits for. */
+  private namedTasks(ids: readonly string[]): string {
+    return ids.map((id) => `${taskRefOf(this.store.planTasks, id) ?? id} "${this.store.get(id)?.title ?? id}"`).join(', ');
+  }
+
+  /**
    * A start that never ran, however its spawn failed (`SpawnFailure`).
    * The task's status is settled before anything is awaited, so no tick in
    * between finds it in progress with no attempt; then its worktree is let
    * go, the user is told why and the run goes on.
    */
   private async settleSpawnFailure({ task, attempt, failure }: Extract<AttemptEnded, { kind: 'spawn-failed' }>): Promise<void> {
+    const parked = parkPastUnrun(this.store.get(task.id) ?? task, attempt.attempt);
+    if (parked) this.store.update(task.id, { parked });
     if (failure.leaves === 'conflict') {
       this.store.markAwaitingUser(task.id, 'conflict');
       this.settleUnlanded(task, await this.landing.unrepaired(task, failure.why), attempt.admission);
@@ -1912,7 +1967,14 @@ export class TaskOrchestrator {
     // landed and the attempt was torn down) has nothing left to cancel. Without
     // this guard it would still revert a completed/failed task to 'pending',
     // silently discarding a verdict that already landed.
-    if (!this.attempts.has(taskId) && task.status !== 'in_progress') return;
+    if (!this.attempts.has(taskId) && task.status !== 'in_progress') {
+      // A parked task has no attempt to end, but its Stop keeps it from going on once its wait is over (ADR-0074).
+      if (ending === 'cancelled' && this.parkedNow(task)) {
+        this.starts.hold(taskId, CANCELLED_HOLD, 'chosen');
+        this.emit('onTaskChanged');
+      }
+      return;
+    }
     const ended = this.attempts.end(taskId, 'cancel', { keep: endKeeps(ending) });
     const release = this.leave(taskId, ending, ended);
     this.emit('onTaskChanged');
@@ -2772,6 +2834,7 @@ export class TaskOrchestrator {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
     const admission = this.admittedNow();
     this.recoverOrphans();
+    this.endLostWaits();
     // A merge taken back out closes its gate again, before anything reads it.
     if (this.runs.readsMerged) await this.runs.refreshInHead();
     // Every way a dependency finishes ticks — a verdict, Mark complete, a skip,
@@ -2899,6 +2962,8 @@ export class TaskOrchestrator {
    * as a scheduled one is held, on whatever the start rule waits for.
    */
   private async settleRun(after: 'tick' | 'verdict'): Promise<void> {
+    // A failure that came while a tick awaited leaves a parked task work to do, not a block (ADR-0074 P7).
+    if (this.endLostWaits()) return this.tick();
     // A retry, Mark not done or an added task since leaves the plan unfinished:
     // still finished, it would tell every surface the run is over while a task waits.
     if (!this.store.isFinished()) this.transition({ type: 'reopen' });

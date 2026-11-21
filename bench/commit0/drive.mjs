@@ -38,8 +38,11 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --plan-only            make arm B's plan and record its shape, then stop: nothing runs, merges or is scored,
                          so the result is never a scored one; arm A has no plan, so --arm A is refused and
                          --arm both means B (with --run or --rehearse, not --dry-run)
-  --provider-pin <p>     the OpenRouter provider the key is pinned to, recorded in every result
+  --provider-pin <p>     the OpenRouter provider the key is pinned to in the account, recorded in every result;
+                         the flag itself pins nothing: the built-in runner has no setting that names an upstream
   --cap-usd <usd>        the spend cap, the same for both arms (default ${L.CAP_USD})
+  --call-budget <n>      the built-in runner's model calls per attempt, the same for both arms (default ${L.STEP_LIMIT});
+                         recorded in every result, and a pair whose arms differ is not valid
   --parallel <n>         arm B's ORDEWELL_MAX_PARALLEL (default ${L.PARALLEL}); arm A runs one task
   --cpus <n>             the box's CPU quota (default ${L.CPUS})
   --memory <size>        the box's memory quota, swap held to it (default ${L.MEMORY})
@@ -1352,7 +1355,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const runId = L.runIdFor({ stamp, lib: lib.name, arm: arm.id, seed: opts.seed });
   const runDir = path.join(runsDir, runId);
   fs.mkdirSync(runDir, { recursive: true });
-  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
+  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h, ${settings.callBudget} calls per attempt; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
   const startedAt = new Date().toISOString();
   const first = checks.length;
   let sb = null;
@@ -1430,6 +1433,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const armChecks = checks.slice(first);
   const plan = record.arm?.finalPlan ?? null;
   const recorded = plan ? L.recordedSpend(plan) : null;
+  const reference = L.referenceSpend(plan);
   const sessionId = record.arm?.sessionId ?? null;
   const taskLogs = plan && sessionId && !opts.planOnly ? L.readTaskLogs(path.join(runDir, 'workspace-ordewell'), sessionId, plan) : null;
   const metrics = plan && sessionId && !opts.planOnly ? L.runMetrics(plan, taskLogs) : null;
@@ -1443,7 +1447,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
         : record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
       transcripts: record.transcripts, stopped: record.arm?.stopped, stalled: record.arm?.stalled, truncated: record.truncated,
       scoredFrom: record.files?.scoredFrom, scoring: record.scoring, patches: record.files?.patches, validity,
-      providerPin: opts.providerPin, dryRun: opts.dryRun, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(),
+      providerPin: opts.providerPin, referenceSpend: reference, dryRun: opts.dryRun, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(),
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,
@@ -1455,7 +1459,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     recorded,
     metrics,
     // How the arm stopped (its own completion and the runner's reason, a cap, or the settle rule and what it left open) and, for arm A, its model calls against the step limit; null parts are what the copied session did not hold.
-    ending: L.runEnding({ arm: arm.id, plan, taskLogs, stopped: record.arm?.stopped, stalled: record.arm?.stalled, ran: !opts.dryRun && !opts.planOnly }),
+    ending: L.runEnding({ arm: arm.id, plan, taskLogs, stopped: record.arm?.stopped, stalled: record.arm?.stalled, ran: !opts.dryRun && !opts.planOnly, stepLimit: settings.callBudget }),
     // Attempts whose upstream provider changed at least once, and the changes, as the built-in runner's usage records name it.
     providerSwitches: L.providerSwitches(taskLogs),
     // What the plan review said (arm B's planner), from the research log's own line; null when it left none.

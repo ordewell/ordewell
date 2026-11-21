@@ -13,7 +13,7 @@ import type {
 import type { ApprovalDecision } from '../interfaces/IApproval';
 import type { RunnerCommand } from '../models/RunnerCommand';
 import type { RunnerSessionCost } from '../models/Usage';
-import { checkpointReply, commandReply, type CheckpointAnswer, type ApplyPatchArgs, type McpToolReply, type PostArgs, ReadTaskArgs, type TaskCompleteArgs } from './mcp/tools';
+import { checkpointReply, commandReply, type CheckpointAnswer, type ApplyPatchArgs, type McpToolReply, type PostArgs, ReadTaskArgs, type TaskCompleteArgs, type WaitForArgs } from './mcp/tools';
 import { sharedMcpServer, type OrdewellMcpServer, type TaskTokenScope } from './mcp/OrdewellMcpServer';
 import { mcpClientConfig } from './mcp/clientConfig';
 import type { ResearchToolType } from '../models/Task';
@@ -270,6 +270,7 @@ interface SessionLaunch {
   readTask?: (args: ReadTaskArgs) => McpToolReply | Promise<McpToolReply>;
   post?: (args: PostArgs) => McpToolReply | Promise<McpToolReply>;
   applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
+  waitFor?: (args: WaitForArgs) => Promise<McpToolReply>;
   onNotice?: (message: string) => void;
   onAttaching?: (spawn: 1 | 2) => void;
 }
@@ -441,6 +442,7 @@ export class StructuredSession extends AbstractRunnerSession {
         ...(this.launch.readTask ? { readTask: async (args) => this.launch.readTask!(args) } : {}),
         ...(this.launch.post ? { post: async (args) => this.launch.post!(args) } : {}),
         ...(this.launch.applyPatch ? { applyPatch: async (args) => this.launch.applyPatch!(args) } : {}),
+        ...(this.launch.waitFor ? { waitFor: async (args) => this.launch.waitFor!(args) } : {}),
         // The call's signal aborts when the token is revoked, so a command still running ends with the attempt.
         ...(shell ? { runCommand: async ({ command }, { signal }) => commandReply(await shell.run(command, signal)) } : {}),
         ...(savePatch ? { savePatch: async (_args, { signal }) => savePatch(signal) } : {}),
@@ -1244,6 +1246,7 @@ export class StructuredRunner extends AbstractRunner<StructuredSession> {
       ...(opts.readTask ? { readTask: opts.readTask } : {}),
       ...(opts.post ? { post: opts.post } : {}),
       ...(opts.applyPatch ? { applyPatch: opts.applyPatch } : {}),
+      ...(opts.waitFor ? { waitFor: opts.waitFor } : {}),
       onNotice: opts.onNotice,
       onAttaching: opts.onAttaching,
     });

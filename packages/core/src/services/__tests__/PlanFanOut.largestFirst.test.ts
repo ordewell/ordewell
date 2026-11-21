@@ -1,35 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { largestSlicesFirst, MAX_SIZED_FILES } from '../PlanFanOut';
 import { createTask, renumberTasks, type Task } from '../../models/Task';
-import type { ReadFileOpts, ToolOutcome } from '../../interfaces/IFileSystem';
 import { fakeFileSystem } from '../../testing';
+import { lines, workspace } from './planFanOutKit';
 
 const t = (id: string, deps: string[], prompt: string, extra: Partial<Task> = {}): Task =>
   createTask({ id, title: `T ${id}`, dependencies: deps, prompt, assignedRunner: 'claude-code', autonomy: 'AFK', sliceType: 'AFK', ...extra });
 const ids = (ts: readonly Task[]) => ts.map((x) => x.id);
-const lines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
-
-/** A workspace whose reads answer as the planner's file systems do: numbered lines, a size cap in KB, a line limit. */
-function workspace(files: Record<string, string>) {
-  const reads: string[] = [];
-  const fs = fakeFileSystem({
-    readFile: async (p: string, opts?: ReadFileOpts): Promise<ToolOutcome> => {
-      reads.push(p);
-      const content = files[p];
-      if (content === undefined) return { success: false, output: `Error reading ${p}: ENOENT`, truncated: false };
-      if (Buffer.byteLength(content) > (opts?.maxBytes ?? 1024) * 1024) return { success: true, output: 'File too large (2.0 MB). Maximum is 1024 KB.', truncated: false };
-      const all = content.split('\n');
-      if (all[all.length - 1] === '') all.pop();
-      const limit = opts?.limit ?? 2000;
-      const shown = all.slice(0, limit).map((l, i) => `${String(i + 1).padStart(String(all.length).length)}|${l}`).join('\n');
-      return limit < all.length
-        ? { success: true, output: `${shown}\n\n(File has more lines — use offset=${limit} to read beyond line ${limit})\n`, truncated: true }
-        : { success: true, output: shown, truncated: false };
-    },
-  });
-  return { fs, reads };
-}
-
 /** An opening task, five slices that each name their module and its tests, a closing check. */
 const plan = () => renumberTasks([
   t('r', [], 'Make the package import.'),
@@ -81,6 +58,24 @@ describe('largestSlicesFirst', () => {
     const { fs, reads } = workspace({ 'tests/test_b.py': lines(100) });
     expect((await largestSlicesFirst(narrow, fs)).tasks).toBe(narrow);
     expect(reads).toEqual([]);
+  });
+
+  // A core task most slices wait for, listed after the slices beside it, would wait for a slot while they run.
+  it('starts a task the slices wait for ahead of the slices of its level, sized or not', async () => {
+    const beside = renumberTasks([
+      ...[1, 2, 3, 4, 5].map((n) => t(`x${n}`, [], `Fill in src/x${n}.py. Verify: pytest tests/test_x${n}.py`)),
+      t('core', [], 'Fill in src/core.py.'),
+      ...[1, 2, 3, 4, 5, 6].map((n) => t(`s${n}`, ['core'], `Fill in src/s${n}.py.`)),
+      t('close', ['x1', 'x2', 'x3', 'x4', 'x5', 's1', 's2', 's3', 's4', 's5', 's6'], 'Run the suite.'),
+    ]);
+    const unsized = await largestSlicesFirst(beside, workspace({}).fs);
+    expect(ids(unsized.tasks).slice(0, 6)).toEqual(['core', 'x1', 'x2', 'x3', 'x4', 'x5']);
+    expect(unsized).toMatchObject({ moved: 5, gatesFirst: 1 });
+    expect(unsized.measure).toBeUndefined();
+    expect(unsized.tasks.map((x) => x.order)).toEqual(beside.map((x) => x.order));
+    const sized = await largestSlicesFirst(beside, workspace({ 'tests/test_x4.py': lines(50) }).fs);
+    expect(ids(sized.tasks).slice(0, 6)).toEqual(['core', 'x4', 'x1', 'x2', 'x3', 'x5']);
+    expect(sized.measure).toBe('test');
   });
 
   it('reorders slices only among those of their own level, and leaves every other task where it was', async () => {

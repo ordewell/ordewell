@@ -52,7 +52,7 @@ describe('OrdewellMcpServer', () => {
     const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }));
 
     const names = async (client: Client) => (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(await names(task)).toEqual(['apply_patch', 'checkpoint', 'read', 'task_complete']);
+    expect(await names(task)).toEqual(['apply_patch', 'checkpoint', 'read', 'task_complete', 'wait_for']);
     expect(await names(planner)).toEqual([
       'answer_approval', 'answer_checkpoint', 'edit_plan', 'fetch', 'list_models', 'list_runners', 'load_skill', 'merge_all', 'message_task', 'record', 'retry_task', 'run_command',
       'run_plan', 'run_script', 'run_task', 'skip_task', 'stop_run', 'stop_task', 'submit_plan', 'task_diff', 'task_output', 'task_query', 'web_search',
@@ -75,7 +75,7 @@ describe('OrdewellMcpServer', () => {
     expect(tools.map((t) => t.name).sort()).toEqual(['checkpoint', 'fetch', 'read', 'run_command', 'save_patch', 'task_complete', 'web_search']);
     // The hint names what lands, even when a command changes its disposable worktree.
     expect(tools.find((t) => t.name === 'run_command')?.annotations?.readOnlyHint).toBe(true);
-    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['apply_patch', 'checkpoint', 'read', 'task_complete']);
+    expect((await change.listTools()).tools.map((t) => t.name).sort()).toEqual(['apply_patch', 'checkpoint', 'read', 'task_complete', 'wait_for']);
 
     expect(await readOnly.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).toMatchObject({ content: [{ type: 'text', text: 'ran npm test' }], isError: false });
     await expect(change.callTool({ name: 'run_command', arguments: { command: 'npm test' } })).rejects.toThrow(/'run_command' is disabled on this token: read-only tasks only/);
@@ -136,7 +136,7 @@ describe('OrdewellMcpServer', () => {
     const executing = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'skip_task', 'message_task', 'answer_approval', 'answer_checkpoint', 'merge_all', 'run_script'];
     for (const [name, hint] of Object.entries(hints)) expect(hint, name).toBe(!executing.includes(name));
     expect(Object.keys(hints)).toHaveLength(23);
-    expect((await task.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint])).toEqual([['task_complete', undefined], ['checkpoint', undefined], ['read', true], ['apply_patch', undefined]]);
+    expect((await task.listTools()).tools.map((t) => [t.name, t.annotations?.readOnlyHint])).toEqual([['task_complete', undefined], ['checkpoint', undefined], ['read', true], ['apply_patch', undefined], ['wait_for', undefined]]);
   });
 
   it('answers an unknown or revoked token with 401, and the SDK client cannot connect with it', async () => {

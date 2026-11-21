@@ -126,3 +126,32 @@ describe('a skipped or failed task, its last handoff kept (ADR-0047)', () => {
     expect(readTask({ task: '#1' }, 'docs', skipped, cutOff).text).toContain('Two races remain.');
   });
 });
+
+describe('a citation of a task the producer may not read, once that task leaves the plan (ADR-0073)', () => {
+  const zHandoff: StoredHandoff = { ...storedHandoff({ summary: 'Z summary.', report: 'Z REPORT', findings: [{ severity: 'major', title: 'Z finding' }] })!, attempt: 1 };
+  const zLog = {
+    attempts: (taskId: string) => (taskId === 'z' ? [1] : []),
+    events: (taskId: string, attempt: number): TaskLogEvent[] => (taskId === 'z' && attempt === 1 ? [{ type: 'handoff', handoff: zHandoff }] : []),
+  };
+
+  it('passes on nothing of it: neither the producer nor a task reading the producer can read its handoff', () => {
+    // b and z are unrelated siblings: b may cite z, never read it.
+    const before = [
+      createTask({ id: 'z', order: 1, title: 'Z', status: 'completed', handoff: zHandoff }),
+      createTask({ id: 'b', order: 2, title: 'B' }),
+      createTask({ id: 'c', order: 3, title: 'C', dependencies: ['b'] }),
+    ];
+    const checked = checkHandoff({ summary: 'z broke me', findings: [{ severity: 'blocker', title: 'z is broken', evidence: [{ kind: 'task', task: '#1' }] }] }, 'b', before, { logs: handoffLogs(zLog) });
+    if (!checked.ok) throw new Error(checked.refusal);
+    const after = [
+      createTask({ id: 'b', order: 1, title: 'B', status: 'completed', handoff: { ...storedHandoff(checked.handoff)!, attempt: 1 } }),
+      createTask({ id: 'c', order: 2, title: 'C', dependencies: ['b'] }),
+    ];
+
+    for (const reader of ['b', 'c']) {
+      const read = readTask({ task: 'z', include_report: true }, reader, after, zLog);
+      expect(read).toMatchObject({ isError: true, text: expect.stringContaining('names no task in the plan') });
+      expect(read.text).not.toContain('Z REPORT');
+    }
+  });
+});

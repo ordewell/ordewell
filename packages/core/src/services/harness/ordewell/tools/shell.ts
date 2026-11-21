@@ -3,6 +3,7 @@ import { resolveResearchShell } from '../../../researchShell';
 import { killTree, spawnInOwnGroup } from '../../../../utils/processTree';
 import { buildToolEnv } from './shellEnv';
 import type { OrdewellTool } from './types';
+import { waitRefusal } from './waitGuard';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
@@ -26,6 +27,8 @@ export const shellTool: OrdewellTool = {
   },
   async execute(args, context) {
     const command = String(args.command);
+    const waits = context.waits ? waitRefusal(command, { parks: context.waits.parks === true }) : null;
+    if (waits) return { text: waits, isError: true, details: { exitCode: null, refused: 'wait' } };
     const requested = typeof args.timeout === 'number' && Number.isFinite(args.timeout) && args.timeout > 0 ? args.timeout : DEFAULT_TIMEOUT_MS;
     const timeoutMs = Math.min(requested, MAX_TIMEOUT_MS);
     const shell = resolveResearchShell();

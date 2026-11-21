@@ -50,6 +50,11 @@ starting as usual.
   report as input, and its other dependents wait for it as for work under way,
   until its loop stops or runs out of rounds
   ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3).
+  A parked task ended its attempt with no verdict
+  ([ADR-0074](0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md)): it is not started, so it blocks nothing, and its
+  dependents wait for it as for work not yet done. A failure among what it
+  waits for does not block it: the edges its park added for that work are
+  taken back, and it goes on without it (P7).
 - **A skip releases them too.** A skipped dependency is as finished as a
   completed one for the blocked rule: nothing of it lands, so there is
   nothing of its own to wait for. The work it waited on is another matter:
@@ -201,3 +206,4 @@ attempt. This decides what a failure stops, not how a verdict is reached.
 - 2026-11-17 — a follower that cannot answer takes the run's end from `run_concluded`, after any closing turn, and `ordewell run` exits 2 on a failed or blocked task ([ADR-0029](0029-the-supervisor.md)).
 - 2026-11-17 — a subtask is held to every ancestor's dependencies, for the blocked rule and the start rule alike, the merge gate included; it was held to its own alone.
 - 2026-11-17 — `ordewell run`'s wait for `run_concluded` is bounded by the supervisor's own limits ([ADR-0029](0029-the-supervisor.md)).
+- 2026-11-21 — a parked task blocks nothing, and a failure it waits for does not block it: its park's edge to that work is taken back (ADR-0074).

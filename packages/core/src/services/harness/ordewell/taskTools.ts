@@ -5,7 +5,7 @@ import type { McpToolReply } from '../../mcp/tools';
 /**
  * Every task tool the runner offers natively, by the name the model sees and
  * the name the token's tool set serves. The token decides which exist: a
- * change task's serves `checkpoint` and `apply_patch`, a read-only task's the
+ * change task's serves `checkpoint`, `apply_patch` and `wait_for`, a read-only task's the
  * sealed `run_command`, `save_patch`, `fetch` and `web_search` (ADR-0046), a
  * board's `post`; one it does not list is not offered. The task-record `read`
  * is `read_task` here (its alias on the server), since `read` is the file tool.
@@ -15,6 +15,7 @@ const OFFERED: readonly { native: string; served: string }[] = [
   { native: 'read_task', served: 'read' },
   { native: 'checkpoint', served: 'checkpoint' },
   { native: 'apply_patch', served: 'apply_patch' },
+  { native: 'wait_for', served: 'wait_for' },
   { native: 'run_command', served: 'run_command' },
   { native: 'save_patch', served: 'save_patch' },
   { native: 'fetch', served: 'fetch' },

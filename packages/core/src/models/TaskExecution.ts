@@ -36,6 +36,7 @@ export const TASK_FIELDS = {
   autonomy: 'plan',
   sliceType: 'plan',
   userStoriesCovered: 'plan',
+  mergedSlices: 'plan',
   // Cleared when an attempt spawns fresh, not when one is asked for: until then Continue may still offer it.
   runnerSessionId: 'execution',
   runnerSessionOwner: 'execution',
@@ -45,6 +46,7 @@ export const TASK_FIELDS = {
   waitsEnded: 'execution',
   resumeAt: 'attempt',
   carriedFrom: 'attempt',
+  parked: 'attempt',
   retryNote: 'attempt',
   skipReason: 'attempt',
   skipOrigin: 'attempt',

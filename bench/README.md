@@ -135,7 +135,11 @@ node bench/commit0/drive.mjs --sweep
 
 - **D1. One budget.** Both arms get the same wall-clock cap (3 hours) and the
   same spend cap, `--cap-usd` (default 8). A run that meets either is stopped
-  and labelled `stopped: {why: 'spend' | 'wall-clock'}`.
+  and labelled `stopped: {why: 'spend' | 'wall-clock'}`. The built-in runner's
+  budget of model calls per attempt is the same for both arms too, `--call-budget`
+  (default 1000): every `result.json` records it as `callBudget`, and a pair whose
+  arms ran with different ones is not valid (`pairs` in `batch.json`, and the
+  rehearsal's pair check).
 - **D2. Arm A is one agent alone**: supervisor off, one task, mode `full`,
   nothing started or merged on its behalf. It is scored on its working tree's
   final state whether or not its task passed: when the task did not land, the
@@ -175,6 +179,7 @@ labelled containers and networks whose driver on this host is no longer running.
 | Option | Default | |
 | --- | --- | --- |
 | `--cap-usd <usd>` | 8 | the spend cap, both arms |
+| `--call-budget <n>` | 1000 | the built-in runner's model calls per attempt (core's `ordewellStepLimit`), both arms; a single agent that ends its attempt for want of it shows in `ending.modelCalls` |
 | `--parallel <n>` | 8 | arm B's `ORDEWELL_MAX_PARALLEL`; arm A runs one task |
 | `--cpus <n>` | 8 | the box's CPU quota |
 | `--memory <size>` | `12g` | the box's memory quota |
@@ -264,13 +269,15 @@ or network of the bench is left behind:
 
 | Scenario | Arm | What happens | What `result.json` must say |
 | --- | --- | --- | --- |
-| `a-done` | A | the task makes the edits and reports done | valid; `ordewell run` returned by itself with exit 0; not truncated; 1 task completed; more passed than the baseline; the test edit excluded |
+| `a-done` | A | the task's first step is a `sleep 300`, then it makes the edits and reports done | valid; `ordewell run` returned by itself with exit 0; not truncated; 1 task completed; more passed than the baseline; the test edit excluded; the sleep was refused before it ran, in a reply that names `wait_for`, and answered at once |
 | `a-failed` | A | one shell command runs past the settle window, then the edits, then the task reports failed | not stopped while the command ran; settled with 1 task open; scored from the task's unlanded worktree; more passed than the baseline; the test edit excluded |
 | `a-stall` | A | the task makes the edits, then asks a checkpoint that nobody answers | ended by the stall rule (`stalled: waiting on checkpoint`), not by a cap; never complete; the attempt cut short; scored from the task's unlanded worktree; more passed than the baseline |
 | `b-retry` | B | task 1 fails while task 2 waits on it; the supervisor at Act retries it fresh, then answers task 2's checkpoint | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the supervisor played `retry_task` and `answer_checkpoint`; `metrics.supervisor` counts exactly those two acts and no wake for a failure the closing turn left |
 | `b-leave` | B | task 1 fails while task 2 waits on it, and the supervisor leaves it, at the closing turn and again at the second wake core raises for the failure left standing | ended by the settle rule with both tasks held open, which the stall record names, since nobody is waited on; never complete; scored from merged work, at the baseline, since nothing landed; the supervisor said it left the task; `metrics.supervisor` holds no act but words, and exactly one wake for the failure the closing turn left (never a third) |
 | `b-edit-retry` | B | task 1 fails; the supervisor's closing turn edits it (a reply with task ops, as the built-in planner has no `edit_plan` tool) and retries nothing; the second wake, for the failure left standing, retries it; the run goes on to its end | not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; `metrics.supervisor` counts `plan_edit` then `retry_task`, the retry after the closing wake, and one wake for the failure left standing; the closing task ends done with a finding, and its note file is in the merged work |
 | `b-take-in` | B | two tasks side by side: the producer makes the edits and reports done; the consumer runs a long step so that the producer lands, writes a note and commits it, then runs the merge command its own first message gives (the fake reads it out of that message), checks the producer's module is in its worktree, and reports done | the consumer's first message holds the `## Work landing beside yours` block and a command to take the work in with; the commit, the merge and the check each exited 0; the run's integration branch holds a two-parent `Merge: ... (take in landed work)` commit; not truncated; 2 tasks completed; scored from merged work; more passed than the baseline; the test edit excluded |
+| `b-wait` | B at `--parallel 2` | three tasks side by side, the third queued behind the limit: the consumer's first step calls `wait_for` on the producer, which is still at work; the consumer's turn ends in prose; the producer lands; the consumer goes on, makes its edit and lands | the call was granted; the consumer reported nothing before it was continued, and went on in the same session only after the producer's last turn, its request holding "The work you waited for has landed" and the producer's title; the third task started after the call and before the producer's last turn; the final plan shows the consumer depending on the producer, with the park it saved; not truncated; 3 tasks completed; scored from merged work; more passed than the baseline; the test edit excluded |
+| `b-blocker` | B | the opening task lands its edits; two slices after it end done with a `blocker` finding that cites it; the first reports at once, the second is at work, and the closing check waits for both; the supervisor's wake answers with one edit that adds a fix task and makes the closing check wait for it | the wake the supervisor was sent holds the landed-blocker line for task #1, the closing check and the guidance; the supervisor answered it; the final plan holds 5 tasks, one the fix, which depends on the opening task and which the closing check waits for; the fix's last turn came before the closing check's first, and the check found the fix's file in its tree; `metrics.supervisor` counts exactly one `plan_edit` and every wake's trigger is one the harness reads; not truncated; 5 tasks completed; scored from merged work; more passed than the baseline |
 | `b-plan` | B, `--plan-only` | the planner returns a six-task plan with a research task, three changes, an ops task and a script that checks a loop; nothing else is scripted | marked `planOnly` and never valid; the shape the plan has (6 tasks, chain of 4, widest level 2, 6 edges, one gate, one loop check); a priced planner and a planning time; no `run` or `merge` step, no score, no tests; `plan.json` and `plan-saved.json` in the run's directory and no `arm-workdir/`; the fake heard no runner and no supervisor; `plans.jsonl` did not grow |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
 
@@ -282,6 +289,8 @@ consumer commits a note of its own before it takes the work in, as the message
 tells it to: with nothing of its own the merge is a fast-forward and makes no
 commit. `ordewell merge` folds the integration branch into the workdir's own
 and deletes it, so the judge reads the merged history from `HEAD`.
+
+`b-wait` and `b-blocker` prove, in the real box, the two ways one task's work reaches another: a task that needs a sibling's unlanded work parks instead of sleeping (the plan gains the edge, its slot goes to the next task, and its session is continued once that work lands), and a blocker that tasks report in landed work reaches the supervisor, whose one edit adds a fix that lands before the check of the whole starts. The judges read what the fake heard (each request's time and messages) and the session's final plan, which the run's directory holds. In `b-wait` the consumer's session is resumed, so its continuation is the same attempt: a runner that started a fresh attempt fails the scenario, since the built-in runner saves a session it can resume. `a-done`'s `sleep 300` is the guard of the built-in shell, which refuses a change task's long sleep before it runs.
 
 `--pairs <libA,libB>` adds one batch of both arms of two libraries at `--jobs 2`,
 on one scenario (`--pair-scenario`, default `a-done`, whose script only arm A
@@ -388,7 +397,12 @@ Each step that would call the model is reported UNVERIFIED. `--run` runs the
 arms and spends on the key in `OPENROUTER_API_KEY`. That key must be one the
 run has to itself, its limit set to the cap and its provider pinned in the
 OpenRouter account, since a request cannot pin it. Pass that provider as
-`--provider-pin` so every result records it.
+`--provider-pin` so every result records it. The flag only records: the built-in runner has no
+setting that names an upstream (it sends OpenRouter a `provider` field only to
+prefer the upstream that served the conversation's last turn, with fallbacks on,
+or a fixed order for Anthropic models; the `:nitro` and `:floor` model suffixes sort
+by speed or price, and none picks one), so a run is pinned only by the key's
+account setting, and `providerSwitches` and `metrics.calls.byUpstream` show what served it.
 `libraries.example.json` shows the shape of a library list. Results, per library
 and arm, go to `<bench dir>/commit0/` (`dry-runs/`, `runs/`, `results.jsonl`),
 and so does the packed runtime (`runtime/<sha>-<dist build>`). A library's `testCmd` defaults
@@ -444,6 +458,8 @@ scored (`arm.patch` is always the scored diff); `evalBox: 'fresh'`,
 | `metrics.perTask[].attempts[].runningMs` | an attempt a stop cut has a running clock of 0; its `wallTimeMs` is then its running time, and the attempt says `runningFrom: 'wallTimeMs'` (that time includes any wait on a person) |
 | `metrics.calls` | from the attempts' logs: `calls`, `byUpstream` (the `provider` of each of the built-in runner's usage records; `unreported` for one without it) and `coldAfterCall`: calls billed with under `coldShare` (5%) of their input cached straight after another call of the same attempt (a subagent's calls are counted, never judged). Null without the logs |
 | `ending` | how the arm stopped, in `by`: `completion` (the arm's own word: `status` `done`, `failed` or `blocked` and the `reason` text the runner gave in `task_complete`, with each task's own in `reports`; a run the settle rule found holding only failed tasks and the tasks behind them is this too, the runner having reported and nothing left to move), `cap` (`cap` is `spend`, `wall-clock` or `batch-budget`, with `spentUsd` and `atMs`), `settle` (nothing moved for the settle window while a task was still open for another cause: `open` lists each with what held it, and `quietMs`), `stall` (a person waited on for `--stall-min`), `no-start`, or `not-run` (a dry run, a plan-only run or no task). For arm A `modelCalls`: `used` (the attempts' own calls, a subagent's apart in `subagentCalls`), `perAttempt`, `peakAttempt` and `reachedLimit` against `limitPerAttempt`, the runner's step limit, which is per attempt; null for arm B and without the logs |
+| `callBudget` | the built-in runner's model calls per attempt this run ran with (`--call-budget`; `stepLimit` is the same number under its older name) |
+| `referenceUsd`, `referenceSpend` | the run's spend recomputed from its token counts at one price table kept in `lib.mjs` (`REFERENCE_PRICES`, `priceTable` in the record; the model's list price per million tokens in core's offline catalog), so that the dollars of two runs and two arms compare: the upstream providers behind one OpenRouter model charged prices that differed several-fold between runs. `planner` (its ledger holds the supervisor's wake-up turns too) and each of `attempts` (`task`, `attempt`, subtasks included) give `freshInputTokens`, `cachedInputTokens`, `outputTokens` and `usd`; `tokens` and `usd` are the sums. An attempt with no token counts is counted in `unmeasured` and priced at nothing. `recordedUsd` and `billedUsd` stay what the providers charged |
 | `providerSwitches` | from the same usage records' `provider`: `attempts` read, `withProvider` (those naming an upstream), `attemptsSwitched` (attempts whose upstream changed at least once) and `switches` (the changes; a record naming no upstream is skipped, a subagent's calls are left out). Null without the logs, as in a dry run, which shows `ending.by: 'not-run'`; the rehearsal's fake names no upstream, so it shows no switch |
 
 A stub
@@ -510,7 +526,10 @@ host stop loses at most the runs that were going. With both arms and `--jobs`
 2 or more, a library's A and B start together, and the next library's pair
 starts only when both have ended (`--jobs 4` takes two libraries at a time). When runs
 overlapped, a run's `billedUsd` is null and `billedSource` says why; a run
-alone keeps its key delta.
+alone keeps its key delta. Beside the recorded sum, `perArm` holds each arm's
+`recordedUsd`, `referenceUsd` (at the one reference price table, `referencePriceTable`) and
+`referenceTokens`, and `pairs` says for each library with both arms whether they
+ran under one call budget.
 
 ### Score over time
 
@@ -542,7 +561,14 @@ writes `timeline.json` into the run directory (`timeline/<point>/` holds each
 point's `score.json`, `arm.patch` and `tests.log`). The final point must score
 as `result.json` does (passed, failed, errors); when it does not, the timeline
 says `verified: false` and why, and the exit is non-zero, as it is when a point
-could not be scored. `commit0.test.mjs` tests the choice of points and the
+could not be scored. Arm B's history is the first-parent line of its integration
+branch, and once the end-of-run merge has left only `commit0-base` in the
+workdir, of that, which holds every landing; with `--branch` too it is the
+first-parent line, never a full `git log`, which would reach a slice's own commit.
+A point whose pytest was killed (exit 137) and printed no counts has no score: it
+fails, is tried once more alone, and if it is killed again stays `ok: false`,
+`killed: true` and out of `crossings`, the first point at which the passed tests
+reach 25, 50, 75, 90 and 100% of those collected. `commit0.test.mjs` tests the choice of points and the
 commit-to-time mapping on a repository it builds, the closing check's landing included, and the container call
 through a fake `docker` on `PATH`.
 

@@ -1064,7 +1064,7 @@ describe('the command seam\'s extension points', () => {
     const orchestrator: RunReads = {
       isScheduling: false, startsHeld: false, hasLiveWork: true, runHeld: false, scheduledRun: false, startsPending: false, loopCarried: false, awaitsResume: false, advancesOnItsOwn: false,
       getAttempt: attempts(true), holdsSlot: () => true, repairWait: () => null, loopRunsOn: () => false, startWaits: () => [], revertScope: () => ({ taskIds: [] }), awaitsCheckpoint: () => false,
-      admitStart: () => ({ current: () => true, release: vi.fn() }), readyFailed: vi.fn(), startAtGate: vi.fn(),
+      admitStart: () => ({ current: () => true, release: vi.fn() }), readyFailed: vi.fn(), startAtGate: vi.fn(), parkedNow: () => false,
       ...over.orchestrator,
     };
     const controls: RunControls = {

@@ -39,6 +39,14 @@ describe('classifyAttempt', () => {
     expect(classifyAttempt('change', { carriedFrom: 'codex' })).toEqual({ kind: 'carryOver', from: 'codex' });
   });
 
+  // ADR-0074 P4: a park its runner cannot resume goes on as a carry-over, told what it waited for.
+  it('carries a parked task\'s work over to a fresh session where none can be resumed, a move\'s runner first', () => {
+    const parked = { from: 'claude-code', message: 'The work you waited for has landed.' };
+    expect(classifyAttempt('change', { parked })).toEqual({ kind: 'carryOver', from: 'claude-code', parked: parked.message });
+    expect(classifyAttempt('change', { parked, carriedFrom: 'codex' })).toEqual({ kind: 'carryOver', from: 'codex', parked: parked.message });
+    expect(classifyAttempt('change', { parked, continuation: resume }).kind).toBe('continuation');
+  });
+
   it('reads a read-only task as one that lands nothing, fresh or continued (ADR-0046)', () => {
     expect(classifyAttempt('readOnly')).toEqual({ kind: 'readOnly' });
     expect(classifyAttempt('readOnly', { continuation: resume })).toEqual({ kind: 'continuation', work: 'readOnly', ...resume });

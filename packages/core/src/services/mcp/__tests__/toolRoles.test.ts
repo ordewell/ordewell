@@ -35,7 +35,7 @@ describe('a role\'s tool set (R11)', () => {
     const server = newServer();
     const task = await connect(await server.issueTaskToken({ sessionId: 's', taskId: 't', attempt: 1 }, { readTask }));
 
-    expect(await names(task)).toEqual(['task_complete', 'checkpoint', 'read', 'apply_patch']);
+    expect(await names(task)).toEqual(['task_complete', 'checkpoint', 'read', 'apply_patch', 'wait_for']);
     expect(await task.callTool({ name: 'read', arguments: { task: '#1' } })).toMatchObject({ content: [{ text: 'its handoff' }] });
     expect(await task.callTool({ name: 'read_task', arguments: { task: '#1' } })).toMatchObject({ content: [{ text: 'its handoff' }] });
     expect(readTask).toHaveBeenCalledTimes(2);

@@ -232,12 +232,22 @@ describe('read-only mode of the built-in runner (ADR-0046)', () => {
 });
 
 describe('a change task of the built-in runner', () => {
-  it('is offered checkpoint and apply_patch, which its token serves, and calls them in-process', async () => {
+  it('is offered checkpoint, apply_patch and wait_for, which its token serves, and calls them in-process', async () => {
     const token = served(TASK_TOOLS);
-    const { adapter, client, options } = guarded([[call('c', 'checkpoint', { question: 'Which?' }), call('p', 'apply_patch', { task: '#2' }), STOP], [STOP]], worktree(), { mcp: token.mcp });
+    const { adapter, client, options } = guarded([[call('c', 'checkpoint', { question: 'Which?' }), call('p', 'apply_patch', { task: '#2' }), call('w', 'wait_for', { tasks: ['#2'], reason: 'needs its parser' }), STOP], [STOP]], worktree(), { mcp: token.mcp });
     await adapter.start(options);
     await turn(adapter, []);
-    expect(client.requests[0]?.tools.map((t) => t.name).slice(-4)).toEqual(['task_complete', 'read_task', 'checkpoint', 'apply_patch']);
-    expect(token.calls.sort()).toEqual(['apply_patch', 'checkpoint']);
+    expect(client.requests[0]?.tools.map((t) => t.name).slice(-5)).toEqual(['task_complete', 'read_task', 'checkpoint', 'apply_patch', 'wait_for']);
+    expect(token.calls.sort()).toEqual(['apply_patch', 'checkpoint', 'wait_for']);
+  });
+
+  // ADR-0074 P6: a wait inside the attempt is refused, pointing to the tool that parks it.
+  it('refuses a long sleep in its shell, saying to call wait_for', async () => {
+    const token = served(TASK_TOOLS);
+    const { adapter, options } = guarded([[call('s', 'shell', { command: 'sleep 240' }), STOP], [STOP]], worktree(), { mcp: token.mcp, commits: true });
+    await adapter.start(options);
+    const [result] = toolResults(await turn(adapter, [{ decision: 'allow' }]));
+    expect(result).toMatchObject({ name: 'shell', success: false });
+    expect(result?.output).toContain('call `wait_for` with those tasks');
   });
 });

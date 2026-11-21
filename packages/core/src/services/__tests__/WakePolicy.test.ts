@@ -470,3 +470,41 @@ describe('a flat run\'s events, end to end through the policy (ADR-0057 R4)', ()
     expect(policy.poll(Number.POSITIVE_INFINITY)?.attention).toHaveLength(1);
   });
 });
+
+describe('a blocker reported in landed work', () => {
+  const blocker = (at: number, reporters: number): RunEvent => ({
+    kind: 'landed_blocker',
+    at,
+    taskId: 'open',
+    landedBlocker: { owner: 'open', reporters, reports: [{ reporter: 's1', finding: 'F1', title: 'parser drops the last token' }] },
+  });
+
+  it('is held as a failure is, until the plan or the cache says it is time', () => {
+    const policy = createWakePolicy({ debounceMs: DEBOUNCE, facts: () => QUIET });
+    policy.push(blocker(0, 1));
+
+    expect(policy.poll(DEBOUNCE)).toBeNull();
+    expect(policy.dueAt()).toBe(UNKNOWN_CACHE_TTL_MS * 0.8);
+  });
+
+  it('is one fact per landed task, the latest count saying the most and the first stamp holding', () => {
+    const policy = createWakePolicy({ debounceMs: DEBOUNCE, facts: () => DUE });
+    policy.push(blocker(0, 1));
+    policy.push(blocker(400, 2));
+
+    expect(policy.poll(DEBOUNCE)?.attention).toEqual([{ ...blocker(400, 2), at: 0 }]);
+  });
+});
+
+describe('a running-long flag held past its attempt', () => {
+  it('goes once its task passes or fails: it advised on an attempt that has ended', () => {
+    const policy = createWakePolicy({ debounceMs: DEBOUNCE, facts: () => QUIET });
+    policy.push(event('running_long', 0, 't1'));
+    policy.push(event('running_long', 10, 't2'));
+    policy.push(event('task_passed', 500, 't1'));
+
+    expect(policy.snapshot().attention).toEqual([event('running_long', 10, 't2')]);
+    policy.push(event('task_failed', 600, 't2'));
+    expect(policy.snapshot().attention).toEqual([event('task_failed', 600, 't2')]);
+  });
+});

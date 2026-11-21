@@ -97,9 +97,13 @@ trust it:
 | `task` | a task reference, optionally a finding id | at the call |
 | `url` | `http` or `https` only | at the call |
 
-A `task` reference must resolve to a task the producer may read (the readable
-set below) and, with a finding id, to a finding that exists; the call is
-refused otherwise. It is stored with the attempt it read, since F numbers
+A `task` reference must resolve to a task of the plan, and a finding id to a
+finding that exists of a task the producer may read (the readable set below);
+the call is refused otherwise. A citation alone reads nothing, so it may name
+any task: a slice names the sibling whose landed work it found broken, which is
+how that reaches a fix
+([ADR-0073](0073-a-blocker-found-in-landed-work-reaches-the-supervisor-while-the-run-can-still-land-a-fix.md)).
+It is stored with the attempt it read, or that task's latest, since F numbers
 restart per attempt (ADR-0057 R1). A `url` of any other scheme is refused, so no surface
 renders a `javascript:` or `file:` link. A `file` or `commit` is a claim about
 a tree the producer saw: the worktree may be gone when someone reads it, and a
@@ -322,3 +326,4 @@ merges findings; and any new setting.
 - 2026-11-09 — the contract asks a summary for decisions, interfaces, assumptions and what is open, and tells a runner to keep its own context lean.
 - 2026-11-10 — the readable set is the whole loop across rounds; `read` falls back to the newest attempt that left a handoff, labelled with how it ended; measured numbers go in the summary or findings.
 - 2026-11-17 — the `summary` parameter's description says a longer one is refused and where the rest goes.
+- 2026-11-21 — a `task` reference may cite any task of the plan; a finding id stays within the readable set (ADR-0073).

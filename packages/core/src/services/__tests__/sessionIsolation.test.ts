@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { makeSession, FakeRunnerSession, taskOf, saves } from './sessionTestKit';
-import { FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
+import { fakeConfig, FakeWorktreeIsolation, flushMicrotasks } from '../../testing';
 import * as sessionStore from '../../utils/sessionStore';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
@@ -785,6 +785,16 @@ describe('Session with worktree isolation', () => {
       const lone = { repos: ['.'], shared: [] };
       expect(startConversation).toHaveBeenCalledWith(expect.objectContaining({ isolatedExecution: lone }));
       expect(generate).toHaveBeenCalledWith(expect.objectContaining({ modes: expect.objectContaining({ isolatedExecution: lone }) }));
+    });
+
+    // ADR-0072 R7: a wide one-shot plan's small slices are merged toward twice what runs at once.
+    it('hands the one-shot planner how many tasks run at once', async () => {
+      const generate = vi.fn().mockResolvedValue(plan([task('t1', 1)]));
+      const session = makeSession({ config: fakeConfig({ maxParallelSessions: 8 }), planner: { generate } });
+
+      await session.generatePlan('goal', ['claude-code']);
+
+      expect(generate).toHaveBeenCalledWith(expect.objectContaining({ modes: expect.objectContaining({ parallelLimit: 8 }) }));
     });
 
     it('describes a repo group to the planner: its repositories and the paths its tasks share', async () => {

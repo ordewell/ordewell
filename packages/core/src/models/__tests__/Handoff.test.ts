@@ -204,6 +204,15 @@ describe('a reference pinned to its attempt (ADR-0057 R1)', () => {
     expect(pinned(checkHandoff(cite('#4/F3'), 'fix', plan(digest(2, 3))))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2, finding: 'F3' }]);
   });
 
+  it('takes a sibling it may not read as a citation pinned to its attempt, marked unread, and refuses a finding of it', () => {
+    const tasks = [...plan(digest(2, 3)), createTask({ id: 'slice', order: 6, title: 'Slice' })];
+
+    expect(pinned(checkHandoff(cite('#4'), 'slice', tasks))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2, unread: true }]);
+    const refused = checkHandoff(cite('#4/F3'), 'slice', tasks);
+    expect(refused.ok).toBe(false);
+    expect(refused.ok ? '' : refused.refusal).toContain('whose findings this task may not read: cite the task alone, without the finding.');
+  });
+
   it('pins a task named with no finding, whose handoff is what the reference points at', () => {
     expect(pinned(checkHandoff(cite('#4'), 'fix', plan(digest(2, 3))))).toEqual([{ kind: 'task', node: 'root', task: 'review', attempt: 2 }]);
   });

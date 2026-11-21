@@ -762,8 +762,8 @@ test('arm A runs alone with the supervisor off (D2), arm B as its user runs it a
   const opts = L.parseArgs(['--dry-run', '--libs', 'x', '--parallel', '3', '--cpus', '2', '--memory', '4g', '--cap-usd', '1.5']);
   const recA = L.armSettings(L.ARMS.A, opts);
   const recB = L.armSettings(L.ARMS.B, opts);
-  assert.deepEqual(recA, { supervisorLevel: 'off', autorun: false, automerge: false, parallel: 1, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS });
-  assert.deepEqual(recB, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 3, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS });
+  assert.deepEqual(recA, { supervisorLevel: 'off', autorun: false, automerge: false, parallel: 1, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS, callBudget: L.STEP_LIMIT });
+  assert.deepEqual(recB, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 3, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS, callBudget: L.STEP_LIMIT });
   assert.equal(L.boxSettings(L.ARMS.B, recB).supervisorLevel, 'act');
 });
 
@@ -1883,7 +1883,7 @@ test('the fake routes a runner\'s attempts by its task key and round, and an att
   assert.equal(past.content, 'Done.');
   // Arm A's one task carries no key.
   assert.equal(R.taskKeyOf([{ role: 'user', content: 'Implement the tlslite-ng library' }]), 'A');
-  assert.equal(R.turnFor('a-failed', runnerRequest([{ role: 'user', content: 'x' }]), R.createState(), playCtx).toolCall.args.command, `sleep 85 && echo slept 85s`);
+  assert.equal(R.turnFor('a-failed', runnerRequest([{ role: 'user', content: 'x' }]), R.createState(), playCtx).toolCall.args.command, `timeout 85 tail -f /dev/null; echo slept 85s`);
 });
 
 test('the edits change a source file, add a module inside the library and edit a test, and the failing script reports failed', () => {
@@ -1894,7 +1894,7 @@ test('the edits change a source file, add a module inside the library and edit a
   assert.match(said, /find unit_tests -name 'test_\*\.py'/);
   const [attempt] = R.scenario('a-failed').attempts(playCtx).A;
   assert.equal(attempt[0].tool, 'shell');
-  assert.match(attempt[0].args.command, /^sleep \d+/);
+  assert.match(attempt[0].args.command, /^timeout \d+ tail -f \/dev\/null; echo slept/);
   assert.ok(attempt[0].args.timeout > 85_000, 'the shell tool\'s own timeout would cut the long command short');
   assert.deepEqual(attempt.at(-1).args.status, 'failed');
 });
@@ -1977,6 +1977,7 @@ test('judgeRehearsal holds a result.json to its scenario, and judgePlayed to the
     steps: { run: { exit: 2, ended: 'by itself' } },
     ending: { by: 'completion', status: 'failed', reason: 'The rehearsal fails this task on purpose.', modelCalls: { used: 3, limitPerAttempt: 1000, reachedLimit: false } },
     providerSwitches: { attempts: 1, withProvider: 0, attemptsSwitched: 0, switches: 0 },
+    callBudget: 1000, stepLimit: 1000, referenceUsd: 0.1, referenceSpend: { priceTable: { id: 'ref-1' } },
   };
   assert.deepEqual(R.judgeRehearsal('a-failed', passing), []);
   // The ending is the scenario's: another status, another reason, another way to stop, no calls for arm A, calls for arm B, a switch the fake never makes, or no field at all.
@@ -2048,7 +2049,7 @@ test('the fake reads a step\'s command out of the task\'s own first message, and
   const steps = R.scenario('b-take-in').attempts(playCtx).consumer[0];
   const at = steps.findIndex((s) => s.fromPrompt);
   assert.ok(at > 0, 'the take-in comes after the long step, so the producer has landed');
-  assert.equal(steps[0].args.command, 'sleep 85 && echo slept 85s');
+  assert.equal(steps[0].args.command, 'timeout 85 tail -f /dev/null; echo slept 85s');
   const brief = { role: 'user', content: landingBlock() };
   const turnAt = (messages, round) => R.turnFor('b-take-in', runnerRequest([...messages, ...Array.from({ length: round }, () => toolRound('shell')).flat()]), state, playCtx);
   const turn = turnAt([{ role: 'system', content: 'a system prompt that says take it in with `not this`' }, brief], at);
@@ -2101,6 +2102,163 @@ test('judgeTakeIn wants the heading and the command in the consumer\'s first mes
   assert.deepEqual([e.scoredFrom, e.tasks, e.passedAboveBaseline, e.truncated], ['merged', { completed: 2 }, true, false]);
 });
 
+test('b-wait\'s consumer parks on its first step and goes on from the step after the prose turn that ends the attempt', () => {
+  const s = R.scenario('b-wait');
+  const [parkAttempt, freshAttempt] = s.attempts(playCtx).consumer;
+  assert.deepEqual([parkAttempt[0].tool, parkAttempt[0].args.tasks], ['wait_for', ['#1']], 'the first step is the call, naming the producer by its order');
+  assert.ok(parkAttempt[0].args.reason);
+  assert.ok(parkAttempt[1].say, 'the attempt ends in prose, as a granted wait asks');
+  assert.deepEqual(parkAttempt.slice(2), freshAttempt, 'a session that cannot resume plays the same work without the wait');
+  assert.equal(s.windows.parallel, 2);
+  assert.deepEqual(R.windowArgs(s).slice(-2), ['--parallel', '2']);
+  assert.equal(L.parseArgs(['--rehearse', 'b-wait', '--libs', 'x.json', '--arm', 'B', ...R.windowArgs(s)]).parallel, 2);
+  assert.equal(R.windowArgs(R.scenario('b-take-in')).includes('--parallel'), false, 'only a scenario that sets a limit passes one');
+  // The producer is still at work when the consumer calls: its long step comes first.
+  assert.match(s.attempts(playCtx).producer[0][0].args.command, /^timeout 85 tail/);
+  const plan = s.plan();
+  assert.deepEqual(plan.tasks.map((t) => t.dependencies), [[], [], []], 'three tasks side by side: the wait is added by the call, never planned');
+
+  // The fake plays the steps by the turns a task has had, so a resumed session goes on after its prose turn.
+  const state = R.createState();
+  const brief = { role: 'user', content: 'Build on the library. [rehearsal:consumer]' };
+  const asked = (messages) => R.turnFor('b-wait', runnerRequest(messages), state, playCtx);
+  const first = asked([brief]);
+  assert.deepEqual([first.toolCall.name, first.round, first.attempt], ['wait_for', 0, 1]);
+  const waiting = [brief, ...toolRound('wait_for')];
+  const prose = asked(waiting);
+  assert.deepEqual([prose.content, prose.toolCall, prose.round], ['Waiting for the producer.', undefined, 1]);
+  const resumed = asked([...waiting, { role: 'assistant', content: prose.content }, { role: 'user', content: '(Ordewell) The work you waited for has landed: #1 "Implement the library".' }]);
+  assert.deepEqual([resumed.round, resumed.attempt, resumed.toolCall.name], [2, 1, 'write'], 'the continuation is the same attempt, past the park');
+  // A fresh start (a runner that cannot resume) is attempt 2, which does not wait again.
+  const fresh = asked([brief]);
+  assert.deepEqual([fresh.attempt, fresh.toolCall.name], [2, 'write']);
+});
+
+test('judgeWait wants the wait granted, the edge in the plan, the slot used meanwhile, and the continuation after the producer lands, told what landed', () => {
+  const at = (s) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
+  const stepsOf = R.scenario('b-wait').attempts(playCtx).consumer[0];
+  const req = (key, attempt, round, secs, toolCall, extra = {}) => ({ at: at(secs), messages: [{ role: 'user', content: `x [rehearsal:${key}]` }], turn: { role: 'runner', key, attempt, round, toolCall, ...extra.turn }, ...extra.top });
+  const log = ({ cont = 100, other = 20, ended = 90, told = 'The work you waited for has landed: #1 "Implement the library".', reply = 'Waiting for #1 "Implement the library". This attempt ends with your turn.', contAttempt = 1, early = null } = {}) => [
+    req('producer', 1, 0, 1, { name: 'shell' }),
+    req('consumer', 1, 0, 5, { name: 'wait_for' }),
+    { ...req('consumer', 1, 1, 6, undefined), messages: [{ role: 'user', content: 'x' }, { role: 'tool', content: reply }] },
+    req('small', 1, 0, other, { name: 'write' }),
+    req('producer', 1, 5, ended, { name: 'task_complete' }),
+    ...(early ? [req('consumer', 1, 1, early, { name: 'task_complete' })] : []),
+    { ...req('consumer', contAttempt, 2, cont, { name: 'write' }), messages: [{ role: 'user', content: 'x' }, { role: 'user', content: told }] },
+    ...stepsOf.map((st, i) => (i < 2 ? null : { ...req('consumer', contAttempt, i + 1, cont + i, { name: st.tool }), messages: [{ role: 'tool', content: i === 3 ? 'taken in\n[exit code 0]' : 'ok' }] })).filter(Boolean),
+  ];
+  const plan = [
+    { id: 'p', order: 1, dependencies: [] },
+    { id: 'c', order: 2, dependencies: ['p'], parked: { attempt: 1, waitsOn: ['p'], added: ['p'], count: 1 } },
+  ];
+  assert.deepEqual(R.judgeWait('b-wait', log(), playCtx, plan), []);
+  assert.match(R.judgeWait('b-wait', log({ reply: 'wait_for is for a change task' }), playCtx, plan).join(), /wait_for was not granted for "Implement the library"/);
+  assert.match(R.judgeWait('b-wait', log({ cont: 60 }), playCtx, plan).join(), /went on .* before task producer's last turn/);
+  assert.match(R.judgeWait('b-wait', log({ early: 50 }), playCtx, plan).join(), /reported before it was continued/);
+  assert.match(R.judgeWait('b-wait', log({ told: 'Go on with your brief.' }), playCtx, plan).join(), /does not say what landed/);
+  assert.match(R.judgeWait('b-wait', log({ contAttempt: 2 }), playCtx, plan).join(), /did not continue its session/);
+  // The third task must start while the producer is at work, and only after the park: before it, it was never queued.
+  assert.match(R.judgeWait('b-wait', log({ other: 95 }), playCtx, plan).join(), /only after task producer's last turn.*the slot was not free/);
+  assert.match(R.judgeWait('b-wait', log({ other: 2 }), playCtx, plan).join(), /never queued behind the limit/);
+  assert.match(R.judgeWait('b-wait', log().filter((r) => r.turn.key !== 'consumer'), playCtx, plan).join(), /never called wait_for/);
+  assert.match(R.judgeWait('b-wait', log().filter((r) => r.turn.key !== 'small'), playCtx, plan).join(), /task small never started/);
+  assert.match(R.judgeWait('b-wait', log().filter((r) => !(r.turn.key === 'consumer' && r.turn.round > 2)), playCtx, plan).join(), /never reported after it went on|no answer to/);
+  // The plan must show the edge, and the wait the task saved.
+  assert.match(R.judgeWait('b-wait', log(), playCtx, [plan[0], { ...plan[1], dependencies: [] }]).join(), /does not show task #2 depending on #1/);
+  assert.match(R.judgeWait('b-wait', log(), playCtx, [plan[0], { ...plan[1], parked: undefined }]).join(), /holds no park on #1/);
+  assert.match(R.judgeWait('b-wait', log(), playCtx, null).join(), /plan could not be read/);
+  assert.deepEqual(R.judgeWait('b-cap', [], playCtx, null), [], 'a scenario with no wait has nothing to judge');
+  const e = R.scenario('b-wait').expect;
+  assert.deepEqual([e.scoredFrom, e.tasks, e.passedAboveBaseline, e.truncated, e.parallel], ['merged', { completed: 3 }, true, false, 2]);
+  assert.match(R.judgeRehearsal('b-wait', { scoredFrom: 'merged', parallel: 8 }).join(), /parallel limit is 8, wanted 2/);
+  const perTask = (ended) => ({ metrics: { perTask: [{ order: 1, attempts: [{ ended: 'done' }] }, { order: 2, attempts: ended.map((x) => ({ ended: x })) }] } });
+  assert.doesNotMatch(R.judgeRehearsal('b-wait', { parallel: 2, ...perTask(['ended without task_complete', 'done']) }).join(), /attempts ended/);
+  assert.match(R.judgeRehearsal('b-wait', { parallel: 2, ...perTask(['done']) }).join(), /task #2's attempts ended \["done"\], wanted \["ended without task_complete","done"\]/);
+});
+
+test('b-blocker\'s plan, supervisor and judge: one fix task, which the closing check waits for, lands before the check starts', () => {
+  const s = R.scenario('b-blocker');
+  const tasks = s.plan().tasks;
+  assert.deepEqual(tasks.map((t) => t.title), ['Implement the library', 'Slice A', 'Slice B', 'Slice C', 'Slice D', 'Check the whole']);
+  assert.deepEqual(tasks.map((t) => t.dependencies.length), [0, 1, 1, 1, 1, 4], 'four slices: the shape whose landed-blocker line names the closing check');
+  const scripts = s.attempts(playCtx);
+  for (const slice of ['slice-a', 'slice-b']) {
+    const [done] = scripts[slice][0].slice(-1);
+    assert.equal(done.args.findings[0].severity, 'blocker');
+    assert.deepEqual(done.args.findings[0].evidence, [{ kind: 'task', task: '#1' }], 'a task reference with no finding id: how the landed-blocker count reads it');
+  }
+  assert.match(scripts['slice-b'][0][0].args.command, /^timeout 85 tail/, 'the second slice is at work while the supervisor is woken');
+  assert.equal(scripts.check[0][0].exit0, true);
+
+  // The wake the first report raises, and the one reply: a JSON edit that adds the fix and makes the check wait for it.
+  const state = R.createState();
+  state.planned = true;
+  const wake = 'Run update:\n- task #1 "Implement the library" has landed, and 1 task reports a blocker in its work: #2/F1 "x"; the closing check is #6 "Check the whole"\nA blocker reported in landed work is fixed once, by one task, never once per report.';
+  const turn = R.turnFor('b-blocker', { tools: [], messages: [{ role: 'user', content: wake }] }, state, playCtx);
+  assert.equal(turn.role, 'supervisor');
+  assert.equal(turn.toolCall, undefined, 'the built-in planner edits by a JSON reply');
+  const ops = JSON.parse(/```json\n([\s\S]*)\n```/.exec(turn.content)[1]).taskOps;
+  assert.deepEqual(ops.map((o) => o.op), ['add', 'update'], 'one fix task, then the closing check made to wait for it');
+  assert.match(ops[0].task.prompt, /\[rehearsal:fix\]/);
+  assert.deepEqual([ops[0].task.dependencies, ops[1].taskId, ops[1].changes.dependencies], [['#1'], '#6', ['#2', '#3', '#4', '#5', 'fix']]);
+  assert.equal(R.turnFor('b-blocker', { tools: [], messages: [{ role: 'user', content: `${wake}\nand 2 tasks report` }] }, state, playCtx).toolCall, undefined, 'a rule plays once');
+  assert.deepEqual(L.wakeTriggers(wake).map((t) => t.kind), ['landed_blocker'], 'the harness reads the line');
+
+  const at = (n) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
+  const run = (key, attempt, round, secs, toolCall, messages = [{ role: 'user', content: 'x' }]) => ({ at: at(secs), messages, turn: { role: 'runner', key, attempt, round, toolCall } });
+  const log = ({ fixEnd = 40, checkStart = 50, exit = 0, line = wake } = {}) => [
+    { at: at(30), messages: [{ role: 'user', content: line }], turn: { role: 'supervisor', rule: 0 } },
+    run('fix', 1, 1, fixEnd, { name: 'task_complete' }),
+    run('check', 1, 0, checkStart, { name: 'shell' }),
+    run('check', 1, 1, checkStart + 1, { name: 'write' }, [{ role: 'tool', content: `fixed\n[exit code ${exit}]` }]),
+  ];
+  const plan = [
+    { id: 'o', order: 1, title: 'Implement the library', dependencies: [], status: 'completed' },
+    ...['a', 'b', 'x', 'y'].map((id, i) => ({ id, order: i + 2, dependencies: ['o'] })),
+    { id: 'f', order: 6, title: 'Fix the opening task\'s defect', dependencies: ['o'], status: 'completed' },
+    { id: 'c', order: 7, title: 'Check the whole', dependencies: ['a', 'b', 'x', 'y', 'f'] },
+  ];
+  assert.deepEqual(R.judgeBlocker('b-blocker', log(), playCtx, plan), []);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: 'Run update:\n- the run finished' }), playCtx, plan).join(), /no supervisor request held the landed-blocker line/);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('the closing check is #6 "Check the whole"', '') }), playCtx, plan).join(), /does not name the closing check #6/);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('A blocker reported', 'A thing reported') }), playCtx, plan).join(), /not the guidance/);
+  assert.match(R.judgeBlocker('b-blocker', log().map((r, i) => (i === 0 ? { ...r, turn: { role: 'supervisor' } } : r)), playCtx, plan).join(), /did not answer the wake/);
+  assert.match(R.judgeBlocker('b-blocker', log({ checkStart: 35 }), playCtx, plan).join(), /closing check started .* before the fix's last turn/);
+  assert.match(R.judgeBlocker('b-blocker', log({ exit: 1 }), playCtx, plan).join(), /exited 1, wanted 0: the fix had not landed/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, [...plan, { ...plan[5], id: 'g', order: 8 }]).join(), /8 tasks, 2 of them the fix/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'c' ? { ...t, dependencies: ['a', 'b', 'x', 'y'] } : t))).join(), /closing check does not wait for the fix/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'f' ? { ...t, dependencies: [] } : t))).join(), /fix does not depend on the opening task/);
+  assert.match(R.judgeBlocker('b-blocker', log().slice(0, 1), playCtx, plan).join(), /fix never reported/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, null).join(), /plan could not be read/);
+  assert.deepEqual(R.judgeBlocker('b-cap', [], playCtx, null), []);
+  const edits = ['added', 'updated', 'reordered'].map((op) => ({ kind: 'plan_edit', op, at: at(32), outcome: 'done' }));
+  const sup = { wakeUps: 2, wakes: [{ at: at(31), updates: 1, triggers: [{ kind: 'landed_blocker', task: '#1' }] }], actions: edits };
+  assert.deepEqual(R.judgeSupervision(s.supervision, sup), []);
+  assert.match(R.judgeSupervision(s.supervision, { ...sup, actions: [edits[0], edits[1], { ...edits[2], op: 'removed' }] }).join(), /plan edits are \["added","updated","removed"\]/);
+  assert.match(R.judgeSupervision(s.supervision, { ...sup, actions: edits.slice(0, 1) }).join(), /acts are \["plan_edit"\], wanted/);
+});
+
+test('a-done scripts a five-minute sleep as its first step, and judgeRefusals wants the guard\'s refusal naming wait_for, answered at once', () => {
+  const steps = R.scenario('a-done').attempts(playCtx).A[0];
+  assert.deepEqual([steps[0].tool, steps[0].args.command, steps[0].refused], ['shell', 'sleep 300; echo slept', true]);
+  assert.equal(steps.slice(1).some((s) => s.refused), false);
+  const at = (n) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
+  const refusal = 'Not run: this command sleeps for 300 seconds. Waiting inside a task holds one of the run\'s slots. If you are waiting for work another task has not landed yet, call `wait_for` with those tasks.';
+  const log = ({ reply = refusal, gap = 1 } = {}) => [
+    { at: at(0), messages: [], turn: { role: 'runner', key: 'A', attempt: 1, round: 0 } },
+    { at: at(gap), messages: [{ role: 'tool', content: reply }], turn: { role: 'runner', key: 'A', attempt: 1, round: 1 } },
+  ];
+  assert.deepEqual(R.judgeRefusals('a-done', log(), playCtx), []);
+  assert.match(R.judgeRefusals('a-done', log({ reply: 'slept\n[exit code 0]' }), playCtx).join(), /was not refused as a wait/);
+  assert.match(R.judgeRefusals('a-done', log({ reply: 'Not run: this command sleeps for 300 seconds. Finish your own part.' }), playCtx).join(), /does not name wait_for/);
+  assert.match(R.judgeRefusals('a-done', log({ gap: 300 }), playCtx).join(), /took 300 s to answer, so something ran/);
+  assert.match(R.judgeRefusals('a-done', log().slice(0, 1), playCtx).join(), /was never answered/);
+  assert.deepEqual(R.judgeRefusals('a-failed', [], playCtx), [], 'a scenario that scripts no refusal has nothing to judge');
+  // The rest of the scenario is unmoved: the edits and the verdict follow it.
+  assert.equal(steps.at(-1).args.status, 'done');
+  assert.equal(R.roundsOf([{ role: 'assistant', content: '' }, { role: 'assistant', content: 'Waiting.' }, { role: 'assistant', tool_calls: [{}] }, { role: 'user', content: 'x' }]), 2, 'a prose turn is a round; an empty one is not');
+});
 test('a task that ends done with a finding must still land: b-edit-retry names its note, and judgeLanded misses it when absent', () => {
   const s = R.scenario('b-edit-retry');
   const closing = s.attempts(playCtx).after[0].at(-1);
@@ -2445,7 +2603,7 @@ const minutesAfter = (m) => new Date(T0 + m * 60_000).toISOString();
  * branch (commits at those minutes). Each commit writes src/tinylib/m.py as
  * `v<minute>`, so what a point materializes names the commit it came from.
  */
-function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, errors: 0, collected: 9 }, plan = null } = {}) {
+function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, errors: 0, collected: 9 }, plan = null, merged = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-timeline-'));
   const work = path.join(dir, 'arm-workdir');
   fs.mkdirSync(work);
@@ -2472,6 +2630,14 @@ function fixtureRun(arm, minutes, { wall = 100, tests = { passed: 7, failed: 1, 
       git(m, 'checkout', '-q', 'ordewell/r1/integration');
       git(m, 'merge', '-q', '--no-ff', '-m', `land task ${i + 1}`, `ordewell/r1/${i + 1}-task`);
     });
+    if (merged) {
+      // The end-of-run merge: commit0-base takes the integration branch whole, every ordewell/ branch is gone, and a remote ref is left behind the landings.
+      const first = git(0, 'rev-parse', 'ordewell/r1/1-task^{commit}').trim();
+      git(0, 'checkout', '-q', 'commit0-base');
+      git(minutes.at(-1), 'merge', '-q', '--ff-only', 'ordewell/r1/integration');
+      for (const b of git(0, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/ordewell').split('\n').filter(Boolean)) git(0, 'branch', '-q', '-D', b);
+      git(0, 'update-ref', 'refs/remotes/origin/ordewell/r1/integration', first);
+    }
   } else {
     git(0, 'checkout', '-q', '-b', 'ordewell/r2/1-implement');
     for (const m of minutes) {
@@ -2608,7 +2774,7 @@ test('scoreTimeline scores each point\'s source through the driver\'s own two ca
     const c = calls[0];
     assert.equal(c.lib.flatTree.length, 40);
     assert.match(c.lib.flatCommit, /^[0-9a-f]{40}$/);
-    assert.deepEqual(c.settings, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000 });
+    assert.deepEqual(c.settings, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000, callBudget: L.STEP_LIMIT });
     assert.match(c.runId, /^timescore-[a-z0-9-]+-p\d-[0-9a-f]{8}$/);
     const file = JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8'));
     assert.deepEqual(file.points.map((p) => [p.atMin, p.kind, p.tests.passed]), [[10, 'time', 7], [25, 'time', 7], [40, 'time', 7], [70, 'final', 7]]);
@@ -2721,4 +2887,203 @@ test('judgePairBatch: every library\'s two runs found, the batch finished, and t
   assert.match(L.judgePairBatch({ ...record, runs: record.runs.map((r) => (r.lib === 'y' && r.arm === 'A' ? { ...r, startedAt: at(50) } : r)) }, want).join(), /y A started .* before x B ended/);
   assert.match(L.judgePairBatch({ ...record, runs: record.runs.map((r) => ({ ...r, resultDir: null })) }, want).join(), /no result directory/);
   assert.match(L.judgePairBatch({ ...record, keyBeforeUsd: 3 }, want).join(), /read the key/);
+});
+
+// --- The call budget, both arms alike ---------------------------------------
+
+test('--call-budget sets the built-in runner\'s per-attempt budget of model calls for both arms, the default unchanged, and every result records it', () => {
+  assert.equal(L.parseArgs(['--dry-run', '--libs', 'x']).callBudget, L.STEP_LIMIT);
+  const o = L.parseArgs(['--dry-run', '--libs', 'x', '--call-budget', '2500']);
+  assert.equal(o.callBudget, 2500);
+  for (const bad of ['0', '1.5', 'many', '-3']) assert.throws(() => L.parseArgs(['--dry-run', '--libs', 'x', '--call-budget', bad]), /--call-budget takes a whole number/);
+  for (const arm of [L.ARMS.A, L.ARMS.B]) {
+    const settings = L.armSettings(arm, o);
+    assert.equal(settings.callBudget, 2500);
+    assert.equal(L.boxSettings(arm, settings).ordewellStepLimit, 2500, 'the box\'s settings.json holds core\'s own key');
+    assert.equal(L.armSettings(arm).callBudget, L.STEP_LIMIT);
+  }
+  const window = L.judgeWindow({ listed: 1048576, snapshot: 1048576 });
+  const rec = (arm) => L.resultRecord({ lib: lib(), arm, settings: L.armSettings(arm, o), window, ordewell: { sha: 'abc' }, startedAt: 'a', endedAt: 'b', dryRun: true });
+  assert.deepEqual([rec(L.ARMS.A).callBudget, rec(L.ARMS.B).callBudget], [2500, 2500]);
+  assert.equal(rec(L.ARMS.A).stepLimit, 2500, 'the older field names the same budget');
+  // The run's ending reads arm A's calls against the budget it ran with.
+  const logs = { t1: { 1: Array.from({ length: 3 }, () => ({ type: 'usage', record: { source: 'openrouter', inputTokens: 5 } })) } };
+  const plan = { tasks: [{ id: 't1', order: 1, title: 't', status: 'completed', attemptUsage: [] }] };
+  assert.deepEqual([L.runEnding({ arm: 'A', plan, taskLogs: logs, stepLimit: 3 }).modelCalls.reachedLimit, L.runEnding({ arm: 'A', plan, taskLogs: logs, stepLimit: 4 }).modelCalls.reachedLimit], [true, false]);
+});
+
+test('batch.mjs passes --call-budget to every run as given', () => {
+  const r = L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--call-budget', '3000']);
+  assert.equal(r.callBudget, 3000);
+  assert.deepEqual(r.driveArgs, ['--dry-run', '--libs', path.resolve('l.json'), '--call-budget', '3000']);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--call-budget', '0']), /--call-budget/);
+});
+
+test('judgeArmPair: a pair whose arms ran with different call budgets is not valid, and one that ran with the same is', () => {
+  const run = (arm, callBudget) => ({ lib: 'x', arm, callBudget, valid: true });
+  assert.deepEqual(L.judgeArmPair(run('A', 2000), run('B', 2000)), { valid: true, invalidReasons: [] });
+  const bad = L.judgeArmPair(run('A', 2000), run('B', 1000));
+  assert.equal(bad.valid, false);
+  assert.match(bad.invalidReasons[0], /arm A ran with a call budget of 2000, arm B with 1000/);
+  // A result written before the flag ran with the constant.
+  assert.equal(L.judgeArmPair({ arm: 'A' }, { arm: 'B', callBudget: L.STEP_LIMIT }).valid, true);
+  assert.equal(L.judgeArmPair({ arm: 'A' }, { arm: 'B', callBudget: 5 }).valid, false);
+  // The batch record carries the verdict for each library that has both arms.
+  const rec = L.batchRecord({ jobs: 2, overlapped: true, runs: [run('A', 2000), run('B', 1000), { lib: 'y', arm: 'A', callBudget: 7 }] });
+  assert.deepEqual(rec.pairs.map((p) => [p.lib, p.valid]), [['x', false]]);
+  assert.match(rec.pairs[0].invalidReasons[0], /call budget/);
+  // The rehearsal's pair judgement fails on it too.
+  const timed = (r, s, e) => ({ ...r, resultDir: `/d/${r.arm}`, startedAt: s, endedAt: e });
+  const batch = { rehearsal: 'a-done', keyBeforeUsd: null, keyAfterUsd: null, keyReadings: [], finished: true, jobs: 2, runs: [timed(run('A', 2000), '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z'), timed(run('B', 1000), '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z')] };
+  assert.match(L.judgePairBatch(batch, { libs: ['x'], rehearsal: 'a-done' }).join('\n'), /call budget/);
+  batch.runs[1].callBudget = 2000;
+  assert.deepEqual(L.judgePairBatch(batch, { libs: ['x'], rehearsal: 'a-done' }), []);
+});
+
+// --- Timeline: a fully merged run, and a point that was killed --------------
+
+test('runHistory: a fully merged arm B run, whose workdir holds only commit0-base and a stale remote ref, is read from the first-parent line of commit0-base, with or without --branch', { skip: !hasGit && 'needs git' }, () => {
+  const dir = fixtureRun('B', [10, 25, 40, 70], { merged: true });
+  try {
+    const wantTimes = [10, 25, 40, 70];
+    const h = T.runHistory(dir, { arm: 'B' });
+    assert.equal(h.branch, 'commit0-base');
+    assert.deepEqual(h.commits.map((c) => [(c.ms - T0) / 60_000, c.subject]), wantTimes.map((m, i) => [m, `land task ${i + 1}`]));
+    assert.equal(h.final, h.commits.at(-1).sha);
+    assert.equal(h.lastLanding, h.final);
+    // With --branch it is still the first-parent line: a full `git log` would score each slice's own commit as a point.
+    const named = T.runHistory(dir, { arm: 'B', branch: 'commit0-base' });
+    assert.deepEqual(named.commits.map((c) => c.subject), h.commits.map((c) => c.subject));
+    assert.ok(!named.commits.some((c) => /^task \d/.test(c.subject)), 'a slice\'s own commit is not on the first-parent line');
+    // The stale remote ref is not taken for the run's work.
+    assert.equal(T.chooseTimelinePoints(dir, { arm: 'B', points: 8 }).chosen.at(-1).sha, h.final);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a point whose pytest was killed and printed no counts is not a score: it fails, is retried once alone, and stays out of the threshold crossings if it fails again', { skip: !hasGit && 'needs git' }, async () => {
+  assert.equal(T.isKilledRun({ exit: 137 }), true);
+  assert.equal(T.isKilledRun({ exit: 137, passed: 0, failed: 0 }), false, 'a summary was printed: the counts are what they say');
+  assert.equal(T.isKilledRun({ exit: 1 }), false);
+  assert.equal(T.isKilledRun(null), false);
+  const drive = await import('./drive.mjs');
+  const killed = { exit: 137, timedOut: false };
+  const counted = (passed) => ({ exit: 1, passed, failed: 1, errors: 0, skipped: 0 });
+  /** A driver that kills the sources `kills` says, as many times as it says, and notes how many were scoring at once. */
+  const driverFor = (kills) => {
+    const seen = {};
+    const log = [];
+    let live = 0;
+    return {
+      log,
+      materialize: drive.materialize,
+      scoreInFreshBox: async (lib, tree) => {
+        const source = fs.readFileSync(path.join(tree, 'src', 'tinylib', 'm.py'), 'utf8').trim();
+        seen[source] = (seen[source] ?? 0) + 1;
+        live++;
+        log.push({ source, attempt: seen[source], liveAtStart: live });
+        await new Promise((r) => setTimeout(r, 40));
+        live--;
+        const dead = seen[source] <= (kills[source] ?? 0);
+        return { treeCheck: { ok: true }, tests: dead ? killed : counted(source === 'v70' ? 7 : { v10: 2, v25: 4, v40: 6 }[source]), copied: [], removed: [], needsInspection: [], patchError: null };
+      },
+    };
+  };
+  // Killed once, then scored: the retry is alone, and the point counts.
+  const once = fixtureRun('B', [10, 25, 40, 70], { tests: { passed: 7, failed: 1, errors: 0, collected: 8 } });
+  try {
+    const driver = driverFor({ v25: 1 });
+    const { timeline, ok } = await T.scoreTimeline({ runDir: once, libraries: tinyLibs, points: 8, jobs: 3, driver });
+    const p = timeline.points.find((x) => x.atMin === 25);
+    assert.deepEqual([p.ok, p.retried, p.killed ?? false, p.tests.passed], [true, true, false, 4]);
+    assert.deepEqual(driver.log.filter((l) => l.source === 'v25').map((l) => l.attempt), [1, 2]);
+    assert.equal(driver.log.find((l) => l.source === 'v25' && l.attempt === 2).liveAtStart, 1, 'the retry ran alone');
+    assert.equal(ok, true);
+    assert.equal(timeline.crossings.find((c) => c.share === 0.5).atMin, 25);
+  } finally {
+    fs.rmSync(once, { recursive: true, force: true });
+  }
+  // Killed both times: failed, marked, retried only once, kept out of the crossings, and the exit says so.
+  const twice = fixtureRun('B', [10, 25, 40, 70], { tests: { passed: 7, failed: 1, errors: 0, collected: 8 } });
+  try {
+    const driver = driverFor({ v25: 5, v40: 5 });
+    const { timeline, ok } = await T.scoreTimeline({ runDir: twice, libraries: tinyLibs, points: 8, jobs: 3, driver });
+    const p = timeline.points.find((x) => x.atMin === 25);
+    assert.deepEqual([p.ok, p.retried, p.killed], [false, true, true]);
+    assert.match(p.error, /killed \(exit 137\).*no counts/);
+    assert.deepEqual(driver.log.filter((l) => l.source === 'v25').map((l) => l.attempt), [1, 2], 'one retry, no more');
+    assert.equal(ok, false);
+    assert.equal(timeline.verified, true, 'the final point scored as result.json does');
+    // 6 of 8 passed at 40 minutes is 75%, but that point was killed: the 75% crossing is the final's, 70 minutes.
+    const at = (share) => timeline.crossings.find((c) => c.share === share)?.atMin ?? null;
+    assert.deepEqual([at(0.25), at(0.5), at(0.75), at(1)], [10, 70, 70, null]);
+    assert.ok(timeline.crossings.every((c) => c.label === null || !['p2', 'p3'].some((l) => c.label.startsWith(l))));
+  } finally {
+    fs.rmSync(twice, { recursive: true, force: true });
+  }
+});
+
+// --- Spend at one price table -----------------------------------------------
+
+test('referenceSpend prices the token counts of the planner\'s ledger (the supervisor\'s turns are in it) and of every attempt at the harness\'s one fixed table', () => {
+  // Synthetic counts. By hand at the table's per-million prices, fresh input 0.3, cached input 0.006, output 1.2:
+  //   planner: 200,000 in of which 150,000 cached, 10,000 out -> 50,000 fresh -> 0.015 + 0.0009 + 0.012 = 0.0279
+  //   attempt 1: 1,000,000 in of which 600,000 cached, 100,000 out -> 0.12 + 0.0036 + 0.12 = 0.2436
+  //   attempt 2 (a subtask's): 0 cached, 500,000 in, 0 out -> 0.15
+  assert.deepEqual(L.REFERENCE_PRICES.usdPerMTok, { freshInput: 0.3, cachedInput: 0.006, output: 1.2 });
+  const plan = {
+    plannerUsage: { totals: { inputTokens: 200_000, cachedInputTokens: 150_000, outputTokens: 10_000, reportedCost: { USD: 9 } } },
+    tasks: [{
+      id: 't1', order: 1, title: 'a',
+      attemptUsage: [{ attempt: 1, runner: 'openrouter', totals: { inputTokens: 1_000_000, cachedInputTokens: 600_000, outputTokens: 100_000, reportedCost: { USD: 5 } } }],
+      subtasks: [{ id: 't1.1', order: 1, title: 'b', attemptUsage: [{ attempt: 1, runner: 'openrouter', totals: { inputTokens: 500_000, outputTokens: 0 } }] }],
+    }],
+  };
+  const r = L.referenceSpend(plan);
+  assert.deepEqual(r.planner, { freshInputTokens: 50_000, cachedInputTokens: 150_000, outputTokens: 10_000, usd: 0.0279 });
+  assert.deepEqual(r.attempts.map((a) => [a.task, a.attempt, a.freshInputTokens, a.cachedInputTokens, a.outputTokens, a.usd]), [
+    ['t1', 1, 400_000, 600_000, 100_000, 0.2436],
+    ['t1.1', 1, 500_000, 0, 0, 0.15],
+  ]);
+  assert.deepEqual(r.tokens, { freshInput: 950_000, cachedInput: 750_000, output: 110_000 });
+  assert.equal(r.usd, 0.4215);
+  assert.equal(r.unmeasured, 0);
+  assert.equal(r.priceTable.id, L.REFERENCE_PRICES.id);
+  // What the provider billed does not enter it: the table is the point.
+  assert.notEqual(r.usd, 14);
+  // An attempt with no token counts is counted as unmeasured, never priced at zero as if it were.
+  const gap = L.referenceSpend({ tasks: [{ id: 'x', order: 1, title: 'x', attemptUsage: [{ attempt: 1, runner: 'r', totals: {} }] }] });
+  assert.equal(gap.unmeasured, 1);
+  assert.equal(gap.usd, null);
+  const none = L.referenceSpend(null);
+  assert.deepEqual([none.usd, none.planner, none.attempts, none.unmeasured, none.priceTable.id], [null, null, [], 0, L.REFERENCE_PRICES.id], 'a run with no plan holds the table and no spend');
+});
+
+test('a result carries referenceSpend beside the recorded spend, and batch.json sums it per arm', () => {
+  const window = L.judgeWindow({ listed: 1048576, snapshot: 1048576 });
+  const spend = { tokens: { freshInput: 1, cachedInput: 2, output: 3 }, usd: 0.5, planner: null, attempts: [], unmeasured: 0, priceTable: L.REFERENCE_PRICES };
+  const r = L.resultRecord({ lib: lib(), arm: L.ARMS.B, window, ordewell: { sha: 'abc' }, referenceSpend: spend, startedAt: 'a', endedAt: 'b', dryRun: true });
+  assert.deepEqual(r.referenceSpend, spend);
+  assert.equal(r.referenceUsd, 0.5);
+  assert.equal(L.resultRecord({ lib: lib(), arm: L.ARMS.B, window, ordewell: { sha: 'abc' }, startedAt: 'a', endedAt: 'b', dryRun: true }).referenceUsd, null);
+  const run = (lib, arm, recordedUsd, referenceUsd, tokens) => ({ lib, arm, recordedUsd, referenceUsd, referenceTokens: tokens });
+  const b = L.batchRecord({ jobs: 2, overlapped: true, runs: [
+    run('x', 'A', 1, 0.25, { freshInput: 10, cachedInput: 20, output: 5 }),
+    run('x', 'B', 4, 0.5, { freshInput: 1, cachedInput: 2, output: 3 }),
+    run('y', 'A', 2, 0.75, { freshInput: 10, cachedInput: 0, output: 5 }),
+    run('y', 'B', 3, null, null),
+  ] });
+  assert.deepEqual(b.perArm.A, { runs: 2, recordedUsd: 3, referenceUsd: 1, referenceTokens: { freshInput: 20, cachedInput: 20, output: 10 }, unpricedAtReference: [] });
+  assert.deepEqual(b.perArm.B, { runs: 2, recordedUsd: 7, referenceUsd: 0.5, referenceTokens: { freshInput: 1, cachedInput: 2, output: 3 }, unpricedAtReference: ['y B'] });
+  assert.equal(b.referencePriceTable.id, L.REFERENCE_PRICES.id);
+});
+
+test('the rehearsal fails a result that does not record the call budget it ran with or its spend at the reference price table', () => {
+  const base = { aborted: null, valid: true, scoredFrom: 'task-worktree', steps: { run: { exit: 0, ended: 'by itself' } }, ending: { by: 'completion', status: 'done', reason: null, modelCalls: { used: 3, limitPerAttempt: 10, reachedLimit: false } }, providerSwitches: { attempts: 1, attemptsSwitched: 0, switches: 0 } };
+  const f = (extra) => R.judgeRehearsal('a-done', { ...base, ...extra }).join('\n');
+  assert.match(f({}), /budget the arm ran with is not recorded/);
+  assert.match(f({}), /no spend at the reference price table/);
+  const fields = { callBudget: 10, stepLimit: 10, referenceUsd: 0.1, referenceSpend: { priceTable: L.REFERENCE_PRICES } };
+  assert.doesNotMatch(f(fields), /budget the arm|reference price table/);
 });

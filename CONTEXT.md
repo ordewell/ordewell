@@ -607,11 +607,15 @@ planner's own next `submit_plan` changes the plan. Never a refusal.
 
 **Fan-out shape** (`PlanFanOut.ts`, ADR-0072 R5) — a one-shot plan's slices
 that run at once, four or more at one level, read from its dependencies alone,
-with the roles around them. The **opening task** is the first change task
-every slice waits for: the one that makes the project import and collect its
-tests. A later one that waits for it alone is a **shared module**, not a second
-opening task. The **slices** are the change tasks not ordered against every
-other one, each done when the code in its own scope is in place. The **closing
+with the roles around them. The tasks **before the slices** are the change
+tasks every slice waits for, and those every slice of the fan-out's level waits
+for though tasks beside them do not. The **opening task** is the first of them
+when every other waits for it: the one that makes the project import and
+collect its tests, and may edit any file for that alone. A later one that waits
+for it alone is a **shared module**, not a second opening task. Each is done
+only when the project still imports and its tests collect. The **slices** are
+the other change tasks not ordered against every other one, each done when the
+code in its own scope is in place. The **closing
 check** waits for every slice, runs the whole suite and can fix what fails, and
 no other such task waits for it: a loop's check counts when its body edits, an
 ops task, a push or a read-only check alone does not, and a change task the
@@ -620,7 +624,10 @@ Opening tasks in series, no opening task and no closing check are its faults,
 recorded in the research log and never asked about. A wide plan with a closing
 check gets a fixed `Plan shape:` note on each role's brief. A wide plan's slices
 of one level start largest first, sized by the lines of the files their briefs
-name (ADR-0072 R6).
+name (ADR-0072 R6). On a level of more than twice the Parallel limit, small
+slices of one kind, short of a count that would change the plan's shape, are first merged into one task each, a **merged task**,
+which keeps one of their ids, lists the others in `mergedSlices` and gives each
+slice's brief whole under its own title (ADR-0072 R7).
 *Avoid:* "gate" for the opening task (the merge gate is something else),
 "barrier".
 
@@ -1177,7 +1184,7 @@ whose running time passed max(30 min, 3× the longest running time of an AI
 task that passed in its plan, or, after a failed or stopped attempt of the
 same task, that attempt's running time), or, on a first attempt once five AI
 tasks have passed, max(19 min, 3× their median running time) where that comes
-first, doubled after each flag, whose own runner session
+first, then at twice each flag's running time, whose own runner session
 compacted its context by itself, or whose context first reached 40% of its effective
 window (the smaller of the model's and a compaction window in force; see *Task
 compaction start*), never below 150k tokens, and again at each doubling of that
@@ -1284,6 +1291,21 @@ the task log name the preserved branches. `carriedFrom` is saved with the plan
 until the attempt runs; a Retry after a move sets it from the session's owner,
 and any other retry clears it. An ops task carries nothing over.
 *Avoid:* "continue" or "resume" for it — no session is resumed.
+
+**Parked task** (`wait_for`, `Task.parked`, `services/Parking.ts`; ADR-0074) —
+a change task whose `wait_for` call was granted: it needs work a sibling has
+not landed, so its attempt ended with no verdict, the tasks it named became its
+dependencies, an edit of Ordewell's, and its slot went to whatever was ready.
+It is not started and on no hold, so it blocks nothing, and the start rule
+holds it until that work has landed. Its next start, whoever makes it,
+continues the saved session with a first message naming what landed, or,
+where its runner saved no session it can resume, is a *Carry-over* of the
+parked attempt's files. Work it waits for that fails, is blocked, skipped or
+removed is taken out of its dependencies, and it goes on without it, told so.
+A Stop holds it; a Retry starts afresh, the park let go and the edges kept. It
+parks at most twice between fresh attempts.
+*Avoid:* "blocked", "paused" or "waiting for input" for it — no failure, limit
+or person is waited on; "sleeping" — it holds no slot.
 
 **In-flight rule** (`saidInFlight`, `classifyRunnerStop`; ADR-0018, U1;
 ADR-0044) — a usage limit is acted on only when it ended a turn Ordewell
@@ -1687,6 +1709,14 @@ evidence.
 *Avoid:* "issue" (that is a GitHub issue), "check" (a verdict's *Check* or a
 *Loop check*), "error".
 
+**Landed blocker** (ADR-0073) — a `blocker` *Finding* that cites a task whose
+work had landed when it was reported: by a task reference with no finding id,
+or by the first file it names that a landing changed, the last landing of that
+file before the report. Counted per cited task across the plan's handoffs,
+never stored, and raised to the supervisor as `landed_blocker` when that count
+reaches 1, 2, 4, 8…; the supervisor writes the one fix. *Avoid:* "regression"
+(nothing says it worked before), "bug report".
+
 **Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
 task produced, of the same four kinds as an *Evidence reference*, or a `patch`
 that only Ordewell adds, for a *Patch handoff* (ADR-0050). It is in the
@@ -1718,8 +1748,9 @@ saved), "export".
 **Evidence reference** (ADR-0047) — how a *Finding* points at what supports it:
 a `file` (a repository path, optional line), a `commit` (a sha, the repo
 optional), a `task` (a task reference, optional finding id) or a `url` (`http`
-or `https` only). A `task` reference must resolve to a task the producer may
-read and is refused at the call otherwise, and so is any other URL scheme; a
+or `https` only). A `task` reference may name any task of the plan, and a
+finding id only one of a task the producer may read; either is refused at the
+call otherwise, and so is any other URL scheme; a
 `file` or `commit` is a claim about a tree, resolved lazily when read and shown
 unresolved, not refused, when it cannot be.
 *Avoid:* "proof" or "citation" — a reader weighs a reference, and it settles

@@ -108,9 +108,11 @@ attention events are:
 - **new:** a task paused on a usage limit, with the time it resumes (#84).
   Every task one runner's limit pauses is one entry.
 
-A failure, a task gone idle and one running long need nobody yet, so they are held until the plan
-says it is time or the planner's prompt cache would go cold (ADR-0057 R4). Every
-other event wakes it at once.
+A failure, a task gone idle, one running long and a blocker reported in landed
+work ([ADR-0073](0073-a-blocker-found-in-landed-work-reaches-the-supervisor-while-the-run-can-still-land-a-fix.md))
+need nobody yet, so they are held until the plan says it is time or the
+planner's prompt cache would go cold (ADR-0057 R4). Every other event wakes it
+at once.
 
 An ordinary pass never wakes it. Passes ride along as "since last time: tasks
 2, 3, 4 passed". A research task's end, passed, failed or blocked, is an
@@ -875,3 +877,4 @@ until #30 exists.
 - 2026-11-18 — what a closing turn left standing is judged once its retry is over too, so a closing turn that failed once still owes the wake, and the user's Stop of the closing turn or its retry owes none.
 - 2026-11-18 — the Act brief narrows a task that failed part-way, with evidence the rest cannot be done here, to what works before retrying it, and a model's `message_task` to a task not started since it ran is refused naming the retry's note.
 - 2026-11-19 — the Act brief records a remainder shown undoable as a known gap, in the closing check's brief and the message to the user, with no task; a follow-up task gets only a reachable remainder, and none is added for an undoable remainder after the run's last task has ended without new evidence.
+- 2026-11-21 — a blocker reported in landed work is a held attention event, `landed_blocker` (ADR-0073).

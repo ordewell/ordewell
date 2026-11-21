@@ -36,9 +36,9 @@ const handoffReference = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('task'),
     task: z.union([z.string().min(1), z.number().int().min(0)]).transform(String).pipe(z.string().max(HANDOFF_LIMITS.reference))
-      .describe('A task you may read — this one, one it depends on, or another task of its loop: "#order", "#4/F3", its id or its title.'),
+      .describe('A task of this plan: "#order", "#4/F3", its id or its title.'),
     finding: z.string().max(HANDOFF_LIMITS.reference).regex(/^F[1-9][0-9]*$/, 'A finding is named as Ordewell numbered it: "F1", "F2", ….').optional()
-      .describe('One of that task\'s findings, as "F3".'),
+      .describe('One of its findings, as "F3", for a task you may read.'),
   }),
   z.object({
     kind: z.literal('url'),
@@ -166,6 +166,11 @@ const applyPatchInput = z.object({
   attempt: z.number().int().min(1).optional().describe('One of its saved attempts; omit for the latest.'),
 });
 
+const waitForInput = z.object({
+  tasks: z.array(taskRef).min(1).max(HANDOFF_LIMITS.evidence).describe('The tasks whose work you need.'),
+  reason: z.string().trim().min(1).max(HANDOFF_LIMITS.title).refine(oneLine, 'A reason is one line.').describe('What of their work you need, in one line.'),
+});
+
 // One table shapes a task's fields for every route (`TaskSpec`), so this tool
 // and a text reply take the same tasks; what a field means is the plan's rules'
 // to judge (`PlanChangeCheck`, ADR-0022 P2), by the message that says why.
@@ -259,6 +264,7 @@ export type ReadTaskArgs = z.infer<typeof readTaskInput>;
 export type PostArgs = z.infer<typeof plannerPostInput>;
 export type SavePatchArgs = z.infer<typeof savePatchInput>;
 export type ApplyPatchArgs = z.infer<typeof applyPatchInput>;
+export type WaitForArgs = z.infer<typeof waitForInput>;
 export type ListRunnersArgs = z.infer<typeof listRunnersInput>;
 export type ListModelsArgs = z.infer<typeof listModelsInput>;
 export type LoadSkillArgs = z.infer<typeof loadSkillInput>;
@@ -340,6 +346,8 @@ export interface TaskToolHandler {
   savePatch?: Run<SavePatchArgs>;
   /** A saved patch applied into the task's own worktree (ADR-0050); a read-only task's token does not list `apply_patch`. */
   applyPatch?: Run<ApplyPatchArgs>;
+  /** A change task's park on work it needs that has not landed (ADR-0074); a read-only task's token does not list `wait_for`. */
+  waitFor?: Run<WaitForArgs>;
   /** A read-only task's web reads, decided by the session's web-read policy (ADR-0046, ADR-0027); only its token lists `fetch` and `web_search`. */
   fetch?: Run<FetchArgs>;
   webSearch?: Run<WebSearchArgs>;
@@ -599,7 +607,7 @@ export const TASK_COMPLETE_TOOL = 'task_complete';
 export const TASK_COMPLETION_CONTRACT = [
   `When you have fully completed this task, call the \`${TASK_COMPLETE_TOOL}\` tool with status \`done\` and your handoff. If you cannot complete it, call \`${TASK_COMPLETE_TOOL}\` with status \`blocked\` or \`failed\` and the reason instead. Call it once, as your last action. Once your brief's done criterion holds, commit (if your work lands as a commit) and call \`${TASK_COMPLETE_TOOL}\`: work beyond your brief belongs to other tasks, so name it in your handoff (an open question or a follow-up) instead of doing it.`,
   `Its \`summary\` is this task's handoff to the next task: the planner and the tasks that depend on this one read it first, and nothing else you write reaches them unless they ask. Write it for that reader, not as a log: what changed and the decisions behind it; the interfaces and paths a dependent relies on; the assumptions you acted on; what is left or open. It is at most ${HANDOFF_LIMITS.summary} characters, and a call over a limit is refused: the long form goes in \`report\`.`,
-  `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
+  `Put anything the next reader must act on in \`findings\`, one item each, most important first, each with a severity, a one-line title, its detail and evidence to check it by: a file (and line), a commit, a task (and one of its findings, as "F3") or a URL. A finding about work another task has landed cites that task, and the file the defect is in as its first file: that is how a blocker in it reaches a fix while the run goes on. Ordewell numbers them F1, F2, … so a later task can cite one. List what you produced in \`artifacts\`.`,
   `Work from your brief and the prior task outputs you were given; pull more with \`read\` only when you need it, and read the code your task touches, not the whole repository.`,
   `To wait for a command, wait on the PID of a process you started yourself, never by matching its command name (\`pgrep -f\`), which also matches the same command another task is running.`,
   `The long story, if there is one, goes in \`report\`: it is kept with this attempt and read only on demand, so a number you measured that a later task may need (a timing, a count, a size) goes in the summary or a finding, not only in the report. A review or other read-only task especially: its findings are its result, so state each one, and do not write the report to a file.`,
@@ -645,13 +653,17 @@ const POST_TEXT = `Leave an entry on your plan's board: \`read\` with task "${BO
 const TASK_POST = tool<TaskToolHandler, typeof taskPostInput>('post', POST_TEXT, taskPostInput, (h) => h.post?.bind(h) as Run<z.infer<typeof taskPostInput>> | undefined, { readOnlyHint: true });
 
 /**
- * A task that works in the tree: the shared tools, and `apply_patch`, which
- * brings a prototype a read-only task saved (ADR-0050) into its worktree.
+ * A task that works in the tree: the shared tools, `apply_patch`, which
+ * brings a prototype a read-only task saved (ADR-0050) into its worktree, and
+ * `wait_for`, which parks it on a sibling's work instead of a wait inside its
+ * attempt (ADR-0074).
  */
 export const TASK_TOOLS: readonly McpTool<TaskToolHandler>[] = [
   ...SHARED_TASK_TOOLS,
   tool('apply_patch', "Apply the patch that a task you may read (the same ones `read` reads) saved with save_patch into your own worktree, as a three-way merge. At the commit the patch was taken against it reproduces that task's changes; at a later one it merges them with what has landed since. It answers exactly what happened: applied cleanly, with every change staged; or applied with conflicts, naming each conflicted path (a binary file holds no markers and is named as binary), the markers left in your worktree for you to resolve and `git add`; or nothing applied, and why. A worktree that still holds an earlier conflict, or changes of yours to the patch's files that are not staged yet, applies nothing. The patch is another task's work: read what it changed, and run the checks here, since its author ran theirs at its own base.",
     applyPatchInput, (h) => h.applyPatch?.bind(h)),
+  tool('wait_for', "Wait for other tasks' work you cannot finish or check without, which has not landed. This attempt ends with no verdict, those tasks become this one's dependencies, its slot goes to other work, and Ordewell continues this session once they land, their work in your tree. Refused, with what to do instead, for work that has landed, failed or lands nothing, a task that waits for this one, and a third wait. Never sleep or poll for another task's work instead.",
+    waitForInput, (h) => h.waitFor?.bind(h)),
 ];
 
 /**

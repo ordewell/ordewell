@@ -153,7 +153,7 @@ export interface ComposeOptions {
   /** An ops task's last attempt, as its output ended (ADR-0020); absent on a first attempt. */
   previousAttempt?: string;
   /** A carry-over: the runner whose usage-limit-paused attempt this one starts from, and what became of that work. */
-  carriedOver?: { from: string; work?: PreviousWork };
+  carriedOver?: { from: string; work?: PreviousWork; parked?: string };
   /** The AI check's next round, after its body has landed (ADR-0047). */
   loop?: { round: number; previousHandoff?: StoredHandoff; previousReport?: string };
   /** A change task in an isolated run with work that may land beside it: where that lands and how it is taken in (ADR-0013). */
@@ -212,7 +212,9 @@ export function landsBeside(task: Task, plan: readonly Task[], landsWork: (sibli
  * What a change task is told of the work landing beside it (ADR-0013): its
  * worktree was cut from the integration tip when it started, so a sibling
  * that lands later is not in it. It takes that work in itself, with the merge
- * a repair writes the other way round (ADR-0015), and never a stand-in.
+ * a repair writes the other way round (ADR-0015), and never a stand-in. Work
+ * that has not landed it waits for with `wait_for` (ADR-0074), which every
+ * change attempt told this has: its token is a change task's.
  */
 export function renderLandingBeside(beside: LandingBeside): string {
   const branch = `\`${beside.integrationBranch}\``;
@@ -226,7 +228,7 @@ export function renderLandingBeside(beside: LandingBeside): string {
     '',
     `Other tasks of this plan run beside this one, each in its own worktree, and each lands its work on ${branch} when it passes. Your worktree was cut from that branch when this task started: it holds what had landed by then, and nothing since. \`git log --oneline HEAD..${beside.integrationBranch}\` lists what has landed after.`,
     `When code you build or test calls code another task owns, and it is missing or still a stub here, look there first. If that work has landed, ${takeIn}; resolve any conflict so that both sides' intent survives. If you cannot, \`git merge --abort\` puts your worktree back as it was: go on without that work, and never reset your own work away. Take in what has landed once more before you finish, so that what you report was checked against it.`,
-    'Never write a stand-in for another task\'s code, fill it in yourself, or build a scratch copy of the project with it filled in: none of that lands, and what you check against it says nothing of the code that will. If the work you need has not landed, do not wait for it: finish your own part, and once the checks left fail only because that work is missing, stop working on them. Name each such check, and the task whose work it needs, in a finding, and end as your brief\'s done criterion says.',
+    'Never write a stand-in for another task\'s code, fill it in yourself, or build a scratch copy of the project with it filled in: none of that lands, and what you check against it says nothing of the code that will. If the work you need has not landed, never sleep or poll for it: call `wait_for` with the tasks whose work it is, and this attempt ends, its slot goes to other work, and Ordewell continues this session once that work lands. Where wait_for refuses, finish your own part, and once the checks left fail only because that work is missing, stop working on them. Name each such check, and the task whose work it needs, in a finding, and end as your brief\'s done criterion says.',
   ].join('\n');
 }
 
@@ -304,10 +306,14 @@ export function delegatedWorkNote(title: string, work: PreviousWork | undefined)
 /**
  * What a carry-over is told (ADR-0018, U1). A fresh session on another
  * runner finds files it did not write, and nothing of the reasoning behind
- * them, so it is told where they came from and not to trust them as done.
+ * them, so it is told where they came from and not to trust them as done. A
+ * parked task's fresh session is told the same, after what it waited for
+ * (ADR-0074).
  */
-function renderCarriedOver(from: string, work: PreviousWork | undefined): string {
-  const moved = `This task was paused on ${from}'s usage limit and moved to you.`;
+function renderCarriedOver({ from, work, parked }: NonNullable<ComposeOptions['carriedOver']>): string {
+  const moved = parked
+    ? `An earlier attempt of this task on ${from} stopped to wait for other tasks' work, and its session cannot be continued, so this is a fresh one. ${parked}`
+    : `This task was paused on ${from}'s usage limit and moved to you.`;
   const body = work?.outcome === 'fallback'
     ? `${moved} The work its previous attempt on ${from} left could not be applied on top of the integration tip, so your working tree starts fresh at the integration tip. `
       + `${keptWorkLines(work.preserved, "the previous attempt's work")} It may be unfinished.`
@@ -388,7 +394,7 @@ export function composePromptParts(task: Task, allTasks: readonly Task[], opts?:
 
   if (opts?.previousAttempt !== undefined) parts.push({ kind: 'previousAttempt', title: 'Previous attempt', text: renderPreviousAttempt(opts.previousAttempt) });
 
-  if (opts?.carriedOver) parts.push({ kind: 'carriedOver', title: 'Work carried over', text: renderCarriedOver(opts.carriedOver.from, opts.carriedOver.work) });
+  if (opts?.carriedOver) parts.push({ kind: 'carriedOver', title: 'Work carried over', text: renderCarriedOver(opts.carriedOver) });
 
   if (opts?.skills?.length) parts.push({ kind: 'skills', title: 'Task skills', text: renderTaskSkills(opts.skills) });
 

@@ -31,7 +31,9 @@ export interface Continuation {
  *   is what the task is.
  * - `carryOver`: a change task paused on `from`'s usage limit and moved to
  *   another runner (ADR-0018, U1). A fresh session — none can cross runners —
- *   in a worktree that starts from the paused attempt's work.
+ *   in a worktree that starts from the paused attempt's work. Also a parked
+ *   task whose runner left no session it can resume (ADR-0074): `parked` is
+ *   what it is told of the work it waited for.
  * - `delegated`: a delegated task's attempt, a child plan in its worktree
  *   (ADR-0055 D3). `readOnly` lands nothing, and its worktree goes as a
  *   read-only task's does.
@@ -42,7 +44,7 @@ export type AttemptKind =
   | { readonly kind: 'ops' }
   | { readonly kind: 'repair'; readonly repair: RepairAttempt }
   | ({ readonly kind: 'continuation'; readonly work: TaskWork } & Readonly<Continuation>)
-  | { readonly kind: 'carryOver'; readonly from: RunnerId }
+  | { readonly kind: 'carryOver'; readonly from: RunnerId; readonly parked?: string }
   | { readonly kind: 'delegated'; readonly readOnly: boolean };
 
 /**
@@ -63,13 +65,14 @@ export type TaskWork = 'change' | 'ops' | 'readOnly' | 'delegated' | 'delegatedR
  */
 export function classifyAttempt(
   work: TaskWork,
-  owed: { repair?: RepairAttempt | null; continuation?: Continuation | null; carriedFrom?: RunnerId | null } = {},
+  owed: { repair?: RepairAttempt | null; continuation?: Continuation | null; carriedFrom?: RunnerId | null; parked?: { from: RunnerId; message: string } | null } = {},
 ): AttemptKind {
   if (owed.continuation) return { kind: 'continuation', work, ...owed.continuation };
   if (owed.repair) return { kind: 'repair', repair: owed.repair };
   if (work === 'delegated' || work === 'delegatedReadOnly') return { kind: 'delegated', readOnly: work === 'delegatedReadOnly' };
   if (work !== 'change') return { kind: work };
-  return owed.carriedFrom ? { kind: 'carryOver', from: owed.carriedFrom } : { kind: 'change' };
+  if (owed.carriedFrom) return { kind: 'carryOver', from: owed.carriedFrom, ...(owed.parked ? { parked: owed.parked.message } : {}) };
+  return owed.parked ? { kind: 'carryOver', from: owed.parked.from, parked: owed.parked.message } : { kind: 'change' };
 }
 
 /**
@@ -234,7 +237,7 @@ export function composeAttemptPrompt(kind: AttemptKind, src: AttemptPromptSource
     case 'readOnly':
       return composed(composePromptParts(task, plan, { skills: src.skills, loop, readOnly: true }));
     case 'carryOver':
-      return composed(composePromptParts(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork }, loop, ...(src.beside ? { beside: src.beside } : {}) }));
+      return composed(composePromptParts(task, plan, { skills: src.skills, carriedOver: { from: kind.from, work: src.previousWork, ...(kind.parked ? { parked: kind.parked } : {}) }, loop, ...(src.beside ? { beside: src.beside } : {}) }));
     case 'delegated':
       // A subplanner reads its goal, not a runner's brief.
       return { prompt: task.goal ?? '' };

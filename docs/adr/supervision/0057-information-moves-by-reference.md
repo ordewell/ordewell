@@ -155,7 +155,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   | a report arrived | `task_report` ([ADR-0037](0037-research-tasks-wake-the-planner.md)) |
   | the run ended | `run_finished`, with no merge window |
 
-  Any other event but a pass, `task_failed`, `task_idle` and `running_long` among them, is held until the first
+  Any other event but a pass, `task_failed`, `task_idle`, `running_long` and `landed_blocker` among them, is held until the first
   of these, each of which is read from the plan:
   - **nothing can start** on this node without a decision;
   - **the cohort is done**: every task that became ready with this one has ended, read as every
@@ -164,7 +164,7 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   - **a supervisor at Act can retry it**: at Act, a `task_failed` for a task any other task
     depends on, however far back and ready or not, is due at its own merge window, as an event
     that wakes at once is. A retry then runs beside the rest instead of after it. A failure
-    nothing depends on, `task_idle`, `running_long`, and every event at Watch stay held, since a Watch
+    nothing depends on, `task_idle`, `running_long`, `landed_blocker`, and every event at Watch stay held, since a Watch
     supervisor cannot retry;
   - **a maximum age**: 80% of the planner's cache TTL once anything is held, so a wake finds its
     prefix warm. Each connector states its TTL, the shortest it may be since that is the one a wake
@@ -220,7 +220,14 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   ([ADR-0018](../runners/0018-structured-runner-transport.md) C4). A flagged context comes before
   a compaction, so the supervisor can have the runner commit and report, or split the task, while
   its context is still sound. All three are held, batched and counted against the rate guard alike;
-  their line says which raised it.
+  their line says which raised it. One still held when its task passes or fails is dropped from
+  the batch: it advised on an attempt that has ended, and three flags of a recorded run reached the
+  supervisor after their task had passed.
+
+  A `landed_blocker` event is raised by the handoffs that report a blocker in a landed task's work
+  as their count reaches a power of two
+  ([ADR-0073](0073-a-blocker-found-in-landed-work-reaches-the-supervisor-while-the-run-can-still-land-a-fix.md)).
+  One task's reports are one fact: a later count replaces the one still queued, keeping its stamp.
 
   A pass is not held: it wakes nothing and starts no clock, and rides along in the next wake, as it
   does today, so a plan that only passes opens no turn. A delegated task's pass is a child plan
@@ -234,9 +241,10 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   compacts at where Ordewell sets one and the model's window beside it ("context 16k of a 400k compaction
   window (model window 1000k)"), or, for one its context raised, the size it passed ("context 412k
   of a 1000k window, past 400k"), then, as a failure's line does, the tasks it blocks, by the same
-  rule read as though it had failed, subtasks included, and none when it blocks nothing. The digest says once,
-  after the attention lines, what the supervisor can do about one, so the planner's system prompt
-  does not grow. What woke the planner goes
+  rule read as though it had failed, subtasks included, and none when it blocks nothing. A
+  `landed_blocker` line is whole too, never a ride-along: the work it names is what its reporters
+  build on. The digest says once, after the attention lines, what the supervisor can do about
+  either, so the planner's system prompt does not grow. What woke the planner goes
   first, whole items only. Overflow becomes counts and a pointer: `task_query` reads the rest. The
   cap is on what the turn sends, so updates that waited for one turn are bounded together, and the
   transcript keeps them all. The newest is what opened the turn, so it stays whole and the oldest
@@ -294,7 +302,11 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - **No sibling chat, lock, wait or broadcast (R7).** Sibling messages (#38) stay out. They come back
   only if replays of real trees show both of these: conflicts or duplicated work between siblings
   that scope lines and the board do not lower; and, on the same goals, messages on costing fewer
-  tokens per landed task than messages off, not just fewer conflicts.
+  tokens per landed task than messages off, not just fewer conflicts. A task that needs a sibling's
+  unlanded work waits only through an edge of the plan: `wait_for` ends its attempt and adds the
+  dependency, and the start rule continues it once that work lands
+  ([ADR-0074](0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md)).
+  It holds no lock on the sibling and hears nothing from it.
 
 ### The board
 
@@ -513,3 +525,6 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-18 — R4: the closing turn raises `failure_standing` too, for every task it left failed or held with work waiting, once per failure, and that wake holds `run_concluded` until its turn is over.
 - 2026-11-18 — R4: the closing turn's `failure_standing` is judged once its retry is over, and none is raised after the user's Stop of the closing turn or its retry.
 - 2026-11-18 — R5: a `running_long` line names the tasks it blocks, by the rule a failure's line uses as though it had failed, subtasks included, and nothing when it blocks nothing.
+- 2026-11-21 — R4: a running-long flag still held when its task passes or fails is dropped from the batch.
+- 2026-11-21 — R4 holds `landed_blocker`, one per landed task, the latest count replacing a queued one; R5: its line is whole, never a ride-along (ADR-0073).
+- 2026-11-21 — R7: a task waits for a sibling's unlanded work only through a plan edge, by `wait_for` (ADR-0074).

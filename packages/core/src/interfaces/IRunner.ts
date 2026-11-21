@@ -1,5 +1,5 @@
 import type { AgentEvent, TaskRunnerConfig } from '../services/harness/AgentAdapter';
-import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, PostArgs, ReadTaskArgs, TaskCompleteArgs } from '../services/mcp/tools';
+import type { ApplyPatchArgs, CheckpointAnswer, McpToolReply, PostArgs, ReadTaskArgs, TaskCompleteArgs, WaitForArgs } from '../services/mcp/tools';
 import type { ApprovalDecision } from './IApproval';
 import type { Task, TaskSkillSnapshot, VerificationCheck } from '../models/Task';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
@@ -349,6 +349,12 @@ export interface IRunner {
      * says it is not available.
      */
     applyPatch?: (args: ApplyPatchArgs) => Promise<McpToolReply>;
+    /**
+     * Answers a change attempt's `wait_for` calls (ADR-0074): a park the
+     * attempt ends on, or a refusal saying what to do instead. Without one
+     * the call says it is not available.
+     */
+    waitFor?: (args: WaitForArgs) => Promise<McpToolReply>;
     /**
      * Answers a read-only attempt's `fetch` and `web_search` calls (ADR-0046)
      * through the session's web-read policy, apart from its shell. Only a

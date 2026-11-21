@@ -60,6 +60,9 @@ export type HandoffEvidence =
  * `label` is how the task's own plan names it, kept once a reference has
  * crossed a level: a reader in another plan has no plan to name it from, and a
  * task id can repeat between plans, so no plan names one that has it.
+ * `unread` marks a task the producer cited without being able to read it
+ * (ADR-0073): the citation names it and passes on nothing of it, so it never
+ * opens that task's handoff to anyone once the task leaves the plan.
  */
 export interface TaskEvidence {
   kind: 'task';
@@ -68,6 +71,7 @@ export interface TaskEvidence {
   attempt?: number;
   finding?: string;
   label?: string;
+  unread?: true;
 }
 
 /**
@@ -398,7 +402,7 @@ export function removedAttempt(plan: readonly Task[], readable: ReadonlySet<stri
 function citedAttempts(task: Task, taskId: string, latest: number, logs: HandoffLogs): number[] {
   const handoffs = [task.handoff, ...logs.attempts(task.id).map((attempt) => logs.handoff(task.id, attempt))];
   return handoffs.flatMap((handoff) => [...(handoff?.findings ?? []).flatMap((f) => f.evidence ?? []), ...(handoff?.artifacts ?? [])])
-    .flatMap((ref) => (ref.kind === 'task' && ref.task === taskId ? [ref.attempt ?? latest] : []));
+    .flatMap((ref) => (ref.kind === 'task' && ref.task === taskId && ref.unread !== true ? [ref.attempt ?? latest] : []));
 }
 
 /** The pinned reference as text: `#4@2/F3` (ADR-0057 R1); `task` is how the reader names it. */
@@ -839,13 +843,20 @@ function pinIn(scope: ReferenceScope, producer: { id: string; attempt?: number; 
   }
   const target = resolved.task;
   const named = titledTaskRefOf(plan, target.id) ?? target.id;
-  if (!readable.has(target.id)) {
-    refuse(`${field}.task: ${JSON.stringify(written)} is ${named}, which this task may not read: only itself, a task it depends on, or another task of its loop.`);
-    return undefined;
-  }
   const given = oneFinding(resolved.finding);
   if (!given) return undefined;
   const { finding } = given;
+  // Any task of the plan may be cited: a slice names the sibling whose landed work it found broken, which is how that
+  // reaches a fix (ADR-0073). Only a finding is the producer's to have read, and it reads only its readable set.
+  if (!readable.has(target.id)) {
+    if (finding !== undefined) {
+      refuse(`${field}.finding: ${JSON.stringify(written)} names a finding of ${named}, whose findings this task may not read: cite the task alone, without the finding.`);
+      return undefined;
+    }
+    // Pinned to the attempt it saw, as any reference is (ADR-0057 R1): a later attempt's work is not what it found broken.
+    const { latest } = latestHandoff(target, logs);
+    return { kind: 'task', node, task: target.id, ...(latest !== undefined ? { attempt: latest } : {}), ...labelled(target.id), unread: true };
+  }
   const { latest, digest } = latestHandoff(target, logs);
   // A task naming itself means the attempt making the call and the handoff it is writing, whatever an earlier one left on the plan.
   const own = target.id === producer.id && producer.attempt !== undefined && (resolved.attempt ?? producer.attempt) === producer.attempt;

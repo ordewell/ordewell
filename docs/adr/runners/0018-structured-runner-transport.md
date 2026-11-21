@@ -102,13 +102,16 @@ and completion evidence.
   longest, and in a recorded run whose slices took a median of 6 minutes two
   ran on near 40 and were first flagged by their context, 41 minutes in; on
   the recorded runs replayed, 19 flags those two at 19 minutes and at most one
-  in ten ordinary passes, where 10 flagged a fifth of one run's. The threshold
-  is read again at least once a minute, so a task that passed meanwhile can
-  put the flag off or bring it forward, and each flag doubles the time the
-  next needs, never less than double the last flag's however a later pass
-  lowers the threshold. The flag names which comparison fired: the longest
-  pass, or the median and how many passed, and, when double the last flag's
-  time came later than the lowered threshold doubled, that flag's time. An attempt that follows one of the same task that failed or was
+  in ten ordinary passes, where 10 flagged a fifth of one run's. Until the
+  first flag the threshold is read again at least once a minute, so a task that
+  passed meanwhile can put that flag off or bring it forward. Every later flag
+  is due at exactly twice the last, whatever passes do to the threshold since:
+  read again, it rose with the median, and two slow tasks of a recorded run
+  were not flagged a second time in over an hour. The first flag names which
+  comparison fired: the longest pass, or the median and how many passed; a
+  later one names the flag it doubles. A flag still waiting for a wake when its
+  attempt passes or fails is dropped: it advised on an attempt that has ended
+  (ADR-0057 R4). An attempt that follows one of the same task that failed or was
   stopped (the ending is kept on that attempt's usage as `outcome`) is first
   flagged at the larger of 30 minutes and that attempt's running time instead:
   a retry already had that long once, and a retry of a task that failed after
@@ -457,7 +460,12 @@ and completion evidence.
   exhausted limit. However the limit arrived, the pause is one rule
   (`LimitPauses`): no verdict is recorded and nothing goes to the execution
   log, the task's summary names the limit, its worktree is kept for the
-  resume, and what follows is what follows a verdict. A held run stays open
+  resume, and what follows is what follows a verdict. A park
+  ([ADR-0074](../supervision/0074-a-task-that-needs-a-siblings-unlanded-work-parks-and-continues-once-it-lands.md)) ends its attempt
+  the same way, holding no run and with no reason waiting on the user: the
+  task is not started, and its next start continues the saved session once the
+  work it waits for lands, or, where its runner saved none it can resume, is a
+  carry-over of the parked attempt's files. A held run stays open
   ([ADR-0034](../supervision/0034-a-failed-task-blocks-only-its-dependents.md)):
   with nothing left at work it is neither handed over nor merged at its end,
   and sends no `execution_complete`. The hold is held from whatever the run
@@ -782,3 +790,5 @@ transport is retained for take-over.
 - 2026-11-19 — W1: an attempt that continues a saved session takes the context it starts with as its baseline, so its first context flag is the next doubling above it; fresh attempts and the time and compaction flags are unchanged.
 - 2026-11-20 — W1: once five AI tasks have passed, a first attempt is also flagged at max(19 min, 3× their median running time) where that comes first; the threshold is read each minute, the next flag is never under double the last, and the line names the median.
 - 2026-11-20 — W1: a flag set by double the last one's time names that time, not the lowered threshold's doubling.
+- 2026-11-21 — W1: after the first running-long flag the next is due at twice the last, the threshold no longer read again for it; a flag still waiting when its attempt ends is dropped.
+- 2026-11-21 — U1: a park ends its attempt as a pause does and its next start continues the saved session, or carries its files over where none can be resumed (ADR-0074).
