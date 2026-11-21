@@ -403,7 +403,7 @@ describe('reviewLongChain on a fan-out', () => {
     ]);
   });
 
-  // ADR-0072 R7: slices past the parallel limit only queue, so the small ones are merged before the order and the notes.
+  // ADR-0072 R7: replayed on recorded runs, merging small slices past the parallel limit made the closing check start later.
   describe('with a parallel limit', () => {
     const SIZES = [100, 90, 10, 10, 20, 20, 30, 30, 40, 50];
     const plan = () => [t('r', []), ...SIZES.map((_, i) => t(`s${i + 1}`, ['r'], { prompt: `Fill in src/m${i + 1}.py. Verify: pytest tests/test_m${i + 1}.py` })), t('close', sliceIds(10))]
@@ -411,23 +411,19 @@ describe('reviewLongChain on a fan-out', () => {
     const files = () => workspace(Object.fromEntries(SIZES.map((n, i) => [`tests/test_m${i + 1}.py`, lines(n)]))).fs;
     const limit = (parallelLimit: number): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, parallelLimit });
 
-    it('merges small slices, then orders and notes the merged plan, and logs how many slices became how many', async () => {
+    it('merges no slice, however far past the limit the slices are: it orders them largest first and notes every one', async () => {
       const log: ResearchLogEntry[] = [];
       const out = await new ReviewService([]).review(plan(), log, files(), limit(2));
-      // Merged as PlanFanOut.merge.test.ts works it by hand, then sized as the sums of their slices: 100, 90, 70, 50, 50, 40.
-      expect(ids(out)).toEqual(['r', 's1', 's2', 's3', 's6', 's10', 's9', 'close']);
-      expect(out.find((x) => x.id === 's9')!.prompt).toContain('Plan shape: this task is one of 6 slices');
-      const opening = out.find((x) => x.id === 'r')!.prompt!;
-      expect(opening).toContain('- "T s3; T s4; T s5; T s8" (s3): src/m3.py, tests/test_m3.py, src/m4.py, tests/test_m4.py, src/m5.py, tests/test_m5.py, src/m8.py, tests/test_m8.py');
+      expect(ids(out)).toEqual(['r', 's1', 's2', 's10', 's9', 's7', 's8', 's5', 's6', 's3', 's4', 'close']);
+      expect(out.some((x) => x.mergedSlices)).toBe(false);
+      expect(out.find((x) => x.id === 's9')!.prompt).toContain('Plan shape: this task is one of 10 slices');
       expect(log.map(text)).toEqual([
-        'slice merge: 10 slices became 6, by the lines of the test files their briefs name, for 2 tasks at once',
-        'slice order: largest first by the lines of the test files their briefs name; 2 of 6 moved',
-        'fan-out: 6 at once, 1 before, 1 after; role notes added',
+        'slice order: largest first by the lines of the test files their briefs name; 8 of 10 moved',
+        'fan-out: 10 at once, 1 before, 1 after; role notes added',
       ]);
     });
 
-    // Merge, read the shape, order (tasks before the slices, then largest first), note: each on the plan the step before left.
-    it('never merges a task every slice waits for, starts it ahead of the slices beside it, and notes the merged plan', async () => {
+    it('starts a task every slice waits for ahead of the slices beside it, and notes every slice', async () => {
       const shared = t('g', ['r'], { prompt: 'Write src/shared.py, which every module imports.' });
       const beside = ['a1', 'a2'].map((id, i) => t(id, ['r'], { prompt: `Fill in src/${id}.py. Verify: pytest tests/test_${id}.py`, order: i }));
       const fanned = plan().slice(1, -1).map((x) => ({ ...x, dependencies: ['r', 'g'] }));
@@ -435,26 +431,28 @@ describe('reviewLongChain on a fan-out', () => {
       const fs = workspace({ 'tests/test_a1.py': lines(8), 'tests/test_a2.py': lines(5), ...Object.fromEntries(SIZES.map((n, i) => [`tests/test_m${i + 1}.py`, lines(n)])) }).fs;
       const log: ResearchLogEntry[] = [];
       const out = await new ReviewService([]).review(wide, log, fs, limit(2));
-      expect(ids(out)).toEqual(['r', 'g', 'a1', 'a2', 's1', 's2', 's3', 's6', 's10', 's9', 'close']);
-      expect(out.map((x) => x.order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(ids(out)).toEqual(['r', 'g', 'a1', 'a2', 's1', 's2', 's10', 's9', 's7', 's8', 's5', 's6', 's3', 's4', 'close']);
+      expect(out.map((x) => x.order)).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
       const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
-      expect(prompt('g')).toContain('Plan shape: 6 slices wait for this task to land before they start');
-      expect(prompt('g')).not.toContain('this task is one of');
-      expect(prompt('r')).toContain('Plan shape: 8 slices wait for this task to land before any of them starts');
-      expect(prompt('s9')).toContain('Plan shape: this task is one of 8 slices that start once "T r" (r) and "T g" (g) have landed');
-      expect(prompt('a1')).toContain('Plan shape: this task is one of 8 slices that start once "T r" (r) has landed');
+      expect(prompt('g')).toContain('Plan shape: 10 slices wait for this task to land before they start');
+      expect(prompt('r')).toContain('Plan shape: 12 slices wait for this task to land before any of them starts');
+      expect(prompt('s9')).toContain('Plan shape: this task is one of 12 slices that start once "T r" (r) and "T g" (g) have landed');
       expect(log.map(text)).toEqual([
-        'slice merge: 10 slices became 6, by the lines of the test files their briefs name, for 2 tasks at once',
-        'slice order: largest first by the lines of the test files their briefs name; 4 of 8 moved',
+        'slice order: largest first by the lines of the test files their briefs name; 10 of 12 moved',
         'slice order: 1 task the slices wait for moved ahead of the slices beside it',
-        'fan-out: 6 at once, 2 before, 1 after; role notes added',
+        // The widest level's ten, a1 and a2 a level above them.
+        'fan-out: 10 at once, 2 before, 1 after; role notes added',
       ]);
     });
 
-    it('changes nothing at a limit at or above the slices', async () => {
-      const [merged, kept] = [[] as ResearchLogEntry[], [] as ResearchLogEntry[]];
-      expect(await new ReviewService([]).review(plan(), merged, files(), limit(10))).toEqual(await new ReviewService([]).review(plan(), kept, files()));
-      expect(merged.map(text)).toEqual(kept.map(text));
+    it('shapes a plan at any limit as with none', async () => {
+      const kept: ResearchLogEntry[] = [];
+      const none = await new ReviewService([]).review(plan(), kept, files());
+      for (const n of [1, 2, 10]) {
+        const log: ResearchLogEntry[] = [];
+        expect(await new ReviewService([]).review(plan(), log, files(), limit(n))).toEqual(none);
+        expect(log.map(text)).toEqual(kept.map(text));
+      }
     });
   });
 

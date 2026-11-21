@@ -4,16 +4,16 @@
 // plan-only run's plan-saved.json, any { tasks } plan) carries the notes of the
 // build that planned it, so each brief is cut at its first appended
 // "Plan shape:" note, a "Plan revision:" note kept, and the plan goes through
-// core's own shapeFanOut, the order a planner's plan is shaped in: merge, read,
-// order, note (packages/core/src/services/PlanFanOut.ts, bundled here with
+// core's own shapeFanOut, the order a planner's plan is shaped in: read, order,
+// note (packages/core/src/services/PlanFanOut.ts, bundled here with
 // esbuild, as the bench imports no core build that exports it). The slices are
 // sized from the run's repository, the arm-workdir beside the plan file when
 // there is one, read as the planner reads; without one nothing is read, so
-// nothing merges and only the tasks before the slices move.
+// only the tasks before the slices move.
 //
 //   node bench/commit0/reshape.mjs [--base-broken] [--limit N] <plan.json> ...
 //
-// --limit is the run's parallel limit, which only the slice merge reads.
+// --limit is the run's parallel limit, handed to shaping as the planner hands it; a build that merges no slice (ADR-0072 R7) reads it nowhere.
 // One JSON line a plan: the recorded shape and the new one, the log lines
 // shaping wrote, the properties of the shaped plan, and the checks below;
 // exit 1 when any check fails.
@@ -94,7 +94,9 @@ const licensed = (plan) => plan.tasks.filter((t) => (t.prompt ?? '').includes(LI
 function sameGraph(recorded, renoted) {
   const into = new Map();
   for (const t of renoted.tasks) for (const id of [t.id, ...(t.mergedSlices ?? [])]) into.set(id, into.has(id) ? null : t.id);
-  if (recorded.tasks.some((t) => !into.get(t.id)) || into.size !== recorded.tasks.length) return false;
+  // A task the recorded run had already merged names its slices as the renoted one does.
+  const was = new Set(recorded.tasks.flatMap((t) => [t.id, ...(t.mergedSlices ?? [])]));
+  if ([...was].some((id) => !into.get(id)) || into.size !== was.size) return false;
   const old = new Map(recorded.tasks.map((t) => [t.id, t]));
   const set = (ids) => JSON.stringify([...new Set(ids)].sort());
   return renoted.tasks.every((t) => old.has(t.id) && set(t.dependencies ?? []) === set((old.get(t.id).dependencies ?? []).map((d) => into.get(d) ?? d)));
@@ -116,9 +118,35 @@ function levels(plan) {
 
 const OFFLINE = { readFile: async () => ({ success: false, output: 'not read offline', truncated: false }) };
 
-/** The run's repository read as the planner's file systems answer: numbered lines, a size cap in KB, a line limit, nothing outside it. */
+/** The directories the planner's searches skip (SEARCH_EXCLUSIONS in core's IFileSystem.ts). */
+const EXCLUDED = new Set(['node_modules', '.git', '.ordewell', 'dist', 'build', 'out', 'target', '.next', '.nuxt', '.venv', 'venv', '__pycache__',
+  '.mypy_cache', '.pytest_cache', 'vendor', 'coverage', '.turbo', '.cache', '.gradle', 'Pods', '.terraform']);
+
+/**
+ * The run's repository read as the planner's file systems answer: numbered
+ * lines, a size cap in KB, a line limit, nothing outside it; and its glob, as
+ * the daemon's PoolFileSystem answers for a directory below the workspace: the
+ * files whose name the pattern's last segment matches, relative to that
+ * directory, a failure for one that does not exist, a note when rows were cut.
+ */
 export function repositoryReader(root) {
   return {
+    glob: async (pattern, opts = {}) => {
+      const dir = path.resolve(root, opts.path ?? '.');
+      const rel = path.relative(root, dir);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) return { success: false, output: `${opts.path} is outside the workspace`, truncated: false, refused: true };
+      let found;
+      try { found = fs.readdirSync(dir, { recursive: true, withFileTypes: true }); } catch (e) { return { success: false, output: `Glob failed: ${e.message}`, truncated: false }; }
+      const last = pattern.split('/').pop();
+      const name = new RegExp(`^${last.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
+      const rows = found.filter((e) => e.isFile() && name.test(e.name)).map((e) => path.relative(dir, path.join(e.parentPath ?? e.path, e.name)).split(path.sep).join('/'))
+        .filter((p) => !p.split('/').some((seg) => EXCLUDED.has(seg))).sort();
+      const limit = opts.headLimit ?? 200;
+      if (!rows.length) return { success: true, output: 'No files matched.', truncated: false };
+      return rows.length > limit
+        ? { success: true, output: `${rows.slice(0, limit).join('\n')}\n\n[showing ${limit} of ${rows.length} results.]`, truncated: true }
+        : { success: true, output: rows.join('\n'), truncated: false };
+    },
     readFile: async (p, opts = {}) => {
       const abs = path.resolve(root, p);
       const rel = path.relative(root, abs);
