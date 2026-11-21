@@ -164,7 +164,7 @@ const FIX_REPLY = `The rehearsal adds one fix task for the opening task's defect
         assignedModel: { modelId: 'openrouter:deepseek/deepseek-v4.1-flash', modelLabel: 'DeepSeek V4.1 Flash' },
       },
     },
-    { op: 'update', taskId: '#4', changes: { dependencies: ['#2', '#3', 'fix'] } },
+    { op: 'update', taskId: '#6', changes: { dependencies: ['#2', '#3', '#4', '#5', 'fix'] } },
   ],
 }, null, 2)}\n\`\`\``;
 const FAILS_ON_PURPOSE ='The rehearsal fails this task on purpose.';
@@ -337,7 +337,9 @@ export const SCENARIOS = Object.freeze({
       };
     },
     ending: { by: 'completion', status: 'done', reason: null },
-    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 3 }, parallel: 2 },
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 3 }, parallel: 2,
+      // The harness's ledger reads the park as an attempt that ended with no verdict, and the continuation as the next.
+      parkedAttempts: { order: 2, ended: ['ended without task_complete', 'done'] } },
     playedOut: ['producer', 'small'],
     wait: { parker: 'consumer', awaited: 'producer', other: 'small', landed: 'Implement the library' },
   },
@@ -348,7 +350,10 @@ export const SCENARIOS = Object.freeze({
       { key: 'edit', title: 'Implement the library' },
       { key: 'slice-a', title: 'Slice A', after: ['edit'] },
       { key: 'slice-b', title: 'Slice B', after: ['edit'] },
-      { key: 'check', title: 'Check the whole', after: ['slice-a', 'slice-b'] },
+      { key: 'slice-c', title: 'Slice C', after: ['edit'] },
+      { key: 'slice-d', title: 'Slice D', after: ['edit'] },
+      // Four slices make the plan a fan-out, the only shape whose landed-blocker line names a closing check (core's FAN_OUT_MIN).
+      { key: 'check', title: 'Check the whole', after: ['slice-a', 'slice-b', 'slice-c', 'slice-d'] },
     ]),
     attempts: (ctx) => {
       const blocker = (what) => ({
@@ -363,6 +368,9 @@ export const SCENARIOS = Object.freeze({
         // The first slice reports at once, so the wake comes while the second is at work and the closing check cannot start.
         'slice-a': [[note('commit0-rehearsal-slice-a.md'), done('Do slice A', blocker('slice A'))]],
         'slice-b': [[longStep(ctx.longSec), note('commit0-rehearsal-slice-b.md'), done('Do slice B', blocker('slice B'))]],
+        // Two slices report; the other two have nothing to say, as most of a recorded run's did.
+        'slice-c': [[note('commit0-rehearsal-slice-c.md'), done('Do slice C')]],
+        'slice-d': [[note('commit0-rehearsal-slice-d.md'), done('Do slice D')]],
         fix: [[note(FIX_FILE), done('Fix the opening task\'s defect')]],
         // The fix's file is in the tree the check starts from only if the fix landed first.
         check: [[{ ...shell(`test -f ${FIX_FILE} && echo fixed`), exit0: true }, note('commit0-rehearsal-check.md'), done('Check the whole')]],
@@ -370,11 +378,12 @@ export const SCENARIOS = Object.freeze({
     },
     supervisor: [{ when: LANDED_BLOCKER_LINE, say: FIX_REPLY }],
     ending: { by: 'completion', status: 'done', reason: null },
-    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 5 } },
-    playedOut: ['edit', 'slice-a', 'slice-b', 'fix', 'check'],
+    expect: { valid: true, scoredFrom: 'merged', truncated: false, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 7 } },
+    playedOut: ['edit', 'slice-a', 'slice-b', 'slice-c', 'slice-d', 'fix', 'check'],
     spoke: [/adds one fix task/],
-    supervision: { acts: ['plan_edit'], closingWakes: 0 },
-    blocker: { owner: '#1', closing: '#4', fix: 'Fix the opening task\'s defect', check: 'check', fixKey: 'fix' },
+    // One reply, three entries in the plan's log: the fix is added, the closing check updated, and core puts the new task ahead of the ones not started.
+    supervision: { acts: ['plan_edit', 'plan_edit', 'plan_edit'], ops: ['added', 'updated', 'reordered'], closingWakes: 0 },
+    blocker: { closing: '#6', fix: 'Fix the opening task\'s defect', closingTitle: 'Check the whole', check: 'check', fixKey: 'fix', tasks: 7 },
   },
   'b-cap': {
     arm: 'B',
@@ -759,9 +768,10 @@ export function judgeBlocker(name, requests, ctx, plan) {
     if (wake.turn.rule === undefined) f.push('the supervisor did not answer the wake with the scenario\'s edit');
   }
   const fixes = (plan ?? []).filter((t) => t.title === b.fix);
-  const [opening, , , closing] = plan ?? [];
+  const opening = plan?.[0];
+  const closing = (plan ?? []).find((t) => t.title === b.closingTitle);
   if (!plan || !opening || !closing) return [...f, 'the session\'s final plan could not be read'];
-  if (plan.length !== 5 || fixes.length !== 1) f.push(`the plan holds ${plan.length} tasks, ${fixes.length} of them the fix; wanted 5 with one`);
+  if (plan.length !== b.tasks || fixes.length !== 1) f.push(`the plan holds ${plan.length} tasks, ${fixes.length} of them the fix; wanted ${b.tasks} with one`);
   const fix = fixes[0];
   if (fix) {
     if (!(fix.dependencies ?? []).includes(opening.id)) f.push(`the fix does not depend on the opening task: ${JSON.stringify(fix.dependencies)}`);
@@ -873,6 +883,10 @@ export function judgeSupervision(want, sup) {
   const kinds = acts.map((a) => a.kind);
   if (JSON.stringify(kinds) !== JSON.stringify(want.acts)) f.push(`the supervisor's acts are ${JSON.stringify(kinds)}, wanted ${JSON.stringify(want.acts)}`);
   for (const a of acts) if (a.outcome !== 'done') f.push(`act ${a.kind} was ${a.outcome}`);
+  if (want.ops) {
+    const ops = acts.filter((a) => a.kind === 'plan_edit').map((a) => a.op);
+    if (JSON.stringify(ops) !== JSON.stringify(want.ops)) f.push(`the plan edits are ${JSON.stringify(ops)}, wanted ${JSON.stringify(want.ops)}`);
+  }
   for (const a of sup.actions) if (!a.at) f.push(`act ${a.kind} has no time`);
   const triggers = sup.wakes.flatMap((w) => w.triggers);
   const closing = sup.wakes.filter((w) => w.triggers.some((t) => t.kind === 'failure_standing' && t.closing));
@@ -929,6 +943,10 @@ export function judgeRehearsal(name, result) {
   if ('stoppedWhy' in e) want((result.stopped?.why ?? null) === e.stoppedWhy, `stopped by ${result.stopped?.why ?? 'nothing'}, wanted ${e.stoppedWhy ?? 'nothing'}`);
   if ('stalled' in e) want(Boolean(result.stalled) === e.stalled, `stalled is ${JSON.stringify(result.stalled ?? null)}, wanted ${e.stalled ? 'a record' : 'none'}`);
   if (e.parallel !== undefined) want(result.parallel === e.parallel, `the run's parallel limit is ${JSON.stringify(result.parallel)}, wanted ${e.parallel}`);
+  if (e.parkedAttempts) {
+    const ended = ((result.metrics?.perTask ?? []).find((t) => t.order === e.parkedAttempts.order)?.attempts ?? []).map((x) => x.ended);
+    want(JSON.stringify(ended) === JSON.stringify(e.parkedAttempts.ended), `task #${e.parkedAttempts.order}'s attempts ended ${JSON.stringify(ended)}, wanted ${JSON.stringify(e.parkedAttempts.ended)}`);
+  }
   if (e.heldOpen !== undefined) want((result.stalled?.open ?? []).length === e.heldOpen, `${(result.stalled?.open ?? []).length} task(s) held open, wanted ${e.heldOpen} (${JSON.stringify(result.stalled?.open ?? null)})`);
   if (e.mergeExit !== undefined) want(result.steps?.merge?.exit === e.mergeExit, `the merge step ${JSON.stringify(result.steps?.merge ?? null)}, wanted exit ${e.mergeExit}`);
   if (e.tasks) {

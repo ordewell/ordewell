@@ -2172,13 +2172,16 @@ test('judgeWait wants the wait granted, the edge in the plan, the slot used mean
   const e = R.scenario('b-wait').expect;
   assert.deepEqual([e.scoredFrom, e.tasks, e.passedAboveBaseline, e.truncated, e.parallel], ['merged', { completed: 3 }, true, false, 2]);
   assert.match(R.judgeRehearsal('b-wait', { scoredFrom: 'merged', parallel: 8 }).join(), /parallel limit is 8, wanted 2/);
+  const perTask = (ended) => ({ metrics: { perTask: [{ order: 1, attempts: [{ ended: 'done' }] }, { order: 2, attempts: ended.map((x) => ({ ended: x })) }] } });
+  assert.doesNotMatch(R.judgeRehearsal('b-wait', { parallel: 2, ...perTask(['ended without task_complete', 'done']) }).join(), /attempts ended/);
+  assert.match(R.judgeRehearsal('b-wait', { parallel: 2, ...perTask(['done']) }).join(), /task #2's attempts ended \["done"\], wanted \["ended without task_complete","done"\]/);
 });
 
 test('b-blocker\'s plan, supervisor and judge: one fix task, which the closing check waits for, lands before the check starts', () => {
   const s = R.scenario('b-blocker');
   const tasks = s.plan().tasks;
-  assert.deepEqual(tasks.map((t) => t.title), ['Implement the library', 'Slice A', 'Slice B', 'Check the whole']);
-  assert.deepEqual(tasks.map((t) => t.dependencies.length), [0, 1, 1, 2]);
+  assert.deepEqual(tasks.map((t) => t.title), ['Implement the library', 'Slice A', 'Slice B', 'Slice C', 'Slice D', 'Check the whole']);
+  assert.deepEqual(tasks.map((t) => t.dependencies.length), [0, 1, 1, 1, 1, 4], 'four slices: the shape whose landed-blocker line names the closing check');
   const scripts = s.attempts(playCtx);
   for (const slice of ['slice-a', 'slice-b']) {
     const [done] = scripts[slice][0].slice(-1);
@@ -2191,14 +2194,14 @@ test('b-blocker\'s plan, supervisor and judge: one fix task, which the closing c
   // The wake the first report raises, and the one reply: a JSON edit that adds the fix and makes the check wait for it.
   const state = R.createState();
   state.planned = true;
-  const wake = 'Run update:\n- task #1 "Implement the library" has landed, and 1 task reports a blocker in its work: #2/F1 "x"; the closing check is #4 "Check the whole"\nA blocker reported in landed work is fixed once, by one task, never once per report.';
+  const wake = 'Run update:\n- task #1 "Implement the library" has landed, and 1 task reports a blocker in its work: #2/F1 "x"; the closing check is #6 "Check the whole"\nA blocker reported in landed work is fixed once, by one task, never once per report.';
   const turn = R.turnFor('b-blocker', { tools: [], messages: [{ role: 'user', content: wake }] }, state, playCtx);
   assert.equal(turn.role, 'supervisor');
   assert.equal(turn.toolCall, undefined, 'the built-in planner edits by a JSON reply');
   const ops = JSON.parse(/```json\n([\s\S]*)\n```/.exec(turn.content)[1]).taskOps;
   assert.deepEqual(ops.map((o) => o.op), ['add', 'update'], 'one fix task, then the closing check made to wait for it');
   assert.match(ops[0].task.prompt, /\[rehearsal:fix\]/);
-  assert.deepEqual([ops[0].task.dependencies, ops[1].taskId, ops[1].changes.dependencies], [['#1'], '#4', ['#2', '#3', 'fix']]);
+  assert.deepEqual([ops[0].task.dependencies, ops[1].taskId, ops[1].changes.dependencies], [['#1'], '#6', ['#2', '#3', '#4', '#5', 'fix']]);
   assert.equal(R.turnFor('b-blocker', { tools: [], messages: [{ role: 'user', content: `${wake}\nand 2 tasks report` }] }, state, playCtx).toolCall, undefined, 'a rule plays once');
   assert.deepEqual(L.wakeTriggers(wake).map((t) => t.kind), ['landed_blocker'], 'the harness reads the line');
 
@@ -2212,25 +2215,28 @@ test('b-blocker\'s plan, supervisor and judge: one fix task, which the closing c
   ];
   const plan = [
     { id: 'o', order: 1, title: 'Implement the library', dependencies: [], status: 'completed' },
-    { id: 'a', order: 2, dependencies: ['o'] }, { id: 'b', order: 3, dependencies: ['o'] },
-    { id: 'c', order: 4, dependencies: ['a', 'b', 'f'] },
-    { id: 'f', order: 5, title: 'Fix the opening task\'s defect', dependencies: ['o'], status: 'completed' },
+    ...['a', 'b', 'x', 'y'].map((id, i) => ({ id, order: i + 2, dependencies: ['o'] })),
+    { id: 'f', order: 6, title: 'Fix the opening task\'s defect', dependencies: ['o'], status: 'completed' },
+    { id: 'c', order: 7, title: 'Check the whole', dependencies: ['a', 'b', 'x', 'y', 'f'] },
   ];
   assert.deepEqual(R.judgeBlocker('b-blocker', log(), playCtx, plan), []);
   assert.match(R.judgeBlocker('b-blocker', log({ line: 'Run update:\n- the run finished' }), playCtx, plan).join(), /no supervisor request held the landed-blocker line/);
-  assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('the closing check is #4 "Check the whole"', '') }), playCtx, plan).join(), /does not name the closing check #4/);
+  assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('the closing check is #6 "Check the whole"', '') }), playCtx, plan).join(), /does not name the closing check #6/);
   assert.match(R.judgeBlocker('b-blocker', log({ line: wake.replace('A blocker reported', 'A thing reported') }), playCtx, plan).join(), /not the guidance/);
   assert.match(R.judgeBlocker('b-blocker', log().map((r, i) => (i === 0 ? { ...r, turn: { role: 'supervisor' } } : r)), playCtx, plan).join(), /did not answer the wake/);
   assert.match(R.judgeBlocker('b-blocker', log({ checkStart: 35 }), playCtx, plan).join(), /closing check started .* before the fix's last turn/);
   assert.match(R.judgeBlocker('b-blocker', log({ exit: 1 }), playCtx, plan).join(), /exited 1, wanted 0: the fix had not landed/);
-  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, [...plan, { ...plan[4], id: 'g', order: 6 }]).join(), /6 tasks, 2 of them the fix/);
-  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'c' ? { ...t, dependencies: ['a', 'b'] } : t))).join(), /closing check does not wait for the fix/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, [...plan, { ...plan[5], id: 'g', order: 8 }]).join(), /8 tasks, 2 of them the fix/);
+  assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'c' ? { ...t, dependencies: ['a', 'b', 'x', 'y'] } : t))).join(), /closing check does not wait for the fix/);
   assert.match(R.judgeBlocker('b-blocker', log(), playCtx, plan.map((t) => (t.id === 'f' ? { ...t, dependencies: [] } : t))).join(), /fix does not depend on the opening task/);
   assert.match(R.judgeBlocker('b-blocker', log().slice(0, 1), playCtx, plan).join(), /fix never reported/);
   assert.match(R.judgeBlocker('b-blocker', log(), playCtx, null).join(), /plan could not be read/);
   assert.deepEqual(R.judgeBlocker('b-cap', [], playCtx, null), []);
-  assert.deepEqual(s.supervision, { acts: ['plan_edit'], closingWakes: 0 });
-  assert.deepEqual(R.judgeSupervision(s.supervision, { wakeUps: 2, wakes: [{ at: at(31), updates: 1, triggers: [{ kind: 'landed_blocker', task: '#1' }] }], actions: [{ kind: 'plan_edit', at: at(32), outcome: 'done' }] }), []);
+  const edits = ['added', 'updated', 'reordered'].map((op) => ({ kind: 'plan_edit', op, at: at(32), outcome: 'done' }));
+  const sup = { wakeUps: 2, wakes: [{ at: at(31), updates: 1, triggers: [{ kind: 'landed_blocker', task: '#1' }] }], actions: edits };
+  assert.deepEqual(R.judgeSupervision(s.supervision, sup), []);
+  assert.match(R.judgeSupervision(s.supervision, { ...sup, actions: [edits[0], edits[1], { ...edits[2], op: 'removed' }] }).join(), /plan edits are \["added","updated","removed"\]/);
+  assert.match(R.judgeSupervision(s.supervision, { ...sup, actions: edits.slice(0, 1) }).join(), /acts are \["plan_edit"\], wanted/);
 });
 
 test('a-done scripts a five-minute sleep as its first step, and judgeRefusals wants the guard\'s refusal naming wait_for, answered at once', () => {
