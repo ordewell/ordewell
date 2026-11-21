@@ -208,7 +208,12 @@ export class PiAdapter extends StdioAgentAdapter implements TaskModeAgentAdapter
       ...(effort ? ['--thinking', effort] : []),
     ];
     // Pi loads the extension through jiti, whose file cache would keep it, token and all, in the temp dir after Pi exits.
-    return { command: spawnedCommand(PI_MANIFEST), args, env: { JITI_FS_CACHE: 'false' }, files: [extension, prompt] };
+    const env: Record<string, string> = { JITI_FS_CACHE: 'false' };
+    // Without its own copies Pi starts `rg` and `fd` by bare name in the folder it searches, and Windows looks there before PATH,
+    // so a repository's rg.exe would run. Node skips that folder when the spawning process's own environment carries this
+    // variable, which is Pi's when it is set here (windowsBareNameSearch.test.ts; ADR-0028).
+    if ((this.deps.platform ?? process.platform) === 'win32') env.NoDefaultCurrentDirectoryInExePath = '1';
+    return { command: spawnedCommand(PI_MANIFEST), args, env, files: [extension, prompt] };
   }
 
   /**

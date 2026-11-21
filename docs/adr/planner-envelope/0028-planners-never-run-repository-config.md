@@ -307,6 +307,16 @@ planner (above and below), and Ordewell reads them itself:
   offered. One whose name Pi files under the same namespace as Ordewell's
   server would take its place, so Pi would never reach Ordewell: the start
   fails at once, naming the file, instead of waiting out the attach.
+- **Its search programs.** Pi 1.5.2 and 1.6.0 run their own ripgrep and fd
+  from the agent directory's `bin/` when they have them, and otherwise start
+  `rg` and `fd` by bare name, from the folder searched. On Windows, Node looks
+  for a bare name in that folder before PATH, so a repository's `rg.exe` would
+  run inside a planner's or a read-only task's Pi. Node skips the folder when
+  `NoDefaultCurrentDirectoryInExePath` is set in the environment of the
+  process that starts the program, and not when it is set only in the
+  environment handed on, as the Windows tests in
+  `windowsBareNameSearch.test.ts` record. Every Pi start on Windows, a change
+  task's too, sets it in Pi's own environment.
 
 ### What the repository's config can do, and how the planner launch stops it
 
@@ -350,6 +360,7 @@ planner (above and below), and Ordewell reads them itself:
 | Pi | `.pi/settings.json` `sessionDir` | write the transcript anywhere | `--session-dir` on every start |
 | Pi | `.pi/mcp.json` | start a command, reach a URL | `--no-approve` |
 | Pi | context files (`AGENTS.md`, `CLAUDE.md`) | text | `--no-context-files`; injected by Ordewell |
+| Pi | an `rg.exe` or `fd.exe` in a searched folder (Windows) | run code on a search | `NoDefaultCurrentDirectoryInExePath` in Pi's environment |
 
 The workspace's own environment (ADR-0016) is unchanged: it holds only what
 direnv was allowed to export and an untracked `.ordewell/env`.
@@ -566,3 +577,4 @@ specifies.
 - 2026-11-05 — a Cline planner starts in a private directory too, out of reach of the repository's hooks (ADR-0060).
 - 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell; a change task's start is held for `.pi/` config added during the run (#78).
 - 2026-11-20 — every Pi start names its session directory, which a repository's `.pi/settings.json` could otherwise move; a read-only task's Pi starts with `--no-context-files` too, its context files handed over as text; a server in the user's Pi `mcp.json` that would displace Ordewell's fails the start (#78).
+- 2026-11-21 — on Windows every Pi start sets `NoDefaultCurrentDirectoryInExePath`, so a repository's `rg.exe` or `fd.exe` is never the search program Pi starts by bare name.

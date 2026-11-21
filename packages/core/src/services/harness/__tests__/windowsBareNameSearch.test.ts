@@ -12,6 +12,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * planner or read-only task, which must never execute repository code
  * (ADR-0008). Each case is observed with a copy of this node.exe named
  * `rg.exe`, which prints its own path when asked for `process.execPath`.
+ * What they hold is why every Pi on Windows starts with
+ * NoDefaultCurrentDirectoryInExePath in its own environment (PiAdapter).
  *
  * Windows only: POSIX never looks in the current directory for a bare name.
  */
@@ -83,9 +85,9 @@ describe.runIf(process.platform === 'win32')('a bare program name on Windows, st
     expect(whichRan(empty, env(onPath))).toBe(path.join(onPath, 'rg.exe'));
   });
 
-  it('skips the cwd when NoDefaultCurrentDirectoryInExePath is in the child\'s environment', () => {
-    expect(whichRan(repo, env(onPath, { NoDefaultCurrentDirectoryInExePath: '1' }))).toBe(path.join(onPath, 'rg.exe'));
-    expect(whichRan(repo, env(empty, { NoDefaultCurrentDirectoryInExePath: '1' }))).toBe('error ENOENT');
+  it('still runs the cwd\'s rg.exe when NoDefaultCurrentDirectoryInExePath is only in the environment handed to the program started', () => {
+    // Node reads the variable from the spawning process's own environment, not the one it passes on.
+    expect(whichRan(repo, env(onPath, { NoDefaultCurrentDirectoryInExePath: '1' }))).toBe(path.join(repo, 'rg.exe'));
   });
 
   it('skips the cwd for a process started with NoDefaultCurrentDirectoryInExePath, as Pi would be, when it starts rg by bare name', () => {
