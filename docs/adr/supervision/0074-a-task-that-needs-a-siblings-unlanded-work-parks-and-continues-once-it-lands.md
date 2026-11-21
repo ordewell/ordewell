@@ -30,7 +30,10 @@ next start continues its saved session, on its branch, once they have landed.**
   instead, for work that has landed (take it in now), work that may never land
   (failed, skipped, or landing nothing: read-only, ops, a person's), a task
   that waits for this one directly or through others (the edge would be a
-  cycle), the task itself, an ancestor or a subtask of it, a task that has
+  cycle: through dependencies, a container's subtasks, which it lands only
+  with, a loop's body, and the edges of parks granted whose attempts have not
+  ended yet, so two tasks that wait for each other at once are not both
+  granted), the task itself, an ancestor or a subtask of it, a task that has
   parked twice since its last fresh attempt (`MAX_PARKS`), and an attempt that
   is not a change's (an ops task, a repair). The rule is `parkDecision`
   (`Parking.ts`); the call's handler is the attempt's (`Attempts.waitFor`).
@@ -49,10 +52,13 @@ next start continues its saved session, on its branch, once they have landed.**
   holds it; readiness gains nothing. Every surface shows the edge as any other,
   and the supervisor and the user may remove it. The task keeps
   `parked: { attempt, waitsOn, added, count }`, the one new field of the plan,
-  saved with it, so a reload or a daemon restart keeps the wait.
+  saved with it, so a reload or a daemon restart keeps the wait. An edge that
+  would close a cycle the plan gained since the call was granted is left out,
+  and the task's next start is told that work is no longer what it waits for.
 - **It continues (P4).** A start of a parked task while no attempt has run
   since the park (`owedPark`) goes on from it, whoever starts it: the
-  scheduler, a force start, Execute. Where its runner saved a session it can
+  scheduler, a force start, Execute. A start whose spawn failed never ran, so
+  the park stays owed to the start after it. Where its runner saved a session it can
   resume, the same runner's, the start is a continue of that session (ADR-0018
   K1), its first message naming what landed; the worktree is restored from the
   integration tip with the task's own work merged back, so what landed is
@@ -63,9 +69,11 @@ next start continues its saved session, on its branch, once they have landed.**
   or hears from one. The wait is an edge of the plan, which nothing else waits
   on.
 - **The built-in runner refuses a wait (P6).** Its `shell` refuses, before it
-  runs, a change task's command that sleeps over 30 seconds in all or polls in a
-  loop sleeping over 5 seconds a turn, saying to call `wait_for`
-  (`waitGuard.ts`). An ops task's wait on a deploy is its work, and runs. The
+  runs, a change task's command that sleeps over 30 seconds in all, or with no
+  end, or polls in a loop sleeping over 5 seconds a turn, saying to call
+  `wait_for` (`waitGuard.ts`). A sleep counts where it runs: in command
+  position, or in the code a `-c` string or a heredoc holds, never in a quoted
+  argument such as `grep "sleep 45"`. An ops task's wait on a deploy is its work, and runs. The
   note on work landing beside a task says the same to every runner.
 - **A wait that cannot end goes on without it (P7).** When work a parked task
   waits for will not land without someone's retry — it failed for good, is
@@ -131,3 +139,4 @@ its merge gate for what it depends on (ADR-0020).
 - 2026-11-21 — proposed, with the rule for what a wait may name, the
   continuation's message and the built-in runner's guard prototyped.
 - 2026-11-21 — accepted and implemented: a runner without a resumable session parks and starts as a carry-over, a lost wait goes on without it (P7), and a Stop holds a parked task (P8).
+- 2026-11-21 — the cycle check counts containment and parks still ending, a park survives a failed spawn, and the shell guard reads only sleeps that run.

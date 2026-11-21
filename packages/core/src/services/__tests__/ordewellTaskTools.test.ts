@@ -426,13 +426,13 @@ describe('the handoff a task_complete call carries (ADR-0047)', () => {
 
     const accepted = await complete({
       summary: 'Checked.',
-      // A sibling it may not read is cited by the task alone: the slice whose landed work it found broken.
+      // A sibling it may not read is cited by the task alone, marked unread: the slice whose landed work it found broken.
       findings: [{ severity: 'major', title: 'Still broken', evidence: [{ kind: 'task', task: '#1', finding: 'F2' }, { kind: 'task', task: '#3' }] }],
       artifacts: [{ kind: 'task', task: 't2' }],
     });
     expect(accepted.isError).toBe(false);
     await vi.waitFor(() => expect(get('t2').status).toBe('completed'));
-    expect(get('t2').handoff?.findings[0].evidence).toEqual([{ kind: 'task', node: 'root', task: 't1', finding: 'F2' }, { kind: 'task', node: 'root', task: 't3' }]);
+    expect(get('t2').handoff?.findings[0].evidence).toEqual([{ kind: 'task', node: 'root', task: 't1', finding: 'F2' }, { kind: 'task', node: 'root', task: 't3', unread: true }]);
     expect(get('t2').handoff?.artifacts).toEqual([{ kind: 'task', node: 'root', task: 't2', attempt: 1 }]);
   });
 

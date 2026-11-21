@@ -25,7 +25,7 @@ import type {
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
-import { lostWaits, owedPark } from './Parking';
+import { lostWaits, owedPark, parkPastUnrun, waitsOnTask } from './Parking';
 import { IsolationRunController, isRefused, type IsolationDecision, type IsolationStart } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
 import { LimitPauses, type LimitWait, type ResumeNow } from './LimitPauses';
@@ -1567,7 +1567,9 @@ export class TaskOrchestrator {
   private async settleParked({ taskId, attempt, parked, reason }: Extract<AttemptEnded, { kind: 'parked' }>): Promise<void> {
     const task = this.store.get(taskId);
     if (!task) return;
-    const added = parked.added.filter((id) => this.store.get(id) && !task.dependencies.includes(id));
+    // An edge the plan gained since the park was granted may close a cycle with this one: the task goes on without that work, and its next start is told so.
+    const closes = waitsOnTask(this.store.planTasks);
+    const added = parked.added.filter((id) => this.store.get(id) && !task.dependencies.includes(id) && !closes(id, taskId));
     // A second park's edges join the first's, which are still Ordewell's to take back.
     const earlier = (task.parked?.added ?? []).filter((id) => task.dependencies.includes(id));
     this.store.update(taskId, { dependencies: [...task.dependencies, ...added], parked: { ...parked, added: [...earlier, ...added] } });
@@ -1613,6 +1615,8 @@ export class TaskOrchestrator {
    * go, the user is told why and the run goes on.
    */
   private async settleSpawnFailure({ task, attempt, failure }: Extract<AttemptEnded, { kind: 'spawn-failed' }>): Promise<void> {
+    const parked = parkPastUnrun(this.store.get(task.id) ?? task, attempt.attempt);
+    if (parked) this.store.update(task.id, { parked });
     if (failure.leaves === 'conflict') {
       this.store.markAwaitingUser(task.id, 'conflict');
       this.settleUnlanded(task, await this.landing.unrepaired(task, failure.why), attempt.admission);

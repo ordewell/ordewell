@@ -76,6 +76,29 @@ describe('landedBlockers', () => {
 
     expect(landedBlockers(plan, 's1').map((f) => [f.owner, f.reporters, f.reports.map((r) => r.finding)])).toEqual([['a', 1, ['F1']], ['b', 1, ['F3']]]);
   });
+
+  it('counts against one landed task per finding, the first it cites, however many it names', () => {
+    const slices = Array.from({ length: 12 }, (_, i) => reported(`s${i}`, [], { dependencies: [] }));
+    const tree: HandoffFinding = { id: 'F1', severity: 'blocker', title: 'the merged tree does not build', evidence: slices.map((s) => ({ kind: 'task' as const, node: 'root', task: s.id })) };
+    const plan = [...slices, task('close', { dependencies: slices.map((s) => s.id), status: 'failed', handoff: { summary: '', findings: [tree], findingCount: 1, attempt: 1 } })];
+
+    expect(landedBlockers(plan, 'close').map((f) => f.owner)).toEqual(['s0']);
+  });
+
+  it('names no task that lands nothing on the run\'s branch: read-only, ops or a person\'s', () => {
+    for (const owner of [task('open', { status: 'completed', readOnly: true }), task('open', { status: 'completed', ops: true }), task('open', { status: 'completed', type: 'user' })]) {
+      expect(landedBlockers([owner, reported('s1', [blocker('open')], { status: 'failed' })], 's1')).toEqual([]);
+    }
+  });
+
+  it('leaves a loop\'s check between rounds to its loop, whose body is the fix', () => {
+    const check = (status: Task['status'], loopRound: number) => task('check', { readOnly: true, dependencies: ['open'], status, verdict: { outcome: 'fail', reason: '', checks: [], reported: 'failed', decidedAt: new Date(Date.UTC(2026, 0, 1)).toISOString() }, loop: { body: ['fix'], maxRounds: 2 }, loopRound, handoff: { summary: '', findings: [blocker('open')], findingCount: 1, attempt: 1 } });
+    const plan = (c: Task) => [task('open', { status: 'completed' }), c, task('fix', { dependencies: ['check'] })];
+
+    expect(landedBlockers(plan(check('failed', 1)), 'check')).toEqual([]);
+    // Its last round failed: the loop has nothing left to fix it with.
+    expect(landedBlockers(plan(check('failed', 2)), 'check').map((f) => f.owner)).toEqual(['open']);
+  });
 });
 
 describe('landedBlockers, by the files landed work changed', () => {

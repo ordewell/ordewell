@@ -1,4 +1,4 @@
-import { flattenTasksWithParents, runsAsOps, type Parked, type Task } from '../models/Task';
+import { flattenTasksWithParents, landsOnBranch, type Parked, type Task } from '../models/Task';
 import { heldDependencies, planBlocks } from './blocking';
 import { sessionOwner } from './continuation';
 import { resolveTaskRef } from './TaskRefs';
@@ -26,34 +26,47 @@ const named = (t: Task, label: string) => `#${label} "${t.title}"`;
 const FINISH = 'Finish your own part and end as your brief says, naming each check that needs that work, and the task whose work it needs, in a finding.';
 
 /**
+ * Whether one task waits for another's work, directly or through others: the
+ * dependencies it is held to (ADR-0034), a container's subtasks, since it
+ * lands only once they have, a loop's body, and `granted`, the edges of parks
+ * granted whose attempts have not ended yet, which the plan does not hold.
+ */
+export function waitsOnTask(plan: readonly Task[], granted: ReadonlyMap<string, readonly string[]> = new Map()): (from: string, target: string) => boolean {
+  const byId = new Map(flattenTasksWithParents([...plan]).map(({ task }) => [task.id, task]));
+  const held = heldDependencies([...plan]);
+  return (from, target) => {
+    const seen = new Set<string>();
+    for (const stack = [from]; stack.length > 0;) {
+      const at = stack.pop()!;
+      if (at === target) return true;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      const t = byId.get(at);
+      if (!t) continue;
+      stack.push(...held(t).map((d) => d.id), ...(t.subtasks ?? []).map((s) => s.id), ...(t.loop?.body ?? []), ...granted.get(at) ?? []);
+    }
+    return false;
+  };
+}
+
+/**
  * Whether `taskId` may park on the tasks `waitOn` names (an id, "#3" or a
  * title), and which of them the plan would gain as its dependencies. Refused
  * whole, with what to do instead: work that has landed (take it in), work
  * that may never land (failed, skipped, or that lands nothing), a task that
  * waits on this one or holds it (the edge would be a cycle), and a task that
- * has parked {@link MAX_PARKS} times.
+ * has parked {@link MAX_PARKS} times. `granted` is the edges of other parks
+ * still ending ({@link waitsOnTask}): two tasks that wait for each other in
+ * the same moment would otherwise both be granted, and neither could start.
  */
-export function parkDecision(plan: readonly Task[], taskId: string, waitOn: readonly (string | number)[], opts: { parkedBefore: number }): ParkDecision {
+export function parkDecision(plan: readonly Task[], taskId: string, waitOn: readonly (string | number)[], opts: { parkedBefore: number; granted?: ReadonlyMap<string, readonly string[]> }): ParkDecision {
   const flat = flattenTasksWithParents([...plan]);
   const byId = new Map(flat.map(({ task, label, parent }) => [task.id, { task, label, parent }]));
   const self = byId.get(taskId);
   if (!self) return { ok: false, refusal: 'This task is no longer in the plan.' };
   if (opts.parkedBefore >= MAX_PARKS) return { ok: false, refusal: `This task has waited ${opts.parkedBefore} times since it last started afresh, the most it may. ${FINISH}` };
   if (waitOn.length === 0) return { ok: false, refusal: 'Name at least one task to wait for.' };
-  const held = heldDependencies([...plan]);
-  const waitsFor = (id: string, target: string): boolean => {
-    const seen = new Set<string>();
-    for (const stack = [id]; stack.length > 0;) {
-      const at = stack.pop()!;
-      if (at === target) return true;
-      if (seen.has(at)) continue;
-      seen.add(at);
-      const t = byId.get(at)?.task;
-      if (!t) continue;
-      stack.push(...held(t).map((d) => d.id), ...(t.loop?.body ?? []));
-    }
-    return false;
-  };
+  const waitsFor = waitsOnTask(plan, opts.granted);
   // A task's work includes its subtasks', so a task cannot wait for one of its own ancestors or descendants.
   const ancestors = new Set<string>();
   for (let at = self.parent; at; at = byId.get(at.id)?.parent ?? null) ancestors.add(at.id);
@@ -74,7 +87,7 @@ export function parkDecision(plan: readonly Task[], taskId: string, waitOn: read
     else if (ancestors.has(task.id) || within(task.id)) refusals.push(`${name} ${ancestors.has(task.id) ? 'holds' : 'is part of'} this task, so neither lands without the other.`);
     else if (task.status === 'completed') refusals.push(`${name} has landed: take its work in now, as "Work landing beside yours" says, rather than waiting.`);
     else if (task.status === 'failed' || task.status === 'skipped') refusals.push(`${name} ${task.status === 'failed' ? 'failed' : 'was skipped'}, so its work may never land. ${FINISH}`);
-    else if ((task.type !== 'ai' && task.type !== 'delegated') || task.readOnly || runsAsOps(task)) refusals.push(`${name} lands no work on the run's branch, so there is nothing to wait for.`);
+    else if (!landsOnBranch(task)) refusals.push(`${name} lands no work on the run's branch, so there is nothing to wait for.`);
     else if (waitsFor(task.id, taskId)) refusals.push(`${name} waits for this task, directly or through others, so it cannot land before it. ${FINISH}`);
     else waitsOn.push(task.id);
   }
@@ -91,6 +104,18 @@ function lastAttempt(task: Readonly<Task>): number {
 export function owedPark(task: Readonly<Task>): Parked | null {
   const { parked } = task;
   return parked && parked.attempt >= lastAttempt(task) ? parked : null;
+}
+
+/**
+ * The park a start that never ran leaves owed: its spawn failed, so it spent
+ * nothing the park kept, and the next start still goes on from it. Null where
+ * that start owed none.
+ */
+export function parkPastUnrun(task: Readonly<Task>, attempt: number): Parked | null {
+  const { parked } = task;
+  if (!parked) return null;
+  const others = (task.attemptUsage ?? []).filter((u) => u.attempt !== attempt);
+  return owedPark({ ...task, attemptUsage: others }) ? { ...parked, attempt: Math.max(parked.attempt, attempt) } : null;
 }
 
 /**

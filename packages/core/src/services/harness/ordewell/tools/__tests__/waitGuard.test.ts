@@ -9,6 +9,22 @@ describe('sleepsIn', () => {
     expect(sleepsIn('Start-Sleep -Seconds 60')).toEqual([60]);
     expect(sleepsIn('npm test')).toEqual([]);
   });
+
+  it('reads a sleep only where it runs: in command position, or in the code a -c string or a heredoc holds', () => {
+    expect(sleepsIn('grep -rn "sleep 45" src/')).toEqual([]);
+    expect(sleepsIn('git log --grep "sleep 120"')).toEqual([]);
+    expect(sleepsIn("sed -i 's/time.sleep(60)/time.sleep(0)/' worker.py")).toEqual([]);
+    expect(sleepsIn('echo "sleep 300 then retry" >> notes.md')).toEqual([]);
+    expect(sleepsIn("bash -c 'git fetch; sleep 300'")).toEqual([300]);
+    expect(sleepsIn('python3 - <<EOF\nimport time\ntime.sleep(300)\nEOF')).toEqual([300]);
+    expect(sleepsIn('while true; do sleep 60; done')).toEqual([60]);
+  });
+
+  it('reads a sleep with no end, or spelt with an exponent, at its length', () => {
+    expect(sleepsIn('sleep infinity')).toEqual([Infinity]);
+    expect(sleepsIn('sleep inf')).toEqual([Infinity]);
+    expect(sleepsIn('sleep 1e3')).toEqual([1000]);
+  });
 });
 
 describe('waitRefusal', () => {
@@ -29,6 +45,14 @@ describe('waitRefusal', () => {
     expect(waitRefusal('sleep 2 && curl -s localhost:8080')).toBeNull();
     expect(waitRefusal('until curl -sf localhost:8080; do sleep 1; done')).toBeNull();
     expect(waitRefusal('npm test')).toBeNull();
+  });
+
+  it('runs a command that only mentions a sleep, and refuses one that sleeps for good', () => {
+    for (const command of ['grep -rn "sleep 45" src/', 'git log --grep "sleep 120"', "sed -i 's/time.sleep(60)/time.sleep(0)/' worker.py", 'echo "sleep 300 then retry" >> notes.md']) {
+      expect(waitRefusal(command, { parks: true })).toBeNull();
+    }
+    expect(waitRefusal('sleep infinity', { parks: true })).toContain('sleeps with no end');
+    expect(waitRefusal('sleep 1e3', { parks: true })).toContain('sleeps for 1000 seconds');
   });
 
   it('adds up a command\'s sleeps', () => {
