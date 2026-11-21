@@ -1037,7 +1037,9 @@ export class OrchestratorPool {
     // install verdicts, and the agent detection behind the no-choice defaults.
     await this.codexSandbox.refresh();
     const installation = this.installationFor(workspace);
-    installation.refresh?.();
+    // Detection asks the daemon's own probe, so a workspace's list refreshes
+    // both: otherwise the list shows a new agent the planner cannot see.
+    for (const probe of new Set([installation, this.runnerInstallation])) probe.refresh?.();
     await this.detectInstalledPlanner();
 
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });

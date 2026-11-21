@@ -239,6 +239,15 @@ describe('WebConfig', () => {
       expect(config.orchestratorModel).toBe('openai:gpt-4o');
     });
 
+    it('a model `ordewell model set` saved for the key\'s vendor keeps it though Codex names the same id', () => {
+      recordInstalledPlanner('codex');
+      setEnv('OPENAI_API_KEY', 'sk-openai-test');
+      setEnv('ORCHESTRATOR_MODEL', 'gpt-5.5');
+      const config = new WebConfig();
+      expect(config.aiProvider).toBe('openai');
+      expect(config.orchestratorModel).toBe('gpt-5.5');
+    });
+
     it('keeps an explicit keyless OpenRouter choice instead of replacing it with the agent', () => {
       recordInstalledPlanner('claude-code');
       setEnv('AI_PROVIDER', 'openrouter');

@@ -10,10 +10,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
-- **VS Code opens Ordewell once after install, with a walkthrough.** The first
-  activation reveals the Ordewell view, and *Get started with Ordewell*
-  (**Welcome: Open Walkthrough...**) has three steps: open the view, give it a
-  goal, approve the plan. Each step ticks itself off when you do it. The
+- **VS Code opens Ordewell once, with a walkthrough.** The first activation
+  after install or this upgrade reveals the Ordewell view, and *Get started
+  with Ordewell* (**Welcome: Open Walkthrough...**) has three steps: open the
+  view, give it a goal, approve the plan. Each step ticks itself off when you do it. The
   extension now declares that it does not run in Restricted Mode, and says why
   there: it runs coding agents in the folder and reads its `.envrc`,
   `.ordewell/env` and worktree setup command, so trust the folder to use it.
@@ -56,8 +56,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   from the agent, and an API planner has no default model. Now the agent plans,
   unless it is signed out or you chose that provider: picked it with `/planner`
   or `ordewell planner <id>`, or saved a planner model for it
-  (`ORCHESTRATOR_MODEL`, VS Code's `orchestratorModel`, or `GEMINI_MODEL` and
-  `geminiModel` for Gemini). If you already plan with a provider, nothing
+  (`ORCHESTRATOR_MODEL`, VS Code's `orchestratorModel`, or `GEMINI_MODEL`,
+  `geminiModel` and the older `planningModel` for Gemini). If you already plan
+  with a provider, nothing
   changes. With no agent installed, a key's provider plans as before. When a
   key is passed over, the terminal UI's welcome, the desktop app and VS Code
   say once which planner is active and why: "Planning with Claude Code. An
@@ -87,7 +88,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   plans and has no model picked, `/key-set` in the terminal UI opens
   `/planner`'s model step for it, VS Code's key entry (`/key-set`, *Add API
   key* and the *Configure API Key* command) opens the planner picker on that
-  provider's models, and the desktop app opens Settings at the planner. The
+  provider's models, and the desktop app's chat opens Settings at the planner
+  (its welcome window's *Set API key…* says to pick the model there). The
   first goal is no longer refused for a missing model right after a key was
   added. While a coding agent plans, nothing more is asked.
 - **"None of the requested runners are enabled" says what to do:** send the

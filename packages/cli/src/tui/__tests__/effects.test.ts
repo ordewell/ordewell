@@ -1605,6 +1605,25 @@ describe('catalogs and sessions', () => {
     expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'settingsLoaded', 'modelsLoaded']));
   });
 
+  // The runner list re-detects the installed agent (an agent installed, then
+  // /refresh), so settings read beside it would still name the old planner.
+  it.each(['refresh', 'loadScope'] as const)('%s reads the settings once the runner list has answered', async (type) => {
+    let detected = false;
+    const h = harness({
+      getRunners: vi.fn().mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        detected = true;
+        return { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }] };
+      }),
+      getSettings: vi.fn().mockImplementation(async () => ({ aiProvider: detected ? 'claude-code' : 'openrouter' })),
+    });
+
+    await runEffect({ type }, h.deps);
+
+    const loaded = h.actions.find((a) => a.type === 'settingsLoaded');
+    expect(loaded && loaded.type === 'settingsLoaded' && loaded.settings.aiProvider).toBe('claude-code');
+  });
+
   it('loadScope re-reads the runners and the allowlist, not the models', async () => {
     const h = harness();
     await runEffect({ type: 'loadScope' }, h.deps);

@@ -6,7 +6,7 @@ import { daemonWaitLine, DETECTING_AGENTS_DETAIL } from '@ordewell/core/plan-uti
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
-import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryRequest } from '../session/KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, vendorNowPlansNote, type KeyEntryRequest } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
 import { LoginDialog } from './LoginDialog';
 import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, runnerGroups, withTimeout, type RunnerTone } from './model';
@@ -127,6 +127,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   const [login, setLogin] = useState<{ runner: string; label: string } | null>(null);
   const [keyError, setKeyError] = useState<string | undefined>(undefined);
   const [keyWarning, setKeyWarning] = useState<string | undefined>(undefined);
+  const [keyNext, setKeyNext] = useState<string | undefined>(undefined);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -147,6 +148,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
     const answer = await askForKey(request);
     if (!answer) return;
     setKeyWarning(undefined);
+    setKeyNext(undefined);
     try {
       // The write a session's key entry sends, so Custom's endpoint is saved here too.
       const saved = await window.ordewell.daemon.call('settings.update', undefined, { env: keyEntryEnv(answer) });
@@ -161,6 +163,8 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
       }
       setKeyError(undefined);
       setKeyWarning(unsavedKeyWarning(saved.data, answer.provider));
+      // No project is open here to show Settings in, so the welcome names the step.
+      setKeyNext(vendorNowPlansNote(saved.data, answer.provider));
       await load();
     } catch (error) {
       setKeyError(error instanceof Error ? error.message : String(error));
@@ -200,6 +204,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
         <>
           {keyError && <p className="welcome-banner welcome-banner-error" role="alert">{keyError}</p>}
           {keyWarning && <p className="welcome-banner welcome-banner-warning" role="status">{keyWarning}</p>}
+          {keyNext && <p className="welcome-banner welcome-banner-info" role="status">{keyNext}</p>}
           {state.kind === 'ready' ? (
             <ReadyRunners
               lines={state.lines}

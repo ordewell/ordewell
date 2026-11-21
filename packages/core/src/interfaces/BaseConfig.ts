@@ -297,13 +297,13 @@ export abstract class BaseConfig implements IConfig {
   }
 
   /**
-   * The vendor a model configured beside a found key was saved for, when it
-   * is not the installed agent's own: the vendor it plainly names, if that
-   * vendor has its key, and for a bare id the vendor the key selects, as
-   * before an installed agent outranked a key (ADR-0076).
+   * The vendor a model configured beside a found key was saved for, unless
+   * the user picked it for the installed agent: the vendor it plainly names,
+   * if that vendor has its key, and for a bare id the vendor the key selects,
+   * as before an installed agent outranked a key (ADR-0076).
    */
   private vendorSavedWith(agent: PlannerBackendId, model: string): AiProvider | null {
-    if (isAgentsOwnModel(agent, model, () => this.agentCatalog(agent))) return null;
+    if (isPickedForAgent(agent, model)) return null;
     const named = vendorOfModel(agent, model);
     if (named) return configuredProviders(this).includes(named) ? named : null;
     return this.keyedVendor();
@@ -345,9 +345,9 @@ export abstract class BaseConfig implements IConfig {
       model ?? '',
       agent ?? '',
       String(agentSignedOut(agent)),
-      // Whether the model is the agent's own decides a found key's claim, and
-      // its catalog and remembered pick change under a long-lived config.
-      String(agent && model ? isAgentsOwnModel(agent, model, () => this.agentCatalog(agent)) : false),
+      // Whether the model was picked for the agent decides a found key's
+      // claim, and the remembered pick changes under a long-lived config.
+      String(agent && model ? isPickedForAgent(agent, model) : false),
       envDetectedProvider() ?? '',
       configuredProviders(this).join(','),
       this.savedGeminiModel(),
@@ -456,9 +456,14 @@ export function isVendorModelFor(agent: PlannerBackendId, model: string): boolea
   return !discoveryOf(agent)?.providerQualifiedIds && SLUG_SHAPE.test(model);
 }
 
-/** A model `agent` names itself: one of its stable aliases, its remembered pick, or one its discovered catalog lists. */
-function isAgentsOwnModel(agent: PlannerBackendId, model: string, catalog: () => readonly string[]): boolean {
-  return isStableAlias(agent, model) || rememberedChoice(agent)?.model === model || catalog().includes(model);
+/**
+ * A model the user picked for `agent`: its remembered pick. Its stable aliases
+ * and its catalog are no evidence, since a vendor names many of the same ids
+ * (Codex's `gpt-5.5` is OpenAI's too), and a catalog that arrives mid-session
+ * would move the planner between two goals.
+ */
+function isPickedForAgent(agent: PlannerBackendId, model: string): boolean {
+  return rememberedChoice(agent)?.model === model;
 }
 
 /**

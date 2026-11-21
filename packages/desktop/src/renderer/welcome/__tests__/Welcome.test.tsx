@@ -488,6 +488,28 @@ describe('Welcome: runners', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  // Without this the first goal in the project window is refused for want of a model (ADR-0076).
+  it('names the planner model as the next step when the saved key\'s vendor now plans with none picked', async () => {
+    for (const [answer, says] of [[{ aiProvider: 'openai', orchestratorModel: '' }, true], [{ aiProvider: 'claude-code', orchestratorModel: '' }, false], [{ aiProvider: 'openai', orchestratorModel: 'gpt-5' }, false]] as const) {
+      installBridge({ routes: { 'runners.list': () => ok(RUNNERS), 'settings.update': () => ok(answer) } });
+      const { unmount } = render(<Welcome status={CONNECTED} />);
+      const runners = section('Runners');
+      await within(runners).findByText('Signed in');
+      const line = within(runners).getByText('An API key adds the built-in runner on that provider, unless it is marked planner only.').closest('p') as HTMLElement;
+      fireEvent.click(within(line).getByRole('button', { name: 'Set API key…' }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByRole('combobox', { name: 'Provider' }), { target: { value: 'openai' } });
+      fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'sk-test' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+      const note = 'OpenAI now plans. Pick its planner model in Settings, under Planner, before your first goal.';
+      if (says) expect(await within(runners).findByText(note)).toBeInTheDocument();
+      else await waitFor(() => expect(within(runners).queryByText(note)).toBeNull());
+      unmount();
+    }
+  });
+
   it('says the daemon refused Custom\'s endpoint, from the Welcome window too', async () => {
     installBridge({ routes: { 'runners.list': () => ok(RUNNERS), 'settings.update': () => ok({ rejectedEnvKeys: ['OPENAI_COMPATIBLE_BASE_URL'] }) } });
     render(<Welcome status={CONNECTED} />);

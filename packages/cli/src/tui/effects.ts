@@ -914,7 +914,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'loadScope':
-      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
       return;
 
     case 'loadIsolationPreview':
@@ -922,7 +922,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'refresh':
-      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
@@ -1244,6 +1244,16 @@ async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
     orchestratorModel: state.orchestratorModel,
   });
   return state;
+}
+
+/**
+ * The runner list re-detects the installed agent on the daemon, which can
+ * change who plans, so the settings are read once it has answered: read beside
+ * it, they would still name the planner from before an agent was installed.
+ */
+async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
+  await loadRunners(deps);
+  await loadSettings(deps, sessionId);
 }
 
 async function loadSettings(deps: EffectDeps, sessionId?: string): Promise<void> {

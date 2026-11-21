@@ -246,11 +246,43 @@ describe('BaseConfig', () => {
         expect(new EnvConfig().aiProvider).toBe('google');
       });
 
-      it('a model that is the installed agent\'s own does not choose the vendor whose key is found', () => {
+      it('a model the user picked for the installed agent does not choose the vendor whose key is found', () => {
         recordInstalledPlanner('claude-code');
+        new SettingsService().setPlannerModel('claude-code', { model: 'sonnet' });
+        try {
+          process.env.OPENAI_API_KEY = 'sk-openai';
+          process.env.ORCHESTRATOR_MODEL = 'sonnet';
+          expect(new EnvConfig().aiProvider).toBe('claude-code');
+        } finally {
+          new SettingsService().setPlannerModel('claude-code', undefined);
+        }
+      });
+
+      // The agent names these ids too, but only a pick for it is a choice of it.
+      class CatalogConfig extends EnvConfig {
+        constructor(private readonly listed: readonly string[]) { super(); }
+        protected agentCatalog(): readonly string[] { return this.listed; }
+      }
+
+      it('a bare id the agent\'s discovered catalog also lists keeps the vendor, before and after discovery', () => {
+        recordInstalledPlanner('codex');
         process.env.OPENAI_API_KEY = 'sk-openai';
-        process.env.ORCHESTRATOR_MODEL = 'sonnet';
-        expect(new EnvConfig().aiProvider).toBe('claude-code');
+        process.env.ORCHESTRATOR_MODEL = 'gpt-5';
+        expect(new CatalogConfig([]).aiProvider).toBe('openai');
+        expect(new CatalogConfig(['gpt-5', 'gpt-5-codex']).aiProvider).toBe('openai');
+
+        recordInstalledPlanner('claude-code');
+        delete process.env.OPENAI_API_KEY;
+        process.env.ANTHROPIC_API_KEY = 'sk-ant';
+        process.env.ORCHESTRATOR_MODEL = 'claude-sonnet-4-5';
+        expect(new CatalogConfig(['claude-sonnet-4-5']).aiProvider).toBe('anthropic');
+      });
+
+      it('a bare id that is also one of the agent\'s stable aliases keeps the vendor', () => {
+        recordInstalledPlanner('codex');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'gpt-5.5';
+        expect(new EnvConfig().aiProvider).toBe('openai');
       });
 
       it('a vendor model left without its key does not hand planning to another vendor\'s key', () => {

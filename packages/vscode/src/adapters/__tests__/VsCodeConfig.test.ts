@@ -666,6 +666,24 @@ describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', ()
     expect(new VsCodeConfig(await makeStore({ geminiKey: 'g-secret' })).aiProvider).toBe('google');
   });
 
+  it('a Gemini model in the legacy planningModel setting beside a stored Gemini key keeps Google after the upgrade', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ planningModel: 'gemini-2.5-pro' });
+    expect(new VsCodeConfig(await makeStore({ geminiKey: 'g-secret' })).aiProvider).toBe('google');
+  });
+
+  it('a bare orchestratorModel the installed agent\'s catalog also lists keeps the stored key\'s vendor', async () => {
+    recordInstalledPlanner('codex');
+    __setConfig({ orchestratorModel: 'gpt-5' });
+    const catalog: string[] = [];
+    const config = new VsCodeConfig(await makeStore({ openaiKey: 'sk-openai' }), (provider) => (provider === 'codex' ? catalog : []));
+    expect(config.aiProvider).toBe('openai');
+
+    catalog.push('gpt-5', 'gpt-5-codex');
+
+    expect(config.aiProvider).toBe('openai');
+  });
+
   it('an orchestratorModel saved under its vendor\'s prefix beside that vendor\'s stored key keeps the vendor', async () => {
     recordInstalledPlanner('claude-code');
     __setConfig({ orchestratorModel: 'openai:gpt-4o' });

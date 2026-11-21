@@ -18,7 +18,7 @@ import {
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
-import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, vendorNowPlansNote, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
 import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
@@ -443,8 +443,9 @@ export class DaemonHost {
     // A vendor that now plans has no default model, so the next goal would be
     // refused for want of one: the key route goes on to that pick. A coding
     // agent that still plans needs none (ADR-0076).
-    if (saved.aiProvider === answer.provider && !saved.orchestratorModel) {
-      this.view.conversation.note('system', `${VENDORS[answer.provider].label} now plans. Pick its planner model in Settings, under Planner, before your first goal.`);
+    const next = vendorNowPlansNote(saved, answer.provider);
+    if (next) {
+      this.view.conversation.note('system', next);
       this.navigator?.showSettings?.();
     }
   }

@@ -402,6 +402,33 @@ describe('OrchestratorPool default planner', () => {
     pool.destroyAll();
   });
 
+  // The desktop app's Detect again always names the open workspace, while
+  // detection asks the daemon's own probe, which caches a 'not installed'.
+  it('an agent installed after the first probe plans once a workspace\'s runner list is asked again', async () => {
+    let installed = false;
+    const exec = async (command: string) => {
+      if (installed && /^claude\b/.test(command)) return { stdout: 'claude 2.0.0', stderr: '' };
+      throw new Error('not found');
+    };
+    let clock = 0;
+    const now = () => clock;
+    const pool = new OrchestratorPool({ codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } });
+    const internals = pool as unknown as { registry: ConstructorParameters<typeof RunnerInstallation>[0]; runnerInstallation: RunnerInstallation; workspaceInstallations: Map<string, RunnerInstallation> };
+    const probe = () => new RunnerInstallation(internals.registry, exec, now, { authExec: async () => ({ code: 0, stdout: '{"loggedIn":true}', stderr: '' }) });
+    internals.runnerInstallation = probe();
+    internals.workspaceInstallations.set(resolve(workspace), probe());
+    await pool.detectInstalledPlanner();
+    expect(await pool.getInstalledRunners(workspace)).toEqual([]);
+
+    clock = 30_000;
+    installed = true;
+    const runners = await pool.getInstalledRunners(workspace);
+
+    expect(runners.map((r) => r.id)).toEqual(['claude-code']);
+    expect(pool.getSettings().aiProvider).toBe('claude-code');
+    pool.destroyAll();
+  });
+
   it('judges a named workspace\'s login with that workspace\'s env, not the daemon cwd', async () => {
     // `ordewell web` may be serving a workspace other than the directory it was
     // started from. The probe must read that workspace's `.ordewell/env`, or

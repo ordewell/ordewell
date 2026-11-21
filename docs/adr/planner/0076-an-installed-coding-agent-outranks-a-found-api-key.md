@@ -38,16 +38,19 @@ order:
    configured planner model (`ORCHESTRATOR_MODEL`, VS Code's
    `orchestratorModel`) when it names that vendor (its catalog lists it, it
    carries the vendor's prefix such as `openai:`, or it is an `org/model` slug
-   with an OpenRouter key), or a bare id that is not the agent's own, which
-   keeps the vendor the found key selects; or Gemini's own model setting
+   with an OpenRouter key), or a bare id the user did not pick for the agent,
+   which keeps the vendor the found key selects; or Gemini's own model setting
    (`GEMINI_MODEL`, VS Code's `geminiModel`) beside a Gemini key.
 3. The installed coding agent detection found (ADR-0009, ADR-0038), unless its
    own status command last said the user is signed out.
 4. A vendor whose key or endpoint is found, environment first.
 5. `openrouter`, so the preflight names what is missing.
 
-A model is the agent's own when it is one of its stable aliases, its remembered
-pick or listed in its discovered catalog; such a model never chooses a vendor.
+A bare id was picked for the agent only when it is the agent's remembered pick;
+such a model never chooses a vendor. The agent's stable aliases and its
+discovered catalog are no evidence: a vendor names many of the same ids
+(Codex's `gpt-5.5` is OpenAI's too), and a catalog that arrives mid-session
+would move the planner between one goal and the next.
 A vendor model whose vendor has no key never hands planning to another
 vendor's key.
 
@@ -75,8 +78,8 @@ vendor in the terminal UI, the desktop app and VS Code; `ordewell models`, then
   the preflight refuses on (ADR-0052) lets the key's vendor plan; an unknown
   verdict says nothing.
 - **Routing stays memoized on what it reads.** `routedProvider`'s basis adds
-  the agent's sign-in verdict, whether the configured model is the agent's own
-  and Gemini's model setting, so a long-lived config answers what a fresh one
+  the agent's sign-in verdict, whether the configured model is the agent's
+  remembered pick and Gemini's model setting, so a long-lived config answers what a fresh one
   would.
 
 ## Testing decisions
@@ -85,8 +88,10 @@ The rule is tested where hosts read it: `EnvConfig` and the protected
 `detectProvider` in core, `WebConfig` and `OrchestratorPool.getSettings` for the
 daemon, `VsCodeConfig` and `PlannerSelection` for VS Code. Each migration case
 is a test of its own: a persisted `AI_PROVIDER`, a prefixed model, an OpenRouter
-slug before its catalog is discovered, a bare id, `GEMINI_MODEL` and VS Code's
-`geminiModel`. The surfaces' notices are tested through their own seams: the
+slug before its catalog is discovered, a bare id, a bare id the agent's
+stable aliases or discovered catalog also list (before and after discovery),
+the agent's remembered pick, `GEMINI_MODEL` and VS Code's `geminiModel` or
+legacy `planningModel`. The surfaces' notices are tested through their own seams: the
 terminal UI's rendered welcome, the chat webview fed `setPlannerBackends`, and
 the desktop host's messages.
 

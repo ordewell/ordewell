@@ -63,8 +63,8 @@ merge it or discard the run.
 
 To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
 `ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
-you have set plans only when no coding agent is installed and signed in, or
-when you choose its provider: with `/planner`, the `ordewell.aiProvider`
+you have set plans only when no coding agent is installed, when the agent's
+last sign-in check found you signed out, or when you choose its provider: with `/planner`, the `ordewell.aiProvider`
 setting, or a planner model saved for it.
 
 Each runner you want to use must be installed and on your PATH. See the
