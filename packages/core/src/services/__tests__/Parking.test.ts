@@ -39,6 +39,20 @@ describe('parkDecision', () => {
     expect(parkDecision(plan({ b: { dependencies: ['open', 'a'] } }), 'a', ['b'], ok).ok).toBe(false);
   });
 
+  it('refuses a task that waits for this one through a container, which lands only once its subtasks do', () => {
+    // p holds a, and b waits for p: a cannot wait for b.
+    const held = [task('p', 1, { subtasks: [task('a', 1, { status: 'in_progress' })] }), task('b', 2, { dependencies: ['p'] })];
+    expect(refusal(parkDecision(held, 'a', ['b'], ok))).toContain('#2 "Task b" waits for this task');
+    // q's subtask q1 waits for a: a cannot wait for q.
+    const holding = [task('a', 1, { status: 'in_progress' }), task('q', 2, { subtasks: [task('q1', 1, { dependencies: ['a'] })] })];
+    expect(refusal(parkDecision(holding, 'a', ['q'], ok))).toContain('#2 "Task q" waits for this task');
+  });
+
+  it('refuses a task whose own granted park, not yet in the plan, waits for this one', () => {
+    expect(refusal(parkDecision(plan(), 'a', ['b'], { parkedBefore: 0, granted: new Map([['b', ['a']]]) }))).toContain('#3 "Task b" waits for this task');
+    expect(parkDecision(plan(), 'a', ['b'], { parkedBefore: 0, granted: new Map([['c', ['a']]]) }).ok).toBe(true);
+  });
+
   it('refuses itself, a task it holds and a task that holds it', () => {
     const tree = [task('p', 1, { subtasks: [task('s', 1)] }), task('q', 2)];
     expect(refusal(parkDecision(tree, 'p', ['p'], ok))).toContain('is this task');

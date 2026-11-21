@@ -14,12 +14,13 @@ import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
  * session it parked in.
  */
 
-function setup(opts: { maxParallel?: number; sessionIds?: boolean } = {}) {
+function setup(opts: { maxParallel?: number; sessionIds?: boolean; failSpawn?: (o: RunnerSpawnOptions, nth: number) => boolean } = {}) {
   const sessions: FakeRunnerSession[] = [];
   const requests: RunnerSpawnOptions[] = [];
   const runner = {
     spawn: vi.fn(async (o: RunnerSpawnOptions): Promise<IRunnerSession> => {
       requests.push(o);
+      if (opts.failSpawn?.(o, requests.filter((r) => r.taskId === o.taskId).length)) throw new Error('spawn failed');
       const native = opts.sessionIds === false ? null : o.resumeSessionId ?? `native-${o.taskId}-${sessions.length + 1}`;
       const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId, native);
       sessions.push(session);
@@ -101,6 +102,33 @@ describe('a refused wait says why and what to do instead, and changes nothing (A
     expect(h.stored('c').parked).toBeUndefined();
     h.pass('c');
     await vi.waitFor(() => expect(h.stored('c').status).toBe('completed'));
+  });
+
+  it('refuses the second of two tasks that wait for each other before either turn ends, so no cycle deadlocks the run', async () => {
+    const h = setup({ maxParallel: 2 });
+    h.orchestrator.loadPlan([task('a', 1), task('b', 2)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => { expect(h.spawnsOf('a')).toHaveLength(1); expect(h.spawnsOf('b')).toHaveLength(1); });
+
+    expect((await h.waitFor('a', ['b'])).isError).toBeUndefined();
+    expect(await h.waitFor('b', ['a'])).toMatchObject({ isError: true, text: expect.stringContaining('#1 "Task a" waits for this task') });
+    h.latest('a').emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.stored('a')).toMatchObject({ status: 'pending', dependencies: ['b'] }));
+    expect(h.stored('b')).toMatchObject({ status: 'in_progress', dependencies: [] });
+  });
+
+  it('drops an edge that would close a cycle the plan gained while the park was ending, and goes on told so', async () => {
+    const h = setup({ maxParallel: 1 });
+    h.orchestrator.loadPlan([task('a', 1), task('b', 2)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => expect(h.spawnsOf('a')).toHaveLength(1));
+    expect((await h.waitFor('a', ['b'])).isError).toBeUndefined();
+    h.orchestrator.storeInstance.update('b', { dependencies: ['a'] });
+
+    h.latest('a').emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.spawnsOf('a')).toHaveLength(2));
+    expect(h.stored('a').dependencies).toEqual([]);
+    expect(h.spawnsOf('a')[1].prompt).toContain('#2 "Task b" is no longer among what this task waits for');
   });
 
   it('parks twice at most between fresh attempts', async () => {
@@ -216,6 +244,19 @@ describe('the user\'s controls on a parked task', () => {
     await h.orchestrator.forceStartTask('c');
     await vi.waitFor(() => expect(h.spawnsOf('c')).toHaveLength(2));
     expect(h.spawnsOf('c')[1].resumeSessionId).toBe('native-c-2');
+  });
+
+  it('a continuation whose spawn failed leaves the park owed, so the next start still continues its session', async () => {
+    const h = setup({ failSpawn: (o, nth) => o.taskId === 'c' && nth === 2 });
+    await parkedOnA(h);
+    h.pass('a');
+    await vi.waitFor(() => expect(h.stored('c').status).toBe('failed'));
+    expect(h.spawnsOf('c')).toHaveLength(2);
+
+    await h.orchestrator.forceStartTask('c');
+    await vi.waitFor(() => expect(h.spawnsOf('c')).toHaveLength(3));
+    expect(h.spawnsOf('c')[2].resumeSessionId).toBe('native-c-2');
+    expect(h.spawnsOf('c')[2].prompt).toContain('The work you waited for has landed');
   });
 
   it('a Retry starts afresh, the park and its session let go, the edge kept as the plan has it', async () => {

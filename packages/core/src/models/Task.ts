@@ -1306,6 +1306,11 @@ export function runsAsOps(task: Pick<Task, 'ops' | 'type' | 'readOnly'>): boolea
   return (task.type === 'script' && !task.readOnly) || opsFlag(task.ops, task.type) === true;
 }
 
+/** Whether a task's pass lands work on the run's branch: an AI or delegated task's change, not a read-only task's, an ops task's or a person's. */
+export function landsOnBranch(task: Pick<Task, 'ops' | 'type' | 'readOnly'>): boolean {
+  return (task.type === 'ai' || task.type === 'delegated') && !task.readOnly && !runsAsOps(task);
+}
+
 /**
  * The flag of a task a merge or a split makes from others: what the edit
  * chose, else ops only when every task it came from was. A merge that takes

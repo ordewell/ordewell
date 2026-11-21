@@ -71,6 +71,8 @@ export type AttemptPhase = 'starting' | 'running' | 'integrating';
 /** What the scheduler reads of an attempt, live or ended. */
 export interface EndedAttempt {
   readonly taskId: string;
+  /** Its number in the task's ledger. */
+  readonly attempt: number;
   readonly runner: string;
   /** What this attempt is, which decides where it runs, what it is told and what is checked; see {@link AttemptKind}. */
   readonly kind: AttemptKind;
@@ -1571,7 +1573,8 @@ export class Attempts {
       return { text: 'wait_for is for a change task, whose work lands when it passes. This attempt\'s is not, so finish it as your brief says.', isError: true };
     }
     const before = task.parked?.count ?? 0;
-    const decision = parkDecision(store.planTasks, taskId, args.tasks, { parkedBefore: before });
+    const granted = new Map([...this.live].flatMap(([id, other]) => (other.parking ? [[id, other.parking.added] as const] : [])));
+    const decision = parkDecision(store.planTasks, taskId, args.tasks, { parkedBefore: before, granted });
     if (!decision.ok) return { text: decision.refusal, isError: true };
     attempt.decided = true;
     attempt.parking = { waitsOn: decision.waitsOn, added: decision.added, count: before + 1, reason: args.reason };
