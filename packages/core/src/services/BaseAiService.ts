@@ -8,7 +8,7 @@ import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply, repairLoop } from './PlanRepair';
 import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain } from './PlanChainReview';
-import { fanOutShape, largestSlicesFirst, withShapeNotes } from './PlanFanOut';
+import { fanOutShape, largestSlicesFirst, mergeSmallSlices, withShapeNotes, type SliceMeasure } from './PlanFanOut';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, type CompactableMessage } from './contextCompaction';
 import type { RunnerModeInfo } from './ModeResolver';
@@ -774,10 +774,15 @@ export abstract class BaseAiService {
     const note = (content: string) => log?.push({ id: `cr-${Date.now()}`, type: 'system', content, timestamp: new Date().toISOString() });
     // The role notes are Ordewell's, written on the plan that stands, at no call: nothing asks the planner about the fan-out (ADR-0072 R5).
     // The slices are ordered first, so every note that lists them lists them in the order they start (ADR-0072 R6).
+    // Before that, small siblings are merged, so the order and the notes are the merged plan's (ADR-0072 R7).
     const shaped = async (final: Task[]) => {
-      const shape = fanOutShape(final);
-      const sized = fs ? await largestSlicesFirst(final, fs, shape) : { tasks: final, moved: 0 };
-      if (sized.measure) note(`slice order: largest first by the lines of ${sized.measure === 'test' ? 'the test files' : 'every file'} their briefs name; ${sized.moved} of ${shape.slices.length} moved`);
+      const planned = fanOutShape(final);
+      const merged = fs ? await mergeSmallSlices(final, fs, modes.parallelLimit, planned) : { tasks: final };
+      const measured = (m: SliceMeasure) => `the lines of ${m === 'test' ? 'the test files' : 'every file'} their briefs name`;
+      if (merged.merged) note(`slice merge: ${merged.merged.from} slices became ${merged.merged.to}, by ${measured(merged.merged.measure)}, for ${modes.parallelLimit} tasks at once`);
+      const shape = merged.tasks === final ? planned : fanOutShape(merged.tasks);
+      const sized = fs ? await largestSlicesFirst(merged.tasks, fs, shape) : { tasks: merged.tasks, moved: 0 };
+      if (sized.measure) note(`slice order: largest first by ${measured(sized.measure)}; ${sized.moved} of ${shape.slices.length} moved`);
       const out = withShapeNotes(sized.tasks);
       if (out !== sized.tasks) {
         const s = fanOutShape(out);

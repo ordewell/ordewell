@@ -19,6 +19,13 @@ export interface PlannerModes {
    * accepted and then failed. Absent: the plan is not checked.
    */
   taskSkills?: SkillLookup;
+  /**
+   * How many tasks the run starts at once (`maxParallelSessions`), a fact
+   * about the run like the two above. A wide one-shot plan's small sibling
+   * slices are merged toward twice it, since slices past it only queue
+   * (ADR-0072 R7). Absent: nothing is merged. No prompt reads it.
+   */
+  parallelLimit?: number;
 }
 
 export const DEFAULT_PLANNER_MODES: PlannerModes = {

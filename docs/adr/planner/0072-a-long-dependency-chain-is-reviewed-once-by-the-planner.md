@@ -30,7 +30,8 @@ dependency blocks the closing check that waits for it.
 wrote it is asked once to review the plan edge by edge, and only the planner
 decides what changes. The review asks that chain question and nothing else; a
 wide one-shot plan's fan-out shape is read by Ordewell and noted on each role's
-brief, never asked about, and its slices are started largest first.** The question names the chain, task by task, and asks of
+brief, never asked about, its small sibling slices are merged toward twice the
+run's parallel limit, and its slices are started largest first.** The question names the chain, task by task, and asks of
 every dependency whether the dependent needs a file, name, signature or schema
 that does not exist in the repository until the other task writes it; it names
 the dependencies other rules require, so it never asks to drop them. How the
@@ -126,6 +127,39 @@ question is put depends on how the plan arrives.
   no content reaches a prompt. The research log records the measure and how
   many slices moved. Which slice finishes first is a guess from its files,
   never a verdict: it changes when a slice starts, not what it must do.
+- **A wide one-shot plan's small sibling slices are merged (R7).** A slice
+  pays a fixed run of calls before it does any work (finding its way, taking
+  in sibling work, writing its handoff), while its real work costs what it
+  would in one agent, and slices past the run's parallel limit only queue, so
+  many small slices buy no parallelism and pay that fixed cost again each
+  time. The limit (`maxParallelSessions`) reaches plan shaping as
+  `PlannerModes.parallelLimit`, set where the session builds the planner's
+  modes, a fact about the run that no prompt reads. On the plan R1 kept,
+  before R6's order and R5's notes, `mergeSmallSlices` (`PlanFanOut.ts`)
+  takes each level holding more than twice the limit in slices and merges its
+  smallest, by R6's size, into bins: the smallest bin with the smallest other
+  of its kind, two at a time, until the level has twice the limit, or, where
+  the cap below stops it short of that, the multiple of the limit just above
+  the fewest it allows, so the last wave is full, unless that is no fewer
+  than the level held, when it stops at the fewest. A bin never grows past the
+  largest slice the planner wrote for that level, which it judged one task; a
+  slice of that size stays alone, and so does one with no size (no file its
+  brief names was read), since a size of nothing would put any number of them
+  in one bin. When no slice is sized, nothing is merged. Only slices of one
+  kind merge: the same dependencies and dependents, type, runner, model, mode,
+  skills and autonomy. A merged task keeps the id of its first slice in plan
+  order, in that slice's place, and records the others in `mergedSlices`;
+  every dependency on them now names it. Its title joins the slices' titles;
+  its brief says it covers the listed slices the planner wrote separately and
+  gives each one's brief whole, in plan order, under `Slice N of M: <title>`,
+  then one done criterion over all of them, then any note appended to a
+  slice's brief, last, as R1's revision note must be. R5's notes, read after,
+  read a merged brief slice by slice, so its paths and its size are its
+  slices' together. The research log records how many slices became how
+  many. A plan already noted, a plan that is not wide, a level of at most
+  twice the limit and a conversation planner's plan are not touched: the
+  plan comes back as the same array. Which slices merge is a guess from the
+  repository's files, like R6's order, never a verdict.
 - **The one-shot prompt words two dependency rules its own way (R4).** It says a
   dependency is for something that does not exist yet, lets the task that
   restores the build edit whatever blocks it, and gives a four-level shape for a
@@ -151,7 +185,13 @@ a session. `largestSlicesFirst` is tested over a file system that answers reads 
 planner's adapters do (numbered lines, a size cap, a line limit): its measure,
 its fallback, equal shares, the level it keeps and the bounds on reading; that
 the notes list the slices in their new order, and the log line, through
-`reviewLongChain`. That a wide plan with a fault and a short chain makes no review call,
+`reviewLongChain`. `mergeSmallSlices` is tested over the same file system: a
+level worked by hand (which pairs merge and where it stops), the merged task
+pinned word for word, each kind that keeps slices apart, the plans it leaves as
+the same array, and a later level merged on the dependencies an earlier merge
+rewrote; that the order and notes are the merged plan's, and the log line,
+through `reviewLongChain`, and that the session hands the planner its limit
+through `generatePlan`. That a wide plan with a fault and a short chain makes no review call,
 and a long one is asked R1's message word for word, is tested through
 `reviewLongChain`. `reviewLongChain` is tested through
 a `BaseAiService` whose `streamPlanText` answers from a queue and keeps what each
@@ -168,8 +208,8 @@ conversation's as they stand.
 - A plan whose work sits in one task. No chain review reaches it.
 - The harness one-shot path (`CliAgentAiService.oneShot`, where the review rides
   on `submit_plan`'s answer, R3): its plans are not read for their fan-out shape
-  and get no `Plan shape:` note yet, and their slices keep the planner's
-  order. Neither does a conversation plan.
+  and get no `Plan shape:` note yet, their slices keep the planner's
+  order and none is merged. Neither does a conversation plan.
 - The run time: a failed slice still blocks the closing check (a skip releases
   it, and lands nothing), and the closing check cannot reach a failed slice's
   unlanded work. R5's slice note makes the slice end done instead wherever its
@@ -217,6 +257,17 @@ conversation's as they stand.
 - **The planner asked to put its largest slices first.** Not taken: the
   ordering needs no call, and a change to the one-shot prompt is measured on
   its own (R4).
+- **Telling the planner how many tasks run at once.** Not taken. The
+  one-shot planner is never told the parallel limit, and its rules say to put
+  every slice of a level side by side, so it wrote many more slices than
+  slots. Telling it in the prompt is a wording change, and three changes to
+  the planner's wording (the dependency rules, the fan-out shape, the shape's
+  faults asked in R1's call) each failed their measurement, so Ordewell
+  computes the merge, as it computes R6's order, and the prompt and R1's
+  message stay as they are.
+- **Merging every slice with no size, as a size of nothing.** Rejected: any
+  number of them fit in one bin under the cap, so one task would take most of
+  a level whose briefs name their test files past the paths read.
 - **A separate call for the shape.** Rejected: it costs a call for what the
   notes do without one, and the questions failed even on R1's call.
 - **The planner writes each role's done criterion.** Rejected: the criterion is
@@ -242,7 +293,13 @@ conversation's as they stand.
   order is a guess from the repository, and a run whose planner already listed
   its long slices first can do worse for it. Briefs that name test files by
   bare name beside a full path, or more than `MAX_PATHS` paths, are sized by
-  the paths read and the rest count nothing.
+  the paths read and the rest count nothing; such a slice has no size and is
+  never merged (R7), so a plan whose briefs list many source files before
+  their tests keeps most of its small slices.
+- A merged task is larger than any one of its slices and no larger than the
+  level's largest slice; it runs its slices' work in one worktree, one after
+  another, so a merge the measure misjudges makes a task that lands late,
+  never one larger than the planner already judged a single slice.
 - A wide plan's shape costs no call: its faults are only recorded, so a plan
   with no opening task or no closing check keeps that fault unless the chain
   question's reply happens to mend it. `FAN_OUT_MIN` is not tuned yet, and the
@@ -258,3 +315,4 @@ conversation's as they stand.
 - 2026-11-19 — R5: the fault questions and the tasks a reply could add are dropped after failing their measurement; R1 asks the chain question only, the notes go to the closing check no other waits for and the first opening task, and a slice's table is bounded.
 - 2026-11-19 — R5: a slice takes in a sibling's work once it has landed; a closing check with a task beside it is the closing check; a revision note's titles are no brief's paths.
 - 2026-11-20 — R6: a wide one-shot plan's slices of each level start largest first, sized by the lines of the files their briefs name.
+- 2026-11-21 — R7: a wide one-shot plan's small sibling slices are merged toward twice the run's parallel limit, before the order and the notes; telling the planner the limit is not taken.
