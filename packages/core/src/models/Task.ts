@@ -333,6 +333,12 @@ export interface Task {
   autonomy?: 'AFK' | 'HITL';
   sliceType?: 'HITL' | 'AFK';
   userStoriesCovered?: string[];
+  /**
+   * The ids of the slices the planner wrote separately that this task also
+   * covers: Ordewell merged them into it, under its own id, and rewrote every
+   * dependency on them to it (ADR-0072 R7).
+   */
+  mergedSlices?: string[];
   /** The runner's saved session for a later continue; cleared when a fresh attempt starts. */
   runnerSessionId?: string;
   /**
@@ -1197,6 +1203,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     autonomy: overrides.autonomy,
     sliceType: overrides.sliceType,
     userStoriesCovered: overrides.userStoriesCovered,
+    ...(overrides.mergedSlices?.length ? { mergedSlices: [...overrides.mergedSlices] } : {}),
     ...(opsFlag(overrides.ops, overrides.type) ? { ops: true } : {}),
     ...(skills ? { skills } : {}),
     ...(overrides.addedBy === 'supervisor' ? { addedBy: 'supervisor' as const } : {}),

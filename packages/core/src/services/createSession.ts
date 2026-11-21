@@ -2201,7 +2201,7 @@ export class Session {
   private generateFor(goal: string, chosenRunners: RunnerId[], signal: AbortSignal | undefined): Promise<LegacyPlanState> {
     return this.conversation.hold(signal, async (turn) => {
       const { modelsByRunner, runnerModes } = await this.catalog.planning(chosenRunners);
-      const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills() };
+      const modes = { ...plannerModesFrom(this.autonomous()), isolatedExecution: await this.runs.plannerLayout(), taskSkills: this.workspaceSkills(), parallelLimit: this.config.maxParallelSessions };
       const subagents = new SubagentRuns();
 
       const { skillWarnings = [], ...plan } = await this.planner.generate({

@@ -1,6 +1,7 @@
 import * as path from 'path';
 import type { IFileSystem } from '../interfaces/IFileSystem';
-import { runsAsOps, type Task } from '../models/Task';
+import { flattenTasks, runsAsOps, type Task } from '../models/Task';
+import { replace } from './PlanGraph';
 
 /**
  * A one-shot plan that fans out over code whose parts call each other (a
@@ -145,9 +146,21 @@ const NOTED = 'Plan shape:';
 /** Where the notes Ordewell appends begin: this module's, and the chain review's, which names tasks by title. */
 const APPENDED = /Plan (?:shape|revision):/;
 
-/** From the brief as the planner wrote it: a note already appended names other tasks' paths. */
+/** A merged task's brief: the line each slice's brief starts under, and the done criterion after the last. */
+const SECTION = /^Slice \d+ of \d+: .*$/m;
+const MERGED_DONE = 'This task is done when every slice above meets its own brief\'s done criterion.';
+
+const pathsIn = (text: string) => [...new Set(text.match(PATH) ?? [])].slice(0, MAX_PATHS);
+
+/**
+ * From the brief as the planner wrote it: a note already appended names other
+ * tasks' paths. A merged task's brief is read slice by slice, as the planner
+ * wrote each, so it names what its slices named and sizes as they summed.
+ */
 function namedPaths(t: Task): string[] {
-  return [...new Set((t.prompt ?? '').split(APPENDED)[0].match(PATH) ?? [])].slice(0, MAX_PATHS);
+  const own = (t.prompt ?? '').split(APPENDED)[0];
+  if (!t.mergedSlices?.length) return pathsIn(own);
+  return [...new Set(own.split(MERGED_DONE)[0].split(SECTION).slice(1).flatMap(pathsIn))];
 }
 
 function ownershipTable(shape: FanOutShape): string {
@@ -267,23 +280,26 @@ async function lineCount(fs: Pick<IFileSystem, 'readFile'>, path: string): Promi
   return last ? Number(last[1]) : undefined;
 }
 
+interface SliceSizes {
+  measure: SliceMeasure;
+  /** Every slice's size, nothing for a file that could not be read. */
+  size: Map<string, number>;
+  /** The slices with a file read: one without has no size, only nothing. */
+  sized: Set<string>;
+}
+
 /**
- * The plan with each level's slices started largest first: ready tasks start
- * in plan order, a few at a time, so a long slice the planner listed late set
- * when the whole fan-out ended (ADR-0072 R6). A slice's size is the lines of
- * the test files its brief names, or of every file it names when no slice
- * names a test file that exists; a file several briefs name is shared equally
- * among them. Only the order of slices of one level changes, each taking the
- * place and `order` of the one it displaced; ties keep the planner's order.
+ * Each slice's size: the lines of the test files its brief names, or of
+ * every file it names when no slice names a test file that exists; a file
+ * several briefs name is shared equally among them. Undefined when no file
+ * could be read, or when the slices name more than {@link MAX_SIZED_FILES}.
  */
-export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesOrdered> {
-  const unchanged: SlicesOrdered = { tasks, moved: 0 };
-  if (!shape.wide) return unchanged;
+async function sliceSizes(slices: readonly Task[], fs: Pick<IFileSystem, 'readFile'>): Promise<SliceSizes | undefined> {
   const lines = new Map<string, number | undefined>();
-  const sizes = async (counts: (path: string) => boolean): Promise<Map<string, number> | undefined> => {
+  const sizes = async (counts: (path: string) => boolean): Promise<Omit<SliceSizes, 'measure'> | undefined> => {
     // A path out of the workspace would ask the user to approve the read (ADR-0008). The
     // workspace check reads any path whose relative form starts `..` as out, `...tests/x.py` too.
-    const named = new Map(shape.slices.map((s) => [s.id, namedPaths(s).filter((p) => counts(p) && !path.posix.normalize(p).startsWith('..'))]));
+    const named = new Map(slices.map((s) => [s.id, namedPaths(s).filter((p) => counts(p) && !path.posix.normalize(p).startsWith('..'))]));
     const owners = new Map<string, number>();
     for (const paths of named.values()) for (const p of paths) owners.set(p, (owners.get(p) ?? 0) + 1);
     const unread = [...owners.keys()].filter((p) => !lines.has(p));
@@ -291,14 +307,32 @@ export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'r
     if (lines.size + unread.length > MAX_SIZED_FILES) return undefined;
     for (const p of unread) lines.set(p, await lineCount(fs, p));
     if (![...owners.keys()].some((p) => lines.get(p) !== undefined)) return undefined;
-    return new Map([...named].map(([id, paths]) => [id, paths.reduce((sum, p) => sum + (lines.get(p) ?? 0) / owners.get(p)!, 0)]));
+    return {
+      size: new Map([...named].map(([id, paths]) => [id, paths.reduce((sum, p) => sum + (lines.get(p) ?? 0) / owners.get(p)!, 0)])),
+      sized: new Set([...named].filter(([, paths]) => paths.some((p) => lines.get(p) !== undefined)).map(([id]) => id)),
+    };
   };
   // On recorded runs the lines of a slice's test files predicted its time best;
   // with no test file to read, the files its brief names come next.
   const byTests = await sizes((p) => TEST_FILE.test(p));
-  const measure: SliceMeasure = byTests ? 'test' : 'named';
-  const size = byTests ?? await sizes(() => true);
-  if (!size) return unchanged;
+  if (byTests) return { measure: 'test', ...byTests };
+  const byNamed = await sizes(() => true);
+  return byNamed && { measure: 'named', ...byNamed };
+}
+
+/**
+ * The plan with each level's slices started largest first: ready tasks start
+ * in plan order, a few at a time, so a long slice the planner listed late set
+ * when the whole fan-out ended (ADR-0072 R6). Sized by {@link sliceSizes}.
+ * Only the order of slices of one level changes, each taking the place and
+ * `order` of the one it displaced; ties keep the planner's order.
+ */
+export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesOrdered> {
+  const unchanged: SlicesOrdered = { tasks, moved: 0 };
+  if (!shape.wide) return unchanged;
+  const sized = await sliceSizes(shape.slices, fs);
+  if (!sized) return unchanged;
+  const { size, measure } = sized;
   const level = graph(tasks)!.level;
   const out = [...tasks];
   let moved = 0;
@@ -312,4 +346,121 @@ export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'r
     });
   }
   return { tasks: moved ? out : tasks, measure, moved };
+}
+
+export interface SlicesMerged {
+  /** The plan with small sibling slices merged; the same array when nothing was. */
+  tasks: Task[];
+  /** How many slices of the levels merged became how many tasks; absent when nothing was merged. */
+  merged?: { from: number; to: number; measure: SliceMeasure };
+}
+
+/** A note splits a brief into what the planner wrote and what Ordewell appended after it. */
+function ownAndNotes(prompt: string): [string, string | undefined] {
+  const at = prompt.search(APPENDED);
+  return at < 0 ? [prompt, undefined] : [prompt.slice(0, at).trimEnd(), prompt.slice(at)];
+}
+
+/**
+ * One task for slices that share their dependencies, dependents, runner,
+ * model, mode and skills: the first one's id and fields, each brief whole
+ * under its own title in plan order, one done criterion over them all, and
+ * the notes appended to any of them last, as they were.
+ */
+function mergedTask(members: readonly Task[]): Task {
+  const [first, ...rest] = members;
+  const split = members.map((m) => ownAndNotes(m.prompt ?? ''));
+  const notes = [...new Set(split.flatMap(([, n]) => (n ? [n] : [])))];
+  const stories = [...new Set(members.flatMap((m) => m.userStoriesCovered ?? []))];
+  return {
+    ...first,
+    title: members.map((m) => m.title).join('; '),
+    description: members.map((m) => m.description).filter(Boolean).join('\n\n'),
+    prompt: [
+      `This task covers ${members.length} slices the planner wrote separately, each brief below whole and in order under its own title. Do every one of them in this task.`,
+      ...members.map((m, i) => `Slice ${i + 1} of ${members.length}: ${m.title}\n${split[i][0]}`),
+      MERGED_DONE,
+      ...notes,
+    ].join('\n\n'),
+    mergedSlices: rest.map((m) => m.id),
+    userStoriesCovered: stories.length ? stories : undefined,
+  };
+}
+
+/**
+ * Bins of one level's slices: the smallest bin is merged with the smallest
+ * other of its kind, two at a time, while the pair is no larger than `cap`.
+ * It stops at twice `limit`; where the cap stops it short of that, at the
+ * multiple of `limit` nearest above the fewest bins the cap allows, so the
+ * last wave of slots is full, unless that is no fewer than the level held.
+ */
+function pack(level: readonly Task[], size: (t: Task) => number, kind: (t: Task) => string | undefined, cap: number, limit: number): Task[][] {
+  const run = (stopAt: number) => {
+    const bins = level.map((t, at) => ({ members: [t], size: size(t), at, kind: kind(t) }));
+    while (bins.length > stopAt) {
+      const open = bins.filter((b) => b.kind !== undefined).sort((a, b) => a.size - b.size || a.at - b.at);
+      let pair: [typeof bins[number], typeof bins[number]] | undefined;
+      for (const u of open) {
+        const v = open.find((o) => o !== u && o.kind === u.kind);
+        if (v && u.size + v.size <= cap) { pair = [u, v]; break; }
+      }
+      if (!pair) break;
+      const [u, v] = pair;
+      bins.splice(bins.indexOf(v), 1);
+      u.members = [...u.members, ...v.members].sort((a, b) => level.indexOf(a) - level.indexOf(b));
+      u.size += v.size;
+      u.at = Math.min(u.at, v.at);
+    }
+    return bins.map((b) => b.members);
+  };
+  const fewest = run(2 * limit).length;
+  const full = Math.ceil(fewest / limit) * limit;
+  return run(fewest <= 2 * limit ? 2 * limit : full < level.length ? full : fewest);
+}
+
+/**
+ * The plan with each crowded level's small slices merged (ADR-0072 R7). A
+ * slice costs a fixed run of calls before it does any work, and slices past
+ * the run's parallel limit only queue, so on a level of more than twice
+ * `parallelLimit` slices, sized as {@link largestSlicesFirst} sizes them, the
+ * smallest are merged until the level has about twice the limit. No bin grows
+ * past the level's largest slice, which the planner judged one task, and a
+ * slice at that size stays alone, as does one with no size. Only slices of one
+ * kind merge: the same dependencies and dependents, runner, model, mode,
+ * skills, autonomy and type. Every dependency on a merged slice now names the
+ * task that covers it.
+ */
+export async function mergeSmallSlices(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, parallelLimit: number | undefined, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesMerged> {
+  const unchanged: SlicesMerged = { tasks };
+  if (!shape.wide || !parallelLimit || parallelLimit < 1) return unchanged;
+  // A brief already noted was shaped: its notes count the slices as they were.
+  if (tasks.some((t) => t.prompt?.includes(NOTED))) return unchanged;
+  const level = graph(tasks)!.level;
+  const levels = new Map<number, Task[]>();
+  for (const s of shape.slices) levels.set(level.get(s.id)!, [...(levels.get(level.get(s.id)!) ?? []), s]);
+  const crowded = [...levels.entries()].sort(([a], [b]) => a - b).map(([, l]) => l).filter((l) => l.length > 2 * parallelLimit);
+  if (crowded.length === 0) return unchanged;
+  const sized = await sliceSizes(shape.slices, fs);
+  if (!sized) return unchanged;
+  let out = tasks;
+  let from = 0;
+  let to = 0;
+  for (const planned of crowded) {
+    // Read from the plan as merged so far: an earlier level's merge rewrote this one's dependencies.
+    const dependents = new Map<string, string[]>();
+    for (const t of flattenTasks(out)) for (const d of new Set(t.dependencies)) dependents.set(d, [...(dependents.get(d) ?? []), t.id]);
+    const slices = out.filter((t) => planned.some((p) => p.id === t.id));
+    const size = (t: Task) => sized.size.get(t.id) ?? 0;
+    const cap = Math.max(...slices.map(size));
+    const kind = (t: Task) => (t.prompt === undefined || t.subtasks.length > 0 || t.mergedSlices || !sized.sized.has(t.id) || size(t) >= cap
+      ? undefined
+      : JSON.stringify([[...new Set(t.dependencies)].sort(), (dependents.get(t.id) ?? []).sort(), t.type, t.assignedRunner, t.assignedModel ?? null,
+        t.taskMode ?? null, [...(t.skills ?? [])].sort(), t.autonomy ?? null, t.sliceType ?? null]));
+    const bins = pack(slices, size, kind, cap, parallelLimit);
+    if (bins.length === slices.length) continue;
+    from += slices.length;
+    to += bins.length;
+    for (const bin of bins) if (bin.length > 1) out = replace(out, bin.map((t) => t.id), [mergedTask(bin)], bin[0].id);
+  }
+  return from ? { tasks: out, merged: { from, to, measure: sized.measure } } : unchanged;
 }

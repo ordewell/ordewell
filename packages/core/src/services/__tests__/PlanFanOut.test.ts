@@ -6,6 +6,8 @@ import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../
 import { fakeConfig, fakeFileSystem } from '../../testing';
 import type { IFileSystem } from '../../interfaces/IFileSystem';
 import { applyTaskOps } from '../TaskOps';
+import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
+import { lines, workspace } from './planFanOutKit';
 
 const RUNNERS: RunnerId[] = ['claude-code'];
 const t = (id: string, deps: string[], extra: Partial<Task> = {}): Task =>
@@ -276,8 +278,8 @@ class ReviewService extends BaseAiService {
     call?.onReply?.(r);
     return reply;
   }
-  review(tasks: Task[], log: ResearchLogEntry[], fs?: IFileSystem): Promise<Task[]> {
-    return this.reviewLongChain(tasks, 'goal', '', '', {}, RUNNERS, () => {}, undefined, undefined, undefined, log, fs);
+  review(tasks: Task[], log: ResearchLogEntry[], fs?: IFileSystem, modes?: PlannerModes): Promise<Task[]> {
+    return this.reviewLongChain(tasks, 'goal', '', '', {}, RUNNERS, () => {}, undefined, undefined, modes, log, fs);
   }
 }
 
@@ -314,6 +316,36 @@ describe('reviewLongChain on a fan-out', () => {
       'slice order: largest first by the lines of the test files their briefs name; 5 of 6 moved',
       'fan-out: 6 at once, 1 before, 1 after; role notes added',
     ]);
+  });
+
+  // ADR-0072 R7: slices past the parallel limit only queue, so the small ones are merged before the order and the notes.
+  describe('with a parallel limit', () => {
+    const SIZES = [100, 90, 10, 10, 20, 20, 30, 30, 40, 50];
+    const plan = () => [t('r', []), ...SIZES.map((_, i) => t(`s${i + 1}`, ['r'], { prompt: `Fill in src/m${i + 1}.py. Verify: pytest tests/test_m${i + 1}.py` })), t('close', sliceIds(10))]
+      .map((x, i) => ({ ...x, order: i + 1 }));
+    const files = () => workspace(Object.fromEntries(SIZES.map((n, i) => [`tests/test_m${i + 1}.py`, lines(n)]))).fs;
+    const limit = (parallelLimit: number): PlannerModes => ({ ...DEFAULT_PLANNER_MODES, parallelLimit });
+
+    it('merges small slices, then orders and notes the merged plan, and logs how many slices became how many', async () => {
+      const log: ResearchLogEntry[] = [];
+      const out = await new ReviewService([]).review(plan(), log, files(), limit(2));
+      // Merged as PlanFanOut.merge.test.ts works it by hand, then sized as the sums of their slices: 100, 90, 70, 50, 50, 40.
+      expect(ids(out)).toEqual(['r', 's1', 's2', 's3', 's6', 's10', 's9', 'close']);
+      expect(out.find((x) => x.id === 's9')!.prompt).toContain('Plan shape: this task is one of 6 slices');
+      const opening = out.find((x) => x.id === 'r')!.prompt!;
+      expect(opening).toContain('- "T s3; T s4; T s5; T s8" (s3): src/m3.py, tests/test_m3.py, src/m4.py, tests/test_m4.py, src/m5.py, tests/test_m5.py, src/m8.py, tests/test_m8.py');
+      expect(log.map(text)).toEqual([
+        'slice merge: 10 slices became 6, by the lines of the test files their briefs name, for 2 tasks at once',
+        'slice order: largest first by the lines of the test files their briefs name; 2 of 6 moved',
+        'fan-out: 6 at once, 1 before, 1 after; role notes added',
+      ]);
+    });
+
+    it('changes nothing at a limit at or above the slices', async () => {
+      const [merged, kept] = [[] as ResearchLogEntry[], [] as ResearchLogEntry[]];
+      expect(await new ReviewService([]).review(plan(), merged, files(), limit(10))).toEqual(await new ReviewService([]).review(plan(), kept, files()));
+      expect(merged.map(text)).toEqual(kept.map(text));
+    });
   });
 
   it('makes no call on a fan-out with every fault and a short chain, and notes nothing without a closing check', async () => {
