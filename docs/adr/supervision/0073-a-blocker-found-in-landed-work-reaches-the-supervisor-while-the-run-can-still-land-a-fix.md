@@ -33,8 +33,9 @@ and raised as the count of reporting tasks reaches 1, 2, 4, 8…; the supervisor
 writes the one fix.**
 
 - **What counts.** A finding of severity `blocker`, in the handoff of any task as
-  it settles, passed or not, that names a completed task of this plan in one of
-  two ways, and nothing read from its words (`LandedBlockers`):
+  it settles, passed or not, that names a completed task of this plan whose pass
+  landed work on the run's branch (not a read-only, ops or person's task), in
+  one of two ways, and nothing read from its words (`LandedBlockers`):
   - a `task` reference with no finding id, at the attempt that landed or
     unpinned. A reference with a finding id cites that report, which may be
     about anyone's work, and a reference to a plan below is that plan's
@@ -46,6 +47,12 @@ writes the one fix.**
     branch changed (`IsolationRunController.changedPaths`), read once per
     landing and only when a blocker cites a file. A run that shares the checkout
     can say nothing, and has only the first signal.
+
+  A finding names one owner at most: its first landed task reference, else its
+  file's. A closing check's "the merged tree does not build" that cites every
+  slice is one defect, not a fix owed by each. A loop's check between rounds
+  reports nothing ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3): its loop's body is the fix,
+  and runs again; once its last round fails, it reports as any task.
 - **Landed before the report.** A report counts only against work whose verdict
   came before the reporter's: one made before is about work that was not there.
   So the count only grows as reporters settle, and a retry of the owner that
@@ -75,7 +82,10 @@ writes the one fix.**
   any task of its plan, pinned to that task's latest attempt. A finding id is
   accepted only on a task the producer may read (ADR-0047's readable set),
   which `read` still holds to. A citation reads nothing; a finding id would say
-  what the producer read.
+  what the producer read. A citation of a task outside the producer's readable
+  set is saved marked `unread`, so once that task leaves the plan it opens its
+  handoff to no one, where a citation the producer could read passes it on
+  (ADR-0057 R1).
 - **The completion contract asks for it.** One sentence: a finding about work
   another task has landed cites that task, and the file the defect is in as its
   first file.
@@ -137,3 +147,4 @@ recorded data is committed, and fixtures are synthetic.
 
 - 2026-11-21 — accepted: the event, its count by task reference and by the files
   a landing changed, the digest line and the wider citation scope.
+- 2026-11-21 — one owner per finding, owners that land work only, a loop's check between rounds left to its loop, and an unreadable citation marked so it passes nothing on.

@@ -1,4 +1,5 @@
-import { flattenTasks, type Task } from '../models/Task';
+import { flattenTasks, landsOnBranch, type Task } from '../models/Task';
+import { planBlocks } from './blocking';
 import { ROOT_NODE, type HandoffFinding, type TaskEvidence } from '../models/Handoff';
 import { fanOutShape } from './PlanFanOut';
 
@@ -57,16 +58,19 @@ export function raisesAt(count: number): boolean {
 /** The files a completed task's landing changed, workspace-relative; undefined where nothing says. */
 export type LandedPaths = (taskId: string) => readonly string[] | undefined;
 
-/** The completed tasks a finding names as blocked by their work, at the attempt that landed. */
-function ownersNamed(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>, landedPaths?: LandedPaths): string[] {
-  if (finding.severity !== 'blocker') return [];
-  const cited = (finding.evidence ?? []).flatMap((ref) => {
-    if (ref.kind !== 'task') return [];
-    const owner = landedOwner(ref, reporter, byId);
-    return owner ? [owner] : [];
-  });
-  const changed = landedPaths ? fileOwner(finding, reporter, byId, landedPaths) : undefined;
-  return [...new Set([...cited, ...(changed ? [changed] : [])])];
+/**
+ * The landed task a finding names as blocked by its work, at the attempt that
+ * landed: the first task it cites, else the owner of its files. One at most,
+ * as the file signal is: a closing check's "the merged tree does not build"
+ * citing every slice is one defect, not a fix owed by each.
+ */
+function ownerNamed(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<string, Task>, landedPaths?: LandedPaths): string | undefined {
+  if (finding.severity !== 'blocker') return undefined;
+  for (const ref of finding.evidence ?? []) {
+    const owner = ref.kind === 'task' ? landedOwner(ref, reporter, byId) : undefined;
+    if (owner) return owner;
+  }
+  return landedPaths ? fileOwner(finding, reporter, byId, landedPaths) : undefined;
 }
 
 /**
@@ -76,7 +80,7 @@ function ownersNamed(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<
  * again starts the count over.
  */
 function landedBefore(owner: Task, reporter: Task): boolean {
-  return owner.id !== reporter.id && owner.status === 'completed' && (settledAt(owner) ?? -Infinity) <= (settledAt(reporter) ?? Infinity);
+  return owner.id !== reporter.id && owner.status === 'completed' && landsOnBranch(owner) && (settledAt(owner) ?? -Infinity) <= (settledAt(reporter) ?? Infinity);
 }
 
 /**
@@ -117,7 +121,7 @@ function landedOwner(ref: TaskEvidence, reporter: Task, byId: ReadonlyMap<string
 
 /**
  * The `landed_blocker` facts that `reporterId`'s handoff, as it settles,
- * raises: one per landed task it names whose count of reporters has just
+ * raises: one per landed task its findings name whose count of reporters has just
  * reached a power of two. `plan` is the plan tree as it stands, with the
  * reporter's handoff on it.
  */
@@ -125,8 +129,11 @@ export function landedBlockers(plan: readonly Task[], reporterId: string, landed
   const tasks = flattenTasks([...plan]);
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const reporter = byId.get(reporterId);
-  if (!reporter) return [];
-  const named = new Set((reporter.handoff?.findings ?? []).flatMap((f) => ownersNamed(f, reporter, byId, landedPaths)));
+  // A loop's check between rounds has its fix in hand: the loop's body is that fix, and runs again (ADR-0045 L3).
+  const { repeating } = planBlocks([...plan]);
+  if (!reporter || repeating.has(reporterId)) return [];
+  const ownerOf = (f: HandoffFinding, by: Task) => ownerNamed(f, by, byId, landedPaths);
+  const named = new Set((reporter.handoff?.findings ?? []).flatMap((f) => ownerOf(f, reporter) ?? []));
   if (named.size === 0) return [];
   const closer = fanOutShape(plan as Task[]).closers[0]?.id;
   const out: LandedBlockerFacts[] = [];
@@ -134,7 +141,8 @@ export function landedBlockers(plan: readonly Task[], reporterId: string, landed
     const reports: BlockerReport[] = [];
     let reporters = 0;
     for (const task of tasks) {
-      const hits = (task.handoff?.findings ?? []).filter((f) => ownersNamed(f, task, byId, landedPaths).includes(owner));
+      if (repeating.has(task.id)) continue;
+      const hits = (task.handoff?.findings ?? []).filter((f) => ownerOf(f, task) === owner);
       if (hits.length === 0) continue;
       reporters++;
       if (reports.length < LANDED_BLOCKER_NAMED) reports.push({ reporter: task.id, finding: hits[0].id, title: hits[0].title });
