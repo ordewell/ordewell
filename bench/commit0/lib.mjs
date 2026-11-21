@@ -2029,6 +2029,7 @@ const TRIGGERS = [
   ['auto_merge_stopped', /^- automatic Merge all /],
   ['start_refused', /^- work could not start/],
   ['usage_limit', /usage limit paused/],
+  ['landed_blocker', /^- [Tt]ask \S+ ".*?" has landed, and .* a blocker in its work/],
   ['task_failed', /^- task \S+ ".*?" failed\b/],
 ];
 
