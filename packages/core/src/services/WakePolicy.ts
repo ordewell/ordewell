@@ -1,6 +1,7 @@
 import { flattenTasks, type Task, type TurnAuthority } from '../models/Task';
 import type { StartWait, StartWaitKind } from './readiness';
 import type { RunningLongEvent } from './RunningLong';
+import type { LandedBlockerFacts } from './LandedBlockers';
 
 /**
  * When the supervisor wakes during a run (#27, ADR-0057 R4). The decision is
@@ -33,6 +34,7 @@ export type RunEventKind =
   | 'run_finished'
   | 'run_held'
   | 'failure_standing'
+  | 'landed_blocker'
   | 'task_report';
 
 export type RunEvent = {
@@ -51,6 +53,8 @@ export type RunEvent = {
   report?: TaskReportEvent;
   /** `running_long` only: how long the attempt has run against what, and its context (ADR-0018 W1). */
   runningLong?: RunningLongEvent;
+  /** `landed_blocker` only: whose landed work tasks report a blocker in, how many, and the first few reports. */
+  landedBlocker?: LandedBlockerFacts;
   /** `failure_standing` only: owed by the turn on the run's end, so that end stands only once this one's turn is over (ADR-0029). */
   closing?: true;
 };
@@ -75,7 +79,15 @@ export interface WakeBatch {
 }
 
 /** The events no one is waiting on: held until the plan or the cache says it is time, or an Act supervisor can retry a failure (ADR-0057 R4). */
-const HELD_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['task_failed', 'task_idle', 'running_long']);
+const HELD_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['task_failed', 'task_idle', 'running_long', 'landed_blocker']);
+
+/**
+ * What a task's end makes moot: a running-long flag is advice about an attempt
+ * still at work (ADR-0018 W1), so one held past that attempt's end, as three of
+ * a recorded run's were, advises nothing. A silence stays: it says how the
+ * attempt went, and its pass does not undo that.
+ */
+const MOOT_ONCE_ENDED: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['running_long']);
 
 /** Whether an event is held rather than waking at once. */
 export function isHeldEvent(event: Pick<RunEvent, 'kind'>): boolean {
@@ -292,6 +304,10 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
 
   return {
     push(event) {
+      // A held flag can wait past the attempt it was about; its end supersedes it.
+      if ((event.kind === 'task_passed' || event.kind === 'task_failed') && event.taskId !== undefined) {
+        attention = attention.filter((e) => !(MOOT_ONCE_ENDED.has(e.kind) && e.taskId === event.taskId));
+      }
       // A denial below the root settled itself: nobody waits on it, so it rides along (ADR-0056 M8).
       if (event.kind === 'task_passed' || event.kind === 'approval_denied') {
         sinceLast.push(event);
@@ -305,6 +321,15 @@ export function createWakePolicy(options: WakePolicyOptions): WakePolicy {
       // most; it keeps the first one's stamp, so a later flag cannot hold the wake off.
       if (event.kind === 'running_long') {
         const at = attention.findIndex((e) => e.kind === 'running_long' && e.taskId === event.taskId);
+        if (at >= 0) {
+          attention = attention.map((e, i) => (i !== at ? e : { ...event, at: e.at }));
+          return;
+        }
+      }
+      // Reports of one landed task's work are one fact, the latest count saying the most; the first stamp holds, as a running-long flag's does.
+      if (event.kind === 'landed_blocker' && event.landedBlocker) {
+        const owner = event.landedBlocker.owner;
+        const at = attention.findIndex((e) => e.kind === 'landed_blocker' && e.landedBlocker?.owner === owner);
         if (at >= 0) {
           attention = attention.map((e, i) => (i !== at ? e : { ...event, at: e.at }));
           return;

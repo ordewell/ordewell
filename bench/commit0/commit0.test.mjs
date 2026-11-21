@@ -1883,7 +1883,7 @@ test('the fake routes a runner\'s attempts by its task key and round, and an att
   assert.equal(past.content, 'Done.');
   // Arm A's one task carries no key.
   assert.equal(R.taskKeyOf([{ role: 'user', content: 'Implement the tlslite-ng library' }]), 'A');
-  assert.equal(R.turnFor('a-failed', runnerRequest([{ role: 'user', content: 'x' }]), R.createState(), playCtx).toolCall.args.command, `sleep 85 && echo slept 85s`);
+  assert.equal(R.turnFor('a-failed', runnerRequest([{ role: 'user', content: 'x' }]), R.createState(), playCtx).toolCall.args.command, `timeout 85 tail -f /dev/null; echo slept 85s`);
 });
 
 test('the edits change a source file, add a module inside the library and edit a test, and the failing script reports failed', () => {
@@ -1894,7 +1894,7 @@ test('the edits change a source file, add a module inside the library and edit a
   assert.match(said, /find unit_tests -name 'test_\*\.py'/);
   const [attempt] = R.scenario('a-failed').attempts(playCtx).A;
   assert.equal(attempt[0].tool, 'shell');
-  assert.match(attempt[0].args.command, /^sleep \d+/);
+  assert.match(attempt[0].args.command, /^timeout \d+ tail -f \/dev\/null; echo slept/);
   assert.ok(attempt[0].args.timeout > 85_000, 'the shell tool\'s own timeout would cut the long command short');
   assert.deepEqual(attempt.at(-1).args.status, 'failed');
 });
@@ -2049,7 +2049,7 @@ test('the fake reads a step\'s command out of the task\'s own first message, and
   const steps = R.scenario('b-take-in').attempts(playCtx).consumer[0];
   const at = steps.findIndex((s) => s.fromPrompt);
   assert.ok(at > 0, 'the take-in comes after the long step, so the producer has landed');
-  assert.equal(steps[0].args.command, 'sleep 85 && echo slept 85s');
+  assert.equal(steps[0].args.command, 'timeout 85 tail -f /dev/null; echo slept 85s');
   const brief = { role: 'user', content: landingBlock() };
   const turnAt = (messages, round) => R.turnFor('b-take-in', runnerRequest([...messages, ...Array.from({ length: round }, () => toolRound('shell')).flat()]), state, playCtx);
   const turn = turnAt([{ role: 'system', content: 'a system prompt that says take it in with `not this`' }, brief], at);

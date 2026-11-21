@@ -37,6 +37,16 @@ describe('shell', () => {
     }
   });
 
+  it('refuses a change task\'s wait before running it, and runs it for a task that is not refused waits', async () => {
+    const s = scratch();
+    const refused = await runTool(shellTool, { command: 'sleep 240' }, { ...s.context, waits: { refused: true } });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('Not run: this command sleeps for 240 seconds');
+    expect(refused.details).toMatchObject({ refused: 'wait' });
+    const ran = await runTool(shellTool, { command: nodeCmd('console.log(1)') }, { ...s.context, waits: { refused: true } });
+    expect(ran.text).toContain('[exit code 0]');
+  });
+
   it('kills a command at its timeout', async () => {
     const s = scratch();
     const started = Date.now();

@@ -1,3 +1,4 @@
+import { isReadOnly } from './TaskEdit';
 import { flattenTasks, isSettledTask, keepExecutionState, renumberTasks, type RunnerId, type Task } from '../models/Task';
 import { carryPlannedModes, type RunnerModeInfo } from './ModeResolver';
 import { validatePlanTasks, type PlanTasksResult } from './PlanValidator';
@@ -162,7 +163,7 @@ export class PlanChangeCheck {
     for (;;) {
       const normal = this.normalize(change, phase, read);
       // Probed once: a plan moved during the probe into bringing one is judged on that answer, which nothing since can have changed.
-      if (!probed && bringsSealedScript(normal)) {
+      if (!probed && (bringsSealedScript(normal) || broughtReadOnly(normal).length > 0)) {
         sealable = await this.scope.canSeal?.();
         probed = true;
         continue;
@@ -235,7 +236,7 @@ export class PlanChangeCheck {
       const broken = phase === 'land' || canSeal === false ? rewriteBreaches(before, tasks, runners, catalog.runnerModes, sealing) : [];
       skillErrors.push(...unprovided(tasks));
       if (broken.length > 0 || skillErrors.length > 0) return this.refused(change, [...broken, ...skillErrors]);
-      const warnings = [...(read?.ok ? read.warnings ?? [] : []), ...skills.warnings];
+      const warnings = [...(read?.ok ? read.warnings ?? [] : []), ...skills.warnings, ...unsealedReadOnly(normal, canSeal)];
       if (phase !== 'land') return { ok: true, tasks, adjustments: normal.adjustments, warnings, summary: [], handles: new Map() };
       // Dependencies first, as an edit leaves them: a settled task keeps its slot, so a rewrite that lists it ahead of what it waits on is refused.
       const repaired = PlanGraph.repairOrder(tasks);
@@ -262,7 +263,7 @@ export class PlanChangeCheck {
       ok: true,
       tasks: resolved.tasks,
       adjustments: [...applied.adjustments ?? [], ...resolved.adjustments],
-      warnings: [...skills.warnings, ...broughtOverlaps(before, resolved.tasks)],
+      warnings: [...skills.warnings, ...broughtOverlaps(before, resolved.tasks), ...unsealedReadOnly(normal, canSeal)],
       summary: applied.summary,
       handles: applied.handles ?? new Map(),
     };
@@ -344,6 +345,27 @@ function bringsSealedScript(normal: Normalized): boolean {
   if (!normal.applied.ok) return false;
   const was = new Set(flattenTasks(normal.before).filter(sealed).map((task) => task.id));
   return normal.applied.tasks.some((task) => sealed(task) && !was.has(task.id));
+}
+
+/** The read-only AI tasks a change brings: a plan's every one, an edit's new ones. */
+function broughtReadOnly(normal: Normalized): Task[] {
+  // Read-only is the mode a runner tags so (ADR-0046), as the plan stores it; a task saved with the flag reads so too.
+  const readOnly = (task: Task) => task.type === 'ai' && (task.readOnly === true || isReadOnly(task, normal.catalog));
+  if (normal.kind === 'plan') return flattenTasks(normal.tasks).filter(readOnly);
+  if (!normal.applied.ok) return [];
+  const was = new Set(flattenTasks(normal.before).filter(readOnly).map((task) => task.id));
+  return flattenTasks(normal.applied.tasks).filter((task) => readOnly(task) && !was.has(task.id));
+}
+
+/**
+ * Where no sandbox starts, a read-only task's shell runs only what needs none
+ * (ADR-0046): a supervisor that added one to run code saw it fail twelve
+ * minutes later, with nothing in its answer to say this host could not. Said,
+ * not refused: one that only reads and searches is still the right task.
+ */
+function unsealedReadOnly(normal: Normalized, canSeal: boolean | undefined): string[] {
+  if (canSeal !== false) return [];
+  return broughtReadOnly(normal).map((task) => `Task "${task.title}" is read-only, and this machine has no sandbox: it can read and search, and run read-only commands and those the user's allowlist covers, but no test, build or script. If it must run code, make it a change task, or a check that runs on the merged tree.`);
 }
 
 /**

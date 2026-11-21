@@ -12,7 +12,7 @@ const task = (id: string, order: number, over: Partial<Task> = {}): Task =>
 
 const SUPERVISOR_RETRY: ExecutionRecord = { command: 'retry_task', actor: 'supervisor', level: 'act', outcome: 'done', task: { id: 't1', ref: '#1', title: 'Task t1' }, at: '2026-10-13T00:00:00Z' };
 
-function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptions = {}) {
+function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptions = {}, extra: Pick<RunSupervisionHost, 'landedPaths'> = {}) {
   const tasks = [task('t1', 1)];
   const plan: { runSettings?: RunSettings; pendingTurns?: PendingPlanTurn[] } = {};
   const settings: GlobalRunSettings = { ...RUN_SETTINGS_DEFAULTS, ...user };
@@ -41,6 +41,7 @@ function harness(user: Partial<GlobalRunSettings> = {}, options: SupervisorOptio
     abandonTurn: vi.fn(),
     startWaits: () => new Map(),
     plannerCache: () => ({ requestAt: null }),
+    ...extra,
   } satisfies RunSupervisionHost;
   const supervision = new RunSupervision(host, { debounceMs: 10, ...options });
   return { supervision, plan, settings, tasks, transcript, host };
@@ -518,5 +519,91 @@ describe('a turn that leaves a loop\'s check between rounds (ADR-0057 R4, ADR-00
 
     const later = host.deliver.mock.calls.slice(1).map(([text]) => String(text));
     expect(later.filter((text) => text.includes('Task #1 "Task c" is still failed'))).toEqual([]);
+  });
+});
+
+describe('a blocker a task reports in landed work (LandedBlockers)', () => {
+  it('reaches the supervisor once the task that found it settles, naming the work and the report, and again only as the reports double', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    const report = (id: string, order: number) => task(id, order, {
+      status: 'completed',
+      dependencies: ['t1'],
+      handoff: { summary: '', findingCount: 1, attempt: 1, findings: [{ id: 'F1', severity: 'blocker', title: 'tokenize() drops the last token', evidence: [{ kind: 'task', node: 'root', task: 't1', attempt: 1 }] }] },
+    });
+    tasks[0] = { ...tasks[0], status: 'completed', handoff: { summary: '', findings: [], findingCount: 0, attempt: 1 } };
+    tasks.push(report('t2', 2));
+
+    supervision.taskSettled(tasks[1]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.deliver.mock.calls[0][0]).toContain('- task #1 "Task t1" has landed, and 1 task reports a blocker in its work: #2/F1 "tokenize() drops the last token"');
+
+    // The second report corroborates the first and is raised; a third is no power of two, so nothing new goes for it.
+    tasks.push(report('t3', 3));
+    supervision.taskSettled(tasks[2]);
+    tasks.push(report('t4', 4));
+    supervision.taskSettled(tasks[3]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const later = host.deliver.mock.calls.slice(1).map((call) => String(call[0])).join('\n');
+    expect(later).toContain('2 tasks report a blocker in its work: #2/F1 "tokenize() drops the last token"; #3/F1');
+    expect(later).not.toContain('3 tasks report');
+  });
+});
+
+describe('a blocker a task reports by the file it found broken (LandedBlockers)', () => {
+  it('names the landed task whose landing changed that file, its paths read once', async () => {
+    vi.useFakeTimers();
+    const landedPaths = vi.fn(async (taskId: string): Promise<readonly string[]> => (taskId === 't1' ? ['src/tokenize.ts'] : []));
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' }, {}, { landedPaths });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    const report = (id: string, order: number) => task(id, order, {
+      status: 'completed',
+      dependencies: ['t1'],
+      handoff: { summary: '', findingCount: 1, attempt: 1, findings: [{ id: 'F1', severity: 'blocker', title: 'tokenize() drops the last token', evidence: [{ kind: 'file', path: 'src/tokenize.ts', line: 12 }] }] },
+    });
+    tasks[0] = { ...tasks[0], status: 'completed', handoff: { summary: '', findings: [], findingCount: 0, attempt: 1 } };
+    tasks.push(report('t2', 2));
+
+    supervision.taskSettled(tasks[1]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    tasks.push(report('t3', 3));
+    supervision.taskSettled(tasks[2]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    const delivered = host.deliver.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(delivered).toContain('- task #1 "Task t1" has landed, and 1 task reports a blocker in its work: #2/F1 "tokenize() drops the last token"');
+    expect(delivered).toContain('2 tasks report a blocker in its work');
+    expect(landedPaths.mock.calls.filter(([id]) => id === 't1')).toHaveLength(1);
+  });
+
+  it('asks again at the next report for files the run could not say, and raises nothing on a read that failed', async () => {
+    vi.useFakeTimers();
+    let fails = true;
+    const landedPaths = vi.fn(async (): Promise<readonly string[]> => {
+      if (fails) throw new Error('Task diff is not available yet');
+      return ['src/tokenize.ts'];
+    });
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' }, {}, { landedPaths });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    const report = (id: string, order: number) => task(id, order, {
+      status: 'completed',
+      dependencies: ['t1'],
+      handoff: { summary: '', findingCount: 1, attempt: 1, findings: [{ id: 'F1', severity: 'blocker', title: 'tokenize() drops the last token', evidence: [{ kind: 'file', path: 'src/tokenize.ts' }] }] },
+    });
+    tasks[0] = { ...tasks[0], status: 'completed', handoff: { summary: '', findings: [], findingCount: 0, attempt: 1 } };
+    tasks.push(report('t2', 2));
+
+    supervision.taskSettled(tasks[1]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(host.deliver.mock.calls.map((call) => String(call[0])).join('\n')).not.toContain('has landed');
+
+    fails = false;
+    tasks.push(report('t3', 3));
+    supervision.taskSettled(tasks[2]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(host.deliver.mock.calls.map((call) => String(call[0])).join('\n')).toContain('2 tasks report a blocker in its work');
   });
 });

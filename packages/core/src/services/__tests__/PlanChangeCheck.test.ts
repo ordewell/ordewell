@@ -196,6 +196,29 @@ describe('a script added below the root, where nothing can seal (ADR-0056 M9)', 
   });
 });
 
+describe('a read-only task added where nothing can seal', () => {
+  const scope = (canSeal: boolean): PlanChangeScope => ({
+    tasks: () => [],
+    runners: () => ['claude-code'],
+    catalog: () => ({ modelsByRunner: {}, runnerModes: { 'claude-code': [{ id: 'build', label: 'Build', description: 'edits' }, { id: 'plan', label: 'Plan', description: 'reads', readOnly: true }] } }),
+    canSeal: () => Promise.resolve(canSeal),
+  });
+  const research = { title: 'Measure the parser', prompt: 'run the parser tests and time them', readOnly: true };
+  const said = 'Task "Measure the parser" is read-only, and this machine has no sandbox: it can read and search, and run read-only commands and those the user\'s allowlist covers, but no test, build or script. If it must run code, make it a change task, or a check that runs on the merged tree.';
+
+  it('is said in the edit\'s answer, and not refused: one that only reads is still the right task', async () => {
+    const edited = await new PlanChangeCheck(scope(false)).check({ kind: 'ops', ops: [{ op: 'add', task: research }] }, 'land');
+
+    expect(edited).toMatchObject({ ok: true, warnings: [said] });
+  });
+
+  it('is not said where a sandbox starts', async () => {
+    const edited = await new PlanChangeCheck(scope(true)).check({ kind: 'ops', ops: [{ op: 'add', task: research }] }, 'land');
+
+    expect(edited).toMatchObject({ ok: true, warnings: [] });
+  });
+});
+
 describe('an edit, as it commits', () => {
   const plan = () => [createTask({ id: 't1', order: 1, title: 'Build', prompt: 'p', assignedRunner: 'claude-code', assignedModel: { modelId: 'sonnet', modelLabel: 'sonnet' } })];
 

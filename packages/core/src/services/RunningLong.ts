@@ -304,12 +304,13 @@ export class RunningLongClock {
   }
 
   /**
-   * A pass that raised the threshold puts the next flag off. One that lowered
-   * it, as the median rule can, does not bring it closer than double the last:
-   * the supervisor heard of this task then.
+   * The first flag follows the threshold as passes move it. Every later one is
+   * due at twice the last, whatever passes did since: a threshold read again
+   * rose with the median of the tasks that passed, and two slow tasks of a
+   * recorded run were not flagged a second time in over an hour.
    */
   private due(): number {
-    return Math.max(this.threshold().ms * 2 ** this.flags, this.flaggedAt * 2);
+    return this.flags === 0 ? this.threshold().ms : this.flaggedAt * 2;
   }
 
   private arm(): void {
@@ -331,7 +332,7 @@ export class RunningLongClock {
       this.arm();
       return;
     }
-    const previous = due > this.threshold().ms * 2 ** this.flags ? this.flaggedAt : undefined;
+    const previous = this.flags > 0 ? this.flaggedAt : undefined;
     this.flags += 1;
     this.flaggedAt = due;
     this.flag({ ...this.facts('duration', due), ...(previous !== undefined ? { previousMs: previous } : {}) });

@@ -4,6 +4,7 @@ import { createWakePolicy, cut, isHeldEvent, LEFT_OUT_ROOM, REPORT_LEAD, RIDE_AL
 import { classifyRunnerStop } from './runnerExit';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
 import { LAND_KEPT_HINT } from './taskReport';
+import type { LandedBlockerFacts } from './LandedBlockers';
 import { CONTEXT_FLOOR_TOKENS, CONTEXT_SHARE, RUNNING_LONG_FACTOR, RUNNING_LONG_FLOOR_MS, RUNNING_LONG_MEDIAN_FACTOR, RUNNING_LONG_MEDIAN_FLOOR_MS, contextThresholdOf, type RunningLongEvent } from './RunningLong';
 import { formatElapsed } from '../conversation/elapsed';
 import { WAKE_UP_RATE, wakeUpRateTripped, type WakeUpRate } from './LoopGuards';
@@ -780,6 +781,7 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
   run_finished: 'ended',
   run_held: 'holding the run',
   failure_standing: 'still holding work back',
+  landed_blocker: 'with a blocker reported in their landed work',
   task_report: 'reported',
 };
 
@@ -792,6 +794,15 @@ const OVERFLOW_WORDS: Record<RunEventKind, string> = {
  * the rest took 6, and finished within minutes of being told.
  */
 export const RUNNING_LONG_ADVICE = "Running long is advice, never a verdict: read the task's output with task_output; if its brief's done criterion holds, or it is stuck on what that criterion does not need or the workspace cannot tell it, message_task it to commit what works, call task_complete and list the rest; if the brief is too large, stop_task it and split it; otherwise let it go on.";
+
+/**
+ * What a supervisor does about a blocker reported in landed work, said once a
+ * wake as {@link RUNNING_LONG_ADVICE} is: one fix, whoever reported it, written
+ * by the supervisor, since a report's words are never another task's brief
+ * (ADR-0057 R3), and started ahead of the tasks still waiting for a slot. Its
+ * level's brief says whether it acts or suggests.
+ */
+export const LANDED_BLOCKER_ADVICE = 'A blocker reported in landed work is fixed once, by one task, never once per report: read a report with task_output; if it holds, make one edit_plan call that adds a fix task depending on the task whose work it is, citing the reports by reference (as #5/F2), makes the closing check depend on the fix too, and reorders the fix ahead of every task not yet started, so it takes the next free slot. Add none if a task in the plan already fixes it. Do not retry, stop or message the tasks that reported it: they go on.';
 
 /** A running-long line carries its facts whole: they are what the supervisor weighs, and a ride-along line would cut them off. */
 const RUNNING_LONG_CHARS = 2 * TASK_NAME_CHARS + DETAIL_CHARS;
@@ -818,7 +829,8 @@ export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => str
   ];
   const shown = new Set<DigestItem>();
   const advised = items.some((item) => item.kind === 'running_long');
-  let used = 'Run update:'.length + SINCE_LAST.length + OVERFLOW_ROOM + (advised ? RUNNING_LONG_ADVICE.length + 1 : 0);
+  const fixable = items.some((item) => item.kind === 'landed_blocker');
+  let used = 'Run update:'.length + SINCE_LAST.length + OVERFLOW_ROOM + (advised ? RUNNING_LONG_ADVICE.length + 1 : 0) + (fixable ? LANDED_BLOCKER_ADVICE.length + 1 : 0);
   // Whole items by rank, stopping at the first that does not fit: a smaller one past it would read as more important than it.
   for (const item of [...items].sort((a, b) => a.rank - b.rank)) {
     if (used + item.line.length + 1 > WAKE_MAX_CHARS) break;
@@ -831,6 +843,7 @@ export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => str
     'Run update:',
     ...items.filter((item) => item.kind !== 'task_passed' && shown.has(item)).map((item) => item.line),
     ...([...shown].some((item) => item.kind === 'running_long') ? [RUNNING_LONG_ADVICE] : []),
+    ...([...shown].some((item) => item.kind === 'landed_blocker') ? [LANDED_BLOCKER_ADVICE] : []),
     ...(passes.length > 0 ? [SINCE_LAST, ...passes.map((item) => item.line)] : []),
     ...(left.length > 0 ? [overflowLine(left)] : []),
   ].join('\n');
@@ -847,8 +860,8 @@ function attentionItem(event: RunEvent, describe: (taskId: string) => string, bl
   // Read as the update goes out: a retry that passed since has lifted the block.
   const blocked = (event.kind === 'task_failed' || event.kind === 'running_long') && event.taskId !== undefined ? blockedBy(event.taskId) : [];
   const line = attentionLine(event, describe, blocked);
-  // A task holding work back is why the wake came, whatever else it was held for.
-  if (!isHeldEvent(event) || blocked.length > 0) return { kind: event.kind, rank: 0, line: `- ${line}` };
+  // A task holding work back is why the wake came, whatever else it was held for; so is work every reporter builds on.
+  if (!isHeldEvent(event) || blocked.length > 0 || event.kind === 'landed_blocker') return { kind: event.kind, rank: 0, line: `- ${line}` };
   return { kind: event.kind, rank: 1, line: `- ${cut(line, (event.kind === 'running_long' ? RUNNING_LONG_CHARS : RIDE_ALONG_CHARS) - 2)}` };
 }
 
@@ -881,6 +894,7 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
     // Its result whole, not a digest line: the planner asked for it, and reads it here (ADR-0037, R2).
     case 'task_report': return `${task}${REPORT_LEAD} ${(event.report?.text ?? '').split('\n').join('\n  ')}`;
     case 'task_passed': return `${task} passed`;
+    case 'landed_blocker': return landedBlockerLine(task, event.landedBlocker, describe);
     case 'usage_limit': {
       const ids = event.taskIds ?? (event.taskId === undefined ? [] : [event.taskId]);
       const many = ids.length > 1;
@@ -896,6 +910,16 @@ function attentionLine(event: RunEvent, describe: (taskId: string) => string, bl
 
 function blocks(blocked: readonly string[], describe: (taskId: string) => string): string {
   return blocked.length === 0 ? '' : `; it blocks ${blocked.length === 1 ? 'task' : 'tasks'} ${namedFirst(blocked, describe)}`;
+}
+
+/** Whose landed work, how many report a blocker in it, the first reports by reference, and the check the fix must land before. */
+function landedBlockerLine(task: string, facts: LandedBlockerFacts | undefined, describe: (taskId: string) => string): string {
+  if (!facts) return `${task} has landed, and a task reports a blocker in its work`;
+  const { reporters, reports, closer } = facts;
+  const named = reports.map((r) => `${describe(r.reporter).split(' ')[0]}/${r.finding} "${cut(r.title, 80)}"`);
+  const more = reporters > reports.length ? ` and ${reporters - reports.length} more` : '';
+  const before = closer ? `; the closing check is ${describe(closer)}` : '';
+  return `${task} has landed, and ${reporters === 1 ? '1 task reports' : `${reporters} tasks report`} a blocker in its work: ${named.join('; ')}${more}${before}`;
 }
 
 /** The facts of a running-long flag, worded for the supervisor to weigh (ADR-0018 W1). */
@@ -919,9 +943,6 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
     return `${task}'s runner compacted its context on its own, ${times(facts.compactions)} this attempt, after ${formatElapsed(facts.elapsedMs)} running${context}`;
   }
   const { basis, median, retryOf } = facts;
-  const base = retryOf ? retryOf.runningMs
-    : median ? Math.max(RUNNING_LONG_MEDIAN_FLOOR_MS, median.runningMs * RUNNING_LONG_MEDIAN_FACTOR)
-      : basis ? basis.runningMs * RUNNING_LONG_FACTOR : RUNNING_LONG_FLOOR_MS;
   const from = retryOf
     ? `the ${formatElapsed(retryOf.runningMs)} attempt ${retryOf.attempt} ran before it ${retryOf.outcome === 'failed' ? 'failed' : 'was stopped'}`
     : median
@@ -929,10 +950,10 @@ function runningLongLine(task: string, facts: RunningLongEvent | undefined, desc
       : basis
         ? `${RUNNING_LONG_FACTOR}× the ${formatElapsed(basis.runningMs)} task ${describe(basis.taskId)} passed in`
         : `the ${formatElapsed(RUNNING_LONG_FLOOR_MS)} floor`;
-  // A threshold lowered since the last flag, doubled, would come sooner than twice that flag, which is when this one came.
+  // After the first flag the next is twice the last, whatever the threshold did since.
   const why = facts.previousMs !== undefined
-    ? `twice the ${formatElapsed(facts.previousMs)} its last flag was due at, never sooner; ${from}`
-    : `${from}${facts.thresholdMs > base ? ', doubled after each earlier flag' : ''}`;
+    ? `twice the ${formatElapsed(facts.previousMs)} its last flag was due at`
+    : from;
   return `${task} has run long: ${formatElapsed(facts.elapsedMs)} running, past its ${formatElapsed(facts.thresholdMs)} threshold (${why})${context}${compacted}`;
 }
 

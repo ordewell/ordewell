@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Supervisor, wakeUpDigest, type RunEventInput, type SupervisedRun, type SupervisorHost } from '../Supervisor';
+import { LANDED_BLOCKER_ADVICE, Supervisor, wakeUpDigest, type RunEventInput, type SupervisedRun, type SupervisorHost } from '../Supervisor';
 import { boundedWakeUps, WAKE_MAX_CHARS, type RunEvent } from '../WakePolicy';
 
 const describeTask = (taskId: string) => `#${taskId.slice(1)} "Task ${taskId}"`;
@@ -79,11 +79,25 @@ describe('wakeUpDigest', () => {
         .toContain('context 210k of an assumed 400k window, past 200k');
     });
 
-    it('names the floor when no AI task has passed, and a threshold doubled by earlier flags', () => {
-      const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE });
+    it('names the landed task a blocker is reported in, the first reports by reference and the closing check, then says once what to do', () => {
+      const event: RunEvent = {
+        kind: 'landed_blocker',
+        at: 0,
+        taskId: 't1',
+        landedBlocker: { owner: 't1', reporters: 4, reports: [{ reporter: 't5', finding: 'F2', title: 'tokenize() drops the last token' }, { reporter: 't7', finding: 'F1', title: 'same' }], closer: 't9' },
+      };
+      const lines = wakeUpDigest({ attention: [event, { ...event, taskId: 't2', landedBlocker: { owner: 't2', reporters: 1, reports: [{ reporter: 't3', finding: 'F1', title: 'x' }] } }], sinceLast: [] }, describeTask).split('\n');
+
+      expect(lines[1]).toBe('- task #1 "Task t1" has landed, and 4 tasks report a blocker in its work: #5/F2 "tokenize() drops the last token"; #7/F1 "same" and 2 more; the closing check is #9 "Task t9"');
+      expect(lines[2]).toBe('- task #2 "Task t2" has landed, and 1 task reports a blocker in its work: #3/F1 "x"');
+      expect(lines.filter((line) => line === LANDED_BLOCKER_ADVICE)).toHaveLength(1);
+    });
+
+    it('names the floor when no AI task has passed', () => {
+      const event = runningLong('t4', { elapsedMs: 30 * MINUTE, thresholdMs: 30 * MINUTE });
 
       expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
-        .toBe('- task #4 "Task t4" has run long: 1h 00m running, past its 1h 00m threshold (the 30m 00s floor, doubled after each earlier flag)');
+        .toBe('- task #4 "Task t4" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor)');
     });
 
     it('names the median the passed tasks took when it set the threshold, and still what the task holds back', () => {
@@ -93,19 +107,19 @@ describe('wakeUpDigest', () => {
         .toBe('- task #4 "Task t4" has run long: 22m 00s running, past its 22m 00s threshold (the 12 tasks that have passed took a median of 7m 20s; 3× that, 19m 00s at least); it blocks task #7 "Task t7"');
     });
 
-    it('says a median threshold was doubled only once it was', () => {
-      const event = runningLong('t4', { elapsedMs: 38 * MINUTE, thresholdMs: 38 * MINUTE, median: { passed: 5, runningMs: 2 * MINUTE } });
+    it('names the median rule\'s floor when it set a first flag', () => {
+      const event = runningLong('t4', { elapsedMs: 19 * MINUTE, thresholdMs: 19 * MINUTE, median: { passed: 5, runningMs: 2 * MINUTE } });
 
       expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
-        .toBe('- task #4 "Task t4" has run long: 38m 00s running, past its 38m 00s threshold (the 5 tasks that have passed took a median of 2m 00s; 3× that, 19m 00s at least, doubled after each earlier flag)');
+        .toBe('- task #4 "Task t4" has run long: 19m 00s running, past its 19m 00s threshold (the 5 tasks that have passed took a median of 2m 00s; 3× that, 19m 00s at least)');
     });
 
-    it('names the earlier flag when twice it, not the threshold doubled, set the one it names', () => {
-      // A flag at the 30-minute floor, then a fifth pass lowers the threshold to 19: the next is due at 60, not 38.
-      const event = runningLong('t4', { elapsedMs: 60 * MINUTE, thresholdMs: 60 * MINUTE, previousMs: 30 * MINUTE, median: { passed: 5, runningMs: 6 * MINUTE } });
+    it('names the earlier flag a later one is twice, whatever the threshold reads now', () => {
+      // A flag at 19 minutes, then passes raise the median's threshold to 45: the next is still due at 38.
+      const event = runningLong('t4', { elapsedMs: 38 * MINUTE, thresholdMs: 38 * MINUTE, previousMs: 19 * MINUTE, median: { passed: 9, runningMs: 15 * MINUTE } });
 
       expect(wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1])
-        .toBe('- task #4 "Task t4" has run long: 1h 00m running, past its 1h 00m threshold (twice the 30m 00s its last flag was due at, never sooner; the 5 tasks that have passed took a median of 6m 00s; 3× that, 19m 00s at least)');
+        .toBe('- task #4 "Task t4" has run long: 38m 00s running, past its 38m 00s threshold (twice the 19m 00s its last flag was due at)');
     });
 
     it('names the earlier attempt a retry\'s threshold was its running time of', () => {
