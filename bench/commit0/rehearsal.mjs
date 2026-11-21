@@ -168,6 +168,9 @@ const FIX_REPLY = `The rehearsal adds one fix task for the opening task's defect
   ],
 }, null, 2)}\n\`\`\``;
 const FAILS_ON_PURPOSE ='The rehearsal fails this task on purpose.';
+const GIVES_UP_EARLY = 'The rehearsal gives up early on purpose: the agent reports failed long before a cap.';
+/** A shell step that the provider prices at `usd`, as a long attempt's spending mounts. */
+const spends = (usd) => ({ ...shell('echo spending'), costUsd: usd });
 const LEFT_PLAN = [
   { key: 'edit', title: 'Implement the library' },
   { key: 'after', title: 'Note the rehearsal', after: ['edit'] },
@@ -193,7 +196,7 @@ const SHAPED_PLAN = [
  * a task's prompt carries, or `A` for arm A's one task), and what its
  * result.json must hold. `ctx` is { src, tests, longSec }.
  */
-export const SCENARIOS = Object.freeze({
+const SCENARIO_TABLE = {
   'b-plan': {
     arm: 'B',
     planOnly: true,
@@ -238,6 +241,58 @@ export const SCENARIOS = Object.freeze({
       notComplete: true, passedAboveBaseline: true, testExcluded: true,
     },
     cutShort: ['A'],
+  },
+  'a-continued': {
+    arm: 'A-continued',
+    about: 'the control arm: its one task reports failed after one step and ends its attempt, is continued in its saved session with the fixed message, makes the edits and reports done; each continuation after that is idle (an attempt ending in prose with no report, answered as the reply its task waits on, then a report and a word, twice), so after three the harness gives up; scored on its final tree',
+    // One session, so one script: a continuation goes on from the step after the last one the session played (the rounds of its history).
+    attempts: (ctx) => ({
+      A: [[
+        note('commit0-rehearsal-note.md'),
+        failed(GIVES_UP_EARLY),
+        say('I could not finish this.'),
+        // The first continuation: the edits, a report, a closing word. An attempt ends when the model stops calling tools, whatever it reported.
+        ...editSteps(ctx),
+        done('Implement the library'),
+        say('Finished.'),
+        // The three idle ones. First an attempt that ends in prose with no report: the runner reminds it once, it answers in prose again, and the task waits on input for a reply (the harness's message); then a report and a closing word, twice.
+        say('I believe that is everything.'),
+        say('There is nothing to report.'),
+        done('Nothing more to do'),
+        say('Nothing more to add.'),
+        done('Nothing more to do'),
+        say('Nothing more to add.'),
+      ]],
+    }),
+    ending: { by: 'continuation', why: 'gave-up', calls: true },
+    expect: { valid: true, truncated: false, stoppedWhy: null, passedAboveBaseline: true, testExcluded: true, tasks: { completed: 1 } },
+    playedOut: ['A'],
+    // Each continuation: the verdict of the attempt before it, and whether its own attempt did anything (calls above two, or a changed tree).
+    continued: { verdicts: ['failed', 'done', 'no report', 'done'], vias: ['continue', 'continue', 'message', 'continue'], busy: [true, false, false, false], stop: 'gave-up' },
+  },
+  'a-continued-cap': {
+    arm: 'A-continued',
+    about: 'the control arm up to the spend cap: its task reports failed after spending, is continued, makes the edits and reports done, and is continued again, and that attempt reports usage past --cap-usd mid-attempt: the stop, the merge and the scoring all happen, the caps winning across the continuations',
+    capUsd: 0.5,
+    attempts: (ctx) => ({
+      A: [[
+        spends(0.2),
+        failed(GIVES_UP_EARLY),
+        say('I could not finish this.'),
+        ...editSteps(ctx),
+        done('Implement the library'),
+        say('Finished.'),
+        spends(1),
+        longStep(ctx.longSec),
+        done('Spend past the cap'),
+      ]],
+    }),
+    ending: { by: 'cap', cap: 'spend', calls: true },
+    // `ordewell run` returned by itself when the first attempt ended: the continued attempts run under the daemon, which the driver's stop ends.
+    expect: { valid: true, truncated: true, truncatedWhy: /^cap: spend/, stoppedWhy: 'spend', mergeExit: 0, passedAboveBaseline: true, testExcluded: true },
+    playedOut: [],
+    cutShort: ['A'],
+    continued: { verdicts: ['failed', 'done'], busy: [true], stop: null },
   },
   'b-retry': {
     arm: 'B',
@@ -402,7 +457,16 @@ export const SCENARIOS = Object.freeze({
     playedOut: ['edit'],
     cutShort: ['spend'],
   },
-});
+};
+
+// The control arm again, asked (--effort-a) to think at a level: what is judged beyond a-continued is that the level reached the model's requests.
+SCENARIO_TABLE['a-continued-effort'] = {
+  ...SCENARIO_TABLE['a-continued'],
+  about: 'the control arm as a-continued, with --effort-a high: the task is planned with that effort and every request of the runner the fake provider hears carries it',
+  effortA: 'high',
+};
+
+export const SCENARIOS = Object.freeze(SCENARIO_TABLE);
 
 export const scenarioNames = () => Object.keys(SCENARIOS);
 
@@ -794,6 +858,75 @@ export function judgeBlocker(name, requests, ctx, plan) {
   return f;
 }
 
+/**
+ * The failures of a control-arm scenario: what result.json says of each
+ * continuation (the verdict of the attempt before it, in order, the message
+ * itself, the calls and spend so far, and what its own attempt did), why the
+ * run stopped continuing, and, from the fake's request log, that the one
+ * fixed message reached the runner once per continuation in the same
+ * session, the task's own first message still the first.
+ */
+export function judgeContinued(name, result, requests, message) {
+  const s = scenario(name);
+  if (!s.continued) return [];
+  const want = s.continued;
+  const f = [];
+  if (result?.arm !== 'A-continued') f.push(`the run's arm is ${JSON.stringify(result?.arm)}, not A-continued`);
+  const c = result?.continuation;
+  if (!c) return [...f, 'result.json holds no continuation record'];
+  if (c.message !== message) f.push(`the continuation message is ${JSON.stringify(c.message)}, not the harness's constant`);
+  if (!c.margins || !(c.margins.minWallMs > 0) || !(c.margins.minUsd > 0) || !(c.margins.max > 0)) f.push(`the record holds no margins: ${JSON.stringify(c.margins ?? null)}`);
+  const records = c.continuations ?? [];
+  const verdicts = records.map((r) => r.after?.verdict);
+  if (JSON.stringify(verdicts) !== JSON.stringify(want.verdicts)) f.push(`the continuations followed ${JSON.stringify(verdicts)}, wanted ${JSON.stringify(want.verdicts)}`);
+  if (c.count !== records.length) f.push(`count is ${c.count} for ${records.length} records`);
+  if (c.first?.verdict !== want.verdicts[0]) f.push(`the first attempt ended ${JSON.stringify(c.first?.verdict)}, wanted ${want.verdicts[0]}`);
+  let prev = { callsSoFar: 0, spentUsd: 0, at: '' };
+  records.forEach((r, i) => {
+    const who = `continuation ${i + 1}`;
+    if (r.n !== i + 1) f.push(`${who} is numbered ${r.n}`);
+    if (r.mode !== 'session' || !['continue', 'message'].includes(r.via)) f.push(`${who} was ${r.mode} (${r.via}), not the saved session continued`);
+    if (want.vias && r.via !== want.vias[i]) f.push(`${who} went in by ${JSON.stringify(r.via)}, wanted ${JSON.stringify(want.vias[i])}`);
+    if (!r.at || Number.isNaN(Date.parse(r.at)) || r.at < prev.at) f.push(`${who} has no time, or one before the last's (${r.at})`);
+    if (!(r.callsSoFar > prev.callsSoFar)) f.push(`${who}: ${r.callsSoFar} calls so far, not more than ${prev.callsSoFar}`);
+    if (typeof r.spentUsd !== 'number' || r.spentUsd < prev.spentUsd) f.push(`${who}: spend so far ${r.spentUsd} is under the last's ${prev.spentUsd}`);
+    if (['failed', 'done'].includes(r.after?.verdict) && !r.after.summary) f.push(`${who} records no summary of the ${r.after.verdict} attempt before it`);
+    // The last record is the one a stop may have cut: only what ended is judged.
+    if (r.calls !== null && want.busy[i] !== undefined) {
+      const busy = r.calls > (c.margins?.giveUpCalls ?? 2) || r.treeChanged === true;
+      if (busy !== want.busy[i]) f.push(`${who}'s attempt made ${r.calls} calls and ${r.treeChanged ? 'changed' : 'left'} the tree: ${busy ? 'busy' : 'idle'}, wanted ${want.busy[i] ? 'busy' : 'idle'}`);
+    }
+    prev = r;
+  });
+  if ((c.stop?.why ?? null) !== want.stop) f.push(`the continuation stopped for ${JSON.stringify(c.stop?.why ?? null)}, wanted ${JSON.stringify(want.stop)}`);
+  // From the fake: the same attempt of the same session heard the message once per continuation.
+  const mine = requests.filter((r) => r.turn?.role === 'runner' && r.turn.key === 'A');
+  if (!mine.length) return [...f, 'the fake heard no request of the task'];
+  const users = (r) => (r.messages ?? []).filter((m) => m.role === 'user').map(text);
+  const most = Math.max(...mine.map((r) => users(r).filter((t) => t.includes(message)).length));
+  if (most !== records.length) f.push(`the runner was sent the message ${most} time(s) in its session, wanted ${records.length}`);
+  const firstGoal = users(mine[0])[0];
+  if (mine.some((r) => users(r)[0] !== firstGoal)) f.push('a request does not open on the task\'s own first message: a continuation started a conversation of its own');
+  if (mine.some((r) => r.turn.attempt !== 1)) f.push('the fake counted a second attempt: the saved session was not what was continued');
+  return f;
+}
+
+/**
+ * The failures of a scenario that sets the single agent's reasoning effort
+ * (--effort-a): every request the runner made for the task carries it, as
+ * OpenRouter takes it, in the body's `reasoning.effort` (core's chat
+ * completions dialect), which the fake logs as `reasoning`.
+ */
+export function judgeEffort(name, requests) {
+  const want = scenario(name).effortA;
+  if (!want) return [];
+  const mine = requests.filter((r) => r.turn?.role === 'runner' && r.turn.key === 'A');
+  if (!mine.length) return ['the fake heard no request of the task, so the effort it ran at cannot be read'];
+  const carried = mine.filter((r) => r.reasoning?.effort === want).length;
+  const seen = [...new Set(mine.map((r) => JSON.stringify(r.reasoning ?? null)))].join(', ');
+  return carried === mine.length ? [] : [`${carried} of ${mine.length} requests of the task carried reasoning effort "${want}" (seen: ${seen})`];
+}
+
 /** The failures of a scenario that names files its merged work must hold; `present` says whether one is there. */
 export function judgeLanded(name, present) {
   return (scenario(name).landed ?? []).filter((file) => !present(file)).map((file) => `${file} never landed: a task that ended done with a finding must still land`);
@@ -918,7 +1051,7 @@ function judgeEnding(want, result) {
   const sw = result.providerSwitches;
   if (!sw || !(sw.attempts > 0) || sw.attemptsSwitched !== 0 || sw.switches !== 0) f.push(`providerSwitches is ${JSON.stringify(sw)}, wanted every attempt read and no switch`);
   if (!want) return f;
-  for (const k of ['by', 'status', 'reason', 'cap']) if (k in want && end[k] !== want[k]) f.push(`ending.${k} is ${JSON.stringify(end[k])}, wanted ${JSON.stringify(want[k])}`);
+  for (const k of ['by', 'status', 'reason', 'cap', 'why']) if (k in want && end[k] !== want[k]) f.push(`ending.${k} is ${JSON.stringify(end[k])}, wanted ${JSON.stringify(want[k])}`);
   if (want.calls) {
     const m = end.modelCalls;
     if (!m || !(m.used > 0) || !(m.limitPerAttempt > 0) || m.reachedLimit) f.push(`ending.modelCalls is ${JSON.stringify(m)}, wanted calls used against the step limit`);

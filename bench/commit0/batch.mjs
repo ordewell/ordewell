@@ -32,6 +32,10 @@ const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run | --rehears
                            (required with --run)
   --only <a,b>             only these libraries of --libs
   --arm A|B|both           which arms of each library (default both)
+  --continue-a             arm A becomes the control arm, A-continued: the same single agent, continued with one
+                           fixed message each time its attempt ends while the caps have room (see bench/README.md)
+  --effort-a <level>       the reasoning effort of the single-agent arms' task (${L.EFFORTS.join(', ')}); none set
+                           without it. B's tasks carry the effort the planner gave them
   --plan-only              only arm B's planning: each run makes its plan, records its shape and stops, with
                            nothing run, merged or scored (arm A has no plan: --arm A is refused, both means B).
                            Its results go in plan-runs/ and plans.jsonl, never runs/ or results.jsonl
@@ -132,7 +136,7 @@ async function main() {
   const names = opts.only.length ? listed.filter((n) => opts.only.includes(n)) : listed;
   const missing = opts.only.filter((n) => !listed.includes(n));
   if (missing.length) throw new Error(`not in ${opts.libs}: ${missing.join(', ')}`);
-  const runs = L.batchPlan({ libs: names, arms: L.armsOf(opts.arm).map((a) => a.id), seed: opts.seed });
+  const runs = L.batchPlan({ libs: names, arms: L.armsOf(opts.arm, opts.continueA).map((a) => a.id), seed: opts.seed });
   if (runs.length === 0) throw new Error('no run in the batch');
   if (opts.run && !process.env.OPENROUTER_API_KEY) throw new Error('--run needs OPENROUTER_API_KEY');
   const realKeys = opts.rehearse ? R.realKeysIn(process.env) : [];
@@ -192,6 +196,8 @@ async function main() {
         startedAt: found?.result.startedAt ?? null,
         endedAt: found?.result.endedAt ?? null,
         recordedUsd: found?.result.recordedUsd ?? null,
+        effortA: found?.result.effortA ?? null,
+        efforts: found?.result.efforts ?? null,
         referenceUsd: found?.result.referenceUsd ?? null,
         referenceTokens: found?.result.referenceSpend?.tokens ?? null,
         billedUsd: found?.result.billedUsd ?? null,
@@ -221,7 +227,7 @@ async function main() {
         continue;
       }
       const tag = `${r.lib}-${r.arm}`.toLowerCase();
-      const args = [...opts.driveArgs, '--only', r.lib, '--arm', r.arm, ...(opts.seed ? ['--seed', opts.seed] : []), '--batch-dir', batchDir, ...(overlapped ? ['--batch-shared'] : [])];
+      const args = [...opts.driveArgs, '--only', r.lib, ...L.driveArmArgs(L.ARMS[r.arm], opts), ...(opts.seed ? ['--seed', opts.seed] : []), '--batch-dir', batchDir, ...(overlapped ? ['--batch-shared'] : [])];
       const { code, signal } = await runChild(args, path.join(batchDir, `${tag}.log`), `[${r.lib} ${r.arm}]`);
       outcomes.push({ ...r, exit: code, signal: signal ?? null });
       // Read once the run has ended and written before anything else can be lost: a host stop costs the runs still going.

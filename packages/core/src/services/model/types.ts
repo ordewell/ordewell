@@ -82,6 +82,17 @@ export type ModelMessage =
   | { role: 'assistant'; text: string; toolCalls?: ModelToolCall[]; providerState?: ProviderState }
   | { role: 'tool'; results: ToolResult[] };
 
+/**
+ * Which earlier reasoning a request may leave out. Only an adapter knows
+ * whether its provider takes a conversation missing some (provider state is
+ * opaque outside it), so each honours this where that is known to be safe and
+ * otherwise sends every turn's reasoning, as with no hint.
+ */
+export interface ReasoningHint {
+  /** Assistant messages before this index of `messages` may go without their reasoning; every one from it on keeps it. */
+  keepFrom: number;
+}
+
 export interface ModelRequest {
   /** The provider's own model id, with no Ordewell provider prefix. */
   model: string;
@@ -92,6 +103,7 @@ export interface ModelRequest {
   effort?: EffortLevel;
   maxOutputTokens?: number;
   cache?: CacheHints;
+  reasoning?: ReasoningHint;
 }
 
 /**

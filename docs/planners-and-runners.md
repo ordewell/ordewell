@@ -275,6 +275,37 @@ the runner assumes 128,000 tokens; the context meter then reads "of an assumed
 over the catalog and the listing. When a provider refuses a request as too long, the
 runner compacts further and keeps the smaller window for the rest of that attempt.
 
+**Earlier reasoning.** A reasoning model's turns go back to it with the reasoning
+each produced, so every call re-sends all the reasoning before it. The
+`taskReasoningKept` setting, in the same file (`ORDEWELL_TASK_REASONING_KEPT` wins
+when it is set), lets a call leave the oldest of it out. It applies to the built-in
+runner only; other runners ignore it.
+
+- `"all"`, the default, sends every turn's reasoning: requests are as they always
+  were.
+- A whole number N above zero keeps the reasoning of at least the latest N calls.
+  The boundary before which reasoning may go moves forward in steps of 2N calls,
+  so between two moves every call starts with the call before's prompt and reads it
+  from the provider's cache; the kept span runs from N to 3N - 1 calls. The latest
+  call's reasoning is always kept, and a compaction starts the count over.
+
+Any other value (not a number, zero or negative) stops a task from starting, with a
+message saying what is accepted. Whether reasoning is actually left out is each
+provider's to decide, and a call sends everything wherever that is not known to be
+safe:
+
+| Dialect | With a number N |
+| --- | --- |
+| Chat-completions through OpenRouter | Honoured only for a model a probe has checked (DeepSeek V4.1 Flash today), when the upstream that served the call before is one the probe found takes it; the call then names those upstreams as its only fallbacks. An unknown upstream, any other upstream or model, and a `:nitro` or `:floor` model id send everything. |
+| Chat-completions to DeepSeek directly | Ignored: DeepSeek refuses a request with tools that leaves out any turn's reasoning, so every turn carries it. |
+| Chat-completions to any other vendor (Kimi included) | Ignored. |
+| Anthropic Messages | Ignored: a task is one tool-use turn, whose thinking blocks Anthropic asks to have back. |
+| Gemini | Ignored: its thought signatures are checked across the turn's calls, and thought text is not sent back. |
+| OpenAI Responses | Ignored: the reasoning items of a function-call loop are to be passed back, and the API drops earlier turns' itself. |
+
+Whether a model works as well without its older reasoning is not something the
+probe could show: try a number on a task you can compare before relying on it.
+
 **Resuming and messages.** The runner keeps each attempt's conversation in a
 transcript under Ordewell's data directory, outside your repository, so a resumed
 task continues from it, and compacts a long conversation itself.
