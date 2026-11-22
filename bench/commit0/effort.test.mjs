@@ -73,3 +73,19 @@ test('the effort scenario passes the flag and the fake provider is told to read 
   // The planner and the supervisor are not the task: only the runner's requests are read.
   assert.equal(f([asked({ effort: 'high' }), asked(null, 'supervisor')]), '');
 });
+
+test('a scenario that passes --task-setting: the run record, the batch record and the box\'s check must all say it', () => {
+  const s = R.scenario('a-done-task-setting');
+  assert.deepEqual(s.taskSettings, { taskReasoningKept: 3 });
+  assert.deepEqual(R.taskSettingArgs(s), ['--task-setting', 'taskReasoningKept=3']);
+  assert.deepEqual(R.taskSettingArgs(R.scenario('a-done')), []);
+  const good = { taskSettings: { taskReasoningKept: 3 }, checks: [{ name: 'arm A task settings in the box', ok: true }] };
+  assert.deepEqual(R.judgeTaskSettings('a-done-task-setting', good), []);
+  assert.match(R.judgeTaskSettings('a-done-task-setting', { ...good, taskSettings: {} }).join(), /result.json records task settings \{\}/);
+  assert.match(R.judgeTaskSettings('a-done-task-setting', { ...good, checks: [] }).join(), /no check that the box received/);
+  assert.match(R.judgeTaskSettings('a-done-task-setting', { ...good, checks: [{ name: 'arm A task settings in the box', ok: false }] }).join(), /did not pass/);
+  assert.deepEqual(R.judgeTaskSettings('a-done', { taskSettings: {} }), []);
+  const batch = { rehearsal: 'x', finished: true, keyReadings: [], keyBeforeUsd: null, keyAfterUsd: null, taskSettings: {}, runs: [{ lib: 'l', arm: 'A', resultDir: '/d' }] };
+  assert.match(R.judgeBatch(batch, { lib: 'l', arm: 'A', rehearsal: 'x', taskSettings: { taskReasoningKept: 3 } }).join(), /batch.json records task settings \{\}/);
+  assert.deepEqual(R.judgeBatch({ ...batch, taskSettings: { taskReasoningKept: 3 } }, { lib: 'l', arm: 'A', rehearsal: 'x', taskSettings: { taskReasoningKept: 3 } }), []);
+});

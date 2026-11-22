@@ -137,14 +137,18 @@ is one runner per API provider, under the provider's own id and name.**
   was cut off again, and its task waited for input with its dependents behind it.
 - **A tool call written as text is not a finished reply either.** A reply with
   no tool call whose text, code spans and fences aside, opens a line with a
-  `<tool_call>` block whose JSON body names a tool offered in that request does
-  not end the turn: the text is never run, and the turn goes on with a note
+  `<tool_call>` block whose JSON body, or an `<invoke name="…">` block (bare,
+  in `<function_calls>`, or DeepSeek's `<｜DSML｜ invoke …>`), names a tool
+  offered in that request, or that is a JSON object naming one and its
+  arguments as the whole reply, does not end the turn: the text is never run, and the turn goes on with a note
   that the call was written as text and must be made through the tool-calling
   interface. Prose that only mentions or quotes the syntax, or names a tool the
   request did not offer, is a finished reply. Three in a row (the cut-off
   bound) fail the attempt through the runner's own `task_complete`, naming the
   cause. The model fell back to this when its tool channel stopped answering,
-  and its task waited for input until the supervisor restarted it.
+  and its task waited for input until the supervisor restarted it. The API
+  planner's turns use the same detector (`services/textCall.ts`)
+  ([ADR-0002](../planner/0002-planner-as-conversation-loop.md)).
 - **One neutral tool set**: `read`, `edit`, `write`, `shell`, `grep`, `glob`,
   then the task tools as native tools, `task_complete` and `read_task` (the
   token's `read`, renamed because `read` reads files here). The list is fixed
@@ -525,3 +529,4 @@ comes from that call.
   context as exhausted with room left is answered once.
 - 2026-11-21 — a notice on a compacting step gives the fill after it, the context phrases take a limit reached or too little left, and the budget and context answers are given once between them.
 - 2026-11-21 — DeepSeek's own API gets every turn's reasoning back, not only a tool-calling turn's; `taskReasoningKept` (default `all`) lets a request hint a stepped boundary before which older reasoning may go, honoured only through OpenRouter on probed upstreams of a probed model.
+- 2026-11-22 — the written-call detector is shared with the API planner and takes `<invoke>`, DSML and whole-reply JSON calls besides `<tool_call>`.

@@ -60,10 +60,16 @@ export function fanOutShape(plan) {
   }
   // As core: a task every slice of the fan-out's level waits for runs before the fan-out, the level
   // counted without the tasks every deeper one waits for, and only a level of a fan-out takes any.
+  // As core: those deeper must hold a fan-out's level, so a last task waiting for some slices makes none of them such a task.
   const lv = (t) => level.get(t.id);
+  const holdsFanOut = (ts) => {
+    const per = new Map();
+    for (const s of ts) per.set(lv(s), (per.get(lv(s)) ?? 0) + 1);
+    return [...per.values()].some((n) => n >= FAN_OUT_MIN);
+  };
   const deeperAll = new Set(parallel.filter((t) => {
     const deeper = parallel.filter((s) => lv(s) > lv(t));
-    return deeper.length > 0 && deeper.every((s) => anc.get(s.id).has(t.id));
+    return holdsFanOut(deeper) && deeper.every((s) => anc.get(s.id).has(t.id));
   }));
   const count = new Map();
   for (const s of parallel) if (!deeperAll.has(s)) count.set(lv(s), (count.get(lv(s)) ?? 0) + 1);
