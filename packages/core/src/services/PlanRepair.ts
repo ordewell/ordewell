@@ -128,7 +128,8 @@ export function taskOpsRejectedPrompt(errors: string[]): string {
 // ---------------------------------------------------------------------------
 
 export type PlannerReplyClassification =
-  | { kind: 'plan'; tasks: Task[] }
+  /** `notes` are what the parse changed to make it valid (a dependency id read as the task it meant). */
+  | { kind: 'plan'; tasks: Task[]; notes: string[] }
   | { kind: 'task_ops'; ops: TaskOp[] }
   /** A read: show me these tasks in full (and/or the whole catalog) before I edit anything. */
   | { kind: 'task_query'; query: TaskQuery }
@@ -188,7 +189,8 @@ export function classifyPlannerReply(
   // models often emit a short preamble before the JSON.
   if (text.includes(`"${PLAN_ENVELOPE_KEY}"`)) {
     try {
-      return { kind: 'plan', tasks: parsePlanJson(text, opts.runners, opts.runnerModes, opts.autonomousDefault) };
+      const notes: string[] = [];
+      return { kind: 'plan', tasks: parsePlanJson(text, opts.runners, opts.runnerModes, opts.autonomousDefault, notes), notes };
     } catch (err) {
       if (!(err instanceof PlanParseError)) throw err;
       if (looksLikePlanAttempt(text)) return { kind: 'broken_plan', error: err };
@@ -215,13 +217,17 @@ export async function generatePlanWithRepair(
   maxAttempts = 2,
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = false,
+  onNote?: (line: string) => void,
 ): Promise<Task[]> {
   return repairLoop<string, Task[]>({
     first: () => generate(undefined),
     resend: (corrective) => generate(corrective),
     interpret: (text) => {
       try {
-        return { done: parsePlanJson(text, runners, runnerModes, autonomousDefault) };
+        const notes: string[] = [];
+        const tasks = parsePlanJson(text, runners, runnerModes, autonomousDefault, notes);
+        for (const line of notes) onNote?.(line);
+        return { done: tasks };
       } catch (err) {
         if (!(err instanceof PlanParseError)) throw err;
         // A shape rejection is not a parse failure: telling the model its JSON

@@ -3,6 +3,7 @@ import type { RunnerModeInfo } from './ModeResolver';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings } from './JsonExtractor';
 import { checkPlanInvariants } from './PlannedTask';
 import { planAncestors } from './readiness';
+import { fanOutShape } from './PlanFanOut';
 
 /**
  * A planner filling in code whose interfaces exist still orders slices by what
@@ -100,6 +101,8 @@ export interface ChainChange {
   id: string;
   removed: string[];
   added: string[];
+  /** The tasks the reply cut the closing check off from, each waited for in the first plan, given back as its direct dependencies. */
+  restored?: string[];
 }
 
 /** `ignored`: the subtask ids the reply answered for, which the review does not revise. */
@@ -123,6 +126,36 @@ const withRoots = (tasks: readonly Task[]): [Task, Task][] => {
   return tasks.flatMap((t) => under(t, t));
 };
 const subtaskIds = (t: Task): string[] => t.subtasks.flatMap((s) => [s.id, ...subtaskIds(s)]);
+
+/**
+ * The first plan's closing check, as R5 reads it: the AI task that edits, waits
+ * for every slice and that no other such task waits for. A loop's check is
+ * held by {@link actsAfterItsAncestors}, which refuses the reply instead.
+ */
+function closingCheck(tasks: readonly Task[]): Task | undefined {
+  const closer = fanOutShape(tasks).closers[0] as Task | undefined;
+  return closer && closer.type === 'ai' && !closer.readOnly && !closer.loop ? closer : undefined;
+}
+
+/**
+ * The review's message asks to keep a closing check that depends on every
+ * task, and a reply that cut another task's dependencies could leave it
+ * waiting for none of the slices through that task. So each top-level task it
+ * waited for in the first plan and no longer reaches becomes its own
+ * dependency again, the fewest such: those none of the others reaches. The
+ * check runs after what it ran after, and every other change the reply made
+ * stands (ADR-0072 R1).
+ */
+function restoredWaits(tasks: readonly Task[], rewired: readonly Task[], closer: Task): string[] {
+  const top = new Set(tasks.map((t) => t.id));
+  const before = planAncestors(tasks)(closer).filter((id) => top.has(id));
+  const after = planAncestors(rewired);
+  const byId = new Map(rewired.map((t) => [t.id, t]));
+  const kept = new Set(after(byId.get(closer.id)!));
+  const lost = before.filter((id) => !kept.has(id));
+  const reaches = new Map(lost.map((id) => [id, new Set(after(byId.get(id)!))]));
+  return lost.filter((id) => !lost.some((o) => o !== id && reaches.get(o)!.has(id)));
+}
 
 /**
  * The review's reply applied to the plan as written. Any fault, an unknown id,
@@ -168,7 +201,11 @@ export function applyChainReview(
     next.set(e.id, deps);
   }
   // Subtasks kept: the merge gate walks through them and their parents' edges.
-  const rewired = tasks.map((t) => ({ ...t, dependencies: next.get(t.id) ?? t.dependencies }));
+  const wired = () => tasks.map((t) => ({ ...t, dependencies: next.get(t.id) ?? t.dependencies }));
+  const closer = closingCheck(tasks);
+  const restored = closer ? restoredWaits(tasks, wired(), closer) : [];
+  if (closer && restored.length) next.set(closer.id, [...(next.get(closer.id) ?? closer.dependencies), ...restored]);
+  const rewired = wired();
   const before = planAncestors(tasks);
   const after = planAncestors(rewired);
   const rewiredById = new Map(withRoots(rewired).map(([t]) => [t.id, t]));
@@ -181,14 +218,19 @@ export function applyChainReview(
     const lost = before(t).find((a) => !kept.has(a));
     if (lost) return { ok: false, error: `task "${t.id}" would no longer run after ${title(lost)}, which it waits for` };
   }
+  // A task given back that the reply set after the check cannot run before it too.
+  const behind = closer && restored.find((id) => afterOf(id).has(closer.id));
+  if (closer && behind) return { ok: false, error: `the closing check "${closer.id}" would no longer run after ${title(behind)}, which it waits for` };
   const changes: ChainChange[] = [];
   const revised = tasks.map((t) => {
     const deps = next.get(t.id);
     if (!deps) return t;
     const removed = t.dependencies.filter((d) => !deps.includes(d));
-    const added = deps.filter((d) => !t.dependencies.includes(d));
-    if (!removed.length && !added.length) return t;
-    changes.push({ id: t.id, removed, added });
+    // A dependency given back was waited for before, so the brief is told nothing of it; the log names each.
+    const back = t.id === closer?.id ? restored : [];
+    const added = deps.filter((d) => !t.dependencies.includes(d) && !back.includes(d));
+    if (!removed.length && !added.length && !back.length) return t;
+    changes.push({ id: t.id, removed, added, ...(back.length ? { restored: back } : {}) });
     // A removed dependency still reached through another runs before this task, not beside it.
     const kept = afterOf(t.id);
     const parallel = removed.filter((d) => !kept.has(d));

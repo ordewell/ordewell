@@ -221,3 +221,158 @@ describe('corrective prompts', () => {
     expect(prompt).toContain('- unknown task');
   });
 });
+
+// A dependency written as another task's id, spelled the way the model remembers it.
+const task = (id: string, title: string, dependencies: string[] = [], extra: Record<string, unknown> = {}) => ({
+  id, order: 1, title, description: `${title} body`, type: 'ai', dependencies, prompt: `Do ${title}`,
+  assignedRunner: 'claude-code', sliceType: 'AFK', autonomy: 'AFK', subtasks: [], ...extra,
+});
+const planOf = (...tasks: unknown[]) => JSON.stringify({ tasks });
+
+describe('a dependency naming an id no task has', () => {
+  it('is resolved to the one task it obviously means, and the note says so', async () => {
+    const generate = vi.fn().mockResolvedValueOnce(planOf(task('task-1', 'Core'), task('task-2', 'Utils', ['task-01'])));
+    const notes: string[] = [];
+    const tasks = await generatePlanWithRepair(generate, RUNNERS, 2, undefined, false, (line) => notes.push(line));
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(tasks.find((t) => t.id === 'task-2')?.dependencies).toEqual(['task-1']);
+    expect(notes).toEqual(['dependency "task-01" of "Utils" read as "task-1" ("Core")']);
+  });
+});
+
+describe('dependency ids read as the task they mean', () => {
+  const resolved = async (written: string, ...others: unknown[]) => {
+    const generate = vi.fn().mockResolvedValueOnce(planOf(task('task-1', 'Core api'), ...others, task('task-9', 'Last', [written])));
+    const tasks = await generatePlanWithRepair(generate, RUNNERS);
+    expect(generate).toHaveBeenCalledTimes(1);
+    return tasks.find((t) => t.id === 'task-9')?.dependencies;
+  };
+
+  it.each([
+    ['TASK-1', 'letter case'],
+    ['  task-1 ', 'surrounding spaces'],
+    ['#task-1', 'a "#" prefix'],
+    ['Task 1', 'a "task " prefix'],
+    ['task-001', 'leading zeros'],
+    ['#01', 'a "#" prefix and leading zeros on a bare number'],
+    ['core API', 'the task\'s title'],
+  ])('%s (%s)', async (written) => {
+    expect(await resolved(written)).toEqual(['task-1']);
+  });
+
+  // The validator keeps an id as written, spaces and all: a dependency spelled the same names it.
+  it('leaves a dependency on an id with surrounding spaces as written', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('task-1 ', 'Core'), task('task-2', 'Utils', ['task-1 '])));
+    const notes: string[] = [];
+    const tasks = await generatePlanWithRepair(generate, RUNNERS, 2, undefined, false, (l) => notes.push(l));
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(tasks.map((t) => [t.id, t.dependencies])).toEqual([['task-1 ', []], ['task-2', ['task-1 ']]]);
+    expect(notes).toEqual([]);
+  });
+
+  it('reads a dependency as an id with surrounding spaces exactly as the plan writes that id', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task(' task-1', 'Core'), task('task-2', 'Utils', ['TASK-01'])));
+    const tasks = await generatePlanWithRepair(generate, RUNNERS);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(tasks[1].dependencies).toEqual([' task-1']);
+  });
+
+  it('keeps a dependency once when it and the id it is read as both name the same task', async () => {
+    const generate = vi.fn().mockResolvedValueOnce(planOf(task('task-1', 'Core'), task('task-2', 'Utils', ['task-1', 'Task-01'])));
+    const tasks = await generatePlanWithRepair(generate, RUNNERS);
+    expect(tasks[1].dependencies).toEqual(['task-1']);
+  });
+
+  it('resolves a subtask\'s dependency among the plan\'s ids', async () => {
+    const generate = vi.fn().mockResolvedValueOnce(planOf(
+      task('task-1', 'Core'),
+      task('task-2', 'Utils', [], { subtasks: [task('task-2a', 'Part', ['TASK-01'])] }),
+    ));
+    const tasks = await generatePlanWithRepair(generate, RUNNERS);
+    expect(tasks[1].subtasks?.[0].dependencies).toEqual(['task-1']);
+  });
+
+  // "1" is two tasks' number once the prefix and padding are set aside: wiring work to either is a guess.
+  it('never guesses between two tasks the written id could mean', async () => {
+    const generate = vi.fn()
+      .mockResolvedValueOnce(planOf(task('task-1', 'A'), task('1', 'B'), task('task-9', 'C', ['#01'])))
+      .mockResolvedValueOnce(planOf(task('task-1', 'A'), task('1', 'B'), task('task-9', 'C', ['1'])));
+    const notes: string[] = [];
+    const tasks = await generatePlanWithRepair(generate, RUNNERS, 2, undefined, false, (l) => notes.push(l));
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(notes).toEqual([]);
+    expect(tasks.find((t) => t.id === 'task-9')?.dependencies).toEqual(['1']);
+  });
+
+  it('never guesses between two tasks sharing a title', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('a', 'Same'), task('b', 'same'), task('c', 'C', ['SAME'])));
+    await expect(generatePlanWithRepair(generate, RUNNERS)).rejects.toThrow(/Unknown dependency "SAME"/);
+  });
+
+  it('leaves a task depending on itself to the validator', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('task-1', 'A', ['TASK-01'])));
+    await expect(generatePlanWithRepair(generate, RUNNERS)).rejects.toThrow(/Unknown dependency "TASK-01"/);
+  });
+});
+
+describe('a dependency no reading reaches', () => {
+  const bad = planOf(task('task-1', 'Core'), task('task-2', 'Utils'), task('task-3', 'Implement networkx/utils', ['task-7']));
+
+  it('asks the model again with the task, the unknown id and the ids the plan has', async () => {
+    const generate = vi.fn()
+      .mockResolvedValueOnce(bad)
+      .mockResolvedValueOnce(planOf(task('task-1', 'Core'), task('task-3', 'Implement networkx/utils', ['task-1'])));
+    const notes: string[] = [];
+    const tasks = await generatePlanWithRepair(generate, RUNNERS, 2, undefined, false, (l) => notes.push(l));
+    expect(tasks).toHaveLength(2);
+    const corrective = generate.mock.calls.at(-1)?.[0] as string;
+    expect(corrective).toContain('Implement networkx/utils');
+    expect(corrective).toContain('Unknown dependency "task-7"');
+    expect(corrective).toContain('"task-1", "task-2", "task-3"');
+    expect(notes).toEqual([]);
+  });
+
+  it('fails only when the repairs are spent, naming the task, the id and the nearest valid ids', async () => {
+    const generate = vi.fn().mockResolvedValue(bad);
+    const err = await generatePlanWithRepair(generate, RUNNERS).catch((e: unknown) => e);
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(err).toBeInstanceOf(PlanParseError);
+    const message = (err as Error).message;
+    expect(message).toContain('Task "Implement networkx/utils"');
+    expect(message).toContain('Unknown dependency "task-7"');
+    expect(message).toMatch(/nearest valid ids: "task-1" \(Core\), "task-2" \(Utils\)\. /);
+  });
+
+  // Following that hint would write a dependency on itself, which the validator refuses, and spend the one repair.
+  it('never offers the task its own id as a nearest one', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('task-1', 'One'), task('task-10', 'Ten'), task('task-11', 'Eleven', ['task-100'])));
+    const err = await generatePlanWithRepair(generate, RUNNERS).catch((e: unknown) => e);
+    expect((err as Error).message).toContain('nearest valid ids: "task-10" (Ten), "task-1" (One). ');
+  });
+
+  it('lists the nearest ids first, not the first ones', async () => {
+    const tasks = ['a', 'b', 'c', 'd', 'e'].map((x, i) => task(`step-${x}`, `T${i}`));
+    const generate = vi.fn().mockResolvedValue(planOf(...tasks, task('z', 'Z', ['step-e2'])));
+    const err = await generatePlanWithRepair(generate, RUNNERS).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/nearest valid ids: "step-e" \(T4\)/);
+  });
+});
+
+describe('a research reply with a dependency id off by a zero', () => {
+  it('is kept as a plan, with the note for the research log', () => {
+    const reply = classifyPlannerReply(planOf(task('task-1', 'Core'), task('task-2', 'Utils', ['task-01'])), { runners: RUNNERS });
+    expect(reply).toMatchObject({ kind: 'plan', notes: ['dependency "task-01" of "Utils" read as "task-1" ("Core")'] });
+  });
+});
+
+describe('a long plan\'s unknown dependency', () => {
+  it('names the nearest ids and lists a bounded number of the plan\'s ids, not all of them', async () => {
+    const tasks = Array.from({ length: 60 }, (_, i) => task(`step-${i + 1}`, `T${i + 1}`));
+    const generate = vi.fn().mockResolvedValue(planOf(...tasks, task('z', 'Z', ['stp-3'])));
+    const err = await generatePlanWithRepair(generate, RUNNERS).catch((e: unknown) => e);
+    const message = (err as Error).message;
+    expect(message).toContain('nearest valid ids: "step-3" (T3)');
+    expect(message).toContain('"step-40", ...');
+    expect(message).not.toContain('"step-41"');
+  });
+});
