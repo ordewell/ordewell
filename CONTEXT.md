@@ -624,10 +624,10 @@ Opening tasks in series, no opening task and no closing check are its faults,
 recorded in the research log and never asked about. A wide plan with a closing
 check gets a fixed `Plan shape:` note on each role's brief. A wide plan's slices
 of one level start largest first, sized by the lines of the files their briefs
-name (ADR-0072 R6). On a level of more than twice the Parallel limit, small
-slices of one kind, short of a count that would change the plan's shape, are first merged into one task each, a **merged task**,
-which keeps one of their ids, lists the others in `mergedSlices` and gives each
-slice's brief whole under its own title (ADR-0072 R7).
+name (ADR-0072 R6), and none is merged with another, however many queue past
+the Parallel limit (ADR-0072 R7). A **merged task**, which a plan saved by a
+build that merged small slices may hold, keeps one of their ids, lists the
+others in `mergedSlices` and gives each slice's brief whole under its own title.
 *Avoid:* "gate" for the opening task (the merge gate is something else),
 "barrier".
 
@@ -1710,12 +1710,16 @@ evidence.
 *Loop check*), "error".
 
 **Landed blocker** (ADR-0073) — a `blocker` *Finding* that cites a task whose
-work had landed when it was reported: by a task reference with no finding id,
-or by the first file it names that a landing changed, the last landing of that
-file before the report. Counted per cited task across the plan's handoffs,
-never stored, and raised to the supervisor as `landed_blocker` when that count
-reaches 1, 2, 4, 8…; the supervisor writes the one fix. *Avoid:* "regression"
-(nothing says it worked before), "bug report".
+work had landed: by a task reference with no finding id, landed when it was
+reported, or by the first file it names that a landing changed, the last
+landing of that file before the reporting attempt started, and none once
+another task's landing after that start changed it. A finding that also cites,
+by task reference, a task yet to land, neither skipped nor failed nor waiting
+for the reporter, is a *wait notice*, never a landed blocker.
+Counted per cited task across the plan's handoffs, never stored, and raised to
+the supervisor as `landed_blocker` when that count reaches 1, 2, 4, 8…; the
+supervisor writes the one fix. *Avoid:* "regression" (nothing says it worked
+before), "bug report", "blocker" for a wait on work still to come.
 
 **Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
 task produced, of the same four kinds as an *Evidence reference*, or a `patch`
@@ -3778,8 +3782,11 @@ may do is set by the run's **Supervisor level** and checked at the **Command
 seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
-restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
-note in the transcript; `runSettings.unsupervised` says why). The user's Stop
+restart, each attempt having waited out a network or provider failure on the
+backoff, leaves the run *unsupervised* (carrying on as Off, with a notice and a
+note in the transcript; `runSettings.unsupervised` says why). What happens then
+is kept on the plan, and the user's level set again lifts the stop and catches
+the supervisor up on what it was never told. The user's Stop
 stands it down until they start work again: it acts at Off, and what it held
 waits on the plan for their next message or the first turn after their start. A
 stop of one task holds back only what is about that task.

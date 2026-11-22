@@ -491,6 +491,10 @@ describe('composeAugmentedPrompt', () => {
     expect(out).toMatch(/do not write the report to a file/);
   });
 
+  it('asks for a blocker in landed work with its task, its file first and the input, and for a wait on work still to come as info (ADR-0073)', () => {
+    expect(TASK_COMPLETION_CONTRACT).toContain('A finding about work another task has landed cites that task, and the file the defect is in as its first file, with the input that shows it: that is how a blocker in it reaches a fix while the run goes on. Waiting on work not yet landed is no blocker: list it as an `info` finding that cites that task.');
+  });
+
   it('asks that a number a later task may need sit in the summary or a finding, not only in the report', () => {
     expect(TASK_COMPLETION_CONTRACT).toMatch(/number you measured.*\(a timing, a count, a size\).*in the summary or a finding, not only in the report/);
   });

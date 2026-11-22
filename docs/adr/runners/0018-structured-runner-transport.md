@@ -537,8 +537,14 @@ and completion evidence.
   error` unless a 4xx status other than 429 beside it, or words naming a
   context too long, say the request or the key was refused (OpenCode keeps an
   `APIError`'s status in its `statusCode`, which the adapter puts beside the
-  words as `HTTP <status>`), or a throttle the runner's own field says is not its usage limit
-  (Codex's `rateLimitExceeded`). `classifyRunnerStop` reads it from the turn's
+  words as `HTTP <status>`), a throttle the runner's own field says is not its usage limit
+  (Codex's `rateLimitExceeded`), or the network to the provider failing: Node's
+  error codes for a name that did not resolve or a connection refused, reset,
+  unreachable or timed out (`EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`,
+  `ECONNRESET`, `ETIMEDOUT` and their kin), Claude Code's `Can't reach the API
+  server`, an SDK's `Connection error` or `Request timed out`, `fetch failed`
+  or `socket hang up`; a bare "timed out", which a test's timeout prints, is
+  not one. `classifyRunnerStop` reads it from the turn's
   error as `transient`, after U1: a usage limit, by its field or its words,
   keeps U1's pause. The task stays `in_progress` with no escalation, and the
   turn is tried again in its saved session, told the error, after 30, 60 and
@@ -792,3 +798,4 @@ transport is retained for take-over.
 - 2026-11-20 — W1: a flag set by double the last one's time names that time, not the lowered threshold's doubling.
 - 2026-11-21 — W1: after the first running-long flag the next is due at twice the last, the threshold no longer read again for it; a flag still waiting when its attempt ends is dropped.
 - 2026-11-21 — U1: a park ends its attempt as a pause does and its next start continues the saved session, or carries its files over where none can be resumed (ADR-0074).
+- 2026-11-22 — E1: the network to the provider failing (its error codes, `Can't reach the API server`, `Connection error`, `fetch failed`) is transient too, so an outage is waited out on the backoff, a task's turn and the planner's alike. Seen live: two supervisor wake-up turns failed on `EAI_AGAIN` within seconds and supervision stopped.

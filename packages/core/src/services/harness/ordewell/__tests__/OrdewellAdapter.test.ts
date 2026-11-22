@@ -216,6 +216,27 @@ describe('OrdewellAdapter', () => {
     expect(await windowFor('off')).toBeUndefined();
   });
 
+  it('reads taskReasoningKept at the start, the variable over the file, and hints the boundary on each request (ADR-0070)', async () => {
+    const settingsFile = path.join(tempDir(), 'settings.json');
+    await writeFile(settingsFile, JSON.stringify({ taskReasoningKept: 1 }));
+    const hints = async (env: Record<string, string>): Promise<unknown[]> => {
+      const restore = setEnv({ ORDEWELL_SETTINGS_PATH: settingsFile, ...env });
+      try {
+        const reads = ['a', 'b', 'c'].map((name, i) => [call(`r${i}`, 'read', { path: `${name}.txt` }), STOP]);
+        const { adapter, client } = adapterWith([...reads, [{ type: 'text-delta', text: 'Done.' }, STOP]]);
+        await adapter.start(taskOptions({ model: 'openrouter:acme/unknown' }));
+        await adapter.send('Go.', () => undefined);
+        return client.requests.map((request) => request.reasoning);
+      } finally {
+        restore();
+      }
+    };
+    // [task, a1, t1, a2, t2, a3, t3]: the fourth call keeps a3's reasoning and may leave out the two before.
+    expect(await hints({})).toEqual([undefined, undefined, undefined, { keepFrom: 5 }]);
+    expect(await hints({ ORDEWELL_TASK_REASONING_KEPT: 'all' })).toEqual([undefined, undefined, undefined, undefined]);
+    await expect(hints({ ORDEWELL_TASK_REASONING_KEPT: 'none' })).rejects.toThrow(/ORDEWELL_TASK_REASONING_KEPT.*all or a whole number of calls/);
+  });
+
   it('takes a model\'s window from the settings file\'s ordewellContextWindows, and says nothing of an assumed one', async () => {
     const settingsFile = path.join(tempDir(), 'settings.json');
     await writeFile(settingsFile, JSON.stringify({ ordewellContextWindows: { 'openrouter:acme/unknown': 64_000 } }));

@@ -124,6 +124,11 @@ network. The only way out is a gateway (core's egress sidecar) that opens
 `openrouter.ai` alone. Inside, the box runs Ordewell packed from a built tree's
 `dist/`, with `ORDEWELL_NO_MODELS_DEV=1`.
 
+A third arm, `A-continued` (`--continue-a`), is a control: arm A's single agent,
+continued with one fixed message each time its attempt ends before a cap, so
+that a comparison with B tells structure from persistence. See
+[The control arm](#the-control-arm-a-continued).
+
 ```bash
 npm run build
 node bench/commit0/drive.mjs --dry-run --fixture --image <a python image with pytest and git>
@@ -187,6 +192,8 @@ labelled containers and networks whose driver on this host is no longer running.
 | `--settle-min`, `--no-start-min`, `--poll-sec`, `--wall-min` | 5, 10, 30 s, 180 | the settle window, the no-start bound, the poll interval and the wall-clock cap, which a rehearsal shortens |
 | `--rehearse <scenario>` | | run the arms on the scripted fake provider (see Rehearsal) |
 | `--plan-only` | off | arm B's planning alone, then stop: nothing runs, merges or is scored (see Plan-only) |
+| `--effort-a <level>` | none set | the reasoning effort (`low`, `medium`, `high`, `xhigh` or `max`) of the single-agent arms' task, plain A and `A-continued` alike (see Reasoning effort); refused with `--arm B` or `--plan-only` |
+| `--continue-a` | off | arm A becomes the control arm, `A-continued`: its attempt is continued with one fixed message while the caps have room (see The control arm); refused with `--arm B` or `--plan-only` |
 | `--ordewell-root <dir>` | this tree | the built tree packed into the box |
 | `--allow-stale-dist` | off | run a dist older than its sources; the result is not valid |
 | `--sweep` | | remove boxes of dead drivers; alone, nothing else runs |
@@ -279,6 +286,9 @@ or network of the bench is left behind:
 | `b-wait` | B at `--parallel 2` | three tasks side by side, the third queued behind the limit: the consumer's first step calls `wait_for` on the producer, which is still at work; the consumer's turn ends in prose; the producer lands; the consumer goes on, makes its edit and lands | the call was granted; the consumer reported nothing before it was continued, and went on in the same session only after the producer's last turn, its request holding "The work you waited for has landed" and the producer's title; the third task started after the call and before the producer's last turn; the final plan shows the consumer depending on the producer, with the park it saved; not truncated; 3 tasks completed; scored from merged work; more passed than the baseline; the test edit excluded |
 | `b-blocker` | B | the opening task lands its edits; two slices after it end done with a `blocker` finding that cites it; the first reports at once, the second is at work, and the closing check waits for both; the supervisor's wake answers with one edit that adds a fix task and makes the closing check wait for it | the wake the supervisor was sent holds the landed-blocker line for task #1, the closing check and the guidance; the supervisor answered it; the final plan holds 5 tasks, one the fix, which depends on the opening task and which the closing check waits for; the fix's last turn came before the closing check's first, and the check found the fix's file in its tree; `metrics.supervisor` counts exactly one `plan_edit` and every wake's trigger is one the harness reads; not truncated; 5 tasks completed; scored from merged work; more passed than the baseline |
 | `b-plan` | B, `--plan-only` | the planner returns a six-task plan with a research task, three changes, an ops task and a script that checks a loop; nothing else is scripted | marked `planOnly` and never valid; the shape the plan has (6 tasks, chain of 4, widest level 2, 6 edges, one gate, one loop check); a priced planner and a planning time; no `run` or `merge` step, no score, no tests; `plan.json` and `plan-saved.json` in the run's directory and no `arm-workdir/`; the fake heard no runner and no supervisor; `plans.jsonl` did not grow |
+| `a-continued` | A-continued | the task reports failed and ends its attempt; the harness continues the saved session with the fixed message; the agent makes the edits and reports done; three idle continuations follow (an attempt ending in prose with no report, answered with the message as the reply its parked task waits on, then a report and a word, twice) | valid; not truncated; scored from merged work; more passed than the baseline; the test edit excluded; 4 continuations, the verdicts they followed `failed`, `done`, `no report`, `done`, by `continue`, `continue`, `message`, `continue`; the first busy and the three after it idle; stopped by the give-up rule (`ending.by` `continuation`, `gave-up`); the fake heard the one message once per continuation in one attempt of one session, the task's own first message still the first |
+| `a-continued-effort` | A-continued, `--effort-a high` | `a-continued`'s script and judge, with the effort asked of the task | all of `a-continued`'s, and: every request the built-in runner made for the task, as the fake logged it, carried `reasoning.effort` `high` (OpenRouter's body field; the same scenario without the flag logs none), `effortA` is `high` and `efforts` is `{high: 1}` |
+| `a-continued-cap` | A-continued | the task spends, reports failed and ends its attempt, is continued, makes the edits and reports done, and is continued again; that attempt reports usage past `--cap-usd` mid-attempt | stopped by the spend cap across the continuations (`ending.by` `cap`); 2 continuations; the driver stopped `ordewell run`'s session, the merge ran; scored from merged work; more passed than the baseline |
 | `b-cap` | B | task 1 lands its edits, then task 2 reports usage past `--cap-usd` mid-attempt | stopped by the spend cap; the driver stopped `ordewell run`; the merge ran; scored from merged work; more passed than the baseline |
 
 `b-take-in` proves, in the real box, that the built-in runner's shell lets a task
@@ -312,6 +322,84 @@ Only a paid run can show what a real model does with the goal: how long its
 attempts take, its usage and how OpenRouter bills it, the key's usage and the
 batch budget's stop, provider routing, and whether a stream stalls or a call is
 refused.
+
+### The control arm (`A-continued`)
+
+Arm A ends its own attempt early: it reports `done`, `failed` or `blocked`, or
+answers in prose, with hours and most of the spend cap left. A comparison with
+B then cannot tell what B's structure adds from what persistence adds. The
+control arm answers that. `--continue-a` (on `drive.mjs` and `batch.mjs`) makes
+arm A a continued arm: the same single task, box, quotas, model, call budget per
+attempt, caps, stall rule and scoring from the final working tree in a fresh
+container, but each time its attempt ends while the caps have room, the harness
+continues the same runner session with one fixed message, as a person typing
+"continue" would. It is recorded as arm `A-continued`, never `A`: in the run
+directory's name (`…-a-continued`), `result.json`'s `arm`, `batch.json`'s runs
+and `perArm`, and `pairs`. `--arm both --continue-a` runs `A-continued` and `B`
+(a pair, judged like A and B); `--arm B` or `--plan-only` with it is refused.
+
+- **The call.** For a task whose attempt closed (completed or failed),
+  `ordewell continue 1 <message> --session-id <id> --workspace <workdir>` in the
+  box, which sends the daemon's `retry_task` command with `from: 'session'`
+  (`POST /api/plans/<id>/execute-command`; core's `continueTask` resumes the
+  task's saved runner session, the message its next turn): `via: 'continue'`. A
+  task whose turn ended in prose with no `task_complete` (the built-in runner
+  reminds it once, then parks the task on input) is sent the same text as the
+  reply it waits for, a `message_task` command to the same endpoint, which the
+  CLI has no word for: `via: 'message'`, the live session. A task whose
+  session cannot be continued (the CLI says it "cannot be continued") ends the
+  continuing (`cannot-continue`): a fresh attempt, the one other way on, runs
+  in a new worktree cut from the integration tip, and the arm is scored on the
+  worktree its work is kept in, as arm A is. Three
+  refusals in a row end the run (`continue-refused`).
+- **When.** The attempt has ended with any verdict (`done`, `failed`, `blocked`,
+  or `no report` for an attempt that ended in prose): the task closed or parked
+  on input, nothing running, starting or due to advance by itself. A person
+  waited on at a checkpoint, an approval or a user task is the stall rule's, as
+  in arm A.
+- **The message.** One constant, `CONTINUE_MESSAGE` in `lib.mjs`, printed in every
+  run's `result.json` (`continuation.message`): "The time and spend limits for
+  this task have not been reached. Your context is compacted automatically as it
+  fills, and calls remain. Continue the task until its goal is met." It names
+  nothing of the library, the tests or another arm.
+- **When it stops continuing** (`CONTINUATION`, recorded in `continuation.margins`):
+  less than 3 minutes of the wall-clock cap or less than $0.10 of the spend cap
+  left (`no-room-wall`, `no-room-spend`); 40 continuations (`max-continuations`);
+  or three continuations in a row whose attempts ended within two calls without
+  changing the tree (`gave-up`; the tree is the branch tips and every worktree's
+  tracked changes and untracked files, bytecode, test caches and the venv aside).
+  The caps win: the wall and spend stop rules (D1) run across the continuations
+  with the spend and calls summed over every attempt, so a continuation can be cut
+  by the cap itself (`stopped`).
+- **The record.** `result.json`'s `continuation`: `first` (how the first attempt
+  ended), `continuations` (each with `at`, `mode`, `via`, `after` — the attempt's
+  `verdict` and `summary` that the message followed — `callsSoFar` and `spentUsd`,
+  and, once its own attempt ends, `calls` and `treeChanged`), `count`, `fresh`
+  and `stop` (`why`, null where a cap ended it). `ending.by` is `continuation` for
+  a run that stopped by its own rule, with `why`. `ending.modelCalls` counts
+  calls per attempt as for arm A, so `reachedLimit` shows an attempt that used
+  its call budget.
+- **Reasoning effort.** B's tasks run at the effort the planner gave each; arm A's
+  one task, hand-written, has none unless `--effort-a <level>` sets it. See
+  [Reasoning effort](#reasoning-effort-of-the-single-agent-arms).
+- **Scoring** is arm A's (D2): the final working tree, merged or the task's kept
+  worktree, in a fresh container. `timeline.mjs` reads a continued run like arm
+  A's, over the commits of the task's branch across every attempt.
+
+### Reasoning effort of the single-agent arms
+
+The planner gives each of B's tasks a reasoning effort on its model, and the
+built-in runner sends it to OpenRouter as `reasoning.effort`; arm A's task is
+written by the harness and carried none, so the arms did not think at one
+level. `--effort-a <level>` (`low`, `medium`, `high`, `xhigh`, `max`; on
+`drive.mjs` and `batch.mjs`, which passes it to the single-agent runs only)
+writes the level into the arm's one-task session, on its assigned model, where a
+planned task carries its own. Without the flag no effort is set, as before. A
+run says what it ran at, for every arm: `effortA` (the flag; null for B and
+where absent) and `efforts`, the count of the final plan's AI tasks at each
+effort (`unset` for a task with none), such as `{"high": 1}` for arm A and
+`{"high": 5, "max": 2}` for B. `batch.json` repeats both in each run and totals
+`efforts` in `perArm`.
 
 ### What a run records of the supervisor
 
@@ -457,7 +545,7 @@ scored (`arm.patch` is always the scored diff); `evalBox: 'fresh'`,
 | `planReview` | arm B's plan review, read from the `chain review: N -> M, kept; K tasks changed` line of the session's research log (the session keeps no structured field for it): `firstChain` (the longest chain as the planner first wrote it), `reviewedChain` (null when the review failed or was refused), `tasksChanged`, `kept` and `outcome`. Null when the log holds no such line (a chain under the review's minimum, or arm A) |
 | `metrics.perTask[].attempts[].runningMs` | an attempt a stop cut has a running clock of 0; its `wallTimeMs` is then its running time, and the attempt says `runningFrom: 'wallTimeMs'` (that time includes any wait on a person) |
 | `metrics.calls` | from the attempts' logs: `calls`, `byUpstream` (the `provider` of each of the built-in runner's usage records; `unreported` for one without it) and `coldAfterCall`: calls billed with under `coldShare` (5%) of their input cached straight after another call of the same attempt (a subagent's calls are counted, never judged). Null without the logs |
-| `ending` | how the arm stopped, in `by`: `completion` (the arm's own word: `status` `done`, `failed` or `blocked` and the `reason` text the runner gave in `task_complete`, with each task's own in `reports`; a run the settle rule found holding only failed tasks and the tasks behind them is this too, the runner having reported and nothing left to move), `cap` (`cap` is `spend`, `wall-clock` or `batch-budget`, with `spentUsd` and `atMs`), `settle` (nothing moved for the settle window while a task was still open for another cause: `open` lists each with what held it, and `quietMs`), `stall` (a person waited on for `--stall-min`), `no-start`, or `not-run` (a dry run, a plan-only run or no task). For arm A `modelCalls`: `used` (the attempts' own calls, a subagent's apart in `subagentCalls`), `perAttempt`, `peakAttempt` and `reachedLimit` against `limitPerAttempt`, the runner's step limit, which is per attempt; null for arm B and without the logs |
+| `ending` | how the arm stopped, in `by`: `completion` (the arm's own word: `status` `done`, `failed` or `blocked` and the `reason` text the runner gave in `task_complete`, with each task's own in `reports`; a run the settle rule found holding only failed tasks and the tasks behind them is this too, the runner having reported and nothing left to move), `cap` (`cap` is `spend`, `wall-clock` or `batch-budget`, with `spentUsd` and `atMs`), `continuation` (the control arm stopped continuing: `why` is `no-room-wall`, `no-room-spend`, `max-continuations`, `gave-up`, `cannot-continue` or `continue-refused`), `settle` (nothing moved for the settle window while a task was still open for another cause: `open` lists each with what held it, and `quietMs`), `stall` (a person waited on for `--stall-min`), `no-start`, or `not-run` (a dry run, a plan-only run or no task). For arm A `modelCalls`: `used` (the attempts' own calls, a subagent's apart in `subagentCalls`), `perAttempt`, `peakAttempt` and `reachedLimit` against `limitPerAttempt`, the runner's step limit, which is per attempt; null for arm B and without the logs |
 | `callBudget` | the built-in runner's model calls per attempt this run ran with (`--call-budget`; `stepLimit` is the same number under its older name) |
 | `referenceUsd`, `referenceSpend` | the run's spend recomputed from its token counts at one price table kept in `lib.mjs` (`REFERENCE_PRICES`, `priceTable` in the record; the model's list price per million tokens in core's offline catalog), so that the dollars of two runs and two arms compare: the upstream providers behind one OpenRouter model charged prices that differed several-fold between runs. `planner` (its ledger holds the supervisor's wake-up turns too) and each of `attempts` (`task`, `attempt`, subtasks included) give `freshInputTokens`, `cachedInputTokens`, `outputTokens` and `usd`; `tokens` and `usd` are the sums. An attempt with no token counts is counted in `unmeasured` and priced at nothing. `recordedUsd` and `billedUsd` stay what the providers charged |
 | `providerSwitches` | from the same usage records' `provider`: `attempts` read, `withProvider` (those naming an upstream), `attemptsSwitched` (attempts whose upstream changed at least once) and `switches` (the changes; a record naming no upstream is skipped, a subagent's calls are left out). Null without the logs, as in a dry run, which shows `ending.by: 'not-run'`; the rehearsal's fake names no upstream, so it shows no switch |
@@ -503,6 +591,8 @@ node bench/commit0/batch.mjs --run --libs <libraries.json> --provider-pin <provi
 | `--jobs <n>` | 2 | runs at once |
 | `--batch-budget-usd <usd>` | required with `--run` | stop every run when the key's usage since the batch began reaches it |
 | `--only`, `--arm` | every library, both arms | which runs |
+| `--continue-a` | off | the control arm in place of arm A (see The control arm) |
+| `--effort-a <level>` | none set | the reasoning effort of the single-agent arms' task (see Reasoning effort) |
 | `--plan-only` | off | arm B's plan alone, for every run of the batch (see Plan-only) |
 | `--seed <label>` | none | kept in each `result.json` and run directory's name |
 | `--sweep` | | sweep before the batch |
@@ -571,6 +661,38 @@ fails, is tried once more alone, and if it is killed again stays `ok: false`,
 reach 25, 50, 75, 90 and 100% of those collected. `commit0.test.mjs` tests the choice of points and the
 commit-to-time mapping on a repository it builds, the closing check's landing included, and the container call
 through a fake `docker` on `PATH`.
+
+### Judging a score again
+
+A score is judged valid when no more outcomes were reported than the reference
+collected. A module that calls `pytest.importorskip` (or skips at module level)
+at import is one skipped outcome in pytest's summary, though none of its tests
+is a collected item, so a tree whose every collected test reports has more
+outcomes than the count whenever such a module is skipped. The scoring run's
+`-q` progress lines print one character for each test and none for a module, so
+the summary's skipped outcomes less the `s` printed are the modules'
+(`moduleSkipped` in `result.json`'s `tests`; `moduleLevelSkips` in `lib.mjs`).
+Those are left out of the count and nothing else is: a real excess of per-test
+outcomes is still invalid, with no tolerance. Where the progress lines are
+missing or disagree with the summary (a record made before the count was
+kept, with no `tests.log`), no skip is placed and every outcome counts, as it
+always did. The dry run's fixture arm scores the reference's own source, and
+judges that score with the same function (`judgeScore`): a library whose
+reference a real run would call invalid fails the dry run with the reason.
+
+A recorded run can be judged again by today's rules, offline and with no key or
+Docker:
+
+```bash
+node bench/commit0/rejudge.mjs <run dir | batch dir> ...
+```
+
+It reads each run directory's `result.json` (the checks, stop and freshness the
+run recorded, and the reference's collected count) and its `tests.log`, parses
+the counts afresh, and prints the verdict with its reasons and whether it
+differs from the record. It never rewrites `result.json`: the re-judgement is
+written beside it as `rejudged.json`. The exit is 1 when a run is judged invalid
+or has no `result.json`.
 
 ## Execution pipeline harness (`bench/pipeline/`)
 

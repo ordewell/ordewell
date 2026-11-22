@@ -145,7 +145,13 @@ export class PoolFileSystem extends BaseFileSystem {
     const basename = pattern.split('/').pop() || pattern;
     const excludeArgs = SEARCH_EXCLUSIONS.flatMap((dir) => ['-not', '-path', `*/${dir}/*`]);
     const { root: findRoot } = await this.searchTarget(absRoot);
-    const result = await run('find', [findRoot, '-type', 'f', '-name', basename, ...excludeArgs], { timeout: SEARCH_TIMEOUT_MS, env: this.searchEnv() });
+    // Git for Windows' find.exe is an MSYS program, and the MSYS runtime
+    // expands an unquoted `*` or `?` in its command line against the cwd before
+    // find sees it ("-name *" became "-name LICENSE"). `MSYS=noglob` hands the
+    // pattern to find's own `-name` matching; POSIX ignores the variable.
+    const env = { ...(this.searchEnv() ?? process.env) };
+    env.MSYS = [env.MSYS, 'noglob'].filter(Boolean).join(' ');
+    const result = await run('find', [findRoot, '-type', 'f', '-name', basename, ...excludeArgs], { timeout: SEARCH_TIMEOUT_MS, env });
     if (result.code !== 0 && !result.stdout) {
       return { success: false, output: `Glob failed: ${result.stderr.trim() || 'find error'}`, truncated: false };
     }

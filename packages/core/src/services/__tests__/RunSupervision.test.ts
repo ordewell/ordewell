@@ -222,6 +222,9 @@ describe('an automatic lowering', () => {
     expect(plan.runSettings!.unsupervised).toMatch(/failed twice/);
     expect(supervision.level).toBe('off');
     expect(transcript.at(-1)).toEqual({ voice: 'system', text: expect.stringMatching(/^The supervisor stopped: its wake-up turn failed twice/) });
+    expect(host.notice).toHaveBeenCalledWith('warn', 'The supervisor stopped: its wake-up turn failed twice (planner exited). '
+      + 'Its setting reads Off for the rest of this run, which carries on unsupervised, and what happens meanwhile is kept for it. '
+      + 'To turn it back on for this run, set the supervisor level again in /settings in this session: it is then told what it missed.');
     expect(host.restartPlanner).toHaveBeenCalledTimes(2);
 
     supervision.apply({ supervisorLevel: 'watch' });
@@ -579,6 +582,25 @@ describe('a blocker a task reports by the file it found broken (LandedBlockers)'
     expect(landedPaths.mock.calls.filter(([id]) => id === 't1')).toHaveLength(1);
   });
 
+  it('raises nothing for a report that cites a sibling still at work: it waits on that work, whatever landed file it names', async () => {
+    vi.useFakeTimers();
+    const landedPaths = vi.fn(async (taskId: string): Promise<readonly string[]> => (taskId === 't1' ? ['src/graph.ts'] : []));
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' }, {}, { landedPaths });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    tasks[0] = { ...tasks[0], status: 'completed', handoff: { summary: '', findings: [], findingCount: 0, attempt: 1 } };
+    tasks.push(task('t2', 2, { status: 'in_progress', dependencies: ['t1'] }));
+    tasks.push(task('t3', 3, {
+      status: 'completed',
+      dependencies: ['t1'],
+      handoff: { summary: '', findingCount: 1, attempt: 1, findings: [{ id: 'F1', severity: 'blocker', title: 'its tests wait on the graph', evidence: [{ kind: 'file', path: 'src/graph.ts' }, { kind: 'task', node: 'root', task: 't2' }] }] },
+    }));
+
+    supervision.taskSettled(tasks[2]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(host.deliver.mock.calls.map((call) => String(call[0])).join('\n')).not.toContain('reports a blocker');
+  });
+
   it('asks again at the next report for files the run could not say, and raises nothing on a read that failed', async () => {
     vi.useFakeTimers();
     let fails = true;
@@ -605,5 +627,178 @@ describe('a blocker a task reports by the file it found broken (LandedBlockers)'
     supervision.taskSettled(tasks[2]);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(host.deliver.mock.calls.map((call) => String(call[0])).join('\n')).toContain('2 tasks report a blocker in its work');
+  });
+});
+
+describe('a failure standing that the supervisor was never told of (ADR-0030, ADR-0057 R4)', () => {
+  /** Task t1 failed, with t2 and t3 waiting on it. */
+  const blocking = (tasks: Task[]) => {
+    tasks[0] = { ...tasks[0], status: 'failed' };
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { dependencies: ['t1'] }));
+  };
+  const delivered = (host: ReturnType<typeof harness>['host']) => host.deliver.mock.calls.map(([text]) => text as string);
+  /** Each delivered wake's turn runs until the test ends it. */
+  const heldTurns = (host: ReturnType<typeof harness>['host']) => {
+    const ends: (() => void)[] = [];
+    host.deliver.mockImplementation(() => new Promise<void>((resolve) => { ends.push(resolve); }));
+    return ends;
+  };
+
+  it('wakes the supervisor once when the user raises it to Act during the run, naming the failed task and what waits on it', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    const ends = heldTurns(host);
+    supervision.runStarted('user');
+    blocking(tasks);
+    supervision.taskSettled(tasks[0]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(host.deliver).not.toHaveBeenCalled();
+
+    supervision.apply({ supervisorLevel: 'act' });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(delivered(host)).toHaveLength(1);
+    expect(delivered(host)[0]).toMatch(/- Task #1 "Task t1" is failed, and you were not told: 2 tasks wait on it, #2 "Task t2" and #3 "Task t3"\. Release it: call retry_task/);
+    // Its turn leaving it standing is woken once more, as for any failure, and never again.
+    ends[0]();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(delivered(host)[1]).toMatch(/- Task #1 "Task t1" is still failed after your turn/);
+    ends[1]();
+    supervision.apply({ supervisorLevel: 'watch' });
+    supervision.apply({ supervisorLevel: 'act' });
+    supervision.runIdle();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(delivered(host)).toHaveLength(2);
+  });
+});
+
+describe('a run that starts or continues at Act with a failure standing it was never told of (ADR-0030)', () => {
+  const delivered = (host: ReturnType<typeof harness>['host']) => host.deliver.mock.calls.map(([text]) => text as string);
+
+  it.each(['user', 'supervisor'] as const)('wakes the supervisor once, after the start has claimed what it starts, when the %s opens the run', async (origin) => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'act' });
+    host.deliver.mockImplementation(() => new Promise(() => {}));
+    if (origin === 'supervisor') supervision.runStarted('user');
+    // Loaded failed, or failed with nobody told: no event about it was gathered.
+    tasks[0] = { ...tasks[0], status: 'failed', verdict: { outcome: 'fail', reason: 'two tests fail', checks: [], decidedAt: '2026-11-22T00:00:00Z' } };
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { status: 'failed' }), task('t4', 4, { dependencies: ['t3'] }));
+
+    supervision.runStarted(origin);
+    // The start retries t3: by the end of its merge window it is at work again.
+    tasks[2] = { ...tasks[2], status: 'in_progress' };
+    await vi.advanceTimersByTimeAsync(9);
+    expect(host.deliver).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(11);
+
+    expect(delivered(host)).toHaveLength(1);
+    expect(delivered(host)[0]).toMatch(/^Run update:\n- Task #1 "Task t1" is failed \(two tests fail\), and you were not told: 1 task waits on it, #2 "Task t2"\. Release it:/);
+    expect(delivered(host)[0]).not.toMatch(/Task t3/);
+  });
+
+  it('wakes nobody for a task the user stopped, nor below Act', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'off' });
+    host.deliver.mockImplementation(() => new Promise(() => {}));
+    supervision.runStarted('user');
+    tasks[0] = { ...tasks[0], status: 'failed' };
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }), task('t3', 3, { status: 'failed' }), task('t4', 4, { dependencies: ['t3'] }));
+    supervision.taskStoppedByUser('t1');
+
+    supervision.apply({ supervisorLevel: 'watch' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(host.deliver).not.toHaveBeenCalled();
+    expect(host.pump).toHaveBeenCalledTimes(1);
+
+    supervision.apply({ supervisorLevel: 'act' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(delivered(host)).toHaveLength(1);
+    expect(delivered(host)[0]).toMatch(/Task #3 "Task t3" is failed/);
+    expect(delivered(host)[0]).not.toMatch(/Task t1/);
+  });
+});
+
+describe('the user setting a level between runs (ADR-0030)', () => {
+  it('lifts a stop the last run ended under, so a run continuing it is supervised, and catches an Act supervisor up as its closing turn', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    supervision.runStarted('user');
+    const fail = () => supervision.wakeUp(failsKeepingInput(plan));
+    await expect(fail()).rejects.toThrow('planner exited');
+    await expect(fail()).rejects.toThrow('planner exited');
+    // Failed with nobody told, as after a reload.
+    tasks[0] = { ...tasks[0], status: 'failed' };
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }));
+    supervision.runFinished();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+    host.deliver.mockClear();
+    host.deliver.mockImplementation(() => new Promise(() => {}));
+
+    supervision.apply({ supervisorLevel: 'act' });
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(plan.runSettings!.unsupervised).toBeUndefined();
+    expect(supervision.level).toBe('act');
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.deliver.mock.calls[0][0]).toMatch(/- Task #1 "Task t1" is failed, and you were not told: 1 task waits on it, #2 "Task t2"\. The run has ended, and an edit starts nothing/);
+    // The run's end was told already: nothing more is owed to a follower.
+    expect(host.runConcluded).toHaveBeenCalledTimes(1);
+  });
+
+  it('lifts a stop to the level the user chose, Off included', async () => {
+    const { supervision, plan } = harness({ supervisorLevel: 'act' });
+    supervision.runStarted('user');
+    const fail = () => supervision.wakeUp(failsKeepingInput(plan));
+    await expect(fail()).rejects.toThrow('planner exited');
+    await expect(fail()).rejects.toThrow('planner exited');
+    supervision.runFinished();
+
+    supervision.apply({ supervisorLevel: 'off' });
+
+    expect(plan.runSettings).toMatchObject({ supervisorLevel: 'off' });
+    expect(plan.runSettings!.unsupervised).toBeUndefined();
+    supervision.runStarted('supervisor');
+    expect(supervision.level).toBe('off');
+  });
+});
+
+describe('a run idle behind a failure no wake was delivered about (ADR-0057 R4)', () => {
+  it('raises one wake for it at Act, and only one however often the run is idle', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, host } = harness({ supervisorLevel: 'act' });
+    host.deliver.mockImplementation(() => new Promise(() => {}));
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }));
+    supervision.runStarted('user');
+    await vi.advanceTimersByTimeAsync(50);
+    // A failure that reached nobody: no event about it was gathered.
+    tasks[0] = { ...tasks[0], status: 'failed' };
+
+    supervision.runIdle();
+    supervision.runIdle();
+    await vi.advanceTimersByTimeAsync(50);
+    supervision.runIdle();
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(host.deliver).toHaveBeenCalledTimes(1);
+    expect(host.deliver.mock.calls[0][0]).toMatch(/- Task #1 "Task t1" is failed, and you were not told: 1 task waits on it, #2 "Task t2"/);
+  });
+
+  it('counts against the wake-up rate guard as any wake does', async () => {
+    vi.useFakeTimers();
+    const { supervision, tasks, plan, host } = harness({ supervisorLevel: 'act' }, { wakeUpRate: { max: 1, windowMs: 60_000 } });
+    tasks.push(task('t2', 2, { dependencies: ['t1'] }), task('t3', 3));
+    supervision.runStarted('user');
+    await vi.advanceTimersByTimeAsync(50);
+    supervision.observe({ kind: 'waiting_input', taskId: 't3' });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(plan.runSettings!.supervisorLevel).toBe('act');
+    tasks[0] = { ...tasks[0], status: 'failed' };
+
+    supervision.runIdle();
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(plan.runSettings!.supervisorLevel).toBe('watch');
+    expect(host.deliver).toHaveBeenCalledTimes(2);
   });
 });

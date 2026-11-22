@@ -58,8 +58,32 @@ export const SETTLE_MS = 5 * 60 * 1000;
 
 export const ARMS = Object.freeze({
   A: Object.freeze({ id: 'A', label: 'one hand-written task, no planner, no supervisor' }),
+  // Arm A's box, task, caps and scoring, with its attempt continued each time it ends while the caps have room (see CONTINUE_MESSAGE): a control for what B's structure adds over persistence.
+  'A-continued': Object.freeze({ id: 'A-continued', label: 'one hand-written task, no planner, no supervisor, continued until the caps', continued: true }),
   B: Object.freeze({ id: 'B', label: 'ordewell plan and run, supervisor at Act, automatic merging' }),
 });
+
+/** The reasoning efforts a task's model can be given (core's EffortLevel), which --effort-a takes one of. */
+export const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * The efforts a plan's AI tasks carry, subtasks included, as a count per
+ * level (`unset` for a task with none): what a run records so that arms
+ * thinking at different levels show. Null where no plan was read.
+ */
+export function effortCounts(plan) {
+  if (!plan) return null;
+  const out = {};
+  for (const t of allTasks(plan)) {
+    if ((t.type ?? 'ai') !== 'ai') continue;
+    const level = t.assignedModel?.thinkingEffort || 'unset';
+    out[level] = (out[level] ?? 0) + 1;
+  }
+  return out;
+}
+
+/** Arm A, plain or continued: the arms that are one agent alone, in one task. */
+export const isSingleAgent = (armId) => armId === 'A' || armId === 'A-continued';
 
 /**
  * Both arms take the same step limit. The default (200 per attempt) would be
@@ -773,6 +797,34 @@ export function parsePytestSummary(text) {
 }
 
 /**
+ * How many of the summary's skipped outcomes belong to a module, not to a test.
+ * A module that calls `pytest.importorskip` at import is one skipped outcome in
+ * the summary, though none of its tests is a collected item, and pytest prints
+ * no progress character for it. Each test prints exactly one (`.` passed, `F`
+ * failed, `s` skipped, `x` xfailed, `X` xpassed; an `E` is an error, never an
+ * outcome), so the summary's skips less the `s` printed are the modules'.
+ * Null when the progress lines are absent or disagree with the summary, since
+ * nothing then says which skips are a module's.
+ */
+export function moduleLevelSkips(output, summary) {
+  const chars = { '.': 0, F: 0, s: 0, x: 0, X: 0 };
+  let seen = false;
+  for (const line of output.split('\n')) {
+    const m = /^([.FEsxX]+) *(?:\[ *\d+%\])?$/.exec(line.trimEnd());
+    if (!m) {
+      // The progress block is contiguous from the first run of tests; what follows it is not read.
+      if (seen && line.trim() !== '') break;
+      continue;
+    }
+    seen = true;
+    for (const c of m[1]) if (c in chars) chars[c]++;
+  }
+  if (!seen) return null;
+  if (chars['.'] !== summary.passed || chars.F !== summary.failed || chars.x !== summary.xfailed || chars.X !== summary.xpassed) return null;
+  return chars.s <= summary.skipped ? summary.skipped - chars.s : null;
+}
+
+/**
  * Flags the scoring run adds: a test file that fails to import is one error,
  * and pytest would otherwise stop at the first and run nothing, zeroing the
  * whole library for one file.
@@ -888,7 +940,7 @@ export function collectionErrorFiles(text) {
  */
 export function parseEvaluation(code, output) {
   const summary = parsePytestSummary(output);
-  if (summary) return { ...summary, collectionErrors: collectionErrorFiles(output) };
+  if (summary) return { ...summary, moduleSkipped: moduleLevelSkips(output, summary), collectionErrors: collectionErrorFiles(output) };
   const broke = /^(ImportError while loading conftest.*|Interrupted: \d+ errors? during collection.*)$/m.exec(output);
   if (!broke || code === 0) return null;
   return { passed: 0, failed: 0, errors: 0, skipped: 0, xfailed: 0, xpassed: 0, deselected: 0, collectionErrors: [], collectionError: broke[1].trim() };
@@ -900,11 +952,12 @@ export function parseEvaluation(code, output) {
  * Arm A's plan, written in the box with the checkout's core as `ordewell plan`
  * would save one: one task on the built-in runner and the protocol's model,
  * its prompt the goal, approved, so `ordewell run` starts it with no planner
- * turn. Prints the session id.
+ * turn. `effort` (--effort-a, empty for none) is carried where a planned
+ * task's is, on its assigned model. Prints the session id.
  */
 export const ARM_A_PLAN_JS = String.raw`
 const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
-const [workspace, goal, modelId, modelLabel] = process.argv.slice(1);
+const [workspace, goal, modelId, modelLabel, effort] = process.argv.slice(1);
 const now = new Date().toISOString();
 const task = core.createTask({
   order: 1,
@@ -912,7 +965,7 @@ const task = core.createTask({
   description: goal,
   prompt: goal,
   assignedRunner: '${RUNNER}',
-  assignedModel: { modelId, modelLabel },
+  assignedModel: { modelId, modelLabel, ...(effort ? { thinkingEffort: effort } : {}) },
   taskMode: '${ARM_A_MODE}',
 });
 const meta = core.saveSession({ tasks: [task], generatedAt: now, status: 'approved', runners: ['${RUNNER}'], lastUpdated: now }, goal, workspace);
@@ -970,6 +1023,56 @@ const [workspace, sessionId] = process.argv.slice(1);
   }
 })();
 `;
+
+/**
+ * One command at the daemon's command seam (`POST
+ * /api/plans/:sessionId/execute-command`, the call the CLI and the terminal UI
+ * make), for what the CLI has no word for: `message_task`, the reply to a task
+ * parked on input. The
+ * command is JSON in the third argument. Prints `{status, body}`, or `{error}`.
+ */
+export const EXECUTE_COMMAND_JS = String.raw`
+const core = require('/opt/ordewell/node_modules/@ordewell/core/dist/index.js');
+const [workspace, sessionId, command] = process.argv.slice(1);
+(async () => {
+  try {
+    const port = core.DEFAULT_DAEMON_PORT;
+    const token = core.readDaemonToken(port);
+    if (!token) throw new Error('no daemon token: the daemon is not running');
+    const q = new URLSearchParams({ workspace });
+    const res = await fetch('http://127.0.0.1:' + port + '/api/plans/' + encodeURIComponent(sessionId) + '/execute-command?' + q, {
+      method: 'POST',
+      headers: { Authorization: core.bearerHeaderValue(token), 'Content-Type': 'application/json' },
+      body: command,
+      signal: AbortSignal.timeout(120000),
+    });
+    process.stdout.write(JSON.stringify({ status: res.status, body: await res.json() }));
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ error: String(err && err.message || err) }));
+  }
+})();
+`;
+
+/**
+ * A fingerprint of the work the workspace holds, for the control arm to tell
+ * an attempt that changed the tree from one that did not: the trees of every
+ * branch tip, and per worktree what differs from its HEAD (tracked changes by
+ * content, untracked files by hash), as a set: a landing that adds a commit of
+ * a tree already there, or a worktree cut again over the same files, is no
+ * work. Bytecode, test caches, the venv and Ordewell's own files are none
+ * either. Run with the workdir as $1; prints one hash. A git the arm configured
+ * runs only in the arm's own box.
+ */
+export const TREE_FINGERPRINT_SH = String.raw`cd "$1" || exit 1
+g() { git -c core.fsmonitor=false "$@"; }
+SPEC=". :(exclude).ordewell :(exclude).venv :(exclude).pytest_cache :(exclude,glob)**/__pycache__/** :(exclude,glob)**/.pytest_cache/** :(exclude,glob)**/*.pyc"
+{
+  g for-each-ref --format='tree %(tree)' refs/heads
+  g worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt; do
+    g -C "$wt" diff HEAD -- $SPEC | sha1sum | sed 's/^/diff /'
+    (cd "$wt" && g ls-files -o --exclude-standard -z -- $SPEC | xargs -0 -r sha1sum)
+  done
+} 2>/dev/null | sort -u | sha1sum | cut -d' ' -f1`;
 
 /**
  * A run's state as the watcher reads it: the daemon's own run view while its
@@ -1200,7 +1303,9 @@ export function armCommands(arm, { workspace, goal, sessionId = '<session>' }) {
   const ws = ['--workspace', workspace];
   const run = ['ordewell', 'run', '--session-id', sessionId, ...ws];
   const merge = ['ordewell', 'merge', '--session-id', sessionId, '--yes', ...ws];
-  if (arm.id === 'A') return [['<write the one-task session with core>'], run, merge];
+  // The control arm's continuation, sent each time the attempt has ended while the caps have room; a task parked on input is sent the same text as a message_task instead.
+  const again = ['ordewell', 'continue', '1', '<the continuation message, as often as the caps allow>', '--session-id', sessionId, ...ws];
+  if (isSingleAgent(arm.id)) return [['<write the one-task session with core>'], run, ...(arm.continued ? [again] : []), merge];
   return [['ordewell', 'plan', '--goal', goal, '--runner', RUNNER, '--no-chat', '--yes', ...ws], run, merge];
 }
 
@@ -1402,6 +1507,153 @@ export function settleDecision({ plan, activity = null, fingerprint, nowMs, stat
   return { settled: nowMs - next.sinceMs >= settleMs, state: next };
 }
 
+// --- Continuing arm A's attempt (the control arm) ------------------------------
+
+/**
+ * The one message the control arm sends each time its attempt ends while the
+ * caps have room: what a person typing "continue" would add, and no more. It
+ * says nothing of the work, the tests or another arm. "Calls remain" is true
+ * of every continuation: the runner's budget of calls is per attempt.
+ */
+export const CONTINUE_MESSAGE = 'The time and spend limits for this task have not been reached. Your context is compacted automatically as it fills, and calls remain. Continue the task until its goal is met.';
+
+/**
+ * When the control arm continues and when it stops. `minWallMs` and `minUsd`
+ * are the room the caps must still hold for another attempt to be worth
+ * starting; `max` bounds the continuations; an attempt that ends within
+ * `giveUpCalls` calls and leaves the tree as it was, `giveUpRun` times in a
+ * row, is the agent giving up. The caps themselves are capDecision's.
+ */
+export const CONTINUATION = Object.freeze({ minWallMs: 3 * 60_000, minUsd: 0.1, max: 40, giveUpRun: 3, giveUpCalls: 2 });
+
+/** The longest summary a continuation record keeps of the attempt it follows. */
+const SUMMARY_CHARS = 600;
+
+/**
+ * Whether arm A's one attempt has ended, and with what: the task closed one
+ * way or the other, or parked on "input" (the built-in runner's turn ended in
+ * prose with no `task_complete`, after the reminder it sends first, and it
+ * waits for a reply), nothing running, starting or due to advance by itself.
+ * A checkpoint is a question the agent asks, not an end: the stall rule's.
+ * `verdict` is what the runner reported through `task_complete` (`done`,
+ * `failed`, `blocked`) and `no report` for an attempt that ended without;
+ * `summary` is its report, cut. Null while it goes on.
+ */
+export function attemptEnded({ plan, activity = null }) {
+  const tasks = allTasks(plan).filter((t) => (t.type ?? 'ai') === 'ai');
+  if (tasks.length !== 1) return null;
+  const [t] = tasks;
+  const parked = t.status === 'awaiting_user' && t.awaitingReason === 'input';
+  if (t.status !== 'completed' && t.status !== 'failed' && !parked) return null;
+  const advances = activity && 'advancesOnItsOwn' in activity ? activity.advancesOnItsOwn : activity?.resumable;
+  // A task parked on input still holds its live runner session, which the run view counts as running: the parked status is what says its turn is over.
+  if (!parked && (activity?.running || activity?.starting || advances || waitingOnPerson(plan))) return null;
+  const summary = t.handoff?.summary ?? t.outputSummary?.report ?? null;
+  return {
+    // A parked task is one whose turn ended with nothing reported, whatever an earlier attempt's verdict was.
+    verdict: parked ? 'no report' : t.verdict?.reported ?? (t.status === 'completed' ? 'done' : 'no report'),
+    summary: typeof summary === 'string' ? summary.slice(0, SUMMARY_CHARS) : null,
+    attempts: t.attemptUsage?.length ?? 0,
+    status: t.status,
+  };
+}
+
+/**
+ * Whether to continue an ended attempt. The caps come first: with less than
+ * `minWallMs` of the wall-clock or `minUsd` of the spend left there is no room
+ * (the ordinary stop rules, capDecision, end the run at the cap itself). Then
+ * the bound on continuations, then the agent giving up: `history` holds one
+ * `{calls, treeChanged}` per continuation whose attempt has ended, and null for
+ * what could not be read, which is never evidence of an idle attempt.
+ */
+export function continueDecision({ history, elapsedMs, spentUsd, capUsd, wallCapMs }) {
+  if (wallCapMs - elapsedMs < CONTINUATION.minWallMs) return { go: false, why: 'no-room-wall' };
+  if (round6(capUsd - spentUsd) < CONTINUATION.minUsd) return { go: false, why: 'no-room-spend' };
+  if (history.length >= CONTINUATION.max) return { go: false, why: 'max-continuations' };
+  const last = history.slice(-CONTINUATION.giveUpRun);
+  if (last.length === CONTINUATION.giveUpRun && last.every((h) => typeof h.calls === 'number' && h.calls <= CONTINUATION.giveUpCalls && h.treeChanged === false)) return { go: false, why: 'gave-up' };
+  return { go: true, why: null };
+}
+
+/**
+ * How `ordewell continue` failed. A session core cannot resume ends the
+ * continuing: the one other way on is a fresh attempt, which core runs in a new
+ * worktree cut from the integration tip, so the work the arm kept would be
+ * missing from what it is scored on. Any other failure is a refusal.
+ */
+export function continueRefusal({ code, stdout, stderr }) {
+  const said = `${stderr}\n${stdout}`.trim();
+  return { cannotContinue: /cannot be continued/.test(said), detail: said.slice(-300) || `exit ${code}` };
+}
+
+/** What the driver keeps of a continued run, poll to poll: see continuationStep. */
+export function createContinuation() {
+  return { first: null, continuations: [], sent: null, stop: null, sawLive: false };
+}
+
+/**
+ * One look at an ended attempt (attemptEnded). `wait`: the attempt the last
+ * continuation started has not begun, so what is read is the old one's end.
+ * `stop`: no continuation (`state.stop` says why). `send`: continue with
+ * `record`, which the driver commits with markSent once the message is in.
+ * Seeing an attempt end closes the record of the continuation it was: its
+ * calls (usage records the runner wrote since) and whether the tree changed
+ * (`fingerprint` against the one at the send; null where it could not be read).
+ */
+export function continuationStep(state, { ended, fingerprint, usageLines, spentUsd, elapsedMs, capUsd, wallCapMs, now }) {
+  const sent = state.sent;
+  if (sent) {
+    const begun = state.sawLive || ended.attempts > sent.attempts || usageLines > sent.usageLines;
+    if (!begun) return { action: 'wait' };
+    sent.record.calls = usageLines - sent.usageLines;
+    sent.record.treeChanged = fingerprint === null || sent.fingerprint === null ? null : fingerprint !== sent.fingerprint;
+    state.sent = null;
+  }
+  state.sawLive = false;
+  state.first ??= { verdict: ended.verdict, summary: ended.summary, attempts: ended.attempts, atMs: elapsedMs, callsSoFar: usageLines, spentUsd };
+  const history = state.continuations.filter((c) => c.calls !== null);
+  const d = continueDecision({ history, elapsedMs, spentUsd, capUsd, wallCapMs });
+  if (!d.go) {
+    state.stop = { why: d.why, atMs: elapsedMs, spentUsd, callsSoFar: usageLines };
+    return { action: 'stop', why: d.why };
+  }
+  return {
+    action: 'send',
+    record: {
+      n: state.continuations.length + 1, at: now, atMs: elapsedMs, mode: 'session',
+      after: { attempt: ended.attempts, verdict: ended.verdict, summary: ended.summary },
+      callsSoFar: usageLines, spentUsd, calls: null, treeChanged: null,
+    },
+  };
+}
+
+/**
+ * The message went in. `via` is how: `continue` (a finished task's saved
+ * session, resumed) or `message` (the reply to a task parked on input, in its
+ * live session). Both go into the same session.
+ */
+export function markSent(state, record, { fingerprint, usageLines, attempts }, { via = 'continue' } = {}) {
+  record.mode = 'session';
+  record.via = via;
+  state.continuations.push(record);
+  state.sent = { record, fingerprint, usageLines, attempts };
+  return record;
+}
+
+/** What result.json holds of a continued run; null for an arm that is not continued. */
+export function continuationRecord(state) {
+  if (!state) return null;
+  return {
+    message: CONTINUE_MESSAGE,
+    margins: CONTINUATION,
+    first: state.first,
+    continuations: state.continuations,
+    count: state.continuations.length,
+    fresh: state.continuations.filter((c) => c.mode === 'fresh').length,
+    stop: state.stop,
+  };
+}
+
 /**
  * What a run the settle detector ended still had open, each task with what
  * held it: `on hold` (the scheduler's hold, which only the daemon's run view
@@ -1543,7 +1795,7 @@ function newestPreserved(branches, runId, name, order) {
  * unlanded work is kept for diagnosis, never scored.
  */
 export function scoringPlan(arm, chosen) {
-  if (arm.id === 'A') {
+  if (isSingleAgent(arm.id)) {
     const apply = chosen.find((c) => !c.landed && c.source) ?? null;
     return { scoredFrom: apply ? 'task-worktree' : 'merged', apply, diagnostic: [] };
   }
@@ -1557,7 +1809,7 @@ export function scoringPlan(arm, chosen) {
  * is open, scores the stubs: the comparison is void, never a low score.
  */
 export function judgeScoredSource({ arm, chosen, scoredFrom }) {
-  if (arm.id !== 'A') return { ok: true, failures: [] };
+  if (!isSingleAgent(arm.id)) return { ok: true, failures: [] };
   const failures = [];
   const name = (c) => `task ${c.order ?? '?'} "${c.title ?? c.taskId}"`;
   if (!chosen.length) failures.push('the plan holds no task to score');
@@ -1612,6 +1864,25 @@ export function distFreshness({ dists, sources, allowStale = false }) {
 /** A failed check is one that neither was expected to fail nor could not be verified. */
 export const failedCheck = (c) => !c.ok && !c.unverified && !c.expectedFailure;
 
+/**
+ * What is wrong with a scoring run's counts, as reasons. One function for a
+ * real run and for the dry run's reference, so a library whose reference
+ * would be judged invalid fails the dry run with that reason.
+ */
+export function judgeScore(tests) {
+  if (tests?.timedOut) return ['eval timed out'];
+  if (!tests || tests.passed === undefined) return ['eval gave no summary'];
+  if (typeof tests.collected !== 'number') return [];
+  // Each test has at most one call outcome; errors are left out, since a test
+  // that passes and then errors in teardown is counted under both. A module
+  // that skips at import is an outcome of no collected test (moduleLevelSkips).
+  const outcomes = ['passed', 'failed', 'skipped', 'xfailed', 'xpassed'].reduce((n, k) => n + (tests[k] ?? 0), 0);
+  const modules = tests.moduleSkipped ?? 0;
+  return outcomes - modules > tests.collected
+    ? [`more outcomes than the reference collected: ${outcomes - modules} > ${tests.collected}${modules ? ` (${modules} module-level skip${modules === 1 ? '' : 's'} not counted)` : ''}`]
+    : [];
+}
+
 /** Every reason a result is not one to compare. */
 export function judgeValidity({ aborted, checks, tests, freshness, stopped = null, dryRun = false, planOnly = false, scoring = null }) {
   const reasons = [];
@@ -1620,17 +1891,14 @@ export function judgeValidity({ aborted, checks, tests, freshness, stopped = nul
   for (const c of checks ?? []) if (failedCheck(c)) reasons.push(`failed check: ${c.scope}: ${c.name}`);
   // The batch stops every run at one instant, so this arm got less time and spend than its pair (D1).
   if (stopped?.why === 'batch-budget') reasons.push('stopped by the batch budget');
-  if (dryRun) reasons.push('dry run: no arm ran');
-  // Whatever the plan was, nothing ran and nothing was scored: no plan-only result is one to compare.
-  else if (planOnly) reasons.push('plan-only: the plan was made and nothing ran, so nothing was scored');
-  else if (tests?.timedOut) reasons.push('eval timed out');
-  else if (!tests || tests.passed === undefined) reasons.push('eval gave no summary');
-  else if (typeof tests.collected === 'number') {
-    // Each test has at most one call outcome; errors are left out, since a test
-    // that passes and then errors in teardown is counted under both.
-    const outcomes = ['passed', 'failed', 'skipped', 'xfailed', 'xpassed'].reduce((n, k) => n + (tests[k] ?? 0), 0);
-    if (outcomes > tests.collected) reasons.push(`more outcomes than the reference collected: ${outcomes} > ${tests.collected}`);
-  }
+  if (dryRun) {
+    reasons.push('dry run: no arm ran');
+    // The fixture arm scores the reference's own source, so the score is one the same rules judge.
+    if (tests) reasons.push(...judgeScore(tests));
+  } else if (planOnly) {
+    // Whatever the plan was, nothing ran and nothing was scored: no plan-only result is one to compare.
+    reasons.push('plan-only: the plan was made and nothing ran, so nothing was scored');
+  } else reasons.push(...judgeScore(tests));
   if (freshness?.stale && freshness.allowed) reasons.push('stale dist allowed');
   return { valid: reasons.length === 0, invalidReasons: reasons };
 }
@@ -1649,10 +1917,13 @@ export function baselineRecord(evaluation) {
 }
 
 /** One library's result for one arm, with every field the comparison reports. */
-export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, referenceSpend: reference = null, dryRun, planOnly = false, startedAt, endedAt }) {
+export function resultRecord({ lib, arm, settings = armSettings(arm), window, ordewell, egress, leak, network, tests, baseline, wallClockMs, spend, transcripts, stopped, stalled, truncated, scoredFrom, scoring, patches, validity, providerPin, referenceSpend: reference = null, dryRun, planOnly = false, effortA = null, efforts = null, startedAt, endedAt }) {
   return {
     library: lib.name,
     arm: arm.id,
+    // The reasoning effort asked of arm A's task (--effort-a; null where none was, and for B), and the efforts the plan's tasks carried, counted per level.
+    effortA,
+    efforts,
     dryRun,
     planOnly,
     valid: validity?.valid ?? null,
@@ -1669,7 +1940,7 @@ export function resultRecord({ lib, arm, settings = armSettings(arm), window, or
     egress,
     leak,
     networkDeselected: network?.deselected ?? null,
-    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, collectionErrors: tests.collectionErrors ?? [], exit: tests.exit ?? null, timedOut: tests.timedOut ?? false } : null,
+    tests: tests ? { passed: tests.passed, collected: tests.collected, failed: tests.failed, errors: tests.errors, skipped: tests.skipped, moduleSkipped: tests.moduleSkipped ?? null, collectionErrors: tests.collectionErrors ?? [], exit: tests.exit ?? null, timedOut: tests.timedOut ?? false } : null,
     baseline: baseline ?? null,
     wallClockMs: wallClockMs ?? null,
     billedUsd: spend?.billedUsd ?? null,
@@ -2307,17 +2578,22 @@ function modelCallsOf(taskLogs, limit) {
  *    with the spend and the time it stopped at.
  *  - `settle`: nothing moved for the settle time while some task was still
  *    open for another cause, each listed with what held it.
+ *  - `continuation`: the control arm (A-continued) stopped continuing its
+ *    attempt: `why` is `no-room-wall`, `no-room-spend` (the caps leave no room
+ *    for another attempt), `max-continuations`, `gave-up`, `cannot-continue` or `continue-refused` (CONTINUATION).
  *  - `stall` (a person waited on for --stall-min), `no-start` (no model call
  *    in the first minutes) and `not-run` (a dry run or a plan-only run, or
  *    no task) complete the cases.
  * For arm A the model calls it used against the step limit; null for B and
  * where the logs were not copied.
  */
-export function runEnding({ arm, plan, taskLogs, stopped, stalled, ran = true, stepLimit = STEP_LIMIT }) {
+export function runEnding({ arm, plan, taskLogs, stopped, stalled, ran = true, stepLimit = STEP_LIMIT, continuation = null }) {
   if (!ran) return { by: 'not-run', modelCalls: null };
-  const modelCalls = arm === 'A' ? modelCallsOf(taskLogs, stepLimit) : null;
+  const modelCalls = isSingleAgent(arm) ? modelCallsOf(taskLogs, stepLimit) : null;
   if (stopped?.why === 'no-start') return { by: 'no-start', detail: stopped.detail ?? null, modelCalls };
   if (stopped) return { by: 'cap', cap: stopped.why, spentUsd: stopped.spentUsd ?? null, atMs: stopped.atMs ?? null, modelCalls };
+  // The control arm's own rule: no room left under the caps, the bound on continuations, or the agent giving up (CONTINUATION).
+  if (continuation?.stop) return { by: 'continuation', why: continuation.stop.why, continuations: continuation.count ?? null, spentUsd: continuation.stop.spentUsd ?? null, atMs: continuation.stop.atMs ?? null, modelCalls };
   const failedOnly = (stalled?.open ?? []).every((o) => o.held === 'nothing ready' && (o.reason === 'failed' || /^depends on /.test(o.reason ?? '')));
   if (stalled?.why === 'settled' && !failedOnly) {
     return { by: 'settle', quietMs: stalled.quietMs ?? null, open: stalled.open.map(({ order, title, status, held, reason }) => ({ order, title, status, held, reason })), modelCalls };
@@ -2482,7 +2758,7 @@ export function judgeArmPair(a, b) {
 function armPairs(runs) {
   const out = [];
   for (const lib of [...new Set(runs.map((r) => r.lib))]) {
-    const a = runs.find((r) => r.lib === lib && r.arm === 'A');
+    const a = runs.find((r) => r.lib === lib && isSingleAgent(r.arm));
     const b = runs.find((r) => r.lib === lib && r.arm === 'B');
     if (a && b) out.push({ lib, ...judgeArmPair(a, b) });
   }
@@ -2500,15 +2776,19 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
   // Each arm's spend at the one reference price table, beside what was recorded at the upstreams' own prices.
   const perArm = {};
-  for (const arm of ['A', 'B']) {
+  for (const arm of ['A', 'A-continued', 'B']) {
     const own = runs.filter((r) => r.arm === arm);
     if (!own.length) continue;
     const sum = (key) => own.map((r) => r[key]).filter((n) => typeof n === 'number');
     const total = (key) => (sum(key).length ? round6(sum(key).reduce((a, b) => a + b, 0)) : null);
     const tokens = { freshInput: 0, cachedInput: 0, output: 0 };
     for (const r of own) for (const k of Object.keys(tokens)) tokens[k] += r.referenceTokens?.[k] ?? 0;
+    const efforts = {};
+    for (const r of own) for (const [level, n] of Object.entries(r.efforts ?? {})) efforts[level] = (efforts[level] ?? 0) + n;
     perArm[arm] = {
       runs: own.length, recordedUsd: total('recordedUsd'), referenceUsd: total('referenceUsd'), referenceTokens: tokens,
+      // Tasks at each reasoning effort, over the arm's runs.
+      efforts,
       unpricedAtReference: own.filter((r) => typeof r.referenceUsd !== 'number').map((r) => `${r.lib} ${r.arm}`),
     };
   }
@@ -2648,7 +2928,7 @@ export function parseArgs(argv) {
   const out = {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
     capUsd: CAP_USD, callBudget: STEP_LIMIT, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
-    seed: null, batchDir: null, batchShared: false, planOnly: false,
+    seed: null, batchDir: null, batchShared: false, planOnly: false, continueA: false, effortA: null,
     rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
   const number = (name, v, ok) => {
@@ -2692,6 +2972,8 @@ export function parseArgs(argv) {
     else if (a === '--ordewell-root') out.ordewellRoot = path.resolve(value());
     else if (a === '--allow-stale-dist') out.allowStaleDist = true;
     else if (a === '--plan-only') out.planOnly = true;
+    else if (a === '--continue-a') out.continueA = true;
+    else if (a === '--effort-a') out.effortA = effortLevel(value());
     else if (a === '--sweep') out.sweep = true;
     else if (a === '--seed') out.seed = seedLabel(value());
     // Set by batch.mjs on each run it starts: the batch holds the key and its results.
@@ -2715,8 +2997,25 @@ export function parseArgs(argv) {
   if (out.fixture && !out.image) throw new Error('--fixture needs --image: an image with python3, pytest and git to build it in');
   if (!out.fixture && !out.libs) throw new Error('pass --libs <file>, a list of libraries as libraries.example.json shows, or --fixture');
   if (out.run && !out.providerPin) throw new Error('a run needs --provider-pin <provider>: the one OpenRouter provider the key is pinned to');
+  continueAArms(out);
   if (out.planOnly) planOnlyArms(out);
   return out;
+}
+
+function effortLevel(v) {
+  if (!EFFORTS.includes(v)) throw new Error(`--effort-a takes one of ${EFFORTS.join(', ')}, not ${v}`);
+  return v;
+}
+
+/** --continue-a is arm A's: with no arm A to continue, or no run to continue it in, it is refused rather than ignored. */
+export function continueAArms(o) {
+  if (o.effortA) {
+    if (o.planOnly) throw new Error('--effort-a sets the effort of arm A\'s task, and a plan-only run has no arm A: it has no plan to set it in');
+    if (o.arm === 'B') throw new Error('--effort-a sets the effort of arm A\'s task, and --arm B runs no arm A');
+  }
+  if (!o.continueA) return;
+  if (o.planOnly) throw new Error('--continue-a continues arm A\'s attempts, and a plan-only run has no arm A and runs no attempt: it has no plan to continue');
+  if (o.arm === 'B') throw new Error('--continue-a continues arm A, and --arm B runs no arm A');
 }
 
 /**
@@ -2752,7 +3051,7 @@ const BATCH_PASSED = Object.freeze({
  * passed on in `driveArgs`.
  */
 export function parseBatchArgs(argv) {
-  const own = { jobs: JOBS, budgetUsd: null, seed: null, only: [], arm: 'both', sweep: false, help: false };
+  const own = { jobs: JOBS, budgetUsd: null, seed: null, only: [], arm: 'both', sweep: false, help: false, continueA: false, effortA: null };
   const driveArgs = [];
   const positive = (name, v, ok, what) => {
     const n = Number(v);
@@ -2776,6 +3075,9 @@ export function parseBatchArgs(argv) {
       if (!['A', 'B', 'BOTH'].includes(v)) throw new Error('--arm takes A, B or both');
       own.arm = v === 'BOTH' ? 'both' : v;
     } else if (a === '--sweep') own.sweep = true;
+    // Not passed on as given: each A run is started as arm A with the flag, each B run without it (driveArmArgs).
+    else if (a === '--continue-a') own.continueA = true;
+    else if (a === '--effort-a') own.effortA = effortLevel(value());
     else if (a === '--libs') driveArgs.push(a, path.resolve(value()));
     else if (a === '--ordewell-root') driveArgs.push(a, path.resolve(value()));
     else if (BATCH_PASSED.flags.includes(a)) driveArgs.push(a);
@@ -2784,6 +3086,7 @@ export function parseBatchArgs(argv) {
   }
   if (own.help) return { ...own, driveArgs };
   const run = parseArgs(driveArgs);
+  continueAArms({ ...own, planOnly: run.planOnly });
   if (run.planOnly) planOnlyArms(own);
   if (!run.libs) throw new Error('a batch runs a list of libraries: pass --libs <file>');
   // The key's delta counts every run of the batch: on a key no cap of one run bounds that.
@@ -2791,7 +3094,14 @@ export function parseBatchArgs(argv) {
   return { ...run, ...own, driveArgs };
 }
 
-export const armsOf = (arm) => (arm === 'both' ? [ARMS.A, ARMS.B] : [ARMS[arm]]);
+/** The arms to run: `continueA` swaps arm A for the continued control arm, and leaves B as it is. */
+export const armsOf = (arm, continueA = false) => (arm === 'both' ? [continueA ? ARMS['A-continued'] : ARMS.A, ARMS.B] : [arm === 'A' && continueA ? ARMS['A-continued'] : ARMS[arm]]);
+
+/** The arm's options for the drive.mjs that runs it: the continued arm is arm A with its flag, and a single agent's task takes the effort asked of arm A (`opts.effortA`). */
+export const driveArmArgs = (arm, opts = {}) => [
+  ...(arm.continued ? ['--arm', 'A', '--continue-a'] : ['--arm', arm.id]),
+  ...(isSingleAgent(arm.id) && opts.effortA ? ['--effort-a', opts.effortA] : []),
+];
 
 export function shellQuote(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
