@@ -214,6 +214,19 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   Act none is raised. An Act supervisor on a small model edited the one failed task's prompt in its closing
   turn and never retried it: thirty tasks behind it never ran, and `ordewell run` returned.
 
+  `failure_standing` also catches the supervisor up on a task failed or held with work waiting
+  that no event it gathered was about since the task last settled: it failed while the run was
+  Off, or the plan was loaded with it. At Act it is raised as the user's level becomes Act during
+  a run, as a run starts or continues (once the start's merge window has passed, so a task the
+  start retries is not named), as the user sets a level after a run that ended with its supervisor
+  stopped (then as the closing turn's, holding nothing a follower waits on, since that end was
+  told), and as the run goes idle, the fallback for a failure `run_held` leaves out. Its line says
+  the supervisor was not told, why the task failed, and names what waits on it. Every task the
+  catch-up finds goes in the one wake, each is named once, a task the user stopped is left out,
+  and the wake counts against the rate guard; a turn that leaves the task standing is woken for it
+  once more, under the key above. After a network outage stopped supervision, a loop's check failed
+  its last round with four tasks waiting, and the user's Act reached nobody.
+
   A `running_long` event is raised by a task's running time, by an automatic compaction of its own
   runner session, or by its context growing large; which compactions count as routine, and where a
   large context starts, is one rule for every harness
@@ -528,3 +541,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-21 — R4: a running-long flag still held when its task passes or fails is dropped from the batch.
 - 2026-11-21 — R4 holds `landed_blocker`, one per landed task, the latest count replacing a queued one; R5: its line is whole, never a ride-along (ADR-0073).
 - 2026-11-21 — R7: a task waits for a sibling's unlanded work only through a plan edge, by `wait_for` (ADR-0074).
+- 2026-11-22 — R4: `failure_standing` catches the supervisor up on a failure or hold with work waiting that it was never told of, at Act, as the level becomes Act, a run starts or continues, a level is set after a stopped run, or the run goes idle; one wake, each task once.

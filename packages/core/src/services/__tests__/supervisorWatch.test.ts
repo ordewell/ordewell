@@ -458,7 +458,7 @@ describe('when the supervisor fails, the run does not depend on it', () => {
     const settings = env.session.planState!.runSettings!;
     expect(settings.supervisorLevel).toBe('watch');
     expect(settings.unsupervised).toMatch(/failed twice \(agent died again\)/);
-    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: expect.stringMatching(/^The supervisor stopped: .*The run carries on unsupervised/) }));
+    expect(env.notices).toContainEqual(expect.objectContaining({ level: 'warn', message: expect.stringMatching(/^The supervisor stopped: .*Its setting reads Off for the rest of this run, which carries on unsupervised/) }));
     expect(env.session.planState!.conversationHistory!.at(-1)).toMatchObject({ kind: 'system', content: expect.stringMatching(/^The supervisor stopped/) });
     expect(env.session.planState!.pendingTurns!.map((t) => t.source)).toEqual(['supervisor']);
     expect(saves(env.session).mock.calls.at(-1)![0].pendingTurns!.map((t) => t.source)).toEqual(['supervisor']);

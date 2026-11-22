@@ -176,6 +176,18 @@ describe('settleReply', () => {
       expect(m.sent[1]).toContain(BAD_GATEWAY);
     });
 
+    it('waits out the network failing on the same backoff, and answers once it is back', async () => {
+      const OUTAGE = 'API Error: Can\'t reach the API server (EAI_AGAIN)';
+      const m = model(...Array.from({ length: 3 }, () => reply('', { failure: OUTAGE })), reply('Which store: SQLite or Postgres?'));
+
+      const settled = settleReply(m.opts());
+      await vi.advanceTimersByTimeAsync(30_000 + 60_000 + 120_000);
+      const turn = await settled;
+
+      expect(turn).toMatchObject({ kind: 'message', text: 'Which store: SQLite or Postgres?' });
+      expect(m.sent).toHaveLength(4);
+    });
+
     it('redacts a key the error carries from the try', async () => {
       const key = 'sk-ant-api03-' + 'A1b2C3d4E5'.repeat(9) + '-AAAAAA';
       const m = model(reply('', { failure: `${BAD_GATEWAY} (x-api-key ${key})` }), reply('Done.'));

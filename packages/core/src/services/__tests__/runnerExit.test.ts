@@ -72,6 +72,33 @@ describe('classifyRunnerStop', () => {
     expect(classifyRunnerStop({ message })).toBe('transient');
   });
 
+  // The network between the runner and its provider failing: an outage is waited out, not counted out (ADR-0018 E1).
+  it.each([
+    'API Error: Can\'t reach the API server (EAI_AGAIN)',
+    'API Error: Can’t reach the API server (ENOTFOUND)',
+    'API Error: Connection error.',
+    'Connection error.',
+    'getaddrinfo ENOTFOUND api.anthropic.com',
+    'getaddrinfo EAI_AGAIN api.openai.com',
+    'request to https://api.openai.com/v1/responses failed, reason: connect ECONNREFUSED 104.18.6.192:443',
+    'read ECONNRESET',
+    'connect ETIMEDOUT 10.0.0.1:443',
+    'connect ENETUNREACH 2606:4700::6810:1',
+    'APIConnectionTimeoutError: Request timed out.',
+    'TypeError: fetch failed',
+    'Error: socket hang up',
+  ])('reads a network failure from %j', (message) => {
+    expect(classifyRunnerStop({ message })).toBe('transient');
+  });
+
+  it.each([
+    'Test timed out in 5000ms.',
+    'The migration timed out waiting for the lock',
+    'Error: ENOENT: no such file or directory, open \'/repo/network.ts\'',
+  ])('does not read a network failure from %j', (message) => {
+    expect(classifyRunnerStop({ message })).toBe('stopped');
+  });
+
   it('reads a rate limit the runner said was not its usage limit as transient', () => {
     expect(classifyRunnerStop({ message: 'Rate limit reached for gpt-5.5.', usageLimit: false })).toBe('transient');
     expect(classifyRunnerStop({ message: 'API Error: 503 Service Unavailable', usageLimit: false })).toBe('transient');
