@@ -466,9 +466,34 @@ SCENARIO_TABLE['a-continued-effort'] = {
   effortA: 'high',
 };
 
+// arm A's one task again, with a task setting passed on the command line: the box must receive it, and every record must say so.
+SCENARIO_TABLE['a-done-task-setting'] = {
+  ...SCENARIO_TABLE['a-done'],
+  about: 'arm A as a-done, with --task-setting taskReasoningKept=3: the box\'s settings file holds it, and result.json and batch.json say it',
+  taskSettings: { taskReasoningKept: 3 },
+};
+
 export const SCENARIOS = Object.freeze(SCENARIO_TABLE);
 
 export const scenarioNames = () => Object.keys(SCENARIOS);
+
+/** drive.mjs's `--task-setting` options for a scenario. */
+export const taskSettingArgs = (s) => Object.entries(s.taskSettings ?? {}).flatMap(([k, v]) => ['--task-setting', `${k}=${v}`]);
+
+/**
+ * The failures of a scenario that passes task settings: result.json records
+ * them, and the driver's own check that the box received them passed.
+ */
+export function judgeTaskSettings(name, result) {
+  const want = scenario(name).taskSettings ?? {};
+  if (Object.keys(want).length === 0) return [];
+  const f = [];
+  if (JSON.stringify(result?.taskSettings ?? null) !== JSON.stringify(want)) f.push(`result.json records task settings ${JSON.stringify(result?.taskSettings ?? null)}, wanted ${JSON.stringify(want)}`);
+  const c = (result?.checks ?? []).find((x) => /task settings in the box$/.test(x.name));
+  if (!c) f.push('result.json holds no check that the box received the task settings');
+  else if (!c.ok) f.push('the check that the box received the task settings did not pass');
+  return f;
+}
 
 /** The windows a rehearsal runs under, short enough for minutes; a scenario may set its own. */
 export const WINDOWS = Object.freeze({ settleMin: 1, pollSec: 5, noStartMin: 3, stallMin: 2, wallMin: 25 });
@@ -937,11 +962,12 @@ export function judgeLanded(name, present) {
  * result, says it was this rehearsal, and never read the key, which on a
  * rehearsal is the fake's placeholder.
  */
-export function judgeBatch(record, { lib, arm, rehearsal }) {
+export function judgeBatch(record, { lib, arm, rehearsal, taskSettings = {} }) {
   if (!record) return ['no batch.json'];
   const f = [];
   if (record.rehearsal !== rehearsal) f.push(`batch.json is not marked as rehearsal ${rehearsal} (${JSON.stringify(record.rehearsal ?? null)})`);
   if (record.keyBeforeUsd !== null || record.keyAfterUsd !== null || record.keyReadings?.length) f.push('the batch read the key\'s usage (a key reading in batch.json): a rehearsal has no key to read');
+  if (JSON.stringify(record.taskSettings ?? null) !== JSON.stringify(taskSettings)) f.push(`batch.json records task settings ${JSON.stringify(record.taskSettings ?? null)}, wanted ${JSON.stringify(taskSettings)}`);
   // The last write of batch.json is the one that marks the batch finished: one left unfinished is the write after the last run missing.
   if (record.finished !== true) f.push('batch.json is not marked finished: the batch\'s last write is missing');
   const runs = (record.runs ?? []).filter((r) => r.lib === lib && r.arm === arm);
