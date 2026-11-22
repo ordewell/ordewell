@@ -334,15 +334,16 @@ export const UNNAMED_BUDGET_MS = 5000;
 function unnamedSentence(unnamed: readonly UnnamedTests[]): string {
   const head = 'No task\'s brief names these tests, nor any path in the package they test, so that code is yours too: write it once the slices\' work is in, and run them with the rest:';
   const item = (u: UnnamedTests) => `${u.dir} (${u.files} test file${u.files === 1 ? '' : 's'})`;
-  const more = (n: number) => ` and ${n} more directories, which a run of the whole suite shows.`;
+  const cut = (kept: readonly string[], n: number) =>
+    `${head} ${kept.length ? `${kept.join(', ')}, and ${n} more` : n} director${n === 1 ? 'y' : 'ies'}, which a run of the whole suite shows.`;
   const all = `${head} ${unnamed.map(item).join(', ')}.`;
   if (all.length <= UNNAMED_MAX) return all;
   const kept: string[] = [];
   for (const u of unnamed) {
-    if (`${head} ${[...kept, item(u)].join(', ')},${more(unnamed.length - kept.length - 1)}`.length > UNNAMED_MAX) break;
+    if (cut([...kept, item(u)], unnamed.length - kept.length - 1).length > UNNAMED_MAX) break;
     kept.push(item(u));
   }
-  return `${head} ${kept.join(', ')},${more(unnamed.length - kept.length)}`;
+  return cut(kept, unnamed.length - kept.length);
 }
 
 /** A task's part in a fan-out: the note its brief gets, and what the supervisor's wake about it says it is. */
@@ -639,6 +640,14 @@ export interface FanOutShaped {
 /** The test files' names listed to find the tests no brief names, by the last segment the planner's glob matches: {@link TEST_FILE}'s, but for a file named only by its directory. */
 const TEST_GLOBS = ['**/test_*', '**/*_test.*', '**/*.test.*', '**/*_spec.*', '**/*.spec.*'];
 
+/** What `work` settles to within `ms`, undefined past it. */
+async function settledWithin<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<undefined>((resolve) => { timer = setTimeout(resolve, ms, undefined); })]);
+  } finally { clearTimeout(timer); }
+}
+
 /** A dotted module name in a brief (`pkg.algorithms.flow`), read as the path it is. */
 const DOTTED = /(?<![\w/.-])[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?![\w/-])/g;
 /** A recursive glob a brief names (`pkg/algorithms/**`): it covers every package below its prefix. */
@@ -672,34 +681,41 @@ const stem = (p: string): string => path.posix.basename(p).replace(/\.[^.]*$/, '
  */
 export async function unnamedTests(tasks: readonly Task[], fs: SizingFileSystem): Promise<UnnamedTests[] | undefined> {
   const files = new Set<string>();
-  const started = Date.now();
+  const deadline = Date.now() + UNNAMED_BUDGET_MS;
   for (const pattern of TEST_GLOBS) {
-    const found = await filesUnder(fs, '.', pattern, MAX_SIZED_FILES);
+    const left = deadline - Date.now();
+    // A listing runs to its own file system's timeout, far past the budget, so it is not waited for past what is left.
+    const found = left > 0 ? await settledWithin(filesUnder(fs, '.', pattern, MAX_SIZED_FILES), left) : undefined;
     // Each listing walks the whole workspace, so a slow one makes the next as slow.
-    if (!found || Date.now() - started > UNNAMED_BUDGET_MS) return undefined;
+    if (!found || Date.now() > deadline) return undefined;
     for (const f of found) if (TEST_FILE.test(f)) files.add(path.posix.normalize(f));
   }
   if (files.size > MAX_SIZED_FILES) return undefined;
   const texts = tasks.flatMap((t) => [t, ...t.subtasks]).flatMap(briefTexts);
   const named = new Set<string>();
-  // A bare word of prose ("flow") is no module's name: only a path, a file or a dotted name says which one a stem is.
+  // A bare word of prose ("flow", "tests", "mylib") is no module's name nor a directory's: only a path, a file or a dotted name says which one it is.
+  const paths = new Set<string>();
   const stems = new Set<string>();
   const below: string[] = [];
   for (const text of texts) {
     for (const w of [...(text.match(WORD) ?? []), ...(text.match(DOTTED) ?? []).map((d) => d.replace(/\./g, '/'))]) {
-      const p = path.posix.normalize(w.replace(/\.+$/, '')).replace(/\/$/, '');
+      const written = w.replace(/\.+$/, '');
+      const p = path.posix.normalize(written).replace(/\/$/, '');
       if (!p || p.startsWith('..')) continue;
       named.add(p);
-      if (p.includes('/') || p.includes('.')) stems.add(stem(p));
+      if (written.includes('/') || written.includes('.')) {
+        paths.add(p);
+        stems.add(stem(p));
+      }
     }
     for (const m of text.matchAll(RECURSIVE)) below.push(path.posix.normalize(m[1]).replace(/\/$/, ''));
   }
   const covered = (f: string): boolean => {
-    if (named.has(f) || named.has(path.posix.basename(f)) || named.has(path.posix.dirname(f)) || stems.has(stem(f))) return true;
+    if (named.has(f) || named.has(path.posix.basename(f)) || paths.has(path.posix.dirname(f)) || stems.has(stem(f))) return true;
     const pkg = testedPackage(f);
     if (below.some((b) => pkg === b || pkg.startsWith(`${b}/`))) return true;
     // A path in the package itself, not in a package below it; every file at the root is in no package a flat suite tests.
-    return pkg !== '.' && [...named].some((n) => n === pkg || path.posix.dirname(n) === pkg);
+    return pkg !== '.' && [...paths].some((n) => n === pkg || path.posix.dirname(n) === pkg);
   };
   const byDir = new Map<string, number>();
   for (const f of files) if (!covered(f)) byDir.set(path.posix.dirname(f), (byDir.get(path.posix.dirname(f)) ?? 0) + 1);

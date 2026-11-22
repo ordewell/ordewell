@@ -58,14 +58,15 @@ export function resolveDependencyIds(plan: unknown): string[] {
   const tasks = isRecord(plan) ? plan.tasks : undefined;
   const candidates: { id: string; title: string }[] = [];
   walk(tasks, (t) => {
-    const id = str(t.id)?.trim();
+    // As written, spaces and all, as the validator keeps an id: a trimmed one would name no task.
+    const id = str(t.id);
     if (id) candidates.push({ id, title: str(t.title) ?? '' });
   });
   const known = new Set(candidates.map((c) => c.id));
   const notes: string[] = [];
   walk(tasks, (t) => {
     if (!Array.isArray(t.dependencies)) return;
-    const ownId = str(t.id)?.trim();
+    const ownId = str(t.id);
     const title = str(t.title) ?? '';
     const next: unknown[] = [];
     for (const dep of t.dependencies) {
@@ -95,7 +96,7 @@ export function unknownDependencies(plan: unknown): UnknownDependency[] {
   const tasks = isRecord(plan) ? plan.tasks : undefined;
   const valid: { id: string; title: string }[] = [];
   walk(tasks, (t) => {
-    const id = str(t.id)?.trim();
+    const id = str(t.id);
     if (id) valid.push({ id, title: str(t.title) ?? '' });
   });
   const known = new Set(valid.map((v) => v.id));
@@ -103,7 +104,7 @@ export function unknownDependencies(plan: unknown): UnknownDependency[] {
   walk(tasks, (t) => {
     if (!Array.isArray(t.dependencies)) return;
     for (const dep of t.dependencies) {
-      if (typeof dep === 'string' && !known.has(dep)) found.push({ taskId: str(t.id)?.trim() ?? '', title: str(t.title) ?? '', dependency: dep, valid });
+      if (typeof dep === 'string' && !known.has(dep)) found.push({ taskId: str(t.id) ?? '', title: str(t.title) ?? '', dependency: dep, valid });
     }
   });
   return found;
@@ -140,7 +141,8 @@ const LISTED_IDS = 40;
  * write each dependency exactly as an id.
  */
 export function unknownDependencyHint(u: UnknownDependency): string {
-  const nearest = nearestIds(u.dependency, u.valid).map((n) => `"${n.id}" (${n.title})`).join(', ');
+  // Its own id would be a dependency on itself, which the validator refuses too.
+  const nearest = nearestIds(u.dependency, u.valid.filter((v) => v.id !== u.taskId)).map((n) => `"${n.id}" (${n.title})`).join(', ');
   const ids = u.valid.slice(0, LISTED_IDS).map((v) => `"${v.id}"`).join(', ') + (u.valid.length > LISTED_IDS ? ', ...' : '');
   return `nearest valid ids: ${nearest}. Every dependency must be exactly the "id" of a task in the plan you write; the plan had: ${ids}`;
 }

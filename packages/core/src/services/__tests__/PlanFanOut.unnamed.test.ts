@@ -63,6 +63,12 @@ describe('unnamedTests', () => {
     expect(await unnamedTests(tasks, fs)).toEqual([{ dir: 'tests', files: 1 }]);
   });
 
+  it('does not take a word of prose for a test directory or a package', async () => {
+    const { fs } = workspace({ 'tests/test_rdata.py': lines(5), 'tests/test_zone.py': lines(5), 'dns/rdata.py': lines(5), 'mylib/tests/test_m.py': lines(5) });
+    const tasks = [t('w', [], 'Fill in dns/rdata.py and make its tests pass; mylib is left alone.')];
+    expect(await unnamedTests(tasks, fs)).toEqual([{ dir: 'mylib/tests', files: 1 }, { dir: 'tests', files: 1 }]);
+  });
+
   it('lists nothing once the listings have taken longer than UNNAMED_BUDGET_MS', async () => {
     const { fs } = workspace(files);
     let now = 0;
@@ -72,6 +78,26 @@ describe('unnamedTests', () => {
       expect(await unnamedTests(plan(), slow)).toBeUndefined();
       expect(await unnamedTests(plan(), fs)).toBeDefined();
     } finally { clock.mockRestore(); }
+  });
+
+  it('gives up at UNNAMED_BUDGET_MS, not when a listing that ran past it ends', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fs = fakeFileSystem({
+        glob: async () => {
+          calls++;
+          await new Promise((r) => setTimeout(r, calls === 1 ? UNNAMED_BUDGET_MS - 100 : 20_000));
+          return { success: true, output: 'No files matched.', truncated: false };
+        },
+        readFile: async () => ({ success: false, output: 'no', truncated: false }),
+      });
+      let settled = false;
+      const listed = unnamedTests([t('a', [], 'x')], fs).finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(UNNAMED_BUDGET_MS + 1);
+      expect(settled).toBe(true);
+      expect(await listed).toBeUndefined();
+    } finally { vi.useRealTimers(); }
   });
 
   it('lists nothing when a listing is cut short or the file system has no glob', async () => {
@@ -94,6 +120,14 @@ describe('the closing check\'s note', () => {
     const added = closingNote(shape, many).slice(closingNote(shape).length + 1);
     expect(added.length).toBeLessThanOrEqual(UNNAMED_MAX);
     expect(added).toMatch(/, and \d+ more directories, which a run of the whole suite shows\.$/);
+  });
+
+  it('counts one directory cut as one, and lists none it could not fit', () => {
+    const shape = fanOutShape(plan());
+    const head = 'No task\'s brief names these tests, nor any path in the package they test, so that code is yours too: write it once the slices\' work is in, and run them with the rest:';
+    const long = (i: number) => ({ dir: `pkg/${'d'.repeat(120)}/${i}/tests`, files: 1 });
+    expect(closingNote(shape, [long(0), long(1), long(2)])).toBe(`${closingNote(shape)} ${head} pkg/${'d'.repeat(120)}/0/tests (1 test file), pkg/${'d'.repeat(120)}/1/tests (1 test file), and 1 more directory, which a run of the whole suite shows.`);
+    expect(closingNote(shape, [{ dir: `${'x/'.repeat(400)}tests`, files: 1 }])).toBe(`${closingNote(shape)} ${head} 1 directory, which a run of the whole suite shows.`);
   });
 });
 
