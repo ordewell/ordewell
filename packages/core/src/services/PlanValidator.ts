@@ -3,12 +3,14 @@ import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings
 import type { RunnerModeInfo } from './ModeResolver';
 import { scopeOverlaps } from '../models/Delegation';
 import { plannedTask, checkPlanInvariants, taskWhere, type IntakeCatalog, type PlanTaskError } from './PlannedTask';
+import { resolveDependencyIds, unknownDependencies, unknownDependencyHint } from './PlanDependencyIds';
 
 export function parsePlanJson(
   raw: string,
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = false,
+  notes?: string[],
 ): Task[] {
   const { matches, fallback, sawUnbalanced } = extractObjectsWithKey(raw, PLAN_ENVELOPE_KEY);
 
@@ -21,7 +23,7 @@ export function parsePlanJson(
   let lastError: PlanParseError | null = null;
   for (const json of candidates) {
     try {
-      return parsePlanObject(json, raw, runners, runnerModes, autonomousDefault);
+      return parsePlanObject(json, raw, runners, runnerModes, autonomousDefault, notes);
     } catch (err) {
       if (!(err instanceof PlanParseError)) throw err;
       // Prefer surfacing the error from the most plan-like candidate: the
@@ -48,6 +50,7 @@ function parsePlanObject(
   runners: RunnerId[],
   runnerModes?: Record<RunnerId, RunnerModeInfo[]>,
   autonomousDefault = false,
+  notes?: string[],
 ): Task[] {
   const cleaned = stripTrailingCommas(escapeControlCharsInStrings(json));
 
@@ -59,9 +62,18 @@ function parsePlanObject(
     throw new PlanParseError(`Plan response was not valid JSON: ${detail}`, raw);
   }
 
+  // A one-shot reply is the model's last word: an id it spelled a little off is read as the task it means, so the run's spend is not lost to it.
+  const resolved = resolveDependencyIds(parsed);
   const result = validatePlanTasks(parsed, runners, runnerModes, autonomousDefault);
-  if (result.ok) return result.tasks;
+  if (result.ok) {
+    notes?.push(...resolved);
+    return result.tasks;
+  }
   const [first] = result.errors;
+  const unknown = first.field === 'dependencies'
+    ? unknownDependencies(parsed).find((u) => u.taskId === first.taskId && first.message.includes(`Unknown dependency "${u.dependency}"`))
+    : undefined;
+  if (unknown) throw new PlanParseError(`${first.message} (${unknownDependencyHint(unknown)})`, raw, { semantic: true });
   // An envelope problem (no tasks array, an empty one) keeps the generic
   // re-emit; only a rule broken by a task is worth naming in the corrective.
   throw new PlanParseError(first.message, raw, { semantic: first.taskId !== undefined });
