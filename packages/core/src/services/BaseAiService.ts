@@ -26,6 +26,7 @@ import type { UsageRecord } from '../models/Usage';
 import { abortScope } from '../utils/abortScope';
 import { withTurnBudgets, type TurnBudgets } from './PlannerBudgets';
 import { isModelError, type EffortLevel } from './model';
+import { writtenToolCall } from './textCall';
 
 /** What a one-shot plan call reports besides its text. */
 export interface PlanTextReply {
@@ -41,6 +42,16 @@ export interface AbandonedPlanText {
 /** The research log's entry for a line Ordewell writes there itself. */
 export function systemEntry(content: string): ResearchLogEntry {
   return { id: `sys-${uuidv4()}`, type: 'system', content, timestamp: new Date().toISOString() };
+}
+
+/** The instruction a call written as text is answered with: short, since the model knows the tool. */
+function writtenCallNote(name: string): string {
+  return `[Ordewell] Your last reply wrote a tool call (${name}) as text, so it was not made. Make the call with the tool, not in your reply text.`;
+}
+
+/** What the turn's record says when the instruction did not help: nothing ran, and no surface reports the turn as done silently. */
+function writtenCallRecord(name: string): ResearchLogEntry {
+  return systemEntry(`[Ordewell] The planner wrote a ${name} call as text, twice, and did not make it: the call was not executed.`);
 }
 
 /** How one plan-text call departs from the planner's own settings. */
@@ -156,6 +167,12 @@ export interface ResearchChat {
    * (ADR-0002). Undefined for a call that runs.
    */
   answered?(call: ToolCall): string | undefined;
+  /**
+   * The names of the tools this chat offers its model. Only a chat that runs
+   * the model's own tool calls has them: a reply of one that writes such a call
+   * out as text is answered (ADR-0070). A harness planner's chat has none.
+   */
+  offeredTools?(): ReadonlySet<string>;
 }
 
 /** Everything one conversation turn needs beyond the user message itself. */
@@ -470,6 +487,17 @@ export abstract class BaseAiService {
   }
 
   /**
+   * The tool a reply wrote out as text, when that is all it did: it made no
+   * call, the output limit did not cut it off (a half-written reply is the
+   * cut-off's to retry), and the chat offers tools to name.
+   */
+  private static writtenCallOf(chat: ResearchChat, turn: ResearchTurn): string | undefined {
+    if (turn.hasToolCalls || turn.finishReason === 'length') return undefined;
+    const offered = chat.offeredTools?.();
+    return offered && offered.size > 0 ? writtenToolCall(turn.text, offered) : undefined;
+  }
+
+  /**
    * Countdown appended to the last tool result of the final few rounds, so the
    * model lands the turn on its own terms instead of being cut off exactly at
    * the budget boundary mid-exploration.
@@ -549,53 +577,71 @@ export abstract class BaseAiService {
       // valid and the model is pushed to reply in prose. Bounded, because a
       // model could keep requesting tools forever.
       let wrapUpRounds = 0;
-      for (let step = 0; turn.hasToolCalls; step++) {
-        if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
-        if (step >= MAX_STEPS) {
-          // Budget exhausted while the model still wants tools. Dropping the
-          // calls here used to surface the model's preamble ("Let me read…")
-          // as the reply and leave dangling tool_calls in the API history.
-          if (wrapUpRounds >= 2) break;
-          wrapUpRounds++;
-          const notice = `Research tool budget for this turn is exhausted (${MAX_STEPS} rounds) — this call was NOT executed and no further tool calls will be. Reply to the user now using what you already learned: summarize your findings and ask how to proceed, ask your next question, or emit the plan JSON.`;
-          // These calls are answered without running. Reporting them as
-          // not-executed steps keeps the budget boundary visible; dropping
-          // them silently made a whole refused round look like it never
-          // happened on every surface.
-          for (const tc of turn.toolCalls) {
-            const step: ResearchStep = {
-              id: `rs-${Date.now()}-budget-${researchLog.length}`,
-              tool: tc.name as ResearchStep['tool'],
-              args: JSON.stringify(tc.args),
-              result: notice,
-              success: false,
-              outcome: 'not_executed',
-              toolCallId: tc.id,
-              timestamp: new Date().toISOString(),
-            };
-            researchLog.push(step);
-            onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
-            onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
+      let step = 0;
+      // The loop runs again, with the steps already spent, for the reply to the
+      // instruction a call written as text is answered with.
+      for (let asked = false; ; asked = true) {
+        for (; turn.hasToolCalls; step++) {
+          if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+          if (step >= MAX_STEPS) {
+            // Budget exhausted while the model still wants tools. Dropping the
+            // calls here used to surface the model's preamble ("Let me read…")
+            // as the reply and leave dangling tool_calls in the API history.
+            if (wrapUpRounds >= 2) break;
+            wrapUpRounds++;
+            const notice = `Research tool budget for this turn is exhausted (${MAX_STEPS} rounds) — this call was NOT executed and no further tool calls will be. Reply to the user now using what you already learned: summarize your findings and ask how to proceed, ask your next question, or emit the plan JSON.`;
+            // These calls are answered without running. Reporting them as
+            // not-executed steps keeps the budget boundary visible; dropping
+            // them silently made a whole refused round look like it never
+            // happened on every surface.
+            for (const tc of turn.toolCalls) {
+              const step: ResearchStep = {
+                id: `rs-${Date.now()}-budget-${researchLog.length}`,
+                tool: tc.name as ResearchStep['tool'],
+                args: JSON.stringify(tc.args),
+                result: notice,
+                success: false,
+                outcome: 'not_executed',
+                toolCallId: tc.id,
+                timestamp: new Date().toISOString(),
+              };
+              researchLog.push(step);
+              onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
+              onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
+            }
+            const calls = turn.toolCalls;
+            turn = await call(() => chat.sendToolResults(
+              calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
+              signal,
+            ));
+            continue;
           }
-          const calls = turn.toolCalls;
-          turn = await call(() => chat.sendToolResults(
-            calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
-            signal,
-          ));
-          continue;
+          const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
+          const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
+          researchLog.push(...logEntries);
+          BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
+          turn = await call(() => chat.sendToolResults(toolResults, signal));
         }
-        const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
-        const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
-        researchLog.push(...logEntries);
-        BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
-        turn = await call(() => chat.sendToolResults(toolResults, signal));
-      }
 
-      // A plain-reply turn (no tool calls) never passes through the loop
-      // above, so this is the first point it can notice an abort raised
-      // while its HTTP call was already in flight — without it, a stale
-      // turn classifies and returns as a normal plan/message after reset().
-      if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+        // A plain-reply turn (no tool calls) never passes through the loop
+        // above, so this is the first point it can notice an abort raised
+        // while its HTTP call was already in flight — without it, a stale
+        // turn classifies and returns as a normal plan/message after reset().
+        if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+
+        // A call written as markup is no finished reply (ADR-0070): it never
+        // ran, and a supervisor's wake-up would end as done with its note unsent.
+        const written = BaseAiService.writtenCallOf(chat, turn);
+        if (written === undefined) break;
+        if (asked) {
+          researchLog.push(writtenCallRecord(written));
+          break;
+        }
+        // What it wrote is taken back, not kept as narration before the reply.
+        if (last) onProgress({ type: 'text_retracted', segmentId: last.segmentId });
+        last = undefined;
+        turn = await call(() => chat.sendMessage(writtenCallNote(written), signal));
+      }
 
       // Forced break with nothing to show: degrade to a visible failure
       // instead of an empty planner bubble.
@@ -710,6 +756,7 @@ export abstract class BaseAiService {
       return next;
     };
     let turn = await send(() => chat.sendMessage(firstMessage, signal));
+    let askedForCall = false;
 
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal?.aborted) {
@@ -729,7 +776,16 @@ export abstract class BaseAiService {
         return { tasks: reply.tasks, researchLog, researchResults };
       }
 
-      if (!turn.hasToolCalls) break;
+      if (!turn.hasToolCalls) {
+        const written = BaseAiService.writtenCallOf(chat, turn);
+        if (written === undefined || askedForCall) {
+          if (written !== undefined) researchLog.push(writtenCallRecord(written));
+          break;
+        }
+        askedForCall = true;
+        turn = await send(() => chat.sendMessage(writtenCallNote(written), signal));
+        continue;
+      }
 
       const { toolResults, logEntries, resultsText } = await this.executeToolCalls(
         turn.toolCalls, fs, onProgress, fetcher, step, thinking, signal,
