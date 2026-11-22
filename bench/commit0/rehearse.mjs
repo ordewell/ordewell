@@ -137,7 +137,7 @@ const outcome = [];
 for (const name of names) {
   const s = R.scenario(name);
   const seed = `rehearsal-${name}-${Date.now().toString(36)}`;
-  const argv = ['--rehearse', name, '--libs', libs, '--only', only, ...L.driveArmArgs(L.ARMS[s.arm], { effortA: s.effortA }), '--seed', seed, '--jobs', '1', ...(ordewellRoot ? ['--ordewell-root', ordewellRoot] : []), ...(s.planOnly ? ['--plan-only'] : []), ...R.windowArgs(s)];
+  const argv = ['--rehearse', name, '--libs', libs, '--only', only, ...L.driveArmArgs(L.ARMS[s.arm], { effortA: s.effortA }), '--seed', seed, '--jobs', '1', ...(ordewellRoot ? ['--ordewell-root', ordewellRoot] : []), ...(s.planOnly ? ['--plan-only'] : []), ...R.taskSettingArgs(s), ...R.windowArgs(s)];
   fs.mkdirSync(rehearsals, { recursive: true });
   const log = path.join(rehearsals, `${seed}.log`);
   console.log(`\n== ${name}: ${s.about}\n   node bench/commit0/batch.mjs ${argv.join(' ')}\n   log: ${log}`);
@@ -148,7 +148,7 @@ for (const name of names) {
   const { runDir, batchRecord } = findBatch(seed);
   const result = runDir ? JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8')) : null;
   const failures = R.judgeRehearsal(name, result);
-  failures.push(...R.judgeBatch(batchRecord, { lib: only, arm: s.arm, rehearsal: name }));
+  failures.push(...R.judgeBatch(batchRecord, { lib: only, arm: s.arm, rehearsal: name, taskSettings: s.taskSettings ?? {} }));
   if (resultsSize() !== sizeBefore) failures.push(`${resultsFile} grew: a rehearsal's result was appended to the paid runs' results`);
   if (runDir) {
     const requests = requestsOf(path.join(runDir, 'rehearsal-requests.jsonl'));
@@ -162,7 +162,7 @@ for (const name of names) {
       failures.push(...R.judgeWait(name, requests, ctx, plan), ...R.judgeBlocker(name, requests, ctx, plan));
     }
     if (s.continued) failures.push(...R.judgeContinued(name, result, requests, L.CONTINUE_MESSAGE));
-    failures.push(...R.judgeEffort(name, requests));
+    failures.push(...R.judgeEffort(name, requests), ...R.judgeTaskSettings(name, result));
     // The record says the effort the arm was asked for and that its one task carried it.
     if (s.effortA && (result?.effortA !== s.effortA || JSON.stringify(result?.efforts) !== JSON.stringify({ [s.effortA]: 1 }))) failures.push(`result.json records effortA ${JSON.stringify(result?.effortA)} and efforts ${JSON.stringify(result?.efforts)}, wanted ${s.effortA} and {"${s.effortA}":1}`);
     failures.push(...R.judgeLanded(name, (file) => fs.existsSync(path.join(armDir, file))));
