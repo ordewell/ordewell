@@ -143,6 +143,8 @@ const LISTED_IDS = 40;
 export function unknownDependencyHint(u: UnknownDependency): string {
   // Its own id would be a dependency on itself, which the validator refuses too.
   const nearest = nearestIds(u.dependency, u.valid.filter((v) => v.id !== u.taskId)).map((n) => `"${n.id}" (${n.title})`).join(', ');
+  // With the task's own id the only one, an empty list would read as a broken template.
+  const lead = nearest ? `nearest valid ids: ${nearest}` : 'no other task to depend on';
   const ids = u.valid.slice(0, LISTED_IDS).map((v) => `"${v.id}"`).join(', ') + (u.valid.length > LISTED_IDS ? ', ...' : '');
-  return `nearest valid ids: ${nearest}. Every dependency must be exactly the "id" of a task in the plan you write; the plan had: ${ids}`;
+  return `${lead}. Every dependency must be exactly the "id" of a task in the plan you write; the plan had: ${ids}`;
 }

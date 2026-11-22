@@ -350,6 +350,15 @@ describe('a dependency no reading reaches', () => {
     expect((err as Error).message).toContain('nearest valid ids: "task-10" (Ten), "task-1" (One). ');
   });
 
+  it('offers no empty list of nearest ids when the task\'s own id is the only one the plan has', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('task-1', 'Only', ['setup'])));
+    const err = await generatePlanWithRepair(generate, RUNNERS).catch((e: unknown) => e);
+    const message = (err as Error).message;
+    expect(message).toContain('Unknown dependency "setup"');
+    expect(message).toContain('no other task to depend on. Every dependency must be exactly the "id" of a task in the plan you write; the plan had: "task-1"');
+    expect(message).not.toContain('nearest valid ids');
+  });
+
   it('lists the nearest ids first, not the first ones', async () => {
     const tasks = ['a', 'b', 'c', 'd', 'e'].map((x, i) => task(`step-${x}`, `T${i}`));
     const generate = vi.fn().mockResolvedValue(planOf(...tasks, task('z', 'Z', ['step-e2'])));
