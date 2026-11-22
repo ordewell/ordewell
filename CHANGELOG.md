@@ -8,6 +8,59 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-11-22
+
+### Changed
+
+- **A planner or supervisor reply that writes a tool call out as text is asked
+  again, not taken as done.** When the API planner (a conversation turn, a
+  supervisor wake-up or the one-shot plan answer) writes a tool call as text
+  instead of making it, Ordewell asks once more for the call, then records that
+  the call was not executed. Before, such a reply was taken as finished, and a
+  wake-up could end as done with the supervisor's note never sent. A sample
+  inside a code fence is not a call, and a call written after the turn's tool
+  budget is spent is not asked again, since an answer to it could not run. The
+  check the built-in runner already used is now shared with the planner, and it
+  also recognises `<invoke>` blocks, DSML and a whole reply that is a JSON call;
+  a built-in-runner task whose replies keep writing such a call now fails its
+  attempt instead of waiting for you.
+- **The supervisor is told a task's role when it is woken about that task.** A
+  wake about a task that is running long, near its context limit or failed names
+  the role the plan gave it (opening task, slice or closing check), taken from
+  the note on the task's own brief. A plan with no such note gives no role and no
+  licence.
+- **A wide one-shot plan's tasks get their role notes even when the plan has no
+  closing check.** The notes for the opening task, the slices and the closing
+  check are each written on their own. Before, a wide plan with no closing check
+  gave its opening task no note, so that task did not know it may fix imports
+  anywhere, and the supervisor could have it revert those edits. A last task that
+  waits for only some of the slices is not given the closing-check note, and its
+  slices are still counted.
+- **Test directories that no task names are handed to the closing check.** In a
+  one-shot plan, a directory of tests that no task's brief names used to go
+  unchecked. The closing check's note now lists such directories by name, with
+  the number of test files in each (a long list ends "and 1 more directory"). A
+  listing that takes too long is dropped and the plan goes ahead without it. A
+  bare word such as "tests" in a brief no longer hides a test directory.
+
+### Fixed
+
+- **One-shot planning no longer fails when the model mistypes a dependency
+  id.** A dependency that names no task used to fail planning and lose the run's
+  spend. An id spelled a little off (another letter case, spaces, a leading `#`
+  or `task `, padding zeros, or the task's title) is now read as the one task it
+  means, and only when exactly one task fits; the planner's research log says
+  which id was read as which task. Any other unknown id goes back to the model
+  once, with the task, the id, the nearest valid ids and the ids the plan has.
+  When the task is the plan's only one, the message says there is no other task
+  to depend on. A plan submitted or edited by the model's own tool call is not
+  rewritten: the model gets the error and fixes it.
+- **The plan review can no longer remove a plan's closing check.** When the
+  planner reviews a plan's dependency chain, its reply could cut a sweep down to
+  its opening task, which left the first plan's closing check with nothing to
+  wait for. The closing check now waits directly for the fewest tasks it lost,
+  and the rest of the reply stands.
+
 ## [0.14.6] - 2026-11-22
 
 ### Added
@@ -4945,7 +4998,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.6...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.7...HEAD
+[0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
