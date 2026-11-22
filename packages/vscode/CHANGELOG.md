@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-11-22
+
+### Changed
+
+- A planner or supervisor reply that writes a tool call out as text is asked
+  again once, then recorded as not executed, instead of being taken as done.
+- The supervisor is told a task's role (opening task, slice or closing check)
+  when it is woken about that task.
+- A wide one-shot plan's tasks get their role notes even when the plan has no
+  closing check, so its opening task knows it may fix imports anywhere.
+- Test directories that no task names are handed to a one-shot plan's closing
+  check, by name, with their test-file counts.
+
+### Fixed
+
+- One-shot planning no longer fails when the model mistypes a dependency id: an
+  id that clearly means one task is read as that task, and any other unknown id
+  goes back to the model once with the valid ids.
+- The plan review can no longer remove a plan's closing check.
+
 ## [0.14.6] - 2026-11-22
 
 ### Added
@@ -1814,7 +1834,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.6...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.7...HEAD
+[0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
