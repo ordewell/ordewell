@@ -305,17 +305,32 @@ describe('Supervisor', () => {
   it.each<[string, SupervisedRun | null]>([
     ['no run has started', null],
     ['the run is Off', { level: 'off' }],
-    ['the supervisor failed in this run', { level: 'watch', unsupervised: 'it failed twice' }],
+    ['the supervisor failed in a run the user set to Off', { level: 'off', unsupervised: 'its report turn failed twice' }],
   ])('gathers nothing while %s', async (_case, run) => {
     vi.useFakeTimers();
     const h = host(run);
     const supervisor = new Supervisor(h, { debounceMs: 10 });
 
-    supervisor.observe({ kind: 'task_failed', taskId: 't1' });
+    expect(supervisor.observe({ kind: 'task_failed', taskId: 't1' })).toBe(false);
     await vi.advanceTimersByTimeAsync(100);
 
     expect(h.deliver).not.toHaveBeenCalled();
     expect(supervisor.mayWake()).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('keeps what happens once the supervisor failed in the run, at once and with the inputs that wait, opening no turn (ADR-0029)', async () => {
+    vi.useFakeTimers();
+    const h = host({ level: 'act', unsupervised: 'it failed twice' });
+    const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+    expect(supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' })).toBe(true);
+
+    expect(h.deliver).toHaveBeenCalledWith(expect.stringMatching(/^Run update:\n- task #1 "Task t1" failed: broke/), undefined, undefined, ['t1']);
+    expect(supervisor.mayWake()).toBe(false);
+    expect(supervisor.wakeOwed).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.deliver).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 

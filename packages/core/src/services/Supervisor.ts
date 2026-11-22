@@ -19,7 +19,12 @@ export const WAKE_UP_TURN_TIMEOUT_MS = 10 * 60_000;
 /** How long a stopped wake-up turn has to end before the conversation is taken back from it. */
 export const HUNG_TURN_GRACE_MS = 30_000;
 
-/** How many times a wake-up turn is tried: once, and once more with the planner restarted, before the run goes unsupervised. */
+/**
+ * How many times a wake-up turn is tried: once, and once more with the planner
+ * restarted, before the run goes unsupervised. A call either try's provider or
+ * network fails is tried again inside it on ADR-0018 E1's backoff first, so an
+ * outage is waited out for about seven minutes before this bound is reached.
+ */
 export const WAKE_UP_ATTEMPTS = 2;
 
 /**
@@ -154,7 +159,8 @@ export class WakeUpTimeoutError extends Error {
  * input. A turn on wake-ups alone is a wake-up turn, run through {@link turn}:
  * timed out if it hangs, retried once with the planner restarted if it fails,
  * and after that the run goes unsupervised — it carries on as Off, and what
- * was not delivered waits for the user's next message. A planner usage limit
+ * was not delivered, and all that happens from then on, waits for the user's
+ * next message or their level set again. A planner usage limit
  * is waited out instead, by the planner's turns, which send the wake-up again
  * at the reset (`PlannerResend`). What the supervisor may do in its turns is the
  * level's, checked at the command seam and the edit path, never here.
@@ -300,15 +306,17 @@ export class Supervisor {
   }
 
   /**
-   * A run event. Ignored unless the supervisor watches — at Off, or once it
-   * failed, nothing is gathered — but for a report the planner asked for,
-   * gathered at every level (ADR-0037, R2). Past the user's Stop it goes
-   * straight to the inputs waiting for them.
+   * A run event; true when it was gathered. Ignored at an Off the user chose,
+   * but for a report the planner asked for, gathered at every level (ADR-0037,
+   * R2). Past the user's Stop, or once the supervisor failed for the run, it
+   * goes straight to the inputs waiting, as what was gathered before did, so
+   * nothing that happened is lost (ADR-0029).
    */
-  observe(event: RunEventInput): void {
-    if (this.runLevel === 'off' && event.kind !== 'task_report') return;
+  observe(event: RunEventInput): boolean {
+    const failed = this.failedForRun;
+    if (this.runLevel === 'off' && event.kind !== 'task_report' && !failed) return false;
     if (event.kind === 'run_finished') {
-      if (this.finished) return;
+      if (this.finished) return false;
       this.finished = true;
       this.runEndPending = true;
     }
@@ -317,9 +325,16 @@ export class Supervisor {
     if (event.kind === 'task_passed' || event.report?.passed) this.wakeUps = [];
     if (event.kind !== 'task_passed') this.loaded = false;
     this.policy.push({ ...event, at: this.now() });
-    if (this.stopped) this.standDown();
+    if (this.stopped || failed) this.standDown();
     else this.arm();
     this.host.saveState();
+    return true;
+  }
+
+  /** The supervisor failed for the run at a level the user set above Off: it stopped, and was not turned off. */
+  private get failedForRun(): boolean {
+    const run = this.host.run();
+    return run !== null && run.unsupervised !== undefined && run.level !== 'off';
   }
 
   /** What it gathered but has not delivered, for the plan (ADR-0029). */
@@ -979,7 +994,7 @@ function listed(items: readonly string[]): string {
 }
 
 /** The first few tasks by name and how many more: the list never grows with the plan (ADR-0057 R5). */
-function namedFirst(ids: readonly string[], describe: (taskId: string) => string): string {
+export function namedFirst(ids: readonly string[], describe: (taskId: string) => string): string {
   if (ids.length <= NAMED_TASKS) return listed(ids.map(describe));
   return `${ids.slice(0, NAMED_TASKS).map(describe).join(', ')} and ${ids.length - NAMED_TASKS} more`;
 }

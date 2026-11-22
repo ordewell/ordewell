@@ -86,15 +86,29 @@ export class PlannerResend {
   /**
    * A turn hit the planner's usage limit after a planner tool committed a
    * change in it (ADR-0022 P2), which took the turn's inputs as answered:
-   * nothing waits to be sent again, so no resend is armed, and the user is
-   * told when the limit resets.
+   * nothing waits to be sent again. With the reset known the wait is armed
+   * all the same, so what arrives meanwhile — the user's message, the
+   * supervisor's wake-ups — waits for it and goes then, rather than meeting
+   * the limit again or leaving the run unsupervised (ADR-0029). Without one,
+   * nothing waits and nothing is held.
    */
   limitedAfterChange(said: TurnFailure): PlannerLimit {
+    const plan = this.host.plan();
     const runner = this.host.plannerRunner() ?? undefined;
     const now = new Date();
+    this.resentAt = null;
+    this.waits.clear();
     const reset = readUsageLimitReset(runner ?? '', said, now);
-    const when = reset ? `, resets ${resumeTime(reset, now)}` : '';
-    return { text: `${runner ?? 'Planner'} usage limit${when}. What the planner changed before it stays, and nothing waits to be sent again.`, resendAt: null, held: 'had already made its change', answered: true };
+    const name = runner ?? 'Planner';
+    if (!reset) return { text: `${name} usage limit. What the planner changed before it stays, and nothing waits to be sent again.`, resendAt: null, held: 'had already made its change', answered: true };
+    const at = new Date(reset.getTime() + RESUME_MARGIN_MS);
+    if (plan) plan.plannerResend = { runner, at: at.toISOString() };
+    this.waits.arm(WAIT, at);
+    return {
+      text: `${name} usage limit, resets ${resumeTime(reset, now)}. What the planner changed before it stays, and nothing waits to be sent again; what arrives meanwhile goes at ${resumeTime(at, now)}.`,
+      resendAt: at,
+      answered: true,
+    };
   }
 
   /**

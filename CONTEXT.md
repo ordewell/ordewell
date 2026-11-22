@@ -3782,8 +3782,11 @@ may do is set by the run's **Supervisor level** and checked at the **Command
 seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
-restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
-note in the transcript; `runSettings.unsupervised` says why). The user's Stop
+restart, each attempt having waited out a network or provider failure on the
+backoff, leaves the run *unsupervised* (carrying on as Off, with a notice and a
+note in the transcript; `runSettings.unsupervised` says why). What happens then
+is kept on the plan, and the user's level set again lifts the stop and catches
+the supervisor up on what it was never told. The user's Stop
 stands it down until they start work again: it acts at Off, and what it held
 waits on the plan for their next message or the first turn after their start. A
 stop of one task holds back only what is about that task.
