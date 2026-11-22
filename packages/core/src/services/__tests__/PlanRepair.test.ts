@@ -260,6 +260,23 @@ describe('dependency ids read as the task they mean', () => {
     expect(await resolved(written)).toEqual(['task-1']);
   });
 
+  // The validator keeps an id as written, spaces and all: a dependency spelled the same names it.
+  it('leaves a dependency on an id with surrounding spaces as written', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('task-1 ', 'Core'), task('task-2', 'Utils', ['task-1 '])));
+    const notes: string[] = [];
+    const tasks = await generatePlanWithRepair(generate, RUNNERS, 2, undefined, false, (l) => notes.push(l));
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(tasks.map((t) => [t.id, t.dependencies])).toEqual([['task-1 ', []], ['task-2', ['task-1 ']]]);
+    expect(notes).toEqual([]);
+  });
+
+  it('reads a dependency as an id with surrounding spaces exactly as the plan writes that id', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task(' task-1', 'Core'), task('task-2', 'Utils', ['TASK-01'])));
+    const tasks = await generatePlanWithRepair(generate, RUNNERS);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(tasks[1].dependencies).toEqual([' task-1']);
+  });
+
   it('keeps a dependency once when it and the id it is read as both name the same task', async () => {
     const generate = vi.fn().mockResolvedValueOnce(planOf(task('task-1', 'Core'), task('task-2', 'Utils', ['task-1', 'Task-01'])));
     const tasks = await generatePlanWithRepair(generate, RUNNERS);
@@ -323,7 +340,14 @@ describe('a dependency no reading reaches', () => {
     const message = (err as Error).message;
     expect(message).toContain('Task "Implement networkx/utils"');
     expect(message).toContain('Unknown dependency "task-7"');
-    expect(message).toMatch(/nearest valid ids: "task-1" \(Core\), "task-2" \(Utils\), "task-3" \(Implement networkx\/utils\)/);
+    expect(message).toMatch(/nearest valid ids: "task-1" \(Core\), "task-2" \(Utils\)\. /);
+  });
+
+  // Following that hint would write a dependency on itself, which the validator refuses, and spend the one repair.
+  it('never offers the task its own id as a nearest one', async () => {
+    const generate = vi.fn().mockResolvedValue(planOf(task('task-1', 'One'), task('task-10', 'Ten'), task('task-11', 'Eleven', ['task-100'])));
+    const err = await generatePlanWithRepair(generate, RUNNERS).catch((e: unknown) => e);
+    expect((err as Error).message).toContain('nearest valid ids: "task-10" (Ten), "task-1" (One). ');
   });
 
   it('lists the nearest ids first, not the first ones', async () => {
