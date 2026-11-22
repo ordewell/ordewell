@@ -133,6 +133,11 @@ export function runHoldsKey(holds: readonly RunHold[]): string {
 /** The commands that leave a task on hold, as an execution record names them. */
 const HOLDING_COMMANDS: ReadonlySet<ExecutionCommandName> = new Set<ExecutionCommandName>(['stop_task', 'revert_task', 'mark_not_done']);
 
+/** The task a call that went through left on hold, if it was such a call. */
+export function heldByCall(record: ExecutionRecord): string | undefined {
+  return record.outcome === 'done' && HOLDING_COMMANDS.has(record.command) ? record.task?.id : undefined;
+}
+
 const ACTOR_NAMES: Record<ExecutionRecord['actor'], string> = {
   user: 'the user',
   'planner-turn': 'the planner in the user\'s turn',
@@ -145,7 +150,7 @@ const ACTOR_NAMES: Record<ExecutionRecord['actor'], string> = {
 export function heldBy(history: readonly ConversationMessage[] | undefined, taskId: string): string {
   for (let i = (history?.length ?? 0) - 1; i >= 0; i--) {
     const record = history![i].execution;
-    if (record?.outcome === 'done' && record.task?.id === taskId && HOLDING_COMMANDS.has(record.command)) return ACTOR_NAMES[record.actor];
+    if (record && heldByCall(record) === taskId) return ACTOR_NAMES[record.actor];
   }
   return 'Ordewell';
 }
