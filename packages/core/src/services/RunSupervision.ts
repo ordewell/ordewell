@@ -1,5 +1,5 @@
 import { flattenTasks, flattenTasksWithParents, type LegacyPlanState, type RunSettings, type SupervisionSnapshot, type Task, type TaskReportTo, type TurnAuthority } from '../models/Task';
-import { actorAuthority, type ExecutionActor, type ExecutionRecord, type SupervisorLevel } from '../models/Execution';
+import { actorAuthority, type ExecutionActor, type ExecutionCommandName, type ExecutionRecord, type SupervisorLevel } from '../models/Execution';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import type { GlobalRunSettings } from './SettingsService';
 import type { RunOrigin } from './TaskOrchestrator';
@@ -33,6 +33,9 @@ function standingCandidates(plan: readonly Task[], waits: ReadonlyMap<string, re
     .filter((t) => t.status === 'failed' || t.status === 'awaiting_user' || (waits.get(t.id) ?? []).some((w) => w.kind === 'on-hold'))
     .map((t) => t.id);
 }
+
+/** The calls that start a task again: a start is no settle, so what a Stop marked told must be forgotten here, for a hold a failed start leaves is Ordewell's. */
+const STARTING_COMMANDS: ReadonlySet<ExecutionCommandName> = new Set<ExecutionCommandName>(['run_task', 'retry_task', 'force_start']);
 
 /** How much of why a task failed a catch-up's line carries, as a run update's detail runs: the supervisor reads the rest. */
 const WHY_CHARS = 240;
@@ -674,6 +677,7 @@ export class RunSupervision {
     // Not caught up as untold: a hold a call left is its caller's, and the idle run_held names who (ADR-0057 R4).
     const held = heldByCall(record);
     if (held) this.told.add(held);
+    else if (record.outcome === 'done' && record.task && STARTING_COMMANDS.has(record.command)) this.told.delete(record.task.id);
   }
 
   /** The oscillation guard on a supervisor's edit taking the plan from `before` to `after`; a trip is told to the user. */
