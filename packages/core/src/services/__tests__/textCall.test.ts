@@ -17,6 +17,7 @@ describe('a tool call written out as text', () => {
     ['the same in a fence that is the whole reply', '```json\n{"name": "message_task", "arguments": {"task": "task-7"}}\n```', 'message_task'],
     ['a JSON call with parameters for its key', '{"name":"read_file","parameters":{"path":"a.ts"}}', 'read_file'],
     ['a JSON call in the tool_calls envelope', '{"tool_calls":[{"type":"function","function":{"name":"message_task","arguments":"{}"}}]}', 'message_task'],
+    ['a call after a closed fence', 'The sample:\n```\n<!-- x -->\n```\n<invoke name="read_file">\n</invoke>', 'read_file'],
     ['a call cut off before it closes', '<invoke name="message_task">\n<parameter name="text">hel', 'message_task'],
   ])('is found: %s', (_label, text, name) => {
     expect(found(text)).toBe(name);
@@ -28,6 +29,11 @@ describe('a tool call written out as text', () => {
     ['an invoke mentioned mid-sentence', 'The reply held <invoke name="message_task"> as text, which I fixed.'],
     ['an invoke in an inline code span', 'Do not write `<invoke name="message_task">` in your reply.'],
     ['a fenced code sample in an answer', 'Call it like this:\n\n```xml\n<invoke name="message_task">\n<parameter name="task">task-7</parameter>\n</invoke>\n```\n\nThat sends the note.'],
+    ['a fenced sample whose call is on a later line', 'Call it like this:\n\n```xml\n<function_calls>\n<invoke name="message_task">\n<parameter name="task">task-7</parameter>\n</invoke>\n```\n\nThat sends the note.'],
+    ['a fenced sample with a comment before its call', '```\n<!-- a sample -->\n<invoke name="read_file">\n```'],
+    ['a tilde-fenced sample with a comment before its call', '~~~\n<!-- a sample -->\n<invoke name="read_file">\n~~~'],
+    ['a fenced <tool_call> sample below a comment', '```\n// sample\n<tool_call>{"name":"task_complete","arguments":{}}\n```'],
+    ['an unclosed fence whose call is on a later line', 'Like this:\n```\n<!-- a sample -->\n<invoke name="read_file">'],
     ['a fenced JSON sample with prose around it', 'The tool takes:\n\n```json\n{"name":"message_task","arguments":{"task":"task-7"}}\n```\n\nPass the task id.'],
     ['a JSON call quoted in a sentence', 'Earlier I sent {"name":"message_task","arguments":{"task":"task-7"}} and it landed.'],
     ['a quoted earlier call', '> <invoke name="message_task">\n> <parameter name="task">task-7</parameter>\n\nThat is what I sent before; it landed.'],

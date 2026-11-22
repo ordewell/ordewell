@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTask, type PendingPlanTurn, type RunSettings, type Task } from '../../models/Task';
 import type { ExecutionRecord } from '../../models/Execution';
 import { RunSupervision, runOrigin, type RunSupervisionHost } from '../RunSupervision';
+import { withShapeNotes } from '../PlanFanOut';
 import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
 import type { SupervisorOptions } from '../Supervisor';
 
@@ -501,17 +502,20 @@ describe('a task that failed before its runner started', () => {
 
 // Recorded: woken for the opening task running long, the supervisor read its edits outside its brief as overreach.
 describe('a wake about a task with a role in the plan\'s fan-out (ADR-0072 R5)', () => {
-  const fanOut = (tasks: Task[]) => {
-    tasks.splice(0, tasks.length, task('t1', 1, { prompt: 'Fill in pkg/__init__.py and pkg/core.py.' }));
+  const fanOut = (tasks: Task[], prompt = 'Fill in pkg/__init__.py and pkg/core.py.') => {
+    tasks.splice(0, tasks.length, task('t1', 1, { prompt }));
     for (let i = 2; i <= 6; i++) tasks.push(task(`t${i}`, i, { dependencies: ['t1'] }));
   };
+  // As shaping a one-shot plan leaves it: each role's note on its brief.
+  const noted = (tasks: Task[]) => tasks.splice(0, tasks.length, ...withShapeNotes([...tasks]));
   const runningLong = (taskId: string) => ({ kind: 'running_long' as const, taskId, runningLong: { reason: 'duration' as const, elapsedMs: 1_800_000, thresholdMs: 1_800_000, compactions: 0, attempt: 1 } });
 
-  it('names the role the plan\'s shape gives the task, whatever its brief says', async () => {
+  it('names the role the note on the task\'s brief gives it', async () => {
     vi.useFakeTimers();
     const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
     plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
     fanOut(tasks);
+    noted(tasks);
 
     supervision.observe(runningLong('t1'));
     supervision.observe(runningLong('t2'));
@@ -520,6 +524,40 @@ describe('a wake about a task with a role in the plan\'s fan-out (ADR-0072 R5)',
     const [text] = host.deliver.mock.calls[0] as unknown as [string];
     expect(text).toContain('- task #1 "Task t1" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it blocks tasks #2 "Task t2", #3 "Task t3", #4 "Task t4" and 2 more; it is the opening task, which may edit any file to make the project import and its tests collect\n');
     expect(text).toContain('- task #2 "Task t2" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it is a slice, done once the code in its own scope is in place\n');
+  });
+
+  // A conversation plan, a harness planner's one-shot plan or one planned with research off fans out with no note written.
+  it('names no role for a task whose brief holds no role\'s note, though the plan fans out', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    fanOut(tasks, 'Add the config loader in pkg/config.py only. Do not touch other modules.');
+
+    supervision.observe(runningLong('t1'));
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain('- task #1 "Task t1" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it blocks tasks #2 "Task t2", #3 "Task t3", #4 "Task t4" and 2 more\n');
+    expect(text).not.toContain('; it is ');
+  });
+
+  it('names the role a task\'s note gave it after the plan was edited, and none for the task added before it', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    fanOut(tasks);
+    noted(tasks);
+    // Now t0 runs first, so the plan's shape alone would make it the opening task and t1 a gate.
+    tasks.splice(0, 1, { ...tasks[0], dependencies: ['t0'] });
+    tasks.unshift(task('t0', 0, { prompt: 'Set up the package.' }));
+
+    supervision.observe(runningLong('t0'));
+    supervision.observe(runningLong('t1'));
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain('- task #0 "Task t0" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it blocks tasks #1 "Task t1", #2 "Task t2", #3 "Task t3" and 3 more\n');
+    expect(text).toContain('- task #1 "Task t1" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it blocks tasks #2 "Task t2", #3 "Task t3", #4 "Task t4" and 2 more; it is the opening task, which may edit any file to make the project import and its tests collect\n');
   });
 
   it('names no role in a plan that does not fan out', async () => {

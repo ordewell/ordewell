@@ -49,9 +49,15 @@ function writtenCallNote(name: string): string {
   return `[Ordewell] Your last reply wrote a tool call (${name}) as text, so it was not made. Make the call with the tool, not in your reply text.`;
 }
 
-/** What the turn's record says when the instruction did not help: nothing ran, and no surface reports the turn as done silently. */
-function writtenCallRecord(name: string): ResearchLogEntry {
-  return systemEntry(`[Ordewell] The planner wrote a ${name} call as text, twice, and did not make it: the call was not executed.`);
+/**
+ * What the turn's record says when the instruction did not help, or could not
+ * (a call made after the tool budget is spent never runs): nothing ran, and no
+ * surface reports the turn as done silently.
+ */
+function writtenCallRecord(name: string, budgetSpent = false): ResearchLogEntry {
+  return systemEntry(budgetSpent
+    ? `[Ordewell] The planner wrote a ${name} call as text after its tool budget was spent: the call was not executed.`
+    : `[Ordewell] The planner wrote a ${name} call as text, twice, and did not make it: the call was not executed.`);
 }
 
 /** How one plan-text call departs from the planner's own settings. */
@@ -633,8 +639,8 @@ export abstract class BaseAiService {
         // ran, and a supervisor's wake-up would end as done with its note unsent.
         const written = BaseAiService.writtenCallOf(chat, turn);
         if (written === undefined) break;
-        if (asked) {
-          researchLog.push(writtenCallRecord(written));
+        if (asked || step >= MAX_STEPS) {
+          researchLog.push(writtenCallRecord(written, !asked));
           break;
         }
         // What it wrote is taken back, not kept as narration before the reply.
@@ -778,8 +784,10 @@ export abstract class BaseAiService {
 
       if (!turn.hasToolCalls) {
         const written = BaseAiService.writtenCallOf(chat, turn);
-        if (written === undefined || askedForCall) {
-          if (written !== undefined) researchLog.push(writtenCallRecord(written));
+        // On the last step the loop would end before reading the reply, so nothing asked for could run.
+        const lastStep = step + 1 >= MAX_STEPS;
+        if (written === undefined || askedForCall || lastStep) {
+          if (written !== undefined) researchLog.push(writtenCallRecord(written, !askedForCall));
           break;
         }
         askedForCall = true;

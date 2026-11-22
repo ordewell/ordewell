@@ -82,11 +82,12 @@ test('a recorded plan whose run had merged slices keeps the same graph', async (
 });
 
 // Recorded: no task waited for every slice, so the build that planned it wrote no note, the opening task's licence included.
+// Its last task, waiting for only some slices, is told nothing: a slice's note would forbid it the fixing a last check does.
 test('a plan with no closing check has its opening task, its other tasks before the slices and its slices noted, and is held to the same checks', async () => {
   const recorded = { tasks: numbered([t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('sweep', ['r']), t('close', ['s1', 's2', 'sweep'])]) };
   const r = await reshape(core, recorded);
   assert.deepEqual(r.was, { opening: [], gates: [], slices: [], closing: [] });
-  assert.deepEqual(r.noted, { opening: ['r'], gates: ['a', 'b'], slices: ['s1', 's2', 's3', 's4', 's5', 'sweep', 'close'], closing: [] });
+  assert.deepEqual(r.noted, { opening: ['r'], gates: ['a', 'b'], slices: ['s1', 's2', 's3', 's4', 's5', 'sweep'], closing: [] });
   assert.deepEqual(r.now.faults, ['serial-opening', 'no-closing']);
   assert.equal(r.checks.licenceOnOpening, true);
   assert.equal(r.checks.importCriterion, true);

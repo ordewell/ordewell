@@ -324,15 +324,41 @@ export type FanOutRole = 'opening' | 'gate' | 'slice' | 'closing';
  * what each is told is true without the others. The closing role goes to the
  * closing check, or to the AI tasks of its loop's body when the check is a
  * script or read-only, since a check that cannot edit leaves the fixing to them.
+ * With no closing check, fewer last tasks than a fan-out that wait for several
+ * slices get no role: such a task gathers only some slices' work, as a last
+ * check does, and a slice's note would forbid it the fixing it is there for.
+ * A task after one slice alone carries that slice's module on, and stays one.
  */
 export function fanOutRoles(shape: FanOutShape): Map<string, FanOutRole> {
   const roles = new Map<string, FanOutRole>();
   if (!shape.wide) return roles;
   for (const g of shape.gates) roles.set(g.id, g === shape.opening ? 'opening' : 'gate');
-  for (const s of shape.slices) roles.set(s.id, 'slice');
+  const ids = new Set(shape.slices.map((s) => s.id));
+  const lastChecks = shape.slices.filter((s) => new Set(s.dependencies.filter((d) => ids.has(d))).size > 1 && !shape.slices.some((o) => o.dependencies.includes(s.id)));
+  const unroled = new Set(shape.closers.length === 0 && lastChecks.length < FAN_OUT_MIN ? lastChecks : []);
+  for (const s of shape.slices) if (!unroled.has(s)) roles.set(s.id, 'slice');
   const closer = shape.closers[0] as Task | undefined;
   if (closer) for (const id of closer.type === 'ai' && !closer.readOnly ? [closer.id] : closer.loop?.body ?? []) roles.set(id, 'closing');
   return roles;
+}
+
+/** How each role's note opens, as {@link withShapeNotes} writes it: a line of its own, after the brief. */
+const NOTE_HEADS: ReadonlyArray<readonly [FanOutRole, RegExp]> = [
+  ['opening', /^Plan shape: \d+ slices wait for this task to land before any of them starts\b/m],
+  ['gate', /^Plan shape: \d+ slices wait for this task to land before they start\b/m],
+  ['slice', /^Plan shape: this task is one of \d+ slices\b/m],
+  ['closing', /^Plan shape: this check runs after the \d+ slices\b/m],
+];
+
+/**
+ * The role a task's brief was told by its note, none when it holds no note.
+ * Read from the note, not the plan's shape: only an API planner's one-shot plan
+ * is noted, and a plan edited since may give a task another role than it was told.
+ */
+export function notedRole(task: Pick<Task, 'prompt'>): FanOutRole | undefined {
+  const prompt = task.prompt;
+  if (!prompt?.includes(NOTED)) return undefined;
+  return NOTE_HEADS.find(([, head]) => head.test(prompt))?.[0];
 }
 
 /**
