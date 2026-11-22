@@ -15,7 +15,7 @@ import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { reportEnded, researchReport, runUpdateReport } from './taskReport';
 import { researchReportTo } from './ResearchTasks';
-import { heldBy, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey, untoldDetail } from './runHolds';
+import { heldBy, heldByCall, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey, untoldDetail } from './runHolds';
 import { taskRefOf } from './TaskRefs';
 import { landedBlockers } from './LandedBlockers';
 
@@ -150,10 +150,11 @@ export class RunSupervision {
   /** The files each landed task's work changed, by the landing that changed them: a landing's files never change, so each is read once. */
   private readonly landedPathsRead = new Map<string, Promise<readonly string[] | undefined>>();
   /**
-   * The tasks an event the supervisor gathered was about since each last
-   * settled: it was told of them, or will be with the inputs that wait. What
-   * stands failed or held outside it is {@link catchUp}'s. Not saved: after a
-   * reload, what stands is told once more.
+   * The tasks an event the supervisor gathered was about, or a call left on
+   * hold, since each last settled: it was told of them, or will be with the
+   * inputs that wait, and a hold a call left is its caller's, which `run_held`
+   * names. What stands failed or held outside it is
+   * {@link catchUp}'s. Not saved: after a reload, what stands is told once more.
    */
   private readonly told = new Set<string>();
   /** The catch-up a run's start owes, once the start has claimed what it starts. */
@@ -667,9 +668,12 @@ export class RunSupervision {
   readonly guard: LoopGuard = (actor, command: ExecutionCommand, target: GuardTarget | undefined) =>
     (actor.kind === 'supervisor' ? this.guards.check(command, target, [...this.host.tasks()], this.retryLimit()) : null);
 
-  /** A call went through the seam: a supervisor's retry is counted. */
+  /** A call went through the seam: a supervisor's retry is counted, and a hold it left is told. */
   executed(record: ExecutionRecord): void {
     this.guards.done(record, [...this.host.tasks()]);
+    // Not caught up as untold: a hold a call left is its caller's, and the idle run_held names who (ADR-0057 R4).
+    const held = heldByCall(record);
+    if (held) this.told.add(held);
   }
 
   /** The oscillation guard on a supervisor's edit taking the plan from `before` to `after`; a trip is told to the user. */
