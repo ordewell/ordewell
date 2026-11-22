@@ -499,6 +499,43 @@ describe('a task that failed before its runner started', () => {
   });
 });
 
+// Recorded: woken for the opening task running long, the supervisor read its edits outside its brief as overreach.
+describe('a wake about a task with a role in the plan\'s fan-out (ADR-0072 R5)', () => {
+  const fanOut = (tasks: Task[]) => {
+    tasks.splice(0, tasks.length, task('t1', 1, { prompt: 'Fill in pkg/__init__.py and pkg/core.py.' }));
+    for (let i = 2; i <= 6; i++) tasks.push(task(`t${i}`, i, { dependencies: ['t1'] }));
+  };
+  const runningLong = (taskId: string) => ({ kind: 'running_long' as const, taskId, runningLong: { reason: 'duration' as const, elapsedMs: 1_800_000, thresholdMs: 1_800_000, compactions: 0, attempt: 1 } });
+
+  it('names the role the plan\'s shape gives the task, whatever its brief says', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, tasks, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+    fanOut(tasks);
+
+    supervision.observe(runningLong('t1'));
+    supervision.observe(runningLong('t2'));
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain('- task #1 "Task t1" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it blocks tasks #2 "Task t2", #3 "Task t3", #4 "Task t4" and 2 more; it is the opening task, which may edit any file to make the project import and its tests collect\n');
+    expect(text).toContain('- task #2 "Task t2" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it is a slice, done once the code in its own scope is in place\n');
+  });
+
+  it('names no role in a plan that does not fan out', async () => {
+    vi.useFakeTimers();
+    const { supervision, plan, host } = harness({ supervisorLevel: 'act' });
+    plan.runSettings = { supervisorLevel: 'act' } as RunSettings;
+
+    supervision.observe(runningLong('t1'));
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    const [text] = host.deliver.mock.calls[0] as unknown as [string];
+    expect(text).toContain('- task #1 "Task t1" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor)\n');
+    expect(text).not.toContain('; it is ');
+  });
+});
+
 describe('a turn that leaves a loop\'s check between rounds (ADR-0057 R4, ADR-0045 L3)', () => {
   it('does not wake the supervisor to it as a failure: its loop goes on', async () => {
     vi.useFakeTimers();
