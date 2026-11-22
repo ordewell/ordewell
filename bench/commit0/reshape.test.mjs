@@ -101,3 +101,15 @@ test('only the opening task carries the licence to edit any file', async () => {
   assert.deepEqual(r.licensed, ['o1']);
   assert.equal(r.checks.licenceOnOpening, true);
 });
+
+test('with the run\'s repository, the closing check is given the test directories no brief names, and the graph is the recorded one', async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'reshape-repo-'));
+  const write = (p) => { fs.mkdirSync(path.dirname(path.join(repo, p)), { recursive: true }); fs.writeFileSync(path.join(repo, p), 'x = 1\n'); };
+  ['src/lib/tests/test_s1.py', 'src/lib/minors/tests/test_contract.py', 'src/lib/minors/tests/test_minors.py'].forEach(write);
+  const recorded = { tasks: numbered([t('r', []), ...slices(5, ['r']), t('close', sliceIds(5))]) };
+  const r = await reshape(core, recorded, { workdir: repo }).finally(() => fs.rmSync(repo, { recursive: true, force: true }));
+  assert.ok(r.log.includes('coverage: 2 test files in 1 directory no brief names, given to the closing check'));
+  assert.ok(r.renoted.tasks.find((x) => x.id === 'close').prompt.endsWith('src/lib/minors/tests (2 test files).'));
+  assert.equal(r.checks.sameGraph, true);
+  assert.deepEqual(r.failed, []);
+});
