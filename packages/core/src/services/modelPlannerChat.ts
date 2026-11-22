@@ -430,6 +430,10 @@ export class ModelPlannerChat extends BudgetedChat<PlannerMessage> {
     return { role: 'user', content: text };
   }
 
+  offeredTools(): ReadonlySet<string> {
+    return new Set(this.opts.tools.map((tool) => tool.name));
+  }
+
   /** Each result answers the open call of its id, or failing that the one in its place. */
   protected resultMessages(results: ToolResult[]): PlannerMessage[] {
     const calls = this.history.last()?.tool_calls ?? [];

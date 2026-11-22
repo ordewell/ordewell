@@ -130,6 +130,8 @@ export interface DigestReader {
   describe(taskId: string): string;
   /** The tasks a failed task blocks now, through their dependencies (ADR-0034); for one still at work, those its failure would. */
   blockedBy(taskId: string): string[];
+  /** A task's role in the plan's fan-out, in a few words, read from its shape (ADR-0072 R5); undefined for a task with none. */
+  role?(taskId: string): string | undefined;
 }
 
 export interface SupervisorOptions {
@@ -612,8 +614,8 @@ export class Supervisor {
    */
   private deliver(batch: WakeBatch): void {
     const { own, theirs } = turnsOf(batch);
-    const { describe, blockedBy } = this.host.digestReader();
-    const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy);
+    const { describe, blockedBy, role } = this.host.digestReader();
+    const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy, role);
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
     if (own.length > 0) {
       const runEnd = own.some((e) => e.kind === 'run_finished' || e.closing === true);
@@ -822,6 +824,16 @@ export const LANDED_BLOCKER_ADVICE = 'A blocker reported in landed work is fixed
 /** A running-long line carries its facts whole: they are what the supervisor weighs, and a ride-along line would cut them off. */
 const RUNNING_LONG_CHARS = 2 * TASK_NAME_CHARS + DETAIL_CHARS;
 
+/**
+ * The most a task's role takes in a line about it (ADR-0072 R5): a few fixed
+ * words, outside the line's own cut, so naming the role takes nothing from
+ * what the task did.
+ */
+const ROLE_CHARS = 100;
+
+/** The events whose line names its task's role: what a supervisor judges the task's work by. */
+const ROLE_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['running_long', 'task_failed']);
+
 /** Room kept for the overflow line, which is never left out, and for the note on updates a turn cannot carry beside this one. */
 const OVERFLOW_ROOM = 400 + LEFT_OUT_ROOM;
 
@@ -831,14 +843,23 @@ const OVERFLOW_ROOM = 400 + LEFT_OUT_ROOM;
  * digest, never a log — the supervisor reads more itself. Past the cap what
  * woke it goes first, whole items only, and the rest is counted.
  */
-export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[] = () => []): string {
+export function wakeUpDigest(
+  batch: WakeBatch,
+  describe: (taskId: string) => string,
+  blockedBy: (taskId: string) => string[] = () => [],
+  role: (taskId: string) => string | undefined = () => undefined,
+): string {
   const name = (taskId: string) => {
     const whole = describe(taskId);
     return whole.length > TASK_NAME_CHARS ? `${whole.slice(0, TASK_NAME_CHARS - 2)}…"` : whole;
   };
   const passed = [...new Set(batch.sinceLast.filter((e) => e.kind === 'task_passed').flatMap((e) => e.taskId ?? []))];
+  const withRole = (event: RunEvent, item: DigestItem): DigestItem => {
+    const words = event.taskId !== undefined && ROLE_KINDS.has(event.kind) ? role(event.taskId) : undefined;
+    return words ? { ...item, line: `${item.line}; it is ${cut(words, ROLE_CHARS)}` } : item;
+  };
   const items: DigestItem[] = [
-    ...batch.attention.map((e) => attentionItem(e, name, blockedBy)),
+    ...batch.attention.map((e) => withRole(e, attentionItem(e, name, blockedBy))),
     ...batch.sinceLast.filter((e) => e.kind === 'approval_denied').map((e): DigestItem => ({ kind: e.kind, rank: 1, line: `- ${cut(attentionLine(e, name, []), RIDE_ALONG_CHARS - 2)}` })),
     ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${name(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
   ];

@@ -9,7 +9,7 @@ import { Compactor, fillOfWindow, OVERFLOW_FRACTIONS } from './compaction';
 import type { LoadedTranscript, TranscriptStore } from './transcript';
 import { reasoningHintOf, type TaskReasoningKept } from './reasoningWindow';
 import { REPEAT_FAIL_AT, REPEAT_NUDGE_AT, RepeatGuard, repeatFailure, repeatNudge } from './repeatGuard';
-import { writtenToolCall } from './textCall';
+import { writtenToolCall } from '../../textCall';
 
 /**
  * SEAM (b), the step boundary: called before every step's request, with the

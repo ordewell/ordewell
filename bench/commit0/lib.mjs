@@ -1184,7 +1184,7 @@ const iso = core.createWorktreeIsolation({ config: { worktreeIsolation: 'auto', 
  * (D2): no supervisor to answer for it, nothing started or merged on its
  * behalf, one task at a time. B is Ordewell as its user runs it (D3).
  */
-export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = MEMORY, capUsd = CAP_USD, wallCapMs = WALL_CAP_MS, callBudget = STEP_LIMIT } = {}) {
+export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = MEMORY, capUsd = CAP_USD, wallCapMs = WALL_CAP_MS, callBudget = STEP_LIMIT, taskSettings = {} } = {}) {
   const b = arm.id === 'B';
   return {
     supervisorLevel: b ? 'act' : 'off',
@@ -1197,7 +1197,67 @@ export function armSettings(arm, { parallel = PARALLEL, cpus = CPUS, memory = ME
     wallCapMs,
     // The built-in runner's model calls per attempt: the same for both arms, or the pair measures the budget.
     callBudget,
+    // Ordewell task settings (--task-setting), the same object for both arms, so a result states what it ran with.
+    taskSettings: { ...taskSettings },
   };
+}
+
+/**
+ * The task settings `--task-setting` accepts, each with the settings-file key
+ * core reads it under, the environment variable that overrides that key, and
+ * what it takes. An allowlist, so a typo cannot silently run both arms at a
+ * default, and no setting that is an arm's own (supervisor, parallel, budget)
+ * can be set for both by this route.
+ *
+ * They reach the box through settings.json, the file `boxSettings` already
+ * writes per arm: it is where the product reads them when no variable is set
+ * (reasoningWindow.ts, taskCompactWindow.ts), it sits in one place a result's
+ * record and the in-box check can read back, and an environment variable would
+ * win over it. The check below refuses a box that has one set.
+ */
+export const TASK_SETTINGS = Object.freeze({
+  taskReasoningKept: Object.freeze({ env: 'ORDEWELL_TASK_REASONING_KEPT', word: 'all', takes: 'all or a whole number' }),
+  taskCompactAt: Object.freeze({ env: 'ORDEWELL_TASK_COMPACT_AT', word: 'auto', takes: 'auto or a whole number' }),
+});
+
+/** `name=value` as `--task-setting` gives it, to `[name, value]`: the value a whole number, or the setting's own word. */
+export function parseTaskSetting(text) {
+  const known = Object.keys(TASK_SETTINGS).join(', ');
+  const at = text.indexOf('=');
+  if (at < 1) throw new Error(`--task-setting takes name=value, with a name from ${known}, not ${text}`);
+  const name = text.slice(0, at);
+  const raw = text.slice(at + 1);
+  const def = Object.hasOwn(TASK_SETTINGS, name) ? TASK_SETTINGS[name] : null;
+  if (!def) throw new Error(`--task-setting accepts only ${known}, not ${name}`);
+  if (raw === def.word) return [name, raw];
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n) || (name === 'taskCompactAt' && n < 1)) throw new Error(`--task-setting ${name} takes ${def.takes}, not ${raw}`);
+  return [name, n];
+}
+
+/** `taskReasoningKept=5, taskCompactAt=auto`, or `none`: how a report line says which task settings a run held. */
+export const describeTaskSettings = (ts) => {
+  const e = Object.entries(ts ?? {});
+  return e.length ? e.map(([k, v]) => `${k}=${v}`).join(', ') : 'none';
+};
+
+/**
+ * Whether the box holds each task setting: `file` is its settings.json as
+ * read there, `env` its `printenv`. An ORDEWELL_TASK_* variable in the box
+ * would override the file, so one is a failure even where the file is right.
+ */
+export function judgeTaskSettingsInBox({ file, env }, want) {
+  const failures = [];
+  let held = null;
+  try { held = JSON.parse(file); } catch { /* reported below */ }
+  if (Object.keys(want).length === 0) return { ok: true, failures };
+  if (!held || typeof held !== 'object') return { ok: false, failures: ['the box\'s settings file is not readable as JSON'] };
+  for (const [name, value] of Object.entries(want)) {
+    if (held[name] !== value) failures.push(`${name} is ${JSON.stringify(held[name])} in the box's settings file, not ${JSON.stringify(value)}`);
+    const v = TASK_SETTINGS[name].env;
+    if (String(env ?? '').split('\n').some((l) => l.startsWith(`${v}=`))) failures.push(`${v} is set in the box and would override ${name}`);
+  }
+  return { ok: failures.length === 0, failures };
 }
 
 /**
@@ -1214,6 +1274,7 @@ export function boxSettings(arm, settings = armSettings(arm)) {
     supervisorLevel: settings.supervisorLevel,
     autorun: settings.autorun,
     mergeAtGatesAutomatically: settings.automerge,
+    ...settings.taskSettings,
   };
 }
 
@@ -2751,6 +2812,8 @@ export function runIdFor({ stamp, lib, arm, seed = null }) {
 export function judgeArmPair(a, b) {
   const budget = (r) => r.callBudget ?? STEP_LIMIT;
   const invalidReasons = budget(a) === budget(b) ? [] : [`arm ${a.arm} ran with a call budget of ${budget(a)}, arm ${b.arm} with ${budget(b)}: the pair measures the budget, not the arms`];
+  const ts = (r) => describeTaskSettings(r.taskSettings);
+  if (ts(a) !== ts(b)) invalidReasons.push(`arm ${a.arm} ran with task settings ${ts(a)}, arm ${b.arm} with ${ts(b)}: the pair measures the settings, not the arms`);
   return { valid: invalidReasons.length === 0, invalidReasons };
 }
 
@@ -2771,7 +2834,7 @@ function armPairs(runs) {
  * (a run's unpriced calls, or a call outside the batch on the same key). When
  * runs overlapped, no run's own key delta exists, and each says so.
  */
-export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, planOnly = false, startedAt, endedAt, keyReadings = [], runs }) {
+export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBudget, jobs, overlapped, seed, dryRun, rehearsal = null, planOnly = false, taskSettings = {}, startedAt, endedAt, keyReadings = [], runs }) {
   const recorded = runs.map((r) => r.recordedUsd).filter((n) => typeof n === 'number');
   const recordedSumUsd = recorded.length ? round6(recorded.reduce((a, b) => a + b, 0)) : null;
   // Each arm's spend at the one reference price table, beside what was recorded at the upstreams' own prices.
@@ -2796,7 +2859,7 @@ export function batchRecord({ keyBeforeUsd, keyAfterUsd, budgetUsd, stoppedByBud
   const latestUsd = keyAfterUsd ?? keyReadings.filter((k) => typeof k.usd === 'number').at(-1)?.usd ?? null;
   const keyDeltaUsd = keyBeforeUsd != null && latestUsd !== null ? round6(latestUsd - keyBeforeUsd) : null;
   return {
-    dryRun, rehearsal, planOnly, seed: seed ?? null, jobs, overlapped, startedAt, endedAt: endedAt ?? null,
+    dryRun, rehearsal, planOnly, taskSettings, seed: seed ?? null, jobs, overlapped, startedAt, endedAt: endedAt ?? null,
     finished: Boolean(endedAt),
     keyBeforeUsd: keyBeforeUsd ?? null,
     keyAfterUsd: keyAfterUsd ?? null,
@@ -2927,7 +2990,7 @@ export function judgePairBatch(record, { libs, rehearsal }) {
 export function parseArgs(argv) {
   const out = {
     dryRun: false, run: false, fixture: false, arm: 'both', libs: null, only: [], image: null, providerPin: null, keep: false, help: false,
-    capUsd: CAP_USD, callBudget: STEP_LIMIT, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
+    capUsd: CAP_USD, callBudget: STEP_LIMIT, taskSettings: {}, parallel: PARALLEL, cpus: CPUS, memory: MEMORY, stallMin: STALL_MIN, ordewellRoot: null, allowStaleDist: false, sweep: false,
     seed: null, batchDir: null, batchShared: false, planOnly: false, continueA: false, effortA: null,
     rehearse: null, settleMin: null, noStartMin: null, pollSec: null, wallCapMs: undefined,
   };
@@ -2962,6 +3025,10 @@ export function parseArgs(argv) {
       const n = Number(v);
       if (!Number.isInteger(n) || n < 1) throw new Error(`--call-budget takes a whole number, 1 or more, not ${v}`);
       out.callBudget = n;
+    } else if (a === '--task-setting') {
+      const [name, v] = parseTaskSetting(value());
+      if (Object.hasOwn(out.taskSettings, name)) throw new Error(`--task-setting ${name} is given twice: one value for both arms`);
+      out.taskSettings[name] = v;
     } else if (a === '--parallel') out.parallel = number(a, value(), (n) => Number.isInteger(n) && n >= 1);
     else if (a === '--cpus') out.cpus = number(a, value(), (n) => n > 0);
     else if (a === '--memory') {
@@ -3078,6 +3145,7 @@ export function parseBatchArgs(argv) {
     // Not passed on as given: each A run is started as arm A with the flag, each B run without it (driveArmArgs).
     else if (a === '--continue-a') own.continueA = true;
     else if (a === '--effort-a') own.effortA = effortLevel(value());
+    else if (a === '--task-setting') driveArgs.push(a, value());
     else if (a === '--libs') driveArgs.push(a, path.resolve(value()));
     else if (a === '--ordewell-root') driveArgs.push(a, path.resolve(value()));
     else if (BATCH_PASSED.flags.includes(a)) driveArgs.push(a);

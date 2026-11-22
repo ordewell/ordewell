@@ -112,6 +112,15 @@ test('as core: a core task beside a few slices that every slice of the fan-out w
   assert.deepEqual(p.numbers.faults, []);
 });
 
+// Recorded: a chain before the slices, a catch-all off the opening task, and a last task that waited for only some slices.
+test('as core: a chain before the slices is read whole beside a catch-all off the opening task and a last task waiting for some slices', () => {
+  const plan = { tasks: [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('sweep', ['r']), t('close', ['s1', 's2', 'sweep'])] };
+  const s = fanOutShape(plan);
+  assert.deepEqual(s.gates.map((x) => x.id), ['r', 'a', 'b']);
+  assert.equal(s.opening.id, 'r');
+  assert.deepEqual(s.faults, ['serial-opening', 'no-closing']);
+});
+
 test('P8: every task before the slices carries the import criterion, and the opening task may edit any file for it', () => {
   const opening = 'Plan shape: 5 slices wait for this task to land before any of them starts, … collects its tests without an error … For that alone you may edit any file …';
   const shared = 'Plan shape: 5 slices wait for this task to land before they start, … collects its tests without an error …';

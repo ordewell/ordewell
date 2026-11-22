@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closingNote, fanOutShape, FAN_OUT_MIN, gateNote, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
+import { closingNote, fanOutRoles, fanOutShape, FAN_OUT_MIN, gateNote, notedRole, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
 import { applyChainReview, chainReviewMessage, longestChain } from '../PlanChainReview';
 import { BaseAiService, type PlanTextCall, type PlanTextReply } from '../BaseAiService';
 import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../../models/Task';
@@ -172,7 +172,12 @@ describe('fanOutShape', () => {
     expect(ids(s.gates)).toEqual(['r', 'm1', 'm2', 'm3', 'm4']);
     expect(ids(s.slices)).toEqual(sliceIds(5));
     expect(s.faults).toEqual(['no-closing']);
-    expect(withShapeNotes(plan)).toBe(plan);
+    // Each role's note stands without a closing check: the slices still start from the tree the tasks before them land.
+    const out = withShapeNotes(plan);
+    const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+    expect(prompt('r')).toBe(`Fill in src/lib/r.py.\n\n${openingNote(s)}`);
+    for (const m of ['m1', 'm2', 'm3', 'm4']) expect(prompt(m)).toBe(`Fill in src/lib/${m}.py.\n\n${gateNote(s, s.gates.find((g) => g.id === m)!)}`);
+    for (const id of sliceIds(5)) expect(prompt(id)).toBe(`Fill in src/lib/${id}.py.\n\n${sliceNote(s, s.slices.find((x) => x.id === id))}`);
   });
 
   it('does not count an ops task or a push after everything as a closing check', () => {
@@ -335,12 +340,87 @@ describe('withShapeNotes', () => {
     expect(out.find((x) => x.id === 'check')!.prompt).toBe('Fill in src/lib/check.py.');
   });
 
-  it('notes a script check\'s fix as the closing check, and adds nothing without a closing check', () => {
+  it('reads back from each note the role it was written for, and none from a brief with no note', () => {
+    const chain = [t('r', []), t('a', ['r']), ...slices(5, ['a']), t('close', sliceIds(5))];
+    const expected = { r: 'opening', a: 'gate', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])), close: 'closing' };
+    expect(Object.fromEntries(withShapeNotes(chain).flatMap((x) => { const role = notedRole(x); return role ? [[x.id, role]] : []; }))).toEqual(expected);
+    expect(chain.map(notedRole).filter(Boolean)).toEqual([]);
+    expect(notedRole({ prompt: 'Keep the Plan shape: notes the planner wrote.' })).toBeUndefined();
+  });
+
+  it('notes a script check\'s fix as the closing check, and a fan-out with nothing before or after it only on its slices', () => {
     const plan = [t('r', []), ...slices(4, ['r']),
       createTask({ id: 'check', title: 'Run the suite', type: 'script', commands: [['pytest']], dependencies: sliceIds(4), sliceType: 'AFK', loop: { body: ['fix'], maxRounds: 3 } }),
       t('fix', ['check'])];
     expect(withShapeNotes(plan).find((x) => x.id === 'fix')!.prompt).toContain(closingNote(fanOutShape(plan)));
-    expect(withShapeNotes(flat())).toEqual(flat());
+    const out = withShapeNotes(flat());
+    for (const x of out) expect(x.prompt!.split('\n')[2]).toBe('Plan shape: this task is one of 6 slices. The tasks and the paths their briefs name:');
+  });
+});
+
+// Recorded: a wide plan whose last task waited for only some slices had no closing check, so no role got a note, and the
+// opening task, its brief naming two files, was told by the supervisor to revert the edits that made the package import.
+describe('withShapeNotes on a wide plan with no closing check', () => {
+  const SLICE_HEAD = 'Plan shape: this task is one of 6 slices that start once "T r" (r) has landed. Read the module map at the end of "T r" (r)\'s report (read, with include_report) before you explore. The tasks and the paths their briefs name:';
+  const SLICE_SCOPE = 'Your scope is this brief\'s. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as an `info` finding that cites, by task reference, the slice it waits for, or says why it cannot be derived, and end with status done. Severity `blocker` is for a defect in code that has landed and stops you, given with the file and the input. Take in another slice\'s work once it has landed. Do not write, stub or shim another slice\'s code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.';
+
+  it('notes the opening task and every slice, the slices told of no closing check, and writes no closing note', () => {
+    const plan = [t('r', []), ...slices(6, ['r'])];
+    const shape = fanOutShape(plan);
+    expect(shape.closers).toEqual([]);
+    const out = withShapeNotes(plan);
+    const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+    expect(prompt('r')).toBe(`Fill in src/lib/r.py.\n\n${openingNote(shape)}`);
+    for (const id of sliceIds(6)) {
+      const note = prompt(id).split('\n\n')[1].split('\n');
+      expect(note[0]).toBe(SLICE_HEAD);
+      expect(note[note.length - 1]).toBe(SLICE_SCOPE);
+    }
+    expect(out.some((x) => x.prompt!.includes('this check runs after'))).toBe(false);
+    expect(withShapeNotes(out)).toBe(out);
+  });
+
+  const roles = (plan: Task[]) => Object.fromEntries(fanOutRoles(fanOutShape(plan)));
+
+  it('reads the tasks before the slices in a chain as the opening task and two gates', () => {
+    const plan = [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b'])];
+    expect(roles(plan)).toEqual({ r: 'opening', a: 'gate', b: 'gate', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
+  });
+
+  it('still reads the opening task when a catch-all task hangs off it beside the slices', () => {
+    const plan = [t('r', []), ...slices(5, ['r']), t('sweep', ['r'], { title: 'Sweep the rest' })];
+    expect(roles(plan)).toEqual({ r: 'opening', sweep: 'slice', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
+  });
+
+  // The recorded shape: a chain before the slices, a catch-all off the opening task, and a last task waiting for only some slices.
+  it('still reads a chain before the slices when a catch-all hangs off the opening task and the last task waits for only some slices', () => {
+    const plan = [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('sweep', ['r']), t('close', ['s1', 's2', 'sweep'])];
+    const s = fanOutShape(plan);
+    expect(ids(s.gates)).toEqual(['r', 'a', 'b']);
+    expect(s.faults).toEqual(['serial-opening', 'no-closing']);
+    // A last task that waits for only some slices is no closing check, and no slice either: it gets no role.
+    expect(roles(plan)).toEqual({ r: 'opening', a: 'gate', b: 'gate', sweep: 'slice', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
+    expect(withShapeNotes(plan).find((x) => x.id === 'r')!.prompt).toContain('For that alone you may edit any file');
+  });
+
+  // The recorded plan's last task (#469 F1): told it was a slice that must not write other slices' code, though it runs the suite.
+  it('gives no role, and no note, to a last check that waits for only some slices', () => {
+    const final = t('final', sliceIds(5), { title: 'Final closing check', prompt: 'Run the whole test suite and fix what fails.' });
+    const plan = [t('r', []), ...slices(8, ['r']), final];
+    expect(roles(plan)).toEqual({ r: 'opening', ...Object.fromEntries(sliceIds(8).map((id) => [id, 'slice'])) });
+    expect(withShapeNotes(plan).find((x) => x.id === 'final')!.prompt).toBe('Run the whole test suite and fix what fails.');
+  });
+
+  // A task after one slice carries that slice's module further; one after several gathers their work, as a check does.
+  it('keeps the slice role of a last task that waits for one slice alone', () => {
+    const plan = [t('r', []), ...slices(5, ['r']), t('more', ['s1'])];
+    expect(roles(plan)).toEqual({ r: 'opening', more: 'slice', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
+  });
+
+  // As many tasks after the slices as a fan-out are the plan's last level of slices, as fanOutShape reads them.
+  it('keeps the role of a second level of slices as wide as a fan-out that nothing after them closes', () => {
+    const plan = [t('r', []), ...['a1', 'a2', 'a3', 'a4'].map((id) => t(id, ['r'])), ...['a1', 'a2', 'a3', 'a4'].map((a, i) => t(`b${i + 1}`, [a]))];
+    expect(Object.values(roles(plan)).filter((role) => role === 'slice')).toHaveLength(8);
   });
 });
 
@@ -456,24 +536,31 @@ describe('reviewLongChain on a fan-out', () => {
     });
   });
 
-  it('makes no call on a fan-out with every fault and a short chain, and notes nothing without a closing check', async () => {
+  it('makes no call on a fan-out with every fault and a short chain, and notes its slices though it has no closing check', async () => {
     const plan = flat();
     expect(fanOutShape(plan).faults).toEqual(['no-opening', 'no-closing']);
     expect(longestChain(plan)).toHaveLength(1);
     const svc = new ReviewService([]);
     const log: ResearchLogEntry[] = [];
-    expect(await svc.review(plan, log)).toBe(plan);
+    const out = await svc.review(plan, log);
     expect(svc.calls).toHaveLength(0);
-    expect(log).toEqual([]);
+    expect(out.every((x) => x.prompt!.includes('Plan shape: this task is one of 6 slices.'))).toBe(true);
+    expect(log.map(text)).toEqual(['fan-out: 6 at once, 0 before, 0 after, faults no-opening, no-closing; role notes added']);
   });
 
-  it('makes no call on a short serial opening', async () => {
+  it('makes no call on a short serial opening, and notes each task before the slices though no closing check follows', async () => {
     const plan = [t('g1', []), t('g2', ['g1']), t('g3', ['g2']), ...slices(6, ['g3'])];
     expect(fanOutShape(plan).faults).toEqual(['serial-opening', 'no-closing']);
     expect(longestChain(plan)).toHaveLength(4);
     const svc = new ReviewService([]);
-    expect(await svc.review(plan, [])).toBe(plan);
+    const log: ResearchLogEntry[] = [];
+    const out = await svc.review(plan, log);
     expect(svc.calls).toHaveLength(0);
+    const prompt = (id: string) => out.find((x) => x.id === id)!.prompt!;
+    expect(prompt('g1')).toContain('Plan shape: 6 slices wait for this task to land before any of them starts');
+    for (const id of ['g2', 'g3']) expect(prompt(id)).toContain('Plan shape: 6 slices wait for this task to land before they start');
+    expect(prompt('s1')).toContain('Plan shape: this task is one of 6 slices that start once "T g1" (g1), "T g2" (g2) and "T g3" (g3) have landed. Read the module map');
+    expect(log.map(text)).toEqual(['fan-out: 6 at once, 3 before, 0 after, faults serial-opening, no-closing; role notes added']);
   });
 
   it('asks a long serial opening the chain question word for word, and takes no task from its reply', async () => {

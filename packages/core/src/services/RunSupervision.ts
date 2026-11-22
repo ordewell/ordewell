@@ -18,6 +18,7 @@ import { researchReportTo } from './ResearchTasks';
 import { heldBy, heldByCall, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey, untoldDetail } from './runHolds';
 import { taskRefOf } from './TaskRefs';
 import { landedBlockers } from './LandedBlockers';
+import { FAN_OUT_ROLE_WORDS, notedRole } from './PlanFanOut';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -830,7 +831,15 @@ export class RunSupervision {
     const plan = [...this.host.tasks()];
     let names: Map<string, string> | undefined;
     let blocked: Map<string, string[]> | undefined;
+    let byId: Map<string, Task> | undefined;
     return {
+      // The role its brief's note told the task, so a wake hands the supervisor no licence the task was not given.
+      role: (taskId) => {
+        byId ??= new Map(flattenTasks(plan).map((t) => [t.id, t]));
+        const task = byId.get(taskId);
+        const role = task && notedRole(task);
+        return role && FAN_OUT_ROLE_WORDS[role];
+      },
       describe: (taskId) => {
         names ??= new Map(flattenTasksWithParents(plan).map(({ task, ref }) => [task.id, `${ref} "${task.title}"`]));
         return names.get(taskId) ?? taskId;
