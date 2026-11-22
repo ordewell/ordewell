@@ -762,8 +762,8 @@ test('arm A runs alone with the supervisor off (D2), arm B as its user runs it a
   const opts = L.parseArgs(['--dry-run', '--libs', 'x', '--parallel', '3', '--cpus', '2', '--memory', '4g', '--cap-usd', '1.5']);
   const recA = L.armSettings(L.ARMS.A, opts);
   const recB = L.armSettings(L.ARMS.B, opts);
-  assert.deepEqual(recA, { supervisorLevel: 'off', autorun: false, automerge: false, parallel: 1, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS, callBudget: L.STEP_LIMIT });
-  assert.deepEqual(recB, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 3, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS, callBudget: L.STEP_LIMIT });
+  assert.deepEqual(recA, { supervisorLevel: 'off', autorun: false, automerge: false, parallel: 1, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS, callBudget: L.STEP_LIMIT, taskSettings: {} });
+  assert.deepEqual(recB, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 3, cpus: 2, memory: '4g', capUsd: 1.5, wallCapMs: L.WALL_CAP_MS, callBudget: L.STEP_LIMIT, taskSettings: {} });
   assert.equal(L.boxSettings(L.ARMS.B, recB).supervisorLevel, 'act');
 });
 
@@ -2837,7 +2837,7 @@ test('scoreTimeline scores each point\'s source through the driver\'s own two ca
     const c = calls[0];
     assert.equal(c.lib.flatTree.length, 40);
     assert.match(c.lib.flatCommit, /^[0-9a-f]{40}$/);
-    assert.deepEqual(c.settings, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000, callBudget: L.STEP_LIMIT });
+    assert.deepEqual(c.settings, { supervisorLevel: 'act', autorun: true, automerge: true, parallel: 4, cpus: 2, memory: '4g', capUsd: 8, wallCapMs: 3 * 3_600_000, callBudget: L.STEP_LIMIT, taskSettings: {} });
     assert.match(c.runId, /^timescore-[a-z0-9-]+-p\d-[0-9a-f]{8}$/);
     const file = JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8'));
     assert.deepEqual(file.points.map((p) => [p.atMin, p.kind, p.tests.passed]), [[10, 'time', 7], [25, 'time', 7], [40, 'time', 7], [70, 'final', 7]]);
@@ -3472,4 +3472,60 @@ test('a session the CLI says cannot be continued ends the continuing: no fresh a
   const drive = fs.readFileSync(path.join(here, 'drive.mjs'), 'utf8');
   assert.doesNotMatch(drive, /from: 'fresh'/, 'the control arm never asks for a fresh attempt');
   assert.match(drive, /why: 'cannot-continue'/);
+});
+
+// --- A task setting, the same in every arm ----------------------------------
+
+test('--task-setting takes allowlisted task settings, repeatable, and refuses anything else naming the list', () => {
+  const base = ['--dry-run', '--libs', 'x'];
+  assert.deepEqual(L.parseArgs(base).taskSettings, {});
+  const o = L.parseArgs([...base, '--task-setting', 'taskReasoningKept=5', '--task-setting', 'taskCompactAt=120000']);
+  assert.deepEqual(o.taskSettings, { taskReasoningKept: 5, taskCompactAt: 120000 });
+  assert.deepEqual(L.parseArgs([...base, '--task-setting', 'taskReasoningKept=all', '--task-setting', 'taskCompactAt=auto']).taskSettings, { taskReasoningKept: 'all', taskCompactAt: 'auto' });
+  assert.deepEqual(Object.keys(L.TASK_SETTINGS), ['taskReasoningKept', 'taskCompactAt']);
+  const refused = (v, re) => assert.throws(() => L.parseArgs([...base, '--task-setting', v]), re);
+  refused('ordewellStepLimit=5', /taskReasoningKept, taskCompactAt/);
+  refused('taskReasoningKept', /name=value/);
+  refused('taskReasoningKept=-1', /taskReasoningKept takes all or a whole number/);
+  refused('taskReasoningKept=many', /taskReasoningKept takes all or a whole number/);
+  refused('taskCompactAt=0', /taskCompactAt takes auto or a whole number/);
+  assert.throws(() => L.parseArgs([...base, '--task-setting', 'taskReasoningKept=1', '--task-setting', 'taskReasoningKept=2']), /taskReasoningKept is given twice/);
+});
+
+test('a task setting reaches both arms\' settings.json and result record alike', () => {
+  const o = L.parseArgs(['--dry-run', '--libs', 'x', '--task-setting', 'taskReasoningKept=5']);
+  const window = L.judgeWindow({ listed: 1048576, snapshot: 1048576 });
+  for (const arm of [L.ARMS.A, L.ARMS.B]) {
+    const settings = L.armSettings(arm, o);
+    assert.deepEqual(settings.taskSettings, { taskReasoningKept: 5 });
+    assert.equal(L.boxSettings(arm, settings).taskReasoningKept, 5, 'core\'s own settings-file key');
+    assert.deepEqual(L.resultRecord({ lib: lib(), arm, settings, window, ordewell: { sha: 'abc' }, startedAt: 'a', endedAt: 'b', dryRun: true }).taskSettings, { taskReasoningKept: 5 });
+    assert.equal('taskReasoningKept' in L.boxSettings(arm, L.armSettings(arm)), false, 'nothing is written unless passed');
+    assert.deepEqual(L.armSettings(arm).taskSettings, {});
+  }
+  assert.equal(L.describeTaskSettings({ taskReasoningKept: 5, taskCompactAt: 'auto' }), 'taskReasoningKept=5, taskCompactAt=auto');
+  assert.equal(L.describeTaskSettings({}), 'none');
+});
+
+test('judgeTaskSettingsInBox: the box\'s settings file must hold each setting, and no environment variable may override it', () => {
+  const want = { taskReasoningKept: 5 };
+  const file = JSON.stringify({ autonomousMode: true, taskReasoningKept: 5 });
+  assert.deepEqual(L.judgeTaskSettingsInBox({ file, env: 'HOME=/root\n' }, want), { ok: true, failures: [] });
+  assert.match(L.judgeTaskSettingsInBox({ file: JSON.stringify({}), env: '' }, want).failures.join(), /taskReasoningKept is undefined in the box's settings file, not 5/);
+  assert.match(L.judgeTaskSettingsInBox({ file, env: 'ORDEWELL_TASK_REASONING_KEPT=all\n' }, want).failures.join(), /ORDEWELL_TASK_REASONING_KEPT is set in the box and would override/);
+  assert.match(L.judgeTaskSettingsInBox({ file: 'not json', env: '' }, want).failures.join(), /not readable/);
+  assert.deepEqual(L.judgeTaskSettingsInBox({ file: '{}', env: '' }, {}), { ok: true, failures: [] });
+});
+
+test('a pair whose arms ran with different task settings is not valid; the batch record states the settings, passed on to every run', () => {
+  const run = (arm, taskSettings) => ({ lib: 'x', arm, callBudget: 1, taskSettings, valid: true });
+  assert.equal(L.judgeArmPair(run('A', { taskReasoningKept: 5 }), run('B', { taskReasoningKept: 5 })).valid, true);
+  assert.match(L.judgeArmPair(run('A', { taskReasoningKept: 5 }), run('B', {})).invalidReasons.join(), /task settings/);
+  assert.equal(L.judgeArmPair({ arm: 'A' }, { arm: 'B', taskSettings: {} }).valid, true, 'a result from before the flag held none');
+  const b = L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--task-setting', 'taskReasoningKept=5', '--task-setting', 'taskCompactAt=9000']);
+  assert.deepEqual(b.taskSettings, { taskReasoningKept: 5, taskCompactAt: 9000 });
+  assert.deepEqual(b.driveArgs.filter((a, i) => b.driveArgs[i - 1] === '--task-setting'), ['taskReasoningKept=5', 'taskCompactAt=9000']);
+  assert.throws(() => L.parseBatchArgs(['--dry-run', '--libs', 'l.json', '--task-setting', 'nope=1']), /taskReasoningKept, taskCompactAt/);
+  assert.deepEqual(L.batchRecord({ jobs: 1, overlapped: false, taskSettings: b.taskSettings, runs: [] }).taskSettings, { taskReasoningKept: 5, taskCompactAt: 9000 });
+  assert.deepEqual(L.batchRecord({ jobs: 1, overlapped: false, runs: [] }).taskSettings, {});
 });

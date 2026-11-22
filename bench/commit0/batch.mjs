@@ -42,7 +42,7 @@ const HELP = `Usage: node bench/commit0/batch.mjs (--dry-run | --run | --rehears
   --seed <label>           a label for this repetition, in every run's result.json and directory name
   --sweep                  sweep boxes and networks of drivers no longer running before the batch
 
-Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap-usd, --call-budget, --parallel, --cpus,
+Passed to every run: --dry-run, --run, --rehearse, --libs, --provider-pin, --cap-usd, --call-budget, --task-setting (repeatable), --parallel, --cpus,
 --memory, --stall-min, --settle-min, --no-start-min, --poll-sec, --wall-min, --ordewell-root,
 --allow-stale-dist, --keep, --plan-only (node bench/commit0/drive.mjs --help).
 
@@ -148,7 +148,7 @@ async function main() {
   fs.mkdirSync(batchDir, { recursive: true });
   const overlapped = opts.jobs > 1 && runs.length > 1;
   const key = process.env.OPENROUTER_API_KEY;
-  console.log(`Commit0 batch: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}${opts.planOnly ? ', PLAN ONLY: arm B plans, nothing runs or is scored' : ''}; ${runs.length} runs, ${Math.min(opts.jobs, runs.length)} at once (${opts.cpus} CPUs, ${opts.memory} each); budget ${opts.budgetUsd === null ? 'none' : `$${opts.budgetUsd}`}; in ${batchDir}`);
+  console.log(`Commit0 batch: ${opts.dryRun ? 'DRY RUN, no model call' : opts.rehearse ? `REHEARSAL ${opts.rehearse}, on a scripted fake provider` : 'RUN, spending on the key'}${opts.planOnly ? ', PLAN ONLY: arm B plans, nothing runs or is scored' : ''}; ${runs.length} runs, ${Math.min(opts.jobs, runs.length)} at once (${opts.cpus} CPUs, ${opts.memory} each); task settings ${L.describeTaskSettings(opts.taskSettings)}; budget ${opts.budgetUsd === null ? 'none' : `$${opts.budgetUsd}`}; in ${batchDir}`);
 
   // One lock for the whole batch: its runs share the key with each other and with nothing else.
   const release = opts.run ? L.lockKey(dataDir) : () => {};
@@ -204,13 +204,14 @@ async function main() {
         billedSource: found?.result.billedSource ?? null,
         valid: found?.result.valid ?? null,
         callBudget: found?.result.callBudget ?? null,
+        taskSettings: found?.result.taskSettings ?? null,
         planOnly: found?.result.planOnly ?? null,
         planned: found?.result.planned ?? null,
       });
     }
     const record = L.batchRecord({
       keyBeforeUsd, keyAfterUsd, budgetUsd: opts.budgetUsd, stoppedByBudget, jobs: opts.jobs, overlapped,
-      seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, planOnly: opts.planOnly, startedAt, endedAt, keyReadings, runs: reported,
+      seed: opts.seed, dryRun: opts.dryRun, rehearsal: opts.rehearse ?? null, planOnly: opts.planOnly, taskSettings: opts.taskSettings, startedAt, endedAt, keyReadings, runs: reported,
     });
     L.writeJsonAtomic(path.join(batchDir, 'batch.json'), record);
     return { record, reported, results };
@@ -256,7 +257,7 @@ async function main() {
     for (const r of results) fs.appendFileSync(path.join(dataDir, L.resultsFileName(opts)), `${JSON.stringify(r)}\n`);
   }
 
-  console.log(`\nbatch: ${reported.length} runs in ${batchDir}`);
+  console.log(`\nbatch: ${reported.length} runs in ${batchDir}; task settings ${L.describeTaskSettings(record.taskSettings)}`);
   for (const r of reported) {
     console.log(`  ${r.lib} ${r.arm}: ${r.skipped ?? `exit ${r.exit ?? r.signal}`}${r.recordedUsd !== null ? `, recorded $${r.recordedUsd}` : ''}${r.planOnly ? `; ${L.describePlanned(r.planned)}` : r.valid === null ? '' : r.valid ? ', valid' : ', not valid'}`);
   }

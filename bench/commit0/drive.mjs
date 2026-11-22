@@ -48,6 +48,9 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --cap-usd <usd>        the spend cap, the same for both arms (default ${L.CAP_USD})
   --call-budget <n>      the built-in runner's model calls per attempt, the same for both arms (default ${L.STEP_LIMIT});
                          recorded in every result, and a pair whose arms differ is not valid
+  --task-setting <k=v>   an Ordewell task setting, written into both arms' settings.json alike; repeatable, one value
+                         per name. Accepted: ${Object.keys(L.TASK_SETTINGS).join(', ')} (a whole number, or ${Object.values(L.TASK_SETTINGS).map((d) => d.word).join(' / ')}
+                         respectively). Recorded in every result, and a pair whose arms differ is not valid
   --parallel <n>         arm B's ORDEWELL_MAX_PARALLEL (default ${L.PARALLEL}); arm A runs one task
   --cpus <n>             the box's CPU quota (default ${L.CPUS})
   --memory <size>        the box's memory quota, swap held to it (default ${L.MEMORY})
@@ -673,6 +676,16 @@ async function writeSettings(sb, arm, settings) {
   return r.code === 0;
 }
 
+/** Reads the settings file and environment back inside the box, as the daemon's processes will see them, and judges them against the task settings passed. */
+async function checkTaskSettingsInBox(lib, sb, arm, settings) {
+  const want = settings.taskSettings;
+  if (Object.keys(want).length === 0) return;
+  const file = await inBox(sb, ['cat', `${BOX_HOME}/.ordewell/settings.json`]);
+  const env = await inBox(sb, ['printenv']);
+  const v = L.judgeTaskSettingsInBox({ file: file.stdout, env: env.stdout }, want);
+  check(lib.name, `arm ${arm.id} task settings in the box`, v.ok, v.ok ? `${BOX_HOME}/.ordewell/settings.json holds ${L.describeTaskSettings(want)}, and no ORDEWELL_TASK_* variable overrides it` : v.failures);
+}
+
 async function createArmASession(lib, sb) {
   const r = await inBox(sb, [NODE_IN_BOX, '-e', L.ARM_A_PLAN_JS, lib.workdir, L.goalText(lib), L.MODEL_ID, L.MODEL_LABEL, opts.effortA ?? '']);
   return r.code === 0 ? r.stdout.trim() : null;
@@ -812,6 +825,7 @@ async function treeFingerprint(lib, sb) {
 /** The arm in a dry run: everything it does before its first model call. */
 async function dryArm(lib, sb, arm, settings, runDir) {
   check(lib.name, `arm ${arm.id} settings written`, await writeSettings(sb, arm, settings), `${BOX_HOME}/.ordewell/settings.json: ${JSON.stringify(L.boxSettings(arm, settings))}`);
+  await checkTaskSettingsInBox(lib, sb, arm, settings);
   await checkQuota(lib, sb, settings);
   // B's planner turn is a model call, so B's settings are read back on a session written as A's is.
   const sessionId = await createArmASession(lib, sb);
@@ -923,6 +937,7 @@ async function transcriptSummary(sb) {
  */
 async function realArm(lib, sb, arm, settings, runDir) {
   must(await writeSettings(sb, arm, settings), 'settings');
+  await checkTaskSettingsInBox(lib, sb, arm, settings);
   const log = fs.createWriteStream(path.join(runDir, 'ordewell.log'));
   const started = Date.now();
   const before = opts.batchShared ? null : await keySpent();
@@ -1454,7 +1469,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const runId = L.runIdFor({ stamp, lib: lib.name, arm: arm.id, seed: opts.seed });
   const runDir = path.join(runsDir, runId);
   fs.mkdirSync(runDir, { recursive: true });
-  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h, ${settings.callBudget} calls per attempt; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
+  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h, ${settings.callBudget} calls per attempt; task settings ${L.describeTaskSettings(settings.taskSettings)}; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
   const startedAt = new Date().toISOString();
   const first = checks.length;
   let sb = null;
@@ -1633,7 +1648,7 @@ async function main() {
   const unverified = checks.filter((c) => c.unverified);
   const expected = checks.filter((c) => c.expectedFailure && !c.ok);
   console.log(`\n${checks.length} checks: ${checks.length - failed.length - unverified.length - expected.length} ok, ${failed.length} failed, ${unverified.length} unverified${expected.length ? `, ${expected.length} failed as expected` : ''}`);
-  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, ${r.planOnly ? L.describePlanned(r.planned) : r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
+  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, task settings ${L.describeTaskSettings(r.taskSettings)}, ${r.planOnly ? L.describePlanned(r.planned) : r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
   process.exitCode = failed.length || results.some((r) => r.aborted) ? 1 : 0;
 }
 
