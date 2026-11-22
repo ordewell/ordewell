@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-11-22
+
+### Added
+
+- A task can wait for a sibling's unlanded work without holding a slot
+  (`wait_for`): its attempt ends with no verdict, the plan gains the
+  dependency, and the task continues in the same session once the sibling has
+  landed.
+- The supervisor is woken at once when a task reports a defect in work that
+  has landed, while the run can still land a fix.
+- An optional setting, off by default, sends less old reasoning back to the
+  built-in runner's model (`taskReasoningKept` in the settings file).
+
+### Changed
+
+- The built-in runner shows its model its real context fill and no longer lets
+  it stop over a context or call budget it has not used.
+- A one-shot plan's largest slices start first, sized from every test file
+  they name, and small slices are no longer merged.
+
+### Fixed
+
+- A failure that blocks other tasks always reaches the supervisor, after an
+  outage of the model or planner and after the supervision level is set back
+  to Act.
+- DeepSeek's reasoning is sent back on every turn.
+
 ## [0.14.5] - 2026-11-21
 
 ### Added
@@ -1787,7 +1814,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.6...HEAD
+[0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3

@@ -8,6 +8,79 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-11-22
+
+### Added
+
+- **A task can wait for a sibling's unlanded work without holding a slot
+  (`wait_for`).** A task that needs work a sibling has not landed yet names that
+  sibling, with the reason, instead of polling with `sleep` or building a
+  stand-in. Its attempt ends with no verdict, the plan gains the dependency (the
+  run's notices say so, and the supervisor or you may remove it), its slot is
+  free for other work, and once the sibling has landed the task continues in the
+  same session, on its own branch. The call is refused, with what to do instead,
+  for work that has already landed, work that may never land, a wait that would
+  close a cycle (two tasks waiting for each other, or through a parent and its
+  subtask), and a task that has already parked twice. The built-in shell now
+  refuses a long `sleep`, including one behind a wrapper or an interpreter flag,
+  and points at `wait_for`. Every runner that runs a change task can park, the
+  built-in runner and Pi included.
+- **The supervisor is woken when a task finds a defect in work that has
+  landed.** A task that reports a blocker in landed work now reaches the
+  supervisor at once, while the run can still land a fix, with one wake for
+  many citations. A task that is only waiting on work that has not landed yet
+  does not wake it: the task-completion contract tells a runner to list such a
+  wait as an `info` finding that cites the task, and to give the input that
+  shows a real defect.
+- **An optional setting sends less old reasoning back to the model.** A
+  reasoning model's turns go back to it with the reasoning each produced, so
+  every call re-sends all of it. `taskReasoningKept` in the settings file (or
+  `ORDEWELL_TASK_REASONING_KEPT`) can be a whole number N to keep the reasoning
+  of at least the latest N calls, moving the cut forward in steps so a call
+  still starts with the previous call's prompt. It is off by default (`"all"`),
+  applies to the built-in runner only, and takes effect only where the provider
+  is known to accept it (docs/planners-and-runners.md has the table); anywhere
+  else the call sends everything. A value that is not a whole number above zero
+  stops a task from starting, with a message saying what is accepted. Whether a
+  model works as well without its older reasoning is for you to try on a task
+  you can compare.
+
+### Changed
+
+- **The built-in runner shows its model how full its context is, and no longer
+  lets it stop over a context or budget it has not used.** The model's status
+  line carries the real context fill beside the call count. When it stops and
+  says its context is exhausted while room is left, or that its call budget is
+  spent while calls remain, the runner answers it with the real figures and the
+  turn goes on; a later, separate give-up is answered too, not only the first.
+  A phrase that only mentions another model's context limit is no longer taken
+  for the runner's own.
+- **A one-shot plan's largest slices start first, sized from the test files
+  they name.** A slice's size counts every test path its brief names: a file, a
+  directory (the files in it), a bare test-file name found from the working
+  directory, and a path spelled with a leading `./`, which counts once. Small
+  sibling slices are no longer merged, so a wide plan keeps the shape its
+  planner gave it. Every task before the slices is started ahead of them and
+  asked to leave a tree that imports and collects, and the opening task ends as
+  failed only for a cause in the repository's code.
+- **A running-long flag is scheduled from the last flag and dropped once it is
+  stale.** A handoff may cite any task of its plan, and a read-only task warns
+  where no sandbox is running.
+
+### Fixed
+
+- **A failure that blocks other tasks always reaches the supervisor.** At Act,
+  such a failure could sit unseen until the run went idle when it happened
+  during an outage of the model or the planner, or while the supervision level
+  was lowered and later raised again. It is now caught up, in one wake naming
+  every such failure, after an outage and when the level is set back to Act. A
+  hold the supervisor's own Stop created is not reported back to it as one it
+  was not told of, and a hold a failed restart leaves (the supervisor stops a
+  task, then the spawn of its retry fails) is caught up while other work runs.
+- **DeepSeek's reasoning is sent back on every turn.** The built-in runner
+  sent it only on a turn that called tools, and DeepSeek's own API answers a
+  request with tools that leaves any turn's reasoning out with an error.
+
 ## [0.14.5] - 2026-11-21
 
 ### Added
@@ -4872,7 +4945,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.6...HEAD
+[0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3
