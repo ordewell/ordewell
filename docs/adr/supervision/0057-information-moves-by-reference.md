@@ -218,7 +218,8 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   that no event it gathered was about since the task last settled: it failed while the run was
   Off, or the plan was loaded with it. A hold a call left (a Stop, a revert, a mark not done,
   whoever made it) is not caught up: it is the caller's own, and `run_held` names who put it
-  there once the run is idle. At Act it is raised as the user's level becomes Act during
+  there once the run is idle, unless a start follows (a retry, a run, a force start), whoever
+  starts it: a hold that start then leaves is Ordewell's, and is caught up. At Act it is raised as the user's level becomes Act during
   a run, as a run starts or continues (once the start's merge window has passed, so a task the
   start retries is not named), as the user sets a level after a run that ended with its supervisor
   stopped (then as the closing turn's, holding nothing a follower waits on, since that end was
@@ -545,3 +546,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-21 — R7: a task waits for a sibling's unlanded work only through a plan edge, by `wait_for` (ADR-0074).
 - 2026-11-22 — R4: `failure_standing` catches the supervisor up on a failure or hold with work waiting that it was never told of, at Act, as the level becomes Act, a run starts or continues, a level is set after a stopped run, or the run goes idle; one wake, each task once.
 - 2026-11-22 — R4: the catch-up leaves out a hold a call left (Stop, revert, mark not done), which is `run_held`'s.
+- 2026-11-22 — R4: a call that starts a task again ends the catch-up's leaving out of its hold, so a hold its failed start leaves is caught up.
