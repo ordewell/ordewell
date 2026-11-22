@@ -309,9 +309,40 @@ export function sliceNote(shape: FanOutShape, slice?: Task): string {
   ].join('\n');
 }
 
-/** The closing check's note: it runs once the slices have ended, and some may not have landed. */
-export function closingNote(shape: FanOutShape): string {
-  return `Plan shape: this check runs after the ${shape.slices.length} slices. Read each slice's handoff with read: a slice that ended done lists the tests it left to you, and a slice that did not land (it failed and was skipped) left its module unwritten here, so write that module from its brief, its handoff and the tests. Run the whole test suite, fix what fails, and report each test that still fails with its reason.`;
+/**
+ * The closing check's note: it runs once the slices have ended, and some may
+ * not have landed. With `unnamed`, the test directories no brief names
+ * anything of ({@link unnamedTests}), it is told the code they test is its own.
+ */
+export function closingNote(shape: FanOutShape, unnamed: readonly UnnamedTests[] = []): string {
+  const base = `Plan shape: this check runs after the ${shape.slices.length} slices. Read each slice's handoff with read: a slice that ended done lists the tests it left to you, and a slice that did not land (it failed and was skipped) left its module unwritten here, so write that module from its brief, its handoff and the tests. Run the whole test suite, fix what fails, and report each test that still fails with its reason.`;
+  return unnamed.length ? `${base} ${unnamedSentence(unnamed)}` : base;
+}
+
+/** A test directory no brief names anything of, and how many test files it holds. */
+export interface UnnamedTests {
+  dir: string;
+  files: number;
+}
+
+/** The most characters the closing check's list of unnamed test directories takes. */
+export const UNNAMED_MAX = 600;
+
+/** The longest the listings that find them may take together; a larger workspace gets no list. */
+export const UNNAMED_BUDGET_MS = 5000;
+
+function unnamedSentence(unnamed: readonly UnnamedTests[]): string {
+  const head = 'No task\'s brief names these tests, nor any path in the package they test, so that code is yours too: write it once the slices\' work is in, and run them with the rest:';
+  const item = (u: UnnamedTests) => `${u.dir} (${u.files} test file${u.files === 1 ? '' : 's'})`;
+  const more = (n: number) => ` and ${n} more directories, which a run of the whole suite shows.`;
+  const all = `${head} ${unnamed.map(item).join(', ')}.`;
+  if (all.length <= UNNAMED_MAX) return all;
+  const kept: string[] = [];
+  for (const u of unnamed) {
+    if (`${head} ${[...kept, item(u)].join(', ')},${more(unnamed.length - kept.length - 1)}`.length > UNNAMED_MAX) break;
+    kept.push(item(u));
+  }
+  return `${head} ${kept.join(', ')},${more(unnamed.length - kept.length)}`;
 }
 
 /** A task's part in a fan-out: the note its brief gets, and what the supervisor's wake about it says it is. */
@@ -379,7 +410,7 @@ export const FAN_OUT_ROLE_WORDS: Readonly<Record<FanOutRole, string>> = {
  * note is (see {@link fanOutRoles}). A plan that does not fan out comes back
  * as the same array, and so does one whose every brief is noted already.
  */
-export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(tasks)): Task[] {
+export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(tasks), unnamed: readonly UnnamedTests[] = []): Task[] {
   const roles = fanOutRoles(shape);
   if (roles.size === 0) return tasks;
   // The shape's own tasks: a gate's count of the slices waiting for it is read by identity.
@@ -389,7 +420,7 @@ export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(t
       case 'opening': return openingNote(shape);
       case 'gate': return gateNote(shape, byId.get(id)!);
       case 'slice': return sliceNote(shape, byId.get(id));
-      case 'closing': return closingNote(shape);
+      case 'closing': return closingNote(shape, unnamed);
     }
   };
   const notes = new Map([...roles].map(([id, role]) => [id, noteOf(id, role)]));
@@ -605,6 +636,76 @@ export interface FanOutShaped {
   log: string[];
 }
 
+/** The test files' names listed to find the tests no brief names, by the last segment the planner's glob matches: {@link TEST_FILE}'s, but for a file named only by its directory. */
+const TEST_GLOBS = ['**/test_*', '**/*_test.*', '**/*.test.*', '**/*_spec.*', '**/*.spec.*'];
+
+/** A dotted module name in a brief (`pkg.algorithms.flow`), read as the path it is. */
+const DOTTED = /(?<![\w/.-])[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?![\w/-])/g;
+/** A recursive glob a brief names (`pkg/algorithms/**`): it covers every package below its prefix. */
+const RECURSIVE = /(?<![\w/.-])((?:[\w.-]+\/)+)\*\*/g;
+
+/**
+ * The package a test file tests: the directory above its test directory, or
+ * its own directory when it sits beside the code.
+ */
+function testedPackage(file: string): string {
+  const parts = path.posix.dirname(file).split('/');
+  const at = parts.findIndex((p) => TEST_DIR_NAME.test(p));
+  return at < 0 ? parts.join('/') : parts.slice(0, at).join('/') || '.';
+}
+
+/** A file's name with no extension and no test marker: `tests/test_rdata.py` and `dns/rdata.py` are both `rdata`. */
+const stem = (p: string): string => path.posix.basename(p).replace(/\.[^.]*$/, '').replace(/^test_|[_.](?:test|spec)s?$/g, '');
+
+/**
+ * The test files no brief of the plan names anything of, by their test
+ * directory, largest first: no task names the file, its bare name, its test
+ * directory, the package it tests or a path directly in it, a dotted name for one, a
+ * file of the name it tests (a flat suite's `tests/test_rdata.py` tests
+ * `rdata`), or a recursive glob above it. A brief is read before any appended note. A
+ * named directory covers its own package only: a sweep naming `pkg/` covers
+ * neither `pkg/sub/` nor its tests. Undefined when the plan's file system has
+ * no glob, or a listing failed, passed {@link MAX_SIZED_FILES} or took longer
+ * than {@link UNNAMED_BUDGET_MS} in all: part of the tests would name a
+ * directory a brief does cover. Only listings are read, never a file, and
+ * {@link filesUnder} drops a row outside the workspace.
+ */
+export async function unnamedTests(tasks: readonly Task[], fs: SizingFileSystem): Promise<UnnamedTests[] | undefined> {
+  const files = new Set<string>();
+  const started = Date.now();
+  for (const pattern of TEST_GLOBS) {
+    const found = await filesUnder(fs, '.', pattern, MAX_SIZED_FILES);
+    // Each listing walks the whole workspace, so a slow one makes the next as slow.
+    if (!found || Date.now() - started > UNNAMED_BUDGET_MS) return undefined;
+    for (const f of found) if (TEST_FILE.test(f)) files.add(path.posix.normalize(f));
+  }
+  if (files.size > MAX_SIZED_FILES) return undefined;
+  const texts = tasks.flatMap((t) => [t, ...t.subtasks]).flatMap(briefTexts);
+  const named = new Set<string>();
+  // A bare word of prose ("flow") is no module's name: only a path, a file or a dotted name says which one a stem is.
+  const stems = new Set<string>();
+  const below: string[] = [];
+  for (const text of texts) {
+    for (const w of [...(text.match(WORD) ?? []), ...(text.match(DOTTED) ?? []).map((d) => d.replace(/\./g, '/'))]) {
+      const p = path.posix.normalize(w.replace(/\.+$/, '')).replace(/\/$/, '');
+      if (!p || p.startsWith('..')) continue;
+      named.add(p);
+      if (p.includes('/') || p.includes('.')) stems.add(stem(p));
+    }
+    for (const m of text.matchAll(RECURSIVE)) below.push(path.posix.normalize(m[1]).replace(/\/$/, ''));
+  }
+  const covered = (f: string): boolean => {
+    if (named.has(f) || named.has(path.posix.basename(f)) || named.has(path.posix.dirname(f)) || stems.has(stem(f))) return true;
+    const pkg = testedPackage(f);
+    if (below.some((b) => pkg === b || pkg.startsWith(`${b}/`))) return true;
+    // A path in the package itself, not in a package below it; every file at the root is in no package a flat suite tests.
+    return pkg !== '.' && [...named].some((n) => n === pkg || path.posix.dirname(n) === pkg);
+  };
+  const byDir = new Map<string, number>();
+  for (const f of files) if (!covered(f)) byDir.set(path.posix.dirname(f), (byDir.get(path.posix.dirname(f)) ?? 0) + 1);
+  return [...byDir].map(([dir, n]) => ({ dir, files: n })).sort((a, b) => b.files - a.files || (a.dir < b.dir ? -1 : 1));
+}
+
 const measured = (m: SliceMeasure) => `the lines of ${m === 'test' ? 'the test files' : 'every file'} their briefs name`;
 
 /**
@@ -623,10 +724,15 @@ export async function shapeFanOut(tasks: Task[], fs: SizingFileSystem | undefine
   const sized: SlicesOrdered = fs ? await largestSlicesFirst(tasks, fs, shape) : { tasks, moved: 0 };
   if (sized.measure) log.push(`slice order: largest first by ${measured(sized.measure)}; ${sized.moved} of ${shape.slices.length} moved`);
   if (sized.gatesFirst) log.push(`slice order: ${sized.gatesFirst} task${sized.gatesFirst === 1 ? '' : 's'} the slices wait for moved ahead of the slices beside ${sized.gatesFirst === 1 ? 'it' : 'them'}`);
-  const out = withShapeNotes(sized.tasks);
+  // Only a closing check is told of them: it is the one task that runs after every slice.
+  const closer = shape.closers[0] as Task | undefined;
+  const unnamed = fs && closer?.type === 'ai' && closer.prompt !== undefined && !closer.prompt.includes(NOTED) ? (await unnamedTests(sized.tasks, fs)) ?? [] : [];
+  const out = withShapeNotes(sized.tasks, fanOutShape(sized.tasks), unnamed);
   if (out !== sized.tasks) {
     const s = fanOutShape(out);
     log.push(`fan-out: ${s.width} at once, ${s.gates.length} before, ${s.closers.length} after${s.faults.length ? `, faults ${s.faults.join(', ')}` : ''}; role notes added`);
+    const files = unnamed.reduce((n, u) => n + u.files, 0);
+    if (files) log.push(`coverage: ${files} test file${files === 1 ? '' : 's'} in ${unnamed.length} director${unnamed.length === 1 ? 'y' : 'ies'} no brief names, given to the closing check`);
   }
   return { tasks: out, log };
 }
