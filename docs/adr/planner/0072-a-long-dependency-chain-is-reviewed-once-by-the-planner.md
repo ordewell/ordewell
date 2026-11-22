@@ -53,7 +53,22 @@ question is put depends on how the plan arrives.
   them, no longer waiting for a task it waited for, directly or through others,
   counted with the merge gate's own walk, which passes through subtasks and
   their parents' dependencies: the merge gate and the check rest on those
-  ancestors, and the question asking to keep such edges does not ensure it. A redundant direct edge may still go. An entry for a
+  ancestors, and the question asking to keep such edges does not ensure it. A redundant direct edge may still go.
+  The first plan's closing check, as R5 reads the plan as written, when it is
+  an AI task that edits, is held too, but the other way: a reply that leaves it
+  no longer waiting for a top-level task it waited for, directly or through
+  others, is applied with the check waiting directly for the fewest such tasks,
+  those no other of them reaches, and every other change the reply made
+  stands. A reply that cut the task the check reached the slices through, a
+  sweep cut to the opening task, otherwise left a plan with nothing after the
+  slices, so the check ran beside them and shaping read no closing check. This
+  is not Ordewell dropping or adding edges by its own judgement: it keeps an
+  ancestry the planner wrote and the review's message asked it to keep, judges
+  no edge, and the check runs after what it ran after. Its brief gets no note
+  for them, since it ran after them before, and the research log says how many
+  it got back. A task given back that the reply set after the check rejects the
+  whole reply. A plan whose first version does not fan out, a loop's check
+  (held as above) and subtasks' dependencies are left as the reply has them. An entry for a
   subtask, which the plan shows but the review does not revise, is ignored and
   logged. A changed brief, a delegated task's goal included, gets a
   `Plan revision:` note, last, that names what it no longer waits for even
@@ -248,7 +263,14 @@ own reply, and a conversation plan changes only through the planner's own
 
 `PlanChainReview` is pure: `longestChain`, `applyChainReview` and the two
 messages are tested on plain tasks, and each message is pinned word for word,
-since the measured wording is the decision. `PlanFanOut` is too: the shape and
+since the measured wording is the decision. R1's hold on the closing check is
+tested on a sweep cut to the opening task, the check's own list emptied or
+moved to the first wave, another task set after it, two candidates side by
+side and in a row, subtasks, a task given back that the reply set after the
+check, a loop's check and a plan that does not fan out; and, on the shape of a
+recorded plan whose final check reached half its slices through a sweep the
+reply cut, that shaping notes it as the closing check and the log says how
+many it got back, through `reviewLongChain`. `PlanFanOut` is too: the shape and
 the three notes, each pinned word for word, the slice table's bound on a plan of
 forty slices; that a slice can read the opening task's report is tested through
 a session. `largestSlicesFirst` is tested over a file system that answers reads as the
@@ -291,6 +313,8 @@ conversation's as they stand.
 ## Out of scope
 
 - `edit_plan`: an edit that lengthens a chain is not reviewed.
+- A catch-all task R1's reply cut from the slices it swept: it keeps the
+  reply's list and runs beside them as a slice. Only the closing check is held.
 - An API planner's one-shot plan with research turned off
   (`generatePlanDirect`): it is not reviewed.
 - A plan whose work sits in one task. No chain review reaches it.
@@ -330,6 +354,10 @@ conversation's as they stand.
 - **Ordewell drops edges it judges spurious.** Rejected: only the planner can
   tell an edge that consumes something from one that only orders work, and the
   plan is the source of truth (ADR-0001).
+- **Refusing a reply that cuts the closing check off from a task it waited
+  for**, as one that cuts an ops task's is refused. Rejected: the reply's other
+  changes are the chain fix, and refusing it keeps the first plan's whole
+  chain. Giving the check back what it waited for keeps both.
 - **`submit_plan` refuses a long chain.** Rejected: a long chain can be right (a
   serial rename, an expand-contract change), and a refusal makes the planner
   fight the tool instead of weighing the edges.
@@ -465,4 +493,5 @@ conversation's as they stand.
 - 2026-11-21 — R7: a wide one-shot plan's slices are never merged; replayed with R6's corrected sizes, every merge tried started the closing check later than largest first alone.
 - 2026-11-22 — R5: each role's note is written whether or not the plan has a closing check; a last task waiting for only some slices no longer hides the tasks before them; a wake about a task names its role.
 - 2026-11-22 — R5: with no closing check, a last task waiting for several slices but not every one gets no note; a wake names the role of the note on the task's brief, not of the plan's shape.
+- 2026-11-22 — R1: a reply that cuts the first plan's closing check off from a task it waited for is applied with the check waiting for those tasks directly; refusing it is not taken.
 - 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.
