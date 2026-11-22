@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import path from 'node:path';
 import { largestSlicesFirst, MAX_SIZED_FILES, MAX_SIZED_LISTINGS } from '../PlanFanOut';
 import { createTask, renumberTasks, type Task } from '../../models/Task';
 import { fakeFileSystem } from '../../testing';
@@ -177,6 +178,37 @@ describe('largestSlicesFirst', () => {
     ]);
     const { fs } = workspace({ 'tests/test_core.py': lines(600), 'tests/test_m3.py': lines(400), 'tests/test_m4.py': lines(250) });
     expect(ids((await largestSlicesFirst(shared, fs)).tasks)).toEqual(['r', 's3', 's1', 's2', 's4', 'close']);
+  });
+
+  describe('a path spelled with a leading ./', () => {
+    // A real file system reads ./x as x; the fake one keys on the spelling.
+    const real = (fs: ReturnType<typeof workspace>['fs']) => ({ glob: fs.glob.bind(fs), readFile: (p: string, o?: { limit?: number }) => fs.readFile(path.posix.normalize(p), o) });
+
+    it('counts a test file once when a brief names it and its directory', async () => {
+      const dotted = renumberTasks([
+        t('r', [], 'Make it import.'),
+        t('s1', ['r'], 'Fill in pkg/a.py. Its tests are in pkg/a/tests/; start with ./pkg/a/tests/test_a.py.'),
+        t('s2', ['r'], 'Fill in pkg/b.py. Verify: pytest pkg/b/tests/test_b.py'),
+        t('s3', ['r'], 'Fill in pkg/c.py. Verify: pytest pkg/c/tests/test_c.py'),
+        t('s4', ['r'], 'Fill in pkg/d.py. Verify: pytest pkg/d/tests/test_d.py'),
+        t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+      ]);
+      const { fs } = workspace({ 'pkg/a/tests/test_a.py': lines(100), 'pkg/b/tests/test_b.py': lines(150), 'pkg/c/tests/test_c.py': lines(10), 'pkg/d/tests/test_d.py': lines(5) });
+      expect(ids((await largestSlicesFirst(dotted, real(fs))).tasks)).toEqual(['r', 's2', 's1', 's3', 's4', 'close']);
+    });
+
+    it('shares one file named ./x by one brief and x by another', async () => {
+      const shared = renumberTasks([
+        t('r', [], 'Make the package import.'),
+        t('s1', ['r'], 'Fill in src/lib/graph.py. Verify: pytest ./tests/test_core.py'),
+        t('s2', ['r'], 'Fill in src/lib/node.py. Verify: pytest tests/test_core.py'),
+        t('s3', ['r'], 'Fill in src/lib/m3.py. Verify: pytest tests/test_m3.py'),
+        t('s4', ['r'], 'Fill in src/lib/m4.py. Verify: pytest tests/test_m4.py'),
+        t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+      ]);
+      const { fs } = workspace({ 'tests/test_core.py': lines(600), 'tests/test_m3.py': lines(400), 'tests/test_m4.py': lines(250) });
+      expect(ids((await largestSlicesFirst(shared, real(fs))).tasks)).toEqual(['r', 's3', 's1', 's2', 's4', 'close']);
+    });
   });
 
   it('reorders nothing when no file a slice names exists, or when the plan does not fan out', async () => {

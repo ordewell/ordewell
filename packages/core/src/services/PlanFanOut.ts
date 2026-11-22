@@ -463,7 +463,8 @@ async function sliceSizes(slices: readonly Task[], fs: SizingFileSystem): Promis
   // The notes' tables list a few paths a brief names; a slice's size reads them all,
   // since a brief names its module files first and its tests after them.
   const own = (s: Task, tests: boolean) => [
-    ...namedPaths(s, Infinity).map((p) => resolve(s, p)),
+    // Normalized like the directory listings, so ./x and x are one file, read and shared once.
+    ...namedPaths(s, Infinity).map((p) => path.posix.normalize(resolve(s, p))),
     ...(tests ? namedTestDirs(s).flatMap((d) => listed.get(d) ?? []) : []),
   ];
   const sizes = async (tests: boolean, counts: (path: string) => boolean): Promise<Omit<SliceSizes, 'measure'> | undefined> => {
