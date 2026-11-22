@@ -37,11 +37,12 @@ const NOTE = '\n\nPlan shape:';
 const bare = (t) => (typeof t.prompt === 'string' && t.prompt.includes(NOTE) ? { ...t, prompt: t.prompt.slice(0, t.prompt.indexOf(NOTE)) } : t);
 const ids = (ts) => ts.map((t) => t.id);
 
-/** What the recorded run told each role, read from the notes its briefs carry. */
+/** What a plan's briefs tell each role, read from the notes they carry. */
 function told(plan) {
   const has = (t, text) => (t.prompt ?? '').includes(text);
   return {
     opening: plan.tasks.filter((t) => has(t, 'wait for this task to land before any of them starts')).map((t) => t.id),
+    gates: plan.tasks.filter((t) => has(t, 'wait for this task to land before they start')).map((t) => t.id),
     slices: plan.tasks.filter((t) => has(t, 'Plan shape: this task is one of')).map((t) => t.id),
     closing: plan.tasks.filter((t) => has(t, 'Plan shape: this check runs after')).map((t) => t.id),
   };
@@ -55,9 +56,11 @@ export function reshapeChecks(recorded, renoted, { baseBroken = false } = {}) {
   const by = new Map(renoted.tasks.map((t) => [t.id, t]));
   const old = new Map(recorded.tasks.map((t) => [t.id, t]));
   const level = levels(renoted);
-  const noted = now.wide && now.closers.length > 0;
+  // Each role is noted on its own, so a plan that fans out is noted with or without a closing check (ADR-0072 R5).
+  const noted = now.wide;
   return {
     was,
+    noted: told(renoted),
     now: { width: now.width, before: ids(now.gates), opening: now.opening?.id ?? null, slices: now.slices.length, faults: now.faults },
     properties: p,
     checks: {

@@ -18,6 +18,7 @@ import { researchReportTo } from './ResearchTasks';
 import { heldBy, heldByCall, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey, untoldDetail } from './runHolds';
 import { taskRefOf } from './TaskRefs';
 import { landedBlockers } from './LandedBlockers';
+import { FAN_OUT_ROLE_WORDS, fanOutRoles, fanOutShape, type FanOutRole } from './PlanFanOut';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -830,7 +831,14 @@ export class RunSupervision {
     const plan = [...this.host.tasks()];
     let names: Map<string, string> | undefined;
     let blocked: Map<string, string[]> | undefined;
+    let roles: Map<string, FanOutRole> | undefined;
     return {
+      // From the plan's shape, as the notes were written, never from a brief's words: a brief may have been edited since.
+      role: (taskId) => {
+        roles ??= fanOutRoles(fanOutShape(plan));
+        const role = roles.get(taskId);
+        return role && FAN_OUT_ROLE_WORDS[role];
+      },
       describe: (taskId) => {
         names ??= new Map(flattenTasksWithParents(plan).map(({ task, ref }) => [task.id, `${ref} "${task.title}"`]));
         return names.get(taskId) ?? taskId;

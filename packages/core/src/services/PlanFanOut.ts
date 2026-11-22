@@ -122,10 +122,18 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   // whatever runs beside it: a slice would read it as one of them. The level is
   // the one holding the most of the rest, the first on a tie, counted without the
   // tasks every deeper one waits for, and only a level of a fan-out takes any.
+  // Those deeper must hold a fan-out's level: a last task that waits for only
+  // some slices would otherwise make the slices it waits for such tasks, and
+  // the fan-out's level the narrower one left.
   const lv = (t: Task) => g.level.get(t.id)!;
+  const holdsFanOut = (ts: readonly Task[]) => {
+    const per = new Map<number, number>();
+    for (const s of ts) per.set(lv(s), (per.get(lv(s)) ?? 0) + 1);
+    return [...per.values()].some((n) => n >= FAN_OUT_MIN);
+  };
   const deeperAll = new Set(parallel.filter((t) => {
     const deeper = parallel.filter((s) => lv(s) > lv(t));
-    return deeper.length > 0 && deeper.every((s) => anc(s).has(t.id));
+    return holdsFanOut(deeper) && deeper.every((s) => anc(s).has(t.id));
   }));
   const count = new Map<number, number>();
   for (const s of parallel) if (!deeperAll.has(s)) count.set(lv(s), (count.get(lv(s)) ?? 0) + 1);
@@ -288,15 +296,16 @@ export function gateNote(shape: FanOutShape, gate: Task): string {
  * A slice's note: its own scope is its done criterion, and what needs another
  * slice's work is the closing check's. It names the tasks before the slices
  * that this slice waits for; with no slice given, those every slice waits for.
+ * With no closing check, the two clauses that would name it are left out.
  */
 export function sliceNote(shape: FanOutShape, slice?: Task): string {
   const after = slice ? shape.waits.get(slice.id) ?? [] : shape.gates.filter((t) => shape.slices.every((s) => shape.waits.get(s.id)?.includes(t)));
   const map = shape.opening && after.includes(shape.opening) ? shape.opening : undefined;
-  const closer = shape.closers[0];
+  const closer = shape.closers[0] as Task | undefined;
   return [
-    `Plan shape: this task is one of ${shape.slices.length} slices${after.length ? ` that start once ${refs(after)} ${after.length === 1 ? 'has' : 'have'} landed` : ''}, and ${ref(closer)} runs the whole test suite once every slice has ended.${map ? ` Read the module map at the end of ${ref(map)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
+    `Plan shape: this task is one of ${shape.slices.length} slices${after.length ? ` that start once ${refs(after)} ${after.length === 1 ? 'has' : 'have'} landed` : ''}${closer ? `, and ${ref(closer)} runs the whole test suite once every slice has ended` : ''}.${map ? ` Read the module map at the end of ${ref(map)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
     sliceTable(shape),
-    `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as an \`info\` finding that cites, by task reference, the slice it waits for, or says why it cannot be derived, and end with status done: they are ${ref(closer)}'s. Severity \`blocker\` is for a defect in code that has landed and stops you, given with the file and the input. Take in another slice's work once it has landed. Do not write, stub or shim another slice's code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
+    `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as an \`info\` finding that cites, by task reference, the slice it waits for, or says why it cannot be derived, and end with status done${closer ? `: they are ${ref(closer)}'s` : ''}. Severity \`blocker\` is for a defect in code that has landed and stops you, given with the file and the input. Take in another slice's work once it has landed. Do not write, stub or shim another slice's code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
   ].join('\n');
 }
 
@@ -305,23 +314,59 @@ export function closingNote(shape: FanOutShape): string {
   return `Plan shape: this check runs after the ${shape.slices.length} slices. Read each slice's handoff with read: a slice that ended done lists the tests it left to you, and a slice that did not land (it failed and was skipped) left its module unwritten here, so write that module from its brief, its handoff and the tests. Run the whole test suite, fix what fails, and report each test that still fails with its reason.`;
 }
 
+/** A task's part in a fan-out: the note its brief gets, and what the supervisor's wake about it says it is. */
+export type FanOutRole = 'opening' | 'gate' | 'slice' | 'closing';
+
+/**
+ * Which task plays which role in a plan that fans out, none otherwise. Each
+ * role stands on its own (ADR-0072 R5): a plan with no closing check still has
+ * its opening task, its other tasks before the slices and its slices, since
+ * what each is told is true without the others. The closing role goes to the
+ * closing check, or to the AI tasks of its loop's body when the check is a
+ * script or read-only, since a check that cannot edit leaves the fixing to them.
+ */
+export function fanOutRoles(shape: FanOutShape): Map<string, FanOutRole> {
+  const roles = new Map<string, FanOutRole>();
+  if (!shape.wide) return roles;
+  for (const g of shape.gates) roles.set(g.id, g === shape.opening ? 'opening' : 'gate');
+  for (const s of shape.slices) roles.set(s.id, 'slice');
+  const closer = shape.closers[0] as Task | undefined;
+  if (closer) for (const id of closer.type === 'ai' && !closer.readOnly ? [closer.id] : closer.loop?.body ?? []) roles.set(id, 'closing');
+  return roles;
+}
+
+/**
+ * Each role in a few words, as a wake about its task names it: the supervisor
+ * judges a task by its brief, and a role's note gives it more room than the
+ * brief's own words do (the opening task may edit any file to make the project
+ * import), so a wake that left it out had a supervisor revert what the note allowed.
+ */
+export const FAN_OUT_ROLE_WORDS: Readonly<Record<FanOutRole, string>> = {
+  opening: 'the opening task, which may edit any file to make the project import and its tests collect',
+  gate: 'a task the slices wait for, which must leave the import and the test collection no worse',
+  slice: 'a slice, done once the code in its own scope is in place',
+  closing: 'the closing check, which runs the whole test suite after the slices',
+};
+
 /**
  * The plan with each role's note appended to its brief, last, as a revision
- * note is: the opening task's, every other gate's, every slice's, and the closing check's, or the
- * AI tasks of its loop's body when the check is a script or read-only. Only a
- * plan that fans out with a closing check is noted, since the slices' note
- * leaves work to it; any other plan comes back as the same array.
+ * note is (see {@link fanOutRoles}). A plan that does not fan out comes back
+ * as the same array, and so does one whose every brief is noted already.
  */
 export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(tasks)): Task[] {
-  if (!shape.wide || shape.closers.length === 0) return tasks;
-  const closer = shape.closers[0];
-  // A check that cannot edit leaves the fixing to its loop's body.
-  const closing = new Set(closer.type === 'ai' && !closer.readOnly ? [closer.id] : closer.loop?.body ?? []);
-  const notes = new Map<string, string>();
-  for (const g of shape.gates) notes.set(g.id, g === shape.opening ? openingNote(shape) : gateNote(shape, g));
-  for (const s of shape.slices) notes.set(s.id, sliceNote(shape, s));
-  const close = closingNote(shape);
-  for (const id of closing) notes.set(id, close);
+  const roles = fanOutRoles(shape);
+  if (roles.size === 0) return tasks;
+  // The shape's own tasks: a gate's count of the slices waiting for it is read by identity.
+  const byId = new Map([...shape.gates, ...shape.slices].map((t) => [t.id, t]));
+  const noteOf = (id: string, role: FanOutRole): string => {
+    switch (role) {
+      case 'opening': return openingNote(shape);
+      case 'gate': return gateNote(shape, byId.get(id)!);
+      case 'slice': return sliceNote(shape, byId.get(id));
+      case 'closing': return closingNote(shape);
+    }
+  };
+  const notes = new Map([...roles].map(([id, role]) => [id, noteOf(id, role)]));
   let changed = false;
   const out = tasks.map((t) => {
     const note = notes.get(t.id);
