@@ -779,6 +779,7 @@ export abstract class BaseAiService {
       // second LLM call even when the plan was already in hand.
       const reply = classifyPlannerReply(turn.text, { runners, runnerModes, autonomousDefault });
       if (reply.kind === 'plan') {
+        for (const line of reply.notes) researchLog.push(systemEntry(line));
         return { tasks: reply.tasks, researchLog, researchResults };
       }
 
@@ -943,6 +944,7 @@ export abstract class BaseAiService {
       2,
       runnerModes,
       autonomousDefault,
+      (line) => researchLog.push(systemEntry(line)),
     );
     return { tasks, researchLog };
   }
