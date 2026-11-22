@@ -123,7 +123,15 @@ question is put depends on how the plan arrives.
   brief, on the plan R1 kept, each role's note standing on its own
   (`fanOutRoles`): the opening task's whenever there is an opening task, every
   other task before the slices' likewise, the slices' whenever a level holds
-  `FAN_OUT_MIN` slices, and the closing check's only when there is one. With
+  `FAN_OUT_MIN` slices, and the closing check's only when there is one; that
+  one is told, by directory, of the test files no brief of the plan names
+  (listed from the repository root through the planner's file system, at most
+  `MAX_SIZED_FILES` a listing and `UNNAMED_BUDGET_MS` in all, none when a
+  listing fails), a file counting as named when a brief names it, its bare
+  name, its directory, the package it tests or a file directly in it, a dotted
+  module name, a file of the same stem, or a recursive glob above it, so that
+  code is written once the slices' work is in; a note with nothing unnamed is
+  as it was. With
   no closing check, fewer last tasks than a fan-out that wait for several
   slices, and that no slice waits for, get no note: such a task gathers only
   some slices' work, as a last check does, and a slice's note would forbid it
@@ -284,7 +292,14 @@ waits for only some slices, which gets no note. The role a wake names is
 tested through `wakeUpDigest`, its words and its place outside the line's cut,
 and through `RunSupervision`: the role of the note on the task's brief, none
 on a fan-out with no notes, and the note's role kept after an edit moves the
-plan's shape.
+plan's shape. `unnamedTests` is tested over the same file system: the
+directories no brief names, largest first, a flat suite read by the name it
+tests, a sweep's directory as its own package only, a brief read before its
+appended notes, a prose word naming nothing, rows outside the workspace
+ignored with no file read, and no list when a listing is cut, fails or passes
+the time bound; the closing note's sentence is pinned word for word and cut at
+`UNNAMED_MAX`, and `shapeFanOut` lists nothing for a plan with no closing
+check or one noted already.
 `bench/commit0/reshape.mjs` shapes a recorded plan again through `shapeFanOut`,
 sized from its run's repository, and checks it offline. That a wide plan with a fault and a short chain makes no review call,
 and a long one is asked R1's message word for word, is tested through
@@ -479,3 +494,4 @@ conversation's as they stand.
 - 2026-11-22 — R5: each role's note is written whether or not the plan has a closing check; a last task waiting for only some slices no longer hides the tasks before them; a wake about a task names its role.
 - 2026-11-22 — R5: with no closing check, a last task waiting for several slices but not every one gets no note; a wake names the role of the note on the task's brief, not of the plan's shape.
 - 2026-11-22 — R1: a reply that cuts the first plan's closing check off from a task it waited for is applied with the check waiting for those tasks directly; refusing it is not taken.
+- 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.
