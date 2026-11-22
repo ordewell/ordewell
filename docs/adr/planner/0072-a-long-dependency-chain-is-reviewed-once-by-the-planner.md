@@ -108,8 +108,12 @@ question is put depends on how the plan arrives.
   brief, on the plan R1 kept, each role's note standing on its own
   (`fanOutRoles`): the opening task's whenever there is an opening task, every
   other task before the slices' likewise, the slices' whenever a level holds
-  `FAN_OUT_MIN` slices, and the closing check's only when there is one. A plan
-  that does not fan out is left as it is. The slices start from the
+  `FAN_OUT_MIN` slices, and the closing check's only when there is one. With
+  no closing check, fewer last tasks than a fan-out that wait for several
+  slices, and that no slice waits for, get no note: such a task gathers only
+  some slices' work, as a last check does, and a slice's note would forbid it
+  the fixing it is there for. A task after one slice alone carries that
+  slice's module on, and is told as a slice. A plan that does not fan out is left as it is. The slices start from the
   tree the tasks before them land, so each of those is done, besides its own
   brief's criterion, only when the project builds or imports and the test
   command the slices' briefs run (the project's own, if they name none)
@@ -147,9 +151,13 @@ question is put depends on how the plan arrives.
   context threshold or failed, names the task's role after the line's own
   facts and outside their cut, in a few fixed words (`FAN_OUT_ROLE_WORDS`):
   for the opening task, that it may edit any file to make the project import
-  and its tests collect. The role is read from the plan's shape as the wake
-  goes out, on any plan that fans out, never from the brief's words, since a supervisor that saw only the
-  brief once had the opening task revert the edits its note allowed.
+  and its tests collect. The role is the one the `Plan shape:` note on the
+  task's brief was written for (`notedRole`), read as the wake goes out: a
+  task whose brief holds no note (on a conversation plan, a harness planner's
+  one-shot plan, or added after the notes) has none named, and a task keeps
+  the role it was told though an edit has moved the plan's shape since. The
+  words are Ordewell's fixed ones, not the brief's, since a supervisor that saw
+  only the brief once had the opening task revert the edits its note allowed.
 - **A wide one-shot plan's slices start largest first (R6).** Ready tasks
   start in plan order, `maxParallel` at a time, so a long slice the planner
   listed late started late and set when the whole fan-out ended. On the plan R1
@@ -250,9 +258,11 @@ for word; that such a task starts ahead of the slices beside it, through
 `reviewLongChain`. Each role's note on a plan with no closing check, the slice
 note's variant pinned word for word, and the tasks before the slices read in a
 chain, beside a catch-all off the opening task and beside a last task that
-waits for only some slices. The role a wake names is tested through
-`wakeUpDigest`, its words and its place outside the line's cut, and through
-`RunSupervision`, read from the plan's shape.
+waits for only some slices, which gets no note. The role a wake names is
+tested through `wakeUpDigest`, its words and its place outside the line's cut,
+and through `RunSupervision`: the role of the note on the task's brief, none
+on a fan-out with no notes, and the note's role kept after an edit moves the
+plan's shape.
 `bench/commit0/reshape.mjs` shapes a recorded plan again through `shapeFanOut`,
 sized from its run's repository, and checks it offline. That a wide plan with a fault and a short chain makes no review call,
 and a long one is asked R1's message word for word, is tested through
@@ -392,6 +402,10 @@ conversation's as they stand.
 - **A closing check that starts once every slice has ended, landed or not.**
   Not taken here: it is a run-time change to readiness, outside the plan. The
   slice note keeps a slice whose own scope is in place from failing instead.
+- **A wake reads the role from the plan's shape.** Tried and dropped: a plan
+  no note was written on fans out too, so a wake named the opening task's
+  licence for a task never given it, and an edit that moved the shape named a
+  role the task was not told.
 - **Re-sending the whole planner prompt after a cut-off.** Rejected: the same
   prompt at the same allowance invites the same cut-off, and pays for the
   research again.
@@ -435,3 +449,4 @@ conversation's as they stand.
 - 2026-11-21 — R6: a slice is sized by every path its brief names, the test files under a test directory it names and a bare test-file name one file under its directories holds, not the notes' first `MAX_PATHS`; `MAX_SIZED_FILES` is 1000.
 - 2026-11-21 — R7: a wide one-shot plan's slices are never merged; replayed with R6's corrected sizes, every merge tried started the closing check later than largest first alone.
 - 2026-11-22 — R5: each role's note is written whether or not the plan has a closing check; a last task waiting for only some slices no longer hides the tasks before them; a wake about a task names its role.
+- 2026-11-22 — R5: with no closing check, a last task waiting for several slices but not every one gets no note; a wake names the role of the note on the task's brief, not of the plan's shape.

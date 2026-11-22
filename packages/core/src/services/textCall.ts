@@ -17,7 +17,8 @@
  * earlier call. A body is not parsed whole, as a call cut short or badly
  * escaped is still one.
  */
-const FENCED = /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*\1[`~]*[ \t]*(?=\n|$)|$)/gm;
+// A fence left open runs to the end of the reply: `(?![\s\S])`, since `$` under the m flag would close it at its first line's end.
+const FENCED = /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]*\1[`~]*[ \t]*(?=\n|$)|(?![\s\S]))/gm;
 // A span may wrap lines but not cross a blank one, so a stray backtick cannot swallow the rest of the reply.
 const INLINE = /`(?:[^`\n]|\n(?![ \t]*\n))*`/g;
 const BLOCK = /^[ \t]*<(?:tool_call|function_call)>\s*\{\s*"name"\s*:\s*"([^"\\]*)"/gm;

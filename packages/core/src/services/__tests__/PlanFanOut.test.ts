@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closingNote, fanOutRoles, fanOutShape, FAN_OUT_MIN, gateNote, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
+import { closingNote, fanOutRoles, fanOutShape, FAN_OUT_MIN, gateNote, notedRole, openingNote, sliceNote, withShapeNotes } from '../PlanFanOut';
 import { applyChainReview, chainReviewMessage, longestChain } from '../PlanChainReview';
 import { BaseAiService, type PlanTextCall, type PlanTextReply } from '../BaseAiService';
 import { createTask, type ResearchLogEntry, type RunnerId, type Task } from '../../models/Task';
@@ -340,6 +340,14 @@ describe('withShapeNotes', () => {
     expect(out.find((x) => x.id === 'check')!.prompt).toBe('Fill in src/lib/check.py.');
   });
 
+  it('reads back from each note the role it was written for, and none from a brief with no note', () => {
+    const chain = [t('r', []), t('a', ['r']), ...slices(5, ['a']), t('close', sliceIds(5))];
+    const expected = { r: 'opening', a: 'gate', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])), close: 'closing' };
+    expect(Object.fromEntries(withShapeNotes(chain).flatMap((x) => { const role = notedRole(x); return role ? [[x.id, role]] : []; }))).toEqual(expected);
+    expect(chain.map(notedRole).filter(Boolean)).toEqual([]);
+    expect(notedRole({ prompt: 'Keep the Plan shape: notes the planner wrote.' })).toBeUndefined();
+  });
+
   it('notes a script check\'s fix as the closing check, and a fan-out with nothing before or after it only on its slices', () => {
     const plan = [t('r', []), ...slices(4, ['r']),
       createTask({ id: 'check', title: 'Run the suite', type: 'script', commands: [['pytest']], dependencies: sliceIds(4), sliceType: 'AFK', loop: { body: ['fix'], maxRounds: 3 } }),
@@ -390,9 +398,29 @@ describe('withShapeNotes on a wide plan with no closing check', () => {
     const s = fanOutShape(plan);
     expect(ids(s.gates)).toEqual(['r', 'a', 'b']);
     expect(s.faults).toEqual(['serial-opening', 'no-closing']);
-    // Not recognised: a last task that waits for only some slices is no closing check, so it reads as a slice.
-    expect(roles(plan)).toEqual({ r: 'opening', a: 'gate', b: 'gate', sweep: 'slice', close: 'slice', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
+    // A last task that waits for only some slices is no closing check, and no slice either: it gets no role.
+    expect(roles(plan)).toEqual({ r: 'opening', a: 'gate', b: 'gate', sweep: 'slice', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
     expect(withShapeNotes(plan).find((x) => x.id === 'r')!.prompt).toContain('For that alone you may edit any file');
+  });
+
+  // The recorded plan's last task (#469 F1): told it was a slice that must not write other slices' code, though it runs the suite.
+  it('gives no role, and no note, to a last check that waits for only some slices', () => {
+    const final = t('final', sliceIds(5), { title: 'Final closing check', prompt: 'Run the whole test suite and fix what fails.' });
+    const plan = [t('r', []), ...slices(8, ['r']), final];
+    expect(roles(plan)).toEqual({ r: 'opening', ...Object.fromEntries(sliceIds(8).map((id) => [id, 'slice'])) });
+    expect(withShapeNotes(plan).find((x) => x.id === 'final')!.prompt).toBe('Run the whole test suite and fix what fails.');
+  });
+
+  // A task after one slice carries that slice's module further; one after several gathers their work, as a check does.
+  it('keeps the slice role of a last task that waits for one slice alone', () => {
+    const plan = [t('r', []), ...slices(5, ['r']), t('more', ['s1'])];
+    expect(roles(plan)).toEqual({ r: 'opening', more: 'slice', ...Object.fromEntries(sliceIds(5).map((id) => [id, 'slice'])) });
+  });
+
+  // As many tasks after the slices as a fan-out are the plan's last level of slices, as fanOutShape reads them.
+  it('keeps the role of a second level of slices as wide as a fan-out that nothing after them closes', () => {
+    const plan = [t('r', []), ...['a1', 'a2', 'a3', 'a4'].map((id) => t(id, ['r'])), ...['a1', 'a2', 'a3', 'a4'].map((a, i) => t(`b${i + 1}`, [a]))];
+    expect(Object.values(roles(plan)).filter((role) => role === 'slice')).toHaveLength(8);
   });
 });
 

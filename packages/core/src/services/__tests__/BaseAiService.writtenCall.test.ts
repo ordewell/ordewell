@@ -40,6 +40,9 @@ class TestService extends BaseAiService {
   runTurn(ctx: ConversationTurnContext, onProgress: (p: ResearchProgress) => void = () => {}) {
     return this.runConversationTurn(ctx, 'go', onProgress);
   }
+  static oneShot(chat: ResearchChat, researchMaxSteps = 10) {
+    return new TestService(fakeConfig({ researchMaxSteps })).runOneShot(chat);
+  }
   runOneShot(chat: ResearchChat) {
     return this.runResearchLoop(chat, 'go', fakeFileSystem({}), () => {}, ['claude-code']);
   }
@@ -51,11 +54,13 @@ const toolTurn = (name: string, args: Record<string, unknown> = {}): ResearchTur
 const DSML = '<｜DSML｜ invoke name="message_task">\n<｜DSML｜ parameter name="task">task-7</｜DSML｜ parameter>\n</｜DSML｜ invoke>';
 const NOTE = '[Ordewell] Your last reply wrote a tool call (message_task) as text, so it was not made. Make the call with the tool, not in your reply text.';
 
-function run(chat: ResearchChat) {
+const SPENT = '[Ordewell] The planner wrote a message_task call as text after its tool budget was spent: the call was not executed.';
+
+function run(chat: ResearchChat, researchMaxSteps = 10) {
   const progress: ResearchProgress[] = [];
   const calls: string[] = [];
   const fs = fakeFileSystem({ readFile: async (p) => { calls.push(p); return { success: true, output: 'body', truncated: false }; } });
-  const turn = new TestService(fakeConfig()).runTurn({ chat, fs, runners: ['claude-code'] }, (p) => progress.push(p));
+  const turn = new TestService(fakeConfig({ researchMaxSteps })).runTurn({ chat, fs, runners: ['claude-code'] }, (p) => progress.push(p));
   return { turn, progress, calls };
 }
 
@@ -104,6 +109,20 @@ describe('a call written as text in the API planner\'s reply', () => {
     expect(chat.sent).toEqual(['go', NOTE]);
   });
 
+  it('is not answered once the tool budget is spent, since the call it asks for could not run', async () => {
+    const chat = new ScriptedChat([
+      toolTurn('read_file', { path: 'a.ts' }), toolTurn('read_file', { path: 'b.ts' }), proseTurn(DSML),
+      toolTurn('message_task'), toolTurn('message_task'),
+    ]);
+    const { turn, calls } = run(chat, 1);
+    const settled = await turn;
+
+    expect(chat.sent).toEqual(['go']);
+    expect(calls).toEqual(['a.ts']);
+    expect(settled).toMatchObject({ kind: 'message', text: DSML });
+    expect(systemLines(settled)).toEqual([SPENT]);
+  });
+
   it.each([
     ['prose naming a tool', 'I will use message_task to tell task-7.'],
     ['a code sample in an answer', 'Call it like this:\n\n```xml\n<invoke name="message_task">\n<parameter name="task">task-7</parameter>\n</invoke>\n```\n'],
@@ -146,6 +165,14 @@ describe('a call written as text in the API planner\'s reply', () => {
       expect(result.researchLog.flatMap((entry) => ('type' in entry && entry.type === 'system' ? [entry.content] : []))).toEqual([
         '[Ordewell] The planner wrote a message_task call as text, twice, and did not make it: the call was not executed.',
       ]);
+    });
+
+    it('is not answered on the last step, whose reply the loop would not go on with', async () => {
+      const chat = new ScriptedChat([toolTurn('read_file', { path: 'a.ts' }), proseTurn(DSML), toolTurn('message_task')]);
+      const result = await TestService.oneShot(chat, 2);
+      expect(chat.sent).toEqual(['go']);
+      expect(result.researchResults).toContain(DSML);
+      expect(result.researchLog.flatMap((entry) => ('type' in entry && entry.type === 'system' ? [entry.content] : []))).toEqual([SPENT]);
     });
   });
 });
