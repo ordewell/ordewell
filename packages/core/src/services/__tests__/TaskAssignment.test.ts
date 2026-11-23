@@ -206,6 +206,24 @@ describe('resolveAssignment: a model the writer names', () => {
   });
 });
 
+describe('resolveAssignment: a runner whose discovery came back empty, with an allowlist of another runner\'s slugs', () => {
+  // A settings file written before a picker was scoped to one runner holds OpenRouter slugs for Claude Code.
+  const legacy = catalog({
+    modelsByRunner: { 'claude-code': [], openrouter: [model('openai/gpt-5'), model('anthropic/claude-x')] },
+    perRunnerAllowlist: { 'claude-code': ['openai/gpt-5', 'anthropic/claude-x'] },
+  });
+
+  it('gives a planned task none of those slugs', () => {
+    const planned = resolveAssignment({ writer: 'plan', task: claudeTask({ assignedModel: undefined }), catalog: legacy });
+    expect(landed(planned).assignedModel).toBeUndefined();
+  });
+
+  it('keeps the model the planner wrote', () => {
+    const planned = resolveAssignment({ writer: 'plan', task: claudeTask({ assignedModel: { modelId: 'sonnet', modelLabel: 'sonnet' } }), catalog: legacy });
+    expect(landed(planned).assignedModel?.modelId).toBe('sonnet');
+  });
+});
+
 describe('resolveAssignment: a model the writer left alone', () => {
   const offList = { perRunnerAllowlist: { 'claude-code': ['claude-haiku-4-5'] } };
 

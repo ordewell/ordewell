@@ -9,7 +9,7 @@ export function modelsRoute(pool: OrchestratorPool) {
   router.get('/', async (c) => {
     // The catalog of the workspace's own runner environment, as its login verdict is.
     try {
-      const result: ModelsResponse = await pool.getProviderModels(c.req.query('workspace'));
+      const result: ModelsResponse = await pool.getProviderModels(c.req.query('workspace'), { cached: c.req.query('cached') === '1' });
       return c.json(result);
     } catch (err) {
       return failure(c, err, 'list models');

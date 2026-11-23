@@ -405,6 +405,38 @@ describe('handleStatus --output', () => {
     ]);
     srv.close();
   });
+
+  // A fresh daemon discovers every runner's models on its first full catalog
+  // read, and one runner whose CLI cannot start (an `opencode` beside another
+  // home's service) held status for 37 seconds after a reload.
+  it('flags from the catalog the daemon already holds, and starts no discovery', async () => {
+    const session = {
+      meta: { ...SESSION.meta, status: 'approved' },
+      plan: { pendingTasks: [{ id: 't1', order: 1, title: 'On opus', type: 'ai', status: 'pending', assignedRunner: 'claude-code', assignedModel: { modelId: 'claude-opus-4', modelLabel: 'Opus 4' }, dependencies: [] }] },
+    };
+    const opus = { modelId: 'claude-opus-4', modelLabel: 'Opus 4', variants: [] };
+    const catalogReads: string[] = [];
+    const srv = await startServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const url = new URL(req.url ?? '', 'http://127.0.0.1');
+      if (url.pathname === '/api/runners') {
+        res.end(JSON.stringify({ runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }], orchestratorModel: '' }));
+      } else if (url.pathname === '/api/settings') {
+        res.end(JSON.stringify({ modelAllowlist: { 'claude-code': ['claude-sonnet-4-5'] } }));
+      } else if (url.pathname === '/api/models') {
+        catalogReads.push(url.searchParams.get('cached') === '1' ? 'held' : 'discovered');
+        res.end(JSON.stringify({ models: [opus], modelsByRunner: { 'claude-code': [opus] } }));
+      } else {
+        res.end(JSON.stringify(session));
+      }
+    });
+    const { handleStatus } = await import('../status');
+    const { stdout } = await capture(() => handleStatus(['--session-id', 'session-1'], new ApiClient(srv.port)));
+
+    expect(catalogReads).toEqual(['held']);
+    expect(stripAnsi(stdout)).toContain('⚠ Opus 4 is not in the allowlist');
+    srv.close();
+  });
 });
 
 describe('handleStatus with a handoff (ADR-0047)', () => {

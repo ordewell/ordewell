@@ -177,6 +177,11 @@ export class Supervisor {
   /** The run's end was reported: the scheduler can announce it more than once. */
   private finished = false;
   private runEndPending = false;
+  /**
+   * What the last run end told, until anything else is gathered or the user starts a run. A skip or retry in the turn on that end
+   * continues the run, and a run that starts nothing ends again as it was: the same end is not news (ADR-0029).
+   */
+  private endTold: string | undefined;
   /** Ends the wake-up turn in flight as discarded; null while none is. */
   private discardTurn: (() => void) | null = null;
   /** When each wake-up since the last pass was delivered, for the wake-up rate guard. */
@@ -320,7 +325,10 @@ export class Supervisor {
     if (event.kind === 'run_finished') {
       if (this.finished) return false;
       this.finished = true;
+      if (event.detail !== undefined && event.detail === this.endTold) return false;
       this.runEndPending = true;
+    } else {
+      this.endTold = undefined;
     }
     // The closing turn's backstop holds the run's end as the closing turn did (ADR-0057 R4).
     if (event.closing) this.runEndPending = true;
@@ -375,6 +383,7 @@ export class Supervisor {
     this.finished = false;
     this.loaded = false;
     if (continues) return;
+    this.endTold = undefined;
     this.failures = 0;
     this.wakeUps = [];
     // A new run gathers its own events: what the previous one left undelivered
@@ -420,6 +429,7 @@ export class Supervisor {
     this.failures = 0;
     this.stopped = false;
     this.finished = false;
+    this.endTold = undefined;
     this.runEndPending = false;
     this.wakeUps = [];
     this.loaded = false;
@@ -617,6 +627,7 @@ export class Supervisor {
     const { describe, blockedBy, role } = this.host.digestReader();
     const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy, role);
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
+    this.endTold = [...own, ...theirs].find((e) => e.kind === 'run_finished')?.detail ?? this.endTold;
     if (own.length > 0) {
       const runEnd = own.some((e) => e.kind === 'run_finished' || e.closing === true);
       const asked = own.some((e) => e.kind === 'task_report') ? 'supervisor' : undefined;

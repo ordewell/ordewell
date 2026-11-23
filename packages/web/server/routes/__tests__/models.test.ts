@@ -98,7 +98,7 @@ describe('GET /api/models', () => {
     await app.request('/api/models?workspace=%2Fwork%2Fb', { method: 'GET' });
     await app.request('/api/models', { method: 'GET' });
 
-    expect(vi.mocked(pool.getProviderModels).mock.calls).toEqual([['/work/b'], [undefined]]);
+    expect(vi.mocked(pool.getProviderModels).mock.calls).toEqual([['/work/b', { cached: false }], [undefined, { cached: false }]]);
   });
 
   it('returns empty models when no API keys are configured', async () => {

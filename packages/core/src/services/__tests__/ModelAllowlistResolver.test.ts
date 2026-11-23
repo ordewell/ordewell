@@ -10,6 +10,18 @@ describe('effectiveAllowlist', () => {
     ],
   };
 
+  // An empty list is a discovery that failed: what another runner lists still says what this one cannot run.
+  it('drops another runner\'s ids for a runner whose discovery came back empty, or is missing', () => {
+    const empty = { 'claude-code': [], opencode: catalogs.opencode };
+    expect(effectiveAllowlist(['gpt-5.6-sol', 'other-id'], 'claude-code', empty)).toEqual(['other-id']);
+    expect(effectiveAllowlist(['gpt-5.6-sol', 'other-id'], 'claude-code', { opencode: catalogs.opencode })).toEqual(['other-id']);
+  });
+
+  it('reads a legacy allowlist of another runner\'s slugs as no restriction when this runner\'s discovery came back empty', () => {
+    const openrouter = [{ modelId: 'openai/gpt-5', modelLabel: 'GPT-5', variants: [] }, { modelId: 'anthropic/claude-x', modelLabel: 'Claude X', variants: [] }];
+    expect(effectiveAllowlist(['openai/gpt-5', 'anthropic/claude-x'], 'claude-code', { 'claude-code': [], openrouter })).toBeUndefined();
+  });
+
   it('is undefined for an unset or empty allowlist', () => {
     expect(effectiveAllowlist(undefined, 'claude-code', catalogs)).toBeUndefined();
     expect(effectiveAllowlist([], 'claude-code', catalogs)).toBeUndefined();

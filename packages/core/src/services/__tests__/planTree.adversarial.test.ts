@@ -117,14 +117,25 @@ describe('adversarial: the batch dependency graph (task ops)', () => {
     expect(result.errors[0]).toMatch(/unknown task in reorder list/i);
   });
 
-  it('refuses a repair that would have to move a completed task, naming both', () => {
+  it('refuses a repair that would have to move a completed task past work it depends on, naming both', () => {
+    const tasks = tree();
+    tasks[1] = { ...tasks[1], status: 'completed', dependencies: ['a'] };
+    const result = applyTaskOps(tasks, [
+      { op: 'update', taskId: 'a', changes: { dependencies: ['c'] } },
+    ], RUNNERS);
+    expect(result.ok).toBe(false);
+    // B waits on A, which now waits on C, listed after B.
+    expect(result.errors[0]).toMatch(/"C" would have to run before "B", which is completed and cannot be moved/);
+  });
+
+  it('lets a completed task move up, keeping its order, so a task that now depends on it follows it', () => {
     const tasks = tree();
     tasks[2].status = 'completed';
     const result = applyTaskOps(tasks, [
       { op: 'update', taskId: 'a', changes: { dependencies: ['c'] } },
     ], RUNNERS);
-    expect(result.ok).toBe(false);
-    expect(result.errors[0]).toMatch(/"A" would have to run after "C", which is completed and cannot be moved/);
+    expect(result.errors).toEqual([]);
+    expect(result.tasks.map((t) => t.id)).toEqual(['b', 'c', 'a']);
   });
 });
 

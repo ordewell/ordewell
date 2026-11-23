@@ -199,7 +199,8 @@ export const DAEMON_ROUTES = {
   'approvals.list': row<ApprovalsResponse>()({ method: 'GET', path: '/api/approvals/:sessionId', query: WS, live: 'sessionId' }),
   'approvals.decide': row<ApprovalAnswerResponse, ApprovalDecideRequest>()({ method: 'POST', path: '/api/approvals/:sessionId/:approvalId', query: WS, live: 'sessionId' }),
 
-  'models.list': row<ModelsResponse>()({ method: 'GET', path: '/api/models', query: WS }),
+  // `cached=1` reads only what discovery holds, starting none.
+  'models.list': row<ModelsResponse>()({ method: 'GET', path: '/api/models', query: [...WS, 'cached'] }),
 
   'runners.list': row<RunnersResponse>()({ method: 'GET', path: '/api/runners', query: WS }),
   'runners.setEnabled': row<OkResponse, { enabled: boolean }>()({ method: 'PUT', path: '/api/runners/:id' }),
