@@ -448,6 +448,59 @@ describe('Supervisor', () => {
     });
   });
 
+  // Recorded: a skip in the turn on the run's end continued the run, nothing started, and the same end woke the supervisor again.
+  describe('the run\'s end, told once (ADR-0029, ADR-0057 R4)', () => {
+    const END = '1 of 3 tasks completed, 1 failed, 1 skipped';
+
+    it('is not told again by an end of the run its own turn continued, when nothing happened in between', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'run_finished', detail: END });
+      await vi.advanceTimersByTimeAsync(10);
+      supervisor.runStarted(true);
+      supervisor.observe({ kind: 'run_finished', detail: END });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(h.deliver).toHaveBeenCalledTimes(1);
+      expect(supervisor.awaitsRunEnd).toBe(false);
+      vi.useRealTimers();
+    });
+
+    it('is told again once anything happened since: a retried task failing again is a new end', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'run_finished', detail: END });
+      await vi.advanceTimersByTimeAsync(10);
+      supervisor.runStarted(true);
+      supervisor.observe({ kind: 'task_failed', taskId: 't2', detail: 'still wrong' });
+      supervisor.observe({ kind: 'run_finished', detail: END });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(h.deliver).toHaveBeenCalledTimes(2);
+      expect(h.deliver.mock.calls[1][0]).toContain('the run finished');
+      vi.useRealTimers();
+    });
+
+    it('is told again to a run the user started, which has its own end', async () => {
+      vi.useFakeTimers();
+      const h = host({ level: 'act' });
+      const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+      supervisor.observe({ kind: 'run_finished', detail: END });
+      await vi.advanceTimersByTimeAsync(10);
+      supervisor.runStarted(false);
+      supervisor.observe({ kind: 'run_finished', detail: END });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(h.deliver).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+  });
+
   describe('a report the planner asked for (ADR-0037)', () => {
     const report = (authority: 'user' | 'supervisor', taskId = 't1'): RunEventInput => ({ kind: 'task_report', taskId, report: { authority, text: 'It passed.\nIt printed nothing.', passed: true } });
 

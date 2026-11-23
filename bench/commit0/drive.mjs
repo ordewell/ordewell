@@ -370,7 +370,9 @@ async function openSandbox(lib, runId, runtime, settings) {
   const name = `commit0-${runId}`;
   const driver = L.driverId();
   const labels = ['--label', LABEL, '--label', `${L.DRIVER_LABEL}=${driver}`];
-  const sb = { name, network: `${name}-net`, proxy: `${name}-egress`, box: `${name}-box`, proxyUrl: null };
+  const sb = { name, network: `${name}-net`, proxy: `${name}-egress`, box: `${name}-box`, proxyUrl: null,
+    // Full container ids, set as each container starts: a kernel memcg OOM line names a docker scope by id, not name.
+    ids: { box: null, proxy: null } };
   const close = async () => {
     await docker(['rm', '-f', sb.box, sb.proxy]);
     await docker(['network', 'rm', sb.network]);
@@ -396,6 +398,7 @@ async function openSandbox(lib, runId, runtime, settings) {
     const px = await docker(['run', '-d', '-i', '--name', sb.proxy, ...labels, '--network', sb.network, ...nodeMount,
       '--entrypoint', NODE_IN_BOX, '-e', `ORDEWELL_EGRESS=${egress}`, lib.image, '-e', entry]);
     must(px.code === 0, `gateway: ${px.stderr.trim()}`);
+    sb.ids.proxy = L.containerId(px.stdout);
     let ready = false;
     for (let i = 0; i < 40 && !ready; i++) {
       const logs = await docker(['logs', sb.proxy]);
@@ -432,6 +435,7 @@ async function openSandbox(lib, runId, runtime, settings) {
       ...L.boxRunArgs({ cpus: settings.cpus, memory: settings.memory, parallel: settings.parallel, driver }),
       ...nodeMount, ...mounts, ...envArgs, '--entrypoint', 'sleep', lib.image, 'infinity']);
     must(box.code === 0, `box: ${box.stderr.trim()}`);
+    sb.ids.box = L.containerId(box.stdout);
     const wrapper = `#!/bin/sh\nexec ${NODE_IN_BOX} ${ORDEWELL_IN_BOX}/node_modules/@ordewell/cli/dist/main.js "$@"\n`;
     const setup = await inBox(sb, ['sh', '-c', [
       'cat > /usr/local/bin/ordewell && chmod +x /usr/local/bin/ordewell',
@@ -1289,14 +1293,19 @@ function checkHiddenWorktree(lib, arm, copy, plan) {
  * else, no network, mount, key or Ordewell. Set up as the arm's box was before
  * its run, through the same steps, and checked to flatten to the same tree.
  */
+/** The eval box's container id per run id: it starts and ends inside scoring, after the arm's box is recorded. */
+const evalBoxIds = new Map();
+
 async function openEvalBox(lib, runId, settings) {
-  const sb = { name: `commit0-${runId}`, box: `commit0-${runId}-eval`, network: null, proxy: null };
+  const sb = { name: `commit0-${runId}`, box: `commit0-${runId}-eval`, network: null, proxy: null, ids: { box: null } };
   sb.close = async () => { await docker(['rm', '-f', sb.box]); openSandboxes.delete(sb); };
   openSandboxes.add(sb);
   const r = await docker(['run', '-d', '--init', '--name', sb.box, '--label', LABEL, '--network', 'none', '--user', '0:0',
     ...L.boxRunArgs({ cpus: settings.cpus, memory: settings.memory, parallel: settings.parallel, driver: L.driverId() }),
     '--entrypoint', 'sleep', lib.image, 'infinity']);
   must(r.code === 0, `eval box: ${r.stderr.trim()}`);
+  sb.ids.box = L.containerId(r.stdout);
+  evalBoxIds.set(runId, sb.ids.box);
   const setup = await inBox(sb, ['sh', '-c', 'git config --system user.name commit0-bench && git config --system user.email commit0-bench@localhost && git config --system --add safe.directory "*"']);
   must(check(lib.name, 'eval box', setup.code === 0, setup.code === 0 ? `${lib.image}, no network, no mount, no key, no Ordewell` : setup.stderr.trim()), 'the eval box cannot be set up');
   return sb;
@@ -1564,6 +1573,9 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       providerPin: opts.providerPin, referenceSpend: reference, dryRun: opts.dryRun, planOnly: opts.planOnly,
       effortA: L.isSingleAgent(arm.id) ? opts.effortA ?? null : null, efforts: L.effortCounts(plan), startedAt, endedAt: new Date().toISOString(),
     }),
+    runId,
+    // The full container ids each box started with, for tying a kernel OOM line to this run (bench/README.md, Commit0); null where a box never started.
+    containers: { box: sb?.ids.box ?? null, proxy: sb?.ids.proxy ?? null, evalBox: evalBoxIds.get(runId) ?? null },
     seed: opts.seed,
     batchDir: opts.batchDir,
     rehearsal: opts.rehearse ?? null,
