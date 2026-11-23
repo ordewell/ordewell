@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { classifyHttpFailure, ModelError } from '../ModelError';
 import { cameThroughWhole } from './cutShort';
+import { effortBeforeFirst } from '../effortFirst';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -108,11 +109,11 @@ export function createResponsesClient(options: AdapterOptions): ModelClient {
         body = requestBody(request, true);
         events = await open(body, signal);
       }
-      if (request.effort) {
-        const sent = body.reasoning?.effort;
-        yield { type: 'effort', ...(sent ? { sent } : {}), ...(refusesReasoning.has(request.model) ? { refused: true as const } : {}) };
-      }
-      yield* readStream(events, signal);
+      const sent = body.reasoning?.effort;
+      yield* effortBeforeFirst(
+        request.effort ? { type: 'effort' as const, ...(sent ? { sent } : {}), ...(refusesReasoning.has(request.model) ? { refused: true as const } : {}) } : undefined,
+        readStream(events, signal),
+      );
     },
   };
 }

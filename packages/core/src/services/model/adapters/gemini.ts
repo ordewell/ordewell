@@ -12,6 +12,7 @@ import {
 } from '@google/genai';
 import { v4 as uuidv4 } from 'uuid';
 import { classifyHttpFailure, ModelError } from '../ModelError';
+import { effortBeforeFirst } from '../effortFirst';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -99,8 +100,10 @@ export function createGeminiClient(options: AdapterOptions): ModelClient {
         refusesThinking.add(request.model);
         chunks = await open(request, false, signal);
       }
-      if (request.effort) yield effortSent(request.model, request.effort, refusesThinking.has(request.model));
-      yield* readStream(chunks, signal);
+      yield* effortBeforeFirst(
+        request.effort ? effortSent(request.model, request.effort, refusesThinking.has(request.model)) : undefined,
+        readStream(chunks, signal),
+      );
     },
   };
 }
