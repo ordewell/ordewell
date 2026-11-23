@@ -164,7 +164,10 @@ question is put depends on how the plan arrives.
   brief's criterion, only when the project builds or imports and the test
   command the slices' briefs run (the project's own, if they name none)
   collects its tests without an error, tests may still fail, and its report
-  shows each command and the end of its output. The opening task's note says
+  shows each command and the end of its output. Those two checks are named,
+  importing the package and a collection-only run of the test runner where
+  it has one, and the note says the full test suite is not part of them: the
+  slices and the closing check run the tests. The opening task's note says
   so, lets it edit any file for that alone, whichever task owns it, adding the
   smallest placeholder and listing each one with its owner, says to end
   `failed` when the project still does not import or collect for a cause in
@@ -526,3 +529,4 @@ conversation's as they stand.
 - 2026-11-23 — R1: a reply to a plan that fans out keeps an added wait only on a task the waiting one ran after as written, or between two tasks before the slices; a slice it cuts from the opening task waits again for the tasks every slice ran after.
 - 2026-11-23 — R1: a dropped added wait gives the task back what the dropped one ran after that it ran after as written, so the task is not left waiting for less than the plan as written and the reply together, and an ops, user or loop-check task set after the check is no longer refused for it; the log names as changed only a task whose waits differ.
 - 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.
+- 2026-11-24 — R5: the opening and gate notes name the two checks they ask for (importing, and a collection-only run) and say the full test suite is not part of them, since "run both" had an opening run the whole suite as its own criterion.

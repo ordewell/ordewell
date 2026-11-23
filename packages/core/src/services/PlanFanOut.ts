@@ -271,7 +271,8 @@ function sliceTable(shape: FanOutShape): string {
 
 /** What every task before the slices is done by, besides its brief: the slices start from the tree it lands. */
 const COLLECTS = 'the test command the slices\' briefs run (the project\'s own, if they name none) collects its tests without an error, though tests may still fail';
-const SHOWN = 'run both, a collection-only run where the test runner has one, and put each command and the last lines of its output in your report';
+// Two checks, named: a note that said "run both" had an opening run the whole suite as part of its own criterion.
+const SHOWN = 'run two checks, importing the package and a collection-only run of the test runner where it has one (pytest --collect-only, for example). The full test suite is not part of this check: the slices and the closing check run the tests. Put each command and the last lines of its output in your report';
 
 /**
  * The opening task's note: the slices wait for it, so it is short, it leaves
