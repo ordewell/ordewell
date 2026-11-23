@@ -19,6 +19,7 @@ import type {
   IsolationRun,
   IsolationView,
   IWorktreeIsolation,
+  PreservedWork,
   RepairWait,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
@@ -2353,6 +2354,19 @@ export class TaskOrchestrator {
       // be left unhandled because restarting the run threw.
       await Promise.all([resumed, started]);
     });
+  }
+
+  /**
+   * What a fresh attempt of the task starts from in an isolated run: the
+   * integration tip, never the earlier attempt's worktree (ADR-0013), whose
+   * unlanded work was last kept on `kept`, and whether a worktree of it is
+   * still kept for the start to replace. Null outside one, where an attempt
+   * starts in the checkout as it is.
+   */
+  freshStartOf(taskId: string): { readonly integrationBranch: string; readonly kept?: readonly PreservedWork[]; readonly keptWorktree: boolean } | null {
+    const integrationBranch = this.runs.integrationBranch;
+    if (!integrationBranch) return null;
+    return { integrationBranch, kept: this.runs.keptWorkOf(taskId), keptWorktree: this.runs.taskIsolation(taskId)?.state === 'kept' };
   }
 
   /**

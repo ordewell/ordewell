@@ -134,10 +134,16 @@ describe('reviewLongChain', () => {
     expect(svc.calls[0].call?.largestReply).toBe(false);
     expect(svc.calls[0].hint).toBe(chainReviewMessage(chain5(), longestChain(chain5())));
     expect(longestChain(out)).toHaveLength(3);
-    expect(out.find((x) => x.id === 'c')!.prompt).toBe('Wait for "T b", then fill in c.\n\n' + revisionNote(['"T b" (b)'], ['"T a" (a)']));
-    expect(out.find((x) => x.id === 'e')!.prompt).toBe('Do e.');
+    // The plan kept fans out four wide with no closing check: each role's note follows the revision note (ADR-0072 R5).
+    const [revised, shape] = out.find((x) => x.id === 'c')!.prompt!.split('\n\nPlan shape: ');
+    expect(revised).toBe('Wait for "T b", then fill in c.\n\n' + revisionNote(['"T b" (b)'], ['"T a" (a)']));
+    expect(shape).toMatch(/^this task is one of 5 slices that start once "T a" \(a\) has landed\./);
+    expect(out.find((x) => x.id === 'e')!.prompt).toMatch(/^Do e\.\n\nPlan shape: this task is one of 5 slices/);
     expect(usages(progress)).toEqual([{ ...usage, aggregate: true }]);
-    expect(log.map(text)).toEqual(['chain review: 5 -> 3, kept; 2 tasks changed: "T c" drops "T b" adds "T a"; "T d" drops "T c" adds "T a" [reply 2 tokens out]']);
+    expect(log.map(text)).toEqual([
+      'chain review: 5 -> 3, kept; 2 tasks changed: "T c" drops "T b" adds "T a"; "T d" drops "T c" adds "T a" [reply 2 tokens out]',
+      'fan-out: 4 at once, 1 before, 0 after, faults no-closing; role notes added',
+    ]);
   });
 
   it('keeps the first plan when the revision is not shorter, and says so', async () => {
@@ -176,6 +182,7 @@ describe('reviewLongChain', () => {
     expect(log.map(text)).toEqual([
       'chain review: 5, reply cut off at the output limit [reply 2 tokens out]; asked once more with the plan alone',
       'chain review: 5 -> 3, kept; 2 tasks changed: "T c" drops "T b" adds "T a"; "T d" drops "T c" adds "T a" [reply 3 tokens out]',
+      'fan-out: 4 at once, 1 before, 0 after, faults no-closing; role notes added',
     ]);
   });
 

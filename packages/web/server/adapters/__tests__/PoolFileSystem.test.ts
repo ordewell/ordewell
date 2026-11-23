@@ -137,6 +137,14 @@ describe('PoolFileSystem', () => {
       expect(result.success).toBe(true);
       expect(result.output).toContain('subdir/nested.txt');
     });
+
+    // A one-shot plan's slices are sized from these rows (PlanFanOut, ADR-0072 R6), read as the listed directory's.
+    it('lists a directory below the workspace relative to that directory, with ripgrep and without it', async () => {
+      for (const adapter of [fsAdapter, withoutRipgrep()]) {
+        expect(await adapter.glob('**/*', { path: 'subdir' })).toEqual({ success: true, output: 'nested.txt', truncated: false });
+        expect(await adapter.glob('**/nested.txt', { path: 'subdir' })).toEqual({ success: true, output: 'nested.txt', truncated: false });
+      }
+    });
   });
 
   describe('grep', () => {

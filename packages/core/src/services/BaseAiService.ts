@@ -26,6 +26,7 @@ import type { UsageRecord } from '../models/Usage';
 import { abortScope } from '../utils/abortScope';
 import { withTurnBudgets, type TurnBudgets } from './PlannerBudgets';
 import { isModelError, type EffortLevel } from './model';
+import { writtenToolCall } from './textCall';
 
 /** What a one-shot plan call reports besides its text. */
 export interface PlanTextReply {
@@ -41,6 +42,36 @@ export interface AbandonedPlanText {
 /** The research log's entry for a line Ordewell writes there itself. */
 export function systemEntry(content: string): ResearchLogEntry {
   return { id: `sys-${uuidv4()}`, type: 'system', content, timestamp: new Date().toISOString() };
+}
+
+/** The instruction a call written as text is answered with: short, since the model knows the tool. */
+function writtenCallNote(name: string): string {
+  return `[Ordewell] Your last reply wrote a tool call (${name}) as text, so it was not made. Make the call with the tool, not in your reply text.`;
+}
+
+/** The same, for a call written beside calls the reply made: those ran, and the model must not take the written one for one of them. */
+function writtenBesideNote(name: string): string {
+  return `[Ordewell] Your last reply also wrote a tool call (${name}) as text, so it was not made: only the calls you made through the tool ran. Make it with the tool, not in your reply text.`;
+}
+
+/** A note on a round, appended to its last result: the API history takes no message between a round and its results. */
+function appendNote(toolResults: ToolResult[], text: string): void {
+  const last = toolResults[toolResults.length - 1];
+  if (!last) return;
+  const note = `\n\n${text}`;
+  last.output += note;
+  last.totalChars += note.length;
+}
+
+/**
+ * What the turn's record says when the instruction did not help, or could not
+ * (a call made after the tool budget is spent never runs): nothing ran, and no
+ * surface reports the turn as done silently.
+ */
+function writtenCallRecord(name: string, budgetSpent = false): ResearchLogEntry {
+  return systemEntry(budgetSpent
+    ? `[Ordewell] The planner wrote a ${name} call as text after its tool budget was spent: the call was not executed.`
+    : `[Ordewell] The planner wrote a ${name} call as text, twice, and did not make it: the call was not executed.`);
 }
 
 /** How one plan-text call departs from the planner's own settings. */
@@ -156,6 +187,12 @@ export interface ResearchChat {
    * (ADR-0002). Undefined for a call that runs.
    */
   answered?(call: ToolCall): string | undefined;
+  /**
+   * The names of the tools this chat offers its model. Only a chat that runs
+   * the model's own tool calls has them: a reply of one that writes such a call
+   * out as text is answered (ADR-0070). A harness planner's chat has none.
+   */
+  offeredTools?(): ReadonlySet<string>;
 }
 
 /** Everything one conversation turn needs beyond the user message itself. */
@@ -470,16 +507,37 @@ export abstract class BaseAiService {
   }
 
   /**
+   * The tool a reply wrote out as text, when that is all it did: it made no
+   * call, the output limit did not cut it off (a half-written reply is the
+   * cut-off's to retry), and the chat offers tools to name.
+   */
+  private static writtenCallOf(chat: ResearchChat, turn: ResearchTurn): string | undefined {
+    if (turn.hasToolCalls || turn.finishReason === 'length') return undefined;
+    const offered = chat.offeredTools?.();
+    return offered && offered.size > 0 ? writtenToolCall(turn.text, offered) : undefined;
+  }
+
+  /**
+   * A tool a reply that did make calls wrote out as text besides: one it did
+   * not call. Its round runs, so no reply is asked for; the note rides on the
+   * round's results. A recorded supervisor wrote `message_task` this way, beside
+   * a decision it recorded, twice, and told the user both messages were sent.
+   */
+  private static writtenBesideOf(chat: ResearchChat, turn: ResearchTurn): string | undefined {
+    const offered = chat.offeredTools?.();
+    if (!offered || !turn.text.includes('<')) return undefined;
+    const made = new Set(turn.toolCalls.map((tc) => tc.name));
+    return writtenToolCall(turn.text, new Set([...offered].filter((name) => !made.has(name))));
+  }
+
+  /**
    * Countdown appended to the last tool result of the final few rounds, so the
    * model lands the turn on its own terms instead of being cut off exactly at
    * the budget boundary mid-exploration.
    */
   private static appendBudgetCountdown(toolResults: ToolResult[], remaining: number, wrapUpAction: string): void {
-    if (remaining <= 0 || remaining > 3 || toolResults.length === 0) return;
-    const note = `\n\n[research budget: only ${remaining} tool round${remaining === 1 ? '' : 's'} left this turn — prioritize the most important remaining lookups, then ${wrapUpAction}.]`;
-    const last = toolResults[toolResults.length - 1];
-    last.output += note;
-    last.totalChars += note.length;
+    if (remaining <= 0 || remaining > 3) return;
+    appendNote(toolResults, `[research budget: only ${remaining} tool round${remaining === 1 ? '' : 's'} left this turn — prioritize the most important remaining lookups, then ${wrapUpAction}.]`);
   }
 
   /**
@@ -549,53 +607,77 @@ export abstract class BaseAiService {
       // valid and the model is pushed to reply in prose. Bounded, because a
       // model could keep requesting tools forever.
       let wrapUpRounds = 0;
-      for (let step = 0; turn.hasToolCalls; step++) {
-        if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
-        if (step >= MAX_STEPS) {
-          // Budget exhausted while the model still wants tools. Dropping the
-          // calls here used to surface the model's preamble ("Let me read…")
-          // as the reply and leave dangling tool_calls in the API history.
-          if (wrapUpRounds >= 2) break;
-          wrapUpRounds++;
-          const notice = `Research tool budget for this turn is exhausted (${MAX_STEPS} rounds) — this call was NOT executed and no further tool calls will be. Reply to the user now using what you already learned: summarize your findings and ask how to proceed, ask your next question, or emit the plan JSON.`;
-          // These calls are answered without running. Reporting them as
-          // not-executed steps keeps the budget boundary visible; dropping
-          // them silently made a whole refused round look like it never
-          // happened on every surface.
-          for (const tc of turn.toolCalls) {
-            const step: ResearchStep = {
-              id: `rs-${Date.now()}-budget-${researchLog.length}`,
-              tool: tc.name as ResearchStep['tool'],
-              args: JSON.stringify(tc.args),
-              result: notice,
-              success: false,
-              outcome: 'not_executed',
-              toolCallId: tc.id,
-              timestamp: new Date().toISOString(),
-            };
-            researchLog.push(step);
-            onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
-            onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
+      let step = 0;
+      // The loop runs again, with the steps already spent, for the reply to the
+      // instruction a call written as text is answered with.
+      for (let asked = false; ; asked = true) {
+        for (; turn.hasToolCalls; step++) {
+          if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+          if (step >= MAX_STEPS) {
+            // Budget exhausted while the model still wants tools. Dropping the
+            // calls here used to surface the model's preamble ("Let me read…")
+            // as the reply and leave dangling tool_calls in the API history.
+            if (wrapUpRounds >= 2) break;
+            wrapUpRounds++;
+            const notice = `Research tool budget for this turn is exhausted (${MAX_STEPS} rounds) — this call was NOT executed and no further tool calls will be. Reply to the user now using what you already learned: summarize your findings and ask how to proceed, ask your next question, or emit the plan JSON.`;
+            // These calls are answered without running. Reporting them as
+            // not-executed steps keeps the budget boundary visible; dropping
+            // them silently made a whole refused round look like it never
+            // happened on every surface.
+            for (const tc of turn.toolCalls) {
+              const step: ResearchStep = {
+                id: `rs-${Date.now()}-budget-${researchLog.length}`,
+                tool: tc.name as ResearchStep['tool'],
+                args: JSON.stringify(tc.args),
+                result: notice,
+                success: false,
+                outcome: 'not_executed',
+                toolCallId: tc.id,
+                timestamp: new Date().toISOString(),
+              };
+              researchLog.push(step);
+              onProgress({ type: 'tool_call', tool: tc.name, toolArgs: step.args, toolCallId: tc.id });
+              onProgress({ type: 'tool_result', toolResult: notice, step, toolCallId: tc.id });
+            }
+            const calls = turn.toolCalls;
+            turn = await call(() => chat.sendToolResults(
+              calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
+              signal,
+            ));
+            continue;
           }
-          const calls = turn.toolCalls;
-          turn = await call(() => chat.sendToolResults(
-            calls.map((tc) => ({ name: tc.name, output: notice, truncated: false, totalChars: notice.length, id: tc.id })),
-            signal,
-          ));
-          continue;
+          const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
+          const beside = BaseAiService.writtenBesideOf(chat, turn);
+          if (beside !== undefined && last) {
+            onProgress({ type: 'text_retracted', segmentId: last.segmentId });
+            last = undefined;
+          }
+          const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
+          if (beside !== undefined) appendNote(toolResults, writtenBesideNote(beside));
+          researchLog.push(...logEntries);
+          BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
+          turn = await call(() => chat.sendToolResults(toolResults, signal));
         }
-        const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
-        const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
-        researchLog.push(...logEntries);
-        BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
-        turn = await call(() => chat.sendToolResults(toolResults, signal));
-      }
 
-      // A plain-reply turn (no tool calls) never passes through the loop
-      // above, so this is the first point it can notice an abort raised
-      // while its HTTP call was already in flight — without it, a stale
-      // turn classifies and returns as a normal plan/message after reset().
-      if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+        // A plain-reply turn (no tool calls) never passes through the loop
+        // above, so this is the first point it can notice an abort raised
+        // while its HTTP call was already in flight — without it, a stale
+        // turn classifies and returns as a normal plan/message after reset().
+        if (signal?.aborted) return { text: turn.text, researchLog, aborted: true, runs: runs() };
+
+        // A call written as markup is no finished reply (ADR-0070): it never
+        // ran, and a supervisor's wake-up would end as done with its note unsent.
+        const written = BaseAiService.writtenCallOf(chat, turn);
+        if (written === undefined) break;
+        if (asked || step >= MAX_STEPS) {
+          researchLog.push(writtenCallRecord(written, !asked));
+          break;
+        }
+        // What it wrote is taken back, not kept as narration before the reply.
+        if (last) onProgress({ type: 'text_retracted', segmentId: last.segmentId });
+        last = undefined;
+        turn = await call(() => chat.sendMessage(writtenCallNote(written), signal));
+      }
 
       // Forced break with nothing to show: degrade to a visible failure
       // instead of an empty planner bubble.
@@ -710,6 +792,7 @@ export abstract class BaseAiService {
       return next;
     };
     let turn = await send(() => chat.sendMessage(firstMessage, signal));
+    let askedForCall = false;
 
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal?.aborted) {
@@ -726,10 +809,22 @@ export abstract class BaseAiService {
       // second LLM call even when the plan was already in hand.
       const reply = classifyPlannerReply(turn.text, { runners, runnerModes, autonomousDefault });
       if (reply.kind === 'plan') {
+        for (const line of reply.notes) researchLog.push(systemEntry(line));
         return { tasks: reply.tasks, researchLog, researchResults };
       }
 
-      if (!turn.hasToolCalls) break;
+      if (!turn.hasToolCalls) {
+        const written = BaseAiService.writtenCallOf(chat, turn);
+        // On the last step the loop would end before reading the reply, so nothing asked for could run.
+        const lastStep = step + 1 >= MAX_STEPS;
+        if (written === undefined || askedForCall || lastStep) {
+          if (written !== undefined) researchLog.push(writtenCallRecord(written, !askedForCall));
+          break;
+        }
+        askedForCall = true;
+        turn = await send(() => chat.sendMessage(writtenCallNote(written), signal));
+        continue;
+      }
 
       const { toolResults, logEntries, resultsText } = await this.executeToolCalls(
         turn.toolCalls, fs, onProgress, fetcher, step, thinking, signal,
@@ -834,8 +929,13 @@ export abstract class BaseAiService {
       const after = longestChain(applied.tasks);
       const kept = after.length > 0 && after.length < chain.length;
       const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
-      const changed = applied.changes.map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}`);
-      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
+      // A task the rules gave its dependencies back to ends as the plan wrote it: it is counted below, not named as changed.
+      const changed = applied.changes.filter((c) => c.removed.length || c.added.length || c.restored?.length).map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.restored?.length ? `, kept as the closing check after ${c.restored.length} task${c.restored.length === 1 ? '' : 's'} the reply cut it from` : ''}`);
+      // ADR-0072 R1: what the reply could not change, counted.
+      const dropped = applied.changes.reduce((n, c) => n + (c.dropped?.length ?? 0), 0);
+      const openingKept = applied.changes.reduce((n, c) => n + (c.openingKept?.length ?? 0), 0);
+      const held = dropped || openingKept ? `, ${dropped} added wait${dropped === 1 ? '' : 's'} dropped, ${openingKept} opening wait${openingKept === 1 ? '' : 's'} kept` : '';
+      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${held}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
       return shaped(kept ? applied.tasks : tasks);
     } catch (err) {
       if (signal?.aborted) throw err;
@@ -879,6 +979,7 @@ export abstract class BaseAiService {
       2,
       runnerModes,
       autonomousDefault,
+      (line) => researchLog.push(systemEntry(line)),
     );
     return { tasks, researchLog };
   }

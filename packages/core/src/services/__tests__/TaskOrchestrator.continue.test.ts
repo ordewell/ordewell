@@ -120,10 +120,18 @@ describe('which tasks can be continued (ADR-0018, K1)', () => {
     expect(continuability({ ...old, assignedRunner: 'claude-code' }).ok).toBe(true);
   });
 
+  it('a task stopped mid-attempt, which is back to not started with its session saved', () => {
+    expect(continuability(plan({ status: 'pending', runnerSessionId: savedSessionId }))).toEqual({ ok: true, sessionId: 'sess-1' });
+  });
+
   it('not a task still running, waiting, or never run, nor a user task', () => {
-    for (const status of ['pending', 'in_progress', 'awaiting_user'] as const) {
+    for (const status of ['in_progress', 'awaiting_user'] as const) {
       expect(continuability(plan({ status, runnerSessionId: savedSessionId })).ok).toBe(false);
     }
+    expect(continuability(plan({ status: 'pending' }))).toEqual({
+      ok: false,
+      reason: 'Task "Parse JSON" cannot be continued: only a completed, failed, stopped or skipped task, or one paused on a usage limit, can be.',
+    });
     expect(continuability(plan({ type: 'user', status: 'completed', runnerSessionId: savedSessionId })).ok).toBe(false);
   });
 

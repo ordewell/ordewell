@@ -101,9 +101,17 @@ describe('chat-completions adapter: streams', () => {
         reasoning_content: 'The user wants the file read.',
       },
       { role: 'tool', tool_call_id: 'call_00_ds', content: '# Readme' },
-      // A turn without calls goes back without its reasoning, which DeepSeek refuses there.
-      { role: 'assistant', content: 'Read.' },
+      // DeepSeek refuses a request with tools that leaves out a turn's reasoning, one without calls too.
+      { role: 'assistant', content: 'Read.', reasoning_content: 'The user wants the file read.' },
     ]);
+    // Kimi refuses reasoning on a turn without calls, so only the tool-calling turn carries it there.
+    const kimi = requestBody('kimi', { ...BASE_REQUEST, tools: TOOLS, messages: [
+      { role: 'user', text: 'Read it.' },
+      { role: 'assistant', text: '', toolCalls: [complete.call], providerState: state.state },
+      { role: 'tool', results: [{ callId: 'call_00_ds', name: 'read_file', output: '# Readme' }] },
+      { role: 'assistant', text: 'Read.', providerState: state.state },
+    ] });
+    expect(kimi.messages.slice(1).map((m) => 'reasoning_content' in m)).toEqual([false, true, false, false]);
   });
 
   it('reads OpenRouter reasoning details, cache writes and its reported cost', async () => {

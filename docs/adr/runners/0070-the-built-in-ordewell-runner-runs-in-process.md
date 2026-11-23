@@ -137,14 +137,18 @@ is one runner per API provider, under the provider's own id and name.**
   was cut off again, and its task waited for input with its dependents behind it.
 - **A tool call written as text is not a finished reply either.** A reply with
   no tool call whose text, code spans and fences aside, opens a line with a
-  `<tool_call>` block whose JSON body names a tool offered in that request does
-  not end the turn: the text is never run, and the turn goes on with a note
+  `<tool_call>` block whose JSON body, or an `<invoke name="…">` block (bare,
+  in `<function_calls>`, or DeepSeek's `<｜DSML｜ invoke …>`), names a tool
+  offered in that request, or that is a JSON object naming one and its
+  arguments as the whole reply, does not end the turn: the text is never run, and the turn goes on with a note
   that the call was written as text and must be made through the tool-calling
   interface. Prose that only mentions or quotes the syntax, or names a tool the
   request did not offer, is a finished reply. Three in a row (the cut-off
   bound) fail the attempt through the runner's own `task_complete`, naming the
   cause. The model fell back to this when its tool channel stopped answering,
-  and its task waited for input until the supervisor restarted it.
+  and its task waited for input until the supervisor restarted it. The API
+  planner's turns use the same detector (`services/textCall.ts`)
+  ([ADR-0002](../planner/0002-planner-as-conversation-loop.md)).
 - **One neutral tool set**: `read`, `edit`, `write`, `shell`, `grep`, `glob`,
   then the task tools as native tools, `task_complete` and `read_task` (the
   token's `read`, renamed because `read` reads files here). The list is fixed
@@ -234,6 +238,43 @@ is one runner per API provider, under the provider's own id and name.**
     id (`:nitro`, `:floor`) is the user's choice and is left alone. Each usage
     report names the upstream (`provider`) and OpenRouter's generation id
     (`generationId`), so a run's records say which cache each call could read.
+  - **Earlier reasoning.** A reasoning model's turns go back with the reasoning
+    each produced, as its provider asks: DeepSeek's own API gets
+    `reasoning_content` on every assistant turn, since its thinking-mode guide
+    answers 400 to a request with tools that leaves any out; Kimi gets it only on
+    a turn that called tools, since it refuses it elsewhere; OpenRouter gets its
+    `reasoning_details`. Re-sent reasoning grows with every call, so the
+    `taskReasoningKept` setting (`ORDEWELL_TASK_REASONING_KEPT` wins when it is
+    not blank), read for built-in runner tasks alone, may cap it: `all`, the
+    default, sends every turn's, the request unchanged byte for byte; a whole
+    number N lets a request leave out the reasoning of older turns. The
+    assembler states this as a hint on the request (`ReasoningHint.keepFrom`,
+    the message from which every turn keeps its reasoning), never by rewriting
+    messages, since only an adapter knows what its provider takes. The boundary
+    moves in steps of 2N turns, so between moves every call's prefix is the call
+    before's and reads from cache, and the kept span runs from the latest N
+    turns to 3N - 1; a boundary that moved on every call would make the rest of
+    the prompt fresh input on every call. It is counted from the conversation
+    alone, so it only moves forward, a retry and a resumed session get the
+    boundary their transcript gives, and a compaction, which replaces the
+    conversation, starts the count over. The latest turn always keeps its
+    reasoning, whatever N. Each dialect honours the hint only where the
+    provider is known to take it. Chat-completions through OpenRouter honours it
+    for a model a probe has checked, on the upstreams that probe found answer a
+    conversation whose older turns carry no reasoning as they answer one that
+    keeps it all (`TAKES_OLDER_TURNS_BARE` in `chatCompletions.ts`, one model
+    today), and only when the upstream that served the turn before, which the
+    next call names first, is one of them; that call then also carries
+    `provider.only` with that list, so a fallback stays among them. An unknown
+    upstream, one not on the list, a model not probed and a routing shortcut in
+    the model id send everything. DeepSeek's own API and every other
+    chat-completions vendor ignore it. Anthropic Messages ignores it: its
+    extended-thinking guide asks for the thinking blocks of the current
+    tool-use turn, and a task is one such turn. Gemini ignores it: its thought
+    signatures are validated across the current turn's calls, and the thought
+    text is not sent back. OpenAI Responses ignores it: a function-call loop's
+    reasoning items are to be passed back, and the API itself drops those of
+    earlier turns.
 
 ## Key properties
 
@@ -282,6 +323,22 @@ is one runner per API provider, under the provider's own id and name.**
   a cut-off reply is a model call like any other: it counts against the limit,
   can carry a notice or the forced last call, and is compacted before like any
   step; a cut-off on the last allowed call ends the attempt at the step limit.
+  The count line carries the context fill beside the calls, `[calls: N of M;
+  context: 376k of 1.05M tokens (36%); compaction starts at 840k]` (the start
+  only when a `taskCompactAt` point is in force), and the summary a compaction
+  leaves says that work continues with room restored and gives the new fill: a
+  model told its context was compacted as it fills read that as running out, and
+  ended a task at 36% of its window. A notice on a step that compacts is
+  appended after the compaction, so its fill is the one the summary gives, not
+  the one it replaced. A `failed` or `blocked` report that gives its own
+  context or memory as exhausted ("my context window is full", "running out of
+  context", "context limit reached", "not enough context left"; not a library's
+  context object, a context full *of* something, a container's memory limit, a
+  tool's context-length error or a test's out of memory) while the fill is
+  under where compaction starts, or under 70% of the window with no point in
+  force, is answered with the real figures and goes on, as the budget one is.
+  The two answers are given once an attempt between them: each says the next
+  report is recorded, so a report citing both is held back once.
   The repeat guard nudges the third identical tool call
   in a row and ends the attempt as failed on the fourth. Messages to a running
   task reach the model between steps, an interrupt stops cooperatively, a usage
@@ -467,3 +524,9 @@ comes from that call.
   sent again.
 - 2026-11-20 — the API planner sends a call whose stream broke off part way
   again, the partial reply dropped, under the same retry policy.
+- 2026-11-21 — the count line shows the context fill, a compaction's summary says
+  work continues with room restored, and a report citing the attempt's own
+  context as exhausted with room left is answered once.
+- 2026-11-21 — a notice on a compacting step gives the fill after it, the context phrases take a limit reached or too little left, and the budget and context answers are given once between them.
+- 2026-11-21 — DeepSeek's own API gets every turn's reasoning back, not only a tool-calling turn's; `taskReasoningKept` (default `all`) lets a request hint a stepped boundary before which older reasoning may go, honoured only through OpenRouter on probed upstreams of a probed model.
+- 2026-11-22 — the written-call detector is shared with the API planner and takes `<invoke>`, DSML and whole-reply JSON calls besides `<tool_call>`.

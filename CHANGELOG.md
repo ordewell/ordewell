@@ -156,6 +156,166 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   a goal was refused, and **`/planner` probes the installed coding agents
   again**, so one installed while the TUI runs is offered without `/refresh`.
 
+## [0.14.8] - 2026-11-23
+
+### Changed
+
+- **The plan review can no longer make tasks wait on work they did not wait on
+  as the planner wrote the plan.** When the planner reviews a plan's dependency
+  chain, its reply may still flatten a chain, but a task may not now wait on a
+  task it never ran after, and the parallel tasks may not be left without the
+  opening task: a reply that does either is held to the plan's own ancestry and
+  opening. When the guard drops a wait the reply added, the task gets back the
+  ancestors it shared with the dropped task, so it does not end up waiting for
+  neither the old task nor the new one, and a reply for an ops, user or
+  loop-check task is no longer refused whole because of it. The review's log
+  names only the tasks whose waits really changed.
+- **The supervisor is told which actions its previous turn really carried
+  out.** Each wake-up opens with Ordewell's one-line account of the acts the
+  last turn executed. Wake-ups that merely ride ahead of a user's message are
+  not mistaken for that turn.
+
+### Fixed
+
+- **A stopped task can be continued, with the work it had committed.** Stop used
+  to leave the task not started, which Continue refused, so the only way on was
+  a fresh attempt from the integration tip, with the stopped attempt's commits
+  on a preserved branch nobody named. A stopped task that has a saved session is
+  now continued in its restored worktree, in the same session. A fresh retry's
+  answer now says plainly where it starts: the integration tip, and the
+  preserved branch that holds the stopped attempt's commits.
+- **A tool call written as text beside real tool calls is caught.** A supervisor
+  reply that made real tool calls and also wrote another call out as text (as
+  one model's own markup) was taken as fully done, so the written call never ran
+  while the user was told it was sent. The round's results now say that the
+  written call was not executed.
+
+## [0.14.7] - 2026-11-22
+
+### Changed
+
+- **A planner or supervisor reply that writes a tool call out as text is asked
+  again, not taken as done.** When the API planner (a conversation turn, a
+  supervisor wake-up or the one-shot plan answer) writes a tool call as text
+  instead of making it, Ordewell asks once more for the call, then records that
+  the call was not executed. Before, such a reply was taken as finished, and a
+  wake-up could end as done with the supervisor's note never sent. A sample
+  inside a code fence is not a call, and a call written after the turn's tool
+  budget is spent is not asked again, since an answer to it could not run. The
+  check the built-in runner already used is now shared with the planner, and it
+  also recognises `<invoke>` blocks, DSML and a whole reply that is a JSON call;
+  a built-in-runner task whose replies keep writing such a call now fails its
+  attempt instead of waiting for you.
+- **The supervisor is told a task's role when it is woken about that task.** A
+  wake about a task that is running long, near its context limit or failed names
+  the role the plan gave it (opening task, slice or closing check), taken from
+  the note on the task's own brief. A plan with no such note gives no role and no
+  licence.
+- **A wide one-shot plan's tasks get their role notes even when the plan has no
+  closing check.** The notes for the opening task, the slices and the closing
+  check are each written on their own. Before, a wide plan with no closing check
+  gave its opening task no note, so that task did not know it may fix imports
+  anywhere, and the supervisor could have it revert those edits. A last task that
+  waits for only some of the slices is not given the closing-check note, and its
+  slices are still counted.
+- **Test directories that no task names are handed to the closing check.** In a
+  one-shot plan, a directory of tests that no task's brief names used to go
+  unchecked. The closing check's note now lists such directories by name, with
+  the number of test files in each (a long list ends "and 1 more directory"). A
+  listing that takes too long is dropped and the plan goes ahead without it. A
+  bare word such as "tests" in a brief no longer hides a test directory.
+
+### Fixed
+
+- **One-shot planning no longer fails when the model mistypes a dependency
+  id.** A dependency that names no task used to fail planning and lose the run's
+  spend. An id spelled a little off (another letter case, spaces, a leading `#`
+  or `task `, padding zeros, or the task's title) is now read as the one task it
+  means, and only when exactly one task fits; the planner's research log says
+  which id was read as which task. Any other unknown id goes back to the model
+  once, with the task, the id, the nearest valid ids and the ids the plan has.
+  When the task is the plan's only one, the message says there is no other task
+  to depend on. A plan submitted or edited by the model's own tool call is not
+  rewritten: the model gets the error and fixes it.
+- **The plan review can no longer remove a plan's closing check.** When the
+  planner reviews a plan's dependency chain, its reply could cut a sweep down to
+  its opening task, which left the first plan's closing check with nothing to
+  wait for. The closing check now waits directly for the fewest tasks it lost,
+  and the rest of the reply stands.
+
+## [0.14.6] - 2026-11-22
+
+### Added
+
+- **A task can wait for a sibling's unlanded work without holding a slot
+  (`wait_for`).** A task that needs work a sibling has not landed yet names that
+  sibling, with the reason, instead of polling with `sleep` or building a
+  stand-in. Its attempt ends with no verdict, the plan gains the dependency (the
+  run's notices say so, and the supervisor or you may remove it), its slot is
+  free for other work, and once the sibling has landed the task continues in the
+  same session, on its own branch. The call is refused, with what to do instead,
+  for work that has already landed, work that may never land, a wait that would
+  close a cycle (two tasks waiting for each other, or through a parent and its
+  subtask), and a task that has already parked twice. The built-in shell now
+  refuses a long `sleep`, including one behind a wrapper or an interpreter flag,
+  and points at `wait_for`. Every runner that runs a change task can park, the
+  built-in runner and Pi included.
+- **The supervisor is woken when a task finds a defect in work that has
+  landed.** A task that reports a blocker in landed work now reaches the
+  supervisor at once, while the run can still land a fix, with one wake for
+  many citations. A task that is only waiting on work that has not landed yet
+  does not wake it: the task-completion contract tells a runner to list such a
+  wait as an `info` finding that cites the task, and to give the input that
+  shows a real defect.
+- **An optional setting sends less old reasoning back to the model.** A
+  reasoning model's turns go back to it with the reasoning each produced, so
+  every call re-sends all of it. `taskReasoningKept` in the settings file (or
+  `ORDEWELL_TASK_REASONING_KEPT`) can be a whole number N to keep the reasoning
+  of at least the latest N calls, moving the cut forward in steps so a call
+  still starts with the previous call's prompt. It is off by default (`"all"`),
+  applies to the built-in runner only, and takes effect only where the provider
+  is known to accept it (docs/planners-and-runners.md has the table); anywhere
+  else the call sends everything. A value that is not a whole number above zero
+  stops a task from starting, with a message saying what is accepted. Whether a
+  model works as well without its older reasoning is for you to try on a task
+  you can compare.
+
+### Changed
+
+- **The built-in runner shows its model how full its context is, and no longer
+  lets it stop over a context or budget it has not used.** The model's status
+  line carries the real context fill beside the call count. When it stops and
+  says its context is exhausted while room is left, or that its call budget is
+  spent while calls remain, the runner answers it with the real figures and the
+  turn goes on; a later, separate give-up is answered too, not only the first.
+  A phrase that only mentions another model's context limit is no longer taken
+  for the runner's own.
+- **A one-shot plan's largest slices start first, sized from the test files
+  they name.** A slice's size counts every test path its brief names: a file, a
+  directory (the files in it), a bare test-file name found from the working
+  directory, and a path spelled with a leading `./`, which counts once. Small
+  sibling slices are no longer merged, so a wide plan keeps the shape its
+  planner gave it. Every task before the slices is started ahead of them and
+  asked to leave a tree that imports and collects, and the opening task ends as
+  failed only for a cause in the repository's code.
+- **A running-long flag is scheduled from the last flag and dropped once it is
+  stale.** A handoff may cite any task of its plan, and a read-only task warns
+  where no sandbox is running.
+
+### Fixed
+
+- **A failure that blocks other tasks always reaches the supervisor.** At Act,
+  such a failure could sit unseen until the run went idle when it happened
+  during an outage of the model or the planner, or while the supervision level
+  was lowered and later raised again. It is now caught up, in one wake naming
+  every such failure, after an outage and when the level is set back to Act. A
+  hold the supervisor's own Stop created is not reported back to it as one it
+  was not told of, and a hold a failed restart leaves (the supervisor stops a
+  task, then the spawn of its retry fails) is caught up while other work runs.
+- **DeepSeek's reasoning is sent back on every turn.** The built-in runner
+  sent it only on a turn that called tools, and DeepSeek's own API answers a
+  request with tools that leaves any turn's reasoning out with an error.
+
 ## [0.14.5] - 2026-11-21
 
 ### Added
@@ -5020,7 +5180,10 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
+[0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
+[0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3

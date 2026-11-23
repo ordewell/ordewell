@@ -566,3 +566,37 @@ describe('the closing turn\'s wake for a blocking failure, whichever turn ends i
     expect(env.planner.calls[2].message).toContain(STILL);
   });
 });
+
+describe('a run whose supervisor stopped on failed wake-up turns (ADR-0029, ADR-0030)', () => {
+  it('concludes as its check fails with work waiting, the end kept for the supervisor; the level raised again wakes it as its closing turn, and concludes nothing twice', async () => {
+    const env = await supervised([task('t1', 1), task('t2', 2), task('t3', 3, { dependencies: ['t2'] })], { settings: { supervisorLevel: 'act' } });
+    waitForInput(env.run.of('t1'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await until(() => env.planner.calls.length === 1);
+    env.planner.calls[0].fail(new Error('API Error: Can\'t reach the API server (EAI_AGAIN)'));
+    await until(() => env.planner.calls.length === 2);
+    env.planner.calls[1].fail(new Error('API Error: Can\'t reach the API server (EAI_AGAIN)'));
+    await settled();
+    expect(env.session.planState!.runSettings!.unsupervised).toBeDefined();
+
+    env.run.of('t1').reportComplete({ status: 'done', summary: '' });
+    env.run.of('t2').reportComplete({ status: 'failed', summary: '', reason: 'the review found two bugs' });
+    await until(() => concluded(env).length > 0 && env.session.planTasks.find((t) => t.id === 't2')!.status === 'failed');
+    await settled();
+    const before = ends(env);
+    expect(before.at(-1)).toBe('run_concluded');
+    expect(env.planner.calls).toHaveLength(2);
+
+    changeSettings(env, { supervisorLevel: 'act' });
+    await until(() => env.planner.calls.length === 3);
+    expect(env.planner.calls[2].message).toMatch(/- task #2 "Task t2" failed: .*the review found two bugs; it blocks task #3 "Task t3"/);
+    expect(env.planner.calls[2].message).toMatch(/the run finished/);
+    env.planner.calls[2].finish(prose('Task 2 needs you.'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+    await settled();
+
+    expect(ends(env)).toEqual(before);
+  });
+});

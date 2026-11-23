@@ -269,10 +269,31 @@ to the level chosen:
   shapes, the supervisor's edits — so raising the level never resets a limit.
   Only the wake-up rate window is cleared; kept, it would trip again at the next
   wake-up.
-- **After a failure**, the change restarts supervision. Wake-ups not delivered
-  are handed over whole at its first turn, as they are after a user message.
+- **After a failure**, the change restarts supervision. Wake-ups not delivered,
+  what happened while it was stopped included, go at once: the change opens a
+  turn on them, as a user message would.
+- **The supervisor is caught up.** When the level becomes Act during a run, and
+  when a run starts or continues at Act, every task failed or held with tasks
+  waiting on it that no event the supervisor gathered was about since the task
+  last settled (it failed while the run was Off, or the plan was loaded with
+  it) is named in one wake, `failure_standing` with what waits on it, and the
+  change's turn takes the inputs already waiting with it. At a run's start the
+  wake waits out the merge window, so a task the start retries is not named. A
+  task the user stopped is left out, and below Act nothing is raised. It is one
+  wake per change or start, counted against the wake-up rate as any wake is,
+  and each task is named once: a turn that leaves it standing is woken for it
+  once more, as for any failure ([ADR-0057](0057-information-moves-by-reference.md) R4).
+- **Between runs** the record keeps what the run used, but a level the user
+  sets after a run that ended with its supervisor stopped replaces that stop:
+  `unsupervised` is cleared and the record takes the level chosen, so a run
+  that continues this one (a reset, the supervisor's own start) is supervised
+  at it. What was kept goes in a turn at once, and at Act what the supervisor
+  was never told goes as its closing turn's wake, which the run's end did not
+  get.
 
-It is a fresh consent, given after the notice that explained the lowering.
+It is a fresh consent, given after the notice that explained the lowering,
+which names `/settings` in the session as the way back: the change is
+nothing's but the user's to make.
 
 ### Autorun
 
@@ -550,3 +571,4 @@ the daemon reads it from there at generation.
 - 2026-11-08 — a start the run owes (a hold, queued start, repair, kept resume) is recorded in one ledger, and a user Stop withdraws queued starts, reopens and kept children; a restart does not.
 - 2026-11-09 — the planner is told its user's surface and the run settings in a SURFACE AND SETTINGS block of its turn, not its system prompt, and texts that tell it what the user does name the action and that surface's control rather than a button; with automatic merging on they say the merge happens by itself. A TUI user was told to press buttons the terminal does not have, and asked for merges already automatic.
 - 2026-11-15 — the surface is the one the client sending the message states, kept for a wake turn, with the lease's host only for a client that states none; a `cli` surface names `ordewell` commands. A CLI user, and a TUI joining a shared daemon, were told every surface's controls.
+- 2026-11-22 — the user's level after a failure catches the supervisor up: a task failed or held with work waiting that it was never told of is named in one wake as the level becomes Act, or as a run starts or continues at Act, and a level set between runs lifts the last run's stop. Seen live: after an outage stopped supervision, a loop's check failed with four tasks waiting, the user set Act again, and nothing told the supervisor.

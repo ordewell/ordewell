@@ -97,13 +97,32 @@ export function standingWords(block: StandingBlock['block']): string {
  */
 export function standingDetail({ taskId, block, holdsBack }: StandingBlock, describe: (taskId: string) => string, ended = false): string {
   const waiting = `${holdsBack} ${holdsBack === 1 ? 'task waits' : 'tasks wait'} on it`;
+  return `Task ${describe(taskId)} is still ${standingWords(block)} after your turn, and ${waiting}.${endedNote(ended)} ${releaseLine(block)}`;
+}
+
+/**
+ * The supervisor's line for a task failed or held with work waiting on it
+ * that it was never told of (ADR-0030, ADR-0057 R4): it stood while the
+ * supervisor was off or had stopped, or from before a reload. `why` is how it
+ * failed, `waiting` the tasks that wait on it, named.
+ */
+export function untoldDetail({ taskId, block, holdsBack }: StandingBlock, describe: (taskId: string) => string, waiting: string, why = '', ended = false): string {
+  const count = `${holdsBack} ${holdsBack === 1 ? 'task waits' : 'tasks wait'} on it`;
+  return `Task ${describe(taskId)} is ${standingWords(block)}${why ? ` (${why})` : ''}, and you were not told: ${count}${waiting ? `, ${waiting}` : ''}.${endedNote(ended)} ${releaseLine(block)}`;
+}
+
+function endedNote(ended: boolean): string {
+  return ended ? ' The run has ended, and an edit starts nothing: nothing runs until you release it.' : '';
+}
+
+/** The calls that release a task standing this way. */
+function releaseLine(block: StandingBlock['block']): string {
   const release = block.kind === 'waiting' && block.reason === 'checkpoint'
     ? 'answer it with answer_checkpoint'
     : block.kind === 'waiting'
       ? 'message_task its runner with what to do next, or call retry_task from "fresh" with a message, your note on what to do differently'
       : 'call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply';
-  const over = ended ? ' The run has ended, and an edit starts nothing: nothing runs until you release it.' : '';
-  return `Task ${describe(taskId)} is still ${standingWords(block)} after your turn, and ${waiting}.${over} Release it: ${release}; or skip_task it with your reason; or tell the user.`;
+  return `Release it: ${release}; or skip_task it with your reason; or tell the user.`;
 }
 
 /** One key per distinct set of holds: the same tasks, held the same way. */
@@ -113,6 +132,11 @@ export function runHoldsKey(holds: readonly RunHold[]): string {
 
 /** The commands that leave a task on hold, as an execution record names them. */
 const HOLDING_COMMANDS: ReadonlySet<ExecutionCommandName> = new Set<ExecutionCommandName>(['stop_task', 'revert_task', 'mark_not_done']);
+
+/** The task a call that went through left on hold, if it was such a call. */
+export function heldByCall(record: ExecutionRecord): string | undefined {
+  return record.outcome === 'done' && HOLDING_COMMANDS.has(record.command) ? record.task?.id : undefined;
+}
 
 const ACTOR_NAMES: Record<ExecutionRecord['actor'], string> = {
   user: 'the user',
@@ -126,7 +150,7 @@ const ACTOR_NAMES: Record<ExecutionRecord['actor'], string> = {
 export function heldBy(history: readonly ConversationMessage[] | undefined, taskId: string): string {
   for (let i = (history?.length ?? 0) - 1; i >= 0; i--) {
     const record = history![i].execution;
-    if (record?.outcome === 'done' && record.task?.id === taskId && HOLDING_COMMANDS.has(record.command)) return ACTOR_NAMES[record.actor];
+    if (record && heldByCall(record) === taskId) return ACTOR_NAMES[record.actor];
   }
   return 'Ordewell';
 }

@@ -6,6 +6,7 @@ import { reportEnded, scriptResultOf, taskReport } from './taskReport';
 import type { ApprovalDecision, ApprovalRequest, IApproval } from '../interfaces/IApproval';
 import type { IsolationMergeResult, IsolationRevertResult } from '../interfaces/IWorktreeIsolation';
 import { continuability } from './continuation';
+import { SELF_REPO } from './repoPath';
 import type { GuardTarget, GuardTrip } from './LoopGuards';
 import { STOPPED_BEFORE_START, type StartAdmission, type TaskOrchestrator } from './TaskOrchestrator';
 import type { ApprovalRecord } from './ApprovalRecord';
@@ -171,7 +172,7 @@ export interface WaitingRequest {
 export type RunReads = Pick<TaskOrchestrator,
   | 'isScheduling' | 'startsHeld' | 'hasLiveWork' | 'runHeld' | 'scheduledRun' | 'startsPending' | 'loopCarried' | 'awaitsResume' | 'advancesOnItsOwn'
   | 'getAttempt' | 'holdsSlot' | 'repairWait' | 'loopRunsOn' | 'startWaits' | 'revertScope' | 'awaitsCheckpoint'
-  | 'admitStart' | 'readyFailed' | 'startAtGate' | 'parkedNow'>;
+  | 'admitStart' | 'readyFailed' | 'startAtGate' | 'parkedNow' | 'freshStartOf'>;
 
 /** Who approved what to run (ADR-0029, ADR-0035); a start the seam consented to approves before it acts. */
 export type ApprovalReads = Pick<ApprovalRecord, 'planApproved' | 'isApproved' | 'waitsForApproval' | 'approve' | 'approvePlan'>;
@@ -1103,6 +1104,7 @@ export class ExecutionCommands {
     return {
       ...approval,
       act: async (stopped) => {
+        const before = how === 'retry' ? this.orchestrator.freshStartOf(task.id) : null;
         // The Retry button's own path: it continues a run that ended on a failure, and hands the task to a scheduler that runs.
         if (settled) await this.controls.retryTask(task.id, runOrigin(actor), note);
         // A Stop while the retry let go of the old worktree withdrew the start that would follow it.
@@ -1110,10 +1112,13 @@ export class ExecutionCommands {
         if (!this.running(task.id) && !(settled && this.orchestrator.isScheduling)) await this.host.startTask(task.id, actor, ...(note && !settled ? [note] : []));
         if (this.host.runBlocked()) return { message: voice.blockedRun };
         const verb = how === 'run' || nextRound ? 'Started' : 'Retrying';
+        const started = this.running(task.id);
+        const now = before && this.orchestrator.freshStartOf(task.id);
+        const where = before && now ? ` ${freshStartLine(before, now, started)}` : '';
         return {
-          message: this.running(task.id)
-            ? `${verb} ${label}${nextRound ? `, as round ${nextRound.round} of ${nextRound.maxRounds}` : ''}.`
-            : `${capitalize(label)} is back in the run and starts when a slot is free.`,
+          message: started
+            ? `${verb} ${label}${nextRound ? `, as round ${nextRound.round} of ${nextRound.maxRounds}` : ''}.${where}`
+            : `${capitalize(label)} is back in the run and starts when a slot is free.${where}`,
         };
       },
     };
@@ -1442,7 +1447,8 @@ export class ExecutionCommands {
         if (now?.status === 'awaiting_user' && now.awaitingReason === 'conflict') return { message: `Stopped the repair of ${label}: its merge conflict waits for you, and its work is kept. ${CONFLICT_ANSWERS}` };
         if (parked) return { message: `Stopped ${label}: it waited for other tasks' work and no longer goes on once that lands. It is held until it is retried or force started; a force start goes on in its session.` };
         if (task.type === 'script') return { message: `Stopped ${label}: what it was running was ended, and it is back to not started and held until it is retried. A retry runs its body again from the first step.` };
-        return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}` };
+        const goesOn = now && continuability(now).ok ? ` ${this.voiceOf(actor).goOnStopped}` : '';
+        return { message: `Stopped ${label}: it is back to not started and held until it is retried, and its open approvals were denied.${task.ops ? ' A retry is told what this attempt did.' : ''}${goesOn}` };
       },
     };
   }
@@ -1839,6 +1845,8 @@ interface Voice {
   passGate: string;
   /** What starts a task over that cannot go on in its saved session. */
   startOver: string;
+  /** The two ways on from a Stop of a task that saved its session: a fresh attempt starts from the integration tip, not from what the stopped one kept. */
+  goOnStopped: string;
   /** How a stopped run starts again. */
   startAgain: string;
   /** A Merge all that stopped, after why. */
@@ -1865,6 +1873,7 @@ function modelVoice(controls: SurfaceControls, mergesByThemselves: boolean): Voi
       ? `Automatic merging merges that work at the gate by itself; let it, or ask the user to force start it (${controls.forceStart}).`
       : `Ask the user to merge (${controls.merge}), or to force start it (${controls.forceStart}).`,
     startOver: 'A fresh retry (from "fresh") starts it over from its prompt.',
+    goOnStopped: 'retry_task from "session" goes on in its saved session with the work it kept; from "fresh" starts it over from its prompt.',
     startAgain: 'Start again with run_plan or run_task.',
     notMerged: 'Nothing was merged; tell the user, who resolves it.',
     blockedRun: 'Nothing started: the user\'s checkout has uncommitted changes, and the run waits for them to stash them or run without isolation. Tell them.',
@@ -1891,6 +1900,7 @@ const USER_VOICE: Voice = {
   landKept: 'Once git can commit, land its work: it runs nothing again.',
   passGate: 'Merge all first, or force start it.',
   startOver: 'Retry starts it over from its prompt.',
+  goOnStopped: 'Continue goes on in its saved session with the work it kept; Retry starts it over from its prompt.',
   startAgain: 'Run the plan or a task to start again.',
   notMerged: 'Nothing was merged.',
   blockedRun: 'Nothing started: your checkout has uncommitted changes. Stash them, or run without isolation.',
@@ -1949,6 +1959,27 @@ function scriptsShown(approves: readonly Located[]): string {
     const body = located.task.type === 'script' ? scriptBodyOf(located.task) : null;
     return body ? [`${capitalize(describe(located))}:\n${scriptBodyText(body)}`] : [];
   }).join('\n\n');
+}
+
+type FreshStart = NonNullable<ReturnType<RunReads['freshStartOf']>>;
+
+/**
+ * Where a fresh retry's attempt starts, for its caller: a supervisor once told a
+ * fresh attempt to build on "the work already committed in its worktree",
+ * which was on a preserved branch instead, and the attempt redid it unseen.
+ * `before` is read before the retry let go of anything, so only work this
+ * retry kept is named as the earlier attempt's.
+ */
+function freshStartLine(before: FreshStart, now: FreshStart, started: boolean): string {
+  const from = `It starts from the integration tip, branch \`${now.integrationBranch}\`, not from the earlier attempt's worktree`;
+  if (now.kept && now.kept !== before.kept) {
+    const branches = now.kept.map((kept) => `\`${kept.branch}\`${kept.repo === SELF_REPO ? '' : ` in repository \`${kept.repo}\``}`);
+    const one = branches.length === 1;
+    return `${from}: the work that attempt had not landed is on branch${one ? '' : 'es'} ${branches.join(', ')}, not in the new worktree. `
+      + `If it should build on that work, tell it with message_task to merge ${one ? 'that branch' : 'those branches'}.`;
+  }
+  if (!started && before.keptWorktree) return `${from}: as it starts, the work that attempt had not landed is kept on a branch under \`ordewell-preserved/\`, which a notice names.`;
+  return `${from}.`;
 }
 
 function noPromptRefusal(label: string, task: Pick<Task, 'type'>): string {
