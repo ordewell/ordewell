@@ -142,6 +142,25 @@ describe('a wake-up inside its debounce window across a daemon restart', () => {
   });
 });
 
+describe('the wake policy a reload restored (ADR-0029)', () => {
+  // Recorded: a reload showed the saved attention and sinceLast emptied, which is the decision: they go out once due, into the waiting inputs.
+  it('goes out once due into the waiting inputs, the policy itself left empty and no turn opened', async () => {
+    const env = await supervised([task('t1', 1)]);
+    waitForInput(env.run.of('t1'));
+    await settled();
+    const saved = savedPlan(env);
+    expect(saved.supervision!.wake!.policy.attention).toHaveLength(1);
+
+    const { restarted, planner } = reload(saved);
+    await settled();
+    await vi.advanceTimersByTimeAsync(WAKE_DEBOUNCE_MS);
+
+    expect(planner.calls).toHaveLength(0);
+    expect(restarted.planState!.pendingTurns).toEqual([expect.objectContaining({ source: 'supervisor', text: expect.stringContaining('is waiting for input') })]);
+    expect(restarted.planState!.supervision!.wake!.policy).toEqual({ attention: [], sinceLast: [] });
+  });
+});
+
 describe('a user-started run', () => {
   it('still clears the memory a restart restored', async () => {
     const env = await failedOnce({ supervisorRetryLimit: 1 });
