@@ -187,6 +187,41 @@ describe('PlanGraph.repairOrder', () => {
     expect(ids(r)).toBe('"DEP" would have to run before "RUN", which is running and cannot be moved');
   });
 
+  it('names the pinned task that is stuck, not the first one with a dependency', () => {
+    // P1 waits on A, listed before it; P2 waits on X, listed after it, with no slot before P2 left for X.
+    const r = PlanGraph.repairOrder([
+      task('a', { order: 1, status: 'completed' }),
+      task('p1', { order: 2, status: 'completed', dependencies: ['a'] }),
+      task('p2', { order: 3, status: 'in_progress', dependencies: ['x'] }),
+      task('x', { order: 4 }),
+    ]);
+    expect(ids(r)).toBe('"X" would have to run before "P2", which is running and cannot be moved');
+  });
+
+  it('names what a stuck pinned task waits on through a task between them', () => {
+    // RUN waits on MID, listed before it, which waits on LATE, listed after it.
+    const r = PlanGraph.repairOrder([
+      task('done', { order: 1, status: 'completed' }),
+      task('mid', { order: 2, dependencies: ['late'] }),
+      task('run', { order: 3, status: 'in_progress', dependencies: ['done', 'mid'] }),
+      task('late', { order: 4 }),
+    ]);
+    expect(ids(r)).toBe('"LATE" would have to run before "RUN", which is running and cannot be moved');
+  });
+
+  it('names the pinned task whose slot cannot be met, past an earlier one whose dependency can move up', () => {
+    // P1 waits on X listed after it, but X can take slot 1; P2 cannot fit both Z and W before slot 4.
+    const r = PlanGraph.repairOrder([
+      task('m', { order: 1 }),
+      task('p1', { order: 2, status: 'completed', dependencies: ['x'] }),
+      task('x', { order: 3 }),
+      task('p2', { order: 4, status: 'in_progress', dependencies: ['z', 'w'] }),
+      task('z', { order: 5 }),
+      task('w', { order: 6 }),
+    ]);
+    expect(ids(r)).toMatch(/^"(Z|W)" would have to run before "P2", which is running and cannot be moved$/);
+  });
+
   it('moves a running task up past a re-armed waiter, leaving its completed dependent where it is', () => {
     // W was completed, marked not done and retried; C (completed) depends on it; W parks on running Z.
     const r = PlanGraph.repairOrder([

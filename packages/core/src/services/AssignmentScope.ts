@@ -54,7 +54,10 @@ export function assignmentIssue(task: AssignedTask, scope: AssignmentScope): Ass
   if ((task.type !== 'ai' && task.type !== 'delegated') || OVER.has(task.status)) return null;
   if (!scope.enabledRunners.includes(task.assignedRunner)) return { kind: 'runner-off', runner: task.assignedRunner };
   const model = task.assignedModel;
-  const allowed = effectiveAllowlist(scope.allowlist[task.assignedRunner] as string[] | undefined, task.assignedRunner, scope.models as Partial<Record<RunnerId, DiscoveredModel[]>> | undefined);
+  // A held catalog can lack this runner's discovery, and an empty list here proves nothing against an
+  // allowlisted id, so the flag reads the allowlist as it would with no catalog at all.
+  const models = scope.models?.[task.assignedRunner]?.length ? scope.models as Partial<Record<RunnerId, DiscoveredModel[]>> : undefined;
+  const allowed = effectiveAllowlist(scope.allowlist[task.assignedRunner] as string[] | undefined, task.assignedRunner, models);
   if (model && allowed && !allowed.includes(model.modelId)) {
     return { kind: 'model-off-list', runner: task.assignedRunner, modelId: model.modelId, modelLabel: model.modelLabel || model.modelId };
   }

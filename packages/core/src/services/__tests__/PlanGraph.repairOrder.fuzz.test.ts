@@ -105,4 +105,75 @@ describe('PlanGraph.repairOrder against a brute-force oracle', () => {
     }
     expect(bad.slice(0, 6)).toEqual([]);
   });
+
+  it('accepts exactly when a valid order exists in larger, mostly sorted plans, and refuses naming what a pinned task waits on', () => {
+    const r = rng(99);
+    const bad: string[] = [];
+    let refusals = 0;
+    for (let iter = 0; iter < 6000; iter++) {
+      const n = 6 + Math.floor(r() * 9);
+      const ids = Array.from({ length: n }, (_, i) => String.fromCharCode(97 + i));
+      const rank = shuf([...ids], r);
+      const density = 0.05 + r() * 0.3;
+      const tasks = ids.map((id) => {
+        const s = r();
+        const status = s < 0.25 ? 'completed' : s < 0.4 ? 'in_progress' : 'pending';
+        return createTask({ id, title: id.toUpperCase(), prompt: 'p', assignedRunner: 'claude-code', dependencies: rank.slice(0, rank.indexOf(id)).filter(() => r() < density), status: status as Task['status'] });
+      });
+      // A real plan is close to its dependency order: a topological one with a few swaps.
+      const listed = [...tasks].sort((a, b) => rank.indexOf(a.id) - rank.indexOf(b.id));
+      for (let k = 0; k < 1 + Math.floor(r() * 3); k++) {
+        const i = Math.floor(r() * n), j = Math.floor(r() * n);
+        [listed[i], listed[j]] = [listed[j], listed[i]];
+      }
+      const plan = listed.map((t, i) => ({ ...t, order: i + 1 }));
+
+      const res = PlanGraph.repairOrder(plan);
+      const desc = describeOrder(plan);
+      if ('error' in res) {
+        refusals++;
+        if (solvable(plan)) bad.push(`refused but solvable: ${desc} -> ${res.error}`);
+        const named = /^"(\w+)" would have to run before "(\w+)"/.exec(res.error);
+        const dep = named && plan.find((t) => t.title === named[1]);
+        const pin = named && plan.find((t) => t.title === named[2]);
+        if (!dep || !pin || !pinned(pin) || !reaches(plan, pin.id, dep.id) || dep === pin) bad.push(`refusal names no pinned task and what it waits on: ${desc} -> ${res.error}`);
+      } else if (!valid(plan, res.tasks)) bad.push(`invalid: ${desc} -> ${res.tasks.map((t) => t.id).join('')}`);
+      else if (valid(plan, plan) && res.moves) bad.push(`moved an already valid order: ${desc} -> ${res.moves}`);
+    }
+    expect(refusals).toBeGreaterThan(0);
+    expect(bad.slice(0, 8)).toEqual([]);
+  });
+
+  it('leaves a long valid chain with many pinned tasks as it is', () => {
+    const chain = Array.from({ length: 300 }, (_, i) => createTask({
+      id: `t${i}`, title: `T${i}`, prompt: 'p', assignedRunner: 'claude-code', order: i + 1,
+      dependencies: i > 0 ? [`t${i - 1}`] : [], status: i % 3 === 0 ? 'completed' : 'pending',
+    }));
+    const res = PlanGraph.repairOrder(chain);
+    expect('tasks' in res && res.moves).toBeNull();
+  });
 });
+
+// Whether a valid order exists, by backtracking over which tasks are placed, for lists too long for `perms`.
+function solvable(list: Task[]): boolean {
+  const was = new Map(list.map((t, i) => [t.id, i]));
+  const ids = new Set(list.map((t) => t.id));
+  const pinOrder = list.filter(pinned).map((t) => t.id);
+  const done = new Set<string>();
+  const dead = new Set<string>();
+  const go = (pos: number, pi: number): boolean => {
+    if (pos === list.length) return true;
+    const key = [...done].sort().join(',');
+    if (dead.has(key)) return false;
+    for (const t of list) {
+      if (done.has(t.id) || t.dependencies.some((d) => ids.has(d) && !done.has(d))) continue;
+      if (pinned(t) && (pinOrder[pi] !== t.id || pos > was.get(t.id)!)) continue;
+      done.add(t.id);
+      if (go(pos + 1, pinned(t) ? pi + 1 : pi)) return true;
+      done.delete(t.id);
+    }
+    dead.add(key);
+    return false;
+  };
+  return go(0, 0);
+}
