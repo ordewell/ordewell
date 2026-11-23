@@ -1,4 +1,4 @@
-import { NO_TURN, closeTurn, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
+import { NO_TURN, closeTurn, everyTaskPassed, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollGrowth, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -552,6 +552,13 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'notice':
       if (stale(state, action.sessionId)) return step(state);
       return step(say(state, action.level === 'error' ? 'error' : 'system', action.message, !action.holdPlace));
+
+    // Only the plan at the top ends a run: a child plan's end on screen is one
+    // task of a run still going. Whether this machine still owes the notice is
+    // the runtime's to ask, since it reads a file.
+    case 'runConcluded':
+      if (stale(state, action.sessionId) || state.child || !everyTaskPassed(action.summary)) return step(state);
+      return step(state, [{ type: 'firstRunFeedback', summary: action.summary }]);
 
     case 'childTree':
       return step(childTreeArrived(state, action.sessionId, action.children));

@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import {
   clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
-  type RunnersResponse,
+  type RunnersResponse, type ExecutionSummary,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
@@ -13,6 +13,7 @@ import type { Action, Effect } from './reducer';
 import { answerWords, type ChatRestored, type MergeYes } from './reducers/shared';
 import type { SessionView } from './state';
 import { closeChildLink, openChildLink, sessionLink, shownSession } from './sessionLink';
+import { FIRST_RUN_FEEDBACK_LINE } from './firstRunFeedback';
 
 /**
  * The slice of the daemon client the TUI needs. Derived from `ApiClient` rather
@@ -82,6 +83,13 @@ export interface EffectDeps {
     plan(): UpdatePlanView;
     run(): Promise<void>;
   };
+  /**
+   * Whether this machine still owes the first-run feedback notice, claiming it
+   * if so (core's `claimFirstRunFeedback`, ADR-0075). Absent, it never shows.
+   */
+  claimFirstRunFeedback?(summary: ExecutionSummary): boolean;
+  /** Opens `url` in the person's browser, resolving to whether one could be started. Absent, none can. */
+  openLink?(url: string): Promise<boolean>;
 }
 
 type UpdatePlanView = Extract<Action, { type: 'updatePlanned' }>['plan'];
@@ -939,6 +947,20 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
 
     case 'selfUpdate':
       await deps.update?.run();
+      return;
+
+    // Held in place: a notice must not move the conversation someone is reading.
+    case 'firstRunFeedback':
+      if (deps.claimFirstRunFeedback?.(effect.summary)) dispatch({ type: 'notice', message: FIRST_RUN_FEEDBACK_LINE, holdPlace: true });
+      return;
+
+    case 'openLink':
+      dispatch({
+        type: 'notice',
+        message: await deps.openLink?.(effect.url)
+          ? `Opened ${effect.url} in your browser.`
+          : `Could not open a browser from this terminal: open ${effect.url} yourself.`,
+      });
       return;
   }
 }

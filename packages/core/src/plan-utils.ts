@@ -11,7 +11,9 @@ export { DaemonRefusal, refusalOf } from './utils/daemonRefusal';
 // Which agent tools write a file, so a surface's summary of a run of calls
 // counts an edit the way a row's diff is decided.
 export { isFileEditTool } from './services/harness/agentTools';
-export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY } from './services/SessionMessage';
+export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY, everyTaskPassed } from './services/SessionMessage';
+// The first-run feedback notice's words and links (ADR-0075), which a renderer draws.
+export { FIRST_RUN_FEEDBACK, FEEDBACK_DISCUSSION_URL, REPOSITORY_URL, type FeedbackAction } from './services/feedbackNotice';
 export { capConflictFiles } from './services/conflictFiles';
 // What the planner's decision record still holds (ADR-0067): a surface shows it without the superseded entries.
 export { live as standingRecord } from './services/decisionRecord';

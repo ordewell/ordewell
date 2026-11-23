@@ -1871,6 +1871,17 @@ desktop's main process), never in the daemon, and never holds up a start.
 *Avoid:* "telemetry" or "analytics" (nothing about use is sent), "auto-update"
 (it only tells; it installs nothing), "phone home".
 
+**First-run feedback notice** (`claimFirstRunFeedback`, `FIRST_RUN_FEEDBACK`;
+ADR-0075) — the one notice that asks how Ordewell went, shown once per machine
+at the end of the first run whose every task passed (`everyTaskPassed` on the
+summary `run_concluded` carries), on the surface the person is at: a line in the
+TUI's conversation with `/feedback` and `/star`, a banner in the desktop app, an
+information message in VS Code. `first-run-feedback.json` in `globalDataDir()`
+is its record, created before it shows, so no surface on the machine shows it
+again. It sends nothing, never shows during a run, in a headless command, without
+a TTY or under `CI`, and `ORDEWELL_NO_FEEDBACK_NOTICE` turns it off.
+*Avoid:* "survey", "rating prompt", "nag" (it asks once and records no answer).
+
 **Spawn toolkit** — the shared process policy behind the runner adapters:
 `planDirectLaunch` (`utils/launch.ts`), runner environment cleanup
 (`services/harness/runnerEnv.ts`), and process-group launch and disposal

@@ -10,6 +10,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Added
 
+- **The first run that passes asks how it went, once.** The first time on a
+  machine that a run ends with every task passed, the terminal UI, the desktop
+  app or VS Code, whichever ran it, shows one notice: Ordewell is open source
+  and built in the open, and feedback from a first run is what it needs most.
+  Tell us how it went opens the feedback discussion and Star on GitHub the
+  repository, in the browser; the desktop's banner also has Dismiss, the TUI
+  names `/feedback` and `/star`, which stay as commands, and VS Code's message
+  closes as any does. It is recorded in `~/.ordewell/first-run-feedback.json`
+  before it shows, so no surface on the machine shows it again, whatever you
+  pick. It sends nothing, never shows during a run, in a headless command,
+  without a terminal or in CI, and `ORDEWELL_NO_FEEDBACK_NOTICE=1` turns it
+  off (ADR-0075).
 - **VS Code opens Ordewell once, with a walkthrough.** The first activation
   after install or this upgrade reveals the Ordewell view, and *Get started
   with Ordewell* (**Welcome: Open Walkthrough...**) has three steps: open the

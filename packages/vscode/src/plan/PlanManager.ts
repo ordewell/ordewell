@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  type ExecutionCommand, type OverrideDirection,
+  type ExecutionCommand, type ExecutionSummary, type OverrideDirection,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
@@ -47,6 +47,8 @@ export interface PlanManagerDeps {
   sendRunSettings: () => void;
   /** Redraw the planner list after a re-probe changed the verdict, so the pill stops saying signed out. */
   refreshPlannerState?: () => Promise<void>;
+  /** A run's end stood with every task passed: the first-run feedback notice, if the machine still owes it (ADR-0075). */
+  firstRunFeedback?: (summary: ExecutionSummary) => void;
   log: (msg: string) => void;
 }
 
@@ -667,6 +669,9 @@ function applySessionCue(cue: SessionCue, deps: PlanManagerDeps): void {
       return;
     case 'commands':
       chatProvider.postMessage({ type: 'taskCommands', taskId: cue.taskId, commands: latestTaskCommands(session, cue.taskId) });
+      return;
+    case 'passed':
+      deps.firstRunFeedback?.(cue.summary);
       return;
     default: {
       const exhaustive: never = cue;

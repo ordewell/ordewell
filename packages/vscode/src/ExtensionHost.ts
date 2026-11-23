@@ -24,7 +24,7 @@ import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from './adapters/VsCodeNotification';
-import type { CodexSandboxAvailability, IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
+import type { CodexSandboxAvailability, ExecutionSummary, IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
 import { plannerSettingProblem } from './plannerSetting';
 
 // A VS Code layout preference, not a run setting: it lives in globalState rather
@@ -73,6 +73,8 @@ export interface ExtensionServices {
   accountLimits?: AccountLimitMonitor;
   /** Reads the workspace's repositories and branches for the startup view (ADR-0013); absent, the view shows none. */
   isolationPreview?: IIsolationPreview;
+  /** The first-run feedback notice at a run's passed end (ADR-0075); absent, as in a test, it never shows. */
+  firstRunFeedback?: (summary: ExecutionSummary) => void;
 }
 
 export interface ExtensionHost {
@@ -181,6 +183,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     saveCurrentSession: saveSession,
     sendRunSettings,
     refreshPlannerState: () => planner.sendState(),
+    ...(services.firstRunFeedback ? { firstRunFeedback: services.firstRunFeedback } : {}),
     log,
   };
 

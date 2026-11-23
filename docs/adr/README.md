@@ -390,6 +390,7 @@ Windows, the per-workspace environment and what Ordewell sends from the machine.
 | [0048](platform/0048-a-daily-version-check-with-a-notice-first-and-one-install-per-machine.md) | A daily version check, with a notice first and one install per machine | accepted | — | [0065](surfaces/0065-the-cli-also-ships-as-a-standalone-node-binary.md) |
 | [0051](platform/0051-opencode-go-limits-from-the-selected-login-read-in-place.md) | OpenCode Go limits come from the selected login, read in place | accepted | — | — |
 | [0061](platform/0061-held-secrets-are-hidden-exactly-and-agent-text-by-name-in-depth.md) | Held secrets are hidden exactly at every sink; agent text is redacted by name as defence in depth | accepted | — | — |
+| [0075](platform/0075-the-first-run-that-passes-asks-for-feedback-once-per-machine.md) | The first run that passes asks for feedback, once per machine, and sends nothing | accepted | — | — |
 
 ### Retired numbers
 
