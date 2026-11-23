@@ -3611,3 +3611,35 @@ test('a pair whose arms ran with different task settings is not valid; the batch
   assert.deepEqual(L.batchRecord({ jobs: 1, overlapped: false, taskSettings: b.taskSettings, runs: [] }).taskSettings, { taskReasoningKept: 5, taskCompactAt: 9000 });
   assert.deepEqual(L.batchRecord({ jobs: 1, overlapped: false, runs: [] }).taskSettings, {});
 });
+
+test('oomAttribution: a kernel memcg line names a docker scope by full container id, and each is tied to the run whose record holds that id', () => {
+  const box = 'a'.repeat(64);
+  const proxy = 'b'.repeat(63) + '1';
+  const evalBox = 'c'.repeat(64);
+  const other = 'd'.repeat(64);
+  const runs = [
+    { runId: 'r1', library: 'lib', arm: 'A', containers: { box, proxy, evalBox } },
+    { runId: 'r2', library: 'lib', arm: 'B', containers: { box: other, proxy: null, evalBox: null } },
+  ];
+  const stranger = 'e'.repeat(64);
+  const text = [
+    `Nov 23 10:00:01 h kernel: Memory cgroup out of memory: Killed process 42 (node) total-vm:1kB, anon-rss:2kB, oom_memcg=/system.slice/docker-${box}.scope`,
+    `Nov 23 10:00:02 h kernel: oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=docker-${evalBox}.scope,mems_allowed=0,oom_memcg=/system.slice/docker-${evalBox}.scope,task_memcg=/system.slice/docker-${evalBox}.scope,task=pytest,pid=7,uid=0`,
+    `Nov 23 10:00:03 h kernel: oom-kill:constraint=CONSTRAINT_MEMCG,oom_memcg=/system.slice/docker-${stranger}.scope,task=x`,
+    'Nov 23 10:00:04 h kernel: something unrelated',
+  ].join('\n');
+  const got = L.attributeOomKills(text, runs);
+  assert.deepEqual(got.map((k) => [k.containerId, k.role, k.runId ?? null]), [
+    [box, 'box', 'r1'],
+    [evalBox, 'evalBox', 'r1'],
+    [stranger, null, null],
+  ]);
+  assert.equal(L.attributeOomKills('', runs).length, 0);
+});
+
+test('containerIds: only a full 64-hex id from the engine is recorded; anything else is null', () => {
+  const id = '0123456789abcdef'.repeat(4);
+  assert.equal(L.containerId(`${id}\n`), id);
+  assert.equal(L.containerId('abc123'), null);
+  assert.equal(L.containerId('Error: no such container'), null);
+});

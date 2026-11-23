@@ -623,6 +623,25 @@ alone keeps its key delta. Beside the recorded sum, `perArm` holds each arm's
 `referenceTokens`, and `pairs` says for each library with both arms whether they
 ran under one call budget.
 
+### Tying a kernel OOM kill to its run
+
+The box's memory quota is a cgroup limit, so a run that outgrows it is killed by
+the kernel, and the kernel's line names a docker scope by full container id
+(`oom_memcg=/system.slice/docker-<64 hex>.scope`), not by the box's name. Each
+`result.json` therefore records `runId` and `containers`: the full ids of the
+arm's box, its egress gateway (`proxy`) and the scoring box (`evalBox`), read
+from `docker run -d` as each starts, and null for one that never started. The
+driver does not read `journalctl -k` itself; to match its lines, after a batch:
+
+```bash
+journalctl -k --no-pager | grep -iE 'oom|out of memory' > kernel-oom.txt
+node -e "import('./bench/commit0/lib.mjs').then(L=>{const fs=require('fs');const runs=fs.readdirSync(process.argv[1]).map(d=>{try{return JSON.parse(fs.readFileSync(process.argv[1]+'/'+d+'/result.json','utf8'))}catch{return null}}).filter(Boolean);console.log(JSON.stringify(L.attributeOomKills(fs.readFileSync('kernel-oom.txt','utf8'),runs),null,2))})" <runs dir>
+```
+
+Each hit carries `containerId`, the `role` (`box`, `proxy` or `evalBox`) and the
+run's `runId`, `library` and `arm`; a scope no run holds has no `runId`. Or grep
+the 64-hex id from a kernel line through the runs' `result.json` files.
+
 ### Score over time
 
 A finished run keeps the git history of its work, so its score can be read at
