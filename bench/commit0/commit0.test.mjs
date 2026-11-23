@@ -2807,6 +2807,88 @@ test('judgeFinal: the final point must score as result.json does', () => {
   assert.match(T.judgeFinal({ resultTests, final: undefined }).reason, /no final point/);
 });
 
+test('judgeFinal: a recorded score inside the range the final tree and its re-scores showed is verified within ±k, with the range', () => {
+  const resultTests = { passed: 100, failed: 3, errors: 0, collected: 110 };
+  const at = (passed, failed, errors = 0) => ({ tests: { passed, failed, errors } });
+  const final = at(99, 4);
+  assert.deepEqual(T.judgeFinal({ resultTests, final, rescored: [at(101, 2), at(100, 3)] }), {
+    ok: true, reason: null, within: { k: 1, range: { passed: [99, 101], failed: [2, 4], errors: [0, 0] } },
+  });
+  // The farthest an observation lies from the recorded score, in any of the three numbers.
+  assert.equal(T.judgeFinal({ resultTests, final: at(98, 5), rescored: [at(100, 3), at(100, 3)] }).within.k, 2);
+  // Equal stays plain verified: nothing is read from the re-scores.
+  assert.deepEqual(T.judgeFinal({ resultTests, final: at(100, 3), rescored: [at(90, 3), at(90, 3)] }), { ok: true, reason: null });
+  // Outside the range, or in one number only, is unverified, and says what was seen.
+  const outside = T.judgeFinal({ resultTests, final, rescored: [at(98, 5), at(99, 4)] });
+  assert.equal(outside.ok, false);
+  assert.match(outside.reason, /scored 99 passed, 4 failed, 0 errors; result.json says 100, 3, 0/);
+  assert.match(outside.reason, /passed 98–99, failed 4–5, errors 0–0/);
+  assert.equal(T.judgeFinal({ resultTests, final, rescored: [at(101, 4), at(100, 4)] }).ok, false, 'failed 3 is below every observed 4');
+  // A re-score that could not be scored is no observation.
+  assert.equal(T.judgeFinal({ resultTests, final, rescored: [{ error: 'killed' }, at(101, 3)] }).ok, true);
+  assert.equal(T.judgeFinal({ resultTests, final: { error: 'x' }, rescored: [at(100, 3)] }).ok, false);
+});
+
+test('scoreTimeline re-scores a final tree that differs from result.json twice, and accepts a recorded score inside the range as verified within ±k', { skip: !hasGit && 'needs git' }, async () => {
+  const dir = fixtureRun('A', [5, 15, 30], { tests: { passed: 5, failed: 0, errors: 0, collected: 9 } });
+  const drive = await import('./drive.mjs');
+  const calls = [];
+  const again = [{ passed: 6, failed: 0, errors: 0 }, { passed: 5, failed: 0, errors: 0 }];
+  const driver = {
+    materialize: drive.materialize,
+    scoreInFreshBox: async (lib, tree, o) => {
+      calls.push(o.runId);
+      return { treeCheck: { ok: true }, tests: o.runId.includes('rescore') ? again.shift() : { passed: 4, failed: 0, errors: 0 }, copied: [], removed: [], needsInspection: [], patchError: null };
+    },
+  };
+  try {
+    const { timeline, ok } = await T.scoreTimeline({ runDir: dir, libraries: tinyLibs, points: 2, jobs: 1, driver });
+    assert.equal(calls.filter((c) => c.includes('rescore')).length, 2);
+    assert.equal(ok, true);
+    assert.equal(timeline.verified, true);
+    assert.equal(timeline.unverified, null);
+    assert.equal(timeline.finalMatchesResult, false, 'the final point itself differs');
+    assert.equal(timeline.verification, 'verified within ±1');
+    assert.deepEqual(timeline.verifiedWithin, { k: 1, range: { passed: [4, 6], failed: [0, 0], errors: [0, 0] } });
+    assert.deepEqual(timeline.rescored.map((r) => r.tests.passed), [6, 5]);
+    assert.ok(timeline.points.every((p) => !p.label.includes('rescore')), 'a re-score is no point of the timeline');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'timeline.json'), 'utf8')).verification, 'verified within ±1');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scoreTimeline scores nothing again when the final tree equals result.json: plain verified', { skip: !hasGit && 'needs git' }, async () => {
+  const dir = fixtureRun('A', [5, 15, 30], { tests: { passed: 5, failed: 0, errors: 0, collected: 9 } });
+  const drive = await import('./drive.mjs');
+  const calls = [];
+  const driver = { materialize: drive.materialize, scoreInFreshBox: async (lib, tree, o) => { calls.push(o.runId); return { treeCheck: { ok: true }, tests: { passed: 5, failed: 0, errors: 0 }, copied: [], removed: [], needsInspection: [], patchError: null }; } };
+  try {
+    const { timeline } = await T.scoreTimeline({ runDir: dir, libraries: tinyLibs, points: 2, jobs: 1, driver });
+    assert.equal(calls.length, timeline.points.length, 'the points alone');
+    assert.equal(timeline.verification, 'verified');
+    assert.equal(timeline.verifiedWithin, null);
+    assert.equal(timeline.finalMatchesResult, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scoreTimeline stays unverified, naming the range, when the re-scores do not bring the recorded score in', { skip: !hasGit && 'needs git' }, async () => {
+  const dir = fixtureRun('A', [5, 15, 30], { tests: { passed: 5, failed: 0, errors: 0, collected: 9 } });
+  const drive = await import('./drive.mjs');
+  const driver = { materialize: drive.materialize, scoreInFreshBox: async () => ({ treeCheck: { ok: true }, tests: { passed: 3, failed: 2, errors: 0 }, copied: [], removed: [], needsInspection: [], patchError: null }) };
+  try {
+    const { timeline, ok } = await T.scoreTimeline({ runDir: dir, libraries: tinyLibs, points: 2, jobs: 1, driver });
+    assert.equal(ok, false);
+    assert.equal(timeline.verified, false);
+    assert.equal(timeline.verification, 'unverified');
+    assert.match(timeline.unverified, /passed 3–3, failed 2–2, errors 0–0/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('scoreTimeline scores each point\'s source through the driver\'s own two calls, with no key, at most --jobs at once, and writes timeline.json', { skip: !hasGit && 'needs git' }, async () => {
   const dir = fixtureRun('B', [10, 25, 40, 70]);
   const drive = await import('./drive.mjs');
