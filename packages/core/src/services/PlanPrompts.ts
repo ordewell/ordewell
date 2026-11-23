@@ -631,6 +631,16 @@ function delegationSection({ tokens, delegatedTasks, grantable }: PlannerDelegat
 }
 
 /**
+ * Every planner's default effort. Told to pick "by complexity", or "medium or
+ * high" for moderate work, the one-shot planner set high or max on nearly every
+ * task of the recorded benchmark runs, and reasoning was a third to three fifths
+ * of those runs' spend. A model with no "medium" goes to the next variant up,
+ * not down: whether "low" does the work was never measured. The plan still
+ * holds whatever the planner chose (ADR-0001).
+ */
+const DEFAULT_EFFORT = '"medium" (else the next variant up)';
+
+/**
  * Where a planner with Ordewell's tools gets its catalog (ADR-0022, L3): pulled
  * at the moment it submits, since a runner enabled or an allowlist edited
  * while it planned is what the submission is checked against.
@@ -797,7 +807,8 @@ function buildConversationBody(
       : ['MODEL ASSIGNMENT:', 'Available models:', modelsJson, '', runnerInstruction(runners)]),
     'MODEL SELECTION GUIDELINES:',
     '- Use stronger models for complex refactoring, architecture changes, security-critical code; weaker/faster ones for simple file operations, test generation, config changes, documentation.',
-    `- Assign thinkingEffort by task complexity, only from the assigned model's "variants" ${tools ? 'in list_models' : 'above'}.`,
+    // The tools catalog already says list_models carries the variants, and the word budget has no room to say it twice.
+    `- thinkingEffort: ${DEFAULT_EFFORT}, higher only for the stronger-model tasks.${tools ? '' : ' Only from the assigned model\'s "variants" above.'}`,
     '',
     'READ-ONLY TASKS:',
     modeGuide,
@@ -946,7 +957,7 @@ function getPlanTemplate(isolatedExecution: IsolatedExecution, tools: boolean): 
     'MODEL SELECTION GUIDELINES:',
     '- Use stronger models (Opus, DeepSeek V4 Pro, Kimi 2.6) for: complex refactoring, architecture changes, security-critical code, performance optimization, large-scale changes.',
     '- Use weaker/faster models (Sonnet, DeepSeek V4 Flash) for: simple file operations, test generation, config changes, documentation, straightforward bug fixes.',
-    '- Assign thinkingEffort based on task complexity: "low" for simple tasks, "medium" or "high" for moderate/complex tasks.',
+    `- Default thinkingEffort to ${DEFAULT_EFFORT}; go higher only for architecture changes, a hard refactor or security-critical code. Use "low" for trivial edits.`,
     '  Where a model lists variants, use the variant IDs listed for that model in the models list — the set differs per model.',
     '  Omit thinkingEffort if the model has no variants.',
     '',
@@ -1064,7 +1075,7 @@ export function modelContextBlock(
     'MODEL SELECTION GUIDELINES:',
     '- Use stronger models (Opus, DeepSeek V4 Pro, Kimi 2.6) for: complex refactoring, architecture changes, security-critical code, performance optimization, large-scale changes.',
     '- Use weaker/faster models (Sonnet, DeepSeek V4 Flash) for: simple file operations, test generation, config changes, documentation, straightforward bug fixes.',
-    '- Assign thinkingEffort based on task complexity: "low" for simple tasks, "medium" or "high" for moderate/complex tasks.',
+    `- Default thinkingEffort to ${DEFAULT_EFFORT}; go higher only for architecture changes, a hard refactor or security-critical code. Use "low" for trivial edits.`,
     '',
     'READ-ONLY TASKS:',
     modeGuide,
