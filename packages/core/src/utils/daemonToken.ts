@@ -2,10 +2,12 @@
  * The daemon's bearer token: minted at startup, written beside the per-port
  * process-id file, read by the CLI.
  *
- * Header validation defends against browsers and nothing else. This is what
- * stops another process running as the same user — an install script in the
- * very repository the planner was pointed at, say — from driving the daemon
- * just because it can see the port.
+ * Header validation (no `Origin`, a loopback `Host`) defends against browsers
+ * and nothing else. The token, in an owner-only file, stops what can reach the
+ * port but cannot read that file: another user's processes. It does not stop an
+ * unsandboxed process of the same user, which can read the file as the CLI
+ * does. A task's agent in Full or Guarded is one of those, and so is an
+ * install script it runs from the repository (ADR-0022 A6).
  *
  * Both ends of the wire live here so the carrier encodings cannot drift: the
  * daemon extracts with the same functions the CLI attaches with.

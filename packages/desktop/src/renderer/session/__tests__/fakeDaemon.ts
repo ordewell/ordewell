@@ -43,10 +43,12 @@ export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
     return () => { set.delete(cb); };
   });
   const reportLiveWork = vi.fn(async (_kinds: readonly LiveWorkKind[]): Promise<void> => undefined);
+  const openExternal = vi.fn(async (_url: string) => ({ ok: true }));
   Object.defineProperty(window, 'ordewell', {
     configurable: true,
     value: {
       app: { reportLiveWork },
+      shell: { openExternal },
       daemon: {
         status: async () => current,
         onStatus: (cb: (status: DaemonStatus) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; },
@@ -64,6 +66,8 @@ export function fakeDaemon(answers: Partial<Record<RouteId, Answer>> = {}) {
     subscribe,
     /** What the window told main it has live, each time that changed. */
     reportLiveWork,
+    /** The pages the window asked main to open in the browser. */
+    openExternal,
     join,
     leave,
     answers,

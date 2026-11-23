@@ -60,6 +60,14 @@ provider-neutral client that also retries and reports usage limits. Providers in
 with the environment variable it reads, such as `(no DEEPSEEK_API_KEY)`. The
 planner's model is one of that provider's models.
 
+Until you pick a planner, an installed coding agent that is signed in plans, ahead
+of any provider key Ordewell finds in your shell or saved in Ordewell: a key on its
+own never switches planning to its provider, or spends its credit. That provider
+plans when you pick it with `/planner` (or `ordewell planner <id>`), when you saved a
+planner model for it, or when no coding agent is installed. When a key is passed
+over, the first screen says so once
+([ADR-0076](adr/planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md)).
+
 A provider key adds an API planner and also lets the built-in runner run tasks on
 that provider's models; an installed coding-agent CLI is separate. A `DEEPSEEK_API_KEY` or
 `MOONSHOT_API_KEY` lets DeepSeek or Kimi models plan, and the built-in runner run
@@ -249,7 +257,9 @@ cannot be fetched. `ORDEWELL_NO_MODELS_DEV=1` turns the fetch off, and
 | Guarded | Reads and edits inside the worktree go ahead. Every shell command asks you: *Allow*, *Allow for this task*, or *Deny* with a note the model reads. *Allow for this task* grants a command prefix for the rest of that attempt; it covers a command only when the whole line is the prefix, or the prefix and plain arguments, never a line with `;`, `&`, `|`, a backtick, `$(`, `>`, `<` or a line break. |
 | Read-only | For read-only tasks. No edit or shell tool; the task reads files and runs sealed commands only ([ADR-0046](adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)). |
 
-In Full and Guarded the shell is not sandboxed.
+In Full and Guarded the shell is not sandboxed: it runs as you and can reach what you
+can, Ordewell's own daemon included. See
+[what a task's agent can reach](../SECURITY.md#what-a-tasks-agent-can-reach).
 
 **Step limit.** An attempt may make a limited number of model calls; the last one is
 told so and must report with `task_complete`. The limit is `ordewellStepLimit` in

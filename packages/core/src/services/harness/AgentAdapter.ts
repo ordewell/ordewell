@@ -31,6 +31,12 @@ export interface UsageLimitSignal {
   resetsAt?: string;
 }
 
+/** A runner's start in another mode than the task's, in the runner's own words for each. */
+export interface ModeRefused {
+  asked: string;
+  started: string;
+}
+
 /**
  * One normalized event from a running agent turn. Deliberately smaller than
  * any single agent's native protocol: this is the intersection Ordewell can act
@@ -123,8 +129,12 @@ export type AgentEvent =
    * `usageLimit` is set where the runner's protocol says in a field, not only
    * in words, whether its account's usage limit failed the turn: `false` when
    * the field names another cause, which its words then cannot overrule.
+   * `modeRefused` is set where the runner started in another mode than the
+   * one asked for, both in its own words (`cliValue`s): the task cannot run
+   * as planned, and the mode it did start in is what the user may switch the
+   * task to (ADR-0018 B2).
    */
-  | { type: 'error'; message: string; usageLimit?: UsageLimitSignal | false }
+  | { type: 'error'; message: string; usageLimit?: UsageLimitSignal | false; modeRefused?: ModeRefused }
   /**
    * What the runner loaded for this process from the user's and the
    * project's own setup (#66): its commands and skills, and its MCP servers.

@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import {
   clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
-  type RunnersResponse,
+  type RunnersResponse, type ExecutionSummary,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
@@ -13,6 +13,7 @@ import type { Action, Effect } from './reducer';
 import { answerWords, type ChatRestored, type MergeYes } from './reducers/shared';
 import type { SessionView } from './state';
 import { closeChildLink, openChildLink, sessionLink, shownSession } from './sessionLink';
+import { FIRST_RUN_FEEDBACK_LINE } from './firstRunFeedback';
 
 /**
  * The slice of the daemon client the TUI needs. Derived from `ApiClient` rather
@@ -82,6 +83,13 @@ export interface EffectDeps {
     plan(): UpdatePlanView;
     run(): Promise<void>;
   };
+  /**
+   * Whether this machine still owes the first-run feedback notice, claiming it
+   * if so (core's `claimFirstRunFeedback`, ADR-0075). Absent, it never shows.
+   */
+  claimFirstRunFeedback?(summary: ExecutionSummary): boolean;
+  /** Opens `url` in the person's browser, resolving to whether one could be started. Absent, none can. */
+  openLink?(url: string): Promise<boolean>;
 }
 
 type UpdatePlanView = Extract<Action, { type: 'updatePlanned' }>['plan'];
@@ -568,7 +576,9 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const env: Record<string, string> = endpoint
         ? { [endpoint.name]: endpoint.url, [meta.apiKeyEnvVar]: effect.key }
         : effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {};
-      await api.updateSettings({ env });
+      // The answer says who plans with the key saved, so the planner row is current at once.
+      const answer = await api.updateSettings({ env });
+      dispatchSettings(deps, answer);
       for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
       const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
@@ -578,6 +588,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       await loadModels(deps);
       // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
       await loadRunners(deps);
+      // A vendor that now plans has no default model, so the next goal would
+      // be refused for want of one: go on to that pick, its catalog now in. A
+      // coding agent that still plans needs none (ADR-0076).
+      if (answer.aiProvider === effect.provider && !answer.orchestratorModel) dispatch({ type: 'pickPlannerModel', provider: effect.provider });
       return;
     }
 
@@ -908,7 +922,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'loadScope':
-      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
       return;
 
     case 'loadIsolationPreview':
@@ -916,7 +930,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'refresh':
-      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
@@ -933,6 +947,20 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
 
     case 'selfUpdate':
       await deps.update?.run();
+      return;
+
+    // Held in place: a notice must not move the conversation someone is reading.
+    case 'firstRunFeedback':
+      if (deps.claimFirstRunFeedback?.(effect.summary)) dispatch({ type: 'notice', message: FIRST_RUN_FEEDBACK_LINE, holdPlace: true });
+      return;
+
+    case 'openLink':
+      dispatch({
+        type: 'notice',
+        message: await deps.openLink?.(effect.url)
+          ? `Opened ${effect.url} in your browser.`
+          : `Could not open a browser from this terminal: open ${effect.url} yourself.`,
+      });
       return;
   }
 }
@@ -1238,6 +1266,16 @@ async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
     orchestratorModel: state.orchestratorModel,
   });
   return state;
+}
+
+/**
+ * The runner list re-detects the installed agent on the daemon, which can
+ * change who plans, so the settings are read once it has answered: read beside
+ * it, they would still name the planner from before an agent was installed.
+ */
+async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
+  await loadRunners(deps);
+  await loadSettings(deps, sessionId);
 }
 
 async function loadSettings(deps: EffectDeps, sessionId?: string): Promise<void> {

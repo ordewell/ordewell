@@ -35,6 +35,8 @@ export interface SignInSyntax {
   login(runner: string): string | null;
   /** Setting a key for the vendor, where `label` is its name in the key entry. */
   chooseKey(provider: AiProvider, label: string): string;
+  /** What the person does with `chooseKey`: "run" a command unless the surface says otherwise, e.g. "use" a button. */
+  keyVerb?: string;
 }
 
 // `/login` hands the terminal to the runner's own login (ADR-0009). Named
@@ -88,7 +90,7 @@ export function describeSignInWays(signIn: RunnerSignIn, syntax: SignInSyntax): 
   }
   if (signIn.key) {
     const others = signIn.key.others ? ` (or ${signIn.key.others})` : '';
-    routes.push(`run ${syntax.chooseKey(signIn.key.provider, signIn.key.label)}${others} to hand it a key`);
+    routes.push(`${syntax.keyVerb ?? 'run'} ${syntax.chooseKey(signIn.key.provider, signIn.key.label)}${others} to hand it a key`);
   }
   if (signIn.byHand) routes.push(signIn.byHand);
   if (routes.length === 0) return '';

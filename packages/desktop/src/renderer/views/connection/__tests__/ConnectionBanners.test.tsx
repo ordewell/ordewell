@@ -93,6 +93,14 @@ function world(initial: DaemonStatus, answers: Parameters<typeof fakeDaemon>[0] 
   };
 }
 
+/** The status row's daemon detail, where the lease and a joined daemon are named; it opens on focus or hover. */
+function detail(): HTMLElement {
+  const item = screen.getByRole('contentinfo').querySelector('.frame-status-daemon');
+  if (!(item instanceof HTMLElement)) throw new Error('no daemon item');
+  act(() => item.focus());
+  return screen.getByRole('tooltip');
+}
+
 function mount(daemon: DaemonStatus): { store: FrameStore; host: ReturnType<typeof daemonHost> } {
   const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
   offs.push(registerFrameCommands(store), registerViews(store.api));
@@ -148,7 +156,7 @@ describe('a session a VS Code window holds (W16)', () => {
     expect(banner).toHaveTextContent("VS Code runs it inside its own window, so the app can't join it.");
     expect(host.getSnapshot().readOnly).toBe(true);
     expect(screen.getByText('⊡ Read-only · held by VS Code (pid 4242)')).toBeInTheDocument();
-    expect(document.querySelector('.frame-status')).toHaveTextContent('held by VS Code (pid 4242) · read-only');
+    expect(detail()).toHaveTextContent('Lease: held by VS Code (pid 4242) · read-only');
   });
 
   it('starts a new session here with the held goal in the composer, not sent', async () => {
@@ -253,9 +261,8 @@ describe('a session another Ordewell daemon holds (W16)', () => {
     expect(chip).toHaveAttribute('title', expect.stringContaining('port 49213'));
     expect(chip).toHaveAttribute('title', expect.stringContaining('0.12.3'));
     expect(screen.getByText("Live in the TUI's daemon on port 49213 (pid 48200), shared with the TUI.")).toBeInTheDocument();
-    const status = document.querySelector('.frame-status');
-    expect(status).toHaveTextContent('· joined :49213');
-    expect(status).toHaveTextContent('held by TUI (pid 48120) · joined');
+    expect(detail()).toHaveTextContent('Joined :49213, v0.12.3 (pid 48200)');
+    expect(detail()).toHaveTextContent('Lease: held by TUI (pid 48120) · joined');
     expect(screen.queryByRole('region', { name: /held|VS Code/i })).not.toBeInTheDocument();
     expect(host.getSnapshot().readOnly).toBe(false);
     expect(body()).not.toHaveAttribute('inert');
@@ -276,8 +283,8 @@ describe('a session another Ordewell daemon holds (W16)', () => {
     expect(gone).toHaveTextContent('Nothing is running it now.');
     // Nothing still claims the holder holds it: the chip and the status bar say it exited.
     expect(screen.getByText('⊡ Read-only · the TUI exited')).toBeInTheDocument();
-    expect(document.querySelector('.frame-status')).toHaveTextContent('TUI (pid 48120) exited · read-only');
-    expect(document.querySelector('.frame-status')).not.toHaveTextContent('held by');
+    expect(detail()).toHaveTextContent('Lease: TUI (pid 48120) exited · read-only');
+    expect(detail()).not.toHaveTextContent('held by');
     fireEvent.click(within(gone).getByRole('button', { name: 'Continue here' }));
 
     await waitFor(() => expect(w.daemon.calls('sessions.load')).toHaveLength(2));
@@ -313,7 +320,7 @@ describe('a session another Ordewell daemon holds (W16)', () => {
     expect(banner).toHaveTextContent(message);
     expect(within(banner).getByRole('button', { name: 'Watch read-only' })).toBeInTheDocument();
     expect(host.getSnapshot().readOnly).toBe(true);
-    expect(document.querySelector('.frame-status')).toHaveTextContent('held by TUI (pid 48120) · read-only');
+    expect(detail()).toHaveTextContent('Lease: held by TUI (pid 48120) · read-only');
   });
 
   it('says a release without desktop join support cannot be joined, then offers Continue here once it exits', async () => {

@@ -1,4 +1,4 @@
-import { NO_TURN, closeTurn, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
+import { NO_TURN, closeTurn, everyTaskPassed, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollGrowth, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -17,7 +17,8 @@ import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
-import { refreshStepper } from './reducers/stepper';
+import { openStepperAt, refreshStepper } from './reducers/stepper';
+import { plannerStepper } from './reducers/plannerStepper';
 import {
   handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
@@ -442,6 +443,11 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'sharedSettingsChanged':
       return step(state, [{ type: 'loadScope', ...(state.sessionId ? { sessionId: state.sessionId } : {}) }]);
 
+    case 'pickPlannerModel': {
+      if (state.overlay) return step(state);
+      return openStepperAt(state, plannerStepper, { harness: action.provider }, 'model') ?? step(state);
+    }
+
     case 'runnersLoaded':
       // Installed runners are `/planner`'s preflight signal, so a stepper
       // opened before discovery landed fills in rather than sitting there
@@ -546,6 +552,13 @@ function reduceAction(state: TuiState, action: Action): Step {
     case 'notice':
       if (stale(state, action.sessionId)) return step(state);
       return step(say(state, action.level === 'error' ? 'error' : 'system', action.message, !action.holdPlace));
+
+    // Only the plan at the top ends a run: a child plan's end on screen is one
+    // task of a run still going. Whether this machine still owes the notice is
+    // the runtime's to ask, since it reads a file.
+    case 'runConcluded':
+      if (stale(state, action.sessionId) || state.child || !everyTaskPassed(action.summary)) return step(state);
+      return step(state, [{ type: 'firstRunFeedback', summary: action.summary }]);
 
     case 'childTree':
       return step(childTreeArrived(state, action.sessionId, action.children));

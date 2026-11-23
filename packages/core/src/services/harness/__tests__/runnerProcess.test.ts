@@ -107,6 +107,52 @@ describe('the environment a runner starts under', () => {
     adapter.dispose();
   });
 
+  // What each agent's shell tool sets for the commands it runs, read from the agents' own builds
+  // (Claude Code 2.1.330, Codex 0.170.0, OpenCode): a daemon started from such a shell carries them.
+  const PARENT_SESSION = {
+    CLAUDE_CODE_SESSION_ID: '925f0553-parent',
+    CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_CHILD_NOTES_DIR: '/home/u/.claude/projects/p/925f0553/notes',
+    CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/claude-501/messaging.sock',
+    CLAUDE_CODE_MESSAGING_TOKEN: 'parent-messaging-synthetic',
+    CLAUDE_CODE_SESSION_ATTENDED: '0',
+    CLAUDE_CODE_LAUNCHED_BY_SESSION_IDS: '925f0553-parent',
+    CLAUDE_CODE_BRIDGE_SESSION_ID: 'bridge-parent',
+    CLAUDE_CODE_STARTER_MAY_HOLD_CONNECTOR_FILE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+    CLAUDE_CODE_EXECPATH: '/opt/claude/bin/claude.exe',
+    CLAUDE_PID: '4711',
+    CLAUDE_EFFORT: 'high',
+    CODEX_THREAD_ID: 'thread-parent',
+    CODEX_TOOL_CALL_ID: 'call-parent',
+    OPENCODE_SESSION_ID: 'ses_parent',
+  };
+  // What a user sets on purpose to point an agent at an endpoint, a model, an account or a proxy.
+  const AGENT_CONFIGURATION = {
+    ANTHROPIC_BASE_URL: 'https://gateway.example/anthropic',
+    ANTHROPIC_MODEL: 'claude-sonnet-5-5',
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    CLAUDE_CONFIG_DIR: '/home/u/.claude-work',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000',
+    OPENAI_BASE_URL: 'https://gateway.example/openai',
+    CODEX_HOME: '/home/u/.codex-work',
+    HTTPS_PROXY: 'http://proxy.example:3128',
+  };
+
+  it.each(adapters)('%s leaves a parent agent session\'s identity and messaging token behind, under any spelling, and keeps what configures an agent', async (_label, start) => {
+    for (const [name, value] of Object.entries(PARENT_SESSION)) vi.stubEnv(name, value);
+    vi.stubEnv('Claude_Code_Messaging_Token', 'parent-messaging-synthetic-2');
+    for (const [name, value] of Object.entries(AGENT_CONFIGURATION)) vi.stubEnv(name, value);
+    const spawned = fakeSpawn([]);
+    const envs: NodeJS.ProcessEnv[] = [];
+    const adapter = await start(spawned, deps(spawned, {}, envs));
+    const parentNames = new Set([...Object.keys(PARENT_SESSION), 'CLAUDECODE']);
+    expect(Object.keys(envs[0]).filter((name) => parentNames.has(name.toUpperCase()))).toEqual([]);
+    expect(Object.values(envs[0]).some((value) => value?.includes('parent'))).toBe(false);
+    for (const [name, value] of Object.entries(AGENT_CONFIGURATION)) expect(envs[0][name]).toBe(value);
+    adapter.dispose();
+  });
+
   it.each(adapters)('%s leaves a parent Ordewell\'s MCP tokens behind, under any spelling', async (_label, start) => {
     vi.stubEnv('ORDEWELL_MCP_TOKEN_0', 'Bearer parent-synthetic-0');
     vi.stubEnv('Ordewell_Mcp_Token_3', 'Bearer parent-synthetic-3');

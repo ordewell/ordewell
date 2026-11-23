@@ -1275,6 +1275,41 @@ describe('settings', () => {
     expect(loaded?.runners.map((r) => [r.id, r.name])).toEqual([['openrouter', 'OpenRouter']]);
   });
 
+  // Bug: the planner row kept the planner from before the key until a goal was refused (F10).
+  it('applies the daemon\'s settings answer once a key is stored, so the planner row shows who plans now', async () => {
+    const h = harness();
+    h.api.updateSettings.mockResolvedValue({
+      aiProvider: 'claude-code', orchestratorModel: '', plannerThinkingEffort: '', unusedPlanningKey: 'openrouter',
+      autonomousMode: false, maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS },
+    });
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+    const loaded = h.actions.find((a) => a.type === 'settingsLoaded') as Extract<Action, { type: 'settingsLoaded' }> | undefined;
+    expect(loaded?.settings).toMatchObject({ aiProvider: 'claude-code', unusedPlanningKey: 'openrouter' });
+  });
+
+  // First-run audit F2: a vendor that now plans has no default model, so the next goal would be refused for want of one.
+  it('goes on to the planner model step once the key\'s vendor plans with none picked, after its models are in', async () => {
+    const h = harness();
+    h.api.updateSettings.mockResolvedValue({
+      aiProvider: 'openrouter', orchestratorModel: '', plannerThinkingEffort: '',
+      autonomousMode: false, maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS },
+    });
+    await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+    const kinds = h.actions.map((a) => a.type);
+    expect(kinds).toContain('pickPlannerModel');
+    expect(kinds.indexOf('modelsLoaded')).toBeLessThan(kinds.indexOf('pickPlannerModel'));
+    expect(h.actions.find((a) => a.type === 'pickPlannerModel')).toEqual({ type: 'pickPlannerModel', provider: 'openrouter' });
+  });
+
+  it('stops at the key while a coding agent plans, or the vendor has its model', async () => {
+    for (const answer of [{ aiProvider: 'claude-code', orchestratorModel: '' }, { aiProvider: 'openrouter', orchestratorModel: 'qwen/max' }]) {
+      const h = harness();
+      h.api.updateSettings.mockResolvedValue({ plannerThinkingEffort: '', autonomousMode: false, maxParallel: 3, modelAllowlist: undefined, plannerModels: undefined, run: { ...RUN_SETTINGS_DEFAULTS }, ...answer });
+      await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-1' }, h.deps);
+      expect(h.actions.map((a) => a.type)).not.toContain('pickPlannerModel');
+    }
+  });
+
   it('never puts an api key in a message the transcript would show', async () => {
     const h = harness();
     await runEffect({ type: 'setApiKey', provider: 'openrouter', key: 'sk-or-secret' }, h.deps);
@@ -1568,6 +1603,25 @@ describe('catalogs and sessions', () => {
     const h = harness();
     await runEffect({ type: 'refresh' }, h.deps);
     expect(types(h.actions)).toEqual(expect.arrayContaining(['runnersLoaded', 'settingsLoaded', 'modelsLoaded']));
+  });
+
+  // The runner list re-detects the installed agent (an agent installed, then
+  // /refresh), so settings read beside it would still name the old planner.
+  it.each(['refresh', 'loadScope'] as const)('%s reads the settings once the runner list has answered', async (type) => {
+    let detected = false;
+    const h = harness({
+      getRunners: vi.fn().mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        detected = true;
+        return { runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }] };
+      }),
+      getSettings: vi.fn().mockImplementation(async () => ({ aiProvider: detected ? 'claude-code' : 'openrouter' })),
+    });
+
+    await runEffect({ type }, h.deps);
+
+    const loaded = h.actions.find((a) => a.type === 'settingsLoaded');
+    expect(loaded && loaded.type === 'settingsLoaded' && loaded.settings.aiProvider).toBe('claude-code');
   });
 
   it('loadScope re-reads the runners and the allowlist, not the models', async () => {

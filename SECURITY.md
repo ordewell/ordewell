@@ -177,7 +177,10 @@ their own repositories. The parts most worth your attention:
   `0.4.8`, authenticates every request against a bearer token minted at daemon
   startup and written to an owner-readable file; browser `Origin` headers are
   rejected outright and `Host` must name loopback at the daemon's own port.
-  Local access is explicitly *not* assumed to be trusted. Anything that makes
+  Local access is explicitly *not* assumed to be trusted, but the token keeps
+  out only what cannot read its file: a process running as you, a task's
+  agent in Full or Guarded included, can (see
+  [What a task's agent can reach](#what-a-tasks-agent-can-reach)). Anything that makes
   the daemon reachable off-host, that lets a web page in a browser reach it
   (DNS rebinding, permissive CORS), or that gets a route to serve a request
   without a valid token — on the HTTP routes or the WebSocket upgrade — is in
@@ -297,6 +300,70 @@ Planned, not yet built:
 - An opt-in container setup with a credential broker and egress proxy
   ([#93](https://github.com/ordewell/ordewell/issues/93),
   [#99](https://github.com/ordewell/ordewell/issues/99)).
+
+## What a task's agent can reach
+
+This section is about Ordewell's own parts: its daemon, its CLI and the tokens
+they use. It describes 0.14.9.
+
+**In Full and in Guarded, a task's agent runs as you.** A change or ops task's
+runner starts with your environment, `HOME` and `PATH` included, so its agent
+and every command it runs can do what any program you start can do. For
+Ordewell, that means it can:
+
+- Read the daemon's token in `~/.ordewell/server-<port>.token` and use it to
+  drive the daemon's local API and the `ordewell` CLI: start and stop runs,
+  approve plans and answer approvals, merge a run and push, and change your
+  settings (`PATCH /api/settings`). The
+  daemon admits a request that has no `Origin`, names loopback in `Host` and
+  carries the token. It cannot tell a task's agent from you. Settings that are
+  "user-level only", such as the effect allowlist and the notify command, are
+  kept from a workspace's files, not from a process running as you.
+- Read the tokens other runners use for Ordewell's tools, and call those tools
+  as that task or planner. Claude Code's and OpenCode's are in owner-only files
+  under `$TMPDIR/ordewell-mcp-<pid>-*/mcp.json`; Codex's is in the Codex
+  process's environment.
+
+Guarded changes what runs without asking you: the runner asks before a shell
+command (on Claude Code, its own classifier decides). A command that runs still
+runs as you, with all of the above. This is accepted, not an oversight: the
+token keeps browsers and other users out and separates roles and attempts, but
+it is not a sandbox against a process of yours
+([ADR-0022](docs/adr/runners/0022-ordewell-mcp-server.md) A6,
+[ADR-0063](docs/adr/surfaces/0063-the-desktop-app-is-an-electron-client-of-the-shared-daemon.md)).
+
+**Read-only tasks run sealed.** Their only shell is `run_command`, and their
+runner's native writes and shell are withheld
+([ADR-0046](docs/adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)).
+They cannot reach the daemon, the CLI or `~/.ordewell`, and they write nothing
+outside their worktree and a scratch directory of their own. Where this machine
+has no sandbox, a command that would run sealed is refused. On macOS one gap
+stays open: a sealed command can read the command lines and environments of
+your other processes, a Codex runner's token for Ordewell's tools included
+([ADR-0036](docs/adr/planner-envelope/0036-the-planners-shell-sealed-runs-and-native-opt-in.md),
+the first residual under Sealed runs above). A sealed run has no network to use
+such a value from; it leaves only through a later step that has one.
+
+**A daemon started inside a Claude Code session, in 0.14.8 and earlier.** Such
+a daemon (started by the Claude Code plugin, or by `ordewell` in Claude Code's
+Bash tool) kept that session's variables and passed them to every runner it
+started, that session's messaging socket and token included. 0.14.9, which
+contains [#209](https://github.com/ordewell/ordewell/pull/209), leaves them
+behind. Until you run it, start the daemon from a terminal of your own.
+
+What you can do:
+
+- For a repository you do not trust, plan the work as read-only tasks where a
+  report is enough (a review, an audit, an investigation), and use **Guarded**
+  for tasks that must change it, so a command waits for you (on Claude Code,
+  for its classifier) before it runs.
+- Keep other long-lived secrets out of the environments and command lines of
+  the processes you run beside Ordewell, as Sealed runs above advises for macOS.
+- Running change tasks in containers, where your files and this machine's
+  loopback are out of their reach, is
+  [experimental and off in published versions](docs/containers.md): it works
+  only in a build from a checkout of this repository, with
+  `ORDEWELL_CONTAINERS=1`.
 
 ## What is out of scope
 

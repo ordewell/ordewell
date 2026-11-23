@@ -18,7 +18,7 @@ function toneOf(status: DaemonStatus | undefined): Tone {
 }
 
 function daemonLine(status: DaemonStatus | undefined): string {
-  if (!status || status.state === 'connecting') return 'daemon: connecting …';
+  if (!status || status.state === 'connecting') return status?.starting ? 'daemon: starting …' : 'daemon: connecting …';
   if (status.state === 'connected') {
     return [`daemon :${status.port}`, status.owned ? 'owned' : 'attached', status.daemon.version].filter(Boolean).join(' · ');
   }

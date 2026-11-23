@@ -107,6 +107,7 @@ describe('a first goal waiting for the installed-agent probe', () => {
         setPlannerModel: vi.fn(async () => {}),
         openTaskLog: vi.fn(),
         openFile: vi.fn(),
+        openLink: vi.fn(),
         setPlanDockHeight: vi.fn(),
         changeSettings: vi.fn(async () => {}),
         setRunnerEnabled: vi.fn(async () => {}),

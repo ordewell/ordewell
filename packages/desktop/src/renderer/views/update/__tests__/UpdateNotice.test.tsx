@@ -90,6 +90,9 @@ describe('a new version, on a build that cannot update itself', () => {
     expect(shown).toHaveClass('frame-banner-info');
     expect(await indicator()).toHaveTextContent('↑ 1.3.0 available');
     expect(document.querySelector('[data-slot="status.update"]')).toContainElement(await indicator());
+    // The row holds the daemon and this notice, nothing else.
+    expect(screen.getByRole('contentinfo').querySelector('.ow-status-label')).toHaveTextContent('Daemon v1.2.0 · :3700');
+    expect(screen.getByRole('contentinfo').lastElementChild).toContainElement(await indicator());
     expect(within(shown).getByRole('button', { name: 'Download' })).toBeInTheDocument();
     expect(within(shown).queryByRole('button', { name: 'Update' })).toBeNull();
   });
@@ -166,6 +169,8 @@ describe('a new version, on a signed build', () => {
     fireEvent.click(within(shown).getByRole('button', { name: 'Download' }));
     await waitFor(() => expect(w.openExternal).toHaveBeenCalledWith('https://ordewell.ai/download'));
     expect(within(shown).getByRole('button', { name: 'Update' })).toBeInTheDocument();
+    // The row says it too, so a dismissed banner does not hide that the update failed.
+    expect(await indicator()).toHaveTextContent('↑ 1.3.0 · update failed');
   });
 
   it('says so when the daily check names a version the updater has no build of yet', async () => {

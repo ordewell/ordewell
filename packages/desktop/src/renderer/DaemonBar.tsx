@@ -60,18 +60,33 @@ export function cardFor(status: DaemonStatus): Card | undefined {
   }
 }
 
-/** The connection in a few words, for the bar at the foot of a window. */
+const named = (daemon: { version?: string }): string => (daemon.version ? `Daemon v${daemon.version}` : 'Daemon');
+
+/**
+ * The connection in a few words, for the bar at the foot of a window: the
+ * daemon's version and port while all is well, otherwise what needs the user.
+ * Who started it goes in daemonDetail, so the row stays one short line.
+ */
 export function daemonLabel(status: DaemonStatus): string {
   switch (status.state) {
-    case 'connecting': return `Connecting to :${status.port}…`;
-    case 'connected': {
-      const version = status.daemon.version ? ` v${status.daemon.version}` : '';
-      return `Daemon${version} on :${status.port} · ${status.owned ? 'started by this app' : 'attached'}`;
-    }
+    case 'connecting': return status.starting ? `Starting the daemon on :${status.port}…` : `Connecting to :${status.port}…`;
+    case 'connected': return `${named(status.daemon)} · :${status.port}`;
     case 'reconnecting': return `Reconnecting to :${status.port}…`;
     case 'mismatch': return `Version mismatch on :${status.port}`;
     case 'unauthorized': return `Unauthorized on :${status.port}`;
     case 'port-taken': return `Port ${status.port} taken`;
     case 'failed': return 'Daemon failed';
+  }
+}
+
+/** The connection in a sentence, for the daemon item's detail. */
+export function daemonDetail(status: DaemonStatus): string {
+  switch (status.state) {
+    case 'connected':
+      return `${named(status.daemon)} on 127.0.0.1:${status.port}, ${status.owned ? 'started by this app' : 'attached: started outside this app'}`;
+    case 'mismatch':
+      return `The daemon on :${status.port} is ${versionOf(status.daemon)}; this app speaks ${versionOf(status.app)}`;
+    default:
+      return cardFor(status)?.body ?? daemonLabel(status);
   }
 }

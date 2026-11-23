@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { resolve } from 'path';
-import { assertWorkspaceExists, augmentedPath, createSkillsService, EnvConfig, mintSessionId, planDirectLaunch, SettingsService, withPath, workspaceEnvOf } from '@ordewell/core';
+import { assertWorkspaceExists, augmentedPath, claimFirstRunFeedback, createSkillsService, EnvConfig, mintSessionId, planDirectLaunch, SettingsService, withPath, workspaceEnvOf } from '@ordewell/core';
 import { ensureDaemonOwned, findFreePort, resolvePort, stopDaemon } from '../daemon';
 import { ApiClient } from '../apiClient';
 import { flag, saveLastSession } from '../utils';
@@ -10,6 +10,7 @@ import { runEffect } from './effects';
 import { registerSkillCommands } from './slash';
 import { openTerminal, windowsInputNotice } from './terminal';
 import { startCliVersionCheck } from '../versionCheck';
+import { openLink } from '../openLink';
 import { carryOutUpdate, planUpdate, updateHint, type SelfUpdateDeps, type UpdatePlan } from '../selfUpdate';
 
 /** Past the stop's own two-second check that the port's daemon is the one it means to signal. */
@@ -239,6 +240,10 @@ export async function handleTui(subArgs: string[], options: HandleTuiOptions = {
           return true;
         },
         exit: () => shutdown(0),
+        // A TUI has a person at its keyboard, or it would not have started;
+        // piped output is still no place for the notice (ADR-0075).
+        claimFirstRunFeedback: (summary) => claimFirstRunFeedback(summary, { interactive: process.stdin.isTTY === true && process.stdout.isTTY === true }),
+        openLink: (url) => openLink(url),
         update: {
           plan: () => {
             updatePlan = planUpdate(selfUpdate);

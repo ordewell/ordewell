@@ -4,7 +4,7 @@ import {
   Session, LegacyPlanState, Task, flattenTasks, RunnerId, DiscoveredModel, enabledRunners,
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
-  type ExecutionCommand, type OverrideDirection,
+  type ExecutionCommand, type ExecutionSummary, type OverrideDirection,
   recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
@@ -15,6 +15,7 @@ import {
   removeTaskConfirmation, TaskActions, TaskControls, type SessionCue, type TaskActionPort, type TaskControlPort, type TurnOutcome,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
+import { markWalkthroughStep } from '../firstRun';
 import { handleIsolationBlocked } from './isolation';
 import { taskFromDraft } from './taskEdit';
 
@@ -46,6 +47,8 @@ export interface PlanManagerDeps {
   sendRunSettings: () => void;
   /** Redraw the planner list after a re-probe changed the verdict, so the pill stops saying signed out. */
   refreshPlannerState?: () => Promise<void>;
+  /** A run's end stood with every task passed: the first-run feedback notice, if the machine still owes it (ADR-0075). */
+  firstRunFeedback?: (summary: ExecutionSummary) => void;
   log: (msg: string) => void;
 }
 
@@ -64,7 +67,7 @@ export function resolveRunnerSet(
 ): RunnerId[] | null {
   const enabled = enabledRunners(deps.config).filter((r) => deps.runnerRegistry.get(r));
   if (enabled.length === 0) {
-    deps.chatProvider.showError('No runner is enabled. Toggle runners in the chat header first.');
+    deps.chatProvider.showError("No runner is enabled. Turn one on under Runners in the chat's Settings panel, or install a coding agent such as Claude Code or Codex and run /refresh.");
     return null;
   }
   if (pendingRunners && pendingRunners.length > 0) {
@@ -120,7 +123,7 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   // The session refuses a turn on a planner that cannot plan; the chat says
   // so with its own commands, and as the way out rather than a failure.
   if (err instanceof PlannerNotReadyError) {
-    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS));
+    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS), 'planner_not_ready');
     return;
   }
   const message = err instanceof Error ? err.message : String(err);
@@ -285,6 +288,7 @@ export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: numbe
       deps.sendRunSettings();
     }
     deps.chatProvider.planApproved();
+    markWalkthroughStep('planApproved');
     saveState(plan, deps.fsAdapter.getWorkspaceRoot(), session.sessionId);
     deps.saveCurrentSession();
     try {
@@ -665,6 +669,9 @@ function applySessionCue(cue: SessionCue, deps: PlanManagerDeps): void {
       return;
     case 'commands':
       chatProvider.postMessage({ type: 'taskCommands', taskId: cue.taskId, commands: latestTaskCommands(session, cue.taskId) });
+      return;
+    case 'passed':
+      deps.firstRunFeedback?.(cue.summary);
       return;
     default: {
       const exhaustive: never = cue;

@@ -62,7 +62,7 @@ describe('a planner goal refused after its turn took a slot', () => {
     const b = childOf('b', [task('b1', 1)]);
     try {
       const refused = await refusedGoal(a.session).catch((err: unknown) => err);
-      expect((refused as Error).message).toBe('None of the requested runners are enabled');
+      expect((refused as Error).message).toMatch(/^None of the requested runners are enabled\. /);
       // No turn opened, so nothing ever released what the opening reserved.
       expect((a.session as unknown as { gate: TurnGate }).gate.holding).toBe(false);
 

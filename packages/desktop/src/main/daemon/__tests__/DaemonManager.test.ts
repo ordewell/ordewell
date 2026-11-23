@@ -244,6 +244,17 @@ describe('DaemonManager: own', () => {
     expect(statuses[0]).toEqual({ state: 'connecting', port: PORT });
   });
 
+  // A window waiting on a daemon this app is starting says so, not only "connecting" (F4).
+  it('says it is starting the daemon while the one it forked has not answered', async () => {
+    const w = world({ kind: 'unreachable' });
+    w.state.answerAfter = 3;
+    const { daemon, statuses } = manager(w);
+    await daemon.connect();
+    const forkedAt = statuses.findIndex((status) => status.state === 'connecting' && status.starting === true);
+    expect(forkedAt).toBeGreaterThan(0);
+    expect(statuses.slice(forkedAt + 1).map((status) => status.state)).toEqual(['connected']);
+  });
+
   it('stops the daemon it owns on shutdown', async () => {
     const w = world({ kind: 'unreachable' });
     const { daemon } = manager(w);

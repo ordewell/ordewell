@@ -5,6 +5,7 @@
  * call `ipcRenderer` channels with anything once it is compromised.
  */
 
+import type { ExecutionSummary } from '@ordewell/core';
 import type { RouteId, RouteParams } from './routes';
 import type { TerminalScope } from './terminalScope';
 
@@ -63,7 +64,8 @@ export interface DaemonIdentityView {
  * draw its card (design W15) without asking again.
  */
 export type DaemonStatus =
-  | { state: 'connecting'; port: number }
+  /** `starting`: the port was free, so this app forked its bundled daemon and waits for it to answer. */
+  | { state: 'connecting'; port: number; starting?: boolean }
   /** `owned`: this app started it and stops it on quit (ADR-0063 H2). */
   | { state: 'connected'; port: number; owned: boolean; daemon: DaemonIdentityView }
   /** An attached daemon went away: main probes again. `canStart` once the port is free. */
@@ -354,6 +356,14 @@ export interface OrdewellBridge {
     dismissNotice(): Promise<void>;
   };
   /**
+   * The first-run feedback notice (ADR-0075). Main holds the machine's record,
+   * shared with the TUI and VS Code; the window only asks, at a run's end.
+   */
+  feedback: {
+    /** Whether this window shows the notice for a run that ended so; true once per machine, ever. */
+    claim(summary: ExecutionSummary): Promise<boolean>;
+  };
+  /**
    * What the OS shows attention with: a desktop notification for a new wait or
    * a run's end, and the count on the Dock, the taskbar or the launcher badge.
    * Main decides whether the user has muted notifications; the renderer never
@@ -434,6 +444,7 @@ export const CHANNELS = {
   updateDownload: 'ordewell:update.download',
   updateRestart: 'ordewell:update.restart',
   updateDismissNotice: 'ordewell:update.dismissNotice',
+  feedbackClaim: 'ordewell:feedback.claim',
   notifyShow: 'ordewell:notify.show',
   notifySetBadge: 'ordewell:notify.setBadge',
   shellOpenInEditor: 'ordewell:shell.openInEditor',

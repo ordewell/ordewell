@@ -51,6 +51,7 @@ import { PlannerReadLimit, plannerReadLimitOf } from './plannerReadLimit';
 import { sharedWebResponseCache, type WebResponseCache } from './WebResponseCache';
 import { sharedSearchProvider } from './DuckDuckGoSearchProvider';
 import { PROVIDER_PRIORITY, runnerForProvider } from './ProviderRegistry';
+import { RUNNER_LABELS } from './runnerCatalog';
 import { VENDORS } from './apiProviders';
 import type { HeldValue } from '../utils/redactSecrets';
 import { ModelResolver } from './ModelResolver';
@@ -70,6 +71,7 @@ import { TaskLogRecorder } from './TaskLogRecorder';
 import { ScriptRunner, type ScriptRunnerDeps } from './ScriptRunner';
 import { rewrittenScripts } from '../models/ScriptTask';
 import { taskRefOf } from './TaskRefs';
+import { heldBehindRefusal } from './modeRefusal';
 import { standingBlock, standingWords } from './runHolds';
 import { SessionWindows, withContextWindows } from './ContextWindowFill';
 import { withTaskRunnerConfig } from './taskRunnerConfig';
@@ -1284,7 +1286,25 @@ export class Session {
       escalations: () => this.escalations(),
       resolveConflict: async (taskId) => (await this.resolveConflictAsTask(taskId)) !== null,
       continueRun: (how) => (how === 'stash' ? this.continueWithStash() : this.continueWithoutIsolation()),
+      switchMode: (taskId) => this.switchRefusedMode(taskId),
     };
+  }
+
+  /**
+   * The user's switch of a task its runner started in another mode to the
+   * mode it did start in, and of the tasks held behind the same refusal
+   * (ADR-0018 B2): a hand edit of each, which no level rewrites (ADR-0001),
+   * then those held are let go. The retry is the caller's.
+   */
+  private async switchRefusedMode(taskId: string): Promise<{ label: string; count: number } | null> {
+    const failed = this.store.get(taskId);
+    const refusal = failed?.status === 'failed' ? failed.verdict?.modeRefusal : undefined;
+    if (!failed || !refusal?.offered) return null;
+    const ref = taskRefOf(this.store.planTasks, taskId) ?? `#${failed.order}`;
+    const held = heldBehindRefusal({ ...failed, refusal }, ref, this.store.allTasks, (id) => this.orchestrator.holdReason(id));
+    for (const task of [failed, ...held]) await this.editor.updateTask(task.id, { taskMode: refusal.offered.mode });
+    this.orchestrator.releaseSwitched(held.map((t) => t.id));
+    return { label: refusal.offered.label, count: held.length + 1 };
   }
 
   /**
@@ -2162,7 +2182,7 @@ export class Session {
   private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
     const enabled = this.catalog.enabledRunners();
     const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
-    if (chosen.length === 0) throw new Error('None of the requested runners are enabled');
+    if (chosen.length === 0) throw new Error(noRunnerEnabled(enabled));
     return chosen;
   }
 
@@ -3240,4 +3260,20 @@ export class Session {
   plannerSettingsChanged(): void {
     this.backend.settingsChanged();
   }
+}
+
+/**
+ * The refusal of a goal with no enabled runner to plan for, with the way on:
+ * the runners that are enabled when the request named others, else where to
+ * turn one on or how to get one. Every surface shows it as it is.
+ */
+function noRunnerEnabled(enabled: readonly RunnerId[]): string {
+  const lead = 'None of the requested runners are enabled.';
+  const switchOn = 'under Runners (/runners in the terminal UI)';
+  if (enabled.length === 0) {
+    return `${lead} Turn one on ${switchOn}, or install a coding agent such as Claude Code or Codex and run /refresh.`;
+  }
+  const names = enabled.map((id) => RUNNER_LABELS[id] ?? id);
+  const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  return `${lead} Send the goal again to plan for the enabled ${names.length === 1 ? 'one' : 'ones'} (${listed}), or turn on another ${switchOn}.`;
 }

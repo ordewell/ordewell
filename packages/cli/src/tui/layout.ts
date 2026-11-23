@@ -5,7 +5,7 @@ import { assignmentFlagText, checkpointCardLines, conversationLength, conversati
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
 import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
-import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
+import { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, DELEGATION_OFFERED, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
 import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
@@ -421,7 +421,7 @@ export function chatActivity(state: TuiState): ChatActivity | null {
   if (!tv) {
     if (state.status === 'starting') return { label: 'Starting the plan…', busy: true };
     if (!plannerInFlight(state)) return null;
-    const label = state.plannerDetecting ? DETECTING : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
+    const label = state.plannerDetecting ? DETECTING_AGENTS : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     // A compaction or a wait for the planner opens no turn of its own.
     const since = state.turnGate.open !== null ? state.turnGate.openedAt : undefined;
     return since ? { label, busy: true, since } : { label, busy: true };
@@ -1089,7 +1089,6 @@ function welcomeLogo(restRows: number, rows: number, cols: number): string[] {
     .find((lines) => lines.every((line) => width(line) <= cols - 1) && lines.length + restRows <= rows) ?? [];
 }
 
-const DETECTING = 'Detecting coding agents…';
 const CHECKING_REPOSITORIES = 'Checking repositories…';
 
 /**
@@ -1145,8 +1144,39 @@ function plannerRowValue(state: TuiState, label: string): string {
   const alarm = state.runners.find((row) => row.id === runnerForProvider(state.plannerProvider));
   const paint = alarm && signedOutWithWayIn(alarm) ? style.red : (text: string) => text;
   const effort = plannerEffortLabel(state);
-  const model = state.orchestratorModel ? paint(state.orchestratorModel) : style.yellow('no model');
+  // An agent with no model picked plans with its own default, a working
+  // state; only a vendor, which has no default, is missing something.
+  const model = state.orchestratorModel
+    ? paint(state.orchestratorModel)
+    : isCliProvider(state.plannerProvider) ? paint(AGENT_DEFAULT_MODEL) : style.yellow('no model');
   return [paint(label), model, ...(effort ? [paint(effort)] : [])].join(style.grey(' · '));
+}
+
+/**
+ * The welcome's way on when nothing can plan: an agent's exact install command
+ * and page, that it signs in on its own, `/refresh` to look again, and the key
+ * route second, which `/key-set` carries on to the planner model.
+ */
+function noPlannerNotice(cols: number): string[] {
+  const room = Math.max(1, cols - 1);
+  const routes = agentInstallRoutes(process.platform === 'win32' ? 'windows' : 'posix');
+  const labelCols = Math.max(...routes.map((route) => width(route.label))) + 2;
+  // Wrapped under the label, never cut: a command shown with an ellipsis is
+  // one nobody can run, and Codex's Windows installer is past 80 columns.
+  const indent = ' '.repeat(2 + labelCols);
+  const hanging = (text: string, lead: string): string[] =>
+    wrap(text, Math.max(1, room - indent.length)).map((line, i) => `${i === 0 ? lead : indent}${line}`);
+  return [
+    ...wrap(style.yellow('No planner yet. Install a coding agent (no API key needed), then run /refresh to detect it again:'), room),
+    ...routes.flatMap((route) => [
+      ...hanging(route.command, `  ${pad(route.label, labelCols)}`),
+      ...hanging(style.grey(route.docs), indent),
+    ]),
+    ...wrap(style.grey(AGENT_SIGN_IN_NOTE), room),
+    ...wrap(style.grey(`Any agent /planner lists plans once installed: ${plannerNamesOr()}.`), room),
+    ...wrap(style.yellow('Or add an API key with /key-set, then pick its planner model.'), room),
+    '',
+  ];
 }
 
 /** `rows` is the pane the welcome is painted into. */
@@ -1159,11 +1189,15 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
 
   // Both rows wait on the daemon's probe for coding agents, as its answers do.
   const detecting = !state.plannerKnown || !state.runnersKnown;
+  // With nothing that can plan, the provider named is only the fallback, never
+  // the user's choice: name none rather than one to set up.
   const plannerValue = detecting
-    ? style.grey(DETECTING)
+    ? style.grey(DETECTING_AGENTS)
     : planner.ready
       ? plannerRowValue(state, planner.label)
-      : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
+      : !canPlan
+        ? style.yellow('none yet')
+        : style.yellow(planner.label === 'not set' ? 'not set' : `${planner.label} (unavailable)`);
 
   const prompt = wrap(style.bold('Describe a goal to start planning.'), Math.max(1, cols - 1));
   // Only true while autorun is off (ADR-0030); with it on, the same spot warns
@@ -1180,7 +1214,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     setupRow(
       'Runners',
       detecting
-        ? style.grey(DETECTING)
+        ? style.grey(DETECTING_AGENTS)
         : enabledRunners.length > 0
           ? enabledRunners.map((row) => (signedOutWithWayIn(row) ? style.red(row.name) : row.name)).join(', ')
           : style.yellow('none enabled'),
@@ -1192,15 +1226,14 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     '',
   ];
   // Only once nothing usable was found: a key reaches the welcome with the catalog, after the probe.
-  const notice = canPlan || detecting || !state.providersKnown
-    ? []
-    : [
-      ...wrap(
-        style.yellow(`Install a coding agent (${plannerNamesOr()}) and pick it with /planner. No API key needed. Or add an API key with /key-set and choose your provider.`),
-        Math.max(1, cols - 1),
-      ),
-      '',
-    ];
+  // While the probe runs, the same spot says what it is doing: a cold first probe is slow.
+  const notice = detecting
+    ? [...wrap(style.grey(DETECTING_AGENTS_DETAIL), Math.max(1, cols - 1)), '']
+    : canPlan || !state.providersKnown ? [] : noPlannerNotice(cols);
+  // Once, here, and grey like the version notice: it explains a working state.
+  const keyPassedOver = !detecting && planner.ready && state.unusedPlanningKey && isApiProvider(state.unusedPlanningKey)
+    ? [...wrap(style.grey(describeUnusedPlanningKey(state.plannerProvider, state.unusedPlanningKey, TERMINAL_UI_COMMANDS.pickPlanner)), Math.max(1, cols - 1)), '']
+    : [];
   const versionCheck = state.versionCheckNotice
     ? [...wrap(style.grey(state.versionCheckNotice), Math.max(1, cols - 1)), '']
     : [];
@@ -1209,6 +1242,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     : [];
   const tail = [
     ...notice,
+    ...keyPassedOver,
     ...versionCheck,
     ...update,
     style.grey('/help   all commands'),

@@ -26,6 +26,7 @@ import type {
 import { createWorktreeIsolation } from './GitWorktreeIsolation';
 import { SELF_REPO } from './isolationRecord';
 import { taskRefOf } from './TaskRefs';
+import { refusedAlike, refusedAlikeHold, refusedAlikeNotice, type ModeRefusal } from './modeRefusal';
 import { lostWaits, owedPark, parkPastUnrun, waitsOnTask } from './Parking';
 import { IsolationRunController, isRefused, type IsolationDecision, type IsolationStart } from './IsolationRunController';
 import { completesTask, Landing, type LandingMessage, type LandingOutcome, type UnlandedOutcome } from './Landing';
@@ -1522,10 +1523,14 @@ export class TaskOrchestrator {
         // (ADR-0034). Independent work keeps starting. A loop's check that
         // starts a round instead is no failure yet (ADR-0045 L3).
         const release = this.leave(task.id, 'failed', ended.attempt);
+        // Before anything awaits, so no tick starts a task bound to fail the same way (ADR-0018 B2).
+        const held = verdict.modeRefusal ? this.holdRefusedAlike(task, verdict.modeRefusal) : [];
         // A runner that stopped on its login is told as the way back in (ADR-0052).
         // With no scheduler the loop is carried on, unless a Stop since it was claimed ended it.
-        if (!this.loops.checkFailed(task.id, !this.isScheduling && ended.attempt.admission.current())) {
-          this.notifications.error(ended.unresumed ?? withSignInHint(ended.signedOut, failureText(this.store.get(task.id) ?? task, verdict)));
+        const told = verdict.modeRefusal && this.refusalTold(task, verdict.modeRefusal);
+        if (!this.loops.checkFailed(task.id, !this.isScheduling && ended.attempt.admission.current()) && !told) {
+          const text = withSignInHint(ended.signedOut, failureText(this.store.get(task.id) ?? task, verdict));
+          this.notifications.error(ended.unresumed ?? (verdict.modeRefusal && held.length > 0 ? `${text} ${refusedAlikeNotice(verdict.modeRefusal, held)}` : text));
         }
         await release;
         this.logAndArchive(task, verdict);
@@ -1533,6 +1538,35 @@ export class TaskOrchestrator {
       }
     }
     await this.afterVerdict(ended.task.id);
+  }
+
+  /**
+   * Hold every task not started that would meet the same mode refusal as
+   * `failed` (ADR-0018 B2), by reference and title: it would only fail the
+   * same way. A task held already keeps its own hold, and only the user's
+   * switch, retry or force start lets one go.
+   */
+  private holdRefusedAlike(failed: Readonly<Task>, refusal: ModeRefusal): string[] {
+    const failedRef = taskRefOf(this.store.planTasks, failed.id) ?? `#${failed.order}`;
+    const alike = this.store.allTasks.filter((t) => (t.status === 'pending' || t.status === 'approved')
+      && !this.attempts.has(t.id) && !this.starts.holdReason(t.id) && refusedAlike(t, { ...failed, refusal }));
+    for (const t of alike) this.starts.hold(t.id, refusedAlikeHold(refusal, failedRef), 'chosen');
+    return alike.map((t) => `${taskRefOf(this.store.planTasks, t.id) ?? `#${t.order}`} "${t.title}"`);
+  }
+
+  /**
+   * The user switched these tasks, held behind a mode refusal, to the mode
+   * their runner did start in (ADR-0018 B2): they are let go, and the run
+   * starts each when its turn comes.
+   */
+  releaseSwitched(taskIds: readonly string[]): void {
+    for (const id of taskIds) this.starts.switchedMode(id);
+    if (taskIds.length > 0) this.emit('onTaskChanged');
+  }
+
+  /** Another task failed on the same refusal already, so the run was told of it once. */
+  private refusalTold(failed: Readonly<Task>, refusal: ModeRefusal): boolean {
+    return this.store.allTasks.some((t) => t.status === 'failed' && t.verdict?.modeRefusal && refusedAlike(t, { ...failed, refusal }));
   }
 
   /**
@@ -3300,5 +3334,6 @@ function withSignInHint(hint: string | null, text: string): string {
 /** What a failed task's notice says; a loop's check out of rounds says how many it ran. */
 function failureText(task: Readonly<Task>, verdict: Verdict): string {
   if (outOfRounds(task)) return `Task "${task.title}" failed in all ${loopRoundOf(task)} rounds of its loop: ${verdict.reason}`;
-  return `Task "${task.title}" failed verification: ${verdict.reason}`;
+  // The reason is a sentence of its own: a "failed verification:" before it said the failure twice.
+  return `Task "${task.title}" failed. ${verdict.reason}`;
 }

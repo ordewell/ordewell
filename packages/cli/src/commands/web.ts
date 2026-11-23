@@ -2,6 +2,7 @@ import { existsSync } from 'fs';
 import { daemonCommand, startDaemon, resolvePort } from '../daemon';
 import { spawn } from 'child_process';
 import { constants } from 'os';
+import { withoutParentSession } from '@ordewell/core';
 import { resolve } from 'path';
 export async function handleWeb(subArgs: string[]): Promise<void> {
   const port = resolvePort(subArgs);
@@ -21,7 +22,7 @@ export async function handleWeb(subArgs: string[]): Promise<void> {
 
     const child = spawn(command.file, command.args, {
       stdio: 'inherit',
-      env: { ...process.env },
+      env: withoutParentSession(process.env),
     });
 
     // The child shares this process's group but a signal sent to this pid

@@ -244,6 +244,8 @@
 .graph-card-foot .ow-badge[data-loop] { color: var(--ow-fg); }
 .graph-card-status-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ow-fg); }
 .graph-card-elapsed { flex: none; font-variant-numeric: tabular-nums; }
+/* Why a failed task failed, one line, on the row it replaces: the foot's status line, or Compact's lane. */
+.graph-card-failure { display: block; height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; color: var(--ow-status-failed); }
 
 /* Open chat sits on the row that keeps room for it: the last in Comfortable, the title's in Compact. */
 .graph-card[data-chat='true'] .graph-card-foot,

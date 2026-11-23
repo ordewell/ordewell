@@ -24,7 +24,7 @@ import { SecretStore } from './adapters/SecretStore';
 import type { VsCodeConfig } from './adapters/VsCodeConfig';
 import type { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
 import type { VsCodeNotification } from './adapters/VsCodeNotification';
-import type { CodexSandboxAvailability, IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
+import type { CodexSandboxAvailability, ExecutionSummary, IRunner, RunnerInstallation, RunnerRegistry, ModelResolver, SettingsService, PlannerModelMemory } from '@ordewell/core';
 import { plannerSettingProblem } from './plannerSetting';
 
 // A VS Code layout preference, not a run setting: it lives in globalState rather
@@ -73,6 +73,8 @@ export interface ExtensionServices {
   accountLimits?: AccountLimitMonitor;
   /** Reads the workspace's repositories and branches for the startup view (ADR-0013); absent, the view shows none. */
   isolationPreview?: IIsolationPreview;
+  /** The first-run feedback notice at a run's passed end (ADR-0075); absent, as in a test, it never shows. */
+  firstRunFeedback?: (summary: ExecutionSummary) => void;
 }
 
 export interface ExtensionHost {
@@ -181,6 +183,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     saveCurrentSession: saveSession,
     sendRunSettings,
     refreshPlannerState: () => planner.sendState(),
+    ...(services.firstRunFeedback ? { firstRunFeedback: services.firstRunFeedback } : {}),
     log,
   };
 
@@ -271,6 +274,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   async function detectAgents(): Promise<void> {
     services.chatProvider.postMessage({ type: 'agentDetection', state: 'detecting' });
     try {
+      // Asked afresh, PATH included: this is the first screen's Detect again,
+      // and its first answer must not be a cached "not installed".
+      services.runnerInstallation.refresh();
       await detectInstalledPlanner(services.runnerInstallation);
       sendModelConfig(services.config, services.chatProvider, services.modelResolver);
       await planner.sendState();
@@ -301,7 +307,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     handleApprovePlan: () => handleApprovePlan(managerDeps),
     handleStartPlanning: (text) => handleStartPlanning(text, managerDeps, state.pendingRunners),
     sendRunnerAndModels: () => discovery.refresh(),
-    runApiKeyWizard: (provider) => discovery.runApiKeyWizard(provider),
+    // The palette's key entry goes on to the planner model as /key-set does.
+    runApiKeyWizard: (provider) => handleSlashCommand(provider ? `/key-set ${provider}` : '/key-set', slashDeps()),
     sendNextHeldPrompt: () => sendNextHeldPrompt(routerDeps),
   };
 
@@ -352,6 +359,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
         services.chatProvider.postMessage({ type: 'childNotice', childId, message: error instanceof Error ? error.message : String(error) });
       }),
       openFile: (path) => { void openWorkspaceFile(path); },
+      // Only a web page: the webview is not trusted to name a local file or a command URI.
+      openLink: (url) => { if (url.startsWith('https://')) void vscodeApi.env.openExternal(vscodeApi.Uri.parse(url)); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
       loginPlanner: runPlannerLogin,
@@ -390,10 +399,11 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function slashDeps(): SlashDeps {
     return {
+      // Read when used: /key-set asks who plans after the key is saved.
       config: {
-        orchestratorModel: services.config.orchestratorModel,
-        aiProvider: services.config.aiProvider,
-        plannerThinkingEffort: services.config.plannerThinkingEffort,
+        get orchestratorModel() { return services.config.orchestratorModel; },
+        get aiProvider() { return services.config.aiProvider; },
+        get plannerThinkingEffort() { return services.config.plannerThinkingEffort; },
       },
       modelResolver: {
         pickerOptions: () => services.modelResolver.pickerOptions(),

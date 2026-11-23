@@ -72,8 +72,9 @@ that already re-probes the Codex sandbox and the install verdicts.**
   newly installed agent can join and a removed or now-too-old one can leave;
   re-deriving uses that answer, so the fallback never points at an agent the
   latest look refused.
-- **Only the fallback moves.** A saved runner choice or a vendor key still wins,
-  exactly as before; nothing else is derived here.
+- **Only the fallback moves.** A saved runner choice still wins, and a found
+  vendor key wins only where [ADR-0076](../planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md)
+  says; nothing else is derived here.
 - **Still not per turn.** A planning turn reads the derived answer; it does not
   re-probe. The property ADR-0009 guards — one probe, not one per turn — holds.
 
@@ -125,3 +126,4 @@ that already re-probes the Codex sandbox and the install verdicts.**
 - 2026-11-05 — a refresh forgets the positive install verdicts too, so an
   upgraded or removed binary is re-checked and an ACP agent's minimum version
   is judged again; only the negative still expires on its own.
+- 2026-11-21 — a found vendor key no longer outranks the derived agent on its own (ADR-0076).

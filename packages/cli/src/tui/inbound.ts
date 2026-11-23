@@ -390,8 +390,10 @@ function dispatchLifecycle(dispatch: Dispatch, event: LifecycleMessage, sessionI
       return;
 
     // The TUI already says the run ended at `execution_complete`, and stays
-    // open through the closing turn: this is for a follower that leaves.
+    // open through the closing turn; the end standing is what the first-run
+    // feedback notice waits for, since a closing turn may still continue it.
     case 'run_concluded':
+      dispatch({ type: 'runConcluded', summary: event.summary, sessionId });
       return;
 
     // Raw runner chatter. Listed rather than defaulted, so a new lifecycle

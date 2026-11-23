@@ -53,10 +53,8 @@ export interface PanelView {
 export type SlotId =
   | 'title.breadcrumb'
   | 'title.scope'
+  /** A line in the daemon item's detail, which shows on hover or focus: the session's lease, a joined daemon. */
   | 'status.daemon'
-  | 'status.lease'
-  | 'status.runners'
-  | 'status.usage'
   /** A newer version while one is known (ADR-0063 H9). */
   | 'status.update'
   | 'popover.needsYou';

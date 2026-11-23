@@ -59,6 +59,13 @@ describe('the sign-in hint', () => {
     expect(rewordSignIn(said, TERMINAL_UI_COMMANDS, HEADLESS_CLI_COMMANDS)).toBe(`${HEADLESS[runner]} Then try again.\n\nNot logged in`);
   });
 
+  // A window whose ways in are buttons, as the desktop app's welcome is: no composer takes /login there.
+  it('words a surface whose ways in are buttons it names, with its own verb for the key entry', () => {
+    const buttons = { login: () => 'the Log in button', chooseKey: (_provider: string, label: string) => `the Set API key… button and choose ${label}`, keyVerb: 'use' };
+    expect(describeSignInWays(runnerSignIn('codex')!, buttons)).toBe('Sign in with the Log in button, or run codex login.');
+    expect(describeSignInWays(runnerSignIn('gemini-cli')!, buttons)).toBe('Use the Set API key… button and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.');
+  });
+
   it('names only the ways in where the agent may be signed in already', () => {
     expect(describeSignInWays(runnerSignIn('cursor-agent')!, TERMINAL_UI_COMMANDS)).toBe('Sign in with /login cursor-agent, or run cursor-agent login.');
     expect(describeSignInWays(runnerSignIn('gemini-cli')!, TERMINAL_UI_COMMANDS)).toBe('Run /key-set and choose Google Gemini to hand it a key, or run gemini and choose how it signs in.');

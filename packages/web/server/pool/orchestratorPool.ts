@@ -62,6 +62,7 @@ import {
   runnerForProvider,
   PlannerModelMemory,
   selectPlanner,
+  isAgentPick,
   admitSettingsEnv,
   PROVIDER_CREDENTIAL_ENV,
   removesCredential,
@@ -643,6 +644,7 @@ export class OrchestratorPool {
     const config = this.plannerConfig(undefined, this.settingsWorkspace(sessionId, workspace));
     const userSettings = this.settingsService.getAll();
     const live = sessionId ? this.live(sessionId, workspace) : undefined;
+    const unusedPlanningKey = config.unusedPlanningKey();
     return {
       orchestratorModel: config.orchestratorModel,
       // Who plans (ADR-0009) — a vendor id, or one of the three harness
@@ -653,6 +655,7 @@ export class OrchestratorPool {
       // to render the current level; without it the picker shows "default"
       // for a planner that is running at "high".
       plannerThinkingEffort: config.plannerThinkingEffort ?? '',
+      ...(unusedPlanningKey ? { unusedPlanningKey } : {}),
       // The saved level, read through the service so an environment override
       // is reported the way the next plan will read it (ADR-0001, ADR-0030).
       autonomousMode: this.settingsService.autonomousMode(),
@@ -818,6 +821,12 @@ export class OrchestratorPool {
     const selection = changesPlanner(plannerChange)
       ? selectPlanner(current, plannerChange, this.plannerModelMemory, this.plannerCatalogFor(plannerChange.provider ?? current.provider, workspace))
       : undefined;
+    // A pick with no switch is the agent's own when it plans now, and is
+    // remembered for it before the model is written: routing reads that memory,
+    // and a found key would otherwise claim a bare id its vendor also names.
+    const agentPick = selection?.remember && selection.remember.provider === current.provider
+      && isAgentPick(current.provider, selection.remember.model) ? selection.remember : undefined;
+    if (agentPick) this.plannerModelMemory.remember(agentPick.provider, agentPick.model, agentPick.effort);
 
     let unsavedEnvKeys: string[] = [];
     if (envChanges) {
@@ -890,7 +899,7 @@ export class OrchestratorPool {
 
     if (envChanges) for (const monitor of this.accountLimits.values()) monitor.refresh();
 
-    if (selection?.remember) {
+    if (selection?.remember && !agentPick) {
       const { provider, model, effort } = selection.remember;
       // Without a switch a vendor pick is keyed by the provider its model id
       // resolves to now, which the env written above already reflects.
@@ -1049,7 +1058,9 @@ export class OrchestratorPool {
     // install verdicts, and the agent detection behind the no-choice defaults.
     await this.codexSandbox.refresh();
     const installation = this.installationFor(workspace);
-    installation.refresh?.();
+    // Detection asks the daemon's own probe, so a workspace's list refreshes
+    // both: otherwise the list shows a new agent the planner cannot see.
+    for (const probe of new Set([installation, this.runnerInstallation])) probe.refresh?.();
     await this.detectInstalledPlanner();
 
     const config = new WebConfig({ enabledRunners: this.enabledRunnerOverride() });

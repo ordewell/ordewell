@@ -128,6 +128,9 @@ const bridge: OrdewellBridge = {
     restart: () => ipcRenderer.invoke(CHANNELS.updateRestart),
     dismissNotice: () => ipcRenderer.invoke(CHANNELS.updateDismissNotice),
   },
+  feedback: {
+    claim: (summary) => ipcRenderer.invoke(CHANNELS.feedbackClaim, summary),
+  },
   notify: {
     show: (request: NotificationRequest) => ipcRenderer.invoke(CHANNELS.notifyShow, request),
     setBadge: (count) => ipcRenderer.invoke(CHANNELS.notifySetBadge, count),

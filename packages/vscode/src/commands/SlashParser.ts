@@ -6,7 +6,7 @@ import type { ChatViewProvider, PlannerBackend } from '../providers/ChatViewProv
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 import { configureModelAllowlist } from './configureModelAllowlist';
 import { isBuiltinSlashCommand, resolveSlashAlias, slashHelp } from '@ordewell/ui/protocol';
-import { runPlannerWizard } from './plannerWizard';
+import { runPlannerWizard, type PlannerWizardDeps } from './plannerWizard';
 
 // A '/' text whose first word the table does not name is a discovered skill
 // (or unknown) invocation: the caller routes it to handleSendMessage, so the
@@ -17,6 +17,7 @@ export function isKnownSlashCommand(text: string): boolean {
 }
 
 export interface SlashDeps {
+  /** Read when used, not when the command starts: `/key-set` reads who plans after the key is saved. */
   config: { orchestratorModel: string; aiProvider: PlannerBackendId; plannerThinkingEffort?: string };
   modelResolver: { pickerOptions(): Promise<{ id: string; label: string; provider: string; apiProvider?: AiProvider; description?: string; pricing?: string }[]>; refresh(): Promise<unknown>; invalidate(): void; refreshRunnerModels(): void; modelsForRunners(runners: string[]): Promise<Partial<Record<string, DiscoveredModel[]>>>; };
   /** Every planner the user could pick, with the reason an unusable one can't be (ADR-0009). */
@@ -31,12 +32,40 @@ export interface SlashDeps {
   chatProvider: ChatViewProvider;
   settingsService: { getModelAllowlist(runner: string): string[] | undefined; setModelAllowlist(runner: string, ids: string[] | undefined): void; };
   sendRunnerAndModels(): Promise<void>;
-  runApiKeyWizard(provider?: ApiProvider): Promise<void>;
+  /** The provider whose key was saved, or undefined when the entry was dismissed. */
+  runApiKeyWizard(provider?: ApiProvider): Promise<ApiProvider | undefined>;
   /** What the planner should land on for `provider`: its remembered model, else the catalog's first. */
   recallPlannerModel(provider: PlannerBackendId, harnessModels: DiscoveredModel[] | undefined, vendorOptions: VendorModelOption[] | undefined): PlannerModelRecall;
   /** Switch backend, model and effort in one change and remember the pick. */
   applyPlannerChoice(provider: PlannerBackendId, modelId: string, effort: string): Promise<void>;
   log(msg: string): void;
+}
+
+function wizardDeps(deps: SlashDeps): PlannerWizardDeps {
+  return {
+    current: () => ({
+      provider: deps.config.aiProvider,
+      model: deps.config.orchestratorModel,
+      effort: deps.config.plannerThinkingEffort ?? '',
+    }),
+    plannerBackends: deps.plannerBackends,
+    modelsForRunner: async (runner) => (await deps.modelResolver.modelsForRunners([runner]))[runner] ?? [],
+    vendorModels: async (provider) => (await deps.modelResolver.pickerOptions()).filter((o) => o.apiProvider === provider),
+    recall: deps.recallPlannerModel,
+    applyChoice: deps.applyPlannerChoice,
+  };
+}
+
+/**
+ * The key entry, and then, when the saved key's vendor now plans with no model
+ * picked, that vendor's model step: a vendor has no default model, so the
+ * next goal would be refused for want of one. A coding agent that still plans
+ * needs none (ADR-0076). `config` is read after the key is saved.
+ */
+async function setKey(provider: ApiProvider | undefined, deps: SlashDeps): Promise<void> {
+  const saved = await deps.runApiKeyWizard(provider);
+  if (!saved || deps.config.aiProvider !== saved || deps.config.orchestratorModel) return;
+  await runPlannerWizard(wizardDeps(deps), { start: saved });
 }
 
 /**
@@ -47,18 +76,7 @@ export interface SlashDeps {
  */
 async function pickPlanner(arg: string | undefined, deps: SlashDeps): Promise<void> {
   if (!arg) {
-    await runPlannerWizard({
-      current: () => ({
-        provider: deps.config.aiProvider,
-        model: deps.config.orchestratorModel,
-        effort: deps.config.plannerThinkingEffort ?? '',
-      }),
-      plannerBackends: deps.plannerBackends,
-      modelsForRunner: async (runner) => (await deps.modelResolver.modelsForRunners([runner]))[runner] ?? [],
-      vendorModels: async (provider) => (await deps.modelResolver.pickerOptions()).filter((o) => o.apiProvider === provider),
-      recall: deps.recallPlannerModel,
-      applyChoice: deps.applyPlannerChoice,
-    });
+    await runPlannerWizard(wizardDeps(deps));
     return;
   }
   const chosen = (await deps.plannerBackends()).find((b) => b.id === arg.toLowerCase());
@@ -116,7 +134,7 @@ export async function handleSlashCommand(text: string, deps: SlashDeps): Promise
       return;
     }
     // A key typed inline is never read: it would sit in the chat history, so the wizard asks for it masked.
-    await deps.runApiKeyWizard(provider as ApiProvider | undefined);
+    await setKey(provider as ApiProvider | undefined, deps);
     return;
   }
   if (cmd === '/sessions') {

@@ -890,11 +890,32 @@ describe('cli.sh', { skip: process.platform === 'win32' ? 'a POSIX sh installer;
       assert.doesNotMatch(result.stdout, /Claude Code \(claude\)/);
     });
 
-    it('says none was found and that one is required, without failing the install', () => {
+    // First-run audit F2, F8: an agent is one of two routes, and each ends somewhere.
+    it('says none was found and names both routes, an agent with its install command or an API key, without failing the install', () => {
       const result = install();
       assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /No coding agent was found on PATH\. Ordewell needs one, installed and signed in: Claude Code \(claude\), Codex \(codex\)/);
+      assert.match(result.stdout, /No coding agent was found on PATH\. Ordewell plans with a coding agent or with an API key\./);
+      assert.match(result.stdout, /A coding agent, installed and signed in: Claude Code \(claude\), Codex \(codex\)/);
+      assert.match(result.stdout, /Claude Code: +curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash\n/);
+      assert.match(result.stdout, /Codex: +curl -fsSL https:\/\/chatgpt\.com\/codex\/install\.sh \| sh\n/);
+      assert.match(result.stdout, /Signing in happens in the agent itself: run claude or codex once and follow its sign-in prompt\./);
+      assert.match(result.stdout, /Or an API key: run \/key-set inside ordewell, then pick the planner model\./);
+      assert.doesNotMatch(result.stdout, /is required/);
       assert.ok(existsSync(join(result.target, 'ordewell')));
+    });
+
+    it('with an agent found, still names the key as the other route, and does not call the agent required', () => {
+      const result = install([], { shims: [commands({ codex: 'true' })] });
+      assert.match(result.stdout, /Coding agents found: Codex \(codex\)\.\nOrdewell plans with one of them, signed in \(run it once to sign in\), or with an API key \(\/key-set inside ordewell\)\./);
+      assert.doesNotMatch(result.stdout, /is required/);
+    });
+
+    it('prints the next step: change to your project and run ordewell', () => {
+      for (const shims of [[], [commands({ claude: 'true' })]]) {
+        const result = install([], { shims });
+        assert.match(result.stdout, /Next: change to your project and run ordewell:\n {2}cd \/path\/to\/your-project && ordewell\n/);
+        assert.ok(result.stdout.indexOf('Next: ') > result.stdout.indexOf('git: '), result.stdout);
+      }
     });
 
     it('does not install an agent or git', () => {

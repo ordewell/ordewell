@@ -93,7 +93,7 @@ renderer's UI is `packages/ui`, which the VS Code webview also draws (H7).
 │    │                  ├───────────────────────────────────────────────────┤ │   Script               │
 │ ⚙  │                  │ TERMINAL (hidden by default, Ctrl+`)              │                        │
 ├────┴──────────────────┴───────────────────────────────────────────────────┴────────────────────────┤
-│ ● daemon :3742 (owned, 0.13.0)   lease: this daemon   Claude Code ✓  Codex ✓   5h: 40%   7d: 12%  │ status bar
+│ ● Daemon v0.13.0 · :3742                                                       ↑ 0.13.1 available │ status bar
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
   ☰ Sessions  ⎘ Explorer  ⑂ Changes  ⑃ Git  ⚙ Settings (bottom)   ▌ active indicator   ▔ tab marker
 ```
@@ -182,17 +182,24 @@ left, where VS Code users look for it.
   the foot of the plan's approval card, Review & Merge all on the run diff.
   There it is the same action with the same label. A view never shows a second,
   different filled button.
-- **Status bar.** As in the first build, at 24 px. It shows:
-  - the daemon: attached or owned, its version, its connection state, and
-    *joined :port* while a session is joined ([W16](#w16-a-session-another-host-holds));
-  - the lease holder of the open session;
-  - the runners, each with its name and whether it is signed in;
-  - the account usage limits (`AccountLimitRows`);
+- **Status bar.** As in the first build, at 24 px, and always one line. It
+  shows two things:
+  - the daemon: its version and port, "Daemon v0.14.9 · :3742", or what needs
+    you instead (starting, reconnecting, a version mismatch, unauthorized, the
+    port taken, failed);
   - while a newer Ordewell is known, `↑ 1.3.0 available` (`↑ 1.3.0 · 42%`
-    while it downloads, `↑ 1.3.0 ready` once it has), which brings the update
-    banner back.
+    while it downloads, `↑ 1.3.0 ready` once it has, `↑ 1.3.0 · update failed`
+    when the download failed), which brings the update banner back.
 
-  Each item opens its detail.
+  The daemon item's detail opens on hover or focus, above the row: whether
+  this app started the daemon or attached to it, the open session's lease
+  holder, and *Joined :port* while a session is joined
+  ([W16](#w16-a-session-another-host-holds)). The runners' sign-in and the
+  account usage limits are not on the row: the planner's Settings and its
+  usage line show them, and each task's chat shows its own runner's limits;
+  a task paused on a usage limit is in Needs you. As the window narrows or
+  zooms, the daemon item gives way first and ends in an ellipsis; the update
+  item is never cut.
 - **A newer version.** The daily version check (ADR-0048) runs in main, on by
   default, and names a newer version on every launch while one is known: a
   banner across the window, "Ordewell 1.3.0 is available. You have 1.2.0.",
@@ -375,13 +382,14 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 │   └────────────────────────────┘  └────────────────────────────┘  └────────────────────────┘│
 │                                                                                            │
 │   RUNNERS                                                                                  │
-│   ┌────────────────────────────┐  ┌────────────────────────────┐  ┌────────────────────────┐│
-│   │ [Claude Code]              │  │ [Codex]                    │  │ [OpenCode]             ││
-│   │ ✓ Signed in                │  │ ⚠ Signed out               │  │ ✕ Not installed        ││
-│   │ version 1.4.2              │  │ version 0.9.1              │  │ Install OpenCode,      ││
-│   │                            │  │ Sign in from its CLI       │  │ then Retry.            ││
-│   │                            │  │ [Retry]                    │  │ [Retry]  [Docs ↗]      ││
-│   └────────────────────────────┘  └────────────────────────────┘  └────────────────────────┘│
+│   ┌────────────────────────────┐  ┌────────────────────────────┐                           │
+│   │ [Claude Code]              │  │ [Codex]                    │                           │
+│   │ ✓ Signed in                │  │ ⚠ Signed out               │                           │
+│   │ version 1.4.2              │  │ version 0.9.1              │                           │
+│   │                            │  │ Sign in with the Log in …  │                           │
+│   │                            │  │ [Log in] [Retry]           │                           │
+│   └────────────────────────────┘  └────────────────────────────┘                           │
+│   ▸ More agents (7)                                                                        │
 │                                                                                            │
 │              ⌘O Open folder     ⌘K Command palette     ⌘, Settings     ⌘Q Quit             │
 ├────────────────────────────────────────────────────────────────────────────────────────────┤
@@ -452,21 +460,36 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     open in a window focuses that window (H6).
   - *Forget* removes a card from the list without asking: the folder itself is
     untouched, and the toast offers Undo.
-  - For a runner that is signed out, the hint names its own CLI sign-in, as the
-    chat does (ADR-0052), and the card offers that agent's own way in: *Log
-    in*, which runs the manifest's login in a terminal, or *Set API key…*,
-    which opens the key entry for a key-based agent.
-  - For a runner that is missing, the hint reads "Install <runner>, then
-    Retry". *Docs ↗* opens the runner's own install page through
-    `shell.openExternal`.
+  - The cards come in the order a first look wants: the agents that can work
+    first, then the installed ones with something to fix (signed out, not
+    checked), then those off in Settings or too old to start, each group in
+    core's order. The agents this machine does not have fold under *More
+    agents (N)*, closed, so one working agent is not lost among missing
+    ones. With none installed the fold starts open, since the install pages
+    are the next step.
+  - For a runner that is signed out, the hint names the card's own buttons and
+    the agent's CLI sign-in, worded by core (ADR-0052) for a window with no
+    composer: "Sign in with the Log in button, or run codex login." The card
+    offers that agent's own way in: *Log in*, which runs the manifest's login
+    in a terminal, or *Set API key…*, which opens the key entry for a
+    key-based agent.
+  - For a runner that is missing, the card is neutral, not an error, and the
+    hint reads "Install <runner>, then Retry". *Docs ↗* opens the runner's own
+    install page through `shell.openExternal`.
   - *Retry* asks `GET /api/runners` again and redraws that card.
 - **Loading.**
   - *Cards* draw at once from the app's own store (name, path, the last known
     branch and goal). The live lines (status, Needs you) are skeleton bars
     until the handshake.
   - *Runner cards* are skeletons with the runner's name until
-    `GET /api/runners` answers.
-  - *Footer* reads "daemon: connecting …".
+    `GET /api/runners` answers. From the first frame the heading's line
+    names the wait, in core's words (`startupWait.ts`): "Starting Ordewell's
+    daemon on port 3742…" while this app starts its own, "Connecting to
+    Ordewell's daemon on port 3742…" while it looks for one, then "Looking
+    for coding agents on your PATH, then asking each one whether it is
+    signed in." A first probe on a cold machine is long, and skeletons alone
+    read as a stuck window.
+  - *Footer* reads "daemon: starting …" or "daemon: connecting …".
 - **Empty.**
   - *Recent projects:* no workspaces opened yet. In place of the grid is one
     wide card with a dashed `--ow-border-control` border, reading "Open a
@@ -1448,15 +1471,15 @@ A VS Code holder
   - **Joined.** The session is drawn and driven as if it were the app's own:
     the planner tab, the plan panel, task tabs, Needs you and the primary
     action all work, through the holder's daemon, while the TUI (or other
-    client) shows the same session. The holder is named in four places:
+    client) shows the same session. The holder is named in three places:
     - *The session header* shows a chip, "⇄ Joined · TUI pid 48120". It names
       the holder by what the lease records: *TUI* when the daemon has an
       `ownerPid` (a TUI's private daemon), otherwise "daemon :49213". Its
       tooltip gives the holder's port, its version and the time it took the
       lease.
-    - *The status bar's daemon item* reads "daemon :3742 (owned) · joined
-      :49213". Its detail lists both daemons, with their versions.
-    - *The status bar's lease item* reads "held by TUI (pid 48120) · joined".
+    - *The status bar's daemon item* keeps naming the app's own daemon; its
+      detail adds "Joined :49213, v0.12.3 (pid 48200)" and "Lease: held by
+      TUI (pid 48120) · joined".
     - *The session's row* in the Sessions sidebar carries the same ⇄ glyph.
 
     Files, diffs, branches and the terminal still come from the app's own
@@ -1464,7 +1487,7 @@ A VS Code holder
   - **Watch read-only** (a VS Code holder, or a join that was refused).
     - The saved state, from `GET /api/sessions/:id`, with a ⊡ *Read-only ·
       held by VS Code (pid 51234)* chip in the session header and "· read-only"
-      in the status bar's lease item.
+      on the lease line of the status bar's daemon detail.
     - Every write is disabled, with the holder named in its tooltip. The
       primary action is disabled, not hidden.
     - A *Refresh* button sits in the chip's menu.

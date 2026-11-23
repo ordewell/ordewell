@@ -1,5 +1,5 @@
 import type {
-  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
+  AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, ExecutionSummary, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
   SessionHeld, SessionMessage, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
   SurfacePlanState, Task,
 } from '@ordewell/core';
@@ -18,7 +18,7 @@ import {
 } from '@ordewell/ui/protocol';
 import { runnerName } from '@ordewell/ui/design';
 import { confirm as askInWindow } from './ConfirmDialog';
-import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, vendorNowPlansNote, type KeyEntryAnswer, type KeyEntryRequest } from './KeyEntryDialog';
 import { AgentDetection } from './agentDetection';
 import { callDaemon, messageOf } from './daemon';
 import { takeOverRefusal } from './holder';
@@ -163,7 +163,7 @@ export interface DaemonHostOptions {
 
 /** What a read-only view may still ask: local navigation, the catalog, and leaving for a new session. */
 const READ_ONLY_ALLOWED: ReadonlySet<WebviewToHost['type']> = new Set<WebviewToHost['type']>([
-  'ready', 'refreshModels', 'openTaskLog', 'openFile', 'getTaskCommands', 'newSession',
+  'ready', 'refreshModels', 'openLink', 'openTaskLog', 'openFile', 'getTaskCommands', 'newSession',
 ]);
 
 function mintSessionId(): string {
@@ -265,6 +265,7 @@ export class DaemonHost {
   private readonly sticky = new Map<HostToWebview['type'], HostToWebview>();
   private readonly taskLogs = new Map<string, TaskLogHost>();
   private readonly storeListeners = new Set<() => void>();
+  private readonly passedListeners = new Set<(summary: ExecutionSummary) => void>();
   private readonly reread = new Coalesced(() => this.readPlan());
   private snapshot: SessionSnapshotView;
   private stream: SessionStream | null = null;
@@ -353,6 +354,16 @@ export class DaemonHost {
     return () => this.storeListeners.delete(listener);
   };
 
+  /**
+   * A run of this session ended, its end standing, with every task passed:
+   * the first-run feedback notice's cue (ADR-0075). An event, not state: a
+   * window that opens the session later did not see it end.
+   */
+  onRunPassed(listener: (summary: ExecutionSummary) => void): () => void {
+    this.passedListeners.add(listener);
+    return () => { this.passedListeners.delete(listener); };
+  }
+
   readonly getSnapshot = (): SessionSnapshotView => this.snapshot;
 
   setNavigator(navigator: SessionNavigator | null): void {
@@ -440,6 +451,14 @@ export class DaemonHost {
     const unsaved = unsavedKeyWarning(saved, answer.provider);
     if (unsaved) this.view.conversation.note('system', unsaved);
     await this.refreshCatalog();
+    // A vendor that now plans has no default model, so the next goal would be
+    // refused for want of one: the key route goes on to that pick. A coding
+    // agent that still plans needs none (ADR-0076).
+    const next = vendorNowPlansNote(saved, answer.provider);
+    if (next) {
+      this.view.conversation.note('system', next);
+      this.navigator?.showSettings?.();
+    }
   }
 
   /** Whether a review of the run can be shown, so Review & Merge all has a review step to take. */
@@ -987,6 +1006,10 @@ export class DaemonHost {
         return;
       case 'openFile':
         this.navigator?.openFile(msg.path);
+        return;
+      case 'openLink':
+        // main opens https pages only, and answers with why it did not.
+        void window.ordewell.shell.openExternal(msg.url);
         return;
       case 'setPlanDockHeight':
         storeItem(PLAN_DOCK_HEIGHT_KEY, String(msg.height));
@@ -1632,7 +1655,9 @@ export class DaemonHost {
   }
 
   private showError(error: unknown): void {
-    this.emit({ type: 'showError', error: messageOf(error) });
+    // No planner ready is the one refusal whose Try Again means detecting again.
+    const noPlanner = error instanceof DaemonRefusal && error.code === 'planner_not_ready';
+    this.emit({ type: 'showError', error: messageOf(error), ...(noPlanner ? { code: 'planner_not_ready' as const } : {}) });
   }
 
   private cue(cue: SessionCue): void {
@@ -1656,6 +1681,9 @@ export class DaemonHost {
         return;
       case 'commands':
         void this.postTaskCommands(cue.taskId);
+        return;
+      case 'passed':
+        for (const listener of [...this.passedListeners]) listener(cue.summary);
         return;
     }
   }

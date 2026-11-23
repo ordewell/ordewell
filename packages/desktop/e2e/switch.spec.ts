@@ -17,7 +17,7 @@ import { expect, test, type ElectronApplication, type Page } from '@playwright/t
 import { execFileSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, runnerListed, startMock, untilListening, type Sandbox } from './fixtures';
 
 const GOAL = 'Add greeting and farewell modules';
 
@@ -110,7 +110,7 @@ test('a project window switches in place, focuses an open folder, and never leav
 
   await test.step('welcome: open the first workspace', async () => {
     win = await openFolder(electronApp, welcome, sandbox?.repo ?? '');
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
     await expectProject(win, 'repo');
     await expect(switcher(win)).toHaveAttribute('title', sandbox?.repo ?? '');
   });
@@ -120,7 +120,7 @@ test('a project window switches in place, focuses an open folder, and never leav
     await switcher(win).click();
     await switchMenu(win).getByRole('menuitem', { name: 'Open Folder…' }).click();
     await expectProject(win, 'billing');
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
     expect(electronApp.windows()).toHaveLength(1);
     // The folder it left is now a recent, and the window's own is not offered.
     await switcher(win).click();
@@ -131,7 +131,7 @@ test('a project window switches in place, focuses an open folder, and never leav
   await test.step('a recent switches back, in the same window', async () => {
     await switchMenu(win).getByRole('menuitem', { name: 'repo', exact: true }).click();
     await expectProject(win, 'repo');
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
     expect(electronApp.windows()).toHaveLength(1);
   });
 

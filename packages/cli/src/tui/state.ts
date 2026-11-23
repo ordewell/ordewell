@@ -546,6 +546,12 @@ export interface TuiState {
    */
   plannerEffort: string;
   /**
+   * The vendor whose key the daemon found but does not plan with, because the
+   * detected coding agent plans (ADR-0076); empty when none was passed over.
+   * The welcome says so once.
+   */
+  unusedPlanningKey: string;
+  /**
    * The model (and effort) last picked for each planner backend, keyed by
    * AiProvider — the settings file's `plannerModels`, so `/planner` can
    * pre-select what switching to a backend would restore.
@@ -881,6 +887,7 @@ export const STATE_SCOPE = {
   plannerProvider: 'workspace',
   plannerEnvOverride: 'workspace',
   plannerEffort: 'workspace',
+  unusedPlanningKey: 'workspace',
   plannerModels: 'workspace',
   maxParallel: 'workspace',
   configuredProviders: 'workspace',
@@ -990,6 +997,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     plannerProvider: '',
     plannerEnvOverride: '',
     plannerEffort: '',
+    unusedPlanningKey: '',
     plannerModels: {},
     maxParallel: DEFAULT_MAX_PARALLEL,
     configuredProviders: [],

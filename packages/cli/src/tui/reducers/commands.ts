@@ -3,6 +3,7 @@ import {
   providerRunnerNamed, runnerForProvider, type AiProvider,
 } from '@ordewell/core';
 import { handoffCommand } from '../handoff';
+import { FEEDBACK_COMMANDS } from '../firstRunFeedback';
 import { plannerSwitchOverrideNotice, taskOnlyRunnerRefusal } from '../../plannerModelSwitch';
 import { canonicalCommandName, findCommand, renamedNotice, type ParsedCommand } from '../slash';
 import { findTask, plannerInFlight, type PickerItem, type TuiState } from '../state';
@@ -84,6 +85,10 @@ function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
       return setMouseCapture(state, args[0]);
     case 'update':
       return requestUpdate(state);
+    // The first-run feedback notice's actions (ADR-0075), there whenever someone wants them.
+    case 'feedback':
+    case 'star':
+      return step(state, [{ type: 'openLink', url: FEEDBACK_COMMANDS[name] }]);
 
     case 'sessions':
       return step(
@@ -275,8 +280,9 @@ function setPlanner(state: TuiState, args: string[]): Step {
   }
   const opened = openStepper(state, plannerStepper);
   // The model step lists the chosen backend's catalog, so fetch it fresh; the
-  // open stepper refills when it lands.
-  return { ...opened, effects: [...opened.effects, { type: 'loadModels' }] };
+  // runner list re-probes the installed agents, so one installed while the TUI
+  // runs is offered without /refresh. The open stepper refills as each lands.
+  return { ...opened, effects: [...opened.effects, { type: 'loadModels' }, { type: 'loadRunners' }] };
 }
 
 /** The provider whose endpoint, not a key, is what sets it up: a local server takes no key. */
