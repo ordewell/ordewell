@@ -323,6 +323,8 @@ export class IsolationRunController {
    * later end decided otherwise; see {@link stillToLetGo}.
    */
   private readonly reached = new WeakMap<IsolationTaskRecord, boolean | 'landed'>();
+  /** Where each task's work that had not landed was last kept as its worktree went, so a fresh retry can say where it is rather than leave its caller to guess. */
+  private readonly keptWork = new Map<string, readonly PreservedWork[]>();
   /** The releases in flight on each record, which a spawn ended meanwhile waits out before it asks. */
   private readonly reaching = new WeakMap<IsolationTaskRecord, Promise<unknown>>();
 
@@ -1011,6 +1013,11 @@ export class IsolationRunController {
     return read.text.split('\0').filter(Boolean);
   }
 
+  /** Where the task's unlanded work was last kept on a branch as a worktree of it was removed; undefined when none was. */
+  keptWorkOf(taskId: string): readonly PreservedWork[] | undefined {
+    return this.keptWork.get(taskId);
+  }
+
   /** The branch this run's work lands on, which a board's files are compared with (ADR-0057 R9). */
   get integrationBranch(): string | undefined {
     const repos = this.run?.repos ?? [];
@@ -1164,7 +1171,10 @@ export class IsolationRunController {
       const key = kept.task?.taskId ?? `${kept.repo}:${kept.branch}`;
       byOwner.set(key, [...(byOwner.get(key) ?? []), kept]);
     }
-    for (const kept of byOwner.values()) this.tell('warn', preservedNotice(kept));
+    for (const kept of byOwner.values()) {
+      if (kept[0].task) this.keptWork.set(kept[0].task.taskId, kept);
+      this.tell('warn', preservedNotice(kept));
+    }
     for (const { worktree, reason, task } of removal.refused) this.tell('warn', refusedNotice(worktree, reason, task));
   }
 

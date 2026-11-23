@@ -410,7 +410,9 @@ and completion evidence.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
   It is offered on completed and failed structured tasks with a saved session
-  id, not on conflicts, and only while the task is still assigned to the runner
+  id, and on one stopped mid-attempt (a Stop, the task's or the run's, puts it
+  back to not started with its session saved and its worktree kept), not on
+  conflicts, and only while the task is still assigned to the runner
   that session belongs to: a saved session records its owner
   (`runnerSessionOwner`; for a plan from before that, the runner of the last
   attempt), and a session cannot cross runners
@@ -709,6 +711,12 @@ transport is retained for take-over.
 - **Continuing directly from the kept branch without bringing the integration
   tip along.** Rejected because it omits work landed while the task waited.
   Merging the previous work into the current tips preserves both when clean.
+- **No Continue for a stopped task.** The rule before 2026-11-23: a Stop left
+  the task not started, which Continue refused, so the only way on was a
+  fresh attempt from the integration tip, its stopped predecessor's commits
+  on a preserved branch it was not told of. Seen live: a supervisor stopped a
+  task after 81 minutes of committed work, was refused the continue, and its
+  fresh retry's note promised work the new worktree did not hold.
 - **A wait per task.** A limit belongs to the account a runner signs in with,
   and the runner is usable only once every limit it hit has reset.
 - **Starting a moved task fresh from the integration tip.** Previously
@@ -799,3 +807,4 @@ transport is retained for take-over.
 - 2026-11-21 — W1: after the first running-long flag the next is due at twice the last, the threshold no longer read again for it; a flag still waiting when its attempt ends is dropped.
 - 2026-11-21 — U1: a park ends its attempt as a pause does and its next start continues the saved session, or carries its files over where none can be resumed (ADR-0074).
 - 2026-11-22 — E1: the network to the provider failing (its error codes, `Can't reach the API server`, `Connection error`, `fetch failed`) is transient too, so an outage is waited out on the backoff, a task's turn and the planner's alike. Seen live: two supervisor wake-up turns failed on `EAI_AGAIN` within seconds and supervision stopped.
+- 2026-11-23 — K1: a task stopped mid-attempt, by its own Stop or the run's, with its session saved is continued as a failed one is, its kept worktree restored. Seen live: a supervisor's continue of a task stopped after 81 minutes was refused, and the fresh retry lost sight of its commits.

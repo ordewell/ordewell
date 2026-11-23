@@ -49,6 +49,20 @@ function writtenCallNote(name: string): string {
   return `[Ordewell] Your last reply wrote a tool call (${name}) as text, so it was not made. Make the call with the tool, not in your reply text.`;
 }
 
+/** The same, for a call written beside calls the reply made: those ran, and the model must not take the written one for one of them. */
+function writtenBesideNote(name: string): string {
+  return `[Ordewell] Your last reply also wrote a tool call (${name}) as text, so it was not made: only the calls you made through the tool ran. Make it with the tool, not in your reply text.`;
+}
+
+/** A note on a round, appended to its last result: the API history takes no message between a round and its results. */
+function appendNote(toolResults: ToolResult[], text: string): void {
+  const last = toolResults[toolResults.length - 1];
+  if (!last) return;
+  const note = `\n\n${text}`;
+  last.output += note;
+  last.totalChars += note.length;
+}
+
 /**
  * What the turn's record says when the instruction did not help, or could not
  * (a call made after the tool budget is spent never runs): nothing ran, and no
@@ -504,16 +518,26 @@ export abstract class BaseAiService {
   }
 
   /**
+   * A tool a reply that did make calls wrote out as text besides: one it did
+   * not call. Its round runs, so no reply is asked for; the note rides on the
+   * round's results. A recorded supervisor wrote `message_task` this way, beside
+   * a decision it recorded, twice, and told the user both messages were sent.
+   */
+  private static writtenBesideOf(chat: ResearchChat, turn: ResearchTurn): string | undefined {
+    const offered = chat.offeredTools?.();
+    if (!offered || !turn.text.includes('<')) return undefined;
+    const made = new Set(turn.toolCalls.map((tc) => tc.name));
+    return writtenToolCall(turn.text, new Set([...offered].filter((name) => !made.has(name))));
+  }
+
+  /**
    * Countdown appended to the last tool result of the final few rounds, so the
    * model lands the turn on its own terms instead of being cut off exactly at
    * the budget boundary mid-exploration.
    */
   private static appendBudgetCountdown(toolResults: ToolResult[], remaining: number, wrapUpAction: string): void {
-    if (remaining <= 0 || remaining > 3 || toolResults.length === 0) return;
-    const note = `\n\n[research budget: only ${remaining} tool round${remaining === 1 ? '' : 's'} left this turn — prioritize the most important remaining lookups, then ${wrapUpAction}.]`;
-    const last = toolResults[toolResults.length - 1];
-    last.output += note;
-    last.totalChars += note.length;
+    if (remaining <= 0 || remaining > 3) return;
+    appendNote(toolResults, `[research budget: only ${remaining} tool round${remaining === 1 ? '' : 's'} left this turn — prioritize the most important remaining lookups, then ${wrapUpAction}.]`);
   }
 
   /**
@@ -623,7 +647,13 @@ export abstract class BaseAiService {
             continue;
           }
           const thinking = turn.reasoning ? turn.reasoning.slice(-200) : '';
+          const beside = BaseAiService.writtenBesideOf(chat, turn);
+          if (beside !== undefined && last) {
+            onProgress({ type: 'text_retracted', segmentId: last.segmentId });
+            last = undefined;
+          }
           const { toolResults, logEntries } = await this.runRound(chat, turn.toolCalls, ctx, onProgress, step, thinking, signal);
+          if (beside !== undefined) appendNote(toolResults, writtenBesideNote(beside));
           researchLog.push(...logEntries);
           BaseAiService.appendBudgetCountdown(toolResults, MAX_STEPS - step - 1, 'reply to the user (summary, question, or plan JSON)');
           turn = await call(() => chat.sendToolResults(toolResults, signal));

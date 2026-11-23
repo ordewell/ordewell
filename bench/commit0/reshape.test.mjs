@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadCore, reshape } from './reshape.mjs';
+import { loadCore, reshape, reshapeChecks } from './reshape.mjs';
 
 const core = await loadCore();
 const t = (id, deps) => ({ id, order: 0, title: `Implement ${id}`, description: '', type: 'ai', status: 'pending', dependencies: deps, prompt: `Fill in src/lib/${id}.py.`, subtasks: [], assignedRunner: 'claude-code' });
@@ -112,4 +112,24 @@ test('with the run\'s repository, the closing check is given the test directorie
   assert.ok(r.renoted.tasks.find((x) => x.id === 'close').prompt.endsWith('src/lib/minors/tests (2 test files).'));
   assert.equal(r.checks.sameGraph, true);
   assert.deepEqual(r.failed, []);
+});
+
+// A title is free text, and a slice's note names the tasks it waits for as `"title" (id)`.
+test('parenthesised text in a title is not taken for a task id, a quoted title or one holding "has landed" included', async () => {
+  const recorded = { tasks: numbered([
+    { ...t('r', []), title: 'Restore imports (classes/function.py)' },
+    { ...t('g', ['r']), title: 'Port "argmap" (argmap) once it has landed' },
+    ...slices(5, ['r', 'g']),
+    t('close', sliceIds(5))]) };
+  const r = await reshape(core, recorded);
+  assert.match(r.renoted.tasks.find((x) => x.id === 's1').prompt, /\(classes\/function\.py\)/);
+  assert.equal(r.checks.slicesToldTruly, true);
+  assert.deepEqual(r.failed, []);
+});
+
+test('a slice told it waits for a task it does not wait for fails the check', async () => {
+  const recorded = { tasks: numbered([t('r', []), ...slices(5, ['r']), t('close', sliceIds(5))]) };
+  const r = await reshape(core, recorded);
+  const lie = { ...r.renoted, tasks: r.renoted.tasks.map((x) => (x.id === 's2' ? { ...x, prompt: x.prompt.replace('(r)', '(s3)') } : x)) };
+  assert.equal(reshapeChecks(recorded, lie).checks.slicesToldTruly, false);
 });

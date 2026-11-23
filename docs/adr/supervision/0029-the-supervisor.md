@@ -552,7 +552,12 @@ do differently: for a task that failed or waits on a person, or one stopped
 and on hold, whose next start is the attempt it is for. It is stored with the
 attempt (`retryNote`) and given to the runner with its brief under a heading
 that names it the supervisor's (or the planner's) note for this attempt, with
-the task's prompt unchanged. The next attempt starts without it. A user's retry reads no message, a session retry has no new attempt to
+the task's prompt unchanged. The next attempt starts without it. A fresh
+retry's answer, in an isolated run, says the attempt starts from the
+integration tip and names the branch the earlier attempt's unlanded work was
+kept on, since a note can only point at what the new worktree holds; a
+stopped task's own answer says `retry_task` from `session` goes on with that
+work in place (ADR-0018, K1). A user's retry reads no message, a session retry has no new attempt to
 carry one, and a script or delegated task has no brief to carry it, so a note
 there is refused. An `edit_plan` that changes the prompt of a failed or held
 task answers that the task still stands that way and needs `retry_task` to
@@ -897,3 +902,4 @@ until #30 exists.
 - 2026-11-19 — the Act brief records a remainder shown undoable as a known gap, in the closing check's brief and the message to the user, with no task; a follow-up task gets only a reachable remainder, and none is added for an undoable remainder after the run's last task has ended without new evidence.
 - 2026-11-21 — a blocker reported in landed work is a held attention event, `landed_blocker` (ADR-0073).
 - 2026-11-22 — a wake-up turn's call that fails on the network is retried on E1's backoff; what happens once the run is unsupervised is kept rather than dropped; the stop notice says the setting reads Off and names `/settings`; a usage limit after the turn's change, with its reset known, waits for it instead of ending supervision; and the user's level set again catches the supervisor up (ADR-0030). Seen live: two wake-up turns failed on `EAI_AGAIN`, a check then failed with four tasks waiting, and nothing reached the supervisor once Act was set again.
+- 2026-11-23 — a fresh retry's answer names the integration tip it starts from and the branch holding the earlier attempt's unlanded work, and a stop's answer names the continue that keeps that work (ADR-0018, K1). Seen live: a fresh retry's note told the new attempt to build on commits that were on a preserved branch.

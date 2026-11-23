@@ -119,13 +119,15 @@ export function cut(text: string, chars: number): string {
  * bound what the planner is sent; the transcript keeps them all. The newest is
  * what opened the turn, so it stays whole and the oldest go first, each named
  * in {@link leftOut}: the turn settles what it was sent, and nothing raises
- * those events again.
+ * those events again. `room` is what the turn sends beside them within the
+ * same cap: the account of the last wake-up turn's acts.
  */
-export function boundedWakeUps(digests: readonly string[]): string[] {
-  if (digests.reduce((used, digest) => used + digest.length, 0) <= WAKE_MAX_CHARS) return [...digests];
+export function boundedWakeUps(digests: readonly string[], room = 0): string[] {
+  const max = WAKE_MAX_CHARS - room;
+  if (digests.reduce((used, digest) => used + digest.length, 0) <= max) return [...digests];
   let from = digests.length - 1;
   let used = digests[from].length + LEFT_OUT_ROOM;
-  while (from > 0 && used + digests[from - 1].length <= WAKE_MAX_CHARS) used += digests[--from].length;
+  while (from > 0 && used + digests[from - 1].length <= max) used += digests[--from].length;
   return from > 0 ? [leftOut(digests.slice(0, from)), ...digests.slice(from)] : [...digests];
 }
 
