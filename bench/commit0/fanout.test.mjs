@@ -1,7 +1,11 @@
 // The script's reading of a plan's fan-out, on the shapes the recorded runs had.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fanOutProperties, fanOutShape } from './fanout.mjs';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fanOutProperties, fanOutShape, median, reviewedWaits } from './fanout.mjs';
 
 const t = (id, deps, extra = {}) => ({ id, title: `T ${id}`, type: 'ai', dependencies: deps, prompt: `Fill in src/${id}.py.`, ...extra });
 const slices = (n, deps) => Array.from({ length: n }, (_, i) => t(`s${i + 1}`, deps));
@@ -112,10 +116,88 @@ test('as core: a core task beside a few slices that every slice of the fan-out w
   assert.deepEqual(p.numbers.faults, []);
 });
 
+// Recorded: a chain before the slices, a catch-all off the opening task, and a last task that waited for only some slices.
+test('as core: a chain before the slices is read whole beside a catch-all off the opening task and a last task waiting for some slices', () => {
+  const plan = { tasks: [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('sweep', ['r']), t('close', ['s1', 's2', 'sweep'])] };
+  const s = fanOutShape(plan);
+  assert.deepEqual(s.gates.map((x) => x.id), ['r', 'a', 'b']);
+  assert.equal(s.opening.id, 'r');
+  assert.deepEqual(s.faults, ['serial-opening', 'no-closing']);
+});
+
 test('P8: every task before the slices carries the import criterion, and the opening task may edit any file for it', () => {
   const opening = 'Plan shape: 5 slices wait for this task to land before any of them starts, … collects its tests without an error … For that alone you may edit any file …';
   const shared = 'Plan shape: 5 slices wait for this task to land before they start, … collects its tests without an error …';
   const plan = (coreNote) => ({ tasks: [t('r', [], { prompt: `Restore.\n\n${opening}` }), t('core', ['r'], { prompt: `Core.${coreNote}` }), ...slices(5, ['core']), t('close', sliceIds(5))] });
   assert.equal(fanOutProperties(plan(`\n\n${shared}`)).P8_beforeSlicesImport, true);
   assert.equal(fanOutProperties(plan('')).P8_beforeSlicesImport, false);
+});
+
+// The same plan as first written and after review: what each slice waits for among the tasks before the slices.
+test('reviewedWaits: a task a review added before the slices is a new ancestor of every slice, and the counts are per plan', () => {
+  const written = { tasks: [t('r', []), ...slices(6, ['r']), t('close', sliceIds(6))] };
+  const reviewed = { tasks: [t('r', []), t('fix', ['r']), ...slices(6, ['r', 'fix']), t('close', sliceIds(6))] };
+  const m = reviewedWaits(written, reviewed);
+  assert.deepEqual(m.slices.map((s) => [s.id, s.written, s.reviewed]), sliceIds(6).map((id) => [id, ['r'], ['fix', 'r']]));
+  assert.deepEqual(m.written, { median: 1, max: 1 });
+  assert.deepEqual(m.reviewed, { median: 2, max: 2 });
+  assert.deepEqual(m.newAncestry, sliceIds(6).map((task) => ({ task, waitsFor: 'fix' })));
+  assert.deepEqual(m.openingCut, []);
+});
+
+test('reviewedWaits: a wait whose task was already an ancestor adds nothing; the median is of the slices, the maximum the deepest', () => {
+  const written = { tasks: [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('close', sliceIds(5))] };
+  // The review makes s1 wait for r directly (it already did, through b) and s2 for the slice s3 (new).
+  const reviewed = { tasks: written.tasks.map((x) => (x.id === 's1' ? { ...x, dependencies: ['b', 'r'] } : x.id === 's2' ? { ...x, dependencies: ['b', 's3'] } : x)) };
+  const m = reviewedWaits(written, reviewed);
+  assert.deepEqual(m.newAncestry, [{ task: 's2', waitsFor: 's3' }]);
+  assert.deepEqual(m.written, { median: 3, max: 3 });
+  assert.deepEqual(m.reviewed, { median: 3, max: 3 });
+});
+
+test('reviewedWaits: a slice that no longer waits for what every slice waited for as written is an opening cut', () => {
+  const written = { tasks: [t('r', []), ...slices(5, ['r']), t('close', sliceIds(5))] };
+  const reviewed = { tasks: written.tasks.map((x) => (x.id === 's5' ? { ...x, dependencies: [] } : x)) };
+  const m = reviewedWaits(written, reviewed);
+  assert.deepEqual(m.openingCut, [{ slice: 's5', lost: ['r'] }]);
+  assert.deepEqual(m.newAncestry, []);
+  // A plan reviewed with its slices still all behind the opening task cuts nothing.
+  assert.deepEqual(reviewedWaits(written, written).openingCut, []);
+});
+
+test('reviewedWaits: a slice outside the fan-out that waited for fewer tasks before the slices, and a review that makes it wait for the rest', () => {
+  const written = { tasks: [t('r', []), t('g', ['r']), ...slices(4, ['g']), t('p', ['r']), t('close', [...sliceIds(4), 'p'])] };
+  const reviewed = { tasks: written.tasks.map((x) => (x.id === 'p' ? { ...x, dependencies: ['g'] } : x)) };
+  const m = reviewedWaits(written, reviewed);
+  assert.deepEqual(m.slices.map((s) => [s.id, s.written.length, s.reviewed.length]), [...sliceIds(4).map((id) => [id, 2, 2]), ['p', 1, 2]]);
+  assert.deepEqual(m.written, { median: 2, max: 2 });
+  assert.deepEqual(m.reviewed, { median: 2, max: 2 });
+  assert.deepEqual(m.newAncestry, [{ task: 'p', waitsFor: 'g' }]);
+});
+
+test('median: the middle value, the mean of the middle two for an even count, null for none', () => {
+  assert.equal(median([3, 1, 2]), 2);
+  assert.equal(median([4, 1, 3, 2]), 2.5);
+  assert.equal(median([]), null);
+});
+
+test('fanout.mjs --review prints one JSON line a pair of plans', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fanout-review-'));
+  try {
+    const written = { tasks: [t('r', []), ...slices(5, ['r']), t('close', sliceIds(5))] };
+    const reviewed = { tasks: written.tasks.map((x) => (x.id === 's5' ? { ...x, dependencies: [] } : x)) };
+    fs.writeFileSync(path.join(dir, 'w.json'), JSON.stringify(written));
+    fs.writeFileSync(path.join(dir, 'r.json'), JSON.stringify(reviewed));
+    const out = execFileSync(process.execPath, [path.join(import.meta.dirname, 'fanout.mjs'), '--review', path.join(dir, 'w.json'), path.join(dir, 'r.json')], { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } });
+    const line = JSON.parse(out);
+    assert.deepEqual(line.openingCut, [{ slice: 's5', lost: ['r'] }]);
+    assert.deepEqual(line.files, [path.join(dir, 'w.json'), path.join(dir, 'r.json')]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reviewedWaits: a plan with no fan-out reports no slices', () => {
+  const serial = { tasks: [t('a', []), t('b', ['a'])] };
+  assert.deepEqual(reviewedWaits(serial, serial), { slices: [], written: { median: null, max: null }, reviewed: { median: null, max: null }, newAncestry: [], openingCut: [] });
 });

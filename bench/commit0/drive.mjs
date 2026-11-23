@@ -35,6 +35,11 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --fixture              a synthetic library built in --image, to prove the checks (dry run only)
   --image <image>        the image for --fixture
   --arm A|B|both         which arms (default both)
+  --effort-a <level>     the reasoning effort of arm A's task, plain or continued (${L.EFFORTS.join(', ')}); none is set without it, and B's
+                         tasks carry the effort the planner gave them. Recorded in every result (not with --arm B or --plan-only)
+  --continue-a           arm A becomes the control arm, recorded as A-continued: the same single agent, continued with
+                         one fixed message each time its attempt ends while the caps have room, until a cap, a bound
+                         or the agent giving up (not with --arm B or --plan-only)
   --plan-only            make arm B's plan and record its shape, then stop: nothing runs, merges or is scored,
                          so the result is never a scored one; arm A has no plan, so --arm A is refused and
                          --arm both means B (with --run or --rehearse, not --dry-run)
@@ -43,6 +48,9 @@ const HELP = `Usage: node bench/commit0/drive.mjs (--dry-run | --run | --sweep) 
   --cap-usd <usd>        the spend cap, the same for both arms (default ${L.CAP_USD})
   --call-budget <n>      the built-in runner's model calls per attempt, the same for both arms (default ${L.STEP_LIMIT});
                          recorded in every result, and a pair whose arms differ is not valid
+  --task-setting <k=v>   an Ordewell task setting, written into both arms' settings.json alike; repeatable, one value
+                         per name. Accepted: ${Object.keys(L.TASK_SETTINGS).join(', ')} (a whole number, or ${Object.values(L.TASK_SETTINGS).map((d) => d.word).join(' / ')}
+                         respectively). Recorded in every result, and a pair whose arms differ is not valid
   --parallel <n>         arm B's ORDEWELL_MAX_PARALLEL (default ${L.PARALLEL}); arm A runs one task
   --cpus <n>             the box's CPU quota (default ${L.CPUS})
   --memory <size>        the box's memory quota, swap held to it (default ${L.MEMORY})
@@ -668,8 +676,18 @@ async function writeSettings(sb, arm, settings) {
   return r.code === 0;
 }
 
+/** Reads the settings file and environment back inside the box, as the daemon's processes will see them, and judges them against the task settings passed. */
+async function checkTaskSettingsInBox(lib, sb, arm, settings) {
+  const want = settings.taskSettings;
+  if (Object.keys(want).length === 0) return;
+  const file = await inBox(sb, ['cat', `${BOX_HOME}/.ordewell/settings.json`]);
+  const env = await inBox(sb, ['printenv']);
+  const v = L.judgeTaskSettingsInBox({ file: file.stdout, env: env.stdout }, want);
+  check(lib.name, `arm ${arm.id} task settings in the box`, v.ok, v.ok ? `${BOX_HOME}/.ordewell/settings.json holds ${L.describeTaskSettings(want)}, and no ORDEWELL_TASK_* variable overrides it` : v.failures);
+}
+
 async function createArmASession(lib, sb) {
-  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.ARM_A_PLAN_JS, lib.workdir, L.goalText(lib), L.MODEL_ID, L.MODEL_LABEL]);
+  const r = await inBox(sb, [NODE_IN_BOX, '-e', L.ARM_A_PLAN_JS, lib.workdir, L.goalText(lib), L.MODEL_ID, L.MODEL_LABEL, opts.effortA ?? '']);
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
@@ -797,15 +815,23 @@ async function stopRun(lib, sb, { sessionId, followers = [], merge = false, log 
   return out;
 }
 
+/** The work in the box's worktrees as one hash (the control arm's measure of an attempt's change), null where the box could not be asked. */
+async function treeFingerprint(lib, sb) {
+  const r = await inBox(sb, ['sh', '-c', L.TREE_FINGERPRINT_SH, 'sh', lib.workdir], { timeoutMs: 120_000 });
+  const hash = r.stdout.trim();
+  return r.code === 0 && /^[0-9a-f]{40}$/.test(hash) ? hash : null;
+}
+
 /** The arm in a dry run: everything it does before its first model call. */
 async function dryArm(lib, sb, arm, settings, runDir) {
   check(lib.name, `arm ${arm.id} settings written`, await writeSettings(sb, arm, settings), `${BOX_HOME}/.ordewell/settings.json: ${JSON.stringify(L.boxSettings(arm, settings))}`);
+  await checkTaskSettingsInBox(lib, sb, arm, settings);
   await checkQuota(lib, sb, settings);
   // B's planner turn is a model call, so B's settings are read back on a session written as A's is.
   const sessionId = await createArmASession(lib, sb);
   const plan = sessionId ? await readSaved(lib, sb, sessionId) : null;
   const verdict = L.judgePlan(plan);
-  check(lib.name, arm.id === 'A' ? 'arm A session' : 'arm B probe session', Boolean(sessionId) && verdict.ok, sessionId
+  check(lib.name, L.isSingleAgent(arm.id) ? `arm ${arm.id} session` : 'arm B probe session', Boolean(sessionId) && verdict.ok, sessionId
     ? [`session ${sessionId}: ${plan?.tasks?.length ?? 0} task on ${plan?.tasks?.[0]?.assignedRunner} with ${plan?.tasks?.[0]?.assignedModel?.modelId} in mode ${plan?.tasks?.[0]?.taskMode}, plan ${plan?.status}`, ...verdict.failures]
     : 'core could not save the session');
   const log = fs.createWriteStream(path.join(runDir, 'ordewell.log'));
@@ -822,10 +848,15 @@ async function dryArm(lib, sb, arm, settings, runDir) {
   } finally {
     log.end();
   }
+  if (arm.continued) {
+    // What the control arm reads between attempts, asked of the box as it stands: one hash, and the same one twice (it moves only with the work).
+    const [one, two] = [await treeFingerprint(lib, sb), await treeFingerprint(lib, sb)];
+    check(lib.name, `arm ${arm.id} tree fingerprint`, Boolean(one) && one === two, one && one === two ? `${one.slice(0, 12)}, the same twice with nothing changed` : `read ${one ?? 'nothing'} then ${two ?? 'nothing'}`);
+  }
   const cmds = L.armCommands(arm, { workspace: lib.workdir, goal: L.goalText(lib), sessionId: sessionId ?? '<session>' });
-  check(lib.name, `arm ${arm.id} ${arm.id === 'A' ? 'run and merge' : 'plan, run and merge'}`, true, [
+  check(lib.name, `arm ${arm.id} ${L.isSingleAgent(arm.id) ? 'run and merge' : 'plan, run and merge'}`, true, [
     'not run: each is a model call, or merges what one made',
-    ...(arm.id === 'A' ? cmds.slice(1) : cmds).map((c) => c.map((a) => (a === L.goalText(lib) ? JSON.stringify(a) : a)).join(' ')),
+    ...(L.isSingleAgent(arm.id) ? cmds.slice(1) : cmds).map((c) => c.map((a) => (a === L.goalText(lib) ? JSON.stringify(a) : a)).join(' ')),
   ], { unverified: true });
 }
 
@@ -906,6 +937,7 @@ async function transcriptSummary(sb) {
  */
 async function realArm(lib, sb, arm, settings, runDir) {
   must(await writeSettings(sb, arm, settings), 'settings');
+  await checkTaskSettingsInBox(lib, sb, arm, settings);
   const log = fs.createWriteStream(path.join(runDir, 'ordewell.log'));
   const started = Date.now();
   const before = opts.batchShared ? null : await keySpent();
@@ -923,6 +955,73 @@ async function realArm(lib, sb, arm, settings, runDir) {
   let planStartMs = null;
   let planEndMs = null;
   let planned = null;
+  // The control arm's record of its continuations; null for every other arm.
+  const cont = arm.continued ? L.createContinuation() : null;
+  let refused = 0;
+
+  /**
+   * Puts the fixed message into the arm's task. A task parked on input (its
+   * turn ended in prose) gets it as the reply it waits for, `message_task`; a
+   * finished task has its saved session continued through the CLI
+   * (`retry_task` from the session). One whose session cannot be continued is
+   * not retried: core would run a fresh attempt in a new worktree, and the arm
+   * is scored on the worktree its work is kept in.
+   */
+  const sendContinuation = async (task, ended) => {
+    const ref = String(task.order ?? 1);
+    const execute = async (command) => {
+      const r = await inBox(sb, [NODE_IN_BOX, '-e', L.EXECUTE_COMMAND_JS, lib.workdir, sessionId, JSON.stringify(command)], { log, timeoutMs: 150_000 });
+      let reply;
+      try { reply = JSON.parse(r.stdout); } catch { reply = { error: `exit ${r.code}` }; }
+      return reply.status === 200 ? { ok: true } : { ok: false, detail: reply.error ?? `status ${reply.status}: ${JSON.stringify(reply.body ?? null).slice(0, 300)}` };
+    };
+    if (ended.status === 'awaiting_user') {
+      log.write('\n[commit0] message_task <the continuation message>: the reply to the task parked on input\n');
+      return { ...(await execute({ command: 'message_task', task: ref, text: L.CONTINUE_MESSAGE })), via: 'message' };
+    }
+    const argv = ['ordewell', 'continue', ref, L.CONTINUE_MESSAGE, '--session-id', sessionId, '--workspace', lib.workdir];
+    log.write(`\n[commit0] $ ordewell continue ${ref} <the continuation message> --session-id ${sessionId}\n`);
+    const r = await inBox(sb, argv, { workdir: lib.workdir, log, timeoutMs: 120_000 });
+    if (r.code === 0) return { ok: true, via: 'continue' };
+    const refusal = L.continueRefusal(r);
+    return { ok: false, cannotContinue: refusal.cannotContinue, detail: refusal.detail };
+  };
+
+  /**
+   * The control arm's turn at an attempt that has ended: continue it, or say
+   * why not. `over` ends the run; `handled` means this poll's work is done.
+   */
+  const continueAttempt = async (ended, plan, { transcripts, cap, nowMs }) => {
+    const fingerprint = await treeFingerprint(lib, sb);
+    const step = L.continuationStep(cont, {
+      ended, fingerprint, usageLines: transcripts.usageLines, spentUsd: cap.spentUsd, elapsedMs: nowMs - started,
+      capUsd: settings.capUsd, wallCapMs: settings.wallCapMs, now: new Date(nowMs).toISOString(),
+    });
+    if (step.action === 'wait') return { handled: true };
+    if (step.action === 'stop') {
+      endMs = Date.now();
+      return { over: `not continued (${step.why}) after ${cont.continuations.length} continuation${cont.continuations.length === 1 ? '' : 's'}, ${ended.verdict} at $${cap.spentUsd}` };
+    }
+    const sent = await sendContinuation(plan.tasks[0], ended);
+    if (!sent.ok && sent.cannotContinue) {
+      cont.stop = { why: 'cannot-continue', atMs: nowMs - started, spentUsd: cap.spentUsd, callsSoFar: transcripts.usageLines, detail: sent.detail };
+      endMs = Date.now();
+      return { over: `the session cannot be continued: ${sent.detail}` };
+    }
+    if (!sent.ok) {
+      // The message did not go in: the same end is read again at the next poll. Three refusals in a row end the run.
+      refused += 1;
+      log.write(`\n[commit0] the continuation was refused (${refused}): ${sent.detail}\n`);
+      if (refused < 3) return { handled: true };
+      cont.stop = { why: 'continue-refused', atMs: nowMs - started, spentUsd: cap.spentUsd, callsSoFar: transcripts.usageLines, detail: sent.detail };
+      endMs = Date.now();
+      return { over: `the continuation was refused three times: ${sent.detail}` };
+    }
+    refused = 0;
+    L.markSent(cont, step.record, { fingerprint, usageLines: transcripts.usageLines, attempts: ended.attempts }, { via: sent.via });
+    console.log(`  continued (${sent.via === 'message' ? 'reply to the parked task' : 'saved session'}) after ${ended.verdict}: continuation ${step.record.n}, ${transcripts.usageLines} calls, $${cap.spentUsd}`);
+    return { handled: true };
+  };
 
   /** One look at the run; returns why it is over, or null. */
   const poll = async () => {
@@ -954,6 +1053,16 @@ async function realArm(lib, sb, arm, settings, runDir) {
     if (start.stop) {
       stopped = { why: start.why, atMs: nowMs - started, spentUsd: cap.spentUsd, detail: start.detail };
       return start.detail;
+    }
+    if (cont) {
+      // By the task's own status: a task parked on input holds a live session the run view counts as running, which says nothing of a turn begun.
+      if (L.allTasks(plan).some((t) => t.status === 'in_progress')) cont.sawLive = true;
+      const ended = L.attemptEnded({ plan, activity: view.activity });
+      if (ended) {
+        const turn = await continueAttempt(ended, plan, { transcripts, cap, nowMs });
+        if (turn.over) return turn.over;
+        if (turn.handled) return null;
+      }
     }
     const s = L.stallDecision({ plan, nowMs, sinceMs: stall.sinceMs, stallMs });
     stall = s;
@@ -992,7 +1101,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
 
   let closing = null;
   try {
-    if (arm.id === 'A') {
+    if (L.isSingleAgent(arm.id)) {
       sessionId = await createArmASession(lib, sb);
       must(sessionId, 'arm A session');
     } else {
@@ -1053,6 +1162,7 @@ async function realArm(lib, sb, arm, settings, runDir) {
       : before !== null && after !== null ? { billedUsd: L.round6(after - before), source: 'openrouter key usage' } : null,
     finalPlan,
     planned,
+    continuation: L.continuationRecord(cont),
   };
 }
 
@@ -1273,7 +1383,7 @@ async function exportReferenceFiles(lib, sb, runDir) {
 async function fixtureArm(lib, sb, refFiles, arm) {
   let at = lib.workdir;
   let sessionId = null;
-  if (arm.id === 'A') {
+  if (L.isSingleAgent(arm.id)) {
     const prep = await inBox(sb, [NODE_IN_BOX, '-e', L.FIXTURE_TASK_JS, 'prepare', lib.workdir, L.goalText(lib)], { timeoutMs: 120_000 });
     let made = null;
     try { made = JSON.parse(prep.stdout); } catch { /* reported below */ }
@@ -1315,7 +1425,7 @@ async function fixtureArm(lib, sb, refFiles, arm) {
 }
 
 /** Whether the fresh eval counted the fixture arm's source and nothing else of its box. */
-async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline) {
+async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline, collected) {
   const failures = [];
   for (const p of [fixture.module, fixture.init]) if (!scored.copied.includes(p)) failures.push(`${p} did not cross`);
   if (!scored.excluded.some((e) => e.path === fixture.test && /test/.test(e.reason))) failures.push(`${fixture.test} was not left out as a test`);
@@ -1330,6 +1440,10 @@ async function checkFixtureScored(lib, sb, fixture, scored, evalBox, baseline) {
   if (broken.length) failures.push(`collection errors name ${DRY_MODULE}: ${broken.slice(0, 2).join(' | ')}`);
   check(lib.name, 'fresh eval counts the fixture arm\'s source alone', failures.length === 0, failures.length ? failures
     : `${t.passed} passed against the baseline's ${baseline?.passed ?? 0}: the source edit and ${fixture.module} counted; the test edit, the filters and core.fsmonitor did not reach the eval`);
+  // The fixture arm's score is the reference's own, so a library whose reference a real run would judge invalid fails here, with the run's reason.
+  const reasons = L.judgeScore({ ...t, collected });
+  check(lib.name, 'the reference\'s own score is judged valid', reasons.length === 0, reasons.length ? reasons
+    : `${t.passed} passed, ${t.failed} failed, ${t.skipped} skipped${t.moduleSkipped ? ` (${t.moduleSkipped} of them module-level)` : ''} of ${collected} collected`);
 }
 
 async function copyOut(sb, from, to) {
@@ -1355,7 +1469,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
   const runId = L.runIdFor({ stamp, lib: lib.name, arm: arm.id, seed: opts.seed });
   const runDir = path.join(runsDir, runId);
   fs.mkdirSync(runDir, { recursive: true });
-  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h, ${settings.callBudget} calls per attempt; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
+  console.log(`\n${lib.name}, arm ${arm.id} (${arm.label}; cap $${settings.capUsd}, ${settings.wallCapMs / 3_600_000} h, ${settings.callBudget} calls per attempt; task settings ${L.describeTaskSettings(settings.taskSettings)}; supervisor ${settings.supervisorLevel}, ${settings.parallel} at once, ${settings.cpus} CPUs, ${settings.memory}) -> ${runDir}`);
   const startedAt = new Date().toISOString();
   const first = checks.length;
   let sb = null;
@@ -1409,7 +1523,7 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
       const copy = await copyArmWorkdir(lib, sb, path.join(runDir, 'arm-workdir'));
       record.files = filesToScore(lib, arm, copy, record.arm?.finalPlan ?? fixture?.plan ?? null);
       if (fixture?.plan) checkHiddenWorktree(lib, arm, copy, fixture.plan);
-      const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline) : null;
+      const inspect = fixture ? (box, scored) => checkFixtureScored(lib, sb, fixture, scored, box, record.baseline, record.network.collected) : null;
       record.scoring = await scoreInFreshBox(lib, record.files.dir, { runId, settings, runDir, inspect });
       if (record.scoring.patchError) record.files.patches[0].error = record.scoring.patchError;
       record.tests = record.scoring.tests ? { ...record.scoring.tests, collected: record.network.collected } : null;
@@ -1447,7 +1561,8 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
         : record.transcripts?.sessions ? { billedUsd: record.transcripts.spendUsd, source: 'runner transcripts (the key could not be read)' } : null),
       transcripts: record.transcripts, stopped: record.arm?.stopped, stalled: record.arm?.stalled, truncated: record.truncated,
       scoredFrom: record.files?.scoredFrom, scoring: record.scoring, patches: record.files?.patches, validity,
-      providerPin: opts.providerPin, referenceSpend: reference, dryRun: opts.dryRun, planOnly: opts.planOnly, startedAt, endedAt: new Date().toISOString(),
+      providerPin: opts.providerPin, referenceSpend: reference, dryRun: opts.dryRun, planOnly: opts.planOnly,
+      effortA: L.isSingleAgent(arm.id) ? opts.effortA ?? null : null, efforts: L.effortCounts(plan), startedAt, endedAt: new Date().toISOString(),
     }),
     seed: opts.seed,
     batchDir: opts.batchDir,
@@ -1459,7 +1574,9 @@ async function runOne(lib, arm, ordewell, runsDir, preflightChecks) {
     recorded,
     metrics,
     // How the arm stopped (its own completion and the runner's reason, a cap, or the settle rule and what it left open) and, for arm A, its model calls against the step limit; null parts are what the copied session did not hold.
-    ending: L.runEnding({ arm: arm.id, plan, taskLogs, stopped: record.arm?.stopped, stalled: record.arm?.stalled, ran: !opts.dryRun && !opts.planOnly, stepLimit: settings.callBudget }),
+    ending: L.runEnding({ arm: arm.id, plan, taskLogs, stopped: record.arm?.stopped, stalled: record.arm?.stalled, ran: !opts.dryRun && !opts.planOnly, stepLimit: settings.callBudget, continuation: record.arm?.continuation }),
+    // The control arm's continuations, each with the attempt it followed; null for every other arm.
+    continuation: record.arm?.continuation ?? null,
     // Attempts whose upstream provider changed at least once, and the changes, as the built-in runner's usage records name it.
     providerSwitches: L.providerSwitches(taskLogs),
     // What the plan review said (arm B's planner), from the research log's own line; null when it left none.
@@ -1519,7 +1636,7 @@ async function main() {
     if (opts.dryRun) await checkSweep(libs[0].image);
     const preflightChecks = checks.filter((c) => c.scope === 'preflight');
     for (const lib of libs) {
-      for (const arm of L.armsOf(opts.arm)) results.push(await runOne({ ...lib }, arm, ordewell, runsDir, preflightChecks));
+      for (const arm of L.armsOf(opts.arm, opts.continueA)) results.push(await runOne({ ...lib }, arm, ordewell, runsDir, preflightChecks));
     }
   } catch (err) {
     if (!(err instanceof Abort)) throw err;
@@ -1531,7 +1648,7 @@ async function main() {
   const unverified = checks.filter((c) => c.unverified);
   const expected = checks.filter((c) => c.expectedFailure && !c.ok);
   console.log(`\n${checks.length} checks: ${checks.length - failed.length - unverified.length - expected.length} ok, ${failed.length} failed, ${unverified.length} unverified${expected.length ? `, ${expected.length} failed as expected` : ''}`);
-  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, ${r.planOnly ? L.describePlanned(r.planned) : r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
+  for (const r of results) console.log(`  ${r.library} ${r.arm}: window ${r.contextWindow ?? '-'}, task settings ${L.describeTaskSettings(r.taskSettings)}, ${r.planOnly ? L.describePlanned(r.planned) : r.tests ? `${r.tests.passed}/${r.tests.collected} passed, scored from ${r.scoredFrom}` : 'no arm run'}, ${r.networkDeselected ?? '-'} network-marked left out; ${r.valid ? 'valid' : `not valid: ${r.invalidReasons.join('; ')}`}${r.aborted ? `, stopped: ${r.aborted}` : ''}`);
   process.exitCode = failed.length || results.some((r) => r.aborted) ? 1 : 0;
 }
 

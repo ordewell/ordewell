@@ -1,12 +1,12 @@
 import { flattenTasks, flattenTasksWithParents, type LegacyPlanState, type RunSettings, type SupervisionSnapshot, type Task, type TaskReportTo, type TurnAuthority } from '../models/Task';
-import { actorAuthority, type ExecutionActor, type ExecutionRecord, type SupervisorLevel } from '../models/Execution';
+import { actorAuthority, type ExecutionActor, type ExecutionCommandName, type ExecutionRecord, type SupervisorLevel } from '../models/Execution';
 import type { IsolationHandoff } from '../interfaces/IWorktreeIsolation';
 import type { GlobalRunSettings } from './SettingsService';
 import type { RunOrigin } from './TaskOrchestrator';
 import type { ExecutionCommand, LoopGuard } from './ExecutionCommands';
 import type { WakeUpTurn } from './PlannerConversation';
-import { Supervisor, type DigestReader, type RunEventInput, type SupervisorHost, type SupervisorOptions } from './Supervisor';
-import { planWakeFacts, type WakeCacheClock } from './WakePolicy';
+import { namedFirst, Supervisor, WAKE_DEBOUNCE_MS, type DigestReader, type RunEventInput, type SupervisorHost, type SupervisorOptions } from './Supervisor';
+import { cut, planWakeFacts, type WakeCacheClock } from './WakePolicy';
 import type { StartWait } from './readiness';
 import { SupervisionMemory, type GuardTarget, type GuardTrip } from './LoopGuards';
 import { SUPERVISOR_LEVEL_LABEL } from './runSettingsText';
@@ -15,9 +15,10 @@ import { blockingFailures, repeatingChecks } from './blocking';
 import { betweenRounds, loopRoundOf, outOfRounds } from '../models/Loop';
 import { reportEnded, researchReport, runUpdateReport } from './taskReport';
 import { researchReportTo } from './ResearchTasks';
-import { heldBy, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey } from './runHolds';
+import { heldBy, heldByCall, runHeldDetail, runHolds, runHoldsKey, standingBlock, standingDetail, standingKey, untoldDetail } from './runHolds';
 import { taskRefOf } from './TaskRefs';
 import { landedBlockers } from './LandedBlockers';
+import { FAN_OUT_ROLE_WORDS, notedRole } from './PlanFanOut';
 
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
@@ -32,6 +33,18 @@ function standingCandidates(plan: readonly Task[], waits: ReadonlyMap<string, re
   return flattenTasks([...plan])
     .filter((t) => t.status === 'failed' || t.status === 'awaiting_user' || (waits.get(t.id) ?? []).some((w) => w.kind === 'on-hold'))
     .map((t) => t.id);
+}
+
+/** The calls that start a task again: a start is no settle, so what a Stop marked told must be forgotten here, for a hold a failed start leaves is Ordewell's. */
+const STARTING_COMMANDS: ReadonlySet<ExecutionCommandName> = new Set<ExecutionCommandName>(['run_task', 'retry_task', 'force_start']);
+
+/** How much of why a task failed a catch-up's line carries, as a run update's detail runs: the supervisor reads the rest. */
+const WHY_CHARS = 240;
+
+/** Why a task failed, as a run update says it. A task that failed before its runner started has no verdict; its output summary says why, and what to do. */
+function failureWhy(task: Readonly<Task>): string {
+  const why = task.verdict ? task.verdict.reason : task.outputSummary?.reviewReason ?? '';
+  return `${outOfRoundsNote(task)} ${why}`.trim();
 }
 
 /** One word for a loop's whole run, saying how many rounds it took (ADR-0045 L6); empty for any other failure. */
@@ -140,8 +153,20 @@ export class RunSupervision {
   private closingOwed = false;
   /** The files each landed task's work changed, by the landing that changed them: a landing's files never change, so each is read once. */
   private readonly landedPathsRead = new Map<string, Promise<readonly string[] | undefined>>();
+  /**
+   * The tasks an event the supervisor gathered was about, or a call left on
+   * hold, since each last settled: it was told of them, or will be with the
+   * inputs that wait, and a hold a call left is its caller's, which `run_held`
+   * names. What stands failed or held outside it is
+   * {@link catchUp}'s. Not saved: after a reload, what stands is told once more.
+   */
+  private readonly told = new Set<string>();
+  /** The catch-up a run's start owes, once the start has claimed what it starts. */
+  private catchUpTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly debounceMs: number;
 
   constructor(private readonly host: RunSupervisionHost, options: SupervisorOptions = {}) {
+    this.debounceMs = options.debounceMs ?? WAKE_DEBOUNCE_MS;
     this.supervisor = new Supervisor({
       run: () => {
         const settings = this.settings();
@@ -226,6 +251,12 @@ export class RunSupervision {
     this.endOwed = false;
     this.closingOwed = false;
     this.supervisor.runStarted(continued);
+    // A start claims what it starts after it opens the run, a retried failure included: judged at the merge window's end, that is not named.
+    if (this.catchUpTimer) clearTimeout(this.catchUpTimer);
+    this.catchUpTimer = setTimeout(() => {
+      this.catchUpTimer = null;
+      if (this.running) this.catchUp();
+    }, this.debounceMs);
   }
 
   /**
@@ -244,10 +275,12 @@ export class RunSupervision {
       // still releases a handoff deferred to the supervisor; the next run
       // copies the session's new values (ADR-0030).
       this.changedAfterRun = true;
+      if (level !== undefined && settings.unsupervised !== undefined) this.liftStop(settings, level);
       if (level !== undefined && level !== 'act') this.handOver();
       this.settle();
       return;
     }
+    let raised = false;
     if (level !== undefined && (level !== (settings.supervisorLevel ?? 'off') || settings.unsupervised !== undefined)) {
       settings.supervisorLevel = level;
       delete settings.unsupervised;
@@ -256,12 +289,31 @@ export class RunSupervision {
       // At Off too: a report the planner asked for still opens a turn (ADR-0037, R2), and what failed before is behind it.
       this.supervisor.setByUser();
       if (level !== 'act') this.handOver();
+      raised = this.catchUp();
     }
     if (changes.mergeAtGatesAutomatically !== undefined) settings.mergeAtGatesAutomatically = changes.mergeAtGatesAutomatically;
     if (changes.supervisorRetryLimit !== undefined) settings.supervisorRetryLimit = changes.supervisorRetryLimit;
     if (changes.wakeUpReadBudget !== undefined) settings.wakeUpReadBudget = changes.wakeUpReadBudget;
     this.host.save();
+    // What waits on the plan goes now, in one turn with the catch-up's wake, whose delivery opens it.
+    if (level !== undefined && level !== 'off' && !raised) this.host.pump();
     this.settle();
+  }
+
+  /**
+   * The user set a level after the run ended with its supervisor stopped
+   * (ADR-0030): the stop the record says is not what they consented to now, so
+   * the level they chose replaces it, and a run that continues this one is
+   * supervised at it. What was kept for the supervisor goes now, and at Act
+   * what it was never told of goes as its closing turn's, which the run's end
+   * did not get.
+   */
+  private liftStop(settings: RunSettings, level: SupervisorLevel): void {
+    settings.supervisorLevel = level;
+    delete settings.unsupervised;
+    this.supervisor.setByUser();
+    this.host.save();
+    if (level !== 'off' && !this.catchUp(true)) this.host.pump();
   }
 
   /**
@@ -310,7 +362,44 @@ export class RunSupervision {
 
   /** A run event for the supervisor to batch; see {@link Supervisor.observe}. */
   observe(event: RunEventInput): void {
-    this.supervisor.observe(event);
+    this.gather(event);
+  }
+
+  /** Every event goes to the supervisor through here, so what it gathered is known to have been told (see {@link told}). */
+  private gather(event: RunEventInput): void {
+    if (!this.supervisor.observe(event)) return;
+    for (const taskId of event.taskIds ?? (event.taskId === undefined ? [] : [event.taskId])) this.told.add(taskId);
+  }
+
+  /**
+   * Catch up on what the supervisor was never told of (ADR-0030, ADR-0057
+   * R4): at Act, every task failed or held with work waiting on it that no
+   * event it gathered was about since the task last settled — it failed while
+   * the supervisor was Off, or the plan was loaded with it — raises one
+   * `failure_standing`, all of them in the one wake, and none for a task the
+   * user stopped (ADR-0029). Marked told as it is raised, so it is raised once:
+   * a turn that leaves it standing is woken for it once more, as for any
+   * failure, and never again. `ended`: the run is over, and the wake is its
+   * closing turn's. False when there was nothing to raise.
+   */
+  private catchUp(ended = false): boolean {
+    if (this.level !== 'act') return false;
+    const plan = this.host.tasks();
+    const waits = this.host.startWaits();
+    const reader = this.digestReader();
+    const byId = new Map(flattenTasks([...plan]).map((t) => [t.id, t]));
+    let raised = false;
+    for (const taskId of standingCandidates(plan, waits)) {
+      if (this.told.has(taskId) || this.guards.allStopped([taskId])) continue;
+      const standing = standingBlock(plan, waits, taskId);
+      if (!standing || standing.holdsBack === 0) continue;
+      const task = byId.get(taskId);
+      const why = task?.status === 'failed' ? cut(failureWhy(task), WHY_CHARS) : '';
+      const waiting = namedFirst(reader.blockedBy(taskId), reader.describe);
+      this.gather({ kind: 'failure_standing', taskId, detail: untoldDetail(standing, reader.describe, waiting, why, ended), ...(ended ? { closing: true as const } : {}) });
+      raised = true;
+    }
+    return raised;
   }
 
   /**
@@ -327,17 +416,18 @@ export class RunSupervision {
     const repeating = repeatingChecks([...this.host.tasks()]);
     this.reportStoppedLoops(repeating, task.id);
     if (repeating.has(task.id)) return;
-    // Settling again is a new failure, if it failed: its turn may be woken for it once more (ADR-0057 R4).
+    // Settling again is a new failure, if it failed: its turn may be woken for it once more (ADR-0057 R4), and nobody was told of it yet.
     this.standingWoken.delete(task.id);
+    this.told.delete(task.id);
     this.guards.settled(task);
     const to = this.reportAddress(task);
     if (to && reportEnded(task)) {
-      this.supervisor.observe({ kind: 'task_report', taskId: task.id, report: this.reportOf(task, to) });
+      this.gather({ kind: 'task_report', taskId: task.id, report: this.reportOf(task, to) });
       this.host.reported(task.id, to);
       return;
     }
     const event = this.settledEvent(task);
-    if (event) this.supervisor.observe(event);
+    if (event) this.gather(event);
     void this.raiseLandedBlockers(task.id);
   }
 
@@ -352,7 +442,7 @@ export class RunSupervision {
     const citesFile = reporter?.handoff?.findings.some((f) => f.severity === 'blocker' && f.evidence?.some((ref) => ref.kind === 'file'));
     const paths = citesFile && this.host.landedPaths ? await this.landedPathsOf() : undefined;
     for (const landedBlocker of landedBlockers(this.host.tasks(), reporterId, paths && ((id) => paths.get(id)))) {
-      this.supervisor.observe({ kind: 'landed_blocker', taskId: landedBlocker.owner, landedBlocker });
+      this.gather({ kind: 'landed_blocker', taskId: landedBlocker.owner, landedBlocker });
     }
   }
 
@@ -385,7 +475,7 @@ export class RunSupervision {
     for (const check of this.host.tasks()) {
       const to = check.reportTo;
       if (!to || check.id === settling || !betweenRounds(check) || repeating.has(check.id)) continue;
-      this.supervisor.observe({ kind: 'task_report', taskId: check.id, report: this.reportOf(check, to) });
+      this.gather({ kind: 'task_report', taskId: check.id, report: this.reportOf(check, to) });
       this.host.reported(check.id, to);
     }
   }
@@ -431,7 +521,7 @@ export class RunSupervision {
     const landed = this.host.landedWork();
     const merge = landed === 'merged' ? `; everything it landed is merged into ${this.host.mergeTarget?.() ?? 'the user\'s branch'}, so there is nothing to merge`
       : landed === 'pending' ? '; its landed work is not merged yet' : '';
-    this.supervisor.observe({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
+    this.gather({ kind: 'run_finished', detail: `${completed} of ${total} tasks completed${failed > 0 ? `, ${failed} failed` : ''}${blocked > 0 ? `, ${blocked} blocked` : ''}${skipped > 0 ? `, ${skipped} skipped` : ''}${merge}` });
     if (!this.supervisor.awaitsRunEnd) this.handOver();
     this.settle();
   }
@@ -443,16 +533,20 @@ export class RunSupervision {
    * (ADR-0057 R4). It is told once for each distinct set of holds: a turn
    * that leaves the set it saw in place is not woken to it again. Nothing is
    * told while a turn is in flight or a wake is owed: that turn sees the holds.
+   * At Act a failure with work waiting that no wake was about joins it, as
+   * {@link catchUp} raises it.
    */
   runIdle(): void {
     if (!this.running || this.supervisor.turning || this.supervisor.wakeOwed) return;
     if ((this.host.plan()?.pendingTurns ?? []).some((t) => t.source === 'supervisor')) return;
+    // The holds below leave a failure out: one no wake was about is raised here, once (ADR-0057 R4).
+    this.catchUp();
     const idle = this.idleHolds();
     if (!idle || idle.key === this.holdsSeen) return;
     this.holdsSeen = idle.key;
     const { describe } = this.digestReader();
     const history = this.host.plan()?.conversationHistory;
-    this.supervisor.observe({
+    this.gather({
       kind: 'run_held',
       taskIds: idle.holds.map((h) => h.taskId),
       detail: runHeldDetail(idle.holds, describe, (taskId) => heldBy(history, taskId)),
@@ -492,7 +586,7 @@ export class RunSupervision {
       const key = standingKey(standing);
       if (this.standingWoken.get(taskId) === key) continue;
       this.standingWoken.set(taskId, key);
-      this.supervisor.observe({ kind: 'failure_standing', taskId, detail: standingDetail(standing, describe, closing), ...(closing ? { closing: true as const } : {}) });
+      this.gather({ kind: 'failure_standing', taskId, detail: standingDetail(standing, describe, closing), ...(closing ? { closing: true as const } : {}) });
     }
   }
 
@@ -578,9 +672,13 @@ export class RunSupervision {
   readonly guard: LoopGuard = (actor, command: ExecutionCommand, target: GuardTarget | undefined) =>
     (actor.kind === 'supervisor' ? this.guards.check(command, target, [...this.host.tasks()], this.retryLimit()) : null);
 
-  /** A call went through the seam: a supervisor's retry is counted. */
+  /** A call went through the seam: a supervisor's retry is counted, and a hold it left is told. */
   executed(record: ExecutionRecord): void {
     this.guards.done(record, [...this.host.tasks()]);
+    // Not caught up as untold: a hold a call left is its caller's, and the idle run_held names who (ADR-0057 R4).
+    const held = heldByCall(record);
+    if (held) this.told.add(held);
+    else if (record.outcome === 'done' && record.task && STARTING_COMMANDS.has(record.command)) this.told.delete(record.task.id);
   }
 
   /** The oscillation guard on a supervisor's edit taking the plan from `before` to `after`; a trip is told to the user. */
@@ -620,6 +718,9 @@ export class RunSupervision {
       this.host.runConcluded();
     }
     this.supervisor.reset();
+    if (this.catchUpTimer) clearTimeout(this.catchUpTimer);
+    this.catchUpTimer = null;
+    this.told.clear();
     this.handoffDeferred = false;
     this.running = false;
     this.changedAfterRun = false;
@@ -643,14 +744,16 @@ export class RunSupervision {
   /**
    * The supervisor failed for the rest of the run: the run carries on as Off.
    * At Off, the turns that failed were report turns, and they stop instead.
-   * Said in the transcript, where its notes would have been, and as a notice.
+   * Said in the transcript, where its notes would have been, and as a notice
+   * that names how to turn it back on, since nothing else will.
    */
   private goUnsupervised(reason: string): void {
     const settings = this.settings();
     if (!settings || settings.unsupervised) return;
     const text = this.level === 'off'
       ? `Report turns stopped: ${reason}. The reports the planner asked for reach it with your next message.`
-      : `The supervisor stopped: ${reason}. The run carries on unsupervised; what it was not told reaches the planner with your next message.`;
+      : `The supervisor stopped: ${reason}. Its setting reads Off for the rest of this run, which carries on unsupervised, and what happens meanwhile is kept for it. `
+        + 'To turn it back on for this run, set the supervisor level again in /settings in this session: it is then told what it missed.';
     settings.unsupervised = reason;
     this.host.systemNote(text);
     this.host.notice('warn', text);
@@ -728,7 +831,15 @@ export class RunSupervision {
     const plan = [...this.host.tasks()];
     let names: Map<string, string> | undefined;
     let blocked: Map<string, string[]> | undefined;
+    let byId: Map<string, Task> | undefined;
     return {
+      // The role its brief's note told the task, so a wake hands the supervisor no licence the task was not given.
+      role: (taskId) => {
+        byId ??= new Map(flattenTasks(plan).map((t) => [t.id, t]));
+        const task = byId.get(taskId);
+        const role = task && notedRole(task);
+        return role && FAN_OUT_ROLE_WORDS[role];
+      },
       describe: (taskId) => {
         names ??= new Map(flattenTasksWithParents(plan).map(({ task, ref }) => [task.id, `${ref} "${task.title}"`]));
         return names.get(taskId) ?? taskId;
@@ -758,9 +869,7 @@ export class RunSupervision {
     const taskId = task.id;
     if (task.status === 'completed') return { kind: 'task_passed', taskId };
     if (task.status === 'failed') {
-      // A task that failed before its runner started has no verdict; its output summary says why, and what to do.
-      const why = task.verdict ? task.verdict.reason : task.outputSummary?.reviewReason ?? '';
-      const detail = `${outOfRoundsNote(task)} ${why}`.trim();
+      const detail = failureWhy(task);
       return { kind: 'task_failed', taskId, ...(detail ? { detail } : {}) };
     }
     if (task.status !== 'awaiting_user') return null;

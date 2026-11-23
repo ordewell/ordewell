@@ -4,10 +4,18 @@
 // the bench imports no core source; fanout.test.mjs pins both on the same plans.
 //
 //   node bench/commit0/fanout.mjs [--base-broken] <plan-saved.json> ...
+//   node bench/commit0/fanout.mjs --review <written.json> <reviewed.json> [<written.json> <reviewed.json> ...]
+//
+// --review: one JSON line a pair, the plan as first written and the same plan
+// after review: each slice's ancestors among the tasks before the slices in
+// both (with their median and maximum), `newAncestry` (waits the review added
+// that give a task an ancestor it did not have) and `openingCut` (slices that
+// lost an ancestor every slice had as written); see reviewedWaits.
 //
 // --base-broken: the library's base commit does not import or collect its
 // tests, so exactly one opening task is required (otherwise at most one).
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 export const FAN_OUT_MIN = 4;
 
@@ -38,7 +46,8 @@ export function fanOutShape(plan) {
     level.set(t.id, deepest + 1);
     return true;
   };
-  const none = { wide: false, width: 0, levels: null, gates: [], opening: null, openings: 0, slices: [], closers: [], shared: [], sliceEdges: 0, faults: [] };
+  // `ancestors`: each task's transitive dependencies, which the reading is built on.
+  const none = { wide: false, width: 0, levels: null, gates: [], opening: null, openings: 0, slices: [], closers: [], shared: [], sliceEdges: 0, faults: [], ancestors: anc };
   for (const t of tasks) if (!visit(t)) return { ...none, cycle: true };
   const body = new Set(tasks.flatMap((t) => t.loop?.body ?? []));
   const change = tasks.filter((t) => (t.type ?? 'ai') === 'ai' && !t.readOnly && !runsAsOps(t) && !t.research && !t.loop && !body.has(t.id));
@@ -60,10 +69,16 @@ export function fanOutShape(plan) {
   }
   // As core: a task every slice of the fan-out's level waits for runs before the fan-out, the level
   // counted without the tasks every deeper one waits for, and only a level of a fan-out takes any.
+  // As core: those deeper must hold a fan-out's level, so a last task waiting for some slices makes none of them such a task.
   const lv = (t) => level.get(t.id);
+  const holdsFanOut = (ts) => {
+    const per = new Map();
+    for (const s of ts) per.set(lv(s), (per.get(lv(s)) ?? 0) + 1);
+    return [...per.values()].some((n) => n >= FAN_OUT_MIN);
+  };
   const deeperAll = new Set(parallel.filter((t) => {
     const deeper = parallel.filter((s) => lv(s) > lv(t));
-    return deeper.length > 0 && deeper.every((s) => anc.get(s.id).has(t.id));
+    return holdsFanOut(deeper) && deeper.every((s) => anc.get(s.id).has(t.id));
   }));
   const count = new Map();
   for (const s of parallel) if (!deeperAll.has(s)) count.set(lv(s), (count.get(lv(s)) ?? 0) + 1);
@@ -96,7 +111,52 @@ export function fanOutShape(plan) {
   if (wide && opening && gates.length > 1 + sharedGates.length) faults.push('serial-opening');
   if (wide && !opening) faults.push('no-opening');
   if (wide && closers.length === 0) faults.push('no-closing');
-  return { wide, width, levels, gates, opening, openings: opening ? gates.length - sharedGates.length : 0, slices, closers, shared, sliceEdges, faults };
+  return { wide, width, levels, gates, opening, openings: opening ? gates.length - sharedGates.length : 0, slices, closers, shared, sliceEdges, faults, ancestors: anc };
+}
+
+export function median(values) {
+  if (!values.length) return null;
+  const v = [...values].sort((a, b) => a - b);
+  const mid = v.length >> 1;
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
+
+const spread = (counts) => ({ median: median(counts), max: counts.length ? Math.max(...counts) : null });
+
+/**
+ * A plan as first written and the same plan after review, read by the same
+ * fan-out shape (the tasks before the slices, the slices and the closing check
+ * told apart as `fanOutShape` tells them, each plan by its own). For every
+ * slice of both plans, its ancestors among the tasks before the slices of each
+ * plan, direct or transitive, with the median and the maximum of their counts,
+ * and two questions about what the review did to the waits:
+ *
+ * - `newAncestry`: each wait the review added to a task (in both plans) on a
+ *   task that was not already one of its ancestors as written, so it gives the
+ *   task an ancestor it did not have: `{ task, waitsFor }`.
+ * - `openingCut`: each slice that lost an ancestor every slice had as written,
+ *   `{ slice, lost }`.
+ */
+export function reviewedWaits(written, reviewed) {
+  const w = fanOutShape(written);
+  const r = fanOutShape(reviewed);
+  if (w.cycle || r.cycle) return { cycle: true };
+  const before = (shape) => new Set(shape.gates.map((g) => g.id));
+  const among = (shape, id) => [...shape.ancestors.get(id)].filter((a) => before(shape).has(a)).sort();
+  const wrote = new Set(w.slices.map((s) => s.id));
+  const slices = r.slices.filter((s) => wrote.has(s.id)).map((s) => ({ id: s.id, written: among(w, s.id), reviewed: among(r, s.id) }));
+  const newAncestry = [];
+  const old = new Map((written.tasks ?? []).map((t) => [t.id, t]));
+  for (const t of reviewed.tasks ?? []) {
+    const was = old.get(t.id);
+    if (!was) continue;
+    for (const d of new Set(t.dependencies ?? [])) {
+      if (!(was.dependencies ?? []).includes(d) && !w.ancestors.get(t.id).has(d)) newAncestry.push({ task: t.id, waitsFor: d });
+    }
+  }
+  const every = w.slices.length ? [...w.ancestors.get(w.slices[0].id)].filter((a) => w.slices.every((s) => w.ancestors.get(s.id).has(a))) : [];
+  const openingCut = slices.map((s) => ({ slice: s.id, lost: every.filter((a) => !r.ancestors.get(s.id).has(a)).sort() })).filter((c) => c.lost.length);
+  return { slices, written: spread(slices.map((s) => s.written.length)), reviewed: spread(slices.map((s) => s.reviewed.length)), newAncestry, openingCut };
 }
 
 const brief = (t) => t?.prompt ?? '';
@@ -129,12 +189,16 @@ export function fanOutProperties(plan, { baseBroken = false } = {}) {
   };
 }
 
-const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href;
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const args = process.argv.slice(2);
   const baseBroken = args.includes('--base-broken');
-  for (const file of args.filter((a) => !a.startsWith('--'))) {
-    const plan = JSON.parse(fs.readFileSync(file, 'utf8'));
-    console.log(JSON.stringify({ file, ...fanOutProperties(plan, { baseBroken }) }));
+  const files = args.filter((a) => !a.startsWith('--'));
+  const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (args.includes('--review')) {
+    // One JSON line a pair: the plan as first written, then the same plan after review.
+    for (let i = 0; i + 1 < files.length; i += 2) console.log(JSON.stringify({ files: [files[i], files[i + 1]], ...reviewedWaits(read(files[i]), read(files[i + 1])) }));
+  } else {
+    for (const file of files) console.log(JSON.stringify({ file, ...fanOutProperties(read(file), { baseBroken }) }));
   }
 }

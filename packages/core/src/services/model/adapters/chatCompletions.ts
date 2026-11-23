@@ -27,7 +27,7 @@ type AssistantWire = OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam
 };
 type Body = OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
   reasoning?: { effort: string };
-  provider?: { order: readonly string[]; allow_fallbacks?: boolean };
+  provider?: { order: readonly string[]; allow_fallbacks?: boolean; only?: readonly string[] };
 };
 
 const KEYLESS_PLACEHOLDER = 'not-needed';
@@ -56,6 +56,20 @@ const PREFER_UPSTREAM = (name: string) => ({ order: [name], allow_fallbacks: tru
 const ROUTING_METADATA = { 'X-OpenRouter-Metadata': 'enabled' } as const;
 // A model id's routing shortcut is the user's own choice of upstream, which wins.
 const USER_ROUTED = /:(nitro|floor)$/;
+
+// The upstreams, by the name OpenRouter reports, that a probe found answer a
+// tool conversation whose older turns carry no reasoning_details as they
+// answer one that keeps them all, for the one model probed. Only there is the
+// request's reasoning hint honoured: an upstream that validates the reasoning
+// it gets back (DeepSeek's own API, an Anthropic or Gemini model's signatures)
+// refuses such a request. A model or upstream is added only once a probe of
+// its own has passed (ADR-0070).
+const TAKES_OLDER_TURNS_BARE: Readonly<Record<string, readonly string[]>> = {
+  'deepseek/deepseek-v4.1-flash': [
+    'BaseTen', 'Cloudflare', 'Cohere', 'CoreWeave', 'Crusoe', 'DeepInfra', 'DigitalOcean', 'Fireworks', 'Google', 'InferenceNet', 'Ionstream', 'Makora',
+    'Mancer 2', 'Modal', 'Nebius', 'OpenInference', 'Parasail', 'Reka', 'Relace', 'River', 'Together', 'Venice', 'Wafer',
+  ],
+};
 
 // Vendors whose models take a top-level `reasoning_effort`; OpenRouter takes
 // its own `reasoning` object and drops it for a model without reasoning.
@@ -150,14 +164,16 @@ export function requestBody(provider: AiProvider, request: ModelRequest, without
   // OpenRouter passes `cache_control` through to Anthropic, which caches only
   // where told; every other model here caches implicitly or not at all.
   const explicitCache = provider === 'openrouter' && request.model.startsWith('anthropic/');
+  const bare = bareTurns(provider, request);
   const body: Body = {
     model: request.model,
-    messages: wireMessages(provider, request, explicitCache),
+    messages: wireMessages(provider, request, explicitCache, bare?.before ?? 0),
     stream: true,
     ...(NO_STREAM_OPTIONS.has(provider) ? {} : { stream_options: { include_usage: true } }),
     ...(request.maxOutputTokens !== undefined ? { max_tokens: request.maxOutputTokens } : {}),
   };
-  const routing = routingFor(provider, request, explicitCache);
+  // A fallback stays among the upstreams that take the bare turns, so wherever the call lands takes them.
+  const routing = bare ? { ...PREFER_UPSTREAM(bare.upstream), only: bare.only } : routingFor(provider, request, explicitCache);
   if (routing) body.provider = routing;
   if (request.tools.length > 0) {
     body.tools = request.tools.map((t) => ({
@@ -172,6 +188,20 @@ export function requestBody(provider: AiProvider, request: ModelRequest, without
     else body.reasoning_effort = EFFORT[request.effort];
   }
   return body;
+}
+
+/**
+ * Where the request's reasoning hint is honoured: through OpenRouter, on a
+ * probed model whose next call goes first to a probed upstream, the one that
+ * served the turn before. Anywhere else, the upstream unknown included, every
+ * turn keeps its reasoning, as with no hint. DeepSeek's own API never: its
+ * guide answers 400 to a request with tools that leaves any out.
+ */
+function bareTurns(provider: AiProvider, request: ModelRequest): { before: number; upstream: string; only: readonly string[] } | undefined {
+  if (provider !== 'openrouter' || !request.reasoning) return undefined;
+  const only = TAKES_OLDER_TURNS_BARE[request.model];
+  const upstream = only && lastUpstream(request);
+  return upstream && only.includes(upstream) ? { before: request.reasoning.keepFrom, upstream, only } : undefined;
 }
 
 function routingFor(provider: AiProvider, request: ModelRequest, explicitCache: boolean): Body['provider'] {
@@ -201,7 +231,8 @@ function wireToolChoice(choice: ToolChoice): OpenAI.Chat.Completions.ChatComplet
   return typeof choice === 'string' ? choice : { type: 'function', function: { name: choice.name } };
 }
 
-function wireMessages(provider: AiProvider, request: ModelRequest, explicitCache: boolean): Chat[] {
+/** `bareBefore`: messages before this index go without their reasoning; 0 sends every one's. */
+function wireMessages(provider: AiProvider, request: ModelRequest, explicitCache: boolean, bareBefore: number): Chat[] {
   const out: Chat[] = [];
   if (request.system.length > 0) {
     if (explicitCache) {
@@ -218,12 +249,12 @@ function wireMessages(provider: AiProvider, request: ModelRequest, explicitCache
   }
   const last = request.messages.length - 1;
   request.messages.forEach((message, i) => {
-    out.push(...wireMessage(provider, message, explicitCache && request.cache?.atLastMessage === true && i === last));
+    out.push(...wireMessage(provider, message, explicitCache && request.cache?.atLastMessage === true && i === last, i < bareBefore));
   });
   return out;
 }
 
-function wireMessage(provider: AiProvider, message: ModelMessage, cacheHere: boolean): Chat[] {
+function wireMessage(provider: AiProvider, message: ModelMessage, cacheHere: boolean, bare: boolean): Chat[] {
   const text = (value: string): string | TextPart[] => (cacheHere ? [{ type: 'text', text: value, cache_control: EPHEMERAL }] : value);
   switch (message.role) {
     case 'user':
@@ -244,11 +275,13 @@ function wireMessage(provider: AiProvider, message: ModelMessage, cacheHere: boo
           function: { name: c.name, arguments: c.rawArguments || JSON.stringify(c.arguments) },
         }));
       }
-      const state = message.providerState?.dialect === 'chat-completions' ? readState(message.providerState.data) : undefined;
+      const state = message.providerState?.dialect === 'chat-completions' && !bare ? readState(message.providerState.data) : undefined;
       if (state?.details && provider === 'openrouter') wire.reasoning_details = state.details;
-      // DeepSeek and Kimi check a tool-calling turn's reasoning comes back with
-      // it, and refuse it on a turn without calls, so only that turn carries it.
-      if (state?.field === 'reasoning_content' && state.reasoning && calls.length > 0) wire.reasoning_content = state.reasoning;
+      // DeepSeek answers 400 to a request with tools that leaves out any earlier
+      // turn's reasoning, a turn without calls too, and ignores it in one without
+      // tools, so every turn carries it. Kimi checks a tool-calling turn's
+      // reasoning comes back with it and refuses it on a turn without calls.
+      if (state?.field === 'reasoning_content' && state.reasoning && (calls.length > 0 || provider === 'deepseek')) wire.reasoning_content = state.reasoning;
       return [wire];
     }
   }

@@ -131,8 +131,57 @@ describe('landedBlockers, by the files landed work changed', () => {
       reported('late', [fileBlocker('F1', 'pkg/multidigraph.py')], { dependencies: [], verdict: at(4) }),
     ];
 
-    expect(landedBlockers(plan, 'early', (id) => paths[id]).map((f) => [f.owner, f.reporters])).toEqual([['multi', 1]]);
+    expect(landedBlockers(plan.slice(0, 2), 'early', (id) => paths[id]).map((f) => [f.owner, f.reporters])).toEqual([['multi', 1]]);
     expect(landedBlockers(plan, 'late', (id) => paths[id]).map((f) => [f.owner, f.reporters])).toEqual([['graph', 1]]);
+    // The graph's landing changed the file after the early report: it was still being written.
+    expect(landedBlockers(plan, 'early', (id) => paths[id])).toEqual([]);
+  });
+
+  it('reads a blocker that cites, by reference, a task yet to land as a wait notice, whatever else it cites', () => {
+    const waits = (...cited: NonNullable<HandoffFinding['evidence']>): HandoffFinding => ({ id: 'F1', severity: 'blocker', title: 'tests cannot pass until the graph lands', evidence: [{ kind: 'file', path: 'pkg/decorators.py', line: 3 }, ...cited] });
+    const plan = (f: HandoffFinding) => [task('open', { status: 'completed' }), task('graph', { status: 'in_progress' }), reported('s1', [f])];
+
+    expect(landedBlockers(plan(waits({ kind: 'task', node: 'root', task: 'graph', unread: true })), 's1', landedPaths)).toEqual([]);
+    expect(landedBlockers(plan(waits({ kind: 'task', node: 'root', task: 'graph' }, { kind: 'task', node: 'root', task: 'open' })), 's1', landedPaths)).toEqual([]);
+    // Its own task, a report's finding or a plan below is no work it waits on.
+    const cites = [{ kind: 'task' as const, node: 'root', task: 's1' }, { kind: 'task' as const, node: 'root', task: 'graph', finding: 'F2' }, { kind: 'task' as const, node: '2', task: 'graph' }];
+    expect(landedBlockers(plan(waits(...cites)), 's1', landedPaths).map((f) => f.owner)).toEqual(['open']);
+  });
+
+  it('counts a report by its files only against work that had landed when the attempt that wrote it started', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString();
+    const verdict = (minute: number) => ({ outcome: 'pass' as const, reason: '', checks: [], decidedAt: at(minute) });
+    const started = (...minutes: number[]) => minutes.map((m, i) => ({ attempt: i + 1, runner: 'claude', startedAt: at(m), wallTimeMs: 0, totals: {}, byModel: [] }));
+    const byFile = fileBlocker('F1', 'pkg/decorators.py');
+    const plan = (attemptUsage: Task['attemptUsage'], attempt = 1, finding = byFile) => [
+      task('open', { status: 'completed', verdict: verdict(3) }),
+      reported('s1', [finding], { dependencies: [], verdict: verdict(5), attemptUsage, handoff: { summary: '', findings: [finding], findingCount: 1, attempt } }),
+    ];
+
+    expect(landedBlockers(plan(started(2)), 's1', landedPaths)).toEqual([]);
+    expect(landedBlockers(plan(started(4)), 's1', landedPaths).map((f) => f.owner)).toEqual(['open']);
+    // The attempt that wrote the handoff, not the first.
+    expect(landedBlockers(plan(started(1, 4), 2), 's1', landedPaths).map((f) => f.owner)).toEqual(['open']);
+    expect(landedBlockers(plan(started(4, 1), 2), 's1', landedPaths)).toEqual([]);
+    // A reporter that names the task has its work, taken in once it landed as the slice note asks.
+    expect(landedBlockers(plan(started(2), 1, blocker('open')), 's1', landedPaths).map((f) => f.owner)).toEqual(['open']);
+  });
+
+  it('names no task by a file that a later landing changed after the report, so that report stops counting', () => {
+    const at = (minute: number) => ({ outcome: 'pass' as const, reason: '', checks: [], decidedAt: new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString() });
+    const paths: Record<string, string[]> = { open: ['pkg/decorators.py', 'pkg/graph.py'], graph: ['pkg/graph.py'] };
+    const plan = (graph: Task) => [
+      task('open', { status: 'completed', verdict: at(1) }),
+      reported('s1', [fileBlocker('F1', 'pkg/graph.py', 'pkg/decorators.py')], { verdict: at(2) }),
+      graph,
+      reported('s3', [fileBlocker('F1', 'pkg/decorators.py')], { verdict: at(5) }),
+    ];
+
+    // While the graph is still being written, nothing says the placeholder is not the defect.
+    expect(landedBlockers(plan(task('graph', { status: 'in_progress' })).slice(0, 3), 's1', (id) => paths[id]).map((f) => [f.owner, f.reporters])).toEqual([['open', 1]]);
+    const landed = plan(task('graph', { status: 'completed', verdict: at(3) }));
+    expect(landedBlockers(landed, 's3', (id) => paths[id]).map((f) => [f.owner, f.reporters, f.reports.map((r) => r.reporter)])).toEqual([['open', 1, ['s3']]]);
+    expect(landedBlockers(landed, 's1', (id) => paths[id])).toEqual([]);
   });
 
   it('counts no report made before the work it names landed, so the first report after it is raised', () => {
@@ -145,5 +194,48 @@ describe('landedBlockers, by the files landed work changed', () => {
     ];
 
     expect(landedBlockers(plan, 's3', landedPaths).map((f) => [f.owner, f.reporters, f.reports.map((r) => r.reporter)])).toEqual([['open', 1, ['s3']]]);
+  });
+});
+
+describe('landedBlockers, when the work it names landed', () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString();
+  const verdict = (minute: number) => ({ outcome: 'pass' as const, reason: '', checks: [], decidedAt: at(minute) });
+  const startedAt = (minute: number) => [{ attempt: 1, runner: 'claude', startedAt: at(minute), wallTimeMs: 0, totals: {}, byModel: [] }];
+  const fb = (path: string, ...tasks: string[]): HandoffFinding => ({
+    id: 'F1', severity: 'blocker', title: `${path} crashes on an empty input`,
+    evidence: [{ kind: 'file', path, line: 3 }, ...tasks.map((t) => ({ kind: 'task' as const, node: 'root', task: t }))],
+  });
+
+  it('raises a defect a slice found in a sibling\'s work it took in after it started, citing that sibling by reference', () => {
+    const paths: Record<string, string[]> = { open: ['pkg/a.py'], s2: ['pkg/s2.py'] };
+    const plan = [
+      task('open', { status: 'completed', verdict: verdict(1) }),
+      reported('s1', [fb('pkg/s2.py', 's2')], { verdict: verdict(5), attemptUsage: startedAt(2) }),
+      task('s2', { status: 'completed', dependencies: ['open'], verdict: verdict(3) }),
+    ];
+    expect(landedBlockers(plan, 's1', (id) => paths[id]).map((f) => f.owner)).toEqual(['s2']);
+  });
+
+  it('reads no wait in a citation of a task that runs after the reporter, as the closing check does, or of one that will not land', () => {
+    const paths: Record<string, string[]> = { open: ['pkg/a.py'] };
+    const forCloser = fanOut([reported('s1', [fb('pkg/a.py', 'open', 'close')]), task('s2', { dependencies: ['open'] })]);
+    expect(landedBlockers(forCloser, 's1', (id) => paths[id]).map((f) => f.owner)).toEqual(['open']);
+    for (const status of ['skipped', 'failed'] as const) {
+      const plan = [task('open', { status: 'completed' }), task('gone', { status }), reported('s1', [fb('pkg/a.py', 'open', 'gone')])];
+      expect(landedBlockers(plan, 's1', (id) => paths[id]).map((f) => f.owner)).toEqual(['open']);
+    }
+    // A task still to come stays a wait, paused or not.
+    const paused = [task('open', { status: 'completed' }), task('graph', { status: 'awaiting_user' }), reported('s1', [fb('pkg/a.py', 'open', 'graph')])];
+    expect(landedBlockers(paused, 's1', (id) => paths[id])).toEqual([]);
+  });
+
+  it('judges every report from a tree cut before a later landing of the file alike, so no count is raised twice', () => {
+    const paths: Record<string, string[]> = { open: ['pkg/utils.py'], g: ['pkg/utils.py', 'pkg/g.py'] };
+    const r = (id: string, minute: number) => reported(id, [fb('pkg/utils.py')], { verdict: verdict(minute), attemptUsage: startedAt(2) });
+    const plan = [task('open', { status: 'completed', verdict: verdict(1) }), r('s1', 3), r('s2', 4), task('g', { status: 'completed', verdict: verdict(5) }), r('s3', 6), r('s4', 7)];
+    const raised = ([['s1', 2], ['s2', 3], ['s3', 5], ['s4', 6]] as const)
+      .flatMap(([id, n]) => landedBlockers(plan.slice(0, n), id, (t) => paths[t]).map((f) => `${id}->${f.owner}:${f.reporters}`));
+    // s3 and s4 held the tree s1 and s2 held: g changed the file after it was cut, so none of the four counts once g has landed.
+    expect(raised).toEqual(['s1->open:1', 's2->open:2']);
   });
 });

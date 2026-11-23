@@ -8,8 +8,8 @@ import type { UsageLimitSignal } from './harness/AgentAdapter';
 
 /**
  * Why a runner stopped, as far as the tail of its own output says. `usage-limit`
- * is the account, not the task, running out; `transient` is its provider
- * failing the turn, which a later try of the same turn may not meet
+ * is the account, not the task, running out; `transient` is its provider, or
+ * the network to it, failing the turn, which a later try of the same turn may not meet
  * (ADR-0018 E1); anything else is `stopped`.
  */
 export type RunnerStop = 'usage-limit' | 'transient' | 'stopped';
@@ -33,6 +33,17 @@ const USAGE_LIMIT_RE = /\b(?:usage|session|weekly|daily|monthly) limit\b|\byou['
  * never enough, since a turn's error can quote a test's.
  */
 const TRANSIENT_RE = /\bAPI Error: 5\d\d\b|\b(?:HTTP|status(?: code)?)[ :]*5\d\d\b|\b(?:internal server error|bad gateway|service unavailable|gateway timeout)\b|\boverloaded(?:_error)?\b|\bapi_error\b/i;
+
+/**
+ * What a runner says when the network between it and its provider failed: a
+ * name that did not resolve (EAI_AGAIN, ENOTFOUND), a connection refused,
+ * reset or timed out, Claude Code's "Can't reach the API server", an SDK's
+ * "Connection error" or "Request timed out", Node's `fetch failed`. An outage
+ * is waited out on the same backoff, not counted out (ADR-0018 E1). The error
+ * codes are Node's own names for these and nothing else; a test's timeout is
+ * not one, so a bare "timed out" is never enough.
+ */
+const NETWORK_RE = /\bcan(?:no|['’])?t reach the API\b|\b(?:EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENETUNREACH|ENETDOWN|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)\b|\bconnection error\b|\bAPIConnection(?:Timeout)?Error\b|\b(?:request|connection) timed out\b|\bfetch failed\b|\bsocket hang up\b/i;
 
 /**
  * A router's words for any upstream failure, its status beside them. Only the
@@ -82,7 +93,7 @@ export function classifyRunnerStop(said: string | TurnFailure): RunnerStop {
   const tail = wordsOf(said).slice(-USAGE_LIMIT_TAIL);
   const field = typeof said === 'string' ? undefined : said.usageLimit;
   if (field !== undefined ? field : USAGE_LIMIT_RE.test(tail)) return 'usage-limit';
-  if (TRANSIENT_RE.test(tail) || (PROVIDER_ERROR_RE.test(tail) && !CLIENT_ERROR_RE.test(tail))) return 'transient';
+  if (TRANSIENT_RE.test(tail) || NETWORK_RE.test(tail) || (PROVIDER_ERROR_RE.test(tail) && !CLIENT_ERROR_RE.test(tail))) return 'transient';
   // A throttle the runner said was not its limit (Codex's `rateLimitExceeded`) is the provider's, and passes.
   if (field === false && THROTTLE_RE.test(tail)) return 'transient';
   return 'stopped';

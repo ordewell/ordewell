@@ -19,7 +19,12 @@ export const WAKE_UP_TURN_TIMEOUT_MS = 10 * 60_000;
 /** How long a stopped wake-up turn has to end before the conversation is taken back from it. */
 export const HUNG_TURN_GRACE_MS = 30_000;
 
-/** How many times a wake-up turn is tried: once, and once more with the planner restarted, before the run goes unsupervised. */
+/**
+ * How many times a wake-up turn is tried: once, and once more with the planner
+ * restarted, before the run goes unsupervised. A call either try's provider or
+ * network fails is tried again inside it on ADR-0018 E1's backoff first, so an
+ * outage is waited out for about seven minutes before this bound is reached.
+ */
 export const WAKE_UP_ATTEMPTS = 2;
 
 /**
@@ -125,6 +130,8 @@ export interface DigestReader {
   describe(taskId: string): string;
   /** The tasks a failed task blocks now, through their dependencies (ADR-0034); for one still at work, those its failure would. */
   blockedBy(taskId: string): string[];
+  /** A task's role in the plan's fan-out, in a few words, read from its shape (ADR-0072 R5); undefined for a task with none. */
+  role?(taskId: string): string | undefined;
 }
 
 export interface SupervisorOptions {
@@ -154,7 +161,8 @@ export class WakeUpTimeoutError extends Error {
  * input. A turn on wake-ups alone is a wake-up turn, run through {@link turn}:
  * timed out if it hangs, retried once with the planner restarted if it fails,
  * and after that the run goes unsupervised — it carries on as Off, and what
- * was not delivered waits for the user's next message. A planner usage limit
+ * was not delivered, and all that happens from then on, waits for the user's
+ * next message or their level set again. A planner usage limit
  * is waited out instead, by the planner's turns, which send the wake-up again
  * at the reset (`PlannerResend`). What the supervisor may do in its turns is the
  * level's, checked at the command seam and the edit path, never here.
@@ -300,15 +308,17 @@ export class Supervisor {
   }
 
   /**
-   * A run event. Ignored unless the supervisor watches — at Off, or once it
-   * failed, nothing is gathered — but for a report the planner asked for,
-   * gathered at every level (ADR-0037, R2). Past the user's Stop it goes
-   * straight to the inputs waiting for them.
+   * A run event; true when it was gathered. Ignored at an Off the user chose,
+   * but for a report the planner asked for, gathered at every level (ADR-0037,
+   * R2). Past the user's Stop, or once the supervisor failed for the run, it
+   * goes straight to the inputs waiting, as what was gathered before did, so
+   * nothing that happened is lost (ADR-0029).
    */
-  observe(event: RunEventInput): void {
-    if (this.runLevel === 'off' && event.kind !== 'task_report') return;
+  observe(event: RunEventInput): boolean {
+    const failed = this.failedForRun;
+    if (this.runLevel === 'off' && event.kind !== 'task_report' && !failed) return false;
     if (event.kind === 'run_finished') {
-      if (this.finished) return;
+      if (this.finished) return false;
       this.finished = true;
       this.runEndPending = true;
     }
@@ -317,9 +327,16 @@ export class Supervisor {
     if (event.kind === 'task_passed' || event.report?.passed) this.wakeUps = [];
     if (event.kind !== 'task_passed') this.loaded = false;
     this.policy.push({ ...event, at: this.now() });
-    if (this.stopped) this.standDown();
+    if (this.stopped || failed) this.standDown();
     else this.arm();
     this.host.saveState();
+    return true;
+  }
+
+  /** The supervisor failed for the run at a level the user set above Off: it stopped, and was not turned off. */
+  private get failedForRun(): boolean {
+    const run = this.host.run();
+    return run !== null && run.unsupervised !== undefined && run.level !== 'off';
   }
 
   /** What it gathered but has not delivered, for the plan (ADR-0029). */
@@ -597,8 +614,8 @@ export class Supervisor {
    */
   private deliver(batch: WakeBatch): void {
     const { own, theirs } = turnsOf(batch);
-    const { describe, blockedBy } = this.host.digestReader();
-    const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy);
+    const { describe, blockedBy, role } = this.host.digestReader();
+    const digest = (part: WakeBatch) => wakeUpDigest(part, describe, blockedBy, role);
     // A failure is the wake-up turn's to handle, in {@link turn}; the batch stays pending meanwhile.
     if (own.length > 0) {
       const runEnd = own.some((e) => e.kind === 'run_finished' || e.closing === true);
@@ -807,6 +824,16 @@ export const LANDED_BLOCKER_ADVICE = 'A blocker reported in landed work is fixed
 /** A running-long line carries its facts whole: they are what the supervisor weighs, and a ride-along line would cut them off. */
 const RUNNING_LONG_CHARS = 2 * TASK_NAME_CHARS + DETAIL_CHARS;
 
+/**
+ * The most a task's role takes in a line about it (ADR-0072 R5): a few fixed
+ * words, outside the line's own cut, so naming the role takes nothing from
+ * what the task did.
+ */
+const ROLE_CHARS = 100;
+
+/** The events whose line names its task's role: what a supervisor judges the task's work by. */
+const ROLE_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>(['running_long', 'task_failed']);
+
 /** Room kept for the overflow line, which is never left out, and for the note on updates a turn cannot carry beside this one. */
 const OVERFLOW_ROOM = 400 + LEFT_OUT_ROOM;
 
@@ -816,14 +843,23 @@ const OVERFLOW_ROOM = 400 + LEFT_OUT_ROOM;
  * digest, never a log — the supervisor reads more itself. Past the cap what
  * woke it goes first, whole items only, and the rest is counted.
  */
-export function wakeUpDigest(batch: WakeBatch, describe: (taskId: string) => string, blockedBy: (taskId: string) => string[] = () => []): string {
+export function wakeUpDigest(
+  batch: WakeBatch,
+  describe: (taskId: string) => string,
+  blockedBy: (taskId: string) => string[] = () => [],
+  role: (taskId: string) => string | undefined = () => undefined,
+): string {
   const name = (taskId: string) => {
     const whole = describe(taskId);
     return whole.length > TASK_NAME_CHARS ? `${whole.slice(0, TASK_NAME_CHARS - 2)}…"` : whole;
   };
   const passed = [...new Set(batch.sinceLast.filter((e) => e.kind === 'task_passed').flatMap((e) => e.taskId ?? []))];
+  const withRole = (event: RunEvent, item: DigestItem): DigestItem => {
+    const words = event.taskId !== undefined && ROLE_KINDS.has(event.kind) ? role(event.taskId) : undefined;
+    return words ? { ...item, line: `${item.line}; it is ${cut(words, ROLE_CHARS)}` } : item;
+  };
   const items: DigestItem[] = [
-    ...batch.attention.map((e) => attentionItem(e, name, blockedBy)),
+    ...batch.attention.map((e) => withRole(e, attentionItem(e, name, blockedBy))),
     ...batch.sinceLast.filter((e) => e.kind === 'approval_denied').map((e): DigestItem => ({ kind: e.kind, rank: 1, line: `- ${cut(attentionLine(e, name, []), RIDE_ALONG_CHARS - 2)}` })),
     ...passed.map((taskId): DigestItem => ({ kind: 'task_passed', rank: 2, line: `- ${cut(`task ${name(taskId)} passed`, RIDE_ALONG_CHARS - 2)}` })),
   ];
@@ -979,7 +1015,7 @@ function listed(items: readonly string[]): string {
 }
 
 /** The first few tasks by name and how many more: the list never grows with the plan (ADR-0057 R5). */
-function namedFirst(ids: readonly string[], describe: (taskId: string) => string): string {
+export function namedFirst(ids: readonly string[], describe: (taskId: string) => string): string {
   if (ids.length <= NAMED_TASKS) return listed(ids.map(describe));
   return `${ids.slice(0, NAMED_TASKS).map(describe).join(', ')} and ${ids.length - NAMED_TASKS} more`;
 }
