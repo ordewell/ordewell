@@ -1210,8 +1210,8 @@ completion evidence: if the next turn also ends without the call, the task
 waits for input.
 *Avoid:* "nudge" (the planner's corrective prompts), "auto-complete".
 
-**Continue** — a retry of a completed, failed or skipped structured task, or
-of one paused on a usage limit (see *Usage-limit resume*), that resumes its
+**Continue** — a retry of a completed, failed, stopped or skipped structured
+task, or of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn. A **Delegated task**'s reopens its **Child
 plan** instead, stopped or failed but not landed: that plan acts as Execute, its
