@@ -75,10 +75,7 @@ export function reshapeChecks(recorded, renoted, { baseBroken = false } = {}) {
       // With no task before the slices nothing restores the import: reported in now.faults as no-opening, not checked here.
       importCriterion: noted && now.gates.length ? p.P8_beforeSlicesImport : null,
       // A slice is told it starts after a task only when it waits for it.
-      slicesToldTruly: noted ? now.slices.every((s) => {
-        const names = [...(by.get(s.id).prompt ?? '').matchAll(/that start once (.*?) (?:has|have) landed/g)].flatMap((m) => [...m[1].matchAll(/\(([^()\s]+)\)/g)].map((x) => x[1]));
-        return names.every((id) => ancestorOf(renoted, id, s.id));
-      }) : null,
+      slicesToldTruly: noted ? now.slices.every((s) => toldWaits(renoted, by.get(s.id)).every((id) => ancestorOf(renoted, id, s.id))) : null,
       // Nothing but the notes, the order and the slice merge changed: every recorded task is in one task, and each
       // task waits for what its first recorded task waited for, a merged slice named by the task that covers it.
       sameGraph: sameGraph(recorded, renoted),
@@ -91,7 +88,26 @@ export function reshapeChecks(recorded, renoted, { baseBroken = false } = {}) {
   };
 }
 
-const LICENCE = 'For that alone you may edit any file';
+/**
+ * The task ids a slice's note says it starts after. The note names each as
+ * `"title" (id)` (PlanFanOut.ts's ref), and a title is free text that may hold
+ * parentheses, quotes or "has landed", so the plan's own references are taken
+ * out whole first; what remains and still has the `" (id)` shape names a task
+ * the plan does not hold, which the check then fails.
+ */
+function toldWaits(plan, slice) {
+  const line = /that start once ([^\n]*) (?:has|have) landed/.exec(slice.prompt ?? '')?.[1];
+  if (line === undefined) return [];
+  let rest = line;
+  const known = [];
+  for (const t of plan.tasks) {
+    const ref = `"${t.title}" (${t.id})`;
+    if (rest.includes(ref)) { known.push(t.id); rest = rest.split(ref).join(''); }
+  }
+  return [...known, ...[...rest.matchAll(/" \(([^()\s]+)\)/g)].map((m) => m[1])];
+}
+
+const LICENCE ='For that alone you may edit any file';
 const licensed = (plan) => plan.tasks.filter((t) => (t.prompt ?? '').includes(LICENCE)).map((t) => t.id);
 
 function sameGraph(recorded, renoted) {

@@ -101,12 +101,14 @@ describe('the first plan\'s closing check keeps waiting for every task it waited
     expect(r.tasks.find((t) => t.id === 'final')!.prompt).toBe('Run the whole test suite and fix what fails.\n\nPlan revision: This task now also runs after "T open" (open).');
   });
 
-  it('lets a reply set another task after the check, which loses nothing', () => {
+  it('drops a reply\'s wait setting another task after the check, which it never ran after, and the check loses nothing', () => {
     const tasks = [...sweptPlan(), ai('audit', ['core'], { readOnly: true })];
     const r = applyChainReview(tasks, '{"dependencyChanges":[{"id":"audit","dependencies":["final"]}]}', RUNNERS);
     if (!r.ok) throw new Error(r.error);
     expect(deps(r.tasks, 'final')).toEqual(['sweep', 's5', 's6']);
-    expect(r.changes).toEqual([{ id: 'audit', removed: ['core'], added: ['final'] }]);
+    // The wait on the check is dropped, and the audit keeps the work it ran after rather than waiting for neither.
+    expect(deps(r.tasks, 'audit')).toEqual(['core']);
+    expect(r.changes).toEqual([{ id: 'audit', removed: [], added: [], dropped: ['final'] }]);
   });
 
   it('holds only the closing check R5 reads when two tasks after every slice could be it', () => {

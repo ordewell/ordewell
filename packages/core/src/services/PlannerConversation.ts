@@ -30,6 +30,7 @@ import { ContextSummaryError } from './contextSummary';
 import { redactSummaryText, type HeldValue } from '../utils/redactSecrets';
 import { PlannerContextExhaustedError } from './plannerContextBudget';
 import { boundedWakeUps } from './WakePolicy';
+import { lastWakeAccount, TASKS_UPDATED } from './wakeAccount';
 
 /**
  * Per-runner model cap for the always-on catalog block. Generous enough that
@@ -1338,7 +1339,9 @@ export class PlannerConversation {
     const said = fromUser ? plannerMessage(message.text, message.skills) : '';
     const asides = userTurn.asides ?? [];
     const updates = wakeUps.filter((wakeUp) => !asides.includes(wakeUp));
-    const outgoing = plannerInput([contextBlock, ...asides, ...boundedWakeUps(updates), userTurn.briefing.wakeBrief, said]);
+    // Never saved, as the brief is not: a replay is told it again from the record it is read from.
+    const account = userTurn.wakeUp && !fromUser ? lastWakeAccount(this.requirePlan().conversationHistory ?? []) : undefined;
+    const outgoing = plannerInput([contextBlock, ...asides, account, ...boundedWakeUps(updates, account?.length), userTurn.briefing.wakeBrief, said]);
     return reopened
       ? this.resume(reopened, outgoing, priorHistory, signal, userTurn.stream.sink(), native)
       : this.host.aiService().continueConversation(outgoing, userTurn.stream.sink(), signal);
@@ -1894,7 +1897,7 @@ export class PlannerConversation {
     return this.land(userTurn, reply?.researchLog ?? [], () => {
       if (kind === 'task_ops') {
         this.host.adoptTasks(passed.tasks, 'edit');
-        return [...(said ? [said] : []), { content: `Tasks updated:\n- ${passed.summary.join('\n- ')}` }];
+        return [...(said ? [said] : []), { content: `${TASKS_UPDATED}\n- ${passed.summary.join('\n- ')}` }];
       }
       // A cheap model may emit the PRD block and the plan JSON in one turn —
       // capture the PRD here too so it isn't dropped with the plan preamble.
