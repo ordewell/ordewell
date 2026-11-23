@@ -67,7 +67,26 @@ question is put depends on how the plan arrives.
   no edge, and the check runs after what it ran after. Its brief gets no note
   for them, since it ran after them before, and the research log says how many
   it got back. A task given back that the reply set after the check rejects the
-  whole reply. A plan whose first version does not fan out, a loop's check
+  whole reply. A reply to a plan whose first version fans out is held on two
+  more points. It makes no task wait on more than the plan as written: a wait
+  it adds is kept only on a task the waiting one ran after in the first plan,
+  directly or through others, which is what flattening a chain does, and any
+  other is dropped while the rest of the reply stands. A recorded reply set
+  every slice after every task before the fan-out, where as written few waited
+  for the last of them, which then held them all. The tasks before the slices
+  may still be put in another order among themselves: a replayed reply that
+  moved the task restoring the import first kept every fan-out property, and
+  dropping its waits lost the opening. And a slice the reply left no longer
+  running after the first plan's opening task gets back, directly, the fewest
+  of the tasks before the slices that every slice ran after as written, those
+  no other of them reaches: a recorded reply cut every slice from a three-task
+  opening and left the plan none. A slice still after the opening task keeps
+  the reply's list, since replayed replies that let slices skip shared modules
+  they did not need kept every fan-out property, and holding the slices to
+  those modules lost their parallel width. A brief is told of neither, since a
+  dropped wait never reaches it and a wait given back was waited for before;
+  the research log counts both. A wait given back that would close a cycle
+  leaves the plan's invariants refusing the whole reply. A plan whose first version does not fan out, a loop's check
   (held as above) and subtasks' dependencies are left as the reply has them. An entry for a
   subtask, which the plan shows but the review does not revise, is ignored and
   logged. A changed brief, a delegated task's goal included, gets a
@@ -270,7 +289,12 @@ side and in a row, subtasks, a task given back that the reply set after the
 check, a loop's check and a plan that does not fan out; and, on the shape of a
 recorded plan whose final check reached half its slices through a sweep the
 reply cut, that shaping notes it as the closing check and the log says how
-many it got back, through `reviewLongChain`. `PlanFanOut` is too: the shape and
+many it got back, through `reviewLongChain`. Its two holds on a reply to a plan
+that fans out are tested on the shapes of two recorded plans, every slice set
+after all thirteen tasks before the slices and every slice cut from a
+three-task opening, and on a flattening kept, a reordered opening, a wait that
+would set the opening after a slice, and a plan that does not fan out.
+`PlanFanOut` is too: the shape and
 the three notes, each pinned word for word, the slice table's bound on a plan of
 forty slices; that a slice can read the opening task's report is tested through
 a session. `largestSlicesFirst` is tested over a file system that answers reads as the
@@ -314,7 +338,8 @@ conversation's as they stand.
 
 - `edit_plan`: an edit that lengthens a chain is not reviewed.
 - A catch-all task R1's reply cut from the slices it swept: it keeps the
-  reply's list and runs beside them as a slice. Only the closing check is held.
+  reply's list and runs beside them as a slice. Only the closing check, and a
+  slice's place after the opening task, are held.
 - An API planner's one-shot plan with research turned off
   (`generatePlanDirect`): it is not reviewed.
 - A plan whose work sits in one task. No chain review reaches it.
@@ -494,4 +519,5 @@ conversation's as they stand.
 - 2026-11-22 — R5: each role's note is written whether or not the plan has a closing check; a last task waiting for only some slices no longer hides the tasks before them; a wake about a task names its role.
 - 2026-11-22 — R5: with no closing check, a last task waiting for several slices but not every one gets no note; a wake names the role of the note on the task's brief, not of the plan's shape.
 - 2026-11-22 — R1: a reply that cuts the first plan's closing check off from a task it waited for is applied with the check waiting for those tasks directly; refusing it is not taken.
+- 2026-11-23 — R1: a reply to a plan that fans out keeps an added wait only on a task the waiting one ran after as written, or between two tasks before the slices; a slice it cuts from the opening task waits again for the tasks every slice ran after.
 - 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.
