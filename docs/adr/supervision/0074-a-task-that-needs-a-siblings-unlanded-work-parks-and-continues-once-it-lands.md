@@ -49,7 +49,13 @@ next start continues its saved session, on its branch, once they have landed.**
   not already hold are added to them before the task is pending again: an edit
   of Ordewell's on the task's behalf, said in the run's notices, that no
   planner's or supervisor's loop guard counts. The ordinary start rule then
-  holds it; readiness gains nothing. Every surface shows the edge as any other,
+  holds it; readiness gains nothing. Once it is pending, so free to move, the
+  plan's order is repaired as an edit's is (`PlanStore.keepDependenciesFirst`):
+  it comes to sit after what it waits for, running and completed tasks moving
+  up a slot, never past one another, where nothing else can take its place.
+  Left where it was, ahead of a task it now depends on, every later edit's repair
+  would have to move that task, running or completed, and would refuse the edit.
+  Every surface shows the edge as any other,
   and the supervisor and the user may remove it. The task keeps
   `parked: { attempt, waitsOn, added, count }`, the one new field of the plan,
   saved with it, so a reload or a daemon restart keeps the wait. An edge that
@@ -141,3 +147,4 @@ its merge gate for what it depends on (ADR-0020).
 - 2026-11-21 — accepted and implemented: a runner without a resumable session parks and starts as a carry-over, a lost wait goes on without it (P7), and a Stop holds a parked task (P8).
 - 2026-11-21 — the cycle check counts containment and parks still ending, a park survives a failed spawn, and the shell guard reads only sleeps that run.
 - 2026-11-21 — Pi, which joined the task runners beside this decision, is among the runners that have it.
+- 2026-11-23 — a park reorders the plan so the waiter follows what it waits for, and the order repair moves running and completed tasks up to let a waiter past, so a park no longer leaves every later edit refused.

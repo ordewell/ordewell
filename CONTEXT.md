@@ -2903,7 +2903,11 @@ planner batches and whole-plan intake all read them. A planner batch is checked
 on its final graph, so a later op may finish an earlier rewire. Its post-pass
 `PlanGraph.repairOrder` places top-level dependencies before their dependents,
 keeping unrelated tasks in relative order and running or completed tasks in their
-slots; a batch that requires moving a pinned task is refused, naming it. Display
+order among themselves and, where they can, in their slots: a slot only a task
+that waits on a pinned one further down could take closes up, the pinned tasks
+moving up one. A batch that would move a pinned task past a task it depends on
+is refused, naming both. A park's edges are repaired the same way as it settles
+(ADR-0074 P3), the waiter's own level only. Display
 order is not a requirement on a user's dependency edit. A `merged` or `parts[i]`
 spec's own `dependencies` are read like any task's and joined to what the merged
 tasks or the split task had, each id once; a part that names the task being split

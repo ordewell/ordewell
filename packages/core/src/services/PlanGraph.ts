@@ -76,11 +76,17 @@ function isPinned(t: Task): boolean {
 
 /**
  * Reorder one list of siblings so every dependency comes before its
- * dependents, moving as little as possible: pinned tasks keep the exact slot
- * they are in, and each free slot goes to the earliest-listed movable task
- * whose dependencies are already placed — so tasks the graph does not
- * constrain keep their relative order. A dependency outside the list (a task
- * of another level) constrains nothing here. Assumes an acyclic graph (the
+ * dependents, moving as little as possible: pinned tasks keep their order
+ * among themselves and, where they can, the exact slot they are in, and each
+ * free slot goes to the earliest-listed movable task whose dependencies are
+ * already placed — so tasks the graph does not constrain keep their relative
+ * order. A free slot no movable task can take yet, because each one left waits
+ * on a pinned task further down, closes up: the pinned tasks below move up one,
+ * and what waits on them follows them. That is how a task that parked on a
+ * sibling listed after it (ADR-0074 P3) comes to sit after it. A pinned task
+ * that depends on one listed after it is refused, since moving it down would
+ * move it past work that has already started. A dependency outside the list (a
+ * task of another level) constrains nothing here. Assumes an acyclic graph (the
  * caller checks first). `moves` says what moved, as `"B" #2→#1, "A" #1→#3`, or
  * is null when nothing did.
  */
@@ -94,35 +100,27 @@ export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | nul
     return id ? byId.get(id) : undefined;
   };
   const place = (t: Task) => { result.push(t); placed.add(t.id); };
+  const placeNextMovable = (): boolean => {
+    const next = movable.findIndex((t) => !blockerOf(t));
+    if (next < 0) return false;
+    place(movable.splice(next, 1)[0]);
+    return true;
+  };
 
   for (const occupant of tasks) {
     if (isPinned(occupant)) {
       const blocker = blockerOf(occupant);
-      if (blocker) return { error: pinnedRefusal(blocker, occupant, 'before') };
+      if (blocker) return { error: pinnedRefusal(blocker, occupant) };
       place(occupant);
       continue;
     }
-    const next = movable.findIndex((t) => !blockerOf(t));
-    if (next < 0) {
-      // Nothing is schedulable and the graph is acyclic, so every movable task
-      // left waits — directly or through others — on a pinned task further down
-      // that would have to come up to free this slot.
-      const [stuck, pin] = trailToPin(movable[0], blockerOf);
-      return { error: pinnedRefusal(stuck, pin, 'after') };
-    }
-    place(movable.splice(next, 1)[0]);
+    placeNextMovable();
   }
+  // Every pinned task is placed, and the graph is acyclic, so what is left can all go.
+  while (placeNextMovable());
+  // Only a cycle the caller let through leaves any: refused, never dropped from the plan.
+  if (movable.length > 0) return { error: `"${movable[0].title}" waits on a task that waits on it` };
   return { tasks: result, moves: describeMoves(tasks, result) };
-}
-
-/** Walk the waiting-on chain from `task` down to the pinned task holding it up. */
-function trailToPin(task: Task, blockerOf: (t: Task) => Task | undefined): [Task, Task] {
-  let at = task;
-  for (;;) {
-    const blocker = blockerOf(at);
-    if (!blocker || isPinned(blocker)) return [at, blocker ?? at];
-    at = blocker;
-  }
 }
 
 function describeMoves(before: Task[], after: Task[]): string | null {
@@ -133,7 +131,7 @@ function describeMoves(before: Task[], after: Task[]): string | null {
   return moved.length ? moved.map((m) => `"${m.t.title}" #${m.from}→#${m.to}`).join(', ') : null;
 }
 
-function pinnedRefusal(other: Task, pin: Task, side: 'before' | 'after'): string {
+function pinnedRefusal(other: Task, pin: Task): string {
   const word = pin.status === 'completed' ? 'completed' : 'running';
-  return `"${other.title}" would have to run ${side} "${pin.title}", which is ${word} and cannot be moved`;
+  return `"${other.title}" would have to run before "${pin.title}", which is ${word} and cannot be moved`;
 }

@@ -544,3 +544,30 @@ describe('PlanStore.revision', () => {
     expect(store.statusMark()).not.toBe(mark);
   });
 });
+
+describe('PlanStore.keepDependenciesFirst (ADR-0074 P3)', () => {
+  const t = (id: string, order: number, over: Partial<Task> = {}) => createTask({ id, order, title: id.toUpperCase(), prompt: 'p', ...over });
+  const load = (tasks: Task[]) => { const store = new PlanStore(); store.load(tasks, ['claude-code']); return store; };
+
+  it('repairs the level the task is on, a subtask\'s included, renumbered, and says what moved', () => {
+    const store = load([t('p', 1, { subtasks: [t('w', 1, { dependencies: ['r'] }), t('r', 2, { status: 'in_progress' })] })]);
+    let mutations = 0;
+    store.onMutate = () => { mutations++; };
+
+    expect(store.keepDependenciesFirst('w')).toBe('"R" #2→#1, "W" #1→#2');
+    expect(store.planTasks[0].subtasks.map((s) => `${s.order}:${s.id}`)).toEqual(['1:r', '2:w']);
+    expect(mutations).toBe(1);
+  });
+
+  it('changes nothing where nothing has to move, or where the repair refuses', () => {
+    const fine = load([t('a', 1), t('b', 2, { dependencies: ['a'] })]);
+    const before = fine.revision;
+    expect(fine.keepDependenciesFirst('b')).toBeNull();
+    expect(fine.revision).toBe(before);
+
+    // A completed task depending on the one that must move down cannot follow it.
+    const stuck = load([t('w', 1, { dependencies: ['r'] }), t('done', 2, { status: 'completed', dependencies: ['w'] }), t('r', 3, { status: 'in_progress' })]);
+    expect(stuck.keepDependenciesFirst('w')).toBeNull();
+    expect(stuck.planTasks.map((x) => x.id)).toEqual(['w', 'done', 'r']);
+  });
+});

@@ -1575,6 +1575,8 @@ export class TaskOrchestrator {
     const earlier = (task.parked?.added ?? []).filter((id) => task.dependencies.includes(id));
     this.store.update(taskId, { dependencies: [...task.dependencies, ...added], parked: { ...parked, added: [...earlier, ...added] } });
     const release = this.leave(taskId, 'parked', attempt);
+    // Pending now, so free to move: it sits after what it waits for, and the plan stays one an edit can repair.
+    this.store.keepDependenciesFirst(taskId);
     const names = this.namedTasks(parked.waitsOn);
     this.store.setTaskOutputSummary(taskId, summarizeOutput(`Waits for ${names}: ${reason}`, ''), handoffKept(this.store.get(taskId), attempt.kind));
     this.tell('info', `Task "${task.title}" waits for ${names} (${reason}): its slot is free, and it goes on in its session once that work has landed.`);

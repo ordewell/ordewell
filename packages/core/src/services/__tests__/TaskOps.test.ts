@@ -155,12 +155,12 @@ describe('applyTaskOps', () => {
     }
   });
 
-  it('keeps a task waiting at a checkpoint in its slot, as a running one', () => {
-    const plan = samplePlan().map((t) => ({ ...t, dependencies: [] }));
-    plan[2] = { ...plan[2], status: 'awaiting_user', awaitingReason: 'checkpoint' };
+  it('keeps a task waiting at a checkpoint ahead of what it depends on, as a running one', () => {
+    const plan: Task[] = samplePlan().map((t) => ({ ...t, dependencies: [] }));
+    plan[1] = { ...plan[1], status: 'awaiting_user', awaitingReason: 'checkpoint', dependencies: ['a'] };
     const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { dependencies: ['#3'] } }], ['claude-code']);
     expect(res.ok).toBe(false);
-    expect(res.errors[0]).toBe('"Setup" would have to run after "Test", which is running and cannot be moved');
+    expect(res.errors[0]).toBe('"Setup" would have to run before "Build", which is running and cannot be moved');
   });
 
   it('resolves every ref against the pre-batch plan, not the mid-batch renumbered one', () => {
@@ -1085,17 +1085,17 @@ describe('applyTaskOps — order repair', () => {
     expect(res.tasks).toBe(plan);
   });
 
-  it('refuses to park a task behind a running task that would have to slide up for it', () => {
-    // C(3) is running and last, so nothing can be scheduled after it without
-    // renumbering it — which is exactly what the repair refuses to do.
+  it('slides a running task up, never past another, so a task that now waits on it can follow it', () => {
+    // C(3) is running and last, so A can only come after it if C moves up a
+    // slot: it does, keeping its place after B, as a park on it needs (ADR-0074 P3).
     const plan = independentPlan();
     plan[2].status = 'in_progress';
     const res = applyTaskOps(plan, [
       { op: 'update', taskId: 'a', changes: { dependencies: ['#3'] } },
     ], ['claude-code']);
-    expect(res.ok).toBe(false);
-    expect(res.errors[0]).toBe('"A" would have to run after "C", which is running and cannot be moved');
-    expect(res.tasks).toBe(plan);
+    expect(res.errors).toEqual([]);
+    expect(res.tasks.map((t) => `${t.order}:${t.title}`)).toEqual(['1:B', '2:C', '3:A']);
+    expect(res.summary).toContain('Reordered to keep dependencies first: "B" #2→#1, "C" #3→#2, "A" #1→#3');
   });
 });
 
