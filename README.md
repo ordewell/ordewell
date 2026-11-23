@@ -104,7 +104,7 @@ for versions available to install and their release notes.
 <table>
   <tr><td><b>More than code</b></td><td>Plan read-only research, operations and consented scripts alongside code tasks.</td></tr>
   <tr><td><b>Run controls</b></td><td>Watch tasks live, review their reports and choose whether to automate execution or merging.</td></tr>
-  <tr><td><b>Worktree isolation</b></td><td>Run code tasks in separate git worktrees, then review and merge their changes. See <a href="https://ordewell.ai/docs#isolation">isolation and handoff</a>.</td></tr>
+  <tr><td><b>Worktree isolation</b></td><td>Run code tasks in separate git worktrees, then review and merge their changes. A worktree keeps changes apart, not access: see <a href="SECURITY.md#what-a-tasks-agent-can-reach">what a task's agent can reach</a> and <a href="https://ordewell.ai/docs#isolation">isolation and handoff</a>.</td></tr>
   <tr><td><b>Usage limits</b></td><td>Tasks pause when an agent hits its account limit. Resume later or move unfinished work to another agent.</td></tr>
   <tr><td><b>Planner choices</b></td><td>Plan with a supported coding agent without an extra API key, or use an API provider. The planner reads your repository; changes run through tasks in the plan.</td></tr>
   <tr><td><b>Interfaces</b></td><td>Use the desktop app, terminal UI, VS Code extension, CLI or local API.</td></tr>
@@ -244,8 +244,11 @@ Autorun and automatic merging are off by default. During planning, research task
 can start without build-plan approval, and script tasks can run with consent under
 your approval and run settings. See [run settings](https://ordewell.ai/docs#run-settings).
 
-The planner only reads; tasks run as you, in the mode the plan assigns. See
-[SECURITY.md](SECURITY.md#what-each-part-can-touch) for what each part can touch.
+The planner only reads; tasks run as you, in the mode the plan assigns. In Full
+and Guarded a task's agent can reach what you can, Ordewell's own daemon
+included; read-only tasks run sealed. See
+[SECURITY.md](SECURITY.md#what-each-part-can-touch) for what each part can touch
+and [what a task's agent can reach](SECURITY.md#what-a-tasks-agent-can-reach).
 Without a git repository or with isolation disabled, tasks share the workspace;
 some files can also be shared between worktrees. See
 [isolation and handoff](https://ordewell.ai/docs#isolation) for details.

@@ -249,7 +249,9 @@ cannot be fetched. `ORDEWELL_NO_MODELS_DEV=1` turns the fetch off, and
 | Guarded | Reads and edits inside the worktree go ahead. Every shell command asks you: *Allow*, *Allow for this task*, or *Deny* with a note the model reads. *Allow for this task* grants a command prefix for the rest of that attempt; it covers a command only when the whole line is the prefix, or the prefix and plain arguments, never a line with `;`, `&`, `|`, a backtick, `$(`, `>`, `<` or a line break. |
 | Read-only | For read-only tasks. No edit or shell tool; the task reads files and runs sealed commands only ([ADR-0046](adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)). |
 
-In Full and Guarded the shell is not sandboxed.
+In Full and Guarded the shell is not sandboxed: it runs as you and can reach what you
+can, Ordewell's own daemon included. See
+[what a task's agent can reach](../SECURITY.md#what-a-tasks-agent-can-reach).
 
 **Step limit.** An attempt may make a limited number of model calls; the last one is
 told so and must report with `task_complete`. The limit is `ordewellStepLimit` in
