@@ -109,6 +109,41 @@ describe('a call written as text in the API planner\'s reply', () => {
     expect(chat.sent).toEqual(['go', NOTE]);
   });
 
+  // A recorded supervisor wrote its message_task as DSML in a reply that also recorded a decision, twice, then told the user it had sent both.
+  describe('beside a call it did make', () => {
+    const BESIDE = '[Ordewell] Your last reply also wrote a tool call (message_task) as text, so it was not made: only the calls you made through the tool ran. Make it with the tool, not in your reply text.';
+    const withText = (text: string, name: string, segmentId?: string): ResearchTurn => ({ ...toolTurn(name, { path: 'a.ts' }), text, ...(segmentId ? { segmentId } : {}) });
+
+    it('runs the call it made, and its result says the written one was not made', async () => {
+      const chat = new ScriptedChat([withText(DSML, 'read_file', 'seg-1'), proseTurn('Sent it.')]);
+      const { turn, calls, progress } = run(chat);
+      const settled = await turn;
+
+      expect(calls).toEqual(['a.ts']);
+      expect(chat.toolResultsSent).toHaveLength(1);
+      expect(chat.toolResultsSent[0][0].output).toBe(`body\n\n${BESIDE}`);
+      // The markup is taken back from the surface, and is not kept as narration before the reply.
+      expect(progress).toContainEqual({ type: 'text_retracted', segmentId: 'seg-1' });
+      expect(settled.runs?.map((r) => r.text)).toEqual(['Sent it.']);
+    });
+
+    it('says nothing of a written call to the tool the reply did make', async () => {
+      const chat = new ScriptedChat([withText('<invoke name="read_file">\n</invoke>', 'read_file'), proseTurn('Read it.')]);
+      const { turn } = run(chat);
+      await turn;
+      expect(chat.toolResultsSent[0][0].output).toBe('body');
+    });
+
+    it('keeps narration that writes no call', async () => {
+      const chat = new ScriptedChat([withText('Reading a.ts first.', 'read_file', 'seg-1'), proseTurn('Read it.')]);
+      const { turn, progress } = run(chat);
+      const settled = await turn;
+      expect(chat.toolResultsSent[0][0].output).toBe('body');
+      expect(progress.filter((p) => p.type === 'text_retracted')).toEqual([]);
+      expect(settled.runs?.map((r) => r.text)).toEqual(['Reading a.ts first.', 'Read it.']);
+    });
+  });
+
   it('is not answered once the tool budget is spent, since the call it asks for could not run', async () => {
     const chat = new ScriptedChat([
       toolTurn('read_file', { path: 'a.ts' }), toolTurn('read_file', { path: 'b.ts' }), proseTurn(DSML),
