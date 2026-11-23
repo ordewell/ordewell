@@ -304,7 +304,7 @@ Planned, not yet built:
 ## What a task's agent can reach
 
 This section is about Ordewell's own parts: its daemon, its CLI and the tokens
-they use. It describes 0.14.5.
+they use. It describes 0.14.8.
 
 **In Full and in Guarded, a task's agent runs as you.** A change or ops task's
 runner starts with your environment, `HOME` and `PATH` included, so its agent
@@ -344,7 +344,7 @@ your other processes, a Codex runner's token for Ordewell's tools included
 the first residual under Sealed runs above). A sealed run has no network to use
 such a value from; it leaves only through a later step that has one.
 
-**A daemon started inside a Claude Code session, in 0.14.5 and earlier.** Such
+**A daemon started inside a Claude Code session, in 0.14.8 and earlier.** Such
 a daemon (started by the Claude Code plugin, or by `ordewell` in Claude Code's
 Bash tool) kept that session's variables and passed them to every runner it
 started, that session's messaging socket and token included. The release that
