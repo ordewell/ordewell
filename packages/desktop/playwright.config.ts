@@ -7,7 +7,8 @@ import { defineConfig } from '@playwright/test';
  * daemons, so it is its own spec in the same project, run after it, as is
  * switching project from a window, which opens several repositories, and the
  * terminal's copy and paste, which drives the system clipboard, its tabs'
- * shells following the panel's size, and the disabled Option+Arrow chord.
+ * shells following the panel's size, the disabled Option+Arrow chord, and the
+ * status row at each width and zoom.
  * The visual tour walks the same run for screenshots and layout checks: its own
  * project, so neither script runs the other's spec.
  */
@@ -21,7 +22,7 @@ export default defineConfig({
   timeout: 5 * 60_000,
   expect: { timeout: 30_000 },
   projects: [
-    { name: 'acceptance', testMatch: ['acceptance.spec.ts', 'joined.spec.ts', 'switch.spec.ts', 'clipboard.spec.ts', 'terminalSize.spec.ts', 'wordChord.spec.ts', 'startup.spec.ts', 'loading.spec.ts', 'updateNotice.spec.ts'] },
+    { name: 'acceptance', testMatch: ['acceptance.spec.ts', 'joined.spec.ts', 'switch.spec.ts', 'clipboard.spec.ts', 'terminalSize.spec.ts', 'wordChord.spec.ts', 'startup.spec.ts', 'loading.spec.ts', 'updateNotice.spec.ts', 'statusRow.spec.ts'] },
     // Every state in two themes and three sizes is one long walk; a retry would repeat it all.
     { name: 'tour', testMatch: 'tour.spec.ts', retries: 0, timeout: 30 * 60_000 },
   ],

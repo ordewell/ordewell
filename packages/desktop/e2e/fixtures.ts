@@ -3,7 +3,7 @@
  * repository under a temp HOME, the mock planner provider, a hermetic PATH whose
  * only runner is bench/pipeline's fake-claude, and the Electron launch.
  */
-import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -384,3 +384,17 @@ export const NONE_INSTALLED: FakedDaemon = { runners: fakedRunners([]) };
 export const DETECTION_FAILED: FakedDaemon = {
   runners: { status: 500, body: { error: 'Runner detection failed: spawn EMFILE while looking for installed agents.' } },
 };
+
+/**
+ * The planner's Runners block once the window has read which runners are on:
+ * what a test waits on before it drives the window. The status row no longer
+ * names runners, so the wait is on the chat that does.
+ */
+export const runnersKnown = (page: Page): Locator => page.locator('.runner-pills[data-runners="known"]');
+/** One runner's pill in that block, once the window has read it is on. */
+export const runnerListed = (page: Page, id: string): Locator => page.locator(`.runner-pills[data-runners="known"] [data-runner="${id}"]`);
+/** The daemon item's detail in the status row, which names the lease and a joined daemon: focused open, as a keyboard user opens it. */
+export async function daemonDetail(page: Page): Promise<Locator> {
+  await page.getByRole('contentinfo').locator('.frame-status-daemon').focus();
+  return page.getByRole('tooltip').and(page.locator('#frame-status-detail'));
+}

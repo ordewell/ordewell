@@ -32,6 +32,18 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Changed
 
+- **The desktop app's status row shows the daemon and a new version, on one
+  line.** It reads "Daemon v0.14.9 · :3742", or what needs you about the daemon
+  (reconnecting, a version mismatch, failed), and **↑ X available** while a
+  newer Ordewell is known, now with **↑ X · update failed** when its download
+  failed. The runners' sign-in marks and the account usage figures are gone
+  from it: the planner's Settings and usage line show them, and each task's
+  chat shows its own runner's limits. Whether the app started the daemon, and
+  who holds the session's lease, moved to the daemon's detail, which opens on
+  hover or focus. The row no longer overlaps at narrow widths or at 150% and
+  200% zoom: the daemon item ends in an ellipsis and the update item is never
+  cut, and the activity bar scrolls in a short window instead of drawing over
+  the row.
 - **The desktop welcome shows the agents that work first.** Signed-in agents
   come first, then installed ones with something to fix, then those off or too
   old. Agents this machine does not have fold under *More agents (N)*, in a

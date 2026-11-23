@@ -416,8 +416,8 @@ the CLI can follow ([ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electr
   The folder goes to the top of the recents either way it opens.
 - **A session another host holds.** A session the terminal UI or another
   Ordewell daemon holds is *joined*: you drive it live from the app while the
-  other client shows the same session, and the session header and status bar
-  say *Joined* and name the holder. When that holder exits, **Continue here**
+  other client shows the same session, and the session header and the status
+  bar's daemon detail say *Joined* and name the holder. When that holder exits, **Continue here**
   carries the session on in the app. A session a VS Code window holds runs
   inside VS Code, so the app offers **Start a new session here** or **Watch
   read-only** instead. **Take over…**, in the `⋯` menu, asks before it moves a
@@ -435,7 +435,7 @@ the CLI can follow ([ADR-0063](../adr/surfaces/0063-the-desktop-app-is-an-electr
 │    │ Git)      ├──────────────────────────────────────────┤                 │
 │ ⚙  │           │ terminal (Ctrl+`)                        │                 │
 ├────┴───────────┴──────────────────────────────────────────┴─────────────────┤
-│ status bar: daemon · lease holder · runners · usage limits                  │
+│ status bar: the daemon · a newer version, when there is one                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -562,9 +562,12 @@ theme you saved earlier, including System, is never rewritten.
 ### Command palette and status bar
 
 `⌘K`/`Ctrl+K` lists every enabled command by name, with its shortcut. The
-status bar names the daemon and whether the app attached to it or started it,
-the session's lease holder, the enabled runners, and the account usage limits
-the daemon has read.
+status bar is one line: the daemon's version and port, or what needs you about
+it, and **↑ X available** while a newer version is known. Hover over or focus
+the daemon to see whether the app started it or attached to it and who holds
+the session's lease. The runners' sign-in and the account usage limits are in
+the planner's Settings and usage line, and each task's chat shows its own
+runner's limits.
 
 ## Keyboard
 

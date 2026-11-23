@@ -28,6 +28,7 @@ function words(state: UpdateState, latest: string): Pick<Banner, 'body'> {
 function indicatorText(state: UpdateState, latest: string): string {
   if (state.updater.phase === 'ready') return `↑ ${latest} ready`;
   if (state.updater.phase === 'downloading') return `↑ ${latest} · ${Math.round(state.updater.percent)}%`;
+  if (state.updater.phase === 'error') return `↑ ${latest} · update failed`;
   return `↑ ${latest} available`;
 }
 

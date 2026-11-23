@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bandDefaults, paneBounds } from '../src/renderer/frame/layout';
 import {
-  appEnv, closeApp, DESKTOP, DETECTION_FAILED, fakedRunners, fakeDaemon, freePort, git, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, startMock, untilListening,
+  appEnv, closeApp, daemonDetail, DESKTOP, DETECTION_FAILED, fakeDaemon, fakedRunners, freePort, git, launchApp, makeSandbox, MIXED, MIXED_RUNNERS, NONE_INSTALLED, openFolder, removeSandbox, ROOT, runnerListed, runnersKnown, startMock, untilListening,
   type Sandbox,
 } from './fixtures';
 import { assertPartition, combinations, legName, owns, parseLeg } from './legs';
@@ -1199,7 +1199,7 @@ test('the visual tour', async () => {
     await expect(switchMenu().getByRole('menuitem', { name: 'Open Folder…' })).toBeVisible();
   };
   await state(win, 'project-switcher', 'The title bar\'s project switcher open: recent folders, Open Folder… and Open in new window', async () => {
-    await expect(need(win).getByRole('contentinfo')).toContainText('Claude Code', { timeout: 60_000 });
+    await expect(runnerListed(need(win), 'claude-code')).toBeAttached({ timeout: 60_000 });
     await openSwitcher();
   }, {
     ensure: openSwitcher,
@@ -1209,7 +1209,7 @@ test('the visual tour', async () => {
 
   await state(win, 'planning', 'Session while planning', async (record) => {
     const page = need(win);
-    await expect(page.getByRole('contentinfo')).toContainText('Claude Code', { timeout: 60_000 });
+    await expect(runnerListed(page, 'claude-code')).toBeAttached({ timeout: 60_000 });
     fs.writeFileSync(holdFile, '');
     await page.getByRole('button', { name: 'New session' }).click();
     const box2 = page.getByRole('textbox', { name: 'Message the planner' });
@@ -1863,7 +1863,7 @@ test('the visual tour', async () => {
     for (let i = 1; i <= 2; i++) {
       // Wait for the daemon of the moment: the first restart writes a new PID file.
       await expect.poll(() => pidOfDaemon(box.home, ownedPort) !== undefined && alive(pidOfDaemon(box.home, ownedPort) ?? 0), { timeout: 30_000 }).toBe(true);
-      await expect(page.getByRole('contentinfo').locator('[data-runners="known"]')).toBeVisible({ timeout: 30_000 });
+      await expect(runnersKnown(page)).toBeAttached({ timeout: 30_000 });
       const pid = pidOfDaemon(box.home, ownedPort) ?? 0;
       process.kill(pid, 'SIGKILL');
       kills.push({ kill: i, pid, seen: await sampleChrome(page, 8_000) });
@@ -1920,7 +1920,7 @@ test('the visual tour', async () => {
 
   await state(win2, 'no-provider', 'Workspace with no planner provider configured', async (record) => {
     const page = need(win2);
-    await expect(page.getByRole('contentinfo').locator('[data-runners="known"]')).toBeVisible({ timeout: 60_000 });
+    await expect(runnersKnown(page)).toBeAttached({ timeout: 60_000 });
     await page.waitForTimeout(LOADING_GRACE_MS);
     const planner = page.getByRole('main', { name: 'Centre' });
     record.notes.push(`planner panel after ${LOADING_GRACE_MS / 1000} s: ${((await planner.textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
@@ -2005,7 +2005,9 @@ test('the visual tour', async () => {
     if (await refresh.isVisible()) await refresh.click();
     else await openSession(page);
     await expect(page.getByText(`Live in the daemon on port ${holderPort} (pid ${holder?.pid ?? ''}), shared.`)).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole('contentinfo')).toContainText(`joined :${holderPort}`);
+    await expect(await daemonDetail(page)).toContainText(`Joined :${holderPort}`);
+    // Closed again, so the state's capture shows the row as it rests.
+    await page.getByRole('contentinfo').locator('.frame-status-daemon').blur();
     await expect(page.getByRole('region', { name: /^Held by|^Can't join|VS Code window/ })).toHaveCount(0);
     held.joined = {
       seen: await sampleChrome(page, 2_000),
