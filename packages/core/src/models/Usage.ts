@@ -76,6 +76,20 @@ export interface UsageRecord {
   provider?: string;
   /** The aggregator's id for the call, which its generation lookup takes. */
   generationId?: string;
+  /** The thinking effort the task planned and what the call's request carried, where the runner knows both. */
+  effort?: EffortUse;
+}
+
+/**
+ * The plan's effort is never rewritten (ADR-0001), but an adapter maps a level
+ * its provider lacks onto one it has, or sends none: this keeps the two apart.
+ */
+export interface EffortUse {
+  planned: string;
+  /** In the provider's own word (`high`, `budget_tokens 10000`); absent, the request carried none. */
+  sent?: string;
+  /** The provider refused the effort for this model, so the request went without one. */
+  refused?: true;
 }
 
 /** A model's window as its reporter stated it: what a plan saves of its session's windows (`SessionWindows`). */
@@ -362,6 +376,8 @@ export interface AttemptUsage extends PlannerUsage {
   compaction?: CompactionPoint;
   /** It ended on a failed verdict or a stop: the next attempt's running-long threshold is its running time (ADR-0018 W1). */
   outcome?: AttemptOutcome;
+  /** The effort its main model's latest call planned and carried, where its runner reports both. */
+  effort?: EffortUse;
 }
 
 export type AttemptOutcome = 'failed' | 'stopped';
@@ -373,7 +389,9 @@ export function startAttemptUsage(attempt: number, runner: string, startedAt: st
 /** What its runner reports as it winds down after the attempt ended is added without moving its end. */
 export function addAttemptUsage(usage: AttemptUsage, record: UsageRecord, now: string): AttemptUsage {
   const folded = addPlannerUsage(usage, record);
-  return { ...usage, ...folded, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, contextWindowAssumed: folded.contextWindowAssumed, wallTimeMs: Math.max(0, Date.parse(usage.endedAt ?? now) - Date.parse(usage.startedAt)) };
+  // A subagent runs on its own model and effort, which say nothing of the attempt's.
+  const effort = record.effort && !record.subagentId ? { effort: record.effort } : {};
+  return { ...usage, ...folded, ...effort, lastPromptTokens: folded.lastPromptTokens, contextWindow: folded.contextWindow, contextWindowAssumed: folded.contextWindowAssumed, wallTimeMs: Math.max(0, Date.parse(usage.endedAt ?? now) - Date.parse(usage.startedAt)) };
 }
 
 /** An attempt ends once; ended again once its runner wound down, it only takes the count that runner ended on. */

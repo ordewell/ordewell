@@ -108,6 +108,10 @@ export function createResponsesClient(options: AdapterOptions): ModelClient {
         body = requestBody(request, true);
         events = await open(body, signal);
       }
+      if (request.effort) {
+        const sent = body.reasoning?.effort;
+        yield { type: 'effort', ...(sent ? { sent } : {}), ...(refusesReasoning.has(request.model) ? { refused: true as const } : {}) };
+      }
       yield* readStream(events, signal);
     },
   };

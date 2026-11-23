@@ -6,6 +6,7 @@ import { cameThroughWhole } from './cutShort';
 import type {
   AdapterOptions,
   EffortLevel,
+  EffortSent,
   FinishReason,
   ModelClient,
   ModelEvent,
@@ -148,9 +149,15 @@ export function createChatCompletionsClient(options: AdapterOptions): ModelClien
         body = requestBody(provider, request, true);
         chunks = await open(body, signal);
       }
+      if (request.effort) yield effortSent(body, refusesEffort.has(request.model));
       yield* readStream(provider, request.model, chunks, signal);
     },
   };
+}
+
+function effortSent(body: Body, refused: boolean): EffortSent {
+  const sent = body.reasoning?.effort ?? body.reasoning_effort;
+  return { type: 'effort', ...(sent ? { sent } : {}), ...(refused ? { refused: true as const } : {}) };
 }
 
 /** A refusal that blames the effort field this request carried, by the provider's own `param`. */

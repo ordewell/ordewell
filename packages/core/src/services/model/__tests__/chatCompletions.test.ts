@@ -351,6 +351,19 @@ describe('chat-completions adapter: errors', () => {
     expect(transport.sent.map((s) => s.body.reasoning_effort)).toEqual(['high', undefined, undefined]);
   });
 
+  // A planned max went out as high on every recorded OpenRouter run, and a refused effort left no trace.
+  it('reports the effort each request carried: the level sent, none where the provider takes none, and a refusal', async () => {
+    const sent = async (provider: AiProvider, transport: Replay, effort: ModelRequest['effort']) => ofType(await collect(clientFor(provider, transport), { ...BASE_REQUEST, effort }), 'effort');
+    expect(await sent('openrouter', replay(recorded('text.sse')), 'max')).toEqual([{ type: 'effort', sent: 'high' }]);
+    expect(await sent('groq', replay(recorded('text.sse')), 'medium')).toEqual([{ type: 'effort', sent: 'medium' }]);
+    expect(await sent('deepseek', replay(recorded('text.sse')), 'low')).toEqual([{ type: 'effort' }]);
+    expect(await sent('groq', replay(recorded('text.sse')), undefined)).toEqual([]);
+    const refused = refusal(400, { error: { message: 'reasoning_effort is not supported with this model', type: 'invalid_request_error', param: 'reasoning_effort' } });
+    const client = clientFor('groq', replay(refused, recorded('text.sse'), recorded('text.sse')));
+    expect(ofType(await collect(client, { ...BASE_REQUEST, effort: 'high' }), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+    expect(ofType(await collect(client, { ...BASE_REQUEST, effort: 'high' }), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+  });
+
   it('does not retry a refusal that blames another field', async () => {
     const transport = replay(refusal(400, { error: { message: 'bad tools', type: 'invalid_request_error', param: 'tools' } }));
     const err = await failure(clientFor('groq', transport), { ...BASE_REQUEST, effort: 'high' });

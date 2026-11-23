@@ -1297,3 +1297,31 @@ describe('the shell a script with no #! line runs under (review 132, round 2)', 
     expect(p).not.toContain('POSIX sh unless');
   });
 });
+
+// The recorded one-shot plans set high or max on 289 of 297 tasks, where "medium or high" was the advice.
+describe('the default thinking effort', () => {
+  const selection = (p: string) => p.slice(p.indexOf('MODEL SELECTION GUIDELINES:'), p.indexOf('READ-ONLY TASKS:'));
+  const conversations = [
+    ['over an API', buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: false })],
+    ['in a harness', buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness: true, runner: 'claude-code' })],
+  ] as const;
+  const oneShots = [
+    ['without tools', buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, false)],
+    ['with tools', buildPlanWithResults('goal', '', '', {}, ['claude-code'], undefined, DEFAULT_PLANNER_MODES, true)],
+  ] as const;
+
+  // Its word budget leaves no room to list the work again: the line above it already names it.
+  it.each(conversations)('tells the conversation planner %s to default to medium, higher only for the stronger-model work', (_name, prompt) => {
+    const text = selection(prompt);
+    expect(text).toContain('- Use stronger models for complex refactoring, architecture changes, security-critical code;');
+    expect(text).toContain('- thinkingEffort: "medium" (else the next variant up), higher only for the stronger-model tasks.');
+    expect(text).not.toContain('by task complexity');
+  });
+
+  // Its stronger-model list also names large-scale changes, which were most of the recorded high-effort tasks.
+  it.each(oneShots)('tells the one-shot planner %s to default to medium and names the work that needs more', (_name, prompt) => {
+    const text = selection(prompt);
+    expect(text).toContain('- Default thinkingEffort to "medium" (else the next variant up); go higher only for architecture changes, a hard refactor or security-critical code. Use "low" for trivial edits.');
+    expect(text).not.toContain('"medium" or "high" for moderate/complex tasks');
+  });
+});

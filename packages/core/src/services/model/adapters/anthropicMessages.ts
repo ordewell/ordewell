@@ -4,6 +4,7 @@ import { cameThroughWhole } from './cutShort';
 import type {
   AdapterOptions,
   EffortLevel,
+  EffortSent,
   FinishReason,
   ModelClient,
   ModelEvent,
@@ -125,14 +126,17 @@ export function createAnthropicMessagesClient(options: AdapterOptions): ModelCli
       if (!quirks) learnt.set(request.model, (quirks = new Set()));
       for (;;) {
         let events: AsyncIterable<StreamEvent>;
+        const body = requestBody(request, quirks);
         try {
-          events = await open(requestBody(request, quirks), signal);
+          events = await open(body, signal);
         } catch (err) {
           const quirk = err instanceof ModelError ? refusedQuirk(err) : undefined;
           if (!quirk || quirks.has(quirk)) throw err;
           quirks.add(quirk);
           continue;
         }
+        const effort = request.effort ? effortSent(body, quirks) : undefined;
+        if (effort) yield effort;
         yield* readStream(events, signal);
         return;
       }
@@ -197,6 +201,18 @@ export function requestBody(request: ModelRequest, quirks: ReadonlySet<Quirk> = 
     if (effort) body.output_config = { effort };
   }
   return body;
+}
+
+/**
+ * What the request carried for the effort it asked: the level, or the thinking
+ * budget a budget model takes instead. None on a step that switched thinking
+ * off to force a tool, which is that step's choice and says nothing of the effort.
+ */
+function effortSent(body: Body, quirks: ReadonlySet<Quirk>): EffortSent | undefined {
+  if (body.thinking?.type === 'disabled') return undefined;
+  const sent = body.output_config?.effort ?? (body.thinking?.type === 'enabled' ? `budget_tokens ${body.thinking.budget_tokens}` : undefined);
+  const refused = quirks.has('noEffort') || quirks.has('noThinking');
+  return { type: 'effort', ...(sent ? { sent } : {}), ...(refused ? { refused: true as const } : {}) };
 }
 
 function nudgeText(choice: ModelRequest['toolChoice']): string {

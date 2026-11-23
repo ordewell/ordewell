@@ -20,6 +20,16 @@ describe('attempt usage', () => {
     expect(usage.bySubagent?.child.inputTokens).toBe(20);
   });
 
+  it('keeps the effort its latest call planned and sent, which a subagent\'s call does not move', () => {
+    let usage = startAttemptUsage(1, 'openrouter', start);
+    expect(usage.effort).toBeUndefined();
+    usage = addAttemptUsage(usage, { source: 'ordewell', model: 'm', inputTokens: 10, effort: { planned: 'max', sent: 'high' } }, end);
+    usage = addAttemptUsage(usage, { source: 'ordewell', model: 'm', inputTokens: 10, effort: { planned: 'max', refused: true } }, end);
+    usage = addAttemptUsage(usage, { source: 'ordewell', model: 'm', inputTokens: 10, subagentId: 'child', effort: { planned: 'low', sent: 'low' } }, end);
+    usage = addAttemptUsage(usage, { source: 'ordewell', model: 'm', inputTokens: 10 }, end);
+    expect(usage.effort).toEqual({ planned: 'max', refused: true });
+  });
+
   it('counts a call made outside the agent\'s turns in the totals on a row of its own, without moving the context meter', () => {
     let usage = startAttemptUsage(1, 'opencode', start);
     usage = addAttemptUsage(usage, { source: 'opencode', model: 'p/big', inputTokens: 500, outputTokens: 20, contextWindow: 1000, reportedCost: { amount: 0.5, currency: 'USD' } }, end);

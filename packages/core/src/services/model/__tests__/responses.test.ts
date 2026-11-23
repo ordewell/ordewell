@@ -262,6 +262,18 @@ describe('responses adapter: errors', () => {
       expect(transport.sent[2].body.reasoning).toBeUndefined();
     });
 
+    it('reports the effort each request carried: the level the model takes, none where it does not reason, and a refusal', async () => {
+      const effortOf = async (model: string, effort: ModelRequest['effort']) => ofType(await collect(clientFor(replay(recorded('text.sse'))), { ...BASE_REQUEST, model, effort }), 'effort');
+      expect(await effortOf('gpt-5.2', 'max')).toEqual([{ type: 'effort', sent: 'xhigh' }]);
+      expect(await effortOf('o3', 'xhigh')).toEqual([{ type: 'effort', sent: 'high' }]);
+      expect(await effortOf('gpt-4.1', 'high')).toEqual([{ type: 'effort' }]);
+      expect(await effortOf('gpt-5.2', undefined)).toEqual([]);
+      const client = clientFor(replay(refused, recorded('text.sse'), recorded('text.sse')));
+      const request = { ...BASE_REQUEST, model: 'gpt-5.2-custom', effort: 'high' } as const;
+      expect(ofType(await collect(client, request), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+      expect(ofType(await collect(client, request), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+    });
+
     it('is not retried when the refusal blames another field', async () => {
       const transport = replay(refusal(400, { error: { message: 'bad tools', type: 'invalid_request_error', param: 'tools' } }));
       const err = await failure(clientFor(transport), { ...BASE_REQUEST, model: REASONER, effort: 'high' });

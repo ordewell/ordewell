@@ -1,7 +1,7 @@
 import type { AgentEvent } from '../AgentAdapter';
-import type { UsageRecord } from '../../../models/Usage';
+import type { EffortUse, UsageRecord } from '../../../models/Usage';
 import { DEFAULT_RETRY_POLICY, isModelError, retryDelay, type ModelError, type RetryPolicy } from '../../model';
-import type { EffortLevel, ModelClient, ModelMessage, ModelRequest, ModelToolCall, ModelUsage, SystemPart, ToolChoice, ToolDefinition, ToolResult as ModelToolResult } from '../../model';
+import type { EffortLevel, EffortSent, ModelClient, ModelMessage, ModelRequest, ModelToolCall, ModelUsage, SystemPart, ToolChoice, ToolDefinition, ToolResult as ModelToolResult } from '../../model';
 import { ordewellTools, runTool, type OrdewellTool, type ToolContext, type ToolGate } from './tools';
 import type { ModelInfo } from './models';
 import type { TaskTools } from './taskTools';
@@ -203,6 +203,8 @@ export class OrdewellLoop {
   private stops = 0;
   /** The budget notices this attempt has spent, each at most once (ADR-0070). */
   private readonly noticed = new Set<number>();
+  /** Each way the sent effort differed from the planned one that the task log was told of, once an attempt. */
+  private readonly effortNoted = new Set<string>();
   /**
    * Whether a report giving up on a budget not yet near its end has been
    * answered, and likewise one giving up on a context with room left: each
@@ -535,6 +537,7 @@ export class OrdewellLoop {
     let text = '';
     let thinking = '';
     let usage: ModelUsage | undefined;
+    let effort: EffortUse | undefined;
     let providerState: Extract<ModelMessage, { role: 'assistant' }>['providerState'];
     const calls: ModelToolCall[] = [];
     const running: Promise<ModelToolResult>[] = [];
@@ -566,6 +569,8 @@ export class OrdewellLoop {
           } else {
             running.push(this.startCall(event.call, signals, times === REPEAT_NUDGE_AT ? repeatNudge(event.call) : ''));
           }
+        } else if (event.type === 'effort') {
+          effort = this.effortUse(event);
         } else if (event.type === 'usage') {
           usage = event.usage;
         } else if (event.type === 'provider-state') {
@@ -582,7 +587,7 @@ export class OrdewellLoop {
     // covers the request and the assistant message recorded from its reply below, and not the tool
     // results, which the next estimate adds; a failed step with no call records no reply.
     const replied = calls.length > 0 || (text !== '' && (streamError === undefined || aborted));
-    if (usage) await this.recordUsage(step, usage, request.messages.length + (replied ? 1 : 0));
+    if (usage) await this.recordUsage(step, usage, request.messages.length + (replied ? 1 : 0), effort);
     streamed();
 
     if (thinking) this.emit({ type: 'thinking', text: thinking });
@@ -652,7 +657,24 @@ export class OrdewellLoop {
     return { callId: call.id, name: call.name, output: shown, ...(isError ? { isError: true } : {}) };
   }
 
-  private async recordUsage(step: number, usage: ModelUsage, covers: number): Promise<void> {
+  /**
+   * The planned effort beside what the request carried. A difference is said
+   * once in the task log, as the adapter would otherwise map or drop it
+   * silently: a planned max went out as high on every recorded OpenRouter run.
+   */
+  private effortUse(event: EffortSent): EffortUse | undefined {
+    const planned = this.options.effort;
+    if (!planned) return undefined;
+    const use: EffortUse = { planned, ...(event.sent ? { sent: event.sent } : {}), ...(event.refused ? { refused: true as const } : {}) };
+    const note = effortNote(use);
+    if (note && !this.effortNoted.has(note)) {
+      this.effortNoted.add(note);
+      this.emit({ type: 'command_output', text: note });
+    }
+    return use;
+  }
+
+  private async recordUsage(step: number, usage: ModelUsage, covers: number, effort: EffortUse | undefined): Promise<void> {
     await this.record({ v: 1, kind: 'usage', at: now(), step, usage, covers });
     const { model } = this.options;
     const record: UsageRecord = {
@@ -665,6 +687,7 @@ export class OrdewellLoop {
       ...(usage.cost ? { reportedCost: { amount: usage.cost.amount, currency: usage.cost.currency, kind: 'billed' as const } } : {}),
       ...(usage.provider ? { provider: usage.provider } : {}),
       ...(usage.generationId ? { generationId: usage.generationId } : {}),
+      ...(effort ? { effort } : {}),
       // Always: compaction acts on this window, so the meter must read the same one, an assumed one or one an overflow shrank included.
       contextWindow: this.compactor.contextWindow,
       ...(this.compactor.windowAssumed ? { contextWindowAssumed: true } : {}),
@@ -686,6 +709,14 @@ export class OrdewellLoop {
   private emit(event: AgentEvent): void {
     this.options.emit(this.options.hide(event));
   }
+}
+
+/** The task log's line for an effort that did not go out as planned; none when it did. */
+function effortNote({ planned, sent, refused }: EffortUse): string | undefined {
+  if (refused) return `[Ordewell] This task planned thinking effort ${planned}, which the provider refused for this model: its model requests go without one for the rest of this attempt.`;
+  if (sent === undefined) return `[Ordewell] This task planned thinking effort ${planned}; its model requests carry none, since this provider or model takes none.`;
+  if (sent !== planned) return `[Ordewell] This task planned thinking effort ${planned}; its model requests carry ${sent}, the nearest its provider takes.`;
+  return undefined;
 }
 
 /**
