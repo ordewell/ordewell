@@ -3209,3 +3209,35 @@ export function pidAlive(pid) {
 }
 
 export const round6 = (x) => Math.round(x * 1e6) / 1e6;
+
+// --- Container ids and kernel OOM kills ---------------------------------------
+
+/**
+ * The full container id `docker run -d` printed, or null for anything else: a
+ * kernel memcg line names a docker scope by this id, so a short or garbled one
+ * would attribute nothing.
+ */
+export function containerId(stdout) {
+  const id = String(stdout ?? '').trim();
+  return /^[0-9a-f]{64}$/.test(id) ? id : null;
+}
+
+/**
+ * Each kernel memcg OOM line (`journalctl -k` text) that names a docker scope,
+ * tied to the run whose `containers` (box, proxy, evalBox ids, as the box
+ * started) holds that id. A scope no run holds comes back with no `runId`.
+ * Nothing here reads the journal: the caller passes its text.
+ */
+export function attributeOomKills(text, runs) {
+  const owner = new Map();
+  for (const run of runs) for (const [role, id] of Object.entries(run.containers ?? {})) if (id) owner.set(id, { run, role });
+  const out = [];
+  for (const line of String(text ?? '').split('\n')) {
+    if (!/oom[-_ ]?(kill|memcg)|out of memory/i.test(line)) continue;
+    const scope = /oom_memcg=\S*?docker-([0-9a-f]{64})\.scope/.exec(line) ?? /docker-([0-9a-f]{64})\.scope/.exec(line);
+    if (!scope) continue;
+    const held = owner.get(scope[1]);
+    out.push({ containerId: scope[1], role: held?.role ?? null, runId: held?.run.runId, library: held?.run.library, arm: held?.run.arm, line });
+  }
+  return out;
+}

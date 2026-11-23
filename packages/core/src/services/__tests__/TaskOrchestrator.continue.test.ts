@@ -124,6 +124,16 @@ describe('which tasks can be continued (ADR-0018, K1)', () => {
     expect(continuability(plan({ status: 'pending', runnerSessionId: savedSessionId }))).toEqual({ ok: true, sessionId: 'sess-1' });
   });
 
+  it('a task whose stopped attempt saved no session is refused for that, not for its status', () => {
+    const stoppedAttempt = [{ attempt: 1, runner: 'claude-code', startedAt: '2026-10-01T10:00:00.000Z', wallTimeMs: 0, totals: {}, byModel: [], outcome: 'stopped' as const }];
+    expect(continuability(plan({ status: 'pending', attemptUsage: stoppedAttempt }))).toEqual({
+      ok: false,
+      reason: 'Task "Parse JSON" cannot be continued: its stopped attempt left no saved session to resume. Use Retry instead.',
+    });
+    // Never run, or its last attempt ended otherwise: still not a task that can be continued at all.
+    expect(continuability(plan({ status: 'pending' }))).toEqual({ ok: false, reason: expect.stringContaining('only a completed') });
+  });
+
   it('not a task still running, waiting, or never run, nor a user task', () => {
     for (const status of ['in_progress', 'awaiting_user'] as const) {
       expect(continuability(plan({ status, runnerSessionId: savedSessionId })).ok).toBe(false);

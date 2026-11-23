@@ -9,6 +9,7 @@ import { betweenRounds, loopRoundOf } from '../models/Loop';
 import type { SkipOrigin } from '../models/SkipOrigin';
 import { handoffDigest, type StoredHandoff } from '../models/Handoff';
 import { ATTEMPT_FIELDS, freshAttempt, type AttemptField } from '../models/TaskExecution';
+import { repairOrder } from './PlanGraph';
 
 /** See {@link PlanStore.ready}. */
 const READY_KEEPS: readonly AttemptField[] = ['loopRound', 'reverted', 'carriedFrom', 'parked', 'retryNote'];
@@ -204,6 +205,32 @@ export class PlanStore {
     this.rebuild();
     this.notifyMutate();
     return this._taskMap.get(taskId);
+  }
+
+  /**
+   * Put the siblings of `taskId` back in dependency order after an edge was
+   * added outside an edit, as an edit's ops are (`applyTaskOps`), so a task
+   * listed ahead of what it now waits for does not leave every later edit
+   * refused (ADR-0074 P3). Says what moved, or null; where the repair refuses
+   * the order is left as it is, for the edit that meets it to say why.
+   */
+  keepDependenciesFirst(taskId: string): string | null {
+    let moves: string | null = null;
+    const repair = (level: readonly Task[]): Task[] => {
+      if (level.some((t) => t.id === taskId)) {
+        const repaired = repairOrder([...level]);
+        if ('error' in repaired || !repaired.moves) return [...level];
+        moves = repaired.moves;
+        return repaired.tasks.map((t, i) => ({ ...t, order: i + 1 }));
+      }
+      return level.map((t) => ({ ...t, subtasks: repair(t.subtasks ?? []) }));
+    };
+    const tasks = repair(this._planTasks);
+    if (!moves) return null;
+    this._planTasks = tasks;
+    this.rebuild();
+    this.notifyMutate();
+    return moves;
   }
 
   /**

@@ -32,6 +32,10 @@ export function continuability(task: Task): Continuability {
   // refused, the only way on was a fresh attempt that left the stopped one's commits on a preserved branch, unseen.
   const stopped = task.status === 'pending' && !!task.runnerSessionId;
   const finished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped' || stopped || (delegated && (task.status === 'pending' || task.awaitingReason === 'question-lost'));
+  // Not the general refusal below, which would call a stopped task one that cannot be continued by its status: it was stopped, and left nothing to go on in.
+  if (!delegated && task.status === 'pending' && !task.runnerSessionId && task.attemptUsage?.at(-1)?.outcome === 'stopped') {
+    return refuse('its stopped attempt left no saved session to resume. Use Retry instead.');
+  }
   if (!finished && !pausedOnLimit(task)) return refuse('only a completed, failed, stopped or skipped task, or one paused on a usage limit, can be.');
   if (!task.runnerSessionId) return refuse(delegated ? 'it has no child to reopen. Use Retry instead, which starts one.' : 'its runner left no saved session to resume. Use Retry instead.');
   const owner = sessionOwner(task);
