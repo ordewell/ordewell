@@ -266,7 +266,14 @@ is no sibling chat, lock tool, wait tool or broadcast.**
   transcript keeps them all. The newest is what opened the turn, so it stays whole and the oldest
   are left out first, each of their events named in a line up to a count, since a turn settles what
   it was sent and nothing raises them again. A failure blocking many tasks names the first few and the count, as a
-  usage limit does. The level brief is sent once and then one line on a change, through
+  usage limit does. Ahead of the updates, every wake-up after the first carries Ordewell's own
+  account of what the last wake-up turn executed, in one line of at most 400 characters within
+  the same cap: the calls the command seam recorded for a planner, done and refused apart, a few
+  named and the rest counted, and each edit or plan that landed, or that it executed none. It is
+  read from the transcript, from that turn's run updates to the next message a person sent, never
+  saved, and never sent on a turn a person started. A model that wrote its call as text or never
+  made it otherwise decided on its own words: a recorded supervisor told the user it had sent two
+  timeboxes no record held, then took their silence for the runner's. The level brief is sent once and then one line on a change, through
   `PlannerBriefing`, and again whole only when a context no longer holds it, as ADR-0012 T10 sends
   the plan block; ADR-0029's "each turn" goes. Each level has its brief, and a context that never
   held the one a change reaches gets it whole: a line cannot carry a level's rules, the escalation
@@ -547,3 +554,4 @@ is no sibling chat, lock tool, wait tool or broadcast.**
 - 2026-11-22 — R4: `failure_standing` catches the supervisor up on a failure or hold with work waiting that it was never told of, at Act, as the level becomes Act, a run starts or continues, a level is set after a stopped run, or the run goes idle; one wake, each task once.
 - 2026-11-22 — R4: the catch-up leaves out a hold a call left (Stop, revert, mark not done), which is `run_held`'s.
 - 2026-11-22 — R4: a call that starts a task again ends the catch-up's leaving out of its hold, so a hold its failed start leaves is caught up.
+- 2026-11-23 — R5: a wake-up carries Ordewell's one-line account of what the last wake-up turn executed, within the cap.
