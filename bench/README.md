@@ -651,9 +651,17 @@ then always a dry run), in a fresh box on no network, with no key: any key in th
 environment is removed first. At most `--jobs` containers run at once. It
 writes `timeline.json` into the run directory (`timeline/<point>/` holds each
 point's `score.json`, `arm.patch` and `tests.log`). The final point must score
-as `result.json` does (passed, failed, errors); when it does not, the timeline
-says `verified: false` and why, and the exit is non-zero, as it is when a point
-could not be scored. Arm B's history is the first-parent line of its integration
+as `result.json` does (passed, failed, errors). A tree whose tests are flaky by
+one or two scores differently each time, so when it differs the final tree is
+scored twice more, alone (`rescored` in `timeline.json`, each in
+`timeline/<point>-rescoreN/`, never a point of the timeline), and the recorded
+score is accepted when each of its passed, failed and errors lies within the
+range those runs showed: `verification` is then `verified within ±k`, `k` the
+farthest any of the runs lay from the recorded number, with the range in
+`verifiedWithin`, and `finalMatchesResult` is false. An equal score stays plain
+`verified`, scored once. Outside the range the timeline says `verified: false`
+and why, naming the range, and the exit is non-zero, as it is when a point could
+not be scored. Arm B's history is the first-parent line of its integration
 branch, and once the end-of-run merge has left only `commit0-base` in the
 workdir, of that, which holds every landing; with `--branch` too it is the
 first-parent line, never a full `git log`, which would reach a slice's own commit.
@@ -663,6 +671,31 @@ fails, is tried once more alone, and if it is killed again stays `ok: false`,
 reach 25, 50, 75, 90 and 100% of those collected. `commit0.test.mjs` tests the choice of points and the
 commit-to-time mapping on a repository it builds, the closing check's landing included, and the container call
 through a fake `docker` on `PATH`.
+
+### The shape of a plan
+
+`reshape.mjs` shapes a recorded plan again with this build's core and checks
+it; `fanout.mjs` reads a plan's fan-out by script. Both work on small
+`{ tasks }` plans and need no key. `slicesToldTruly` holds each slice to the
+tasks its note says it starts after, reading them as the note writes them, `"title"
+(id)`, against the plan's own tasks, so parentheses in a title, such as
+`(classes/function.py)`, are not taken for a task id; a note naming a task the
+slice does not wait for fails it.
+
+```bash
+node bench/commit0/fanout.mjs --review <written.json> <reviewed.json> [...]
+```
+
+compares a plan as first written with the same plan after review, one JSON line
+a pair. The tasks before the slices, the slices and the closing check are told
+apart as `fanout.mjs` tells them, each plan by its own. For every slice in both,
+it lists the ancestors it has among the tasks before the slices (direct or
+transitive) as written and as reviewed, with the median and the maximum of their
+counts for each. `newAncestry` lists the waits the review added, `{ task,
+waitsFor }`, that give a task an ancestor it did not have as written; a wait on
+a task that was already an ancestor adds nothing and is not listed. `openingCut`
+lists the slices that lost an ancestor every slice had as written, `{ slice,
+lost }`. `fanout.test.mjs` pins each on small synthetic plans.
 
 ### Judging a score again
 
