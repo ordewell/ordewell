@@ -1,6 +1,6 @@
 # Ordewell for VS Code
 
-**Plan once, run it across Claude Code, Codex and six more coding agents, and review one branch.**
+**Plan once, run it across Claude Code, Codex and seven more coding agents, and review one branch.**
 One goal becomes an editable plan with a runner and model assigned to each AI task.
 By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
