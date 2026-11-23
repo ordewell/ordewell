@@ -11,7 +11,7 @@
  */
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
-import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, runnerListed, startMock, untilListening, type Sandbox } from './fixtures';
 
 const MAC = process.platform === 'darwin';
 const COPY = MAC ? 'Meta+C' : 'Control+Shift+C';
@@ -75,7 +75,7 @@ test('the terminal copies and pastes with the platform\'s chords, and Ctrl+C sti
   const screen = win.locator('.xterm').first();
 
   await test.step('open a terminal', async () => {
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
     await win.keyboard.press('Control+Backquote');
     await expect(win.getByRole('tablist', { name: 'Terminals' })).toBeVisible();
     await expect(screen).toBeVisible();

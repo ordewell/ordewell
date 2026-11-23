@@ -180,6 +180,11 @@ kbd.frame-menu-hint { font-family: inherit; }
   align-items: center;
   flex: none;
   width: 52px;
+  /* A short or zoomed window scrolls its items here rather than drawing them over the status row. */
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
   padding: var(--ow-space-1) 0;
   background: var(--ow-bg-chrome);
   border-right: 1px solid var(--ow-border);
@@ -409,13 +414,33 @@ kbd.frame-menu-hint { font-family: inherit; }
   font: var(--ow-type-small);
   overflow: hidden;
 }
-.frame-status-daemon { display: inline-flex; align-items: center; gap: var(--ow-space-1); min-width: 0; white-space: nowrap; }
-.frame-status-daemon .ow-status-label { color: var(--ow-fg-secondary); overflow: hidden; text-overflow: ellipsis; }
-.frame-status-slot { display: inline-flex; align-items: center; gap: var(--ow-space-2); min-width: 0; white-space: nowrap; }
+/* One line at any width or zoom: the daemon item gives way and ends in an ellipsis, the update notice never does. */
+.frame-status-daemon { display: inline-flex; align-items: center; flex: 0 1 auto; min-width: 0; padding: 0 var(--ow-space-1); overflow: hidden; white-space: nowrap; border-radius: var(--ow-radius-sm); }
+.frame-status-daemon:focus-visible { outline-offset: calc(var(--ow-focus-offset) * -1); }
+.frame-status-daemon > .ow-status { min-width: 0; }
+.frame-status-daemon .ow-status-label { min-width: 0; color: var(--ow-fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Drawn while the item is hovered or focused. Fixed, so the row's overflow: hidden does not clip it: just above the row, from its left edge. */
+.frame-status-detail {
+  position: fixed;
+  left: var(--ow-space-2);
+  bottom: calc(var(--ow-height-status-bar) + var(--ow-space-1));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ow-space-half);
+  max-width: min(480px, calc(100vw - 2 * var(--ow-space-2)));
+  padding: var(--ow-space-2) var(--ow-space-3);
+  background: var(--ow-surface-overlay);
+  border: 1px solid var(--ow-border-widget);
+  border-radius: var(--ow-radius-lg);
+  box-shadow: var(--ow-elevation-overlay);
+  color: var(--ow-fg-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.frame-status-detail > span:empty { display: none; }
+.frame-status-slot { display: inline-flex; align-items: center; flex: none; min-width: 0; margin-left: auto; white-space: nowrap; }
 .frame-status-slot:empty { display: none; }
-.frame-status-slot:last-child { margin-left: auto; }
-.frame-status-text { color: var(--ow-fg-secondary); white-space: nowrap; }
-.frame-status-runners { display: inline-flex; gap: var(--ow-space-3); }
 /* A newer version: the one thing in the bar that is a button, so it reads as one. */
 .frame-status-update { padding: 0 var(--ow-space-1); border: 0; border-radius: var(--ow-radius-sm); background: none; color: var(--ow-accent); font: inherit; white-space: nowrap; cursor: pointer; }
 .frame-status-update:hover { text-decoration: underline; }

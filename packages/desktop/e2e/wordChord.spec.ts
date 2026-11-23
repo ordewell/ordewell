@@ -3,7 +3,7 @@ import { expect, test, type ElectronApplication, type Locator, type Page } from 
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, runnerListed, startMock, untilListening, type Sandbox } from './fixtures';
 
 let sandbox: Sandbox | undefined;
 let mock: ChildProcess | undefined;
@@ -63,7 +63,7 @@ test('Option+Left/Right moves by words in a linked zsh, and otherwise leaves the
   }
 
   // The status bar names a runner once the window is ready for the panel's chord.
-  await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+  await expect(runnerListed(win, 'claude-code')).toBeAttached();
   await win.keyboard.press('Control+Backquote');
   await expect(screen).toBeVisible();
   await expect.poll(async () => (await rows(screen)).some((row) => row.trim() !== '')).toBe(true);

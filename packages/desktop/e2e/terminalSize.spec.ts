@@ -10,7 +10,7 @@
  */
 import { expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
-import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, runnerListed, startMock, untilListening, type Sandbox } from './fixtures';
 
 let sandbox: Sandbox | undefined;
 let mock: ChildProcess | undefined;
@@ -126,7 +126,7 @@ test('a tab shown again after the panel changed size has its shell at its own gr
 
   await test.step('open two terminals at one size', async () => {
     await setSize(1200, 800);
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
     await win.keyboard.press('Control+Backquote');
     await expect(win.getByRole('tablist', { name: 'Terminals' })).toBeVisible();
     await ready();

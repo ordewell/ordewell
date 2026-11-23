@@ -63,7 +63,7 @@ describe('the view stubs', () => {
     expect(Object.keys(state.tabKinds).sort()).toEqual(['commit', 'commit-diff', 'commits', 'diff', 'file', 'plan-graph', 'planner', 'settings', 'task']);
     expect(state.panels.map((p) => `${p.region}/${p.id}`).sort()).toEqual(['plan/plan', 'terminal/terminal']);
     expect(state.slots.map((s) => s.slot).sort()).toEqual([
-      'popover.needsYou', 'status.daemon', 'status.lease', 'status.runners', 'status.update', 'status.usage', 'title.breadcrumb', 'title.scope',
+      'popover.needsYou', 'status.daemon', 'status.daemon', 'status.update', 'title.breadcrumb', 'title.scope',
     ]);
     expect(state.commands.map((c) => c.id)).toContain('explorer.quickOpen');
     expect(state.commands.map((c) => c.id)).toContain('update.check');

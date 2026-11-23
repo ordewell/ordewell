@@ -13,7 +13,7 @@ import { expect, test, type ElectronApplication, type Page } from '@playwright/t
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { appEnv, closeApp, freePort, launchApp, makeSandbox, openFolder, removeSandbox, ROOT, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, daemonDetail, freePort, launchApp, makeSandbox, openFolder, removeSandbox, ROOT, runnerListed, startMock, untilListening, type Sandbox } from './fixtures';
 
 const GOAL = 'Add greeting and farewell modules';
 const SESSION = 'session-joined-e2e';
@@ -153,14 +153,14 @@ test('the app joins a session a TUI\'s daemon holds, drives it there, and contin
 
   await test.step('open the workspace and the held session: the app joins the holder', async () => {
     win = await openFolder(electronApp, welcome, box().repo);
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
     const sidebar = win.getByRole('navigation', { name: 'Sessions' });
     // Clicking the activity already shown collapses its sidebar, so it is clicked only when hidden.
     if (!await sidebar.isVisible()) await win.getByRole('navigation', { name: 'Views' }).getByRole('tab', { name: /^Sessions/ }).click();
     await expect(sidebar).toBeVisible();
     await sidebar.getByRole('button', { name: new RegExp(GOAL) }).click({ timeout: 60_000 });
     await expect(win.getByText(`Live in the TUI's daemon on port ${holderPort} (pid ${holderPid}), shared with the TUI.`)).toBeVisible({ timeout: 30_000 });
-    await expect(win.getByRole('contentinfo')).toContainText(`joined :${holderPort}`);
+    await expect(await daemonDetail(win)).toContainText(`Joined :${holderPort}`);
     await expect(sidebar.getByRole('button', { name: new RegExp(`${GOAL} Joined · TUI pid ${process.pid}`) })).toBeVisible();
     await expect(win.getByRole('region', { name: /^Held by|^Can't join/ })).toHaveCount(0);
   });
@@ -184,7 +184,7 @@ test('the app joins a session a TUI\'s daemon holds, drives it there, and contin
     await expect(gone).toBeVisible({ timeout: 60_000 });
     await gone.getByRole('button', { name: 'Continue here' }).click();
     await expect(gone).toBeHidden({ timeout: 30_000 });
-    await expect(win.getByRole('contentinfo')).not.toContainText(`joined :${holderPort}`);
+    await expect(await daemonDetail(win)).not.toContainText(`Joined :${holderPort}`);
     const box = win.getByRole('textbox', { name: 'Message the planner' });
     await expect(box).toBeEditable();
     await box.fill(AFTER_EXIT);

@@ -16,7 +16,7 @@
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
-import { appEnv, closeApp, freePort, git as gitIn, launchApp, makeSandbox, openFolder, removeSandbox, startMock, untilListening, type Sandbox } from './fixtures';
+import { appEnv, closeApp, freePort, git as gitIn, launchApp, makeSandbox, openFolder, removeSandbox, runnerListed, startMock, untilListening, type Sandbox } from './fixtures';
 
 const GOAL = 'Add greeting and farewell modules';
 const COMMENT = 'Export it as a named constant, please.';
@@ -73,7 +73,7 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
   await test.step('welcome: open the workspace', async () => {
     await expect(welcome.getByRole('button', { name: 'Open folder…' })).toBeVisible();
     win = await openFolder(electronApp, welcome, sandbox?.repo ?? '');
-    await expect(win.getByRole('contentinfo')).toContainText('Claude Code');
+    await expect(runnerListed(win, 'claude-code')).toBeAttached();
   });
 
   const views = win.getByRole('navigation', { name: 'Views' });

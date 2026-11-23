@@ -1343,7 +1343,7 @@ export default function App({ layout = 'chat', selection, goal }: {
             Coding agents, and the built-in runner on each provider with a key, execute the plan's tasks.
             The planner assigns only the ones switched on.
           </div>
-          <div className="runner-pills">
+          <div className="runner-pills" data-runners={runnersKnown ? 'known' : 'checking'}>
             {runnerList.map((r) => {
               const on = runners.includes(r.id);
               // Never emptied from here: with no runner on, no surface could assign a task.
