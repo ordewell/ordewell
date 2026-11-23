@@ -221,7 +221,7 @@ const oneTaskInput = z.object({ task: taskRef });
 const retryTaskInput = z.object({
   task: taskRef,
   from: z.enum(['fresh', 'session'])
-    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now. "session": continue the runner\'s saved session with "message"; for a completed or failed task, or one paused on a usage limit.'),
+    .describe('"fresh": a new attempt from the task\'s prompt as the plan holds it now. "session": continue its saved session with "message"; for a completed, failed or stopped task, or one paused on a usage limit.'),
   message: z.string().optional().describe('"session": what the runner should do next, required unless resuming a task paused on a usage limit. "fresh": your note on what to do differently; it counts as a change to the identical-retry guard.'),
 });
 
