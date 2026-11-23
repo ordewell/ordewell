@@ -6,30 +6,23 @@
 </p>
 
 <p align="center">
-  <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
-  Ordewell is an open-source orchestrator for coding agents: one goal becomes a
-  plan of tasks, each run by the agent you choose, in parallel, and passed only
-  on evidence.
+  Ordewell is an open-source tool that turns one goal into a plan of tasks that
+  your coding agents run in parallel, for you to review and merge.
 </p>
 
 <p align="center">
-  <a href="https://ordewell.ai"><strong>Website</strong></a> ·
-  <a href="https://ordewell.ai/download"><strong>Download</strong></a> ·
-  <a href="https://ordewell.ai/docs">Documentation</a> ·
-  <a href="https://ordewell.ai/news">News</a>
-</p>
-
-<p align="center">
-  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run in Ordewell's terminal UI: a goal becomes a four-task plan, Claude Code, Codex and OpenCode run independent tasks in parallel, and a final verification task completes the plan. Sped up stretches are marked.">
-  <br>
-  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/how-it-works-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/readme/how-it-works-light.svg">
+    <img src="assets/readme/how-it-works-light.svg" width="800" alt="One goal becomes a plan you can edit. Its tasks run in parallel, each on its own agent, such as Claude Code, Codex or OpenCode, and its own git branch, and each passes only on evidence. Then you review and merge.">
+  </picture>
 </p>
 
 | Use it in | Install |
 |---|---|
 | Desktop app | [Download for macOS, Windows or Linux](https://ordewell.ai/download) |
-| Terminal | `curl -fsSL https://ordewell.ai/install.sh \| sh` (macOS and Linux, no Node.js needed; on Windows, [use npm](#install-the-terminal-app)) |
-| VS Code | Extension `ordewell.ordewell`: `code --install-extension ordewell.ordewell` |
+| Terminal | `curl -fsSL https://ordewell.ai/install.sh \| sh` (macOS and Linux; on Windows, [use npm](#install-the-terminal-app)) |
+| VS Code | `code --install-extension ordewell.ordewell` |
 
 **You need** a coding agent you already use, such as Claude Code or Codex,
 installed and signed in, or a provider API key. No Ordewell account or key.
@@ -45,59 +38,42 @@ installed and signed in, or a provider API key. No Ordewell account or key.
 4. A task passes only on evidence: its agent's report, or a script's clean exit.
    You read the diff, then merge the run into your branch or discard it.
 
+Use it in the [desktop app](#download-the-desktop-app), the
+[terminal](#install-the-terminal-app), [VS Code](#vs-code) or the command line.
+All of them drive the same plans, runners and settings. This README describes 0.14.8; see the
+[published releases](https://github.com/ordewell/ordewell/releases) for the
+versions you can install and their release notes.
+
 <p align="center">
+  <a href="https://ordewell.ai"><strong>Website</strong></a> ·
+  <a href="https://ordewell.ai/docs">Documentation</a> ·
+  <a href="https://ordewell.ai/news">News</a>
+  <br>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.npmjs.com/package/@ordewell/cli"><img src="https://img.shields.io/npm/v/@ordewell/cli" alt="npm"></a>
   <a href="https://github.com/ordewell/ordewell/actions/workflows/ci.yml"><img src="https://github.com/ordewell/ordewell/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/ordewell/ordewell"><img src="https://img.shields.io/github/stars/ordewell/ordewell?style=social" alt="GitHub stars"></a>
 </p>
-
-Ordewell is the best agent orchestrator for complex work. One goal becomes a plan
-graph you can edit, and each task gets its own agent, model and effort: Claude
-Code, Codex, OpenCode, GitHub Copilot CLI and more. Independent tasks run in
-parallel on their own branches, pass only on evidence, then merge. Review every
-step, or let it run.
-
-Use it in the [desktop app](#download-the-desktop-app), the
-[terminal](#install-the-terminal-app), [VS Code](#vs-code) or from the command
-line. Every one drives the same plans, runners and settings.
-
-This README describes 0.14.8. See the [published releases](https://github.com/ordewell/ordewell/releases)
-for versions available to install and their release notes.
 
 ## Why Ordewell
 
-1. **A goal becomes a plan graph you can edit.** The planner reads your
-   repository, asks what is vague and writes tasks with dependencies. Change any
-   prompt, dependency, agent, model, effort or mode before it runs. The desktop
-   app shows the plan as a list or as a graph.
+1. **A plan you can edit.** Change any task's prompt, dependencies, agent,
+   model, effort or mode before it runs. The desktop app shows the plan as a
+   list or as a graph.
 2. **Every task picks its own agent.** Claude Code, Codex, OpenCode, Pi, GitHub
-   Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor are supported out of the
-   box and mix freely in one plan. Signed-in agents need no extra API key. A
-   provider API key adds the built-in runner, which needs no coding agent
-   installed ([planners and runners](docs/planners-and-runners.md#the-built-in-runner)).
-3. **Parallel, without the pile-up.** Independent tasks run side by side, each
-   on its own branch in its own git worktree; dependent tasks wait for the work
-   they need, and a merge conflict gets a repair attempt before you are asked.
+   Copilot CLI, Qwen Code, Cline, Gemini CLI and Cursor mix freely in one plan,
+   and a signed-in agent needs no extra API key. A provider API key adds the
+   built-in runner, which needs no coding agent installed
+   ([planners and runners](docs/planners-and-runners.md#the-built-in-runner)).
+3. **Parallel, without the pile-up.** Dependent tasks wait for the work they
+   need, and a merge conflict gets a repair attempt before you are asked.
    Without a git repository, tasks share your folder.
-4. **Done means evidence.** A task passes when its agent reports through
-   `task_complete`, or when a script task exits cleanly. A clean exit with no
-   report is a failure, and no second model decides. Check-and-fix loops repeat
-   a check and its fix until it passes or reaches its round limit.
+4. **Done means evidence.** A clean exit with no report is a failure, and no
+   second model decides. Check-and-fix loops repeat a check and its fix until
+   it passes or reaches its round limit.
 5. **Your call on autonomy.** By default you approve the plan, answer
    checkpoints and merge. Turn on autorun, automatic merging and an Act
    supervisor, and it runs and merges on its own; a merge conflict leaves your
    tree untouched and waits for you.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/desktop-plan-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/readme/desktop-plan-light.png">
-    <img src="assets/readme/desktop-plan-light.png" width="900" alt="The Ordewell desktop app with a plan ready for approval: the planner conversation in the middle, with Ask for changes and Approve plan buttons, and the six-task plan on the right, each task showing its agent, model and effort.">
-  </picture>
-  <br>
-  <sub>A plan waiting for approval.</sub>
-</p>
 
 ## Features
 
@@ -164,12 +140,8 @@ the next release. Windows SmartScreen may still warn while the new certificate
 builds reputation. The [desktop guide](docs/desktop/README.md#install) covers
 each platform, checksums and updates.
 
-The first winget submission requires Microsoft's review before
-`winget install Ordewell.Ordewell` becomes available. The installer above works
-while that review is pending.
-
-The desktop app carries Electron and its own copy of the Ordewell daemon, so it
-needs no Node.js.
+winget's first submission is waiting on Microsoft's review; the installer
+above works until it is available. The desktop app needs no Node.js.
 
 ## Install the terminal app
 
@@ -227,19 +199,7 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 
 ## How it works
 
-<p align="center">
-  <img src="assets/readme/workflow.svg" width="900" alt="Describe your goal, review and edit the plan, run independent tasks in parallel with Claude Code, Codex and OpenCode, then review the diff and choose when to merge.">
-</p>
-
-1. **Describe your goal.** The planner explores your workspace without modifying
-   it and asks clarifying questions.
-2. **Review the plan.** Edit tasks, dependencies, runners and models before
-   approving the build plan.
-3. **Run the tasks.** Independent tasks run in parallel; dependent tasks wait
-   for the work they need. Follow progress live.
-4. **Review and merge.** Read the diff and test evidence, then merge the changes
-   into your branch or discard the run.
-
+A run follows the steps of [your first run](#what-happens-on-your-first-run).
 Autorun and automatic merging are off by default. During planning, research tasks
 can start without build-plan approval, and script tasks can run with consent under
 your approval and run settings. See [run settings](https://ordewell.ai/docs#run-settings).
@@ -287,11 +247,9 @@ adapted from [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT).
 
 Ordewell checks for updates daily, sending its version and a random install ID
 to ordewell.ai after a one-time notice, and nothing else. The desktop app sends
-the same daily check. When the answer names a newer release, Ordewell remembers
-it until you update and says so: the desktop app in a banner and its status
-bar, the terminal UI on every start and in its status row, VS Code in its
-status bar and in a message once a day, and a command run in a terminal once a
-day. `ordewell update` and `/update` run the update; they send nothing to
+the same daily check. When the answer names a newer release, the desktop app,
+the terminal UI, VS Code and terminal commands say so until you update.
+`ordewell update` and `/update` run the update; they send nothing to
 ordewell.ai. To turn the check off, set `ORDEWELL_NO_VERSION_CHECK=1` or
 `DO_NOT_TRACK=1`, turn off **Check for new versions** in the desktop app's
 Settings, or turn off VS Code's telemetry for the extension. See

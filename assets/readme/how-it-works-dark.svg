@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="262" viewBox="0 0 800 262" font-family="Arial, Helvetica, sans-serif">
+  <title>How Ordewell works</title>
+  <desc>One goal becomes a plan you can edit. Its tasks run in parallel, each on its own agent, such as Claude Code, Codex or OpenCode, and its own git branch, and each passes only on evidence. Then you review and merge.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 1 1 L 9 5 L 1 9 z" fill="#A7AEB8"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#A7AEB8" stroke-width="1.6">
+    <path d="M 135 130 H 168" marker-end="url(#arrow)"/>
+    <path d="M 320 130 C 350 130 343 58 373 58" marker-end="url(#arrow)"/>
+    <path d="M 320 130 C 350 130 343 130 373 130" marker-end="url(#arrow)"/>
+    <path d="M 320 130 C 350 130 343 202 373 202" marker-end="url(#arrow)"/>
+    <path d="M 575 58 C 603 58 595 130 623 130" marker-end="url(#arrow)"/>
+    <path d="M 575 130 C 603 130 595 130 623 130" marker-end="url(#arrow)"/>
+    <path d="M 575 202 C 603 202 595 130 623 130" marker-end="url(#arrow)"/>
+  </g>
+  <g fill="#1C1E23" stroke="#525761" stroke-width="1.4">
+    <rect x="10" y="95" width="125" height="70" rx="10"/>
+    <rect x="170" y="95" width="150" height="70" rx="10"/>
+    <rect x="375" y="30" width="200" height="56" rx="10"/>
+    <rect x="375" y="102" width="200" height="56" rx="10"/>
+    <rect x="375" y="174" width="200" height="56" rx="10"/>
+  </g>
+  <rect x="625" y="95" width="165" height="70" rx="10" fill="#1C1E23" stroke="#0BC7F4" stroke-width="2"/>
+  <g fill="#E6E8EC" font-size="17" font-weight="bold" text-anchor="middle">
+    <text x="72.5" y="125">One goal</text>
+    <text x="245" y="125">A plan</text>
+    <text x="707.5" y="125">You review</text>
+  </g>
+  <g fill="#A7AEB8" font-size="15" text-anchor="middle">
+    <text x="72.5" y="148">in your words</text>
+    <text x="245" y="148">you can edit</text>
+    <text x="707.5" y="148">and merge</text>
+  </g>
+  <text x="395" y="54" fill="#E6E8EC" font-size="16" font-weight="bold">Claude Code</text>
+  <text x="395" y="74" fill="#A7AEB8" font-size="14">its own git branch</text>
+  <text x="395" y="126" fill="#E6E8EC" font-size="16" font-weight="bold">Codex</text>
+  <text x="395" y="146" fill="#A7AEB8" font-size="14">its own git branch</text>
+  <text x="395" y="198" fill="#E6E8EC" font-size="16" font-weight="bold">OpenCode</text>
+  <text x="395" y="218" fill="#A7AEB8" font-size="14">its own git branch</text>
+  <g fill="none" stroke="#0BC7F4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 541 59 l 6 6 l 12 -13"/>
+    <path d="M 541 131 l 6 6 l 12 -13"/>
+    <path d="M 541 203 l 6 6 l 12 -13"/>
+  </g>
+  <g fill="#0BC7F4" font-size="14" text-anchor="middle">
+    <text x="475" y="19">Tasks run in parallel</text>
+    <text x="475" y="253">Each passes only on evidence</text>
+  </g>
+</svg>
