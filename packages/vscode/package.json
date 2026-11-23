@@ -1,8 +1,8 @@
 {
   "name": "ordewell",
   "displayName": "Ordewell",
-  "description": "Plan, run, and review across eight coding agents.",
-  "version": "0.14.5",
+  "description": "Plan, run, and review across nine coding agents.",
+  "version": "0.14.8",
   "private": true,
   "publisher": "ordewell",
   "license": "Apache-2.0",
@@ -44,6 +44,16 @@
     "onWebviewPanel:ordewellChildTaskLog"
   ],
   "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Ordewell runs coding agents that read and change this folder, and reads its .envrc, .ordewell/env and worktree setup command. Trust the folder to use it."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Ordewell runs coding agents and git on files on this machine."
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "tsup && vite build && node scripts/copy-skills.mjs && node scripts/verify-bundle.mjs && node ../../scripts/generate-third-party-notices.mjs vscode",
@@ -76,6 +86,36 @@
         }
       ]
     },
+    "walkthroughs": [
+      {
+        "id": "ordewell.firstRun",
+        "title": "Get started with Ordewell",
+        "description": "From a goal to a plan of coding-agent tasks, run when you approve it.",
+        "steps": [
+          {
+            "id": "openView",
+            "title": "Open the Ordewell view",
+            "description": "Ordewell lives in the activity bar. Its view says which coding agent plans and which ones run tasks.\n[Open Ordewell](command:ordewell.focusChat)",
+            "media": { "markdown": "media/walkthrough/open-view.md" },
+            "completionEvents": ["onView:ordewellChatView"]
+          },
+          {
+            "id": "giveGoal",
+            "title": "Give it a goal",
+            "description": "Type what you want done in the chat and send it. The planner reads the repository, may ask a question, and proposes a plan of tasks. Nothing runs yet.\n[Open the chat](command:ordewell.focusChat)",
+            "media": { "markdown": "media/walkthrough/give-goal.md" },
+            "completionEvents": ["onContext:ordewell.walkthrough.goalGiven"]
+          },
+          {
+            "id": "approvePlan",
+            "title": "Approve the plan",
+            "description": "Read the plan: each task names its runner, model and mode. Click Execute Plan to approve it and start the run, or tell the planner what to change.\n[Open the chat](command:ordewell.focusChat)",
+            "media": { "markdown": "media/walkthrough/approve-plan.md" },
+            "completionEvents": ["onContext:ordewell.walkthrough.planApproved"]
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "ordewell.forkConversation",
@@ -215,7 +255,7 @@
         "ordewell.aiProvider": {
           "type": "string",
           "default": "",
-          "description": "Who plans: an API provider (google, openrouter, openai_compatible, or another vendor), or the id of a coding-agent runner installed on this machine, which plans on its own subscription with no API key. Auto-detected from the API keys you have set if left blank. The runner ids are the ones /runners lists; an unknown value is reported when it is set. Set it from the planner picker (/planner) rather than by hand."
+          "description": "Who plans: an API provider (google, openrouter, openai_compatible, or another vendor), or the id of a coding-agent runner installed on this machine, which plans on its own subscription with no API key. Left blank, an installed coding agent plans, and an API key you have set plans only when no agent is installed or you saved a model for its provider. The runner ids are the ones /runners lists; an unknown value is reported when it is set. Set it from the planner picker (/planner) rather than by hand."
         },
         "ordewell.plannerThinkingEffort": {
           "type": "string",
@@ -225,7 +265,7 @@
         "ordewell.orchestratorModel": {
           "type": "string",
           "default": "",
-          "description": "Main planning model (required. Use /planner or the Planner section to choose one)"
+          "description": "The planner's model. Left empty, a coding-agent planner uses the agent's own default; an API provider has no default, so it needs one. Use /planner or the Planner section to choose one."
         },
         "ordewell.geminiModel": {
           "type": "string",
@@ -346,8 +386,8 @@
     }
   },
   "dependencies": {
-    "@ordewell/core": "^0.14.5",
-    "@ordewell/ui": "^0.14.5"
+    "@ordewell/core": "^0.14.8",
+    "@ordewell/ui": "^0.14.8"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

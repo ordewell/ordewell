@@ -99,6 +99,8 @@ export interface PlannerCommandSyntax extends SignInSyntax {
   pickPlanner: string;
   setKey(provider: AiProvider): string;
   setModel: string;
+  /** Where a surface whose `setModel` takes a bare id lists the ids to give it. */
+  listModels?: string;
 }
 
 export const TERMINAL_UI_COMMANDS: PlannerCommandSyntax = {
@@ -117,6 +119,7 @@ export const HEADLESS_CLI_COMMANDS: PlannerCommandSyntax = {
   pickPlanner: 'ordewell planner <id>',
   setKey: (provider) => `ordewell key set ${provider} <key>`,
   setModel: 'ordewell model set <id>',
+  listModels: 'ordewell models',
   ...HEADLESS_CLI_SIGN_IN,
 };
 
@@ -138,11 +141,16 @@ export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_CO
 export function describePlannerNotReady(reason: PlannerNotReady, commands: PlannerCommandSyntax): string {
   if (reason.code === 'signed_out') return `${describeSignIn(reason.signIn, commands)} Then try again.`;
   if (reason.code === 'no_model') {
-    // The TUI and VS Code pick the model inside `/planner`; the headless CLI
-    // has its own `ordewell model set`. Name the one place, not two.
-    return commands.setModel === commands.pickPlanner
-      ? `No planner model selected for ${reason.label}. Pick one with ${commands.setModel}.`
-      : `No planner model selected for ${reason.label}. Pick one with ${commands.setModel}, or switch planner with ${commands.pickPlanner}.`;
+    // An API planner has no default model on purpose, so the refusal names
+    // the one step that ends it. The TUI, the desktop app and VS Code pick the
+    // model inside `/planner`; the headless CLI sets an id it lists elsewhere.
+    if (commands.setModel === commands.pickPlanner) {
+      return `No planner model selected for ${reason.label}. Run ${commands.setModel} and pick a model for ${reason.label}.`;
+    }
+    const pick = commands.listModels
+      ? `List its models with ${commands.listModels}, then pick one with ${commands.setModel}`
+      : `Pick one with ${commands.setModel}`;
+    return `No planner model selected for ${reason.label}. ${pick}, or switch planner with ${commands.pickPlanner}.`;
   }
   const lead = `No planner is ready. Pick one with ${commands.pickPlanner}: ${harnessPlannerNames()} plan with no API key.`;
   if (reason.code === 'no_base_url') {

@@ -192,7 +192,7 @@ Quick Start:
 Environment:
   OPENROUTER_API_KEY         OpenRouter API key
   GEMINI_API_KEY             Google Gemini API key
-  AI_PROVIDER                Provider ID (auto-detected from keys); list with "ordewell planner"
+  AI_PROVIDER                Provider ID (auto-detected: an installed coding agent, else a key's vendor); list with "ordewell planner"
                              ${plannerIdList()}: plan with that CLI,
                              no API key (uses its own subscription)
   ORDEWELL_PLANNER_EFFORT    Thinking effort for a coding-agent planner

@@ -78,6 +78,12 @@ Concretely:
   planner's does where it needs one — a move to another runner, a manual task
   turned into an AI one, a task added — so a mode picked by hand is never
   rewritten and no task lands on a mode its runner lacks.
+- **A mode the runner will not start in fails the task; it is never swapped.**
+  Claude Code given `auto` where Auto is not offered starts in `default`
+  (ADR-0018 B2). The task fails, and the mode it did start in is offered as
+  the user's one-click switch and retry, the same hand edit the dropdown
+  makes. Falling back by itself would run a task in a mode nobody chose, and
+  the mode is the user's safety choice.
 
 ### The planner says read-only, not a mode (ADR-0031)
 
@@ -301,3 +307,4 @@ writing.
 - 2026-10-22: the TUI and VS Code set the level in `/settings`; the headless CLI keeps `ordewell auto`, aliases included.
 - 2026-10-25 — the level starts Guarded on a fresh install rather than Full; a
   saved or environment-selected level still decides.
+- 2026-11-21 — a runner that starts in another mode fails the task, and the mode it started in is offered as the user's switch, never applied for them (ADR-0018 B2).

@@ -15,6 +15,7 @@ import { lookupModelInfo, parseModelId, providerCredentials } from './models';
 import { buildSystemPrompt } from './prompt';
 import { compactionStart } from './compaction';
 import { taskCompactAtOf } from '../../taskCompactWindow';
+import { taskReasoningKeptOf } from './reasoningWindow';
 import { taskToolsOf } from './taskTools';
 import { FileTranscriptStore, ordewellSessionsRoot, type LoadedTranscript, type TranscriptStore } from './transcript';
 import { OrdewellLoop, retryNote, stepFailure, type RequestAssembler, type StepBoundary, type StepBoundaryHook, type StepPlan } from './loop';
@@ -186,6 +187,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
     const compactSetting = taskCompactAtOf();
     const compactAt = compactionStart(model.contextWindow, compactSetting, `${this.label} runner`, (line) => this.startNotices.push(line));
     this.compactAtSet = typeof compactSetting === 'number' ? compactAt : undefined;
+    const reasoningKept = taskReasoningKeptOf();
     const effort = EFFORTS.find((level) => level === opts.flags.effort);
 
     this.store = store;
@@ -218,6 +220,7 @@ export class OrdewellAdapter implements TaskModeAgentAdapter {
       ...(effort ? { effort } : {}),
       // `auto` and `off` leave the guard alone, so it still follows a window the provider shrinks mid-attempt.
       ...(typeof compactSetting === 'number' ? { compactAt } : {}),
+      reasoningKept,
       hide: (value) => this.held.hideIn(value),
       emit,
     });

@@ -45,6 +45,37 @@ describe('wakeUpDigest', () => {
     expect(digest).toMatch(/…$/);
   });
 
+  // Recorded: woken for an opening task running long, the supervisor saw edits outside its brief and had it revert what its role allowed.
+  describe('a task with a role in a fan-out (ADR-0072 R5)', () => {
+    const OPENING = 'the opening task, which may edit any file to make the project import and its tests collect';
+    const role = (taskId: string) => (taskId === 't1' ? OPENING : undefined);
+    const MINUTE = 60_000;
+
+    it('names the role after what the task did, running long, at its context threshold or failed', () => {
+      const lines = wakeUpDigest({ attention: [
+        { kind: 'running_long', taskId: 't1', at: 0, runningLong: { reason: 'duration', elapsedMs: 30 * MINUTE, thresholdMs: 30 * MINUTE, compactions: 0, attempt: 1 } },
+        { kind: 'task_failed', taskId: 't1', at: 0, detail: 'the tests do not collect' },
+        { kind: 'task_failed', taskId: 't2', at: 0, detail: 'the tests fail' },
+        { kind: 'running_long', taskId: 't1', at: 0, runningLong: { reason: 'context', elapsedMs: 40 * MINUTE, thresholdMs: 60 * MINUTE, contextThreshold: 200_000, contextTokens: 210_000, contextWindow: 400_000, compactions: 0, attempt: 1 } },
+      ], sinceLast: [] }, describeTask, () => [], role).split('\n');
+
+      expect(lines.slice(1, 4)).toEqual([
+        `- task #1 "Task t1" has run long: 30m 00s running, past its 30m 00s threshold (the 30m 00s floor); it is ${OPENING}`,
+        `- task #1 "Task t1" failed: the tests do not collect; it is ${OPENING}`,
+        '- task #2 "Task t2" failed: the tests fail',
+      ]);
+      expect(lines[4]).toMatch(new RegExp(`^- task #1 "Task t1"'s context reached its threshold: .*; it is ${OPENING}$`));
+    });
+
+    it('keeps the line\'s own facts as long as they were, the role beside them', () => {
+      const event: RunEvent = { kind: 'task_failed', taskId: 't1', at: 0, detail: 'x'.repeat(1000) };
+      const bare = wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask).split('\n')[1];
+      const named = wakeUpDigest({ attention: [event], sinceLast: [] }, describeTask, () => [], role).split('\n')[1];
+
+      expect(named).toBe(`${bare}; it is ${OPENING}`);
+    });
+  });
+
   describe('a task running long (ADR-0018 W1)', () => {
     const MINUTE = 60_000;
     const runningLong = (taskId: string, facts: Partial<NonNullable<RunEvent['runningLong']>> = {}): RunEvent => ({
@@ -305,17 +336,32 @@ describe('Supervisor', () => {
   it.each<[string, SupervisedRun | null]>([
     ['no run has started', null],
     ['the run is Off', { level: 'off' }],
-    ['the supervisor failed in this run', { level: 'watch', unsupervised: 'it failed twice' }],
+    ['the supervisor failed in a run the user set to Off', { level: 'off', unsupervised: 'its report turn failed twice' }],
   ])('gathers nothing while %s', async (_case, run) => {
     vi.useFakeTimers();
     const h = host(run);
     const supervisor = new Supervisor(h, { debounceMs: 10 });
 
-    supervisor.observe({ kind: 'task_failed', taskId: 't1' });
+    expect(supervisor.observe({ kind: 'task_failed', taskId: 't1' })).toBe(false);
     await vi.advanceTimersByTimeAsync(100);
 
     expect(h.deliver).not.toHaveBeenCalled();
     expect(supervisor.mayWake()).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it('keeps what happens once the supervisor failed in the run, at once and with the inputs that wait, opening no turn (ADR-0029)', async () => {
+    vi.useFakeTimers();
+    const h = host({ level: 'act', unsupervised: 'it failed twice' });
+    const supervisor = new Supervisor(h, { debounceMs: 10 });
+
+    expect(supervisor.observe({ kind: 'task_failed', taskId: 't1', detail: 'broke' })).toBe(true);
+
+    expect(h.deliver).toHaveBeenCalledWith(expect.stringMatching(/^Run update:\n- task #1 "Task t1" failed: broke/), undefined, undefined, ['t1']);
+    expect(supervisor.mayWake()).toBe(false);
+    expect(supervisor.wakeOwed).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.deliver).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
 

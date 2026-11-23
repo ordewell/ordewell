@@ -22,6 +22,311 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   pick. It sends nothing, never shows during a run, in a headless command,
   without a terminal or in CI, and `ORDEWELL_NO_FEEDBACK_NOTICE=1` turns it
   off (ADR-0075).
+- **VS Code opens Ordewell once, with a walkthrough.** The first activation
+  after install or this upgrade reveals the Ordewell view, and *Get started
+  with Ordewell* (**Welcome: Open Walkthrough...**) has three steps: open the
+  view, give it a goal, approve the plan. Each step ticks itself off when you do it. The
+  extension now declares that it does not run in Restricted Mode, and says why
+  there: it runs coding agents in the folder and reads its `.envrc`,
+  `.ordewell/env` and worktree setup command, so trust the folder to use it.
+
+### Changed
+
+- **The desktop welcome shows the agents that work first.** Signed-in agents
+  come first, then installed ones with something to fix, then those off or too
+  old. Agents this machine does not have fold under *More agents (N)*, in a
+  neutral tone, not red. With none installed, the fold starts open, since the
+  install pages are the next step. A signed-out agent's hint names the card's
+  own *Log in* and *Set API key…* buttons, not `/login` and `/key-set`, which
+  that window has no composer for.
+- **Each surface names what it is waiting for at startup.** The desktop
+  welcome's runner row says, from the first frame, "Starting Ordewell's daemon
+  on port N…" while the app starts its own daemon, "Connecting to…" while it
+  looks for one, and then "Looking for coding agents on your PATH, then asking
+  each one whether it is signed in." Before, it showed blank skeletons, with
+  "Loading runners …" only after two seconds. The footer and the status bar
+  say *starting* rather than *connecting* while the app starts its daemon. The
+  chat in the desktop app and VS Code shows "Detecting coding agents…" and the
+  same line in place of a bare "Loading…". The terminal UI's welcome adds that
+  line under Setup while it detects. If the daemon has not answered after
+  about five seconds, `ordewell` says it is still waiting and where the
+  daemon's log is. No timeout changed.
+- **Docs and messages that misdirected a first run are corrected.** The README's
+  terminal quick start no longer suggests `/planner` and `/runners` are setup
+  steps. Troubleshooting says releases from 0.14.1 are signed and notarized,
+  and names the card as the app shows it, *Could not authenticate with the
+  daemon*. The desktop guide says *Approve plan* starts the run in one click.
+  The VS Code guide names the *Execute Plan* button, and says a saved key plans
+  only when no agent can, or when you choose its provider. VS Code's "No runner
+  is enabled" now points to Runners in the chat's Settings panel, not a header.
+
+- **An installed coding agent plans ahead of an API key Ordewell finds.** A
+  Claude Code or Codex user with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or
+  another provider's key in their shell, or one saved in Ordewell (VS Code's
+  secret storage, the desktop app's *Set API key…*, `/key-set`), had their
+  first goal refused with "No planner model selected": the key took planning
+  from the agent, and an API planner has no default model. Now the agent plans,
+  unless it is signed out or you chose that provider: picked it with `/planner`
+  or `ordewell planner <id>`, or saved a planner model for it
+  (`ORCHESTRATOR_MODEL`, VS Code's `orchestratorModel`, or `GEMINI_MODEL`,
+  `geminiModel` and the older `planningModel` for Gemini). A model you pick
+  while the agent plans (desktop Settings or chat, `ordewell model set`,
+  VS Code's `/model`) stays the agent's, even one the key's provider also
+  names, such as `gpt-5.5`. If you already plan with a provider, nothing
+  changes. With no agent installed, a key's provider plans as before. When a
+  key is passed over, the terminal UI's welcome, the desktop app and VS Code
+  say once which planner is active and why: "Planning with Claude Code. An
+  OpenAI key was found and is not used for planning; /planner changes that."
+  ([ADR-0076](docs/adr/planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md)).
+- **A coding agent with no model picked reads as working.** The terminal UI's
+  Planner row says `agent default`, no longer `no model` in yellow; the chat's
+  and the desktop app's planner model pickers say *Agent default* instead of
+  *Select model...* or a blank; VS Code's `orchestratorModel` setting no longer
+  calls the model required; and VS Code's `/planner` offers *Agent default*
+  first for an agent and no longer gives up when the agent's catalog is empty.
+- **A planner refused for having no model names the exact step.** "Run
+  /planner and pick a model for OpenAI" in the terminal UI, the desktop app and
+  VS Code; from the command line, list the models with `ordewell models`, then
+  `ordewell model set <id>`.
+
+- **With nothing that can plan, every first screen says exactly how to get a
+  planner.** The desktop app and VS Code show the install command and install
+  guide for Claude Code and for Codex, say that signing in happens in the agent
+  itself, and offer *Detect again*, with *Add API key* as the second route. The
+  terminal UI shows the same, with `/refresh` to look again, and its Planner
+  row says `none yet` instead of `OpenRouter (unavailable)`, a provider nobody
+  chose. The installer names both routes, an agent or an API key, with the two
+  agents' install commands, and ends with the next step: change to your
+  project and run `ordewell`.
+- **Adding a key goes on to the planner model.** When the key's provider now
+  plans and has no model picked, `/key-set` in the terminal UI opens
+  `/planner`'s model step for it, VS Code's key entry (`/key-set`, *Add API
+  key* and the *Configure API Key* command) opens the planner picker on that
+  provider's models, and the desktop app's chat opens Settings at the planner
+  (its welcome window's *Set API key…* says to pick the model there). The
+  first goal is no longer refused for a missing model right after a key was
+  added. While a coding agent plans, nothing more is asked.
+- **"None of the requested runners are enabled" says what to do:** send the
+  goal again to plan for the runners that are on, or turn one on under Runners
+  (`/runners` in the terminal UI), or, with none enabled, install a coding agent
+  and run `/refresh`.
+
+### Fixed
+
+- **Ordewell started from inside a coding agent's session no longer makes
+  its runners part of that session.** A daemon started from a Claude Code
+  shell (the Claude Code plugin, or `ordewell run` in a Bash call) kept that
+  session's variables, and every planner and task session it started was
+  linked to it: its transcript recorded the parent, the parent's notes
+  directory got an entry, and the parent's messaging socket and token reached
+  every runner. The parent was the session that first started the daemon, not
+  the one asking. The daemon and every runner now leave behind what names a
+  parent agent session: Claude Code's `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`,
+  `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_CHILD_NOTES_DIR`,
+  `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_LAUNCHED_BY_SESSION_IDS`,
+  `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_STARTER_MAY_HOLD_CONNECTOR_FILE`,
+  `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`,
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_PID` and
+  `CLAUDE_EFFORT`; Codex's `CODEX_THREAD_ID` and `CODEX_TOOL_CALL_ID`; and
+  OpenCode's `OPENCODE_SESSION_ID`. What you set to configure an agent (base
+  URLs, models, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, proxies) still reaches it,
+  and a workspace's `.envrc` or `.ordewell/env` may still set any of these on
+  purpose.
+- **`ordewell run` on a plan whose manual tasks are all that is left says
+  so.** It said "Every task has already completed: there is nothing left to
+  run." Now it says "Nothing is left for a run to start: every AI and script
+  task has completed", names each manual task still to do, and says that a
+  person does it and marks it complete. A plan with a skipped task says
+  "completed or was skipped".
+
+- **A Claude Code task that cannot start in Auto mode says so and offers the
+  next step.** Claude Code offers Auto only on some models (on Anthropic's API:
+  Opus and Sonnet 4.6 or later, Haiku 5.5, the Fable models), and an
+  administrator can turn it off. Elsewhere it starts in *Ask before edits* without saying why, and the
+  task failed with "the runner exited cleanly but never called task_complete".
+  Now the task fails with "Claude Code started in Ask before edits mode, not
+  Auto, the mode this task asked for…", and its entry in the inbox (the desktop
+  app's *Needs you*, VS Code's and the terminal UI's inbox) offers *Use Ask
+  before edits and retry*. Nothing changes the mode until you pick that. The
+  run's other Claude Code tasks in Auto on the same model are held before they
+  start and named once in the notice. The same option switches them too
+  ([ADR-0018](docs/adr/runners/0018-structured-runner-transport.md) B2).
+- **A failed task says why on its row.** The desktop app's plan card and VS
+  Code's task card and row show the first sentence of the reason while
+  collapsed, the whole reason on hover. The failure notice no longer says
+  "failed verification: Failed verification:", and a runner that stops without
+  reporting now reads "The runner stopped before reporting the task done, so
+  nothing it did counts yet. Open its chat to see where it stopped, then retry
+  it."
+- **An agent installed while Ordewell runs is found on the next detection.**
+  *Detect again*, `/refresh`, the runner list and a no-planner error's *Try
+  Again* now ask the login shell for its PATH again, so an installer that adds
+  a directory to your shell profile no longer needs Ordewell restarted. The
+  chat's *Try Again* on that error detects again instead of only closing it.
+- **The terminal UI's Planner row is current after `/key-set`,** which now
+  applies the daemon's answer at once instead of showing the old planner until
+  a goal was refused, and **`/planner` probes the installed coding agents
+  again**, so one installed while the TUI runs is offered without `/refresh`.
+
+## [0.14.8] - 2026-11-23
+
+### Changed
+
+- **The plan review can no longer make tasks wait on work they did not wait on
+  as the planner wrote the plan.** When the planner reviews a plan's dependency
+  chain, its reply may still flatten a chain, but a task may not now wait on a
+  task it never ran after, and the parallel tasks may not be left without the
+  opening task: a reply that does either is held to the plan's own ancestry and
+  opening. When the guard drops a wait the reply added, the task gets back the
+  ancestors it shared with the dropped task, so it does not end up waiting for
+  neither the old task nor the new one, and a reply for an ops, user or
+  loop-check task is no longer refused whole because of it. The review's log
+  names only the tasks whose waits really changed.
+- **The supervisor is told which actions its previous turn really carried
+  out.** Each wake-up opens with Ordewell's one-line account of the acts the
+  last turn executed. Wake-ups that merely ride ahead of a user's message are
+  not mistaken for that turn.
+
+### Fixed
+
+- **A stopped task can be continued, with the work it had committed.** Stop used
+  to leave the task not started, which Continue refused, so the only way on was
+  a fresh attempt from the integration tip, with the stopped attempt's commits
+  on a preserved branch nobody named. A stopped task that has a saved session is
+  now continued in its restored worktree, in the same session. A fresh retry's
+  answer now says plainly where it starts: the integration tip, and the
+  preserved branch that holds the stopped attempt's commits.
+- **A tool call written as text beside real tool calls is caught.** A supervisor
+  reply that made real tool calls and also wrote another call out as text (as
+  one model's own markup) was taken as fully done, so the written call never ran
+  while the user was told it was sent. The round's results now say that the
+  written call was not executed.
+
+## [0.14.7] - 2026-11-22
+
+### Changed
+
+- **A planner or supervisor reply that writes a tool call out as text is asked
+  again, not taken as done.** When the API planner (a conversation turn, a
+  supervisor wake-up or the one-shot plan answer) writes a tool call as text
+  instead of making it, Ordewell asks once more for the call, then records that
+  the call was not executed. Before, such a reply was taken as finished, and a
+  wake-up could end as done with the supervisor's note never sent. A sample
+  inside a code fence is not a call, and a call written after the turn's tool
+  budget is spent is not asked again, since an answer to it could not run. The
+  check the built-in runner already used is now shared with the planner, and it
+  also recognises `<invoke>` blocks, DSML and a whole reply that is a JSON call;
+  a built-in-runner task whose replies keep writing such a call now fails its
+  attempt instead of waiting for you.
+- **The supervisor is told a task's role when it is woken about that task.** A
+  wake about a task that is running long, near its context limit or failed names
+  the role the plan gave it (opening task, slice or closing check), taken from
+  the note on the task's own brief. A plan with no such note gives no role and no
+  licence.
+- **A wide one-shot plan's tasks get their role notes even when the plan has no
+  closing check.** The notes for the opening task, the slices and the closing
+  check are each written on their own. Before, a wide plan with no closing check
+  gave its opening task no note, so that task did not know it may fix imports
+  anywhere, and the supervisor could have it revert those edits. A last task that
+  waits for only some of the slices is not given the closing-check note, and its
+  slices are still counted.
+- **Test directories that no task names are handed to the closing check.** In a
+  one-shot plan, a directory of tests that no task's brief names used to go
+  unchecked. The closing check's note now lists such directories by name, with
+  the number of test files in each (a long list ends "and 1 more directory"). A
+  listing that takes too long is dropped and the plan goes ahead without it. A
+  bare word such as "tests" in a brief no longer hides a test directory.
+
+### Fixed
+
+- **One-shot planning no longer fails when the model mistypes a dependency
+  id.** A dependency that names no task used to fail planning and lose the run's
+  spend. An id spelled a little off (another letter case, spaces, a leading `#`
+  or `task `, padding zeros, or the task's title) is now read as the one task it
+  means, and only when exactly one task fits; the planner's research log says
+  which id was read as which task. Any other unknown id goes back to the model
+  once, with the task, the id, the nearest valid ids and the ids the plan has.
+  When the task is the plan's only one, the message says there is no other task
+  to depend on. A plan submitted or edited by the model's own tool call is not
+  rewritten: the model gets the error and fixes it.
+- **The plan review can no longer remove a plan's closing check.** When the
+  planner reviews a plan's dependency chain, its reply could cut a sweep down to
+  its opening task, which left the first plan's closing check with nothing to
+  wait for. The closing check now waits directly for the fewest tasks it lost,
+  and the rest of the reply stands.
+
+## [0.14.6] - 2026-11-22
+
+### Added
+
+- **A task can wait for a sibling's unlanded work without holding a slot
+  (`wait_for`).** A task that needs work a sibling has not landed yet names that
+  sibling, with the reason, instead of polling with `sleep` or building a
+  stand-in. Its attempt ends with no verdict, the plan gains the dependency (the
+  run's notices say so, and the supervisor or you may remove it), its slot is
+  free for other work, and once the sibling has landed the task continues in the
+  same session, on its own branch. The call is refused, with what to do instead,
+  for work that has already landed, work that may never land, a wait that would
+  close a cycle (two tasks waiting for each other, or through a parent and its
+  subtask), and a task that has already parked twice. The built-in shell now
+  refuses a long `sleep`, including one behind a wrapper or an interpreter flag,
+  and points at `wait_for`. Every runner that runs a change task can park, the
+  built-in runner and Pi included.
+- **The supervisor is woken when a task finds a defect in work that has
+  landed.** A task that reports a blocker in landed work now reaches the
+  supervisor at once, while the run can still land a fix, with one wake for
+  many citations. A task that is only waiting on work that has not landed yet
+  does not wake it: the task-completion contract tells a runner to list such a
+  wait as an `info` finding that cites the task, and to give the input that
+  shows a real defect.
+- **An optional setting sends less old reasoning back to the model.** A
+  reasoning model's turns go back to it with the reasoning each produced, so
+  every call re-sends all of it. `taskReasoningKept` in the settings file (or
+  `ORDEWELL_TASK_REASONING_KEPT`) can be a whole number N to keep the reasoning
+  of at least the latest N calls, moving the cut forward in steps so a call
+  still starts with the previous call's prompt. It is off by default (`"all"`),
+  applies to the built-in runner only, and takes effect only where the provider
+  is known to accept it (docs/planners-and-runners.md has the table); anywhere
+  else the call sends everything. A value that is not a whole number above zero
+  stops a task from starting, with a message saying what is accepted. Whether a
+  model works as well without its older reasoning is for you to try on a task
+  you can compare.
+
+### Changed
+
+- **The built-in runner shows its model how full its context is, and no longer
+  lets it stop over a context or budget it has not used.** The model's status
+  line carries the real context fill beside the call count. When it stops and
+  says its context is exhausted while room is left, or that its call budget is
+  spent while calls remain, the runner answers it with the real figures and the
+  turn goes on; a later, separate give-up is answered too, not only the first.
+  A phrase that only mentions another model's context limit is no longer taken
+  for the runner's own.
+- **A one-shot plan's largest slices start first, sized from the test files
+  they name.** A slice's size counts every test path its brief names: a file, a
+  directory (the files in it), a bare test-file name found from the working
+  directory, and a path spelled with a leading `./`, which counts once. Small
+  sibling slices are no longer merged, so a wide plan keeps the shape its
+  planner gave it. Every task before the slices is started ahead of them and
+  asked to leave a tree that imports and collects, and the opening task ends as
+  failed only for a cause in the repository's code.
+- **A running-long flag is scheduled from the last flag and dropped once it is
+  stale.** A handoff may cite any task of its plan, and a read-only task warns
+  where no sandbox is running.
+
+### Fixed
+
+- **A failure that blocks other tasks always reaches the supervisor.** At Act,
+  such a failure could sit unseen until the run went idle when it happened
+  during an outage of the model or the planner, or while the supervision level
+  was lowered and later raised again. It is now caught up, in one wake naming
+  every such failure, after an outage and when the level is set back to Act. A
+  hold the supervisor's own Stop created is not reported back to it as one it
+  was not told of, and a hold a failed restart leaves (the supervisor stops a
+  task, then the spawn of its retry fails) is caught up while other work runs.
+- **DeepSeek's reasoning is sent back on every turn.** The built-in runner
+  sent it only on a turn that called tools, and DeepSeek's own API answers a
+  request with tools that leaves any turn's reasoning out with an error.
 
 ## [0.14.5] - 2026-11-21
 
@@ -4887,7 +5192,10 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
+[0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
+[0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3

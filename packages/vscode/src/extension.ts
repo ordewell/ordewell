@@ -8,6 +8,7 @@ import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
 import { startExtensionVersionCheck } from './versionCheck';
 import { showFirstRunFeedback } from './firstRunFeedback';
+import { revealOnFirstActivation } from './firstRun';
 
 const UPDATE_POPUP_KEY = 'ordewell.updatePopupShownAt';
 import { createExtension, type ExtensionHost } from './ExtensionHost';
@@ -116,6 +117,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }, vscode);
 
     await activeHost.start();
+    void revealOnFirstActivation(vscode.commands, context.globalState);
     // After start, and not awaited: the check reads one small file and never
     // waits on the network, so it cannot hold the extension back.
     versionCheck = startExtensionVersionCheck(vscode, String(context.extension?.packageJSON?.version ?? 'unknown'), {

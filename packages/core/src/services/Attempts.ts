@@ -53,6 +53,7 @@ import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import { recordRunnerAuth, signedOutFromFailure } from './runnerAuth';
 import { describeSignIn, TERMINAL_UI_SIGN_IN } from './signInHint';
 import { compactionStartOf } from './compactionStart';
+import { modeRefusalOf, modeRefusedReason } from './modeRefusal';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
@@ -1053,6 +1054,20 @@ export class Attempts {
   }
 
   /**
+   * An attempt its runner started in another mode than the task's (ADR-0018
+   * B2) ended with nothing done: its verdict says so in the user's words
+   * rather than as a missing report, and names the mode to offer, which only
+   * the user may switch the task to (ADR-0001).
+   */
+  private modeRefusedVerdict(task: Task, attempt: TaskAttempt, verdict: Verdict): Verdict | null {
+    const failure = attempt.turnError;
+    if (!failure?.modeRefused || !endedByExit(verdict) || !task.taskMode) return null;
+    const manifest = this.deps.registry?.get(attempt.runner)?.manifest ?? BUILTIN_MANIFESTS.find((m) => m.name === attempt.runner);
+    const refusal = modeRefusalOf(manifest ?? { name: attempt.runner, displayName: attempt.runner }, task.taskMode, failure.modeRefused);
+    return { ...verdict, reason: modeRefusedReason(failure.message, refusal), modeRefusal: refusal };
+  }
+
+  /**
    * How a spawn that threw leaves its task ({@link SpawnFailure}), the
    * attempt already ended; a usage limit that refused the start is a pause.
    */
@@ -1501,6 +1516,12 @@ export class Attempts {
       session.kill();
       return;
     }
+    if (attempt.turnError?.modeRefused) {
+      // Nothing ran, and a reply cannot change the mode the runner started in
+      // (ADR-0018 B2): its verdict says so, and offers the user the mode it did start in.
+      session.kill();
+      return;
+    }
     const stop = reason === 'failed' && attempt.turnError !== null ? classifyRunnerStop(attempt.turnError) : null;
     if (stop === 'usage-limit') {
       // The runner is still up, but no turn can run until the limit resets.
@@ -1639,11 +1660,12 @@ export class Attempts {
    * reported. Nothing is reported once it is no longer the task's attempt:
    * whatever ended it has settled the task.
    */
-  private async decide(taskId: string, verdict: Verdict): Promise<void> {
+  private async decide(taskId: string, decided: Verdict): Promise<void> {
     const { store, output, runs } = this.deps;
     const task = store.get(taskId);
     const attempt = this.live.get(taskId);
     if (!task || !attempt) return;
+    const verdict = this.modeRefusedVerdict(task, attempt, decided) ?? decided;
     // Its runner exited, or reported, after its park was granted: the park stands, and nothing it said since counts.
     if (attempt.parking) return this.endParked(taskId, attempt);
     attempt.decided = true;

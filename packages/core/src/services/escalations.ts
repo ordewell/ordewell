@@ -12,6 +12,7 @@ import type { ExecutionCommand } from './ExecutionCommands';
 import type { PendingApproval } from './PendingApprovals';
 import type { RunMergeView } from './SessionMessage';
 import { redactAgentText } from '../utils/redactSecrets';
+import { andList, heldBehindRefusal, type ModeRefusal } from './modeRefusal';
 
 /**
  * What an escalation waits on (ADR-0053). `approval`, `checkpoint`, `input`,
@@ -58,7 +59,8 @@ export type EscalationOptionId =
   | 'resolve-conflict'
   | 'start-resolver'
   | 'stash'
-  | 'run-without-isolation';
+  | 'run-without-isolation'
+  | 'switch-mode';
 
 /** One answer the user may give: what the wait's own card or command offers. */
 export interface EscalationOption {
@@ -377,7 +379,10 @@ function stranded(row: TaskWithParent, start: Extract<CheckStart, { kind: 'fix-u
 function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait | null {
   const { task } = row;
   if (outOfRounds(task)) return { kind: 'out-of-rounds', ...ended(row, `Its loop ran out of rounds: it failed round ${loopRoundOf(task)} of ${task.loop?.maxRounds}.`, input, rows) };
-  if (!betweenRounds(task)) return { kind: 'failed', ...ended(row, task.verdict?.reason || 'It failed.', input, rows) };
+  if (!betweenRounds(task)) {
+    const wait: Wait = { kind: 'failed', ...ended(row, task.verdict?.reason || 'It failed.', input, rows) };
+    return task.verdict?.modeRefusal ? withModeSwitch(row, wait, task.verdict.modeRefusal, input, rows) : wait;
+  }
   const repeating = waitOf(input.waits.get(task.id) ?? [], 'repeating');
   const start = checkStart(repeating, !!repeating && input.loopRunsOn(task.id));
   if (start.kind === 'loop-runs-it') return null;
@@ -387,6 +392,35 @@ function failed(row: TaskWithParent, input: EscalationInput, rows: Rows): Wait |
   // A retry of the check would run it against the tree that stopped the loop and fail again at once, and a body task that did not run is no wait of its own to retry from.
   const stopped = ended(row, `Its loop stopped: ${body.map((r) => r.ref).join(', ')} did not run.`, input, rows);
   return { kind: 'failed', ...stopped, options: stopped.options.filter((o) => o.id !== 'retry' && o.id !== 'continue') };
+}
+
+/** The rows held behind `failed`'s mode refusal (ADR-0018 B2). */
+function heldBehind(failed: TaskWithParent, refusal: ModeRefusal, input: EscalationInput, rows: Rows): TaskWithParent[] {
+  return heldBehindRefusal({ ...failed.task, refusal }, failed.ref, [...rows.values()].map((r) => r.task), input.holdReason).map((t) => rows.get(t.id)!);
+}
+
+/**
+ * A task its runner started in another mode: the mode it did start in is
+ * offered first, as the user's own switch (ADR-0001), and it takes the tasks
+ * held behind the same refusal along, which are listed here once rather than
+ * each on its own. Only where a retry is offered, since the switch is one.
+ */
+function withModeSwitch(row: TaskWithParent, wait: Wait, refusal: ModeRefusal, input: EscalationInput, rows: Rows): Wait {
+  const held = heldBehind(row, refusal, input, rows).map((r) => r.ref);
+  const reason = held.length === 0 ? wait.reason
+    : `${wait.reason} ${andList(held)} ${held.length === 1 ? 'uses' : 'use'} ${refusal.asked.label} on ${refusal.runnerLabel} too, and ${held.length === 1 ? 'waits' : 'wait'} on hold.`;
+  if (!refusal.offered || !wait.options.some((o) => o.id === 'retry')) return { ...wait, reason };
+  const label = held.length === 0 ? `Use ${refusal.offered.label} and retry` : `Use ${refusal.offered.label} for all ${held.length + 1} and retry`;
+  return { ...wait, reason, options: [{ id: 'switch-mode', label }, ...wait.options] };
+}
+
+/** A task held behind a failed task's mode refusal, which that task's own entry lists. */
+function heldForRefusal(row: TaskWithParent, input: EscalationInput, rows: Rows): boolean {
+  for (const failed of rows.values()) {
+    const refusal = failed.task.status === 'failed' ? failed.task.verdict?.modeRefusal : undefined;
+    if (refusal && heldBehind(failed, refusal, input, rows).some((r) => r.task.id === row.task.id)) return true;
+  }
+  return false;
 }
 
 /** Merge all as the user is offered it: with what it would carry past its check (ADR-0055 D9) and the ops tasks it would go beside (ADR-0020) named, when there are any. */
@@ -415,6 +449,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
     return { kind: 'no-prompt', reason: task.type === 'script' ? 'It has no body to run.' : 'It has no prompt, so there is nothing to run.', options: [SKIP] };
   }
   if (waitOf(waits, 'on-hold')) {
+    if (heldForRefusal(row, input, rows)) return null;
     // No runner starts a user task, so its hold is the wait for it to be done.
     if (task.type === 'user') return { kind: 'on-hold', reason: BY_HAND, options: completeOption(row, input.run) };
     // The seam refuses a retry until they have finished; a force start goes past a failure, and queues behind what has yet to run.
@@ -538,7 +573,8 @@ export function escalations(input: EscalationInput): Escalation[] {
 export type EscalationAct =
   | { kind: 'command'; command: ExecutionCommand }
   | { kind: 'resolve-conflict'; task: string }
-  | { kind: 'continue-run'; how: 'stash' | 'shared' };
+  | { kind: 'continue-run'; how: 'stash' | 'shared' }
+  | { kind: 'switch-mode'; task: string };
 
 /**
  * The existing command behind an option, so each check it has still applies.
@@ -571,5 +607,7 @@ export function escalationAct(escalation: Escalation, option: EscalationOptionId
     case 'start-resolver': return command({ command: 'run_task', task: escalation.resolver ?? '' });
     case 'stash': return { kind: 'continue-run', how: 'stash' };
     case 'run-without-isolation': return { kind: 'continue-run', how: 'shared' };
+    // A plan edit and retries, with no one command behind them: the Session carries it out as the user's.
+    case 'switch-mode': return { kind: 'switch-mode', task };
   }
 }

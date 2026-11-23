@@ -95,6 +95,11 @@
 .welcome-runner .welcome-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A reason ends in what to do about it (Update, then Refresh), so it gets two lines before the ellipsis. */
 .welcome-runner .welcome-hint { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
+/* The agents this machine does not have, folded away under the ones that work (F9). */
+.welcome-more { margin-top: var(--ow-space-3); }
+.welcome-more-summary { cursor: pointer; width: fit-content; font: var(--ow-type-label); color: var(--ow-fg-secondary); }
+.welcome-more-summary:focus-visible { outline: var(--ow-focus-width) solid var(--ow-focus-ring); outline-offset: var(--ow-focus-offset); border-radius: var(--ow-radius-sm); }
+.welcome-more[open] > .welcome-grid { margin-top: var(--ow-space-2); }
 .welcome-card-actions { display: flex; flex-wrap: wrap; gap: var(--ow-space-2); margin-top: var(--ow-space-1); }
 
 /* Skeleton bars sit at a line's own height, so nothing moves when the text arrives. */

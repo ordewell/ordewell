@@ -22,6 +22,12 @@ interface ModelSelectorProps {
    * list nor the effort is offered until this is cleared.
    */
   unavailable?: string;
+  /**
+   * What the trigger reads while nothing is assigned. A coding-agent planner
+   * with no model picked plans with its own default, so it says that rather
+   * than asking for a model as though one were missing.
+   */
+  unassigned?: string;
 }
 
 export const API_PROVIDER_LABELS: Record<ApiProvider, string> = {
@@ -117,6 +123,7 @@ export default function ModelSelector({
   label = 'Model',
   onOpen,
   unavailable: unavailableReason,
+  unassigned,
 }: ModelSelectorProps) {
   const discovery = useContext(ModelDiscoveryContext);
   const loading = discovery?.state === 'loading' && models.length === 0 && unavailableReason === undefined;
@@ -234,7 +241,7 @@ export default function ModelSelector({
       ? currentModel.modelId.includes('/')
         ? `${currentModel.modelLabel} · ${providerLabel(currentModel.modelId.split('/')[0])}`
         : currentModel.modelLabel
-      : 'Select model...';
+      : unassigned ?? 'Select model...';
   const closeDropdown = () => {
     setOpen(false);
     setFrozen(null);

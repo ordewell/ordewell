@@ -552,7 +552,12 @@ do differently: for a task that failed or waits on a person, or one stopped
 and on hold, whose next start is the attempt it is for. It is stored with the
 attempt (`retryNote`) and given to the runner with its brief under a heading
 that names it the supervisor's (or the planner's) note for this attempt, with
-the task's prompt unchanged. The next attempt starts without it. A user's retry reads no message, a session retry has no new attempt to
+the task's prompt unchanged. The next attempt starts without it. A fresh
+retry's answer, in an isolated run, says the attempt starts from the
+integration tip and names the branch the earlier attempt's unlanded work was
+kept on, since a note can only point at what the new worktree holds; a
+stopped task's own answer says `retry_task` from `session` goes on with that
+work in place (ADR-0018, K1). A user's retry reads no message, a session retry has no new attempt to
 carry one, and a script or delegated task has no brief to carry it, so a note
 there is refused. An `edit_plan` that changes the prompt of a failed or held
 task answers that the task still stands that way and needs `retry_task` to
@@ -599,15 +604,33 @@ the same search was added after the run had ended.
   its timeout and grace with it, so taking the conversation back never
   reaches the next scope's turn and no failure is counted. A planner turn that ends without a reply — a dead agent — is a
   crash here, not a note.
-- **Then the run goes unsupervised**: it carries on as Off, with a visible
-  notice. Wake-ups not delivered are persisted and handed over whole at the
-  next successful turn or user message, so nothing that happened is lost to
-  the conversation. A child has nobody else, so there it ends `failed`, its tasks
+- **An outage is waited out, not counted out.** A call of the turn that fails
+  on the network (a name that does not resolve, a connection refused, reset or
+  timed out, "Can't reach the API server") is a provider failure
+  ([ADR-0018](../runners/0018-structured-runner-transport.md) E1): it is tried
+  again in the same turn after 30, 60 and 120 seconds before the turn counts as
+  failed, and the retry with the planner restarted waits the same again. The
+  bound is the two attempts, about seven minutes of backoff; an outage longer
+  than that leaves the run unsupervised.
+- **Then the run goes unsupervised**: it carries on as Off, with a notice
+  that says so, that the setting reads Off for this run, and that setting the
+  level again in `/settings` turns it back on. Wake-ups not delivered are
+  persisted, and what happens from then on is kept with them as it happens, a
+  turn of its own for each event that would have reached it; they are handed
+  over whole at the next successful turn or user message, so nothing that
+  happened is lost to the conversation. The user's level set again lifts the
+  stop, opens a turn on them at once, and at Act names whatever failed or held
+  work back that the supervisor was never told
+  ([ADR-0030](0030-global-run-settings.md)). At an Off the user chose nothing
+  is gathered. A child has nobody else, so there it ends `failed`, its tasks
   stopped first, and a guard that would lower a root ends it `blocked`
   (ADR-0056 M8). A child's questions go to its parent, not to a person.
 - **A planner usage limit waits for its reset** as a runner's does (#84): the
   turn's wake-ups wait with its other inputs and go again in the planner's
-  resend ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)); one
+  resend ([ADR-0044](../planner/0044-the-planners-usage-limit-waits-and-resends.md)).
+  A turn whose change took its inputs as answered (ADR-0022 P2) has nothing to
+  resend, but with the reset known the wait is armed all the same, so what
+  arrives meanwhile goes at the reset and supervision goes on. Only a limit
   whose reset cannot be read leaves the run unsupervised.
 - **Loading a session never opens a planner turn or starts execution.**
   Undelivered wake-up batches and user inputs are preserved for a new input.
@@ -878,3 +901,5 @@ until #30 exists.
 - 2026-11-18 — the Act brief narrows a task that failed part-way, with evidence the rest cannot be done here, to what works before retrying it, and a model's `message_task` to a task not started since it ran is refused naming the retry's note.
 - 2026-11-19 — the Act brief records a remainder shown undoable as a known gap, in the closing check's brief and the message to the user, with no task; a follow-up task gets only a reachable remainder, and none is added for an undoable remainder after the run's last task has ended without new evidence.
 - 2026-11-21 — a blocker reported in landed work is a held attention event, `landed_blocker` (ADR-0073).
+- 2026-11-22 — a wake-up turn's call that fails on the network is retried on E1's backoff; what happens once the run is unsupervised is kept rather than dropped; the stop notice says the setting reads Off and names `/settings`; a usage limit after the turn's change, with its reset known, waits for it instead of ending supervision; and the user's level set again catches the supervisor up (ADR-0030). Seen live: two wake-up turns failed on `EAI_AGAIN`, a check then failed with four tasks waiting, and nothing reached the supervisor once Act was set again.
+- 2026-11-23 — a fresh retry's answer names the integration tip it starts from and the branch holding the earlier attempt's unlanded work, and a stop's answer names the continue that keeps that work (ADR-0018, K1). Seen live: a fresh retry's note told the new attempt to build on commits that were on a preserved branch.

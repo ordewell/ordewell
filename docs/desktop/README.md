@@ -352,8 +352,10 @@ folder of them. Under **Recent projects**, the ones you opened before are
 cards with their branch, their last session's goal and status, and what needs
 you there; one whose folder has gone missing says so, and **Forget** takes it
 off the list. A card
-per runner says whether it is installed and signed in. If one is signed out,
-sign in from its own CLI first, or in Settings; if one is missing, install it
+per runner says whether it is installed and signed in, the ones that can work
+first; the agents this machine does not have are folded under **More agents**.
+If one is signed out, press its **Log in** (or **Set API key…** for an agent
+that takes a key), or sign in from its own CLI; if one is missing, install it
 and press **Retry**.
 
 With a workspace open:
@@ -363,8 +365,9 @@ With a workspace open:
    to edit its prompt, dependencies, runner, model or mode in its tab; the
    approval card at the foot of the conversation lists any script or effect you
    should read first.
-3. **Approve plan**, then **Run**. Independent tasks run in parallel and
-   dependent ones wait.
+3. **Approve plan** approves the plan and starts the run in one click.
+   Independent tasks run in parallel and dependent ones wait. **Run** is
+   offered later, to carry on a run that stopped with tasks left.
 4. Follow a task in its tab, answer what **Needs you** asks, and read each diff
    in Changes.
 5. **Review & Merge all** when the run has settled with landings, or discard the

@@ -449,3 +449,41 @@ describe('no plan', () => {
     expect(await env.session.answerEscalation('failed:t1:1', 'retry')).toMatchObject({ ok: false, outcome: 'refused' });
   });
 });
+
+describe('a task its runner started in another mode (ADR-0018 B2)', () => {
+  const REFUSED = 'Claude Code started in Ask before edits mode, not Auto, the mode this task asked for.';
+  const refuse = (s: FakeRunnerSession) => {
+    s.emitEvent({ type: 'error', message: REFUSED, modeRefused: { asked: 'auto', started: 'default' } });
+    s.emitTurnEnd('failed');
+    s.emitExit(0);
+  };
+
+  it('lists one wait for the run, and switches every task held behind it only once the user picks the switch', async () => {
+    const env = setup();
+    env.load([
+      task('t1', 1, { taskMode: 'auto' }),
+      task('t2', 2, { taskMode: 'auto', dependencies: ['t1'] }),
+      task('t3', 3, { taskMode: 'auto', dependencies: ['t1'] }),
+    ]);
+    await env.start();
+    refuse(env.latest('t1'));
+    await vi.waitFor(() => expect(taskOf(env.session, 't1')?.status).toBe('failed'));
+
+    const list = env.session.escalations();
+    expect(list.map((e) => [e.kind, e.task?.id])).toEqual([['failed', 't1']]);
+    expect(list[0].options[0]).toEqual({ id: 'switch-mode', label: 'Use Ask before edits for all 3 and retry' });
+    env.expectStreamed();
+    // Until the user answers, every mode stays as planned.
+    expect(['t1', 't2', 't3'].map((id) => taskOf(env.session, id)?.taskMode)).toEqual(['auto', 'auto', 'auto']);
+
+    expect(await env.session.answerEscalation(list[0].id, 'switch-mode')).toMatchObject({ ok: true, message: expect.stringContaining('Switched 3 tasks to Ask before edits.') });
+
+    expect(['t1', 't2', 't3'].map((id) => taskOf(env.session, id)?.taskMode)).toEqual(['default', 'default', 'default']);
+    await vi.waitFor(() => expect(env.spawn.mock.calls.filter(([o]) => o.taskId === 't1')).toHaveLength(2));
+    expect(env.spawn.mock.calls.at(-1)?.[0]).toMatchObject({ taskId: 't1', mode: 'default' });
+    // Let go of their hold, the others start once t1 is done, in the mode switched to.
+    env.latest('t1').reportComplete({ status: 'done', summary: 'ok' });
+    await vi.waitFor(() => expect(env.spawn.mock.calls.map(([o]) => o.taskId)).toEqual(expect.arrayContaining(['t2', 't3'])));
+    expect(env.ids()).toEqual([]);
+  });
+});

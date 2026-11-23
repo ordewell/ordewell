@@ -535,10 +535,13 @@ kill -TERM -- -<group>
 
 ## The desktop app will not open
 
-An unsigned build of the desktop app is not notarized by Apple and carries no
-Windows code-signing certificate, so Gatekeeper and SmartScreen refuse its first
-launch. Releases are unsigned until the project's signing credentials are
-configured, and Linux builds always are. The unsigned macOS build is signed ad hoc, so the
+Official releases from 0.14.1 are signed with a Developer ID and notarized by
+Apple on macOS, and Authenticode-signed on Windows, so they open without these
+steps; SmartScreen may still warn on Windows while the new certificate builds
+reputation. An unsigned build (a pull-request or local build, or a release
+older than 0.14.1) is not notarized and carries no Windows code-signing
+certificate, so Gatekeeper and SmartScreen refuse its first launch. Linux
+builds are never signed. The unsigned macOS build is signed ad hoc, so the
 system can start it once you allow it.
 
 An app installed with the one-line script (`scripts/install/desktop.sh`) was
@@ -570,9 +573,9 @@ to check one, is in
 
 ## The desktop app cannot reach its daemon
 
-The window shows a card over its content: **Port 3742 is taken**, **The daemon
-refused this app**, **The daemon could not start**, or **Reconnecting to the
-daemon…**.
+The window shows a card over its content: **Port 3742 is taken**, **Could not
+authenticate with the daemon**, **The daemon could not start**, or
+**Reconnecting to the daemon…**.
 
 ### Cause
 
@@ -584,7 +587,7 @@ Each message names a different problem:
 | Card | What happened |
 |---|---|
 | Port 3742 is taken | Something that is not an Ordewell daemon holds the port. |
-| The daemon refused this app | No token file for that port, or one the daemon did not accept. The daemon may belong to another user or install. |
+| Could not authenticate with the daemon | No token file for that port, or one the daemon did not accept. The daemon may belong to another user or install. |
 | The daemon could not start | Starting the bundled daemon failed; the card quotes why and names the log. |
 | Reconnecting to the daemon… | An attached daemon went away. Nothing is restarted silently. |
 

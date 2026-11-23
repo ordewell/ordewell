@@ -503,8 +503,10 @@ describe('planner bar', () => {
     send({ type: 'setConfiguredProviders', providers: [] });
     send({ type: 'setPlannerBackends', backends: backends.map((b) => ({ ...b, usable: false })), provider: '' });
     const started = document.querySelector('.get-started');
-    expect(started?.textContent).toContain('Claude Code or Codex');
-    expect(started?.textContent).toContain('API key');
+    // How to install each, and the key route second (first-run audit F2).
+    expect(started?.textContent).toContain('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(started?.textContent).toContain('curl -fsSL https://chatgpt.com/codex/install.sh | sh');
+    expect([...started!.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Detect again', 'Add API key']);
   });
 
   it('labels the two setup blocks, planner first', () => {

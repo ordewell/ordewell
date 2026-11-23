@@ -312,6 +312,43 @@ describe('the command seam: an unapproved plan or task never starts', () => {
   });
 });
 
+// A plan whose agents are done can still hold a manual task: "every task has completed" said otherwise.
+describe('the command seam: run_plan with nothing left for a run to start', () => {
+  const refusal = async (tasks: Task[]) => {
+    const env = setup();
+    env.session.loadPlan(plan(tasks), 'goal', testWorkspace, { persist: false });
+    const outcome = await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+    expect(env.spawn).not.toHaveBeenCalled();
+    return outcome;
+  };
+  const manual = (id: string, order: number, title: string) => task(id, order, { type: 'user', prompt: undefined, title });
+
+  it('names the manual task still to do, and that no run starts it', async () => {
+    expect(await refusal([task('t1', 1, { status: 'completed' }), manual('u2', 2, 'Sign the form')])).toMatchObject({
+      ok: false,
+      outcome: 'refused',
+      message: 'Nothing is left for a run to start: every AI and script task has completed. Task #2 "Sign the form" is a manual task: a person does it and marks it complete, and no run starts it.',
+    });
+  });
+
+  it('names every manual task still to do, and says nothing of agent tasks a plan does not have', async () => {
+    expect((await refusal([manual('u1', 1, 'Sign the form'), manual('u2', 2, 'Post the letter')])).message)
+      .toBe('Nothing is left for a run to start: task #1 "Sign the form" and task #2 "Post the letter" are manual tasks: a person does them and marks them complete, and no run starts them.');
+  });
+
+  it('leaves a manual task already done out of it, and says a skipped task was skipped', async () => {
+    expect((await refusal([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'skipped' }), manual('u3', 3, 'Sign the form')])).message)
+      .toBe('Nothing is left for a run to start: every AI and script task has completed or was skipped. Task #3 "Sign the form" is a manual task: a person does it and marks it complete, and no run starts it.');
+    expect((await refusal([task('t1', 1, { status: 'completed' }), task('t2', 2, { status: 'skipped' }), task('u3', 3, { type: 'user', prompt: undefined, status: 'completed' })])).message)
+      .toBe('Every task has completed or was skipped: there is nothing left to run.');
+  });
+
+  it('says every task has completed only when every task has', async () => {
+    expect((await refusal([task('t1', 1, { status: 'completed' }), task('u2', 2, { type: 'user', prompt: undefined, status: 'completed' })])).message)
+      .toBe('Every task has already completed: there is nothing left to run.');
+  });
+});
+
 describe('the command seam: consent in a user-started planner turn', () => {
   it('asks the user before a start in Guarded, on the planner\'s approval card, and starts once allowed', async () => {
     const env = setup({ autonomous: false });
@@ -369,7 +406,11 @@ describe('the command seam: stop_task and stop_run', () => {
 
     const outcome = await env.run({ command: 'stop_task', task: 't1' });
 
-    expect(outcome).toEqual({ ok: true, message: 'Stopped task #1 "Task t1": it is back to not started and held until it is retried, and its open approvals were denied.' });
+    expect(outcome).toEqual({
+      ok: true,
+      message: 'Stopped task #1 "Task t1": it is back to not started and held until it is retried, and its open approvals were denied. '
+        + 'retry_task from "session" goes on in its saved session with the work it kept; from "fresh" starts it over from its prompt.',
+    });
     expect(t1.answers).toEqual([{ id: 'p1', decision: { decision: 'deny' } }]);
     expect(env.session.outstandingApprovals()).toHaveLength(0);
     expect(taskOf(env.session, 't1')!.status).toBe('pending');
@@ -448,6 +489,22 @@ describe('the command seam: retry_task', () => {
     expect(env.timeline().at(-1)!.text).toBe('The planner continued task #1 "Task t1" in its saved session: "fix the import and finish"');
   });
 
+  it.each([
+    ['the supervisor', { kind: 'supervisor', level: 'act' }],
+    ['the user', { kind: 'user' }],
+  ] as const)('continues a task %s stopped mid-attempt in its saved session', async (_who, actor: ExecutionActor) => {
+    const env = await running();
+    expect(await env.run({ command: 'stop_task', task: 't1' }, actor)).toMatchObject({ ok: true });
+    expect(taskOf(env.session, 't1')!.status).toBe('pending');
+
+    const outcome = await env.run({ command: 'retry_task', task: 't1', from: 'session', message: 'commit what works and finish the module' }, actor);
+
+    expect(outcome).toMatchObject({ ok: true, message: 'Continuing task #1 "Task t1" in its saved session with your message.' });
+    expect(env.spawned('t1')).toHaveLength(2);
+    expect(env.spawned('t1')[1].resumeSessionId).toBe('native-1');
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
+  });
+
   it('refuses a continue without a message, and one of a task that never finished', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
@@ -458,7 +515,7 @@ describe('the command seam: retry_task', () => {
     expect((await env.run({ command: 'retry_task', task: 't1', from: 'session' })).message)
       .toBe('Continuing task #1 "Task t1" in its saved session needs a message: what the runner should do next.');
     expect((await env.run({ command: 'retry_task', task: 't2', from: 'session', message: 'go on' })).message)
-      .toBe('Task "Task t2" cannot be continued: only a completed, failed or skipped task, or one paused on a usage limit, can be. A fresh retry (from "fresh") starts it over from its prompt.');
+      .toBe('Task "Task t2" cannot be continued: only a completed, failed, stopped or skipped task, or one paused on a usage limit, can be. A fresh retry (from "fresh") starts it over from its prompt.');
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.spawned('t2')).toHaveLength(0);
   });
@@ -1058,13 +1115,13 @@ describe('the command seam\'s extension points', () => {
       runPlan: vi.fn(), joinRun: vi.fn(async () => ''), startTask: vi.fn(), stopTask: vi.fn(async () => {}), stopRun: vi.fn(), stopAsked: vi.fn(), startAsked: vi.fn(),
       answerRequest: vi.fn(), mergeAll: vi.fn(), runMerged: () => false, record: vi.fn(), guardTripped: vi.fn(), turnHandle: () => undefined,
       draftScript: () => ({ ok: false, errors: ['not here'] }), addScript: vi.fn(), awaitEnd: vi.fn(async () => {}), owe: vi.fn(), reportTail: () => undefined,
-      escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(), checksDelegatedTask: () => false, raiseChild: async () => null, mergeHold: () => [], opsInCheckout: () => [],
+      escalations: () => [], resolveConflict: vi.fn(), continueRun: vi.fn(), switchMode: async () => null, checksDelegatedTask: () => false, raiseChild: async () => null, mergeHold: () => [], opsInCheckout: () => [],
       ...over.host,
     };
     const orchestrator: RunReads = {
       isScheduling: false, startsHeld: false, hasLiveWork: true, runHeld: false, scheduledRun: false, startsPending: false, loopCarried: false, awaitsResume: false, advancesOnItsOwn: false,
       getAttempt: attempts(true), holdsSlot: () => true, repairWait: () => null, loopRunsOn: () => false, startWaits: () => [], revertScope: () => ({ taskIds: [] }), awaitsCheckpoint: () => false,
-      admitStart: () => ({ current: () => true, release: vi.fn() }), readyFailed: vi.fn(), startAtGate: vi.fn(), parkedNow: () => false,
+      admitStart: () => ({ current: () => true, release: vi.fn() }), readyFailed: vi.fn(), startAtGate: vi.fn(), parkedNow: () => false, freshStartOf: () => null,
       ...over.orchestrator,
     };
     const controls: RunControls = {

@@ -60,6 +60,14 @@ provider-neutral client that also retries and reports usage limits. Providers in
 with the environment variable it reads, such as `(no DEEPSEEK_API_KEY)`. The
 planner's model is one of that provider's models.
 
+Until you pick a planner, an installed coding agent that is signed in plans, ahead
+of any provider key Ordewell finds in your shell or saved in Ordewell: a key on its
+own never switches planning to its provider, or spends its credit. That provider
+plans when you pick it with `/planner` (or `ordewell planner <id>`), when you saved a
+planner model for it, or when no coding agent is installed. When a key is passed
+over, the first screen says so once
+([ADR-0076](adr/planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md)).
+
 A provider key adds an API planner and also lets the built-in runner run tasks on
 that provider's models; an installed coding-agent CLI is separate. A `DEEPSEEK_API_KEY` or
 `MOONSHOT_API_KEY` lets DeepSeek or Kimi models plan, and the built-in runner run
@@ -249,7 +257,9 @@ cannot be fetched. `ORDEWELL_NO_MODELS_DEV=1` turns the fetch off, and
 | Guarded | Reads and edits inside the worktree go ahead. Every shell command asks you: *Allow*, *Allow for this task*, or *Deny* with a note the model reads. *Allow for this task* grants a command prefix for the rest of that attempt; it covers a command only when the whole line is the prefix, or the prefix and plain arguments, never a line with `;`, `&`, `|`, a backtick, `$(`, `>`, `<` or a line break. |
 | Read-only | For read-only tasks. No edit or shell tool; the task reads files and runs sealed commands only ([ADR-0046](adr/planner-envelope/0046-a-read-only-task-reads-natively-runs-sealed-and-lands-nothing.md)). |
 
-In Full and Guarded the shell is not sandboxed.
+In Full and Guarded the shell is not sandboxed: it runs as you and can reach what you
+can, Ordewell's own daemon included. See
+[what a task's agent can reach](../SECURITY.md#what-a-tasks-agent-can-reach).
 
 **Step limit.** An attempt may make a limited number of model calls; the last one is
 told so and must report with `task_complete`. The limit is `ordewellStepLimit` in
@@ -274,6 +284,37 @@ the runner assumes 128,000 tokens; the context meter then reads "of an assumed
 `"ordewellContextWindows": { "openrouter:acme/model": 200000 }`. The setting wins
 over the catalog and the listing. When a provider refuses a request as too long, the
 runner compacts further and keeps the smaller window for the rest of that attempt.
+
+**Earlier reasoning.** A reasoning model's turns go back to it with the reasoning
+each produced, so every call re-sends all the reasoning before it. The
+`taskReasoningKept` setting, in the same file (`ORDEWELL_TASK_REASONING_KEPT` wins
+when it is set), lets a call leave the oldest of it out. It applies to the built-in
+runner only; other runners ignore it.
+
+- `"all"`, the default, sends every turn's reasoning: requests are as they always
+  were.
+- A whole number N above zero keeps the reasoning of at least the latest N calls.
+  The boundary before which reasoning may go moves forward in steps of 2N calls,
+  so between two moves every call starts with the call before's prompt and reads it
+  from the provider's cache; the kept span runs from N to 3N - 1 calls. The latest
+  call's reasoning is always kept, and a compaction starts the count over.
+
+Any other value (not a number, zero or negative) stops a task from starting, with a
+message saying what is accepted. Whether reasoning is actually left out is each
+provider's to decide, and a call sends everything wherever that is not known to be
+safe:
+
+| Dialect | With a number N |
+| --- | --- |
+| Chat-completions through OpenRouter | Honoured only for a model a probe has checked (DeepSeek V4.1 Flash today), when the upstream that served the call before is one the probe found takes it; the call then names those upstreams as its only fallbacks. An unknown upstream, any other upstream or model, and a `:nitro` or `:floor` model id send everything. |
+| Chat-completions to DeepSeek directly | Ignored: DeepSeek refuses a request with tools that leaves out any turn's reasoning, so every turn carries it. |
+| Chat-completions to any other vendor (Kimi included) | Ignored. |
+| Anthropic Messages | Ignored: a task is one tool-use turn, whose thinking blocks Anthropic asks to have back. |
+| Gemini | Ignored: its thought signatures are checked across the turn's calls, and thought text is not sent back. |
+| OpenAI Responses | Ignored: the reasoning items of a function-call loop are to be passed back, and the API drops earlier turns' itself. |
+
+Whether a model works as well without its older reasoning is not something the
+probe could show: try a number on a task you can compare before relying on it.
 
 **Resuming and messages.** The runner keeps each attempt's conversation in a
 transcript under Ordewell's data directory, outside your repository, so a resumed

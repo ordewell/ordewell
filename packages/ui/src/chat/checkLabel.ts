@@ -19,10 +19,11 @@ export function checkLabel(name: VerificationCheck['name']): string {
 }
 
 /**
- * The verdict's line on a card. Some of VerdictEngine's reasons already open
- * with the outcome ("Verified: …") and some do not, so the outcome is said once.
+ * The verdict's line on a card. Some of VerdictEngine's passes already open
+ * with "Verified: …" and some do not, so that is said once. A failure's
+ * reason says what failed itself, in the user's words, so it stands alone (F7).
  */
 export function verdictSummary(verdict: Pick<NonNullable<Task['verdict']>, 'outcome' | 'reason'>): string {
-  const outcome = verdict.outcome === 'pass' ? 'Verified' : 'Failed verification';
-  return verdict.reason.startsWith(`${outcome}:`) ? verdict.reason : `${outcome}: ${verdict.reason}`;
+  if (verdict.outcome !== 'pass') return verdict.reason;
+  return verdict.reason.startsWith('Verified:') ? verdict.reason : `Verified: ${verdict.reason}`;
 }

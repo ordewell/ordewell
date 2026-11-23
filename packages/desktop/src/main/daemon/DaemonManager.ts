@@ -264,7 +264,7 @@ export class DaemonManager {
 
   private async startOnce(): Promise<void> {
     if (this.shuttingDown) return;
-    this.set({ state: 'connecting', port: this.port });
+    this.set({ state: 'connecting', port: this.port, starting: true });
     let child: OwnedProcess;
     try {
       child = this.deps.fork(this.port);

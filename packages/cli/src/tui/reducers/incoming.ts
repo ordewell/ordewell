@@ -267,6 +267,8 @@ export function applySettings(state: TuiState, settings: Partial<SettingsRespons
     plannerKnown: state.plannerKnown || typeof settings.aiProvider === 'string',
     plannerEffort:
       typeof settings.plannerThinkingEffort === 'string' ? settings.plannerThinkingEffort : state.plannerEffort,
+    // Every settings answer says who plans, so one without the field means no key is passed over.
+    unusedPlanningKey: typeof settings.aiProvider === 'string' ? settings.unusedPlanningKey ?? '' : state.unusedPlanningKey,
     plannerModels:
       settings.plannerModels && typeof settings.plannerModels === 'object' ? settings.plannerModels : state.plannerModels,
     maxParallel: typeof settings.maxParallel === 'number' ? settings.maxParallel : state.maxParallel,

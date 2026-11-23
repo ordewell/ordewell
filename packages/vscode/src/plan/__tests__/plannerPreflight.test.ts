@@ -47,7 +47,7 @@ describe('plannerPreflightError', () => {
 
   it('still demands a model from a keyed vendor planner, in the chat\'s /planner spelling', () => {
     expect(plannerPreflightError(config('openrouter', 'sk-or', ''), '/repo'))
-      .toBe('No planner model selected for OpenRouter. Pick one with /planner.');
+      .toBe('No planner model selected for OpenRouter. Run /planner and pick a model for OpenRouter.');
   });
 
   it('passes a fully configured vendor planner', () => {

@@ -2,6 +2,119 @@
 
 ## [Unreleased]
 
+### Added
+
+- The first activation after install opens the Ordewell view, and the *Get
+  started with Ordewell* walkthrough has three steps: open the view, give it a
+  goal, approve the plan. Each step ticks itself off when you do it.
+- The extension declares that it does not run in Restricted Mode and says why:
+  it runs coding agents in the folder. Trust the folder to use it.
+
+### Changed
+
+- An installed coding agent plans ahead of an API key found in the
+  environment or saved in VS Code, unless the agent is signed out or you chose
+  that provider: picked it with `/planner` or the `aiProvider` setting, or saved
+  a planner model for it (`orchestratorModel`, or `geminiModel` for Gemini). A
+  key alone used to take planning from the agent and refuse the first goal for
+  having no model. If you already plan with a provider, nothing changes. When a
+  key is passed over, the chat's first screen says which planner is active and
+  why.
+- A coding agent with no model picked reads as *Agent default* in the planner
+  picker, the `orchestratorModel` setting no longer calls the model required,
+  and `/planner` offers *Agent default* first for an agent and no longer gives
+  up when the agent lists no models.
+- A planner refused for having no model says to run `/planner` and pick a
+  model for that provider.
+- With no coding agent and no key, the chat's first screen gives the install
+  command and install guide for Claude Code and for Codex, says that signing in
+  happens in the agent, and offers *Detect again* beside *Add API key*.
+- Saving a key whose provider then plans with no model picked opens the
+  planner picker on that provider's models, from `/key-set`, *Add API key* and
+  the *Configure API Key* command.
+
+- While the chat waits for the first detection, it shows "Detecting coding
+  agents…" and what that probe does, in place of a bare "Loading…".
+- "No runner is enabled" points to Runners in the chat's Settings panel, and
+  the guide names the *Execute Plan* button.
+
+### Fixed
+
+- A Claude Code task that cannot start in Auto mode, on a model or account
+  without it, now fails saying so, and its inbox entry offers *Use Ask before
+  edits and retry*. Nothing changes the mode until you pick that. The run's
+  other Claude Code tasks in Auto on the same model wait on hold rather than
+  each failing the same way, and the same option switches them too.
+- A failed task shows the first sentence of why it failed on its card and row,
+  and its notice no longer repeats "failed verification".
+- An agent installed while VS Code is open is found on *Detect again*,
+  `/refresh` or a no-planner error's *Try Again*, which now detects again:
+  Ordewell reads the login shell's PATH again on each detection.
+
+## [0.14.8] - 2026-11-23
+
+### Changed
+
+- The plan review can no longer make tasks wait on work they did not wait on as
+  the planner wrote the plan, nor leave the parallel tasks without the opening
+  task.
+- The supervisor is told which actions its previous turn really carried out.
+
+### Fixed
+
+- A stopped task can be continued, in the same session and with the work it had
+  committed; a fresh retry says where it starts and which branch keeps the
+  stopped attempt's commits.
+- A tool call written as text beside real tool calls is recorded as not
+  executed, instead of being reported as sent.
+
+## [0.14.7] - 2026-11-22
+
+### Changed
+
+- A planner or supervisor reply that writes a tool call out as text is asked
+  again once, then recorded as not executed, instead of being taken as done.
+- The supervisor is told a task's role (opening task, slice or closing check)
+  when it is woken about that task.
+- A wide one-shot plan's tasks get their role notes even when the plan has no
+  closing check, so its opening task knows it may fix imports anywhere.
+- Test directories that no task names are handed to a one-shot plan's closing
+  check, by name, with their test-file counts.
+
+### Fixed
+
+- One-shot planning no longer fails when the model mistypes a dependency id: an
+  id that clearly means one task is read as that task, and any other unknown id
+  goes back to the model once with the valid ids.
+- The plan review can no longer remove a plan's closing check.
+
+## [0.14.6] - 2026-11-22
+
+### Added
+
+- A task can wait for a sibling's unlanded work without holding a slot
+  (`wait_for`): its attempt ends with no verdict, the plan gains the
+  dependency, and the task continues in the same session once the sibling has
+  landed.
+- The supervisor is woken at once when a task reports a defect in work that
+  has landed, while the run can still land a fix.
+- An optional setting, off by default, sends less old reasoning back to the
+  built-in runner's model (`taskReasoningKept` in the settings file).
+
+### Changed
+
+- The built-in runner shows its model its real context fill and no longer lets
+  it stop over a context or call budget it has not used.
+- A one-shot plan's largest slices start first, sized from every test file
+  they name, and small slices are no longer merged.
+
+### Fixed
+
+- A failure that blocks other tasks always reaches the supervisor, after an
+  outage of the model or planner and after the supervision level is set back
+  to Act.
+- DeepSeek's reasoning is sent back on every turn.
+
 ## [0.14.5] - 2026-11-21
 
 ### Added
@@ -1787,7 +1900,10 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
+[0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
+[0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
 [0.14.4]: https://github.com/ordewell/ordewell/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/ordewell/ordewell/compare/v0.14.2...v0.14.3

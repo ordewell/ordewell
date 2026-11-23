@@ -321,9 +321,68 @@ describe('OrchestratorPool default planner', () => {
     await pool.detectInstalledPlanner();
 
     expect(pool.getSettings().aiProvider).toBe('claude-code');
-    // Derived on each start, so a key installed later still wins.
+    // Derived on each start and never saved, so a later /planner pick still wins.
     const settingsFile = join(dir, 'settings.json');
     expect(existsSync(settingsFile) ? readFileSync(settingsFile, 'utf8') : '').not.toContain('claude-code');
+  });
+
+  // A key saved with /key-set (or found in the shell) is not a choice to plan with it (ADR-0076).
+  it('keeps the detected agent planning when a key is saved, and reports that key as not used for planning', async () => {
+    const { installation, answer } = gatedInstallation();
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    answer();
+    await pool.detectInstalledPlanner();
+    expect(pool.getSettings().unusedPlanningKey).toBeUndefined();
+
+    const saved = pool.updateSettings({ env: { OPENAI_API_KEY: 'sk-openai-test' } });
+
+    expect(saved.aiProvider).toBe('claude-code');
+    expect(saved.unusedPlanningKey).toBe('openai');
+    expect(pool.getSettings().unusedPlanningKey).toBe('openai');
+    pool.updateSettings({ env: { AI_PROVIDER: 'claude-code' } });
+    expect(pool.getSettings().unusedPlanningKey).toBeUndefined();
+    pool.destroyAll();
+  });
+
+  // Desktop Settings, the desktop chat and `ordewell model set` send the model
+  // alone: picking one for the agent planning now is no choice of the vendor
+  // whose key is in the shell, even where that vendor names the same id.
+  it.each([
+    ['claude-code', 'opus'],
+    ['claude-code', 'claude-opus-4-5'],
+    ['codex', 'gpt-5.5'],
+  ] as const)('keeps %s planning when the user picks %s with a key in the shell, and after a restart', async (agent, model) => {
+    const installation = {
+      plannerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === agent })),
+      runnerUsability: vi.fn(async (runner: string): Promise<PlannerUsability> => ({ usable: runner === agent })),
+      filterInstalled: vi.fn(async () => []),
+    };
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    await pool.detectInstalledPlanner();
+    expect(pool.getSettings().aiProvider).toBe(agent);
+
+    const picked = pool.updateSettings({ orchestratorModel: model });
+
+    expect(picked.aiProvider).toBe(agent);
+    expect(picked.orchestratorModel).toBe(model);
+    pool.destroyAll();
+    resetInstalledPlanner();
+    const restarted = new OrchestratorPool({ runnerInstallation: installation });
+    await restarted.detectInstalledPlanner();
+    expect(restarted.getSettings()).toMatchObject({ aiProvider: agent, orchestratorModel: model });
+    restarted.destroyAll();
+  });
+
+  it('a model plainly a vendor\'s, picked while the agent plans, still goes to that vendor\'s key', async () => {
+    const { installation, answer } = gatedInstallation();
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    const pool = new OrchestratorPool({ runnerInstallation: installation });
+    answer();
+    await pool.detectInstalledPlanner();
+
+    expect(pool.updateSettings({ orchestratorModel: 'openai:gpt-4o' }).aiProvider).toBe('openai');
+    pool.destroyAll();
   });
 
   it('probes once at startup, not once for each planning turn', async () => {
@@ -381,6 +440,35 @@ describe('OrchestratorPool default planner', () => {
 
     expect(runners.map((r) => r.id)).toEqual(['opencode']);
     expect(pool.getSettings().aiProvider).toBe('opencode');
+    pool.destroyAll();
+  });
+
+  // The desktop app's Detect again always names the open workspace, while
+  // detection asks the daemon's own probe, which caches a 'not installed'.
+  it('an agent installed after the first probe plans once a workspace\'s runner list is asked again', async () => {
+    let installed = false;
+    const exec = async (command: string) => {
+      if (installed && /^claude\b/.test(command)) return { stdout: 'claude 2.0.0', stderr: '' };
+      throw new Error('not found');
+    };
+    let clock = 0;
+    const now = () => clock;
+    const pool = new OrchestratorPool({ codexSandbox: { ensure: async () => undefined, refresh: async () => undefined } });
+    const internals = pool as unknown as { registry: ConstructorParameters<typeof RunnerInstallation>[0]; runnerInstallation: RunnerInstallation; workspaceInstallations: Map<string, RunnerInstallation> };
+    // Judged as on POSIX: the fake `exec` installs no file a Windows direct
+    // spawn could find, and this test is about the refresh, not that check.
+    const probe = () => new RunnerInstallation(internals.registry, exec, now, { authExec: async () => ({ code: 0, stdout: '{"loggedIn":true}', stderr: '' }), launch: { platform: 'linux' } });
+    internals.runnerInstallation = probe();
+    internals.workspaceInstallations.set(resolve(workspace), probe());
+    await pool.detectInstalledPlanner();
+    expect(await pool.getInstalledRunners(workspace)).toEqual([]);
+
+    clock = 30_000;
+    installed = true;
+    const runners = await pool.getInstalledRunners(workspace);
+
+    expect(runners.map((r) => r.id)).toEqual(['claude-code']);
+    expect(pool.getSettings().aiProvider).toBe('claude-code');
     pool.destroyAll();
   });
 

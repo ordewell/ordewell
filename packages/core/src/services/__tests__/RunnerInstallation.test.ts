@@ -15,6 +15,8 @@ import { PI_MANIFEST } from '../../plugins/builtin/pi.manifest';
 import { CONNECTORS } from '../harness/connectors';
 import { recordedRunnerAuth, recordRunnerAuth, resetRunnerAuth, signedOutFromFailure, type RunnerAuthExec } from '../runnerAuth';
 import type { LaunchDeps } from '../../utils/launch';
+import { augmentedPath, clearAugmentedPathCache } from '../../utils/shellPath';
+import * as path from 'path';
 
 /**
  * Off Windows' PATH lookup: these cases are about what `--version` and the
@@ -426,6 +428,22 @@ describe('RunnerInstallation verdict freshness', () => {
 
     inst.refresh();
     expect(await inst.filterInstalled(['opencode'])).toEqual(['opencode']);
+  });
+
+  // The login shell answers only off Windows, which has none to ask.
+  it.skipIf(process.platform === 'win32')('refresh() reads the login shell\'s PATH again, so an agent installed into a new directory while the host runs is found', async () => {
+    clearAugmentedPathCache();
+    try {
+      const shellSays = (dir: string) => async () => ({ stdout: `__ORDEWELL_PATH__${dir}__ORDEWELL_PATH__` });
+      expect((await augmentedPath(shellSays('/before/bin'))).split(path.delimiter)).toContain('/before/bin');
+
+      new RunnerInstallation(registryWith(OPENCODE_MANIFEST), vi.fn(async () => ({ stdout: '1.0.0' }))).refresh();
+
+      const segments = (await augmentedPath(shellSays('/after/bin'))).split(path.delimiter);
+      expect(segments).toContain('/after/bin');
+    } finally {
+      clearAugmentedPathCache();
+    }
   });
 
   it('refresh() re-checks an installed verdict, so an upgrade or a removed binary is seen', async () => {

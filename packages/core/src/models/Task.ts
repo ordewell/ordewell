@@ -7,6 +7,7 @@ import type { SkillSource } from '../services/SkillsService';
 import type { SupervisionMemorySnapshot } from '../services/LoopGuards';
 import type { SupervisorSnapshot } from '../services/Supervisor';
 import type { TaskLoop } from './Loop';
+import type { ModeRefusal } from '../services/modeRefusal';
 import { legacySkipOrigin, type SkipOrigin } from './SkipOrigin';
 import type { HandoffDigest } from './Handoff';
 import type { DelegatedBudget, TaskScope } from './Delegation';
@@ -53,6 +54,12 @@ export interface Verdict {
    * verdict saved before it was kept.
    */
   reported?: 'done' | 'failed' | 'blocked';
+  /**
+   * Its runner started in another mode than the task's, so nothing ran
+   * (ADR-0018 B2): the mode asked for, and the one the runner did start in,
+   * which only the user may switch the task to (ADR-0001).
+   */
+  modeRefusal?: ModeRefusal;
 }
 
 export interface TaskOutputSummary {

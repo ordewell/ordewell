@@ -312,7 +312,7 @@ describe('in Full with autorun on, the planner needs no approval for anything', 
 
     await endReply(env, planned);
 
-    expect(env.notices).toContainEqual(expect.objectContaining({ message: 'Autorun could not start the plan: Every task has already completed: there is nothing left to run.' }));
+    expect(env.notices).toContainEqual(expect.objectContaining({ message: 'Autorun could not start the plan: Nothing is left for a run to start: task #1 "Sign the form" is a manual task: a person does it and marks it complete, and no run starts it.' }));
   });
 
   it('needs nobody for an edit that rewrites an approved script\'s body, which still counts as a new body', async () => {

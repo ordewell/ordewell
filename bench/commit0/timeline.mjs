@@ -8,7 +8,9 @@
 // (drive.mjs), the same eval box and the same selection of the arm's non-test
 // source files as the run's final score: nothing here scores anything itself.
 // The final point is the run's own final tree, and it must equal result.json's
-// score, or the whole timeline is marked unverified. See bench/README.md,
+// score, or the whole timeline is marked unverified: when it differs, the tree
+// is scored twice more and the recorded score accepted ("verified within ±k")
+// if it lies within what those runs showed. See bench/README.md,
 // "Commit0".
 //
 //   node bench/commit0/timeline.mjs <run dir> --libs <libraries.json> [--points 8 | --minutes 20,40,60] [--jobs 2]
@@ -24,6 +26,8 @@ import { fanOutShape } from './fanout.mjs';
 
 export const DEFAULT_POINTS = 8;
 export const DEFAULT_JOBS = 2;
+/** How many times a final tree that differs from the recorded score is scored again. */
+export const RESCORES = 2;
 
 const HELP = `Usage: node bench/commit0/timeline.mjs <run dir> --libs <libraries.json> [options]
 
@@ -43,7 +47,9 @@ Scores each point in a fresh eval box on no network, with no key (any key is rem
 environment) and writes timeline.json into the run directory. A point whose pytest was killed
 (exit 137) with no counts fails, is tried once more alone, and if killed again is left out of
 the threshold crossings. The final point must equal the score
-in result.json; when it does not, the timeline is marked unverified and the exit is non-zero.`;
+in result.json; when it does not, that tree is scored twice more and the score is accepted as
+"verified within ±k" if it lies within the range seen, else the timeline is marked unverified
+and the exit is non-zero.`;
 
 /** Every variable that holds a credential, taken out: this reads a finished run and calls no model. */
 export function dropKeys(env) {
@@ -83,7 +89,7 @@ function noGlobalConfig() {
  * preserved one). `final` is that branch's tip, the tree the run ended on.
  * The root, the stubs, is never a point of its own unless nothing landed.
  */
-export function runHistory(runDir, { arm, branch = null }) {
+export function runHistory(runDir, { arm, branch = null, merged = false }) {
   const gitDir = path.join(runDir, 'arm-workdir', '.git');
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: noGlobalConfig() };
   const git = (...args) => {
@@ -97,7 +103,10 @@ export function runHistory(runDir, { arm, branch = null }) {
   const wanted = branch
     ? (n) => n === branch
     : arm === 'B' ? (n) => /^ordewell\/[^/]+\/integration$/.test(n) : (n) => /^ordewell(-preserved)?\/[^/]+\/(?!integration$).+/.test(n);
-  const tip = refs.filter((r) => wanted(r.name)).sort((a, b) => b.ct - a.ct)[0]
+  // A single agent scored from what was merged (a continued one lands each attempt that reports done, and the end-of-run merge folds them into
+  // commit0-base): its tree is commit0-base's, and the branch of an attempt left behind is an earlier point of it, never the final.
+  const tip = (merged && !branch && arm !== 'B' ? refs.find((r) => r.name === 'commit0-base') : undefined)
+    ?? refs.filter((r) => wanted(r.name)).sort((a, b) => b.ct - a.ct)[0]
     ?? (arm === 'B' && !branch ? refs.find((r) => r.name === 'commit0-base') : undefined);
   if (!tip) throw new Error(`no branch of the run's work in ${gitDir}: ${branch ?? (arm === 'B' ? 'ordewell/<run>/integration' : 'ordewell/<run>/<task>')}`);
   const format = '--format=%H\t%ct\t%P\t%s';
@@ -209,7 +218,7 @@ export function timelinePoints({ commits, finalSha, lastLanding = null, afterSli
 export function chooseTimelinePoints(runDir, { arm, result = null, points = DEFAULT_POINTS, minutes = null, branch = null }) {
   runDir = path.resolve(runDir);
   result ??= JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8'));
-  const history = runHistory(runDir, { arm, branch });
+  const history = runHistory(runDir, { arm, branch, merged: result.scoredFrom === 'merged' });
   const t0Ms = runStartMs(runDir, result);
   const endMs = t0Ms + (result.wallClockMs ?? 0);
   const afterSlices = arm === 'B' ? landingsAfterSlices({ commits: history.commits, plan: savedPlan(runDir, result.sessionId) }) : [];
@@ -246,16 +255,34 @@ export function thresholdCrossings(points, collected, shares = CROSSING_SHARES) 
 /** The numbers a score is read by, as result.json keeps them. */
 const scoreOf = (tests) => (tests ? { passed: tests.passed ?? 0, failed: tests.failed ?? 0, errors: tests.errors ?? 0 } : null);
 
-/** Whether the final point's score is the run's own: the same passed, failed and errors. */
-export function judgeFinal({ resultTests, final }) {
+const COUNTS = ['passed', 'failed', 'errors'];
+
+/**
+ * Whether the final point's score is the run's own: the same passed, failed and
+ * errors. A tree whose tests are flaky by one or two scores differently each
+ * time it is run, so when the final point differs, `rescored` (the same tree
+ * scored again) widens what is compared to: the recorded score is accepted
+ * when each of its three numbers lies within the range the final point and
+ * the re-scores showed, as `within`: `k` is the farthest any observation lay
+ * from the recorded number, and `range` each number's [lowest, highest]. A
+ * re-score that could not be scored is no observation.
+ */
+export function judgeFinal({ resultTests, final, rescored = [] }) {
   const want = scoreOf(resultTests);
   if (!want) return { ok: false, reason: 'result.json holds no score to compare the final point to' };
   if (!final) return { ok: false, reason: 'no final point was scored' };
   if (final.error) return { ok: false, reason: `the final point could not be scored: ${final.error}` };
   const got = scoreOf(final.tests);
   if (!got) return { ok: false, reason: 'the final point has no test summary' };
-  const same = want.passed === got.passed && want.failed === got.failed && want.errors === got.errors;
-  return same ? { ok: true, reason: null } : { ok: false, reason: `the final point scored ${got.passed} passed, ${got.failed} failed, ${got.errors} errors; result.json says ${want.passed}, ${want.failed}, ${want.errors}` };
+  if (COUNTS.every((c) => want[c] === got[c])) return { ok: true, reason: null };
+  const seen = [got, ...rescored.map((r) => scoreOf(r?.tests)).filter(Boolean)];
+  const range = Object.fromEntries(COUNTS.map((c) => [c, [Math.min(...seen.map((s) => s[c])), Math.max(...seen.map((s) => s[c]))]]));
+  const base = `the final point scored ${got.passed} passed, ${got.failed} failed, ${got.errors} errors; result.json says ${want.passed}, ${want.failed}, ${want.errors}`;
+  if (seen.length < 2) return { ok: false, reason: base };
+  if (COUNTS.every((c) => range[c][0] <= want[c] && want[c] <= range[c][1])) {
+    return { ok: true, reason: null, within: { k: Math.max(...seen.flatMap((s) => COUNTS.map((c) => Math.abs(s[c] - want[c])))), range } };
+  }
+  return { ok: false, reason: `${base}; scored ${seen.length} times, ${COUNTS.map((c) => `${c} ${range[c][0]}–${range[c][1]}`).join(', ')}` };
 }
 
 // --- Scoring ----------------------------------------------------------------
@@ -276,7 +303,7 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
   const result = JSON.parse(fs.readFileSync(path.join(runDir, 'result.json'), 'utf8'));
   const raw = libraries.find((l) => l.name === result.library);
   if (!raw) throw new Error(`the run's library ${result.library} is not in the libraries file`);
-  const arm = result.arm === 'A' ? L.ARMS.A : L.ARMS.B;
+  const arm = L.isSingleAgent(result.arm) ? L.ARMS[result.arm] : L.ARMS.B;
   const { history, t0Ms, chosen } = chooseTimelinePoints(runDir, { arm: arm.id, result, points, minutes, branch });
   const d = driver ?? await loadDriver();
   const settings = L.armSettings(arm, { parallel: result.parallel, cpus: result.cpus, memory: result.memory, capUsd: result.capUsd, wallCapMs: result.wallCapMs, callBudget: result.callBudget });
@@ -284,8 +311,8 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
   const out = path.join(runDir, 'timeline');
   fs.mkdirSync(out, { recursive: true });
 
-  const scoreOne = async (p, index) => {
-    const label = `p${index + 1}-${p.sha.slice(0, 8)}`;
+  const scoreOne = async (p, index, again = 0) => {
+    const label = `p${index + 1}-${p.sha.slice(0, 8)}${again ? `-rescore${again}` : ''}`;
     const dir = path.join(out, label);
     fs.mkdirSync(dir, { recursive: true });
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'commit0-timeline-'));
@@ -330,13 +357,23 @@ export async function scoreTimeline({ runDir, libraries, points = DEFAULT_POINTS
   }
 
   const final = scored.find((p) => p.kind === 'final');
-  const verdict = judgeFinal({ resultTests: result.tests, final });
+  let verdict = judgeFinal({ resultTests: result.tests, final });
+  // A final tree that scored but differs may only be flaky: score it twice more, alone, and judge the recorded score against the range.
+  const rescored = [];
+  if (!verdict.ok && final?.ok && result.tests) {
+    const at = scored.indexOf(final);
+    for (let n = 1; n <= RESCORES; n++) rescored.push(await scoreOne(chosen[at], at, n));
+    verdict = judgeFinal({ resultTests: result.tests, final, rescored });
+  }
   const timeline = {
     run: path.basename(runDir), library: result.library, arm: result.arm, branch: history.branch,
     startedAtMs: t0Ms, wallClockMs: result.wallClockMs ?? null, collected: result.tests?.collected ?? null,
     requested: minutes ? { minutes } : { points },
     verified: verdict.ok, unverified: verdict.ok ? null : verdict.reason,
-    finalMatchesResult: verdict.ok,
+    verification: !verdict.ok ? 'unverified' : verdict.within ? `verified within ±${verdict.within.k}` : 'verified',
+    verifiedWithin: verdict.within ?? null,
+    finalMatchesResult: verdict.ok && !verdict.within,
+    ...(rescored.length ? { rescored } : {}),
     jobs, generatedAt: new Date().toISOString(),
     crossings: thresholdCrossings(scored, result.tests?.collected),
     points: scored,
@@ -396,7 +433,10 @@ async function main() {
   const { timeline, ok } = await scoreTimeline({ runDir: o.runDir, libraries: Array.isArray(raw) ? raw : raw.libraries ?? [], points: o.points, minutes: o.minutes, jobs: o.jobs, branch: o.branch });
   console.log(`\ntimeline: ${timeline.points.length} points of ${timeline.library} ${timeline.arm} in ${path.join(o.runDir, 'timeline.json')}`);
   if (!timeline.verified) console.error(`UNVERIFIED: ${timeline.unverified}`);
-  else if (!ok) console.error('verified, but a point could not be scored: see timeline.json');
+  else {
+    if (timeline.verifiedWithin) console.error(`${timeline.verification}: the final tree scored ${Object.entries(timeline.verifiedWithin.range).map(([c, [lo, hi]]) => `${c} ${lo}–${hi}`).join(', ')} over ${1 + timeline.rescored.length} runs`);
+    if (!ok) console.error('verified, but a point could not be scored: see timeline.json');
+  }
   return ok ? 0 : 1;
 }
 

@@ -624,10 +624,10 @@ Opening tasks in series, no opening task and no closing check are its faults,
 recorded in the research log and never asked about. A wide plan with a closing
 check gets a fixed `Plan shape:` note on each role's brief. A wide plan's slices
 of one level start largest first, sized by the lines of the files their briefs
-name (ADR-0072 R6). On a level of more than twice the Parallel limit, small
-slices of one kind, short of a count that would change the plan's shape, are first merged into one task each, a **merged task**,
-which keeps one of their ids, lists the others in `mergedSlices` and gives each
-slice's brief whole under its own title (ADR-0072 R7).
+name (ADR-0072 R6), and none is merged with another, however many queue past
+the Parallel limit (ADR-0072 R7). A **merged task**, which a plan saved by a
+build that merged small slices may hold, keeps one of their ids, lists the
+others in `mergedSlices` and gives each slice's brief whole under its own title.
 *Avoid:* "gate" for the opening task (the merge gate is something else),
 "barrier".
 
@@ -1210,8 +1210,8 @@ completion evidence: if the next turn also ends without the call, the task
 waits for input.
 *Avoid:* "nudge" (the planner's corrective prompts), "auto-complete".
 
-**Continue** — a retry of a completed, failed or skipped structured task, or
-of one paused on a usage limit (see *Usage-limit resume*), that resumes its
+**Continue** — a retry of a completed, failed, stopped or skipped structured
+task, or of one paused on a usage limit (see *Usage-limit resume*), that resumes its
 saved runner session (Claude's `--resume`, Codex's `thread/resume`) with
 the user's message as the next turn. A **Delegated task**'s reopens its **Child
 plan** instead, stopped or failed but not landed: that plan acts as Execute, its
@@ -1710,12 +1710,16 @@ evidence.
 *Loop check*), "error".
 
 **Landed blocker** (ADR-0073) — a `blocker` *Finding* that cites a task whose
-work had landed when it was reported: by a task reference with no finding id,
-or by the first file it names that a landing changed, the last landing of that
-file before the report. Counted per cited task across the plan's handoffs,
-never stored, and raised to the supervisor as `landed_blocker` when that count
-reaches 1, 2, 4, 8…; the supervisor writes the one fix. *Avoid:* "regression"
-(nothing says it worked before), "bug report".
+work had landed: by a task reference with no finding id, landed when it was
+reported, or by the first file it names that a landing changed, the last
+landing of that file before the reporting attempt started, and none once
+another task's landing after that start changed it. A finding that also cites,
+by task reference, a task yet to land, neither skipped nor failed nor waiting
+for the reporter, is a *wait notice*, never a landed blocker.
+Counted per cited task across the plan's handoffs, never stored, and raised to
+the supervisor as `landed_blocker` when that count reaches 1, 2, 4, 8…; the
+supervisor writes the one fix. *Avoid:* "regression" (nothing says it worked
+before), "bug report", "blocker" for a wait on work still to come.
 
 **Artifact** (ADR-0047) — a typed reference in a *Handoff* to something the
 task produced, of the same four kinds as an *Evidence reference*, or a `patch`
@@ -2045,7 +2049,8 @@ evidence; a reason in plain words; and the options that wait's own card or
 command offers, each with the question its card asks first where it has one.
 It has no deadline and no default answer. What resolves itself is left out, and
 a task whose cause is listed: a blocked task's failure is listed once, not its
-dependents. Answered only by the user, through `answerEscalation` on the
+dependents, and a task held behind a *Mode refusal* is listed in the refused
+task's entry, not its own. Answered only by the user, through `answerEscalation` on the
 *Command seam*, which derives the list afresh, refuses a stale id, and
 dispatches to the existing command for that wait, so it adds no authority. Every
 status update carries the list whole, and it is in the *Run view*. A surface's
@@ -2057,6 +2062,17 @@ or parked start, which stay in memory.
 made); "blocked" for one — that is a dependency term, and a blocked task is not
 listed; a stored or raised escalation — nothing raises one, it holds or it does
 not.
+
+**Mode refusal** (`modeRefused` on a turn's error, `Verdict.modeRefusal`,
+`services/modeRefusal.ts`; ADR-0018 B2) — a runner that started in another mode
+than the task's, as Claude Code does in `default` when `auto` is not offered to
+the model or account. The task fails with nothing run, in the user's words. Its
+verdict names the runner, the mode asked for and, when the runner started in
+another mode its manifest lists, that mode as the *offer*. The offer is the
+escalation option `switch-mode`: the user's own edit of the task's mode, then a
+retry. Every task not started on the same runner, mode and model is held before
+it starts and switched along with it, and the run is told once.
+*Avoid:* "fallback" — nothing falls back by itself; "downgrade".
 
 **Notify command** (`IConfig.notifyCommand`, `ORDEWELL_NOTIFY_COMMAND`,
 `ordewell.notifyCommand`, `EscalationNotifier`, `services/escalationNotifier.ts`;
@@ -3789,8 +3805,11 @@ may do is set by the run's **Supervisor level** and checked at the **Command
 seam**.
 It decides what to do next, never whether a task passed — verdicts come from
 evidence. The run never depends on it: a wake-up turn that still fails after one
-restart leaves the run *unsupervised* (carrying on as Off, with a notice and a
-note in the transcript; `runSettings.unsupervised` says why). The user's Stop
+restart, each attempt having waited out a network or provider failure on the
+backoff, leaves the run *unsupervised* (carrying on as Off, with a notice and a
+note in the transcript; `runSettings.unsupervised` says why). What happens then
+is kept on the plan, and the user's level set again lifts the stop and catches
+the supervisor up on what it was never told. The user's Stop
 stands it down until they start work again: it acts at Off, and what it held
 waits on the plan for their next message or the first turn after their start. A
 stop of one task holds back only what is about that task.

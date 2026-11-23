@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { largestSlicesFirst, MAX_SIZED_FILES } from '../PlanFanOut';
+import path from 'node:path';
+import { largestSlicesFirst, MAX_SIZED_FILES, MAX_SIZED_LISTINGS } from '../PlanFanOut';
 import { createTask, renumberTasks, type Task } from '../../models/Task';
 import { fakeFileSystem } from '../../testing';
 import { lines, workspace } from './planFanOutKit';
@@ -38,6 +39,134 @@ describe('largestSlicesFirst', () => {
     expect(out.moved).toBe(5);
   });
 
+  // A recorded library plan's briefs named module files first and their tests after the sixth path, so most slices sized nothing.
+  it('sizes by every test file a brief names, past the paths the notes\' tables list', async () => {
+    const modules = (n: number) => Array.from({ length: 6 }, (_, i) => `src/lib/m${n}_${i}.py`).join(', ');
+    const late = renumberTasks([
+      t('r', [], 'Make the package import.'),
+      ...[1, 2, 3, 4, 5].map((n) => t(`s${n}`, ['r'], `Fill in ${modules(n)}. Verify: pytest tests/test_m${n}.py tests/test_m${n}_more.py`)),
+      t('close', ['s1', 's2', 's3', 's4', 's5'], 'Run the suite and fix what fails.'),
+    ]);
+    const { fs } = workspace({
+      'tests/test_m1.py': lines(10), 'tests/test_m2.py': lines(300), 'tests/test_m3.py': lines(40),
+      'tests/test_m4.py': lines(100), 'tests/test_m4_more.py': lines(800), 'tests/test_m5.py': lines(40),
+    });
+    const out = await largestSlicesFirst(late, fs);
+    expect(ids(out.tasks)).toEqual(['r', 's4', 's2', 's3', 's5', 's1', 'close']);
+    expect(out.measure).toBe('test');
+  });
+
+  // The daemon's PoolFileSystem, which the API planner's one-shot plans are sized through, lists a directory's files relative to it.
+  it('sizes by the test files under a test directory a brief names, as the planner\'s glob lists them from that directory', async () => {
+    const dirs = renumberTasks([
+      t('r', [], 'Make the package import.'),
+      t('s1', ['r'], 'Fill in pkg/a/core.py. Its tests are in pkg/a/tests/.'),
+      t('s2', ['r'], 'Fill in pkg/b/core.py. Verify: pytest pkg/b/tests'),
+      t('s3', ['r'], 'Fill in pkg/c/core.py. Verify: pytest pkg/c/tests/test_c.py'),
+      t('s4', ['r'], 'Fill in pkg/d/core.py, then run the tests.'),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const { fs, globs } = workspace({
+      'pkg/a/tests/test_one.py': lines(30), 'pkg/a/tests/test_two.py': lines(40), 'pkg/a/tests/data.json': lines(9000),
+      // A row of pkg/b/tests is that directory's path: this one is pkg/b/tests/pkg/b/tests/test_b.py, not the one beside it.
+      'pkg/b/tests/pkg/b/tests/test_b.py': lines(500), 'pkg/b/tests/test_b.py': lines(1),
+      'pkg/c/tests/test_c.py': lines(200), 'pkg/d/core.py': lines(9000),
+    });
+    const out = await largestSlicesFirst(dirs, fs);
+    expect(ids(out.tasks)).toEqual(['r', 's2', 's3', 's1', 's4', 'close']);
+    expect(out.measure).toBe('test');
+    // A bare `tests` is prose: only a path with a slash is listed.
+    expect(globs.sort()).toEqual(['pkg/a/tests', 'pkg/b/tests']);
+  });
+
+  it('reads a test file a brief names by its bare name where exactly one file of that name lies under a directory it names', async () => {
+    const bare = renumberTasks([
+      t('r', [], 'Make the package import.'),
+      t('s1', ['r'], 'Fill in lib/flow/maxflow.py. Use its tests: test_maxflow.py.'),
+      t('s2', ['r'], 'Fill in lib/cuts/cuts.py. Use its tests: test_core.py.'),
+      t('s3', ['r'], 'Fill in lib/a/a.py. Verify: pytest lib/a/tests/test_a.py, then test_a.py again.'),
+      t('s4', ['r'], 'Its tests are in lib/d/tests/; start with test_d2.py.'),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const { fs, globs } = workspace({
+      'lib/flow/maxflow.py': lines(10), 'lib/flow/tests/test_maxflow.py': lines(600),
+      // Two files of the name: which one the brief meant is a guess, so neither is read.
+      'lib/cuts/cuts.py': lines(10), 'lib/cuts/tests/test_core.py': lines(900), 'lib/cuts/old/test_core.py': lines(900),
+      'lib/a/a.py': lines(10), 'lib/a/tests/test_a.py': lines(120), 'lib/a/other/test_a.py': lines(5000),
+      'lib/d/tests/test_d1.py': lines(50), 'lib/d/tests/test_d2.py': lines(50),
+    });
+    const out = await largestSlicesFirst(bare, fs);
+    expect(ids(out.tasks)).toEqual(['r', 's1', 's3', 's4', 's2', 'close']);
+    // A bare name beside the same file's full path is that file: nothing is looked up for it.
+    expect(globs.filter((g) => g.includes('test_a.py'))).toEqual([]);
+  });
+
+  it('reads a bare test name found both from the workspace root and from a deeper directory as one file', async () => {
+    const bare = renumberTasks([
+      t('r', [], 'Make it import.'),
+      // `./setup_tools.py` puts `.` among the directories the bare name is looked for under.
+      t('s1', ['r'], 'Fill in ./setup_tools.py and lib/flow/maxflow.py. Tests: test_maxflow.py.'),
+      t('s2', ['r'], 'Fill in lib/b.py. Verify: pytest lib/tests/test_b.py'),
+      t('s3', ['r'], 'Fill in lib/c.py. Verify: pytest lib/tests/test_c.py'),
+      t('s4', ['r'], 'Fill in lib/d.py. Verify: pytest lib/tests/test_d.py'),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const { fs } = workspace({
+      'setup_tools.py': lines(1), 'lib/flow/maxflow.py': lines(1), 'lib/flow/tests/test_maxflow.py': lines(900),
+      'lib/tests/test_b.py': lines(10), 'lib/tests/test_c.py': lines(20), 'lib/tests/test_d.py': lines(30),
+    });
+    expect(ids((await largestSlicesFirst(bare, fs)).tasks)).toEqual(['r', 's1', 's4', 's3', 's2', 'close']);
+  });
+
+  it(`lists nothing for a plan that would need more than ${MAX_SIZED_LISTINGS} listings, and sizes it by the paths its briefs name whole`, async () => {
+    const many = renumberTasks([
+      t('r', [], 'Make the package import.'),
+      ...Array.from({ length: 4 }, (_, i) => t(`s${i + 1}`, ['r'],
+        `Fill in lib/m${i + 1}/core.py. Verify: pytest lib/m${i + 1}/tests/test_whole.py and ${Array.from({ length: 60 }, (_, k) => `test_${i}_${k}.py`).join(' ')}`)),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const { fs, globs } = workspace({
+      ...Object.fromEntries([1, 2, 3, 4].map((n) => [`lib/m${n}/tests/test_whole.py`, lines(10 * n)])),
+      'lib/m1/tests/test_0_0.py': lines(9000),
+    });
+    expect(ids((await largestSlicesFirst(many, fs)).tasks)).toEqual(['r', 's4', 's3', 's2', 's1', 'close']);
+    expect(globs).toEqual([]);
+  });
+
+  it('sizes nothing by a test directory whose listing was cut short, or through a file system with no glob', async () => {
+    const dirs = renumberTasks([
+      t('r', [], 'Make the package import.'),
+      ...[1, 2, 3, 4].map((n) => t(`s${n}`, ['r'], n === 1 ? 'Verify: pytest big/tests/' : `Verify: pytest tests/test_m${n}.py`)),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const big = Object.fromEntries(Array.from({ length: MAX_SIZED_FILES + 2 }, (_, i) => [`big/tests/test_${i}.py`, lines(50)]));
+    const { fs } = workspace({ ...big, 'tests/test_m2.py': lines(10), 'tests/test_m3.py': lines(30), 'tests/test_m4.py': lines(20) });
+    expect(ids((await largestSlicesFirst(dirs, fs)).tasks)).toEqual(['r', 's3', 's4', 's2', 's1', 'close']);
+    const { readFile } = workspace({ 'big/tests/test_0.py': lines(900), 'tests/test_m2.py': lines(10) }).fs;
+    expect(ids((await largestSlicesFirst(dirs, { readFile })).tasks)).toEqual(['r', 's2', 's1', 's3', 's4', 'close']);
+  });
+
+  // A plan saved by a build that merged small slices (ADR-0072 R7) still holds merged tasks.
+  it('sizes a merged task by what its slices\' briefs name, not by the lines around them', async () => {
+    const merged = renumberTasks([
+      t('r', [], 'Make the package import.'),
+      ...[1, 2, 3].map((n) => t(`s${n}`, ['r'], `Fill in src/lib/m${n}.py. Verify: pytest tests/test_m${n}.py`)),
+      t('s4', ['r'], [
+        'This task covers 2 slices the planner wrote separately, each brief below whole and in order under its own title. Do every one of them in this task. Unlike tests/test_m1.py, it is merged.',
+        'Slice 1 of 2: T s4\nFill in src/lib/m4.py. Verify: pytest tests/test_m4.py',
+        'Slice 2 of 2: T s5\nFill in src/lib/m5.py. Verify: pytest tests/test_m5.py',
+        'This task is done when every slice above meets its own brief\'s done criterion.',
+        'Plan revision: unlike tests/test_m2.py, this note is Ordewell\'s.',
+      ].join('\n\n'), { mergedSlices: ['s5'] }),
+      t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+    ]);
+    const { fs } = workspace({
+      'tests/test_m1.py': lines(100), 'tests/test_m2.py': lines(90), 'tests/test_m3.py': lines(80),
+      'tests/test_m4.py': lines(60), 'tests/test_m5.py': lines(50),
+    });
+    expect(ids((await largestSlicesFirst(merged, fs)).tasks)).toEqual(['r', 's4', 's1', 's2', 's3', 'close']);
+  });
+
   it('counts a test file several briefs name in equal shares', async () => {
     const shared = renumberTasks([
       t('r', [], 'Make the package import.'),
@@ -49,6 +178,37 @@ describe('largestSlicesFirst', () => {
     ]);
     const { fs } = workspace({ 'tests/test_core.py': lines(600), 'tests/test_m3.py': lines(400), 'tests/test_m4.py': lines(250) });
     expect(ids((await largestSlicesFirst(shared, fs)).tasks)).toEqual(['r', 's3', 's1', 's2', 's4', 'close']);
+  });
+
+  describe('a path spelled with a leading ./', () => {
+    // A real file system reads ./x as x; the fake one keys on the spelling.
+    const real = (fs: ReturnType<typeof workspace>['fs']) => ({ glob: fs.glob.bind(fs), readFile: (p: string, o?: { limit?: number }) => fs.readFile(path.posix.normalize(p), o) });
+
+    it('counts a test file once when a brief names it and its directory', async () => {
+      const dotted = renumberTasks([
+        t('r', [], 'Make it import.'),
+        t('s1', ['r'], 'Fill in pkg/a.py. Its tests are in pkg/a/tests/; start with ./pkg/a/tests/test_a.py.'),
+        t('s2', ['r'], 'Fill in pkg/b.py. Verify: pytest pkg/b/tests/test_b.py'),
+        t('s3', ['r'], 'Fill in pkg/c.py. Verify: pytest pkg/c/tests/test_c.py'),
+        t('s4', ['r'], 'Fill in pkg/d.py. Verify: pytest pkg/d/tests/test_d.py'),
+        t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+      ]);
+      const { fs } = workspace({ 'pkg/a/tests/test_a.py': lines(100), 'pkg/b/tests/test_b.py': lines(150), 'pkg/c/tests/test_c.py': lines(10), 'pkg/d/tests/test_d.py': lines(5) });
+      expect(ids((await largestSlicesFirst(dotted, real(fs))).tasks)).toEqual(['r', 's2', 's1', 's3', 's4', 'close']);
+    });
+
+    it('shares one file named ./x by one brief and x by another', async () => {
+      const shared = renumberTasks([
+        t('r', [], 'Make the package import.'),
+        t('s1', ['r'], 'Fill in src/lib/graph.py. Verify: pytest ./tests/test_core.py'),
+        t('s2', ['r'], 'Fill in src/lib/node.py. Verify: pytest tests/test_core.py'),
+        t('s3', ['r'], 'Fill in src/lib/m3.py. Verify: pytest tests/test_m3.py'),
+        t('s4', ['r'], 'Fill in src/lib/m4.py. Verify: pytest tests/test_m4.py'),
+        t('close', ['s1', 's2', 's3', 's4'], 'Run the suite.'),
+      ]);
+      const { fs } = workspace({ 'tests/test_core.py': lines(600), 'tests/test_m3.py': lines(400), 'tests/test_m4.py': lines(250) });
+      expect(ids((await largestSlicesFirst(shared, real(fs))).tasks)).toEqual(['r', 's3', 's1', 's2', 's4', 'close']);
+    });
   });
 
   it('reorders nothing when no file a slice names exists, or when the plan does not fan out', async () => {
@@ -127,7 +287,7 @@ describe('largestSlicesFirst', () => {
     });
 
     it(`reads at most ${MAX_SIZED_FILES} files a plan, and reorders nothing it could not size whole`, async () => {
-      const files = (n: number) => Array.from({ length: 6 }, (_, i) => `tests/test_s${n}_${i}.py`);
+      const files = (n: number) => Array.from({ length: 26 }, (_, i) => `tests/test_s${n}_${i}.py`);
       const many = renumberTasks([
         t('r', [], 'Make the package import.'),
         ...Array.from({ length: 40 }, (_, i) => t(`s${i + 1}`, ['r'], `Verify: pytest ${files(i + 1).join(' ')}`)),

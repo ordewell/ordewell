@@ -270,7 +270,7 @@ describe('VS Code keyless first-run process boundary', () => {
       }
       if (action === 'start') await handleStartPlanning('Build a ledger', h.deps);
       else await handleSendMessageNow('Use Postgres', h.deps);
-      expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('OPENAI_API_KEY') });
+      expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('OPENAI_API_KEY'), code: 'planner_not_ready' });
       expect(argvs).toEqual([]);
       expect(networks).not.toHaveBeenCalled();
     expect(vendorRequests).toEqual([]);
@@ -375,13 +375,15 @@ describe('VS Code keyless first-run process boundary', () => {
     const h = harness();
     await selectionFor(h).setModel('sonnet');
     process.env.OPENROUTER_API_KEY = 'test-key';
-    expect(h.config.aiProvider).toBe('openrouter');
-    expect(h.config.orchestratorModel).toBe('');
+    // A key alone does not take planning from the agent, which keeps its own pick (ADR-0076).
+    expect(h.config.aiProvider).toBe('claude-code');
+    expect(h.config.orchestratorModel).toBe('sonnet');
 
     await handleStartPlanning('Build a ledger', h.deps);
-    expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('No planner model selected') });
+    expect(h.messages.filter((m) => m.type === 'showError')).toEqual([]);
     expect(vendorRequests).toEqual([]);
-    expect(argvs).toEqual([]);
+    expect(argvs).toHaveLength(1);
+    expect(argvs[0][argvs[0].indexOf('--model') + 1]).toBe('sonnet');
   });
 
   it('a model picked for OpenRouter is not sent to Google when the key is swapped for a Gemini one', async () => {
@@ -391,12 +393,14 @@ describe('VS Code keyless first-run process boundary', () => {
     await selectionFor(h).setModel('openai/gpt-4o');
     delete process.env.OPENROUTER_API_KEY;
     process.env.GEMINI_API_KEY = 'gemini-key';
-    expect(h.config.aiProvider).toBe('google');
-    expect([h.config.orchestratorModel, h.config.planningModel]).toEqual(['', '']);
+    // OpenRouter's model with its key gone chooses no vendor, so the agent plans, without that model (ADR-0076).
+    expect(h.config.aiProvider).toBe('claude-code');
+    expect(h.config.orchestratorModel).toBe('');
 
     await handleStartPlanning('Build a ledger', h.deps);
-    expect(h.messages).toContainEqual({ type: 'showError', error: expect.stringContaining('No planner model selected') });
     expect(networks).not.toHaveBeenCalled();
+    expect(argvs).toHaveLength(1);
+    expect(argvs[0]).not.toContain('openai/gpt-4o');
   });
 
   for (const leftover of ['OPENROUTER_BASE_URL', 'GEMINI_BASE_URL']) {

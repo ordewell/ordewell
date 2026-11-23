@@ -233,6 +233,11 @@ export class StartLedger<Admission> {
     this.resumes.delete(taskId);
   }
 
+  /** Switched by the user to the mode its runner did start in, so the refusal it was held behind no longer stands (ADR-0018 B2). */
+  switchedMode(taskId: string): void {
+    this.release(taskId);
+  }
+
   /** Its loop runs it again, as a body task's next round or the check's (ADR-0045 L5). */
   roundStarted(taskId: string): void {
     this.release(taskId);

@@ -363,9 +363,22 @@ and completion evidence.
   assigned to it; queued input waits for the adapter to release its send.
 - **The plan's mode is held (B2).** `--permission-mode auto` on a model or
   account without auto mode is not refused: the CLI starts in `default` and
-  asks about every write. The connector compares the mode `init` reports with
-  the one the plan asked for and fails the turn in plain words on a mismatch
-  (ADR-0001).
+  asks about every write. Claude Code's documentation offers Auto on every
+  plan, but only for some models (on Anthropic's API, Opus and Sonnet 4.6 or
+  later, Haiku 5.5 and the Fable models; fewer on Bedrock, Vertex and
+  Foundry), and an administrator or Anthropic's server can turn it off. The
+  connector compares the mode `init` reports with the one the plan asked for
+  and fails the turn in plain words on a mismatch (ADR-0001), naming both
+  modes in the error event (`modeRefused`). Nothing ran, so the attempt ends
+  at once: its verdict says what happened in the user's words and, where the
+  mode the runner did start in is another the manifest lists (never its
+  read-only profile), offers it. The offer is the user's own switch, the
+  escalation option `switch-mode`: a hand edit of the task's mode, then a
+  retry. Nothing switches a mode for the user. Every task not started that
+  would meet the same refusal (the same runner, mode and model, since the
+  runner decides by model and account) is held before it starts, and the run
+  is told once. The failed task's one escalation lists them and its switch
+  takes them along; each one's own hold is left out of the list while it does.
 - **Lifetime (L1).** The process ends with its attempt, and at a verdict as
   soon as the verdict is accepted, not once the work has landed: the log lives
   in Ordewell, and work after the verdict would go unverified. It ends the way
@@ -410,7 +423,9 @@ and completion evidence.
 - **Continue (K1).** A retry that resumes the saved native session with the
   user's message as the next turn. It is verified and landed like any attempt.
   It is offered on completed and failed structured tasks with a saved session
-  id, not on conflicts, and only while the task is still assigned to the runner
+  id, and on one stopped mid-attempt (a Stop, the task's or the run's, puts it
+  back to not started with its session saved and its worktree kept), not on
+  conflicts, and only while the task is still assigned to the runner
   that session belongs to: a saved session records its owner
   (`runnerSessionOwner`; for a plan from before that, the runner of the last
   attempt), and a session cannot cross runners
@@ -537,8 +552,14 @@ and completion evidence.
   error` unless a 4xx status other than 429 beside it, or words naming a
   context too long, say the request or the key was refused (OpenCode keeps an
   `APIError`'s status in its `statusCode`, which the adapter puts beside the
-  words as `HTTP <status>`), or a throttle the runner's own field says is not its usage limit
-  (Codex's `rateLimitExceeded`). `classifyRunnerStop` reads it from the turn's
+  words as `HTTP <status>`), a throttle the runner's own field says is not its usage limit
+  (Codex's `rateLimitExceeded`), or the network to the provider failing: Node's
+  error codes for a name that did not resolve or a connection refused, reset,
+  unreachable or timed out (`EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`,
+  `ECONNRESET`, `ETIMEDOUT` and their kin), Claude Code's `Can't reach the API
+  server`, an SDK's `Connection error` or `Request timed out`, `fetch failed`
+  or `socket hang up`; a bare "timed out", which a test's timeout prints, is
+  not one. `classifyRunnerStop` reads it from the turn's
   error as `transient`, after U1: a usage limit, by its field or its words,
   keeps U1's pause. The task stays `in_progress` with no escalation, and the
   turn is tried again in its saved session, told the error, after 30, 60 and
@@ -703,6 +724,12 @@ transport is retained for take-over.
 - **Continuing directly from the kept branch without bringing the integration
   tip along.** Rejected because it omits work landed while the task waited.
   Merging the previous work into the current tips preserves both when clean.
+- **No Continue for a stopped task.** The rule before 2026-11-23: a Stop left
+  the task not started, which Continue refused, so the only way on was a
+  fresh attempt from the integration tip, its stopped predecessor's commits
+  on a preserved branch it was not told of. Seen live: a supervisor stopped a
+  task after 81 minutes of committed work, was refused the continue, and its
+  fresh retry's note promised work the new worktree did not hold.
 - **A wait per task.** A limit belongs to the account a runner signs in with,
   and the runner is usable only once every limit it hit has reset.
 - **Starting a moved task fresh from the integration tip.** Previously
@@ -792,3 +819,6 @@ transport is retained for take-over.
 - 2026-11-20 — W1: a flag set by double the last one's time names that time, not the lowered threshold's doubling.
 - 2026-11-21 — W1: after the first running-long flag the next is due at twice the last, the threshold no longer read again for it; a flag still waiting when its attempt ends is dropped.
 - 2026-11-21 — U1: a park ends its attempt as a pause does and its next start continues the saved session, or carries its files over where none can be resumed (ADR-0074).
+- 2026-11-21 — B2: a mode refusal fails its task in the user's words and offers the mode the runner started in as the user's switch; the tasks that would meet it too are held before they start, told once for the run.
+- 2026-11-22 — E1: the network to the provider failing (its error codes, `Can't reach the API server`, `Connection error`, `fetch failed`) is transient too, so an outage is waited out on the backoff, a task's turn and the planner's alike. Seen live: two supervisor wake-up turns failed on `EAI_AGAIN` within seconds and supervision stopped.
+- 2026-11-23 — K1: a task stopped mid-attempt, by its own Stop or the run's, with its session saved is continued as a failed one is, its kept worktree restored. Seen live: a supervisor's continue of a task stopped after 81 minutes was refused, and the fresh retry lost sight of its commits.

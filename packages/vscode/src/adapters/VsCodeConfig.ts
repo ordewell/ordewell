@@ -249,6 +249,20 @@ export class VsCodeConfig extends BaseConfig {
 
   get geminiModel() { return this.config.get<string>('geminiModel', '') || this.config.get<string>('orchestratorModel', '') || this.config.get<string>('planningModel', '') || super.geminiModel; }
 
+  /** The `aiProvider` setting names a planner as AI_PROVIDER does, and is read first, as routing reads it. */
+  protected namedPlanner(): string {
+    return this.rawAiProvider || super.namedPlanner();
+  }
+
+  /**
+   * Gemini's own settings: `geminiModel`, and the legacy `planningModel` a
+   * Gemini planner still reads first. `orchestratorModel` is every planner's,
+   * and routing reads it already (ADR-0076).
+   */
+  protected savedGeminiModel(): string {
+    return this.config.get<string>('geminiModel', '').trim() || this.config.get<string>('planningModel', '').trim() || super.savedGeminiModel();
+  }
+
   /**
    * The list every surface shares (the settings file). Until the user has
    * chosen, the answer is what the retired per-runner toggles said, or the

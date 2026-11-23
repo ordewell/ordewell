@@ -73,7 +73,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     else void vscode.commands.executeCommand('ordewellChatView.focus');
   }
   setState(state: ChatState): void { this.postMessage({ type: 'setState', state }); }
-  showError(error: string): void { this.postMessage({ type: 'showError', error }); }
+  /** `code` marks an error whose Try Again detects coding agents again. */
+  showError(error: string, code?: 'planner_not_ready'): void { this.postMessage({ type: 'showError', error, ...(code ? { code } : {}) }); }
   /**
    * The session's own plan stays with the extension host (it persists and
    * resumes from there); the webview is sent it without skill bodies. The plan
@@ -200,10 +201,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
   /** The repositories and branches the startup view shows; `null` says the read is out. Not kept: a webview that connects asks the host for a current one. */
   setIsolationPreview(preview: IsolationPreview | null): void { this.postMessage({ type: 'isolationPreview', preview }); }
-  /** Who can plan, who does plan, and that planner's effort — one message, so the webview never renders a half-switched planner. */
-  setPlannerBackends(backends: PlannerBackend[], provider: string, runner?: string, effort?: string): void {
-    this._plannerState = { backends, provider, runner, effort };
-    this.postMessage({ type: 'setPlannerBackends', backends, provider, runner, effort });
+  /**
+   * Who can plan, who does plan, and that planner's effort — one message, so
+   * the webview never renders a half-switched planner. `unusedPlanningKey` is
+   * a found key the detected agent plans past (ADR-0076), for the first screen.
+   */
+  setPlannerBackends(backends: PlannerBackend[], provider: string, runner?: string, effort?: string, unusedPlanningKey?: AiProvider): void {
+    this._plannerState = { backends, provider, runner, effort, unusedPlanningKey };
+    this.postMessage({ type: 'setPlannerBackends', backends, provider, runner, effort, unusedPlanningKey });
   }
 
   private _modelsByRunner: Partial<Record<RunnerId, DiscoveredModel[]>> = {};
@@ -218,7 +223,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private _configuredProviders: ApiProvider[] = [];
   private _modelDiscoveryErrors: Record<string, string> = {};
   private _runnerDiscoveryErrors: Record<string, string> = {};
-  private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string } | null = null;
+  private _plannerState: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string; unusedPlanningKey?: AiProvider } | null = null;
   private _accountLimits: readonly AccountLimitSnapshot[] | null = null;
 
   /**

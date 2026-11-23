@@ -44,7 +44,7 @@ function makeDeps(overrides: Partial<SlashDeps> = {}): SlashDeps {
     chatProvider: {} as SlashDeps['chatProvider'],
     settingsService: { getModelAllowlist: () => undefined, setModelAllowlist: () => {} },
     sendRunnerAndModels: async () => {},
-    runApiKeyWizard: async () => {},
+    runApiKeyWizard: async () => undefined,
     recallPlannerModel: () => ({ model: '', effort: '', source: 'none' }),
     applyPlannerChoice: async () => {},
     log: () => {},
@@ -101,7 +101,8 @@ describe('/planner', () => {
     });
 
     const done = handleSlashCommand('/planner', deps);
-    for (const index of [0, 0, 1]) {
+    // Claude Code, then Claude Opus 5.5 past the agent's own default, then High.
+    for (const index of [0, 1, 1]) {
       await new Promise((resolve) => setImmediate(resolve));
       __quickPicks[0].__accept(index);
     }
@@ -172,7 +173,7 @@ describe('/login', () => {
 
 describe('/key-set', () => {
   it('opens the key wizard on the provider named, or on the provider list', async () => {
-    const runApiKeyWizard = vi.fn(async () => {});
+    const runApiKeyWizard = vi.fn(async (_provider?: string) => undefined);
     await handleSlashCommand('/key-set anthropic', makeDeps({ runApiKeyWizard }));
     expect(runApiKeyWizard).toHaveBeenLastCalledWith('anthropic');
     await handleSlashCommand('/key-set', makeDeps({ runApiKeyWizard }));
@@ -181,7 +182,7 @@ describe('/key-set', () => {
 
   // The table resolves the old name to this one, so its `set` arrives with it.
   it('still answers the old /key and /key set <provider>', async () => {
-    const runApiKeyWizard = vi.fn(async () => {});
+    const runApiKeyWizard = vi.fn(async (_provider?: string) => undefined);
     expect(isKnownSlashCommand('/key')).toBe(true);
     await handleSlashCommand('/key set openrouter', makeDeps({ runApiKeyWizard }));
     expect(runApiKeyWizard).toHaveBeenLastCalledWith('openrouter');
@@ -192,7 +193,7 @@ describe('/key-set', () => {
   });
 
   it('refuses a provider it does not know, rather than asking for a key nothing reads', async () => {
-    const runApiKeyWizard = vi.fn(async () => {});
+    const runApiKeyWizard = vi.fn(async (_provider?: string) => undefined);
     const warning = window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
     warning.mockClear();
     await handleSlashCommand('/key-set nope', makeDeps({ runApiKeyWizard }));
@@ -281,3 +282,58 @@ describe('conversation-editing slash commands', () => {
     }
   });
 });
+
+/**
+ * First-run audit F2: a key added where no coding agent plans makes its
+ * vendor the planner, which has no default model, so the next goal would be
+ * refused. The key route goes on into picking that model.
+ */
+describe('/key-set ends ready to plan', () => {
+  const OPENROUTER = { id: 'openrouter', label: 'OpenRouter', kind: 'vendor' as const, usable: true };
+  const MODELS = [
+    { id: 'z-ai/glm-4.6', label: 'GLM 4.6', provider: 'z-ai', apiProvider: 'openrouter' as const },
+    { id: 'deepseek/v4', label: 'DeepSeek V4', provider: 'deepseek', apiProvider: 'openrouter' as const },
+  ];
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  function keyed(after: { aiProvider: SlashDeps['config']['aiProvider']; orchestratorModel: string }, saved: 'openrouter' | null = 'openrouter') {
+    const deps = makeDeps({
+      plannerBackends: async () => [OPENROUTER],
+      applyPlannerChoice: vi.fn(async () => {}),
+    });
+    deps.modelResolver.pickerOptions = async () => MODELS;
+    deps.runApiKeyWizard = vi.fn(async () => {
+      Object.assign(deps.config, after);
+      return saved ?? undefined;
+    });
+    return deps;
+  }
+
+  it('opens the planner\'s model step for the vendor that now plans, and saves the pick', async () => {
+    __resetQuickPicks();
+    const deps = keyed({ aiProvider: 'openrouter', orchestratorModel: '' });
+    const done = handleSlashCommand('/key-set openrouter', deps);
+
+    await flush();
+    const qp = __quickPicks[__quickPicks.length - 1];
+    expect(qp?.step).toBe(2);
+    expect(qp.placeholder).toBe('Pick the planner model for OpenRouter');
+    qp.__accept(0);
+    await done;
+
+    expect(deps.applyPlannerChoice).toHaveBeenCalledWith('openrouter', 'z-ai/glm-4.6', '');
+  });
+
+  it('stops at the key when a coding agent still plans, the vendor has its model, or no key was saved', async () => {
+    for (const [after, saved] of [
+      [{ aiProvider: 'claude-code', orchestratorModel: '' }, 'openrouter'],
+      [{ aiProvider: 'openrouter', orchestratorModel: 'z-ai/glm-4.6' }, 'openrouter'],
+      [{ aiProvider: 'openrouter', orchestratorModel: '' }, null],
+    ] as const) {
+      __resetQuickPicks();
+      await handleSlashCommand('/key-set openrouter', keyed(after, saved));
+      expect(__quickPicks).toHaveLength(0);
+    }
+  });
+});
+

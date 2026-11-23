@@ -27,10 +27,12 @@ reads.
 
 ## Decision
 
-**A `blocker` finding that cites a task whose work had landed when it was
-reported raises a `landed_blocker` event for that task, counted across the plan
-and raised as the count of reporting tasks reaches 1, 2, 4, 8…; the supervisor
-writes the one fix.**
+**A `blocker` finding that cites a task whose work had landed (when it was
+reported, for a task it names; when the reporting attempt started, for a file
+it cites), and cites no task whose work was still to come, raises a
+`landed_blocker` event for that task, counted across the plan and raised as the
+count of reporting tasks reaches 1, 2, 4, 8…; the supervisor writes the one
+fix.**
 
 - **What counts.** A finding of severity `blocker`, in the handoff of any task as
   it settles, passed or not, that names a completed task of this plan whose pass
@@ -42,25 +44,49 @@ writes the one fix.**
     supervisor's;
   - a `file` it cites that a landing changed: the first such file in its
     evidence, which is where the defect is, not the callers it shows in after
-    it. Of several landings that changed that file, the last before the report
-    is the work the reporter's tree held. The files are what each landed task's
-    branch changed (`IsolationRunController.changedPaths`), read once per
-    landing and only when a blocker cites a file. A run that shares the checkout
-    can say nothing, and has only the first signal.
+    it. Of several landings that changed that file, the last before the
+    reporting attempt started is the work the reporter's tree held. None, once
+    another task's landing after that start changed that file: what the report
+    complained of was still being written, as a placeholder the opening task
+    left for a slice is. Every report from a tree cut before that landing is
+    judged alike, whenever it was made, so the count of the owner does not fall
+    and then climb back through 1 and 2 on reports from that same tree, raising
+    it twice at each. The files are what each landed task's branch changed
+    (`IsolationRunController.changedPaths`), read once per landing and only when
+    a blocker cites a file. A run that shares the checkout can say nothing, and
+    has only the first signal.
 
   A finding names one owner at most: its first landed task reference, else its
   file's. A closing check's "the merged tree does not build" that cites every
   slice is one defect, not a fix owed by each. A loop's check between rounds
   reports nothing ([ADR-0045](0045-a-check-repeats-with-its-fix-until-it-passes.md) L3): its loop's body is the fix,
   and runs again; once its last round fails, it reports as any task.
-- **Landed before the report.** A report counts only against work whose verdict
-  came before the reporter's: one made before is about work that was not there.
-  So the count only grows as reporters settle, and a retry of the owner that
-  lands again starts it over.
+- **A wait is no blocker.** A finding whose evidence cites, by a `task`
+  reference with no finding id, a task of this plan other than the reporter
+  that lands work and had not landed when the report was written, and can
+  still land before the reporter's work is wanted, is a wait notice: it counts
+  against no one, whatever files it cites, then or after the work it waited on
+  lands. A citation of the reporter itself, of a report's finding or of a plan
+  below is no work it waits on; nor is one of a task skipped or failed, which
+  lands nothing, or of one that depends on the reporter, as the closing check
+  the slice note names as the one the work is for does.
+- **Landed by the report, or before the attempt started.** A report that names
+  the owner by a `task` reference counts against its work landed before the
+  report: a reporter that names the task has its work, taken in mid-attempt as
+  the slice note asks once it lands. A report that names it only by a file
+  counts against work whose verdict came before the reporting attempt started,
+  as its attempt's usage record says, else before the report: a file says
+  nothing of a take-in, and work that landed after is work the reporter may
+  never have taken in. A take-in is the runner's own merge
+  ([ADR-0013](../isolation/0013-worktree-isolation.md)) and the plan keeps no
+  time for it, so the start is the last moment the records say its tree held
+  what had landed. A retry of the owner that lands again starts the count over.
 - **One fact per landed task.** Reports are grouped by the task whose work they
   name, so 20 reports are one fact. The count is derived from the plan's
-  handoffs as each task settles, never stored (the rule of
-  [ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)).
+  handoffs and the landings as each task settles, never stored (the rule of
+  [ADR-0034](0034-a-failed-task-blocks-only-its-dependents.md)), so a report
+  that a later landing overtook stops counting at the next report: a doubling
+  never names it again.
 - **Raised on doubling.** The event is raised when the count reaches a power of
   two: the first report, its corroboration, then 4, 8, 16. Twenty reports raise
   five events over a run. A queued event for the same task is replaced by the
@@ -86,9 +112,15 @@ writes the one fix.**
   set is saved marked `unread`, so once that task leaves the plan it opens its
   handoff to no one, where a citation the producer could read passes it on
   (ADR-0057 R1).
-- **The completion contract asks for it.** One sentence: a finding about work
-  another task has landed cites that task, and the file the defect is in as its
-  first file.
+- **The completion contract asks for it.** A finding about work another task
+  has landed cites that task, and the file the defect is in as its first file,
+  with the input that shows it; waiting on work not yet landed is no blocker,
+  but an `info` finding that cites that task. A slice's role note
+  (`PlanFanOut.sliceNote`) says the same of the tests it leaves: each an `info`
+  finding citing, by task reference, the slice it waits for, and `blocker` only
+  for a defect in landed code that stops it, with the file and the input. A
+  runner that words a wait as a blocker and cites only files is still matched
+  by them, until the landing it waited on changes the file.
 
 ## Testing decisions
 
@@ -128,16 +160,57 @@ recorded data is committed, and fixtures are synthetic.
 - **List every handoff's findings in each wake.** Rejected: 210 findings in one
   run; the cap (ADR-0057 R5) would cut them to counts, and the two that mattered
   would read as two of many.
+- **Count against work landed before the report.** The rule as first built.
+  Dropped: on a second recorded run it counted slices' waits on siblings still
+  at work against landed tasks, by a placeholder in a file they cited or by a
+  sibling they cited beside one that had not landed, and named such a report
+  again at a later doubling, long after the work it waited on had landed.
+- **Count a task reference, too, against work landed before the attempt
+  started.** Built, then dropped: a slice that took in a sibling's work once it
+  landed, as its role note asks, and found a defect in it raised nothing for
+  it, and a slice-on-slice defect is found in just that case.
+- **Take the reporter's last take-in from git.** Not built: it would read the
+  reporter's branch for merges at every report, for a time the attempt's start
+  bounds from below; a defect found by file in work taken in mid-attempt waits
+  for a reporter that started after it landed.
+- **Overtake a file's report only by a landing after the report.** Built, then
+  dropped: reports from one tree made either side of the landing were judged
+  apart, so those before it stopped counting while those after it counted
+  afresh, and the owner was raised again at 1 and 2.
+- **Never raise an owner again at a count already raised.** Not built: it
+  needs the raises stored, where the count is derived (ADR-0034's rule).
+- **Overtake a file's report only by a landing of a task the finding names.**
+  Rejected: a wait worded as a blocker that cites only files names no task, and
+  would count against the placeholder's owner until a doubling named it again.
+- **Fall through to the next file when the first was overtaken.** Rejected: the
+  first landed file is where the report says the defect is, and the files after
+  it are callers, which would name the wrong task.
 
 ## Consequences
 
-- Replayed on the recorded run, the opening task's defect is raised at its
-  first report, 67 minutes in, and the second task's at its first report by
-  file, 100 minutes in; five raises name four other tasks, one of them a third
-  defect a landed task left in a file two tasks cited.
+- Replayed on the first recorded run under the rule as first built, the
+  opening task's defect is raised at its first report, 67 minutes in, and the
+  second task's at its first report by file, 100 minutes in; five raises name
+  four other tasks, one of them a third defect a landed task left in a file two
+  tasks cited. That run has not been replayed under the wait and attempt-start
+  rules.
+- Replayed on the second, the rule as it stands raises neither wait notice nor
+  the doubling that named one again, and keeps the defects slices reported in
+  landed helpers with the file and the input.
+- A slice that took in landed work mid-attempt and found a defect in it raises
+  it when it names the task; one that cites only the file raises nothing for
+  it, and the next reporter that started after that landing does.
+- A report from a tree cut before a later landing of its file stops counting
+  once that landing is in, even when that landing changed the file for another
+  reason and the defect stands; a reporter that started after it names the
+  later landing's task.
 - A slice that cites a file before the file it found broken, or a defect in a
   file nobody landed, raises nothing, or raises the wrong task: the contract
   asks for the file first, and nothing enforces it.
+- A blocker that cites, by task reference, a sibling whose work landed between
+  the reporter's start and its report is raised against that sibling: the plan
+  cannot tell that case from a defect found after taking the sibling's work in,
+  and the reference counts work landed by the report.
 - Whether a small model acts on the line is not shown by any test: a paid run
   is.
 - A report against work no fix touches keeps doubling to at most log2 of the
@@ -148,3 +221,6 @@ recorded data is committed, and fixtures are synthetic.
 - 2026-11-21 — accepted: the event, its count by task reference and by the files
   a landing changed, the digest line and the wider citation scope.
 - 2026-11-21 — one owner per finding, owners that land work only, a loop's check between rounds left to its loop, and an unreadable citation marked so it passes nothing on.
+- 2026-11-21 — only a defect in landed work: a citation of work still to come is a wait notice, work counts from the reporting attempt's start, a file a later landing changed names no one, and the slice note and contract ask for a wait as `info`.
+- 2026-11-21 — a task reference counts work landed by the report, a file's report is overtaken by a landing after its attempt started, and no task that depends on the reporter, or skipped or failed, is a wait.
+- 2026-11-21 — a consequence recorded: a task reference to a sibling that landed mid-attempt is raised against it.

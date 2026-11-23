@@ -25,4 +25,14 @@ describe('plannerSettingProblem', () => {
     expect(setting.enum).toBeUndefined();
     expect(setting.enumDescriptions).toBeUndefined();
   });
+
+  // An agent planner with no model is a working state, so the setting must not read as one left unset (F6).
+  it('does not call the planner model required: an agent plans with its own default', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf8')) as {
+      contributes: { configuration: { properties: Record<string, { description?: string }> } };
+    };
+    const description = manifest.contributes.configuration.properties['ordewell.orchestratorModel'].description ?? '';
+    expect(description).not.toMatch(/required/i);
+    expect(description).toContain("the agent's own default");
+  });
 });

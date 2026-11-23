@@ -17,7 +17,8 @@ import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
-import { refreshStepper } from './reducers/stepper';
+import { openStepperAt, refreshStepper } from './reducers/stepper';
+import { plannerStepper } from './reducers/plannerStepper';
 import {
   handleMouseSelect, isMouseSelect, isScrollKey, isWheel, scrollChat, scrollDelta, scrollPointed, settlePanes, settlePlan, toggleDetail,
 } from './reducers/pointer';
@@ -441,6 +442,11 @@ function reduceAction(state: TuiState, action: Action): Step {
 
     case 'sharedSettingsChanged':
       return step(state, [{ type: 'loadScope', ...(state.sessionId ? { sessionId: state.sessionId } : {}) }]);
+
+    case 'pickPlannerModel': {
+      if (state.overlay) return step(state);
+      return openStepperAt(state, plannerStepper, { harness: action.provider }, 'model') ?? step(state);
+    }
 
     case 'runnersLoaded':
       // Installed runners are `/planner`'s preflight signal, so a stepper
