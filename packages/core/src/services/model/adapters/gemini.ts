@@ -15,6 +15,7 @@ import { classifyHttpFailure, ModelError } from '../ModelError';
 import type {
   AdapterOptions,
   EffortLevel,
+  EffortSent,
   FinishReason,
   ModelClient,
   ModelEvent,
@@ -98,9 +99,17 @@ export function createGeminiClient(options: AdapterOptions): ModelClient {
         refusesThinking.add(request.model);
         chunks = await open(request, false, signal);
       }
+      if (request.effort) yield effortSent(request.model, request.effort, refusesThinking.has(request.model));
       yield* readStream(chunks, signal);
     },
   };
+}
+
+/** The thinking level or budget the request carried for the effort it asked, in the API's own terms. */
+function effortSent(model: string, effort: EffortLevel, refused: boolean): EffortSent {
+  const thinking = refused ? undefined : thinkingConfig(model, effort);
+  const sent = thinking?.thinkingLevel?.toLowerCase() ?? (thinking?.thinkingBudget !== undefined ? `thinkingBudget ${thinking.thinkingBudget}` : undefined);
+  return { type: 'effort', ...(sent ? { sent } : {}), ...(refused ? { refused: true as const } : {}) };
 }
 
 /** A 400 that blames the thinking setting; a missing-signature refusal names a signature, not a setting. */

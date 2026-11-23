@@ -71,6 +71,7 @@ describe('gemini adapter: streams', () => {
     const transport = replay(recorded('thinking.sse'));
     const events = await collect(clientFor(transport), { ...BASE_REQUEST, model: 'gemini-3-flash-preview', effort: 'high' });
     expect(events).toEqual([
+      { type: 'effort', sent: 'high' },
       { type: 'thinking-delta', text: '**Checking the suite**\n' },
       { type: 'thinking-delta', text: 'I should run it first.' },
       { type: 'text-delta', text: 'Running the ' },
@@ -278,6 +279,19 @@ describe('gemini adapter: thinking effort', () => {
     await collect(client, request);
     expect(transport.sent).toHaveLength(3);
     expect(JSON.stringify(transport.sent[2].body)).not.toContain('thinkingConfig');
+  });
+
+  it('reports the effort each request carried: the level, a thinking budget, none on a model that does not think, and a refusal', async () => {
+    const effortOf = async (model: string, effort: ModelRequest['effort']) => ofType(await collect(clientFor(replay(recorded('text.sse'))), { ...BASE_REQUEST, model, effort }), 'effort');
+    expect(await effortOf('gemini-3-pro-preview', 'medium')).toEqual([{ type: 'effort', sent: 'high' }]);
+    expect(await effortOf('gemini-2.5-flash', 'max')).toEqual([{ type: 'effort', sent: 'thinkingBudget 24576' }]);
+    expect(await effortOf('gemini-2.0-flash', 'high')).toEqual([{ type: 'effort' }]);
+    expect(await effortOf('gemini-3-flash-preview', undefined)).toEqual([]);
+    const refuse = () => refusal(400, googleError(400, 'INVALID_ARGUMENT', 'Unable to submit request because thinking_level is not supported by this model.'));
+    const client = clientFor(replay(refuse, recorded('text.sse'), recorded('text.sse')));
+    const request: ModelRequest = { ...BASE_REQUEST, model: 'gemini-3-flash-preview', effort: 'low' };
+    expect(ofType(await collect(client, request), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+    expect(ofType(await collect(client, request), 'effort')).toEqual([{ type: 'effort', refused: true }]);
   });
 
   it('does not mistake a missing-signature refusal for a thinking refusal', async () => {
