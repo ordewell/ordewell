@@ -8,6 +8,40 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.8] - 2026-11-23
+
+### Changed
+
+- **The plan review can no longer make tasks wait on work they did not wait on
+  as the planner wrote the plan.** When the planner reviews a plan's dependency
+  chain, its reply may still flatten a chain, but a task may not now wait on a
+  task it never ran after, and the parallel tasks may not be left without the
+  opening task: a reply that does either is held to the plan's own ancestry and
+  opening. When the guard drops a wait the reply added, the task gets back the
+  ancestors it shared with the dropped task, so it does not end up waiting for
+  neither the old task nor the new one, and a reply for an ops, user or
+  loop-check task is no longer refused whole because of it. The review's log
+  names only the tasks whose waits really changed.
+- **The supervisor is told which actions its previous turn really carried
+  out.** Each wake-up opens with Ordewell's one-line account of the acts the
+  last turn executed. Wake-ups that merely ride ahead of a user's message are
+  not mistaken for that turn.
+
+### Fixed
+
+- **A stopped task can be continued, with the work it had committed.** Stop used
+  to leave the task not started, which Continue refused, so the only way on was
+  a fresh attempt from the integration tip, with the stopped attempt's commits
+  on a preserved branch nobody named. A stopped task that has a saved session is
+  now continued in its restored worktree, in the same session. A fresh retry's
+  answer now says plainly where it starts: the integration tip, and the
+  preserved branch that holds the stopped attempt's commits.
+- **A tool call written as text beside real tool calls is caught.** A supervisor
+  reply that made real tool calls and also wrote another call out as text (as
+  one model's own markup) was taken as fully done, so the written call never ran
+  while the user was told it was sent. The round's results now say that the
+  written call was not executed.
+
 ## [0.14.7] - 2026-11-22
 
 ### Changed
@@ -4998,7 +5032,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.7...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
 [0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
