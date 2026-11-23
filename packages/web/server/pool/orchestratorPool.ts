@@ -50,6 +50,7 @@ import {
   migratePlanState,
   type RunnerId,
   type DiscoveredModel,
+  type OrchestratorOption,
   type ModelsResponse,
   type RunnersResponse,
   type SettingsResponse,
@@ -932,30 +933,24 @@ export class OrchestratorPool {
    * The catalog as `workspace`'s runners see it: Claude Code's picker lineup
    * follows the `CLAUDE_CONFIG_DIR` that workspace's environment sets.
    * Without a workspace the daemon's cwd stands in.
+   *
+   * `cached` answers from what discovery already holds, spawning no runner's
+   * CLI and fetching no catalog: a runner never discovered lists nothing. A
+   * read that only flags assignments asks this way, since one cold or broken
+   * CLI (an `opencode` that cannot start its service fails only after tens of
+   * seconds) would otherwise hold it up, as `SessionCatalog.scope()` is never
+   * held up either.
    */
-  async getProviderModels(workspace?: string): Promise<ModelsResponse> {
+  async getProviderModels(workspace?: string, { cached = false }: { cached?: boolean } = {}): Promise<ModelsResponse> {
     const config = new WebConfig();
     const resolver = this.resolverFor(workspace);
 
     const runnerIds = this.registry.list().map((p) => p.manifest.name);
-    const sandbox = this.codexSandbox.ensure();
-    // Awaited below; marked handled now, so a failed catalog load before then
-    // does not leave its rejection unhandled.
-    sandbox.catch(() => {});
-    // The vendor catalogs first: a runner started on a key Ordewell holds can
-    // be handed the model that key's catalog says its account is served
-    // (Qwen's, ADR-0060 R9), and a discovery begun before the catalog is held
-    // would list a model the account may be refused, until the next refresh.
-    const providerLists = await resolver.refresh();
-    const [runnerModels] = await Promise.all([resolver.modelsForRunners(runnerIds), sandbox]);
-
-    // `refresh()` populates the picker cache, so this is the same fetch — no
-    // second network round-trip. Errors are whatever that fetch recorded.
-    const orchestratorModels = await resolver.pickerOptions();
+    const { runnerModels, orchestratorModels } = cached
+      ? { runnerModels: Object.fromEntries(runnerIds.map((id) => [id, resolver.getCachedRunnerModels(id)])), orchestratorModels: resolver.getCachedPickerOptions() }
+      : await this.discoverProviderModels(resolver, runnerIds);
     const providerErrors = resolver.getDiscoveryErrors();
     const runnerErrors = resolver.getRunnerDiscoveryErrors();
-
-    this.cachedProviderLists = providerLists;
 
     const allModels: DiscoveredModel[] = [];
     const seen = new Set<string>();
@@ -983,6 +978,25 @@ export class OrchestratorPool {
       providerErrors,
       runnerErrors,
     };
+  }
+
+  private async discoverProviderModels(resolver: ModelResolver, runnerIds: RunnerId[]): Promise<{ runnerModels: Partial<Record<RunnerId, DiscoveredModel[]>>; orchestratorModels: OrchestratorOption[] }> {
+    const sandbox = this.codexSandbox.ensure();
+    // Awaited below; marked handled now, so a failed catalog load before then
+    // does not leave its rejection unhandled.
+    sandbox.catch(() => {});
+    // The vendor catalogs first: a runner started on a key Ordewell holds can
+    // be handed the model that key's catalog says its account is served
+    // (Qwen's, ADR-0060 R9), and a discovery begun before the catalog is held
+    // would list a model the account may be refused, until the next refresh.
+    const providerLists = await resolver.refresh();
+    const [runnerModels] = await Promise.all([resolver.modelsForRunners(runnerIds), sandbox]);
+
+    // `refresh()` populates the picker cache, so this is the same fetch — no
+    // second network round-trip. Errors are whatever that fetch recorded.
+    const orchestratorModels = await resolver.pickerOptions();
+    this.cachedProviderLists = providerLists;
+    return { runnerModels, orchestratorModels };
   }
 
   getRunnerState(workspace?: string): { enabledRunners: RunnerId[]; orchestratorModel: string } {

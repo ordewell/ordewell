@@ -390,10 +390,11 @@ export class ApiClient {
   }
 
   /** The full provider catalog the daemon has discovered (used by the TUI model picker). */
-  getModels(): Promise<ModelsResponse> {
+  getModels({ cached = false }: { cached?: boolean } = {}): Promise<ModelsResponse> {
     // Discovered under this workspace's environment, as its tasks are launched:
     // its CLAUDE_CONFIG_DIR picks the Claude account whose models are offered.
-    return this.call('models.list', 'Failed to fetch models', { query: { workspace: this.workspace } });
+    // `cached` takes only what the daemon has discovered so far, spawning no runner.
+    return this.call('models.list', 'Failed to fetch models', { query: { workspace: this.workspace, cached: cached ? '1' : undefined } });
   }
 
   setRunnerEnabled(runner: string, enabled: boolean): Promise<OkResponse> {

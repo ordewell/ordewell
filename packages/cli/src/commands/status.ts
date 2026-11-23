@@ -66,10 +66,13 @@ function emitJson(payload: unknown, outputPath?: string): void {
  * The runners and models the user allows, read as the TUI reads them, so a
  * task outside them is flagged here as on every surface (ADR-0043). A daemon
  * that cannot say leaves the rows unflagged rather than the status unprinted.
+ * The models are those the daemon holds, as a session's own scope reads them:
+ * asking it to discover would wait on every runner's CLI, a broken one for
+ * tens of seconds, on the first status after a daemon starts.
  */
 async function assignmentScope(api: ApiClient): Promise<AssignmentScope | undefined> {
   try {
-    const [runners, settings, models] = await Promise.all([api.getRunners(), api.getSettings(), api.getModels()]);
+    const [runners, settings, models] = await Promise.all([api.getRunners(), api.getSettings(), api.getModels({ cached: true })]);
     // With no runners listed, every task would read as on one switched off.
     if (!Array.isArray(runners.runners) || runners.runners.length === 0) return undefined;
     return {
