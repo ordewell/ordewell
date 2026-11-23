@@ -124,7 +124,8 @@ describe('adversarial: the batch dependency graph (task ops)', () => {
       { op: 'update', taskId: 'a', changes: { dependencies: ['c'] } },
     ], RUNNERS);
     expect(result.ok).toBe(false);
-    expect(result.errors[0]).toMatch(/"A" would have to run before "B", which is completed and cannot be moved/);
+    // B waits on A, which now waits on C, listed after B.
+    expect(result.errors[0]).toMatch(/"C" would have to run before "B", which is completed and cannot be moved/);
   });
 
   it('lets a completed task move up, keeping its order, so a task that now depends on it follows it', () => {

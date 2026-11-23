@@ -15,8 +15,7 @@ import type { DiscoveredModel, RunnerId } from '../models/Task';
  * - listed for this runner → keep;
  * - listed for no runner → unknown, and the user said it explicitly, so keep it
  *   and let the runner validate last (the same call `resolveAssignment` makes);
- * - listed only for other runners → provably not this runner's, so drop it;
- * - this runner has no list at all → nothing is provable, so keep them all.
+ * - listed only for other runners → provably not this runner's, so drop it.
  *
  * When that leaves nothing, the whole allowlist was about some other runner
  * (a settings file written before a surface scoped its picker to one). No
@@ -31,11 +30,7 @@ export function effectiveAllowlist(
   if (!allowlist || allowlist.length === 0) return undefined;
   if (!modelsByRunner) return allowlist;
 
-  // No list held for this runner (a held catalog can miss one runner's discovery) says nothing about what
-  // it can run, so another runner listing an id proves nothing against it.
-  if (!modelsByRunner[runner]?.length) return allowlist;
-
-  const own = new Set(modelsByRunner[runner].map((m) => m.modelId));
+  const own = new Set((modelsByRunner[runner] ?? []).map((m) => m.modelId));
   const elsewhere = new Set<string>();
   for (const [other, models] of Object.entries(modelsByRunner)) {
     if (other === runner) continue;

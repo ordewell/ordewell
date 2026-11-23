@@ -10,5 +10,10 @@ describe('status flags read against a partly held catalog', () => {
   });
   it('x not yet discovered (held catalog): the same task is still not flagged', () => {
     expect(assignmentIssue(task, { ...base, models: { x: [], y: [m('shared/m')] } })).toBeNull();
+    expect(assignmentIssue(task, { ...base, models: { y: [m('shared/m')] } })).toBeNull();
+  });
+  it('x not yet discovered: a model off the allowlist is still flagged, as with no catalog', () => {
+    const off = { ...task, assignedModel: { modelId: 'y/other' } };
+    expect(assignmentIssue(off, { ...base, models: { y: [m('shared/m'), m('y/other')] } })).toMatchObject({ kind: 'model-off-list', modelId: 'y/other' });
   });
 });

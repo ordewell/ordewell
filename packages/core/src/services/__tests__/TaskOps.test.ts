@@ -160,7 +160,8 @@ describe('applyTaskOps', () => {
     plan[1] = { ...plan[1], status: 'awaiting_user', awaitingReason: 'checkpoint', dependencies: ['a'] };
     const res = applyTaskOps(plan, [{ op: 'update', taskId: 'a', changes: { dependencies: ['#3'] } }], ['claude-code']);
     expect(res.ok).toBe(false);
-    expect(res.errors[0]).toBe('"Setup" would have to run before "Build", which is running and cannot be moved');
+    // Build waits on Setup, which now waits on Test, listed after Build: Test is what cannot go first.
+    expect(res.errors[0]).toBe('"Test" would have to run before "Build", which is running and cannot be moved');
   });
 
   it('resolves every ref against the pre-batch plan, not the mid-batch renumbered one', () => {
@@ -1073,7 +1074,7 @@ describe('applyTaskOps — order repair', () => {
 
   it('refuses a batch that could only be repaired by moving a completed task', () => {
     // B is completed and depends on A. Sending A behind C would drag B along
-    // with it — the one thing the repair may not do.
+    // with it — the one thing the repair may not do. C, listed after B, is what B now waits on.
     const plan = independentPlan();
     plan[1].status = 'completed';
     plan[1].dependencies = ['a'];
@@ -1081,7 +1082,7 @@ describe('applyTaskOps — order repair', () => {
       { op: 'update', taskId: 'a', changes: { dependencies: ['#3'] } },
     ], ['claude-code']);
     expect(res.ok).toBe(false);
-    expect(res.errors[0]).toBe('"A" would have to run before "B", which is completed and cannot be moved');
+    expect(res.errors[0]).toBe('"C" would have to run before "B", which is completed and cannot be moved');
     expect(res.tasks).toBe(plan);
   });
 
