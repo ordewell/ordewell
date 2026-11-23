@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { classifyHttpFailure, headerReader, ModelError, retryAfterFromHeaders } from '../ModelError';
 import { cameThroughWhole } from './cutShort';
+import { effortBeforeFirst } from '../effortFirst';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -135,9 +136,7 @@ export function createAnthropicMessagesClient(options: AdapterOptions): ModelCli
           quirks.add(quirk);
           continue;
         }
-        const effort = request.effort ? effortSent(body, quirks) : undefined;
-        if (effort) yield effort;
-        yield* readStream(events, signal);
+        yield* effortBeforeFirst(request.effort ? effortSent(body, quirks) : undefined, readStream(events, signal));
         return;
       }
     },

@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { AiProvider } from '../../../interfaces/IConfig';
 import { classifyHttpFailure, ModelError } from '../ModelError';
 import { cameThroughWhole } from './cutShort';
+import { effortBeforeFirst } from '../effortFirst';
 import type {
   AdapterOptions,
   EffortLevel,
@@ -149,8 +150,10 @@ export function createChatCompletionsClient(options: AdapterOptions): ModelClien
         body = requestBody(provider, request, true);
         chunks = await open(body, signal);
       }
-      if (request.effort) yield effortSent(body, refusesEffort.has(request.model));
-      yield* readStream(provider, request.model, chunks, signal);
+      yield* effortBeforeFirst(
+        request.effort ? effortSent(body, refusesEffort.has(request.model)) : undefined,
+        readStream(provider, request.model, chunks, signal),
+      );
     },
   };
 }

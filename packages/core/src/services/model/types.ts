@@ -148,7 +148,9 @@ export interface EffortSent {
  * call completes; `finish` is always last, exactly once. A stream that ends
  * without one throws a `ModelError` instead. On `length`, a call the limit cut
  * short never completes: only one whose arguments came through whole does.
- * `effort` comes once, first, on a request that asked for one.
+ * `effort` comes once, ahead of the first of the others, on a request that asked
+ * for one: never before the stream has sent something, which timeouts and retry
+ * would take for it having started.
  */
 export type ModelEvent =
   | EffortSent
