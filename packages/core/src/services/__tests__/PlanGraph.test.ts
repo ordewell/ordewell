@@ -149,9 +149,37 @@ describe('PlanGraph.repairOrder', () => {
     expect(ids(r)).toEqual(['dep', 'run', 'late']);
   });
 
-  it('refuses a pinned task that would have to run after something that depends on it', () => {
+  it('moves a free task that depends on a pinned one listed after it to after it, the pinned one moving up', () => {
     const r = PlanGraph.repairOrder([task('x', { order: 1, dependencies: ['done'] }), task('done', { order: 2, status: 'completed' })]);
-    expect(ids(r)).toBe('"X" would have to run after "DONE", which is completed and cannot be moved');
+    expect(ids(r)).toEqual(['done', 'x']);
+    expect('moves' in r && r.moves).toBe('"DONE" #2→#1, "X" #1→#2');
+  });
+
+  it('fills a free slot before closing it up, and keeps pinned tasks in their order', () => {
+    // W waits on R2, listed after it, and nothing free can take W's slot but F, which comes up.
+    const r = PlanGraph.repairOrder([
+      task('w', { order: 1, dependencies: ['r2'] }),
+      task('r1', { order: 2, status: 'in_progress' }),
+      task('f', { order: 3 }),
+      task('r2', { order: 4, status: 'in_progress' }),
+      task('g', { order: 5, dependencies: ['w'] }),
+    ]);
+    expect(ids(r)).toEqual(['f', 'r1', 'r2', 'w', 'g']);
+  });
+
+  it('closes up several slots at once, each waiter following what it waits on', () => {
+    const r = PlanGraph.repairOrder([
+      task('w1', { order: 1, dependencies: ['r'] }),
+      task('w2', { order: 2, dependencies: ['r'] }),
+      task('done', { order: 3, status: 'completed' }),
+      task('r', { order: 4, status: 'in_progress' }),
+    ]);
+    expect(ids(r)).toEqual(['done', 'r', 'w1', 'w2']);
+  });
+
+  it('refuses a plan whose cycle the caller let through, rather than drop a task from it', () => {
+    const r = PlanGraph.repairOrder([task('a', { order: 1, dependencies: ['b'] }), task('b', { order: 2, dependencies: ['a'] })]);
+    expect(ids(r)).toBe('"A" waits on a task that waits on it');
   });
 
   it('refuses a pinned task that depends on one listed after it', () => {

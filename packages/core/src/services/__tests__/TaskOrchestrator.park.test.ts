@@ -6,6 +6,7 @@ import type { RunnerSpawnOptions } from '../AbstractRunner';
 import { fakeConfig, FakeRunnerSession, FakeWorktreeIsolation } from '../../testing';
 import { fakeNotification, makeSession, saves, taskOf } from './sessionTestKit';
 import { BufferedTaskOutputSource } from '../BufferedTaskOutputSource';
+import { applyTaskOps, type TaskOp } from '../TaskOps';
 
 /**
  * A change task that needs a sibling's unlanded work parks with `wait_for`
@@ -389,5 +390,95 @@ describe('only a change task parks', () => {
     await vi.waitFor(() => expect(h.spawnsOf('o')).toHaveLength(1));
     expect(await h.waitFor('o', ['a'])).toMatchObject({ isError: true, text: expect.stringContaining('wait_for is for a change task') });
     expect(h.stored('o').dependencies).toEqual([]);
+  });
+});
+
+describe('a park keeps the plan editable (ADR-0074 P3)', () => {
+  const order = (h: ReturnType<typeof setup>) => h.orchestrator.storeInstance.planTasks.map((t) => `${t.order}:${t.id}`);
+  // An edit as the supervisor's edit_plan applies it, to the plan as it stands.
+  const edit = (h: ReturnType<typeof setup>, ops: TaskOp[]) => applyTaskOps(h.orchestrator.storeInstance.planTasks, ops, ['claude-code']);
+
+  it('moves a task that parks on one ordered after it to after that task, so a later edit is not refused', async () => {
+    const h = setup({ maxParallel: 2 });
+    h.orchestrator.loadPlan([task('c', 1), task('b', 2)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => { expect(h.spawnsOf('c')).toHaveLength(1); expect(h.spawnsOf('b')).toHaveLength(1); });
+
+    await h.waitFor('c', ['b']);
+    h.latest('c').emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.stored('c')).toMatchObject({ status: 'pending', dependencies: ['b'] }));
+
+    expect(order(h)).toEqual(['1:b', '2:c']);
+    const fix = edit(h, [{ op: 'add', task: { title: 'Fix b', prompt: 'fix b', dependencies: ['b'] } }]);
+    expect(fix.errors).toEqual([]);
+    expect(fix.tasks.map((t) => t.title)).toEqual(['Task b', 'Task c', 'Fix b']);
+  });
+
+  it('moves each of several tasks parked at once to after what it waits for', async () => {
+    const h = setup({ maxParallel: 3 });
+    h.orchestrator.loadPlan([task('x', 1), task('y', 2), task('z', 3)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => expect(h.requests).toHaveLength(3));
+
+    await h.waitFor('x', ['z']);
+    await h.waitFor('y', ['z']);
+    h.latest('x').emitTurnEnd('completed');
+    h.latest('y').emitTurnEnd('completed');
+    await vi.waitFor(() => { expect(h.stored('x').status).toBe('pending'); expect(h.stored('y').status).toBe('pending'); });
+
+    // Each park settles on the plan as the one before left it: Y moves the least it can, to just after Z, where X already went.
+    expect(order(h)).toEqual(['1:z', '2:y', '3:x']);
+    expect(edit(h, [{ op: 'add', task: { title: 'Fix z', prompt: 'fix z', dependencies: ['z'] } }]).errors).toEqual([]);
+  });
+
+  it('moves a task after work that landed while its park was ending, and it goes on at once', async () => {
+    const h = setup({ maxParallel: 2 });
+    h.orchestrator.loadPlan([task('c', 1), task('b', 2)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => expect(h.requests).toHaveLength(2));
+
+    await h.waitFor('c', ['b']);
+    h.pass('b');
+    await vi.waitFor(() => expect(h.stored('b').status).toBe('completed'));
+    h.latest('c').emitTurnEnd('completed');
+
+    await vi.waitFor(() => expect(h.spawnsOf('c')).toHaveLength(2));
+    expect(order(h)).toEqual(['1:b', '2:c']);
+    expect(edit(h, [{ op: 'add', task: { title: 'Docs', prompt: 'docs' } }]).errors).toEqual([]);
+  });
+
+  it('places a task an edit adds on the parked task after it, and leaves alone what neither constrains', async () => {
+    const h = setup({ maxParallel: 2 });
+    h.orchestrator.loadPlan([task('c', 1), task('b', 2), task('d', 3), task('e', 4)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => expect(h.requests).toHaveLength(2));
+
+    await h.waitFor('c', ['b']);
+    h.latest('c').emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.spawnsOf('d')).toHaveLength(1));
+
+    // B runs where it was, as close to it as the edge allows; C follows it, and D and E keep their order.
+    expect(order(h)).toEqual(['1:d', '2:b', '3:c', '4:e']);
+    expect(h.notifications.info).toHaveBeenCalledWith(expect.stringContaining('Task "Task c" waits for #2 "Task b"'));
+    const next = edit(h, [{ op: 'add', task: { title: 'After c', prompt: 'after c', dependencies: ['c'] } }]);
+    expect(next.errors).toEqual([]);
+    expect(next.tasks.map((t) => t.title)).toEqual(['Task d', 'Task b', 'Task c', 'Task e', 'After c']);
+  });
+
+  it('leaves the order valid and editable when the edge is taken back because the work will not land (P7)', async () => {
+    const h = setup({ maxParallel: 2 });
+    h.orchestrator.loadPlan([task('c', 1), task('b', 2)]);
+    await h.orchestrator.approveReview();
+    await vi.waitFor(() => expect(h.requests).toHaveLength(2));
+    await h.waitFor('c', ['b']);
+    h.latest('c').emitTurnEnd('completed');
+    await vi.waitFor(() => expect(h.stored('c').status).toBe('pending'));
+
+    h.latest('b').reportComplete({ status: 'failed', summary: 'could not build', reason: 'broken' });
+    await vi.waitFor(() => expect(h.spawnsOf('c')).toHaveLength(2));
+
+    expect(h.stored('c').dependencies).toEqual([]);
+    expect(order(h)).toEqual(['1:b', '2:c']);
+    expect(edit(h, [{ op: 'add', task: { title: 'Fix b', prompt: 'fix b', dependencies: ['b'] } }]).errors).toEqual([]);
   });
 });
