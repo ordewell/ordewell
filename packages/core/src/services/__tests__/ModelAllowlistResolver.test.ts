@@ -10,6 +10,12 @@ describe('effectiveAllowlist', () => {
     ],
   };
 
+  it('keeps the whole allowlist for a runner whose list is not held, whatever another runner lists', () => {
+    const partial = { 'claude-code': [], opencode: catalogs.opencode };
+    expect(effectiveAllowlist(['gpt-5.6-sol', 'other-id'], 'claude-code', partial)).toEqual(['gpt-5.6-sol', 'other-id']);
+    expect(effectiveAllowlist(['gpt-5.6-sol', 'other-id'], 'claude-code', { opencode: catalogs.opencode })).toEqual(['gpt-5.6-sol', 'other-id']);
+  });
+
   it('is undefined for an unset or empty allowlist', () => {
     expect(effectiveAllowlist(undefined, 'claude-code', catalogs)).toBeUndefined();
     expect(effectiveAllowlist([], 'claude-code', catalogs)).toBeUndefined();

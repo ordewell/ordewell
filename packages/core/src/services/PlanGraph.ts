@@ -83,12 +83,16 @@ function isPinned(t: Task): boolean {
  * order. A free slot no movable task can take yet, because each one left waits
  * on a pinned task further down, closes up: the pinned tasks below move up one,
  * and what waits on them follows them. That is how a task that parked on a
- * sibling listed after it (ADR-0074 P3) comes to sit after it. A pinned task
- * that depends on one listed after it is refused, since moving it down would
- * move it past work that has already started. A dependency outside the list (a
- * task of another level) constrains nothing here. Assumes an acyclic graph (the
- * caller checks first). `moves` says what moved, as `"B" #2→#1, "A" #1→#3`, or
- * is null when nothing did.
+ * sibling listed after it (ADR-0074 P3) comes to sit after it. A pick is kept
+ * only if what is left can still be placed with every pinned task no later than
+ * its slot (earliest deadline first, on deadlines carried back to what each
+ * pinned task waits on): a free slot spent on an unrelated task could otherwise
+ * leave a pinned task's own dependency nowhere to go. A pinned task that
+ * depends on one listed after it, with another pinned task between them, is
+ * refused, since moving it down would move it past work that has already
+ * started. A dependency outside the list (a task of another level) constrains
+ * nothing here. Assumes an acyclic graph (the caller checks first). `moves`
+ * says what moved, as `"B" #2→#1, "A" #1→#3`, or is null when nothing did.
  */
 export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | null } | { error: string } {
   const byId = new Map(tasks.map((t) => [t.id, t]));
@@ -107,14 +111,57 @@ export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | nul
     return true;
   };
 
-  for (const occupant of tasks) {
-    if (isPinned(occupant)) {
-      const blocker = blockerOf(occupant);
-      if (blocker) return { error: pinnedRefusal(blocker, occupant) };
-      place(occupant);
-      continue;
+  const pins = tasks.filter(isPinned);
+  const slot = new Map(tasks.map((t, i) => [t.id, i]));
+  // Can what is left still go in, every pinned task no later than its slot? Earliest deadline first, on
+  // deadlines carried back from each pinned task to what it waits on here, decides it.
+  const feasible = (): boolean => {
+    const left = tasks.filter((t) => !placed.has(t.id));
+    const due = new Map<string, number>();
+    let next = Infinity;
+    for (let i = pins.length - 1; i >= 0; i--) { next = Math.min(slot.get(pins[i].id)!, next - 1); due.set(pins[i].id, next); }
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const t of left) {
+        const d = due.get(t.id);
+        if (d === undefined) continue;
+        for (const id of t.dependencies) {
+          if (!byId.has(id) || placed.has(id)) continue;
+          if ((due.get(id) ?? Infinity) > d - 1) { due.set(id, d - 1); changed = true; }
+        }
+      }
     }
-    placeNextMovable();
+    const done = new Set(placed);
+    for (let at = result.length; at < tasks.length; at++) {
+      let best: Task | undefined;
+      for (const t of left) {
+        if (done.has(t.id) || t.dependencies.some((d) => byId.has(d) && !done.has(d))) continue;
+        if (!best || (due.get(t.id) ?? Infinity) < (due.get(best.id) ?? Infinity)) best = t;
+      }
+      if (!best || (due.get(best.id) ?? Infinity) < at) return false;
+      done.add(best.id);
+    }
+    return true;
+  };
+  const tryPlace = (t: Task): boolean => {
+    place(t);
+    if (feasible()) return true;
+    result.pop(); placed.delete(t.id);
+    return false;
+  };
+  if (!feasible()) {
+    if (pins.length === 0) return { error: `"${movable[0].title}" waits on a task that waits on it` };
+    const pin = pins.find((p) => blockerOf(p)) ?? pins[0];
+    return { error: pinnedRefusal(blockerOf(pin) ?? pin, pin) };
+  }
+  while (pins.length > 0) {
+    const pin = pins[0];
+    if (slot.get(pin.id) === result.length && !blockerOf(pin) && tryPlace(pin)) { pins.shift(); continue; }
+    const free = movable.filter((t) => !blockerOf(t));
+    const pick = free.find((t) => tryPlace(t));
+    if (pick) { movable.splice(movable.indexOf(pick), 1); continue; }
+    if (!blockerOf(pin) && tryPlace(pin)) { pins.shift(); continue; }
+    return { error: pinnedRefusal(blockerOf(pin) ?? pin, pin) };
   }
   // Every pinned task is placed, and the graph is acyclic, so what is left can all go.
   while (placeNextMovable());

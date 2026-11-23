@@ -186,4 +186,15 @@ describe('PlanGraph.repairOrder', () => {
     const r = PlanGraph.repairOrder([task('run', { order: 1, status: 'in_progress', dependencies: ['dep'] }), task('dep', { order: 2 })]);
     expect(ids(r)).toBe('"DEP" would have to run before "RUN", which is running and cannot be moved');
   });
+
+  it('moves a running task up past a re-armed waiter, leaving its completed dependent where it is', () => {
+    // W was completed, marked not done and retried; C (completed) depends on it; W parks on running Z.
+    const r = PlanGraph.repairOrder([
+      task('w', { order: 1, dependencies: ['z'] }),
+      task('z', { order: 2, status: 'in_progress' }),
+      task('c', { order: 3, status: 'completed', dependencies: ['w'] }),
+      task('new', { order: 4 }),
+    ]);
+    expect(ids(r)).toEqual(['z', 'w', 'c', 'new']);
+  });
 });

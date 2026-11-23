@@ -570,4 +570,11 @@ describe('PlanStore.keepDependenciesFirst (ADR-0074 P3)', () => {
     expect(stuck.keepDependenciesFirst('w')).toBeNull();
     expect(stuck.planTasks.map((x) => x.id)).toEqual(['w', 'done', 'r']);
   });
+
+  it('moves a waiter after the running task it parked on, past a completed dependent listed behind it', () => {
+    // Mark not done on W leaves its completed dependent C; W's retry then parks on running Z.
+    const rearmed = load([t('w', 1, { dependencies: ['z'] }), t('z', 2, { status: 'in_progress' }), t('c', 3, { status: 'completed', dependencies: ['w'] })]);
+    expect(rearmed.keepDependenciesFirst('w')).not.toBeNull();
+    expect(rearmed.planTasks.map((x) => x.id)).toEqual(['z', 'w', 'c']);
+  });
 });
