@@ -1,8 +1,8 @@
 {
   "name": "ordewell",
   "displayName": "Ordewell",
-  "description": "Plan, run, and review across eight coding agents.",
-  "version": "0.14.5",
+  "description": "Plan, run, and review across nine coding agents.",
+  "version": "0.14.8",
   "private": true,
   "publisher": "ordewell",
   "license": "Apache-2.0",
@@ -346,8 +346,8 @@
     }
   },
   "dependencies": {
-    "@ordewell/core": "^0.14.5",
-    "@ordewell/ui": "^0.14.5"
+    "@ordewell/core": "^0.14.8",
+    "@ordewell/ui": "^0.14.8"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

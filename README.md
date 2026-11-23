@@ -7,7 +7,9 @@
 
 <p align="center">
   <strong>Stop juggling agent tabs. Talk to one planner.</strong><br>
-  One goal, many agents, working in parallel. Review every step, or let it run.
+  Ordewell is an open-source orchestrator for coding agents: one goal becomes a
+  plan of tasks, each run by the agent you choose, in parallel, and passed only
+  on evidence.
 </p>
 
 <p align="center">
@@ -18,20 +20,36 @@
 </p>
 
 <p align="center">
+  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run in Ordewell's terminal UI: a goal becomes a four-task plan, Claude Code, Codex and OpenCode run independent tasks in parallel, and a final verification task completes the plan. Sped up stretches are marked.">
+  <br>
+  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
+</p>
+
+| Use it in | Install |
+|---|---|
+| Desktop app | [Download for macOS, Windows or Linux](https://ordewell.ai/download) |
+| Terminal | `curl -fsSL https://ordewell.ai/install.sh \| sh` (macOS and Linux, no Node.js needed; on Windows, [use npm](#install-the-terminal-app)) |
+| VS Code | Extension `ordewell.ordewell`: `code --install-extension ordewell.ordewell` |
+
+**You need** a coding agent you already use, such as Claude Code or Codex,
+installed and signed in, or a provider API key. No Ordewell account or key.
+
+## What happens on your first run
+
+1. Open your project in Ordewell. It shows the coding agents it found and
+   whether each is signed in; choose a planner and runners, then type a goal.
+2. The planner reads your repository without changing it, asks what is vague and
+   writes a plan: tasks with dependencies, each with its own agent and model.
+3. You edit and approve the plan. Independent tasks run side by side; in a git
+   repository, each on its own branch in its own worktree.
+4. A task passes only on evidence: its agent's report, or a script's clean exit.
+   You read the diff, then merge the run into your branch or discard it.
+
+<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://www.npmjs.com/package/@ordewell/cli"><img src="https://img.shields.io/npm/v/@ordewell/cli" alt="npm"></a>
   <a href="https://github.com/ordewell/ordewell/actions/workflows/ci.yml"><img src="https://github.com/ordewell/ordewell/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/ordewell/ordewell"><img src="https://img.shields.io/github/stars/ordewell/ordewell?style=social" alt="GitHub stars"></a>
-</p>
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/desktop-run-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/readme/desktop-run-light.png">
-    <img src="assets/readme/desktop-run-light.png" width="900" alt="The Ordewell desktop app showing a plan graph of six tasks in three stages. The three stage 1 tasks are running side by side, on Claude Code, Codex and GitHub Copilot CLI, each with its own model and effort; the later stages wait for them. The plan list sits on the right.">
-  </picture>
-  <br>
-  <sub>The Ordewell desktop app.</sub>
 </p>
 
 Ordewell is the best agent orchestrator for complex work. One goal becomes a plan
@@ -44,7 +62,7 @@ Use it in the [desktop app](#download-the-desktop-app), the
 [terminal](#install-the-terminal-app), [VS Code](#vs-code) or from the command
 line. Every one drives the same plans, runners and settings.
 
-This README describes 0.14.5. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.8. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 ## Why Ordewell
@@ -94,6 +112,16 @@ for versions available to install and their release notes.
 </table>
 
 ## Download the desktop app
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/desktop-run-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/readme/desktop-run-light.png">
+    <img src="assets/readme/desktop-run-light.png" width="900" alt="The Ordewell desktop app showing a plan graph of six tasks in three stages. The three stage 1 tasks are running side by side, on Claude Code, Codex and GitHub Copilot CLI, each with its own model and effort; the later stages wait for them. The plan list sits on the right.">
+  </picture>
+  <br>
+  <sub>The Ordewell desktop app.</sub>
+</p>
 
 Get the installer for your computer from [ordewell.ai/download](https://ordewell.ai/download),
 or straight from the latest release:
@@ -174,7 +202,9 @@ In Cursor, Windsurf or VSCodium, get it from [Open VSX](https://open-vsx.org/ext
 A [supported coding agent](https://ordewell.ai/docs#runners), installed and
 signed in, or a provider API key for the built-in runner. git is optional; 2.38
 or newer is recommended: tasks then run in their own worktrees. Without it, they
-run directly in your folder.
+run directly in your folder. Each commit Ordewell writes ends with a
+`Planned-with: Ordewell` trailer, on by default: `ordewell trailer off` turns it
+off and `ordewell trailer on` back on. A commit an agent made itself gets none.
 
 ## Quick start
 
@@ -222,14 +252,6 @@ and [what a task's agent can reach](SECURITY.md#what-a-tasks-agent-can-reach).
 Without a git repository or with isolation disabled, tasks share the workspace;
 some files can also be shared between worktrees. See
 [isolation and handoff](https://ordewell.ai/docs#isolation) for details.
-
-## See it in the terminal
-
-<p align="center">
-  <img src="assets/readme/hero-plan-to-run.gif" width="900" alt="A real run in Ordewell's terminal UI: a goal becomes a four-task plan, Claude Code, Codex and OpenCode run independent tasks in parallel, and a final verification task completes the plan. Sped up stretches are marked.">
-  <br>
-  <sub>A real run, sped up where marked. <a href="https://ordewell.ai/assets/demo.mp4">Watch the full 48 seconds</a>.</sub>
-</p>
 
 ## Documentation
 

@@ -167,3 +167,33 @@ describe('a usage limit on the API planner (ADR-0044)', () => {
     expect(reply).toMatchObject({ kind: 'message', failed: true, usageLimit: { resetsAt: '2026-11-15T03:00:00.000Z' } });
   });
 });
+
+describe('a tool call the API planner wrote as text (ADR-0070)', () => {
+  it('is answered with an instruction on the wire, and its markup is not the turn\'s reply', async () => {
+    const requests: ModelRequest[] = [];
+    const replies = ['<｜DSML｜ invoke name="read_file">\n<｜DSML｜ parameter name="path">a.ts</｜DSML｜ parameter>\n</｜DSML｜ invoke>', 'Nothing to read.'];
+    const client: ModelClient = {
+      provider: 'openai',
+      dialect: 'responses',
+      async *stream(request): AsyncIterable<ModelEvent> {
+        requests.push(request);
+        yield { type: 'text-delta', text: replies[requests.length - 1] ?? '' };
+        yield { type: 'finish', reason: 'stop' };
+      },
+    };
+    const config = {
+      aiProvider: 'openai',
+      orchestratorModel: 'openai:gpt-5',
+      getProviderBaseUrl: () => '',
+      getProviderApiKey: () => 'sk-test',
+    } as unknown as IConfig;
+
+    const reply = await new OpenAiService(config, { modelClient: () => client }).startConversation({
+      goal: 'add a cache', runners: ['claude-code'], modelsByRunner: {}, fs: fakeFileSystem() as IFileSystem, onProgress: () => {},
+    });
+
+    expect(reply).toMatchObject({ kind: 'message', text: 'Nothing to read.' });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: 'user', text: '[Ordewell] Your last reply wrote a tool call (read_file) as text, so it was not made. Make the call with the tool, not in your reply text.' });
+  });
+});

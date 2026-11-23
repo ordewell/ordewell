@@ -197,6 +197,40 @@ describe.skipIf(!hasGit)('continued attempts keep their previous work', () => {
     expect(git(root, 'show', 'ordewell/continue-run/integration:landed.txt')).toBe('other task implementation');
   });
 
+  it('a task stopped mid-attempt continues in its saved session with the commits it made, beside work landed meanwhile', async () => {
+    const root = repo();
+    const h = setup(root);
+    h.orchestrator.storeInstance.add(createTask({ id: 't2', order: 2, title: 'Other change', prompt: 'Make another change' }));
+    await h.orchestrator.forceStartTask('t1');
+    await h.orchestrator.forceStartTask('t2');
+    const firstCwd = h.requests[0].cwd;
+    writeFileSync(join(firstCwd, 'module.txt'), 'module work\n');
+    git(firstCwd, 'add', 'module.txt');
+    git(firstCwd, 'commit', '-q', '-m', 'module work so far');
+    writeFileSync(join(firstCwd, 'feature.txt'), 'uncommitted implementation\n');
+
+    await h.orchestrator.cancelTask('t1');
+    expect(h.task().status).toBe('pending');
+    writeFileSync(join(h.requests[1].cwd, 'landed.txt'), 'other task implementation\n');
+    h.sessions[1].reportComplete({ status: 'done', summary: 'Other change' });
+    await vi.waitFor(() => expect(h.orchestrator.storeInstance.get('t2')?.status).toBe('completed'), { timeout: 20_000 });
+
+    await h.orchestrator.continueTask('t1', 'Finish the module');
+
+    const resumed = h.requests[2];
+    expect(resumed.resumeSessionId).toBe('native-t1');
+    expect(resumed.cwd).toBe(firstCwd);
+    expect(readFileSync(join(resumed.cwd, 'module.txt'), 'utf8')).toBe('module work\n');
+    expect(readFileSync(join(resumed.cwd, 'feature.txt'), 'utf8')).toBe('uncommitted implementation\n');
+    expect(readFileSync(join(resumed.cwd, 'landed.txt'), 'utf8')).toBe('other task implementation\n');
+    expect(resumed.prompt).toContain('Your previous changes are in the working tree');
+    // Nothing lands on the stop or the continue alone: only the continued attempt's passing verdict does.
+    expect(() => git(root, 'show', 'ordewell/continue-run/integration:module.txt')).toThrow();
+    h.sessions[2].reportComplete({ status: 'done', summary: 'Finished' });
+    await vi.waitFor(() => expect(h.task().status).toBe('completed'), { timeout: 20_000 });
+    expect(git(root, 'show', 'ordewell/continue-run/integration:module.txt')).toBe('module work');
+  });
+
   it('a fresh retry starts clean from the integration tip without resuming the saved session', async () => {
     const root = repo();
     const h = setup(root);

@@ -1,7 +1,6 @@
 import * as path from 'path';
 import type { IFileSystem } from '../interfaces/IFileSystem';
-import { flattenTasks, runsAsOps, type Task } from '../models/Task';
-import { replace } from './PlanGraph';
+import { runsAsOps, type Task } from '../models/Task';
 
 /**
  * A one-shot plan that fans out over code whose parts call each other (a
@@ -123,10 +122,18 @@ export function fanOutShape(tasks: readonly Task[]): FanOutShape {
   // whatever runs beside it: a slice would read it as one of them. The level is
   // the one holding the most of the rest, the first on a tie, counted without the
   // tasks every deeper one waits for, and only a level of a fan-out takes any.
+  // Those deeper must hold a fan-out's level: a last task that waits for only
+  // some slices would otherwise make the slices it waits for such tasks, and
+  // the fan-out's level the narrower one left.
   const lv = (t: Task) => g.level.get(t.id)!;
+  const holdsFanOut = (ts: readonly Task[]) => {
+    const per = new Map<number, number>();
+    for (const s of ts) per.set(lv(s), (per.get(lv(s)) ?? 0) + 1);
+    return [...per.values()].some((n) => n >= FAN_OUT_MIN);
+  };
   const deeperAll = new Set(parallel.filter((t) => {
     const deeper = parallel.filter((s) => lv(s) > lv(t));
-    return deeper.length > 0 && deeper.every((s) => anc(s).has(t.id));
+    return holdsFanOut(deeper) && deeper.every((s) => anc(s).has(t.id));
   }));
   const count = new Map<number, number>();
   for (const s of parallel) if (!deeperAll.has(s)) count.set(lv(s), (count.get(lv(s)) ?? 0) + 1);
@@ -171,7 +178,11 @@ const refs = (ts: readonly Pick<Task, 'title' | 'id'>[]) => (ts.length < 2 ? ts.
 const waitingFor = (shape: FanOutShape, gate: Task) => shape.slices.filter((s) => shape.waits.get(s.id)?.includes(gate)).length;
 
 /** Repository paths a brief names, for the slices' map of who owns what. */
-const PATH = /(?<![\w/.-])(?:[\w.-]+\/)*[\w-]+\.(?:py|pyi|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|rb|php|c|h|cc|cpp|hpp|cs|swift|scala)\b/g;
+const EXTENSIONS = 'py|pyi|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|rb|php|c|h|cc|cpp|hpp|cs|swift|scala';
+const PATH = new RegExp(`(?<![\\w/.-])(?:[\\w.-]+\\/)*[\\w-]+\\.(?:${EXTENSIONS})\\b`, 'g');
+/** A listed path that is one of those files, whole. */
+const FILE = new RegExp(`^(?:[\\w.-]+\\/)*[\\w-]+\\.(?:${EXTENSIONS})$`);
+/** The most paths a task's line in the notes' tables lists; sizing reads every path. */
 const MAX_PATHS = 6;
 
 const NOTED = 'Plan shape:';
@@ -179,21 +190,49 @@ const NOTED = 'Plan shape:';
 /** Where the notes Ordewell appends begin: this module's, and the chain review's, which names tasks by title. */
 const APPENDED = /Plan (?:shape|revision):/;
 
-/** A merged task's brief: the line each slice's brief starts under, and the done criterion after the last. */
+/**
+ * A merged task's brief, as builds that merged small slices wrote it (ADR-0072
+ * R7): a plan saved by one still holds them. The line each slice's brief
+ * starts under, and the done criterion after the last.
+ */
 const SECTION = /^Slice \d+ of \d+: .*$/m;
 const MERGED_DONE = 'This task is done when every slice above meets its own brief\'s done criterion.';
 
-const pathsIn = (text: string) => [...new Set(text.match(PATH) ?? [])].slice(0, MAX_PATHS);
+const pathsIn = (max: number) => (text: string) => [...new Set(text.match(PATH) ?? [])].slice(0, max);
 
 /**
  * From the brief as the planner wrote it: a note already appended names other
  * tasks' paths. A merged task's brief is read slice by slice, as the planner
  * wrote each, so it names what its slices named and sizes as they summed.
  */
-function namedPaths(t: Task): string[] {
+function briefTexts(t: Task): string[] {
   const own = (t.prompt ?? '').split(APPENDED)[0];
-  if (!t.mergedSlices?.length) return pathsIn(own);
-  return [...new Set(own.split(MERGED_DONE)[0].split(SECTION).slice(1).flatMap(pathsIn))];
+  return t.mergedSlices?.length ? own.split(MERGED_DONE)[0].split(SECTION).slice(1) : [own];
+}
+
+/** The paths a brief names, at most `max` a slice's brief. */
+function namedPaths(t: Task, max = MAX_PATHS): string[] {
+  return [...new Set(briefTexts(t).flatMap(pathsIn(max)))];
+}
+
+/** A word of a brief that may be a repository path, a directory's with or without its trailing slash. */
+const WORD = /(?<![\w/.-])[\w.-]+(?:\/[\w.-]+)*\/?/g;
+/** A test directory's own name, as {@link TEST_FILE} reads one inside a path. */
+const TEST_DIR_NAME = /^(?:[\w-]*[_-])?(?:tests?|specs?|__tests__)$/;
+
+/**
+ * The test directories a brief names (`pkg/flow/tests/`, `pkg/flow/tests`):
+ * a brief that points at its tests by their directory names no file of them.
+ * A bare `tests` is a word of prose, so only a path with a slash counts.
+ */
+function namedTestDirs(t: Task): string[] {
+  const dirs = briefTexts(t).flatMap((text) => (text.match(WORD) ?? []).flatMap((word) => {
+    const w = word.replace(/\.+$/, '');
+    if (!w.includes('/')) return [];
+    const dir = path.posix.normalize(w).replace(/\/$/, '');
+    return TEST_DIR_NAME.test(path.posix.basename(dir)) && !dir.startsWith('..') && !path.posix.isAbsolute(dir) ? [dir] : [];
+  }));
+  return [...new Set(dirs)];
 }
 
 function ownershipTable(shape: FanOutShape): string {
@@ -257,40 +296,135 @@ export function gateNote(shape: FanOutShape, gate: Task): string {
  * A slice's note: its own scope is its done criterion, and what needs another
  * slice's work is the closing check's. It names the tasks before the slices
  * that this slice waits for; with no slice given, those every slice waits for.
+ * With no closing check, the two clauses that would name it are left out.
  */
 export function sliceNote(shape: FanOutShape, slice?: Task): string {
   const after = slice ? shape.waits.get(slice.id) ?? [] : shape.gates.filter((t) => shape.slices.every((s) => shape.waits.get(s.id)?.includes(t)));
   const map = shape.opening && after.includes(shape.opening) ? shape.opening : undefined;
-  const closer = shape.closers[0];
+  const closer = shape.closers[0] as Task | undefined;
   return [
-    `Plan shape: this task is one of ${shape.slices.length} slices${after.length ? ` that start once ${refs(after)} ${after.length === 1 ? 'has' : 'have'} landed` : ''}, and ${ref(closer)} runs the whole test suite once every slice has ended.${map ? ` Read the module map at the end of ${ref(map)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
+    `Plan shape: this task is one of ${shape.slices.length} slices${after.length ? ` that start once ${refs(after)} ${after.length === 1 ? 'has' : 'have'} landed` : ''}${closer ? `, and ${ref(closer)} runs the whole test suite once every slice has ended` : ''}.${map ? ` Read the module map at the end of ${ref(map)}'s report (read, with include_report) before you explore.` : ''} The tasks and the paths their briefs name:`,
     sliceTable(shape),
-    `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as a finding with the module it waits for or why it cannot be derived, and end with status done: they are ${ref(closer)}'s. Take in another slice's work once it has landed. Do not write, stub or shim another slice's code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
+    `Your scope is this brief's. You are done when the code in your scope is written and its tests pass, except tests that fail only because they call code another slice owns that has not landed yet, or that ask for behaviour the repository does not let you derive. Run those once, list each as an \`info\` finding that cites, by task reference, the slice it waits for, or says why it cannot be derived, and end with status done${closer ? `: they are ${ref(closer)}'s` : ''}. Severity \`blocker\` is for a defect in code that has landed and stops you, given with the file and the input. Take in another slice's work once it has landed. Do not write, stub or shim another slice's code to make those tests pass, and do not keep iterating on them. End with status failed only when the code in your scope is not in place.`,
   ].join('\n');
 }
 
-/** The closing check's note: it runs once the slices have ended, and some may not have landed. */
-export function closingNote(shape: FanOutShape): string {
-  return `Plan shape: this check runs after the ${shape.slices.length} slices. Read each slice's handoff with read: a slice that ended done lists the tests it left to you, and a slice that did not land (it failed and was skipped) left its module unwritten here, so write that module from its brief, its handoff and the tests. Run the whole test suite, fix what fails, and report each test that still fails with its reason.`;
+/**
+ * The closing check's note: it runs once the slices have ended, and some may
+ * not have landed. With `unnamed`, the test directories no brief names
+ * anything of ({@link unnamedTests}), it is told the code they test is its own.
+ */
+export function closingNote(shape: FanOutShape, unnamed: readonly UnnamedTests[] = []): string {
+  const base = `Plan shape: this check runs after the ${shape.slices.length} slices. Read each slice's handoff with read: a slice that ended done lists the tests it left to you, and a slice that did not land (it failed and was skipped) left its module unwritten here, so write that module from its brief, its handoff and the tests. Run the whole test suite, fix what fails, and report each test that still fails with its reason.`;
+  return unnamed.length ? `${base} ${unnamedSentence(unnamed)}` : base;
+}
+
+/** A test directory no brief names anything of, and how many test files it holds. */
+export interface UnnamedTests {
+  dir: string;
+  files: number;
+}
+
+/** The most characters the closing check's list of unnamed test directories takes. */
+export const UNNAMED_MAX = 600;
+
+/** The longest the listings that find them may take together; a larger workspace gets no list. */
+export const UNNAMED_BUDGET_MS = 5000;
+
+function unnamedSentence(unnamed: readonly UnnamedTests[]): string {
+  const head = 'No task\'s brief names these tests, nor any path in the package they test, so that code is yours too: write it once the slices\' work is in, and run them with the rest:';
+  const item = (u: UnnamedTests) => `${u.dir} (${u.files} test file${u.files === 1 ? '' : 's'})`;
+  const cut = (kept: readonly string[], n: number) =>
+    `${head} ${kept.length ? `${kept.join(', ')}, and ${n} more` : n} director${n === 1 ? 'y' : 'ies'}, which a run of the whole suite shows.`;
+  const all = `${head} ${unnamed.map(item).join(', ')}.`;
+  if (all.length <= UNNAMED_MAX) return all;
+  const kept: string[] = [];
+  for (const u of unnamed) {
+    if (cut([...kept, item(u)], unnamed.length - kept.length - 1).length > UNNAMED_MAX) break;
+    kept.push(item(u));
+  }
+  return cut(kept, unnamed.length - kept.length);
+}
+
+/** A task's part in a fan-out: the note its brief gets, and what the supervisor's wake about it says it is. */
+export type FanOutRole = 'opening' | 'gate' | 'slice' | 'closing';
+
+/**
+ * Which task plays which role in a plan that fans out, none otherwise. Each
+ * role stands on its own (ADR-0072 R5): a plan with no closing check still has
+ * its opening task, its other tasks before the slices and its slices, since
+ * what each is told is true without the others. The closing role goes to the
+ * closing check, or to the AI tasks of its loop's body when the check is a
+ * script or read-only, since a check that cannot edit leaves the fixing to them.
+ * With no closing check, fewer last tasks than a fan-out that wait for several
+ * slices get no role: such a task gathers only some slices' work, as a last
+ * check does, and a slice's note would forbid it the fixing it is there for.
+ * A task after one slice alone carries that slice's module on, and stays one.
+ */
+export function fanOutRoles(shape: FanOutShape): Map<string, FanOutRole> {
+  const roles = new Map<string, FanOutRole>();
+  if (!shape.wide) return roles;
+  for (const g of shape.gates) roles.set(g.id, g === shape.opening ? 'opening' : 'gate');
+  const ids = new Set(shape.slices.map((s) => s.id));
+  const lastChecks = shape.slices.filter((s) => new Set(s.dependencies.filter((d) => ids.has(d))).size > 1 && !shape.slices.some((o) => o.dependencies.includes(s.id)));
+  const unroled = new Set(shape.closers.length === 0 && lastChecks.length < FAN_OUT_MIN ? lastChecks : []);
+  for (const s of shape.slices) if (!unroled.has(s)) roles.set(s.id, 'slice');
+  const closer = shape.closers[0] as Task | undefined;
+  if (closer) for (const id of closer.type === 'ai' && !closer.readOnly ? [closer.id] : closer.loop?.body ?? []) roles.set(id, 'closing');
+  return roles;
+}
+
+/** How each role's note opens, as {@link withShapeNotes} writes it: a line of its own, after the brief. */
+const NOTE_HEADS: ReadonlyArray<readonly [FanOutRole, RegExp]> = [
+  ['opening', /^Plan shape: \d+ slices wait for this task to land before any of them starts\b/m],
+  ['gate', /^Plan shape: \d+ slices wait for this task to land before they start\b/m],
+  ['slice', /^Plan shape: this task is one of \d+ slices\b/m],
+  ['closing', /^Plan shape: this check runs after the \d+ slices\b/m],
+];
+
+/**
+ * The role a task's brief was told by its note, none when it holds no note.
+ * Read from the note, not the plan's shape: only an API planner's one-shot plan
+ * is noted, and a plan edited since may give a task another role than it was told.
+ */
+export function notedRole(task: Pick<Task, 'prompt'>): FanOutRole | undefined {
+  const prompt = task.prompt;
+  if (!prompt?.includes(NOTED)) return undefined;
+  return NOTE_HEADS.find(([, head]) => head.test(prompt))?.[0];
 }
 
 /**
- * The plan with each role's note appended to its brief, last, as a revision
- * note is: the opening task's, every other gate's, every slice's, and the closing check's, or the
- * AI tasks of its loop's body when the check is a script or read-only. Only a
- * plan that fans out with a closing check is noted, since the slices' note
- * leaves work to it; any other plan comes back as the same array.
+ * Each role in a few words, as a wake about its task names it: the supervisor
+ * judges a task by its brief, and a role's note gives it more room than the
+ * brief's own words do (the opening task may edit any file to make the project
+ * import), so a wake that left it out had a supervisor revert what the note allowed.
  */
-export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(tasks)): Task[] {
-  if (!shape.wide || shape.closers.length === 0) return tasks;
-  const closer = shape.closers[0];
-  // A check that cannot edit leaves the fixing to its loop's body.
-  const closing = new Set(closer.type === 'ai' && !closer.readOnly ? [closer.id] : closer.loop?.body ?? []);
-  const notes = new Map<string, string>();
-  for (const g of shape.gates) notes.set(g.id, g === shape.opening ? openingNote(shape) : gateNote(shape, g));
-  for (const s of shape.slices) notes.set(s.id, sliceNote(shape, s));
-  const close = closingNote(shape);
-  for (const id of closing) notes.set(id, close);
+export const FAN_OUT_ROLE_WORDS: Readonly<Record<FanOutRole, string>> = {
+  opening: 'the opening task, which may edit any file to make the project import and its tests collect',
+  gate: 'a task the slices wait for, which must leave the import and the test collection no worse',
+  slice: 'a slice, done once the code in its own scope is in place',
+  closing: 'the closing check, which runs the whole test suite after the slices',
+};
+
+/**
+ * The plan with each role's note appended to its brief, last, as a revision
+ * note is (see {@link fanOutRoles}). A plan that does not fan out comes back
+ * as the same array, and so does one whose every brief is noted already.
+ */
+export function withShapeNotes(tasks: Task[], shape: FanOutShape = fanOutShape(tasks), unnamed: readonly UnnamedTests[] = []): Task[] {
+  const roles = fanOutRoles(shape);
+  if (roles.size === 0) return tasks;
+  // The shape's own tasks: a gate's count of the slices waiting for it is read by identity.
+  const byId = new Map([...shape.gates, ...shape.slices].map((t) => [t.id, t]));
+  const noteOf = (id: string, role: FanOutRole): string => {
+    switch (role) {
+      case 'opening': return openingNote(shape);
+      case 'gate': return gateNote(shape, byId.get(id)!);
+      case 'slice': return sliceNote(shape, byId.get(id));
+      case 'closing': return closingNote(shape, unnamed);
+    }
+  };
+  const notes = new Map([...roles].map(([id, role]) => [id, noteOf(id, role)]));
   let changed = false;
   const out = tasks.map((t) => {
     const note = notes.get(t.id);
@@ -318,20 +452,97 @@ export interface SlicesOrdered {
 /** A file larger than this, in KB or in lines, is skipped: generated data or a vendored bundle says nothing of a slice's work. */
 const MAX_SIZED_KB = 512;
 const MAX_SIZED_LINES = 20_000;
-/** The most files a plan's slices are sized by; a plan that names more is left in the planner's order. */
-export const MAX_SIZED_FILES = 200;
+/**
+ * The most files a plan's slices are sized by; a plan that names more is left
+ * in the planner's order. A slice names its own test files, often a dozen or
+ * more, and a library's plan holds thirty slices or more.
+ */
+export const MAX_SIZED_FILES = 1000;
 
 /** A test file by its name or a directory it sits in, in the usual layouts of the languages {@link PATH} reads. */
 const TEST_FILE = /(?:^|\/)(?:test[_.-][^/]*|[^/]*[_.-](?:test|spec)s?\.\w+|conftest\.py)$|(?:^|\/)(?:[\w-]*[_-])?(?:tests?|specs?|__tests__)\//;
 
 /** A file's lines as the planner's read reports them, numbered `N|`, or undefined when it was not read whole. */
-async function lineCount(fs: Pick<IFileSystem, 'readFile'>, path: string): Promise<number | undefined> {
+async function lineCount(fs: SizingFileSystem, path: string): Promise<number | undefined> {
   // A read that throws sizes nothing: ordering must never cost the plan.
   const r = await fs.readFile(path, { maxBytes: MAX_SIZED_KB, limit: MAX_SIZED_LINES }).catch(() => undefined);
   if (!r?.success || r.truncated || r.refused) return undefined;
   if (r.output === '') return 0;
   const last = /^\s*(\d+)\|/.exec(r.output.slice(r.output.lastIndexOf('\n') + 1));
   return last ? Number(last[1]) : undefined;
+}
+
+/** What sizing reads through: the planner's file system, and its glob, where it has one, to list a test directory a brief names. */
+export type SizingFileSystem = Pick<IFileSystem, 'readFile'> & Partial<Pick<IFileSystem, 'glob'>>;
+
+/** The most directory listings a plan's sizing makes; a plan that needs more lists none and is sized by the paths its briefs name whole. */
+export const MAX_SIZED_LISTINGS = 200;
+
+/**
+ * The files under a directory whose name `pattern` matches, by the
+ * workspace's paths, as the planner's glob lists them; undefined when it has
+ * no glob, or the listing failed or was cut short at `most`, since part of a
+ * directory would size its slice by chance. The daemon's PoolFileSystem, the
+ * one the API planner's one-shot plans are shaped through, and VsCodeFileSystem
+ * for a directory below the workspace, list each file relative to that directory.
+ */
+async function filesUnder(fs: SizingFileSystem, dir: string, pattern: string, most: number): Promise<string[] | undefined> {
+  if (!fs.glob) return undefined;
+  const r = await fs.glob(pattern, { path: dir, headLimit: most }).catch(() => undefined);
+  if (!r?.success || r.truncated || r.refused) return undefined;
+  return [...new Set(r.output.split('\n').flatMap((row) => {
+    const p = row.trim().replace(/\\/g, '/');
+    if (!p || path.posix.isAbsolute(p) || /^[A-Za-z]:/.test(p) || p.startsWith('..')) return [];
+    // Joined, not concatenated: a row listed from `.` must read as the same file found from a deeper directory.
+    const full = path.posix.join(dir, p);
+    return FILE.test(full) ? [full] : [];
+  }))];
+}
+
+/**
+ * Where a brief's bare test-file names (`test_flow.py`) can be looked for:
+ * the directories of the paths it names whole and the test directories it names.
+ */
+function bareTestNames(t: Task): { names: string[]; dirs: string[] } {
+  const named = namedPaths(t, Infinity).filter((p) => !path.posix.normalize(p).startsWith('..'));
+  const whole = named.filter((p) => p.includes('/'));
+  // A bare name beside the same file's full path is that file.
+  const known = new Set(whole.map((p) => path.posix.basename(p)));
+  const names = named.filter((p) => !p.includes('/') && TEST_FILE.test(p) && !known.has(p));
+  const dirs = [...new Set([...whole.map((p) => path.posix.dirname(path.posix.normalize(p))), ...namedTestDirs(t)])];
+  return { names, dirs: names.length ? dirs : [] };
+}
+
+/**
+ * Every listing sizing reads: each named test directory's test files, and for
+ * each bare test-file name the one file of that name under the brief's
+ * directories, where there is exactly one. None when they would be more than
+ * {@link MAX_SIZED_LISTINGS}.
+ */
+async function listings(slices: readonly Task[], fs: SizingFileSystem) {
+  const testDirs = [...new Set(slices.flatMap(namedTestDirs))];
+  const bare = new Map(slices.map((s) => [s.id, bareTestNames(s)]));
+  const lookups = [...new Set([...bare.values()].flatMap(({ names, dirs }) => names.flatMap((n) => dirs.map((d) => JSON.stringify([d, n])))))];
+  const listed = new Map<string, string[]>();
+  const found = new Map<string, string[] | undefined>();
+  if (fs.glob && testDirs.length + lookups.length <= MAX_SIZED_LISTINGS) {
+    for (const dir of testDirs) listed.set(dir, ((await filesUnder(fs, dir, '**/*', MAX_SIZED_FILES)) ?? []).filter((p) => TEST_FILE.test(p)));
+    // Two rows are enough to know the name is not one file's.
+    for (const key of lookups) {
+      const [dir, name] = JSON.parse(key) as [string, string];
+      found.set(key, (await filesUnder(fs, dir, `**/${name}`, 2))?.filter((p) => path.posix.basename(p) === name));
+    }
+  }
+  /** A bare name read as the one file of that name under the brief's directories, else as it was written. */
+  const resolve = (s: Task, p: string): string => {
+    const { names, dirs } = bare.get(s.id)!;
+    if (!names.includes(p)) return p;
+    const hits = dirs.map((d) => found.get(JSON.stringify([d, p])));
+    if (hits.some((h) => h === undefined)) return p;
+    const all = [...new Set(hits.flatMap((h) => h!))];
+    return all.length === 1 ? all[0] : p;
+  };
+  return { listed, resolve };
 }
 
 interface SliceSizes {
@@ -343,17 +554,26 @@ interface SliceSizes {
 }
 
 /**
- * Each slice's size: the lines of the test files its brief names, or of
- * every file it names when no slice names a test file that exists; a file
- * several briefs name is shared equally among them. Undefined when no file
- * could be read, or when the slices name more than {@link MAX_SIZED_FILES}.
+ * Each slice's size: the lines of the test files its brief names, every one
+ * of them and those under a test directory it names, or of every file it
+ * names when no slice names a test file that exists; a file several briefs
+ * name is shared equally among them. Undefined when no file could be read,
+ * or when the slices name more than {@link MAX_SIZED_FILES}.
  */
-async function sliceSizes(slices: readonly Task[], fs: Pick<IFileSystem, 'readFile'>): Promise<SliceSizes | undefined> {
+async function sliceSizes(slices: readonly Task[], fs: SizingFileSystem): Promise<SliceSizes | undefined> {
   const lines = new Map<string, number | undefined>();
-  const sizes = async (counts: (path: string) => boolean): Promise<Omit<SliceSizes, 'measure'> | undefined> => {
+  const { listed, resolve } = await listings(slices, fs);
+  // The notes' tables list a few paths a brief names; a slice's size reads them all,
+  // since a brief names its module files first and its tests after them.
+  const own = (s: Task, tests: boolean) => [
+    // Normalized like the directory listings, so ./x and x are one file, read and shared once.
+    ...namedPaths(s, Infinity).map((p) => path.posix.normalize(resolve(s, p))),
+    ...(tests ? namedTestDirs(s).flatMap((d) => listed.get(d) ?? []) : []),
+  ];
+  const sizes = async (tests: boolean, counts: (path: string) => boolean): Promise<Omit<SliceSizes, 'measure'> | undefined> => {
     // A path out of the workspace would ask the user to approve the read (ADR-0008). The
     // workspace check reads any path whose relative form starts `..` as out, `...tests/x.py` too.
-    const named = new Map(slices.map((s) => [s.id, namedPaths(s).filter((p) => counts(p) && !path.posix.normalize(p).startsWith('..'))]));
+    const named = new Map(slices.map((s) => [s.id, [...new Set(own(s, tests))].filter((p) => counts(p) && !path.posix.normalize(p).startsWith('..'))]));
     const owners = new Map<string, number>();
     for (const paths of named.values()) for (const p of paths) owners.set(p, (owners.get(p) ?? 0) + 1);
     const unread = [...owners.keys()].filter((p) => !lines.has(p));
@@ -368,9 +588,9 @@ async function sliceSizes(slices: readonly Task[], fs: Pick<IFileSystem, 'readFi
   };
   // On recorded runs the lines of a slice's test files predicted its time best;
   // with no test file to read, the files its brief names come next.
-  const byTests = await sizes((p) => TEST_FILE.test(p));
+  const byTests = await sizes(true, (p) => TEST_FILE.test(p));
   if (byTests) return { measure: 'test', ...byTests };
-  const byNamed = await sizes(() => true);
+  const byNamed = await sizes(false, () => true);
   return byNamed && { measure: 'named', ...byNamed };
 }
 
@@ -383,7 +603,7 @@ async function sliceSizes(slices: readonly Task[], fs: Pick<IFileSystem, 'readFi
  * before the slices that sits at a level with slices beside it starts ahead
  * of them, sized or not: they wait for it, and it would wait for a slot.
  */
-export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesOrdered> {
+export async function largestSlicesFirst(tasks: Task[], fs: SizingFileSystem, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesOrdered> {
   const unchanged: SlicesOrdered = { tasks, moved: 0 };
   if (!shape.wide) return unchanged;
   const sized = await sliceSizes(shape.slices, fs);
@@ -410,141 +630,96 @@ export async function largestSlicesFirst(tasks: Task[], fs: Pick<IFileSystem, 'r
   return { tasks: out, ...(measure ? { measure } : {}), moved, ...(gatesFirst ? { gatesFirst } : {}) };
 }
 
-export interface SlicesMerged {
-  /** The plan with small sibling slices merged; the same array when nothing was. */
-  tasks: Task[];
-  /** How many slices of the levels merged became how many tasks; absent when nothing was merged. */
-  merged?: { from: number; to: number; measure: SliceMeasure };
-}
-
-/** A note splits a brief into what the planner wrote and what Ordewell appended after it. */
-function ownAndNotes(prompt: string): [string, string | undefined] {
-  const at = prompt.search(APPENDED);
-  return at < 0 ? [prompt, undefined] : [prompt.slice(0, at).trimEnd(), prompt.slice(at)];
-}
-
-/**
- * One task for slices that share their dependencies, dependents, runner,
- * model, mode and skills: the first one's id and fields, each brief whole
- * under its own title in plan order, one done criterion over them all, and
- * the notes appended to any of them last, as they were.
- */
-function mergedTask(members: readonly Task[]): Task {
-  const [first, ...rest] = members;
-  const split = members.map((m) => ownAndNotes(m.prompt ?? ''));
-  const notes = [...new Set(split.flatMap(([, n]) => (n ? [n] : [])))];
-  const stories = [...new Set(members.flatMap((m) => m.userStoriesCovered ?? []))];
-  return {
-    ...first,
-    title: members.map((m) => m.title).join('; '),
-    description: members.map((m) => m.description).filter(Boolean).join('\n\n'),
-    prompt: [
-      `This task covers ${members.length} slices the planner wrote separately, each brief below whole and in order under its own title. Do every one of them in this task.`,
-      ...members.map((m, i) => `Slice ${i + 1} of ${members.length}: ${m.title}\n${split[i][0]}`),
-      MERGED_DONE,
-      ...notes,
-    ].join('\n\n'),
-    mergedSlices: rest.map((m) => m.id),
-    userStoriesCovered: stories.length ? stories : undefined,
-  };
-}
-
-/**
- * Bins of one level's slices: the smallest bin is merged with the smallest
- * other of its kind, two at a time, while the pair is no larger than `cap`.
- * It stops at `least`; where the cap stops it short of that, at the multiple
- * of `limit` nearest above the fewest bins the cap allows, so the last wave
- * of slots is full, unless that is no fewer than the level held.
- */
-function pack(level: readonly Task[], size: (t: Task) => number, kind: (t: Task) => string | undefined, cap: number, limit: number, least: number): Task[][] {
-  const run = (stopAt: number) => {
-    const bins = level.map((t, at) => ({ members: [t], size: size(t), at, kind: kind(t) }));
-    while (bins.length > stopAt) {
-      const open = bins.filter((b) => b.kind !== undefined).sort((a, b) => a.size - b.size || a.at - b.at);
-      let pair: [typeof bins[number], typeof bins[number]] | undefined;
-      for (const u of open) {
-        const v = open.find((o) => o !== u && o.kind === u.kind);
-        if (v && u.size + v.size <= cap) { pair = [u, v]; break; }
-      }
-      if (!pair) break;
-      const [u, v] = pair;
-      bins.splice(bins.indexOf(v), 1);
-      u.members = [...u.members, ...v.members].sort((a, b) => level.indexOf(a) - level.indexOf(b));
-      u.size += v.size;
-      u.at = Math.min(u.at, v.at);
-    }
-    return bins.map((b) => b.members);
-  };
-  const fewest = run(least).length;
-  const full = Math.ceil(fewest / limit) * limit;
-  return run(fewest <= least ? least : full < level.length ? full : fewest);
-}
-
-/** What the notes read besides the slices themselves: a merge that changes it would note a plan other than the planned one. */
-const roles = (shape: FanOutShape) => JSON.stringify([shape.wide, shape.gates.map((t) => t.id), shape.opening?.id, shape.closers.map((t) => t.id)]);
-
-/**
- * The plan with each crowded level's small slices merged (ADR-0072 R7). A
- * slice costs a fixed run of calls before it does any work, and slices past
- * the run's parallel limit only queue, so on a level of more than twice
- * `parallelLimit` slices, sized as {@link largestSlicesFirst} sizes them, the
- * smallest are merged until the level has about twice the limit, never fewer
- * than {@link FAN_OUT_MIN}, so a limit of one still leaves a fan-out. No bin
- * grows past the level's largest slice, which the planner judged one task, and
- * a slice at that size stays alone, as does one with no size. Only slices of
- * one kind merge: the same dependencies and dependents, runner, model, mode,
- * skills, autonomy, type and slice type. A level stops
- * merging a bin sooner while the merge would change the plan's shape: a level
- * merged to as few slices as a shallower one would move the fan-out there, and
- * a task every slice waited for would read as a slice. Every dependency on a
- * merged slice now names the task that covers it.
- */
-export async function mergeSmallSlices(tasks: Task[], fs: Pick<IFileSystem, 'readFile'>, parallelLimit: number | undefined, shape: FanOutShape = fanOutShape(tasks)): Promise<SlicesMerged> {
-  const unchanged: SlicesMerged = { tasks };
-  if (!shape.wide || !parallelLimit || parallelLimit < 1) return unchanged;
-  // A brief already noted was shaped: its notes count the slices as they were.
-  if (tasks.some((t) => t.prompt?.includes(NOTED))) return unchanged;
-  const level = graph(tasks)!.level;
-  const levels = new Map<number, Task[]>();
-  for (const s of shape.slices) levels.set(level.get(s.id)!, [...(levels.get(level.get(s.id)!) ?? []), s]);
-  const least = Math.max(2 * parallelLimit, FAN_OUT_MIN);
-  const crowded = [...levels.entries()].sort(([a], [b]) => a - b).map(([, l]) => l).filter((l) => l.length > least);
-  if (crowded.length === 0) return unchanged;
-  const sized = await sliceSizes(shape.slices, fs);
-  if (!sized) return unchanged;
-  let out = tasks;
-  let from = 0;
-  let to = 0;
-  for (const planned of crowded) {
-    // Read from the plan as merged so far: an earlier level's merge rewrote this one's dependencies.
-    const dependents = new Map<string, string[]>();
-    for (const t of flattenTasks(out)) for (const d of new Set(t.dependencies)) dependents.set(d, [...(dependents.get(d) ?? []), t.id]);
-    const slices = out.filter((t) => planned.some((p) => p.id === t.id));
-    const size = (t: Task) => sized.size.get(t.id) ?? 0;
-    const cap = Math.max(...slices.map(size));
-    const kind = (t: Task) => (t.prompt === undefined || t.subtasks.length > 0 || t.mergedSlices || !sized.sized.has(t.id) || size(t) >= cap
-      ? undefined
-      : JSON.stringify([[...new Set(t.dependencies)].sort(), (dependents.get(t.id) ?? []).sort(), t.type, t.assignedRunner, t.assignedModel ?? null,
-        t.taskMode ?? null, [...(t.skills ?? [])].sort(), t.autonomy ?? null, t.sliceType ?? null]));
-    for (let floor = least; floor < slices.length; floor++) {
-      const bins = pack(slices, size, kind, cap, parallelLimit, floor);
-      if (bins.length === slices.length) break;
-      const next = bins.reduce((o, bin) => (bin.length > 1 ? replace(o, bin.map((t) => t.id), [mergedTask(bin)], bin[0].id) : o), out);
-      if (roles(fanOutShape(next)) !== roles(shape)) continue;
-      out = next;
-      from += slices.length;
-      to += bins.length;
-      break;
-    }
-  }
-  return from ? { tasks: out, merged: { from, to, measure: sized.measure } } : unchanged;
-}
-
 export interface FanOutShaped {
-  /** The plan as it runs; the same array when nothing was merged, moved or noted. */
+  /** The plan as it runs; the same array when nothing was moved or noted. */
   tasks: Task[];
   /** The research log's lines, one a step that changed the plan, in the order the steps ran. */
   log: string[];
+}
+
+/** The test files' names listed to find the tests no brief names, by the last segment the planner's glob matches: {@link TEST_FILE}'s, but for a file named only by its directory. */
+const TEST_GLOBS = ['**/test_*', '**/*_test.*', '**/*.test.*', '**/*_spec.*', '**/*.spec.*'];
+
+/** What `work` settles to within `ms`, undefined past it. */
+async function settledWithin<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<undefined>((resolve) => { timer = setTimeout(resolve, ms, undefined); })]);
+  } finally { clearTimeout(timer); }
+}
+
+/** A dotted module name in a brief (`pkg.algorithms.flow`), read as the path it is. */
+const DOTTED = /(?<![\w/.-])[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?![\w/-])/g;
+/** A recursive glob a brief names (`pkg/algorithms/**`): it covers every package below its prefix. */
+const RECURSIVE = /(?<![\w/.-])((?:[\w.-]+\/)+)\*\*/g;
+
+/**
+ * The package a test file tests: the directory above its test directory, or
+ * its own directory when it sits beside the code.
+ */
+function testedPackage(file: string): string {
+  const parts = path.posix.dirname(file).split('/');
+  const at = parts.findIndex((p) => TEST_DIR_NAME.test(p));
+  return at < 0 ? parts.join('/') : parts.slice(0, at).join('/') || '.';
+}
+
+/** A file's name with no extension and no test marker: `tests/test_rdata.py` and `dns/rdata.py` are both `rdata`. */
+const stem = (p: string): string => path.posix.basename(p).replace(/\.[^.]*$/, '').replace(/^test_|[_.](?:test|spec)s?$/g, '');
+
+/**
+ * The test files no brief of the plan names anything of, by their test
+ * directory, largest first: no task names the file, its bare name, its test
+ * directory, the package it tests or a path directly in it, a dotted name for one, a
+ * file of the name it tests (a flat suite's `tests/test_rdata.py` tests
+ * `rdata`), or a recursive glob above it. A brief is read before any appended note. A
+ * named directory covers its own package only: a sweep naming `pkg/` covers
+ * neither `pkg/sub/` nor its tests. Undefined when the plan's file system has
+ * no glob, or a listing failed, passed {@link MAX_SIZED_FILES} or took longer
+ * than {@link UNNAMED_BUDGET_MS} in all: part of the tests would name a
+ * directory a brief does cover. Only listings are read, never a file, and
+ * {@link filesUnder} drops a row outside the workspace.
+ */
+export async function unnamedTests(tasks: readonly Task[], fs: SizingFileSystem): Promise<UnnamedTests[] | undefined> {
+  const files = new Set<string>();
+  const deadline = Date.now() + UNNAMED_BUDGET_MS;
+  for (const pattern of TEST_GLOBS) {
+    const left = deadline - Date.now();
+    // A listing runs to its own file system's timeout, far past the budget, so it is not waited for past what is left.
+    const found = left > 0 ? await settledWithin(filesUnder(fs, '.', pattern, MAX_SIZED_FILES), left) : undefined;
+    // Each listing walks the whole workspace, so a slow one makes the next as slow.
+    if (!found || Date.now() > deadline) return undefined;
+    for (const f of found) if (TEST_FILE.test(f)) files.add(path.posix.normalize(f));
+  }
+  if (files.size > MAX_SIZED_FILES) return undefined;
+  const texts = tasks.flatMap((t) => [t, ...t.subtasks]).flatMap(briefTexts);
+  const named = new Set<string>();
+  // A bare word of prose ("flow", "tests", "mylib") is no module's name nor a directory's: only a path, a file or a dotted name says which one it is.
+  const paths = new Set<string>();
+  const stems = new Set<string>();
+  const below: string[] = [];
+  for (const text of texts) {
+    for (const w of [...(text.match(WORD) ?? []), ...(text.match(DOTTED) ?? []).map((d) => d.replace(/\./g, '/'))]) {
+      const written = w.replace(/\.+$/, '');
+      const p = path.posix.normalize(written).replace(/\/$/, '');
+      if (!p || p.startsWith('..')) continue;
+      named.add(p);
+      if (written.includes('/') || written.includes('.')) {
+        paths.add(p);
+        stems.add(stem(p));
+      }
+    }
+    for (const m of text.matchAll(RECURSIVE)) below.push(path.posix.normalize(m[1]).replace(/\/$/, ''));
+  }
+  const covered = (f: string): boolean => {
+    if (named.has(f) || named.has(path.posix.basename(f)) || paths.has(path.posix.dirname(f)) || stems.has(stem(f))) return true;
+    const pkg = testedPackage(f);
+    if (below.some((b) => pkg === b || pkg.startsWith(`${b}/`))) return true;
+    // A path in the package itself, not in a package below it; every file at the root is in no package a flat suite tests.
+    return pkg !== '.' && [...paths].some((n) => n === pkg || path.posix.dirname(n) === pkg);
+  };
+  const byDir = new Map<string, number>();
+  for (const f of files) if (!covered(f)) byDir.set(path.posix.dirname(f), (byDir.get(path.posix.dirname(f)) ?? 0) + 1);
+  return [...byDir].map(([dir, n]) => ({ dir, files: n })).sort((a, b) => b.files - a.files || (a.dir < b.dir ? -1 : 1));
 }
 
 const measured = (m: SliceMeasure) => `the lines of ${m === 'test' ? 'the test files' : 'every file'} their briefs name`;
@@ -552,25 +727,28 @@ const measured = (m: SliceMeasure) => `the lines of ${m === 'test' ? 'the test f
 /**
  * A one-shot plan shaped as it is to run, at no call (ADR-0072 R5-R7). One
  * order, each step reading the plan the step before it left, so the notes and
- * the log describe the plan that runs: small sibling slices are merged (R7), on
- * the shape read before any merge; the shape is read again, the tasks before
- * the slices with it (R5); those tasks start ahead of the slices beside them,
- * then the slices largest first (R6); then each role's note is written (R5).
- * With no file system, a caller with no repository to read, it is only noted.
+ * the log describe the plan that runs: the tasks before the slices start
+ * ahead of the slices beside them, then the slices largest first (R6); then
+ * each role's note is written (R5). No slice is merged with another, however
+ * many queue past the parallel limit (R7): replayed on recorded runs, every
+ * merge tried started the closing check later. With no file system, a caller
+ * with no repository to read, it is only noted.
  */
-export async function shapeFanOut(tasks: Task[], fs: Pick<IFileSystem, 'readFile'> | undefined, parallelLimit: number | undefined): Promise<FanOutShaped> {
+export async function shapeFanOut(tasks: Task[], fs: SizingFileSystem | undefined, _parallelLimit?: number): Promise<FanOutShaped> {
   const log: string[] = [];
-  const planned = fanOutShape(tasks);
-  const merged = fs ? await mergeSmallSlices(tasks, fs, parallelLimit, planned) : { tasks };
-  if (merged.merged) log.push(`slice merge: ${merged.merged.from} slices became ${merged.merged.to}, by ${measured(merged.merged.measure)}, for ${parallelLimit} tasks at once`);
-  const shape = merged.tasks === tasks ? planned : fanOutShape(merged.tasks);
-  const sized: SlicesOrdered = fs ? await largestSlicesFirst(merged.tasks, fs, shape) : { tasks: merged.tasks, moved: 0 };
+  const shape = fanOutShape(tasks);
+  const sized: SlicesOrdered = fs ? await largestSlicesFirst(tasks, fs, shape) : { tasks, moved: 0 };
   if (sized.measure) log.push(`slice order: largest first by ${measured(sized.measure)}; ${sized.moved} of ${shape.slices.length} moved`);
   if (sized.gatesFirst) log.push(`slice order: ${sized.gatesFirst} task${sized.gatesFirst === 1 ? '' : 's'} the slices wait for moved ahead of the slices beside ${sized.gatesFirst === 1 ? 'it' : 'them'}`);
-  const out = withShapeNotes(sized.tasks);
+  // Only a closing check is told of them: it is the one task that runs after every slice.
+  const closer = shape.closers[0] as Task | undefined;
+  const unnamed = fs && closer?.type === 'ai' && closer.prompt !== undefined && !closer.prompt.includes(NOTED) ? (await unnamedTests(sized.tasks, fs)) ?? [] : [];
+  const out = withShapeNotes(sized.tasks, fanOutShape(sized.tasks), unnamed);
   if (out !== sized.tasks) {
     const s = fanOutShape(out);
     log.push(`fan-out: ${s.width} at once, ${s.gates.length} before, ${s.closers.length} after${s.faults.length ? `, faults ${s.faults.join(', ')}` : ''}; role notes added`);
+    const files = unnamed.reduce((n, u) => n + u.files, 0);
+    if (files) log.push(`coverage: ${files} test file${files === 1 ? '' : 's'} in ${unnamed.length} director${unnamed.length === 1 ? 'y' : 'ies'} no brief names, given to the closing check`);
   }
   return { tasks: out, log };
 }

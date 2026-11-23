@@ -1,12 +1,12 @@
 # Ordewell for VS Code
 
-**Plan once, run it across Claude Code, Codex and six more coding agents, and review one branch.**
+**Plan once, run it across Claude Code, Codex and seven more coding agents, and review one branch.**
 One goal becomes an editable plan with a runner and model assigned to each AI task.
 By default, submitted build plans wait for your approval. Run settings let you
 automate execution and merging. Research tasks and consented script tasks can
 start during planning.
 
-This README describes 0.14.5. See the [published releases](https://github.com/ordewell/ordewell/releases)
+This README describes 0.14.8. See the [published releases](https://github.com/ordewell/ordewell/releases)
 for versions available to install and their release notes.
 
 Ordewell is also a [terminal UI and command line](https://www.npmjs.com/package/@ordewell/cli)

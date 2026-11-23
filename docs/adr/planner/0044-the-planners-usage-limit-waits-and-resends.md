@@ -47,6 +47,11 @@ ended a turn Ordewell started.**
 - **The supervisor's wake-ups wait with the rest** and go in the resend. The
   supervisor keeps no wait of its own; with no reset to wait for, the run
   carries on without its supervisor and says so (ADR-0029).
+- **A turn whose change took its inputs as answered** (ADR-0022 P2) has
+  nothing to send again, and sends nothing again. With its reset known the
+  wait is armed all the same, empty: what arrives meanwhile, the user's message
+  or a wake-up, waits for the reset and goes then, and the run stays
+  supervised. With none known nothing waits.
 
 ### The in-flight rule
 
@@ -96,3 +101,4 @@ ended a turn Ordewell started.**
 - 2026-10-17 — accepted and implemented: the planner's wait and resend, `/resend cancel`, the in-flight rule, and Codex's structured limit signals.
 - 2026-10-18 — loading a session holds saved inputs for a new message instead of rearming its resend timer.
 - 2026-11-14 — an API planner's turn ends on a usage-limit error from its `ModelClient` and waits for the reset that error states. Before it, an API planner's limit stated no reset to wait for.
+- 2026-11-22 — a limit after the turn's change, with its reset known, arms an empty wait, so what arrives meanwhile goes at the reset and supervision goes on (ADR-0029); before, the run went unsupervised.

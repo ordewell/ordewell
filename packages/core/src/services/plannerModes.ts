@@ -21,9 +21,8 @@ export interface PlannerModes {
   taskSkills?: SkillLookup;
   /**
    * How many tasks the run starts at once (`maxParallelSessions`), a fact
-   * about the run like the two above. A wide one-shot plan's small sibling
-   * slices are merged toward twice it, since slices past it only queue
-   * (ADR-0072 R7). Absent: nothing is merged. No prompt reads it.
+   * about the run like the two above. No step reads it now: a wide one-shot
+   * plan's slices are never merged toward it (ADR-0072 R7). No prompt reads it.
    */
   parallelLimit?: number;
 }

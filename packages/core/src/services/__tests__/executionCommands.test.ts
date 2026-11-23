@@ -369,7 +369,11 @@ describe('the command seam: stop_task and stop_run', () => {
 
     const outcome = await env.run({ command: 'stop_task', task: 't1' });
 
-    expect(outcome).toEqual({ ok: true, message: 'Stopped task #1 "Task t1": it is back to not started and held until it is retried, and its open approvals were denied.' });
+    expect(outcome).toEqual({
+      ok: true,
+      message: 'Stopped task #1 "Task t1": it is back to not started and held until it is retried, and its open approvals were denied. '
+        + 'retry_task from "session" goes on in its saved session with the work it kept; from "fresh" starts it over from its prompt.',
+    });
     expect(t1.answers).toEqual([{ id: 'p1', decision: { decision: 'deny' } }]);
     expect(env.session.outstandingApprovals()).toHaveLength(0);
     expect(taskOf(env.session, 't1')!.status).toBe('pending');
@@ -448,6 +452,22 @@ describe('the command seam: retry_task', () => {
     expect(env.timeline().at(-1)!.text).toBe('The planner continued task #1 "Task t1" in its saved session: "fix the import and finish"');
   });
 
+  it.each([
+    ['the supervisor', { kind: 'supervisor', level: 'act' }],
+    ['the user', { kind: 'user' }],
+  ] as const)('continues a task %s stopped mid-attempt in its saved session', async (_who, actor: ExecutionActor) => {
+    const env = await running();
+    expect(await env.run({ command: 'stop_task', task: 't1' }, actor)).toMatchObject({ ok: true });
+    expect(taskOf(env.session, 't1')!.status).toBe('pending');
+
+    const outcome = await env.run({ command: 'retry_task', task: 't1', from: 'session', message: 'commit what works and finish the module' }, actor);
+
+    expect(outcome).toMatchObject({ ok: true, message: 'Continuing task #1 "Task t1" in its saved session with your message.' });
+    expect(env.spawned('t1')).toHaveLength(2);
+    expect(env.spawned('t1')[1].resumeSessionId).toBe('native-1');
+    expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
+  });
+
   it('refuses a continue without a message, and one of a task that never finished', async () => {
     const env = setup();
     env.session.loadPlan(plan([task('t1', 1), task('t2', 2)]), 'goal', testWorkspace, { persist: false });
@@ -458,7 +478,7 @@ describe('the command seam: retry_task', () => {
     expect((await env.run({ command: 'retry_task', task: 't1', from: 'session' })).message)
       .toBe('Continuing task #1 "Task t1" in its saved session needs a message: what the runner should do next.');
     expect((await env.run({ command: 'retry_task', task: 't2', from: 'session', message: 'go on' })).message)
-      .toBe('Task "Task t2" cannot be continued: only a completed, failed or skipped task, or one paused on a usage limit, can be. A fresh retry (from "fresh") starts it over from its prompt.');
+      .toBe('Task "Task t2" cannot be continued: only a completed, failed, stopped or skipped task, or one paused on a usage limit, can be. A fresh retry (from "fresh") starts it over from its prompt.');
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.spawned('t2')).toHaveLength(0);
   });
@@ -1064,7 +1084,7 @@ describe('the command seam\'s extension points', () => {
     const orchestrator: RunReads = {
       isScheduling: false, startsHeld: false, hasLiveWork: true, runHeld: false, scheduledRun: false, startsPending: false, loopCarried: false, awaitsResume: false, advancesOnItsOwn: false,
       getAttempt: attempts(true), holdsSlot: () => true, repairWait: () => null, loopRunsOn: () => false, startWaits: () => [], revertScope: () => ({ taskIds: [] }), awaitsCheckpoint: () => false,
-      admitStart: () => ({ current: () => true, release: vi.fn() }), readyFailed: vi.fn(), startAtGate: vi.fn(), parkedNow: () => false,
+      admitStart: () => ({ current: () => true, release: vi.fn() }), readyFailed: vi.fn(), startAtGate: vi.fn(), parkedNow: () => false, freshStartOf: () => null,
       ...over.orchestrator,
     };
     const controls: RunControls = {

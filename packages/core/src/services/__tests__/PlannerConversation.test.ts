@@ -8,6 +8,7 @@ import type { SkillInfo } from '../SkillsService';
 import type { TurnFailure } from '../runnerExit';
 import { fakePlanChanges, passed, refused } from './planChangesTestKit';
 import { PLAN_BLOCK_MAX_TASKS } from '../planWindow';
+import { WAKE_MAX_CHARS } from '../WakePolicy';
 import { turnPrompt } from '../PlanTurns';
 import { NODE_REPORTED } from '../plannerTools';
 
@@ -2024,5 +2025,144 @@ describe('the level brief, sent once to a context (ADR-0057 R5)', () => {
     conversation.reset();
     expect(conversation.lastRequestAt).toBeNull();
     expect(ai.reset).toHaveBeenCalled();
+  });
+});
+
+// A recorded supervisor told the user it had sent two timeboxes it never sent, then explained the silence as the runner's.
+describe('what a wake-up is told its last wake-up turn executed (ADR-0057 R5)', () => {
+  const act: WakeBrief = { key: 'act', whole: 'The whole of Act.', line: 'You are at Act now.' };
+  const NONE = 'Ordewell\'s record of your last wake-up turn: it executed no call on the run. A call you only wrote out or described was not made.';
+  const exec = (command: 'message_task' | 'stop_task' | 'retry_task', ref: string, outcome: 'done' | 'refused' = 'done', actor: 'supervisor' | 'user' = 'supervisor') => ({
+    command, actor, ...(actor === 'supervisor' ? { level: 'act' as const } : {}), task: { id: `task-${ref.slice(1)}`, ref, title: `Task ${ref}` }, outcome, at: '2026-01-01T00:01:00Z',
+  });
+
+  /** A conversation whose planner, on its nth call, runs the nth step while its turn is open. */
+  function scripted(steps: Array<((conversation: PlannerConversation) => Promise<void> | void) | undefined> = []) {
+    const sent: string[] = [];
+    const ai = fakeAi({ continueConversation: vi.fn() });
+    const made = fakeHost(ai, threeTurnPlan());
+    vi.mocked(ai.continueConversation).mockImplementation(async (message: string) => {
+      sent.push(message);
+      await steps[sent.length - 1]?.(made.conversation);
+      return { kind: 'message', text: 'I sent it a timebox.', researchLog: [] } satisfies ConversationTurn;
+    });
+    return { ...made, sent };
+  }
+  const wake = (conversation: PlannerConversation, updates = ['Run update:\n- task #13 has run long']) =>
+    conversation.reply('', { wakeUps: updates, wakeUp: { readBudget: 3, refused: () => undefined, brief: act } });
+
+  it('says the last wake-up turn executed nothing, when it made no call', async () => {
+    const { conversation, sent } = scripted();
+
+    await wake(conversation);
+    await wake(conversation);
+
+    expect(sent[1]).toContain(`${NONE}\n\nRun update:\n- task #13 has run long`);
+  });
+
+  it('names the calls it executed and those refused, and leaves out what the user did meanwhile', async () => {
+    const record = (conversation: PlannerConversation, records: ReturnType<typeof exec>[]) => {
+      for (const r of records) conversation.recordExecution(r, `${r.command} ${r.task.ref}`);
+    };
+    const { conversation, sent, host } = scripted([(c) => {
+      host.mutate(() => {
+        record(c, [exec('message_task', '#1'), exec('stop_task', '#13'), exec('retry_task', '#13', 'refused'), exec('stop_task', '#4', 'done', 'user'), exec('retry_task', '#13')]);
+        return true;
+      });
+    }]);
+
+    await wake(conversation);
+    await wake(conversation);
+
+    expect(sent[1]).toContain('Ordewell\'s record of your last wake-up turn: it executed message_task #1, stop_task #13, retry_task #13; refused or declined: retry_task #13. A call not listed was not made.');
+  });
+
+  it('counts an edit that landed in it', async () => {
+    const { conversation, sent, checks } = scripted([async (c) => {
+      expect(await c.commitFromTool({ kind: 'task_ops', ops: [{ op: 'remove', taskId: '#1' }] }, c.currentTurnId)).toMatchObject({ ok: true });
+    }]);
+    checks.rules.mockReturnValue(passed({ summary: ['removed #1'] }));
+
+    await wake(conversation);
+    await wake(conversation);
+
+    expect(sent[1]).toContain('it executed edit_plan. A call not listed was not made.');
+  });
+
+  it('is told to no wake-up before the first, nor to a turn the user started', async () => {
+    const { conversation, sent } = scripted();
+
+    await wake(conversation);
+    await conversation.reply('did you send it?');
+
+    expect(sent[0]).not.toContain('Ordewell\'s record');
+    expect(sent[1]).not.toContain('Ordewell\'s record');
+  });
+
+  it('is read from the wake-up turn, not the user\'s turn after it', async () => {
+    const { conversation, sent, host } = scripted([undefined, (c) => {
+      host.mutate(() => {
+        c.recordExecution({ command: 'run_task', actor: 'planner-turn', outcome: 'done', at: '2026-01-01T00:02:00Z' }, 'Started.');
+        return true;
+      });
+    }]);
+
+    await wake(conversation);
+    await conversation.reply('start #2');
+    await wake(conversation);
+
+    expect(sent[2]).toContain(NONE);
+  });
+
+  it('names a few acts and counts the rest, in one line', async () => {
+    const { conversation, sent, host } = scripted([(c) => {
+      host.mutate(() => {
+        for (let i = 1; i <= 7; i++) c.recordExecution(exec('message_task', `#${i}`), 'Sent.');
+        return true;
+      });
+    }]);
+
+    await wake(conversation);
+    await wake(conversation);
+
+    expect(sent[1]).toContain('it executed message_task #1, message_task #2, message_task #3, message_task #4 and 3 more. A call not listed');
+  });
+
+  it('fits within the wake\'s cap beside the run updates, which raises no ceiling', async () => {
+    const { conversation, sent } = scripted();
+    const half = (n: number) => `Run update:\n- update ${n}${'.'.repeat(WAKE_MAX_CHARS / 2 - 'Run update:\n- update 1'.length)}`;
+
+    await wake(conversation);
+    await wake(conversation, [half(1), half(2)]);
+
+    expect(sent[1]).toContain(NONE);
+    expect(sent[1]).toContain('+1 earlier run update left out');
+    expect(sent[1]).toContain('- update 2');
+  });
+});
+
+describe('review of #499: wake account after a user turn that carried wake-ups', () => {
+  const act: WakeBrief = { key: 'act', whole: 'The whole of Act.', line: 'You are at Act now.' };
+  it('still reports the last wake-up turn\'s acts', async () => {
+    const sent: string[] = [];
+    const ai = fakeAi({ continueConversation: vi.fn() });
+    const made = fakeHost(ai, threeTurnPlan());
+    const steps: Array<((c: PlannerConversation) => void) | undefined> = [(c) => {
+      made.host.mutate(() => {
+        c.recordExecution({ command: 'retry_task', actor: 'supervisor', level: 'act', task: { id: 'task-13', ref: '#13', title: 'Task #13' }, outcome: 'done', at: '2026-01-01T00:01:00Z' }, 'Retrying.');
+        return true;
+      });
+    }];
+    vi.mocked(ai.continueConversation).mockImplementation(async (message: string) => {
+      sent.push(message);
+      steps[sent.length - 1]?.(made.conversation);
+      return { kind: 'message', text: 'ok', researchLog: [] } satisfies ConversationTurn;
+    });
+    const c = made.conversation;
+    await c.reply('', { wakeUps: ['Run update:\n- task #13 failed'], wakeUp: { readBudget: 3, refused: () => undefined, brief: act } });
+    // The user writes; a held run update rides with their message.
+    await c.reply('how is it going?', { wakeUps: ['Run update:\n- task #4 finished'] });
+    await c.reply('', { wakeUps: ['Run update:\n- task #13 has run long'], wakeUp: { readBudget: 3, refused: () => undefined, brief: act } });
+    expect(sent[2]).toContain('retry_task #13');
   });
 });

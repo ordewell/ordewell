@@ -4,16 +4,16 @@
 // plan-only run's plan-saved.json, any { tasks } plan) carries the notes of the
 // build that planned it, so each brief is cut at its first appended
 // "Plan shape:" note, a "Plan revision:" note kept, and the plan goes through
-// core's own shapeFanOut, the order a planner's plan is shaped in: merge, read,
-// order, note (packages/core/src/services/PlanFanOut.ts, bundled here with
+// core's own shapeFanOut, the order a planner's plan is shaped in: read, order,
+// note (packages/core/src/services/PlanFanOut.ts, bundled here with
 // esbuild, as the bench imports no core build that exports it). The slices are
 // sized from the run's repository, the arm-workdir beside the plan file when
 // there is one, read as the planner reads; without one nothing is read, so
-// nothing merges and only the tasks before the slices move.
+// only the tasks before the slices move.
 //
 //   node bench/commit0/reshape.mjs [--base-broken] [--limit N] <plan.json> ...
 //
-// --limit is the run's parallel limit, which only the slice merge reads.
+// --limit is the run's parallel limit, handed to shaping as the planner hands it; a build that merges no slice (ADR-0072 R7) reads it nowhere.
 // One JSON line a plan: the recorded shape and the new one, the log lines
 // shaping wrote, the properties of the shaped plan, and the checks below;
 // exit 1 when any check fails.
@@ -37,11 +37,12 @@ const NOTE = '\n\nPlan shape:';
 const bare = (t) => (typeof t.prompt === 'string' && t.prompt.includes(NOTE) ? { ...t, prompt: t.prompt.slice(0, t.prompt.indexOf(NOTE)) } : t);
 const ids = (ts) => ts.map((t) => t.id);
 
-/** What the recorded run told each role, read from the notes its briefs carry. */
+/** What a plan's briefs tell each role, read from the notes they carry. */
 function told(plan) {
   const has = (t, text) => (t.prompt ?? '').includes(text);
   return {
     opening: plan.tasks.filter((t) => has(t, 'wait for this task to land before any of them starts')).map((t) => t.id),
+    gates: plan.tasks.filter((t) => has(t, 'wait for this task to land before they start')).map((t) => t.id),
     slices: plan.tasks.filter((t) => has(t, 'Plan shape: this task is one of')).map((t) => t.id),
     closing: plan.tasks.filter((t) => has(t, 'Plan shape: this check runs after')).map((t) => t.id),
   };
@@ -55,9 +56,11 @@ export function reshapeChecks(recorded, renoted, { baseBroken = false } = {}) {
   const by = new Map(renoted.tasks.map((t) => [t.id, t]));
   const old = new Map(recorded.tasks.map((t) => [t.id, t]));
   const level = levels(renoted);
-  const noted = now.wide && now.closers.length > 0;
+  // Each role is noted on its own, so a plan that fans out is noted with or without a closing check (ADR-0072 R5).
+  const noted = now.wide;
   return {
     was,
+    noted: told(renoted),
     now: { width: now.width, before: ids(now.gates), opening: now.opening?.id ?? null, slices: now.slices.length, faults: now.faults },
     properties: p,
     checks: {
@@ -72,10 +75,7 @@ export function reshapeChecks(recorded, renoted, { baseBroken = false } = {}) {
       // With no task before the slices nothing restores the import: reported in now.faults as no-opening, not checked here.
       importCriterion: noted && now.gates.length ? p.P8_beforeSlicesImport : null,
       // A slice is told it starts after a task only when it waits for it.
-      slicesToldTruly: noted ? now.slices.every((s) => {
-        const names = [...(by.get(s.id).prompt ?? '').matchAll(/that start once (.*?) (?:has|have) landed/g)].flatMap((m) => [...m[1].matchAll(/\(([^()\s]+)\)/g)].map((x) => x[1]));
-        return names.every((id) => ancestorOf(renoted, id, s.id));
-      }) : null,
+      slicesToldTruly: noted ? now.slices.every((s) => toldWaits(renoted, by.get(s.id)).every((id) => ancestorOf(renoted, id, s.id))) : null,
       // Nothing but the notes, the order and the slice merge changed: every recorded task is in one task, and each
       // task waits for what its first recorded task waited for, a merged slice named by the task that covers it.
       sameGraph: sameGraph(recorded, renoted),
@@ -88,13 +88,34 @@ export function reshapeChecks(recorded, renoted, { baseBroken = false } = {}) {
   };
 }
 
-const LICENCE = 'For that alone you may edit any file';
+/**
+ * The task ids a slice's note says it starts after. The note names each as
+ * `"title" (id)` (PlanFanOut.ts's ref), and a title is free text that may hold
+ * parentheses, quotes or "has landed", so the plan's own references are taken
+ * out whole first; what remains and still has the `" (id)` shape names a task
+ * the plan does not hold, which the check then fails.
+ */
+function toldWaits(plan, slice) {
+  const line = /that start once ([^\n]*) (?:has|have) landed/.exec(slice.prompt ?? '')?.[1];
+  if (line === undefined) return [];
+  let rest = line;
+  const known = [];
+  for (const t of plan.tasks) {
+    const ref = `"${t.title}" (${t.id})`;
+    if (rest.includes(ref)) { known.push(t.id); rest = rest.split(ref).join(''); }
+  }
+  return [...known, ...[...rest.matchAll(/" \(([^()\s]+)\)/g)].map((m) => m[1])];
+}
+
+const LICENCE ='For that alone you may edit any file';
 const licensed = (plan) => plan.tasks.filter((t) => (t.prompt ?? '').includes(LICENCE)).map((t) => t.id);
 
 function sameGraph(recorded, renoted) {
   const into = new Map();
   for (const t of renoted.tasks) for (const id of [t.id, ...(t.mergedSlices ?? [])]) into.set(id, into.has(id) ? null : t.id);
-  if (recorded.tasks.some((t) => !into.get(t.id)) || into.size !== recorded.tasks.length) return false;
+  // A task the recorded run had already merged names its slices as the renoted one does.
+  const was = new Set(recorded.tasks.flatMap((t) => [t.id, ...(t.mergedSlices ?? [])]));
+  if ([...was].some((id) => !into.get(id)) || into.size !== was.size) return false;
   const old = new Map(recorded.tasks.map((t) => [t.id, t]));
   const set = (ids) => JSON.stringify([...new Set(ids)].sort());
   return renoted.tasks.every((t) => old.has(t.id) && set(t.dependencies ?? []) === set((old.get(t.id).dependencies ?? []).map((d) => into.get(d) ?? d)));
@@ -116,9 +137,35 @@ function levels(plan) {
 
 const OFFLINE = { readFile: async () => ({ success: false, output: 'not read offline', truncated: false }) };
 
-/** The run's repository read as the planner's file systems answer: numbered lines, a size cap in KB, a line limit, nothing outside it. */
+/** The directories the planner's searches skip (SEARCH_EXCLUSIONS in core's IFileSystem.ts). */
+const EXCLUDED = new Set(['node_modules', '.git', '.ordewell', 'dist', 'build', 'out', 'target', '.next', '.nuxt', '.venv', 'venv', '__pycache__',
+  '.mypy_cache', '.pytest_cache', 'vendor', 'coverage', '.turbo', '.cache', '.gradle', 'Pods', '.terraform']);
+
+/**
+ * The run's repository read as the planner's file systems answer: numbered
+ * lines, a size cap in KB, a line limit, nothing outside it; and its glob, as
+ * the daemon's PoolFileSystem answers for a directory below the workspace: the
+ * files whose name the pattern's last segment matches, relative to that
+ * directory, a failure for one that does not exist, a note when rows were cut.
+ */
 export function repositoryReader(root) {
   return {
+    glob: async (pattern, opts = {}) => {
+      const dir = path.resolve(root, opts.path ?? '.');
+      const rel = path.relative(root, dir);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) return { success: false, output: `${opts.path} is outside the workspace`, truncated: false, refused: true };
+      let found;
+      try { found = fs.readdirSync(dir, { recursive: true, withFileTypes: true }); } catch (e) { return { success: false, output: `Glob failed: ${e.message}`, truncated: false }; }
+      const last = pattern.split('/').pop();
+      const name = new RegExp(`^${last.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')}$`);
+      const rows = found.filter((e) => e.isFile() && name.test(e.name)).map((e) => path.relative(dir, path.join(e.parentPath ?? e.path, e.name)).split(path.sep).join('/'))
+        .filter((p) => !p.split('/').some((seg) => EXCLUDED.has(seg))).sort();
+      const limit = opts.headLimit ?? 200;
+      if (!rows.length) return { success: true, output: 'No files matched.', truncated: false };
+      return rows.length > limit
+        ? { success: true, output: `${rows.slice(0, limit).join('\n')}\n\n[showing ${limit} of ${rows.length} results.]`, truncated: true }
+        : { success: true, output: rows.join('\n'), truncated: false };
+    },
     readFile: async (p, opts = {}) => {
       const abs = path.resolve(root, p);
       const rel = path.relative(root, abs);
