@@ -577,10 +577,11 @@ describe('reviewLongChain on a fan-out', () => {
     expect(svc.calls[0].hint).toBe(chainReviewMessage(plan, longestChain(plan)));
     expect(svc.calls[0].hint).not.toContain('fans out');
     expect(out.map((x) => x.id)).toEqual(plan.map((x) => x.id));
-    expect(longestChain(out)).toHaveLength(3);
+    // ADR-0072 R1: the reply may put g3 first, but every slice still runs after g1 and g2, which all of them ran after.
+    expect(longestChain(out)).toHaveLength(4);
     expect(log.map(text)).toEqual([
-      'chain review: 5 -> 3, kept; 4 tasks changed: "T g1" adds "T g3"; "T g2" drops "T g1" adds "T g3"; "T g3" drops "T g2"; "T close" adds "T g1", "T g2"',
-      'fan-out: 8 at once, 1 before, 1 after; role notes added',
+      `chain review: 5 -> 4, kept; 10 tasks changed: "T g1" adds "T g3"; "T g2" drops "T g1" adds "T g3"; "T g3" drops "T g2"; ${sliceIds(6).map((s) => `"T ${s}"`).join('; ')}; "T close" adds "T g1", "T g2", 0 added waits dropped, 12 opening waits kept`,
+      'fan-out: 6 at once, 3 before, 1 after; role notes added',
     ]);
   });
 
