@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.14.8] - 2026-11-23
+
+### Changed
+
+- The plan review can no longer make tasks wait on work they did not wait on as
+  the planner wrote the plan, nor leave the parallel tasks without the opening
+  task.
+- The supervisor is told which actions its previous turn really carried out.
+
+### Fixed
+
+- A stopped task can be continued, in the same session and with the work it had
+  committed; a fresh retry says where it starts and which branch keeps the
+  stopped attempt's commits.
+- A tool call written as text beside real tool calls is recorded as not
+  executed, instead of being reported as sent.
+
 ## [0.14.7] - 2026-11-22
 
 ### Changed
@@ -1834,7 +1851,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.7...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
 [0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
 [0.14.5]: https://github.com/ordewell/ordewell/compare/v0.14.4...v0.14.5
