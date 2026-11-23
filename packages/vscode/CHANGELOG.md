@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-11-23
+
+### Changed
+
+- A refused plan edit names the pinned task that is really stuck and what it
+  waits on.
+
+### Fixed
+
+- A task that pauses itself to wait for others (`wait_for`) no longer makes
+  every later plan edit refused: the plan's order is repaired when it parks.
+- The supervisor is told "run finished" once, not again for each repeat.
+- Continuing a stopped task that has no saved session is refused as that, with
+  Retry as the way on. A reloaded session keeps its supervision and
+  continuation state.
+
 ## [0.14.9] - 2026-11-23
 
 ### Added
@@ -1902,7 +1918,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.9...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.10...HEAD
+[0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
 [0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
 [0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7

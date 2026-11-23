@@ -8,6 +8,40 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-11-23
+
+### Changed
+
+- **A refused plan edit names the task that is really stuck.** When no order
+  of the plan can satisfy a pinned task's dependencies, the refusal now names
+  that pinned task and what it waits on, instead of a task it merely sits
+  beside (ADR-0074).
+- **`ordewell status` reads the held model catalog and starts no discovery.**
+  An empty discovery counts as no proof in status only: a runner whose
+  discovery came back empty no longer has another runner's model written onto
+  a task, and a legacy allowlist made of another runner's model names does not
+  restrict it.
+- The Commit0 bench harness (development only) records each run's id and the
+  container ids of its boxes in `result.json`, so a kernel out-of-memory kill
+  can be tied to its run, and `openingCut` in `bench/commit0/fanout.mjs` counts
+  only the slices cut off the opening task.
+
+### Fixed
+
+- **A task that pauses itself to wait for others (`wait_for`) no longer makes
+  every later plan edit refused.** Parking a task adds dependency edges, and
+  they could leave the plan's listed order invalid, so every edit afterwards,
+  a plain added task included, was refused. The order is now repaired whenever
+  a park adds edges, for every order that can be solved (ADR-0074).
+- **`ordewell status` answers promptly right after a session is reloaded.**
+  It used to run a model discovery first, which could take most of a minute.
+- **The supervisor is told "run finished" once.** A run end that repeats is
+  told once, not again for each repeat.
+- **A stopped task with no saved session is refused as that.** Continuing it
+  says its stopped attempt left no saved session to resume and points to Retry,
+  instead of a message about which states can continue.
+- **A reloaded session keeps its supervision and continuation state.**
+
 ## [0.14.9] - 2026-11-23
 
 ### Added
@@ -5206,7 +5240,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.9...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.10...HEAD
+[0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
 [0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
 [0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
