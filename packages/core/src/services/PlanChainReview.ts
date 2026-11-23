@@ -96,7 +96,7 @@ export function chainReviewMessage(tasks: readonly Task[], chain: readonly Task[
   ].join('\n');
 }
 
-/** One task whose dependencies the review changed, by title, for the brief's note and the research log. */
+/** One task the review changed or the guard held back, by title, for the brief's note and the research log; a task whose dependencies come out as written carries only what was dropped or kept. */
 export interface ChainChange {
   id: string;
   removed: string[];
@@ -252,6 +252,22 @@ export function applyChainReview(
   const gates = new Set(shape.gates.map((g) => g.id));
   const dropped = shape.wide ? newAncestry(tasks, next, gates) : new Map<string, string[]>();
   for (const [id, extra] of dropped) next.set(id, next.get(id)!.filter((d) => !extra.includes(d)));
+  // A dropped wait usually replaced others (a task set after the closing check),
+  // and those stay removed: the task would then wait for neither the old nor the
+  // new, and run before work it always ran after. What the dropped wait ran after,
+  // that the task did too, comes back, the fewest.
+  const firstAncestors = planAncestors(tasks);
+  const top = new Set(tasks.map((t) => t.id));
+  const heldBack = new Map<string, string[]>();
+  for (const [id, extra] of dropped) {
+    const own = new Set(firstAncestors(byId.get(id)!));
+    const wanted = [...new Set(extra.flatMap((d) => firstAncestors(byId.get(d)!).filter((a) => own.has(a) && top.has(a))))];
+    const rewiredNow = wired();
+    const back = givenBack(rewiredNow, byId.get(id)!, wanted);
+    if (!back.length) continue;
+    heldBack.set(id, back);
+    giveBack(id, back);
+  }
   // Only a slice cut from the opening task itself: one the reply left after it may
   // skip the shared modules it never needed, which replayed plans kept parallel.
   const opening = shape.gates.filter((g) => shape.slices.every((s) => shape.waits.get(s.id)!.includes(g))).map((g) => g.id);
@@ -285,7 +301,7 @@ export function applyChainReview(
     const removed = t.dependencies.filter((d) => !deps.includes(d));
     // A dependency given back was waited for before, so the brief is told nothing of it; the log names each.
     const back = t.id === closer?.id ? restored : openingKept.get(t.id) ?? [];
-    const added = deps.filter((d) => !t.dependencies.includes(d) && !back.includes(d));
+    const added = deps.filter((d) => !t.dependencies.includes(d) && !back.includes(d) && !heldBack.get(t.id)?.includes(d));
     const left = dropped.get(t.id) ?? [];
     if (!removed.length && !added.length && !back.length && !left.length) return t;
     changes.push({

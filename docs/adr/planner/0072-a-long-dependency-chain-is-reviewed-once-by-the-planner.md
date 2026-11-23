@@ -71,7 +71,10 @@ question is put depends on how the plan arrives.
   more points. It makes no task wait on more than the plan as written: a wait
   it adds is kept only on a task the waiting one ran after in the first plan,
   directly or through others, which is what flattening a chain does, and any
-  other is dropped while the rest of the reply stands. A recorded reply set
+  other is dropped while the rest of the reply stands, and the task gets back,
+  directly, the fewest of the tasks it ran after as written that the dropped
+  wait ran after too, since the reply took them away to set it after that task
+  and would otherwise leave it waiting for neither. A recorded reply set
   every slice after every task before the fan-out, where as written few waited
   for the last of them, which then held them all. The tasks before the slices
   may still be put in another order among themselves: a replayed reply that
@@ -85,7 +88,8 @@ question is put depends on how the plan arrives.
   they did not need kept every fan-out property, and holding the slices to
   those modules lost their parallel width. A brief is told of neither, since a
   dropped wait never reaches it and a wait given back was waited for before;
-  the research log counts both. A wait given back that would close a cycle
+  the research log counts both and names as changed only a task whose waits
+  differ from the plan as written. A wait given back that would close a cycle
   leaves the plan's invariants refusing the whole reply. A plan whose first version does not fan out, a loop's check
   (held as above) and subtasks' dependencies are left as the reply has them. An entry for a
   subtask, which the plan shows but the review does not revise, is ignored and
@@ -520,4 +524,5 @@ conversation's as they stand.
 - 2026-11-22 — R5: with no closing check, a last task waiting for several slices but not every one gets no note; a wake names the role of the note on the task's brief, not of the plan's shape.
 - 2026-11-22 — R1: a reply that cuts the first plan's closing check off from a task it waited for is applied with the check waiting for those tasks directly; refusing it is not taken.
 - 2026-11-23 — R1: a reply to a plan that fans out keeps an added wait only on a task the waiting one ran after as written, or between two tasks before the slices; a slice it cuts from the opening task waits again for the tasks every slice ran after.
+- 2026-11-23 — R1: a dropped added wait gives the task back what the dropped one ran after that it ran after as written, so the task is not left waiting for less than the plan as written and the reply together, and an ops, user or loop-check task set after the check is no longer refused for it; the log names as changed only a task whose waits differ.
 - 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.

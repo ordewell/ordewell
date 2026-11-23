@@ -25,7 +25,7 @@ const LEAD = 'Ordewell\'s record of your last wake-up turn:';
 export function lastWakeAccount(history: readonly ConversationMessage[]): string | undefined {
   let at = -1;
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].kind === 'wake_up') {
+    if (history[i].kind === 'wake_up' && !ridesWithPerson(history, i)) {
       at = i;
       break;
     }
@@ -49,6 +49,17 @@ export function lastWakeAccount(history: readonly ConversationMessage[]): string
   const executed = done.length > 0 ? `it executed ${named(done)}` : 'it executed no call on the run';
   const notDone = refused.length > 0 ? `; refused or declined: ${named(refused)}` : '';
   return cut(`${LEAD} ${executed}${notDone}. A call not listed was not made.`, WAKE_ACCOUNT_CHARS);
+}
+
+/**
+ * A run update held for the next user turn is written ahead of the person's
+ * message, so the entry that follows its run of wake-ups is that message: the
+ * turn is the user's, not a wake-up turn, and its acts are not this account's.
+ */
+function ridesWithPerson(history: readonly ConversationMessage[], at: number): boolean {
+  let next = at + 1;
+  while (history[next]?.kind === 'wake_up') next++;
+  return history[next]?.role === 'user';
 }
 
 function act(record: ExecutionRecord): string {

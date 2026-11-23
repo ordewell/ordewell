@@ -2140,3 +2140,29 @@ describe('what a wake-up is told its last wake-up turn executed (ADR-0057 R5)', 
     expect(sent[1]).toContain('- update 2');
   });
 });
+
+describe('review of #499: wake account after a user turn that carried wake-ups', () => {
+  const act: WakeBrief = { key: 'act', whole: 'The whole of Act.', line: 'You are at Act now.' };
+  it('still reports the last wake-up turn\'s acts', async () => {
+    const sent: string[] = [];
+    const ai = fakeAi({ continueConversation: vi.fn() });
+    const made = fakeHost(ai, threeTurnPlan());
+    const steps: Array<((c: PlannerConversation) => void) | undefined> = [(c) => {
+      made.host.mutate(() => {
+        c.recordExecution({ command: 'retry_task', actor: 'supervisor', level: 'act', task: { id: 'task-13', ref: '#13', title: 'Task #13' }, outcome: 'done', at: '2026-01-01T00:01:00Z' }, 'Retrying.');
+        return true;
+      });
+    }];
+    vi.mocked(ai.continueConversation).mockImplementation(async (message: string) => {
+      sent.push(message);
+      steps[sent.length - 1]?.(made.conversation);
+      return { kind: 'message', text: 'ok', researchLog: [] } satisfies ConversationTurn;
+    });
+    const c = made.conversation;
+    await c.reply('', { wakeUps: ['Run update:\n- task #13 failed'], wakeUp: { readBudget: 3, refused: () => undefined, brief: act } });
+    // The user writes; a held run update rides with their message.
+    await c.reply('how is it going?', { wakeUps: ['Run update:\n- task #4 finished'] });
+    await c.reply('', { wakeUps: ['Run update:\n- task #13 has run long'], wakeUp: { readBudget: 3, refused: () => undefined, brief: act } });
+    expect(sent[2]).toContain('retry_task #13');
+  });
+});

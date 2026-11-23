@@ -929,7 +929,8 @@ export abstract class BaseAiService {
       const after = longestChain(applied.tasks);
       const kept = after.length > 0 && after.length < chain.length;
       const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
-      const changed = applied.changes.map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.restored?.length ? `, kept as the closing check after ${c.restored.length} task${c.restored.length === 1 ? '' : 's'} the reply cut it from` : ''}`);
+      // A task the rules gave its dependencies back to ends as the plan wrote it: it is counted below, not named as changed.
+      const changed = applied.changes.filter((c) => c.removed.length || c.added.length || c.restored?.length).map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.restored?.length ? `, kept as the closing check after ${c.restored.length} task${c.restored.length === 1 ? '' : 's'} the reply cut it from` : ''}`);
       // ADR-0072 R1: what the reply could not change, counted.
       const dropped = applied.changes.reduce((n, c) => n + (c.dropped?.length ?? 0), 0);
       const openingKept = applied.changes.reduce((n, c) => n + (c.openingKept?.length ?? 0), 0);
