@@ -9,8 +9,10 @@
 // --review: one JSON line a pair, the plan as first written and the same plan
 // after review: each slice's ancestors among the tasks before the slices in
 // both (with their median and maximum), `newAncestry` (waits the review added
-// that give a task an ancestor it did not have) and `openingCut` (slices that
-// lost an ancestor every slice had as written); see reviewedWaits.
+// that give a task an ancestor it did not have), `openingCut` (slices that no
+// longer reach the opening task they reached as written, which is all core's
+// review guard protects) and `gatesCut` (slices that lost any ancestor every
+// slice had as written); see reviewedWaits.
 //
 // --base-broken: the library's base commit does not import or collect its
 // tests, so exactly one opening task is required (otherwise at most one).
@@ -134,8 +136,12 @@ const spread = (counts) => ({ median: median(counts), max: counts.length ? Math.
  * - `newAncestry`: each wait the review added to a task (in both plans) on a
  *   task that was not already one of its ancestors as written, so it gives the
  *   task an ancestor it did not have: `{ task, waitsFor }`.
- * - `openingCut`: each slice that lost an ancestor every slice had as written,
- *   `{ slice, lost }`.
+ * - `openingCut`: each slice that reached the opening task as written (the one
+ *   `fanOutShape` finds, as core's review guard restores it) and no longer does,
+ *   `{ slice, lost: [opening] }`. None when the plan as written has no opening.
+ * - `gatesCut`: the wider reading, each slice that lost any ancestor every slice
+ *   had as written, `{ slice, lost }`. A review that flattens the tasks before
+ *   the slices trips it without cutting any slice off the opening.
  */
 export function reviewedWaits(written, reviewed) {
   const w = fanOutShape(written);
@@ -155,8 +161,10 @@ export function reviewedWaits(written, reviewed) {
     }
   }
   const every = w.slices.length ? [...w.ancestors.get(w.slices[0].id)].filter((a) => w.slices.every((s) => w.ancestors.get(s.id).has(a))) : [];
-  const openingCut = slices.map((s) => ({ slice: s.id, lost: every.filter((a) => !r.ancestors.get(s.id).has(a)).sort() })).filter((c) => c.lost.length);
-  return { slices, written: spread(slices.map((s) => s.written.length)), reviewed: spread(slices.map((s) => s.reviewed.length)), newAncestry, openingCut };
+  const gatesCut = slices.map((s) => ({ slice: s.id, lost: every.filter((a) => !r.ancestors.get(s.id).has(a)).sort() })).filter((c) => c.lost.length);
+  const open = w.opening?.id;
+  const openingCut = open === undefined ? [] : slices.filter((s) => w.ancestors.get(s.id).has(open) && !r.ancestors.get(s.id).has(open)).map((s) => ({ slice: s.id, lost: [open] }));
+  return { slices, written: spread(slices.map((s) => s.written.length)), reviewed: spread(slices.map((s) => s.reviewed.length)), newAncestry, openingCut, gatesCut };
 }
 
 const brief = (t) => t?.prompt ?? '';

@@ -694,8 +694,13 @@ transitive) as written and as reviewed, with the median and the maximum of their
 counts for each. `newAncestry` lists the waits the review added, `{ task,
 waitsFor }`, that give a task an ancestor it did not have as written; a wait on
 a task that was already an ancestor adds nothing and is not listed. `openingCut`
-lists the slices that lost an ancestor every slice had as written, `{ slice,
-lost }`. `fanout.test.mjs` pins each on small synthetic plans.
+lists the slices that reached the opening task as written (the one `fanOutShape`
+finds) and no longer reach it, `{ slice, lost: [opening] }`: what core's review
+guard protects (ADR-0072 R1), and empty when the plan as written has no opening
+task. A review that flattens the tasks before the slices is what review is for,
+so `gatesCut` lists separately the slices that lost any ancestor every slice had
+as written, `{ slice, lost }`; it is the older, wider reading and is not a
+failure by itself. `fanout.test.mjs` pins each on small synthetic plans.
 
 ### Judging a score again
 
