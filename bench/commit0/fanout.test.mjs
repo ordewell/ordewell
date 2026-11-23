@@ -165,6 +165,38 @@ test('reviewedWaits: a slice that no longer waits for what every slice waited fo
   assert.deepEqual(reviewedWaits(written, written).openingCut, []);
 });
 
+test('reviewedWaits: a flattening that drops a gate-to-gate wait but keeps the opening cuts no opening', () => {
+  const written = { tasks: [t('r', []), t('g', ['r']), ...slices(5, ['g']), t('close', sliceIds(5))] };
+  // The review makes the gate g wait for nothing and the slices wait for r directly.
+  const flat = { tasks: [t('r', []), t('g', []), ...slices(5, ['r', 'g']), t('close', sliceIds(5))] };
+  const m = reviewedWaits(written, flat);
+  assert.equal(fanOutShape(written).opening.id, 'r');
+  assert.deepEqual(m.openingCut, []);
+  assert.deepEqual(m.gatesCut, []);
+});
+
+test('reviewedWaits: a flattening that drops one gate\'s wait on another keeps the opening and trips only gatesCut', () => {
+  const written = { tasks: [t('r', []), t('a', ['r']), t('b', ['a']), ...slices(5, ['b']), t('close', sliceIds(5))] };
+  const reviewed = { tasks: [t('r', []), t('a', ['r']), t('b', ['r']), ...slices(5, ['b']), t('close', sliceIds(5))] };
+  const m = reviewedWaits(written, reviewed);
+  assert.deepEqual(m.openingCut, []);
+  assert.deepEqual(m.gatesCut, sliceIds(5).map((slice) => ({ slice, lost: ['a'] })));
+});
+
+test('reviewedWaits: a reply that cuts every slice off the opening counts every slice, and a plan with no opening counts none', () => {
+  const written = { tasks: [t('r', []), ...slices(5, ['r']), t('close', sliceIds(5))] };
+  const cut = { tasks: [t('r', []), ...slices(5, []), t('close', sliceIds(5))] };
+  const m = reviewedWaits(written, cut);
+  assert.deepEqual(m.openingCut, sliceIds(5).map((slice) => ({ slice, lost: ['r'] })));
+  assert.deepEqual(m.gatesCut, m.openingCut);
+  // Two unrelated gates make no opening task, so there is nothing to cut.
+  const none = { tasks: [t('g1', []), t('g2', []), ...slices(5, ['g1', 'g2']), t('close', sliceIds(5))] };
+  assert.equal(fanOutShape(none).opening, null);
+  const m2 = reviewedWaits(none, { tasks: none.tasks.map((y) => (y.id === 's1' ? { ...y, dependencies: [] } : y)) });
+  assert.deepEqual(m2.openingCut, []);
+  assert.deepEqual(m2.gatesCut, [{ slice: 's1', lost: ['g1', 'g2'] }]);
+});
+
 test('reviewedWaits: a slice outside the fan-out that waited for fewer tasks before the slices, and a review that makes it wait for the rest', () => {
   const written = { tasks: [t('r', []), t('g', ['r']), ...slices(4, ['g']), t('p', ['r']), t('close', [...sliceIds(4), 'p'])] };
   const reviewed = { tasks: written.tasks.map((x) => (x.id === 'p' ? { ...x, dependencies: ['g'] } : x)) };
@@ -199,5 +231,5 @@ test('fanout.mjs --review prints one JSON line a pair of plans', () => {
 
 test('reviewedWaits: a plan with no fan-out reports no slices', () => {
   const serial = { tasks: [t('a', []), t('b', ['a'])] };
-  assert.deepEqual(reviewedWaits(serial, serial), { slices: [], written: { median: null, max: null }, reviewed: { median: null, max: null }, newAncestry: [], openingCut: [] });
+  assert.deepEqual(reviewedWaits(serial, serial), { slices: [], written: { median: null, max: null }, reviewed: { median: null, max: null }, newAncestry: [], openingCut: [], gatesCut: [] });
 });
