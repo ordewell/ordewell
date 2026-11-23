@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-11-23
+
 ### Added
 
 - **The first run that passes asks how it went, once.** The first time on a
@@ -5204,7 +5206,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.9...HEAD
+[0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
 [0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
 [0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6

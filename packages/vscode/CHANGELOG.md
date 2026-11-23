@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-11-23
+
 ### Added
 
 - The first activation after install opens the Ordewell view, and the *Get
@@ -1900,7 +1902,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.8...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.9...HEAD
+[0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
 [0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
 [0.14.7]: https://github.com/ordewell/ordewell/compare/v0.14.6...v0.14.7
 [0.14.6]: https://github.com/ordewell/ordewell/compare/v0.14.5...v0.14.6
