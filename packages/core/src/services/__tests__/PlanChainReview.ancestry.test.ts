@@ -39,11 +39,11 @@ describe('the slices keep the opening the plan as written gave them all', () => 
     if (!r.ok) throw new Error(r.error);
     // s1 still runs after o1: it may skip o3, as a slice that needs only the shared modules before it.
     expect(deps(r.tasks, 's1')).toEqual(['o2']);
-    // s2 never ran after s3: that wait is dropped, which leaves s2 waiting for nothing, so o3 comes back.
+    // s2 never ran after s3: that wait is dropped, and what s3 and s2 both ran after, o3, comes back with it.
     expect(deps(r.tasks, 's2')).toEqual(['o3']);
     expect(r.changes).toEqual([
       { id: 's1', removed: ['o3'], added: ['o2'] },
-      { id: 's2', removed: [], added: [], dropped: ['s3'], openingKept: ['o3'] },
+      { id: 's2', removed: [], added: [], dropped: ['s3'] },
     ]);
   });
 
@@ -142,7 +142,7 @@ describe('the review\'s log line counts what the rules dropped and kept', () => 
 
   it('counts the opening waits kept, and keeps the first plan when they leave it no shorter', async () => {
     const line = await new OneReply(reply(Object.fromEntries(range('s', 8).map((s) => [s, []])))).logLine(openingChain());
-    expect(line).toMatch(/^chain review: 5 -> 5, first plan kept, not shorter; 8 tasks changed: "T s1"; .*, 0 added waits dropped, 8 opening waits kept$/);
+    expect(line).toMatch(/^chain review: 5 -> 5, first plan kept, not shorter; 0 tasks changed, 0 added waits dropped, 8 opening waits kept$/);
   });
 
   it('says nothing of either when neither rule changed the reply', async () => {

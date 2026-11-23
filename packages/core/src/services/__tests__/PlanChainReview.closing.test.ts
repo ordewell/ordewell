@@ -106,8 +106,9 @@ describe('the first plan\'s closing check keeps waiting for every task it waited
     const r = applyChainReview(tasks, '{"dependencyChanges":[{"id":"audit","dependencies":["final"]}]}', RUNNERS);
     if (!r.ok) throw new Error(r.error);
     expect(deps(r.tasks, 'final')).toEqual(['sweep', 's5', 's6']);
-    expect(deps(r.tasks, 'audit')).toEqual([]);
-    expect(r.changes).toEqual([{ id: 'audit', removed: ['core'], added: [], dropped: ['final'] }]);
+    // The wait on the check is dropped, and the audit keeps the work it ran after rather than waiting for neither.
+    expect(deps(r.tasks, 'audit')).toEqual(['core']);
+    expect(r.changes).toEqual([{ id: 'audit', removed: [], added: [], dropped: ['final'] }]);
   });
 
   it('holds only the closing check R5 reads when two tasks after every slice could be it', () => {
