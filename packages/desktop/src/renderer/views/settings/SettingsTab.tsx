@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, CircleAlert, KeyRound, LogIn, RotateCw } fro
 import { Button, EmptyState, Icon, LoadingState } from '@ordewell/ui/design';
 import type { DiscoveredModel, SettingsResponse, SupervisorLevel } from '@ordewell/core';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
-import { describeSignInWays, isProviderRunner, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
+import { AGENT_DEFAULT_MODEL, describeSignInWays, isProviderRunner, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN } from '@ordewell/core/plan-utils';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { THEME_CHOICES, type ThemePref } from '../../frame/themePref';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
@@ -104,6 +104,9 @@ function Planner({ settings, backends, models, modelsPending, busy, onPlanner, o
     ? [...backends]
     : [{ id: settings.aiProvider, label: settings.aiProvider, kind: 'vendor', usable: true }, ...backends];
   const active = backends.find((backend) => backend.id === settings.aiProvider);
+  // An agent with no model picked plans with its own default, a working
+  // choice; a vendor has none, so its blank stays a blank.
+  const unassigned = active?.kind === 'harness' ? AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT_MODEL.slice(1) : '';
   return (
     <>
       <label className="settings-field" htmlFor={plannerId}>
@@ -123,8 +126,8 @@ function Planner({ settings, backends, models, modelsPending, busy, onPlanner, o
       <label className="settings-field" htmlFor={modelFieldId}>
         <span className="settings-label">Planner model</span>
         <select className="ow-select" id={modelFieldId} aria-label="Planner model" value={settings.orchestratorModel} disabled={busy || modelsPending || choices.length === 0} onChange={(event) => onModel(event.target.value)}>
-          {choices.length === 0 && <option value={settings.orchestratorModel}>{settings.orchestratorModel || 'No model listed'}</option>}
-          {choices.map((candidate) => <option key={candidate.modelId} value={candidate.modelId}>{candidate.modelLabel || candidate.modelId}</option>)}
+          {choices.length === 0 && <option value={settings.orchestratorModel}>{settings.orchestratorModel || unassigned || 'No model listed'}</option>}
+          {choices.map((candidate) => <option key={candidate.modelId} value={candidate.modelId}>{candidate.modelLabel || candidate.modelId || unassigned}</option>)}
         </select>
       </label>
       {efforts.length > 0 && (

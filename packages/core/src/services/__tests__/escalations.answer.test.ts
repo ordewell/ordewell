@@ -64,6 +64,23 @@ describe('answerEscalation', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('switches a refused task\'s mode as the user asked, then retries it as the user (ADR-0018 B2)', async () => {
+    const switchMode = vi.fn(async () => ({ label: 'Ask before edits', count: 3 }));
+    const { commands, run } = setup([live({ options: [{ id: 'switch-mode', label: 'Use Ask before edits for all 3 and retry' }] })], { switchMode });
+
+    expect(await commands.answerEscalation('e1', 'switch-mode')).toEqual({ ok: true, message: 'Switched 3 tasks to Ask before edits. done' });
+
+    expect(switchMode).toHaveBeenCalledWith('t1');
+    expect(run.mock.calls).toEqual([[{ command: 'retry_task', task: 't1', from: 'fresh' }, { kind: 'user' }]]);
+  });
+
+  it('switches nothing and retries nothing when the refusal has gone', async () => {
+    const { commands, run } = setup([live({ options: [{ id: 'switch-mode', label: 'Use Ask before edits and retry' }] })], { switchMode: async () => null });
+
+    expect(await commands.answerEscalation('e1', 'switch-mode')).toEqual({ ok: false, outcome: 'refused', message: 'Task #1 "Task t1" has no mode left to switch: it did not fail on its mode, or that mode is gone. Nothing was changed.' });
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('says so when there was no conflict left to resolve', async () => {
     const { commands } = setup([live({ kind: 'conflict', options: [{ id: 'resolve-conflict', label: 'Add a resolver task' }] })], { resolveConflict: async () => false });
 

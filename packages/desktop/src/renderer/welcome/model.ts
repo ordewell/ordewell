@@ -1,6 +1,6 @@
 import type { AiProvider } from '@ordewell/core';
 import {
-  describeSignInWays, RUNNER_INSTALL_DOCS, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN,
+  describeSignInWays, RUNNER_INSTALL_DOCS, signInAction, signInOfVerdict, type SignInSyntax,
 } from '@ordewell/core/plan-utils';
 import type { StatusId } from '@ordewell/ui/design';
 import type { DaemonCallResult, RecentGit } from '../../shared/bridge';
@@ -159,6 +159,16 @@ export interface RunnerCardModel {
 /** Each runner's own install page, from core's manifest, opened through main's https-only `shell.openExternal`. */
 export const INSTALL_DOCS: Readonly<Record<string, string>> = RUNNER_INSTALL_DOCS;
 
+/**
+ * The welcome window has no composer, so its ways in are the card's own
+ * buttons, not the terminal UI's /login and /key-set (ADR-0052).
+ */
+const WELCOME_SIGN_IN: SignInSyntax = {
+  login: () => 'the Log in button',
+  chooseKey: (_provider, label) => `the Set API key… button and choose ${label}`,
+  keyVerb: 'use',
+};
+
 export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
   const version = line.version ? { version: line.version } : {};
   // An agent Ordewell cannot start is no better for being signed in, and a login
@@ -176,7 +186,7 @@ export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
       // The agent's own ways in, worded once by core (ADR-0052): a key-based
       // agent names the key entry, never a CLI sign-in it does not have.
       const signIn = line.signIn ?? signInOfVerdict(line.id, name, line.loginCommand ? { loginCommand: line.loginCommand } : undefined);
-      const hint = signIn ? describeSignInWays(signIn, TERMINAL_UI_SIGN_IN) : '';
+      const hint = signIn ? describeSignInWays(signIn, WELCOME_SIGN_IN) : '';
       const action = signInAction(signIn);
       return {
         id: line.id,
@@ -194,15 +204,35 @@ export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
       return { id: line.id, tone: 'idle', word: 'Not checked', ...version, ...(line.detail ? { hint: line.detail } : {}) };
     case 'off':
       return { id: line.id, tone: 'idle', word: 'Off in Settings', ...version };
+    // Not having an agent is no fault, so it is not drawn as one (F9).
     case 'missing':
       return {
         id: line.id,
-        tone: 'failed',
+        tone: 'idle',
         word: 'Not installed',
         hint: `Install ${name}, then Retry.`,
         ...(Object.hasOwn(INSTALL_DOCS, line.id) ? { docs: INSTALL_DOCS[line.id] } : {}),
       };
   }
+}
+
+/** Ready to work, then installed but held back (signed out, unchecked, off, too old). */
+function rank(line: RunnerLine): number {
+  if (line.state === 'signed-in' && !line.unavailable) return 0;
+  if ((line.state === 'signed-out' || line.state === 'unknown') && !line.unavailable) return 1;
+  return 2;
+}
+
+/**
+ * The cards in the order a first look wants them: the agents that can work
+ * first, then the installed ones with something to fix, and the ones this
+ * machine does not have set aside under *More agents*. Each group keeps core's
+ * order. With none installed, `shown` is empty and `more` holds them all.
+ */
+export function runnerGroups(lines: RunnerLine[]): { shown: RunnerLine[]; more: RunnerLine[] } {
+  const installed = lines.filter((line) => line.state !== 'missing');
+  // Array.prototype.sort is stable, so core's order holds within each rank.
+  return { shown: [...installed].sort((a, b) => rank(a) - rank(b)), more: lines.filter((line) => line.state === 'missing') };
 }
 
 /** The runner row is empty only when every runner is turned off: a missing one still has its install hint to show. */

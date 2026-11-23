@@ -72,6 +72,17 @@ describe('/planner', () => {
     expect(stepperOf(state).items.map((i) => i.id)).toEqual(['claude-code', 'codex', 'opencode', 'openrouter']);
   });
 
+  // Bug: an agent installed while the TUI ran was not offered until /refresh (F10).
+  it('asks the daemon to probe the installed agents again, and lists one found while it is open', () => {
+    const opened = run('/planner', { ...ready, runners: [{ id: 'codex', name: 'Codex', enabled: true }] });
+    expect(opened.effects).toContainEqual({ type: 'loadRunners' });
+    expect(stepperOf(opened.state).items.map((i) => i.id)).not.toContain('claude-code');
+
+    const probed = reduce(opened.state, { type: 'runnersLoaded', runners: [{ id: 'claude-code', name: 'Claude Code', enabled: true }, { id: 'codex', name: 'Codex', enabled: true }] }).state;
+
+    expect(stepperOf(probed).items.map((i) => i.id)).toContain('claude-code');
+  });
+
   it('says a coding agent needs no API key', () => {
     const { state } = run('/planner', ready);
     expect(stepperOf(state).items.find((i) => i.id === 'claude-code')?.detail).toMatch(/no API key/i);
@@ -410,3 +421,43 @@ describe('streamed planner text', () => {
     expect(messagesOf(state)).toHaveLength(0);
   });
 });
+
+/**
+ * First-run audit F2: a key saved where no coding agent plans makes its vendor
+ * the planner, with no model, so the next goal would be refused. /key-set
+ * carries on into that vendor's model step.
+ */
+describe('the planner model step a saved key opens', () => {
+  const keyed: Partial<TuiState> = {
+    runners: [],
+    orchestratorModels: [
+      { id: 'deepseek/v4', label: 'DeepSeek V4', provider: 'openrouter' },
+      { id: 'qwen/max', label: 'Qwen Max', provider: 'openrouter' },
+    ],
+    configuredProviders: ['openrouter'],
+    plannerProvider: 'openrouter',
+    orchestratorModel: '',
+  };
+
+  it('opens on the vendor\'s models, its harness already chosen, and saves the pick', () => {
+    const opened = reduce(initialState(keyed), { type: 'pickPlannerModel', provider: 'openrouter' }).state;
+    expect(at(opened).step).toBe('Model');
+    expect(stepperOf(opened).trail).toEqual([
+      { label: 'Harness', value: 'OpenRouter', active: false },
+      { label: 'Model', active: true },
+    ]);
+    expect(stepperOf(opened).items.map((i) => i.id)).toEqual(['deepseek/v4', 'qwen/max']);
+
+    const picked = choose(opened, 'qwen/max');
+    expect(picked.effects).toEqual([{ type: 'setPlannerChoice', provider: 'openrouter', modelId: 'qwen/max', effort: '', notice: 'Planner: OpenRouter · Qwen Max' }]);
+    expect(picked.state.overlay).toBeNull();
+  });
+
+  it('opens nothing over another overlay, or for a vendor with no model listed yet', () => {
+    const busy = initialState({ ...keyed, overlay: { kind: 'help', scroll: 0 } } as Partial<TuiState>);
+    expect(reduce(busy, { type: 'pickPlannerModel', provider: 'openrouter' }).state.overlay).toEqual(busy.overlay);
+    const empty = initialState({ ...keyed, orchestratorModels: [] });
+    expect(reduce(empty, { type: 'pickPlannerModel', provider: 'openrouter' }).state.overlay).toBeNull();
+  });
+});
+

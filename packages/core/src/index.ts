@@ -89,7 +89,7 @@ export { SYMBOL_LANGUAGES, definitionPattern, referencePattern, languageForId, i
 export { buildGrepArgs, buildGlobArgs, buildFallbackGrepArgs, GREP_PCRE_PROBE_ARGS, grepRegexFromProbe, filterFallbackByAnchoredInclude, applyHeadLimit, formatSearchOutput } from './services/ripgrepArgs';
 export type { GrepInvocation, CappedRows, GrepRegex } from './services/ripgrepArgs';
 export * from './interfaces/IConfig';
-export { BaseConfig, isVendorModelFor, normalizeGeminiModel } from './interfaces/BaseConfig';
+export { BaseConfig, isAgentPick, isVendorModelFor, normalizeGeminiModel } from './interfaces/BaseConfig';
 export type { ConfiguredPlanner, PlannerChoice, PlannerModelSource, ResolvedChoice, ResolvedPlanner } from './interfaces/BaseConfig';
 export { EnvConfig } from './interfaces/EnvConfig';
 export * from './interfaces/INotification';
@@ -135,6 +135,7 @@ export type { RunnerInstallationOptions, RunnerUsability } from './services/Runn
 export { forgetSignedOutRunnerAuth, readRunnerAuth, recordRunnerAuth, recordedRunnerAuth, resetRunnerAuth, rewordSignIn, runnerSignIn, signedOutFromFailure } from './services/runnerAuth';
 export type { RunnerAuth, RunnerAuthExec, RunnerAuthExecOptions, RunnerAuthExecResult, ReadRunnerAuthOptions } from './services/runnerAuth';
 export { workspaceEnvOf } from './services/workspaceEnv';
+export { withoutParentSession } from './services/harness/runnerEnv';
 export { AccountLimitMonitor } from './services/AccountLimitMonitor';
 export type { AccountLimitCollector, AccountLimitReading, AccountLimitListener, AccountLimitMonitorOptions } from './services/AccountLimitMonitor';
 export { codexAccountLimitCollector } from './services/harness/codexAccountLimits';
@@ -207,6 +208,8 @@ export { ReconnectBackoff } from './utils/reconnectBackoff';
 export { SessionNotFoundError, NoPlanError, AlreadyExecutingError } from './services/SessionErrors';
 export { LeaseHost, processLeaseHost, SessionHeldError, describeHeld, describeHolder, LEASE_HEARTBEAT_MS, LEASE_STALE_MS, type LeaseHostKind, type LeaseHostOptions, type SessionHeld, type SessionLease, type SessionLeaseRecord } from './services/sessionLease';
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOf, signInOfVerdict, TERMINAL_UI_SIGN_IN, HEADLESS_CLI_SIGN_IN, type KeySignInRoute, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
+export { daemonWaitLine, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
+export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';
 export { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, PlannerNotReadyError, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerCommandSyntax, type PlannerReadinessConfig } from './services/plannerReadiness';
 export type { ChildPlacement, SessionDeps, SessionRuntimeSettings, SessionPlanner, SaveSession, ConversationFork, ConversationRewind } from './services/createSession';
 export type { TaskEditOptions } from './services/PlanEditor';

@@ -67,4 +67,19 @@ describe('enabled runners read live', () => {
     expect(session.planState).toBe(held);
     expect(session.planState?.conversationHistory?.[0]?.content).toBe('first goal');
   });
+  // F11 of the first-run audit: the refusal named the wall and no way past it.
+  it('says how to go on when the goal names a runner that is not enabled: the ones that are, or turning one on', async () => {
+    const { session } = liveSession();
+    await expect(session.startPlanning('goal', ['opencode'])).rejects.toThrow(
+      'None of the requested runners are enabled. Send the goal again to plan for the enabled one (Claude Code), or turn on another under Runners (/runners in the terminal UI).',
+    );
+  });
+
+  it('says how to go on when no runner is enabled at all: turn one on, or install a coding agent and detect again', async () => {
+    const { session, setEnabled } = liveSession();
+    setEnabled([]);
+    await expect(session.startPlanning('goal')).rejects.toThrow(
+      'None of the requested runners are enabled. Turn one on under Runners (/runners in the terminal UI), or install a coding agent such as Claude Code or Codex and run /refresh.',
+    );
+  });
 });

@@ -271,6 +271,9 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   async function detectAgents(): Promise<void> {
     services.chatProvider.postMessage({ type: 'agentDetection', state: 'detecting' });
     try {
+      // Asked afresh, PATH included: this is the first screen's Detect again,
+      // and its first answer must not be a cached "not installed".
+      services.runnerInstallation.refresh();
       await detectInstalledPlanner(services.runnerInstallation);
       sendModelConfig(services.config, services.chatProvider, services.modelResolver);
       await planner.sendState();
@@ -301,7 +304,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     handleApprovePlan: () => handleApprovePlan(managerDeps),
     handleStartPlanning: (text) => handleStartPlanning(text, managerDeps, state.pendingRunners),
     sendRunnerAndModels: () => discovery.refresh(),
-    runApiKeyWizard: (provider) => discovery.runApiKeyWizard(provider),
+    // The palette's key entry goes on to the planner model as /key-set does.
+    runApiKeyWizard: (provider) => handleSlashCommand(provider ? `/key-set ${provider}` : '/key-set', slashDeps()),
     sendNextHeldPrompt: () => sendNextHeldPrompt(routerDeps),
   };
 
@@ -352,6 +356,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
         services.chatProvider.postMessage({ type: 'childNotice', childId, message: error instanceof Error ? error.message : String(error) });
       }),
       openFile: (path) => { void openWorkspaceFile(path); },
+      // Only a web page: the webview is not trusted to name a local file or a command URI.
+      openLink: (url) => { if (url.startsWith('https://')) void vscodeApi.env.openExternal(vscodeApi.Uri.parse(url)); },
       setPlanDockHeight: (height) => { void services.context.globalState.update(PLAN_DOCK_HEIGHT_KEY, height); },
       changeSettings,
       loginPlanner: runPlannerLogin,
@@ -390,10 +396,11 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
 
   function slashDeps(): SlashDeps {
     return {
+      // Read when used: /key-set asks who plans after the key is saved.
       config: {
-        orchestratorModel: services.config.orchestratorModel,
-        aiProvider: services.config.aiProvider,
-        plannerThinkingEffort: services.config.plannerThinkingEffort,
+        get orchestratorModel() { return services.config.orchestratorModel; },
+        get aiProvider() { return services.config.aiProvider; },
+        get plannerThinkingEffort() { return services.config.plannerThinkingEffort; },
       },
       modelResolver: {
         pickerOptions: () => services.modelResolver.pickerOptions(),

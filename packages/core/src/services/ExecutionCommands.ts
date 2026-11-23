@@ -261,6 +261,13 @@ export interface ExecutionHost {
   resolveConflict(taskId: string): Promise<boolean>;
   /** Replay the run a dirty checkout turned away, stashing first or for this run without isolation. */
   continueRun(how: 'stash' | 'shared'): Promise<void>;
+  /**
+   * Switch a task its runner started in another mode to the mode it did
+   * start in, with the tasks held behind the same refusal, and let those go
+   * (ADR-0018 B2): the user's own edit, never made for them (ADR-0001). The
+   * mode switched to and how many tasks; null when it failed on no such refusal.
+   */
+  switchMode(taskId: string): Promise<{ label: string; count: number } | null>;
   /** The end of a task's output, as a planner turn is told it; see {@link taskReport}. */
   reportTail(taskId: string): string | undefined;
 }
@@ -493,6 +500,7 @@ export class ExecutionCommands {
     if (chosen.confirm && !confirmed) return refused(`${chosen.confirm} Nothing was changed: it needs your explicit yes.`);
     const act = escalationAct(escalation, chosen.id, note, raiseTokens);
     if (act.kind === 'command') return this.run(act.command, { kind: 'user' });
+    if (act.kind === 'switch-mode') return this.switchModeAndRetry(escalation, act.task);
     try {
       if (act.kind === 'continue-run') {
         await this.host.continueRun(act.how);
@@ -504,6 +512,21 @@ export class ExecutionCommands {
     } catch (err) {
       return refused(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /** The mode switch, then the retry the option names, both as the user: the retry keeps every check the Retry button has. */
+  private async switchModeAndRetry(escalation: Escalation, taskId: string): Promise<CommandOutcome> {
+    const label = `task ${escalation.task?.ref} "${escalation.task?.title}"`;
+    let switched: { label: string; count: number } | null;
+    try {
+      switched = await this.host.switchMode(taskId);
+    } catch (err) {
+      return { ok: false, outcome: 'refused', message: err instanceof Error ? err.message : String(err) };
+    }
+    if (!switched) return { ok: false, outcome: 'refused', message: `${capitalize(label)} has no mode left to switch: it did not fail on its mode, or that mode is gone. Nothing was changed.` };
+    const retried = await this.run({ command: 'retry_task', task: taskId, from: 'fresh' }, { kind: 'user' });
+    const what = switched.count === 1 ? `${capitalize(label)}` : `${switched.count} tasks`;
+    return { ...retried, message: `Switched ${what} to ${switched.label}. ${retried.message}` };
   }
 
   /** A valid, consented call, from the user's answer where one is needed to the act and its record. */
@@ -975,7 +998,7 @@ export class ExecutionCommands {
     }
     // A new run leaves a skipped task skipped, as it leaves a completed one done.
     const toRun = all.filter(({ task }) => task.type !== 'user' && task.status !== 'completed' && task.status !== 'skipped');
-    if (toRun.length === 0) return { refusal: 'Every task has already completed: there is nothing left to run.' };
+    if (toRun.length === 0) return { refusal: nothingLeftToRun(all) };
     let approves: Located[] = [];
     // Autorun is the user's standing instruction: its run is the user's approval, as Execute plan is, and so is a start it lets a planner make in Full.
     if (actor.kind !== 'user' && actor.kind !== 'autorun' && !this.startsUnattended(actor)) {
@@ -1901,6 +1924,23 @@ function describe({ task, ref }: Located): string {
 function named(tasks: readonly Located[]): string {
   const labels = tasks.map(describe);
   return labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * Why a run_plan finds nothing to start, which can be a plan whose AI and
+ * script tasks are done and whose manual tasks are not: no run starts a
+ * manual task, so a plan that still holds one has not "completed".
+ */
+function nothingLeftToRun(all: readonly Located[]): string {
+  const manual = all.filter(({ task }) => task.type === 'user' && task.status !== 'completed' && task.status !== 'skipped');
+  const agentTasks = all.filter(({ task }) => task.type !== 'user');
+  const skipped = (tasks: readonly Located[]) => tasks.some(({ task }) => task.status === 'skipped');
+  if (manual.length === 0) return `Every task has ${skipped(all) ? 'completed or was skipped' : 'already completed'}: there is nothing left to run.`;
+  const one = manual.length === 1;
+  const waits = `${named(manual)} ${one ? 'is a manual task' : 'are manual tasks'}: a person does ${one ? 'it' : 'them'} and marks ${one ? 'it' : 'them'} complete, and no run starts ${one ? 'it' : 'them'}.`;
+  return agentTasks.length === 0
+    ? `Nothing is left for a run to start: ${waits}`
+    : `Nothing is left for a run to start: every AI and script task has ${skipped(agentTasks) ? 'completed or was skipped' : 'completed'}. ${capitalize(waits)}`;
 }
 
 function capitalize(text: string): string {

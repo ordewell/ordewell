@@ -96,7 +96,7 @@ describe('TaskCard — Run Task button', () => {
 
     expect(screen.getByText('Failed')).toBeTruthy();
     fireEvent.click(screen.getByText('Test task'));
-    expect(screen.getByText(/Failed verification/)).toBeTruthy();
+    expect(document.querySelector('.task-review-summary')?.textContent).toBe('Completion marker missing.');
     expect(screen.getByText('Completion Marker')).toBeTruthy();
   });
 
@@ -402,5 +402,24 @@ describe('TaskCard — the assignment flag', () => {
     render(card(makeTask({ subtasks: [sub] })));
     act(() => { fireEvent.click(screen.getByText('Test task')); });
     expect(screen.getByText('codex is switched off')).toBeTruthy();
+  });
+});
+
+describe('TaskCard — why a failed task failed (F7)', () => {
+  const reason = 'The runner stopped before reporting the task done, so nothing it did counts yet. Open its chat to see where it stopped, then retry it.';
+  const failed = makeTask({ status: 'failed', verdict: { outcome: 'fail', reason, checks: [], decidedAt: '2026-11-21T00:00:00Z' } });
+
+  it.each([['card', false], ['row', true]])('says it on the collapsed %s, before any output, its whole reason a hover away', (_, asRow) => {
+    render(<TaskCard task={failed} models={emptyModels} isExecuting output={'last line'} {...(asRow ? { variant: 'row' as const } : {})} />);
+
+    const line = document.querySelector<HTMLElement>('.task-failure-peek');
+    expect(line?.textContent).toBe('The runner stopped before reporting the task done, so nothing it did counts yet.');
+    expect(line?.title).toBe(reason);
+    expect(document.querySelector('.task-output-peek')).toBeNull();
+  });
+
+  it('says nothing of a failure on a task that has not failed', () => {
+    render(<TaskCard task={makeTask({ status: 'completed' })} models={emptyModels} isExecuting />);
+    expect(document.querySelector('.task-failure-peek')).toBeNull();
   });
 });

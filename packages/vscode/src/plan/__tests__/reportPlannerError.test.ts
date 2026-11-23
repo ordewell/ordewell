@@ -13,6 +13,7 @@ describe('reportPlannerError', () => {
     const { deps, showError } = harness();
     reportPlannerError(new Error('runner exited: transaction aborted'), deps);
     expect(showError).toHaveBeenCalledWith('Planner failed: runner exited: transaction aborted');
+    expect(showError.mock.calls[0]).toHaveLength(1);
   });
 
   it('stays quiet for an AbortError', () => {
@@ -36,6 +37,6 @@ describe('reportPlannerError', () => {
   it('words a planner the session refused with the chat\'s own commands, not as a failure', () => {
     const { deps, showError } = harness();
     reportPlannerError(new PlannerNotReadyError({ code: 'no_model', provider: 'openrouter', label: 'OpenRouter' }), deps);
-    expect(showError).toHaveBeenCalledWith('No planner model selected for OpenRouter. Pick one with /planner.');
+    expect(showError).toHaveBeenCalledWith('No planner model selected for OpenRouter. Run /planner and pick a model for OpenRouter.', 'planner_not_ready');
   });
 });

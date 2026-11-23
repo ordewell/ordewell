@@ -33,6 +33,20 @@ describe('the first screen while the coding agents are detected', () => {
     expect(runnersBlock()).not.toContain('No coding agent detected');
   });
 
+  // A bare "Loading…" named nothing while the host's first probe ran, which can be long (F4).
+  it('names what it waits for from the first frame, before the host has answered anything', () => {
+    const list = document.querySelector('.message-list') as HTMLElement;
+    expect(list.textContent).toContain('Detecting coding agents…');
+    expect(list.textContent).toContain('Looking for coding agents on your PATH, then asking each one whether it is signed in.');
+    expect(list.textContent).not.toContain('Loading…');
+  });
+
+  it('keeps naming the probe once the catalog is in and the agents are not', () => {
+    post({ type: 'setConfiguredProviders', providers: [] });
+    expect((document.querySelector('.message-list') as HTMLElement).textContent)
+      .toContain('Looking for coding agents on your PATH, then asking each one whether it is signed in.');
+  });
+
   it('settles on the detected agent', () => {
     post({ type: 'setConfiguredProviders', providers: [] });
     post({ type: 'setRunners', runners: [{ id: 'claude-code', displayName: 'Claude Code', enabled: true }] });

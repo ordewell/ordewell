@@ -37,6 +37,8 @@ export interface HostState {
   isExecuting: boolean;
   isResearchActive: boolean;
   error: string;
+  /** Set with an error the host marked as no planner being ready, whose Try Again detects again. */
+  errorCode?: 'planner_not_ready';
   models: DiscoveredModel[];
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
   modelAllowlist: Record<string, string[]>;
@@ -72,7 +74,7 @@ export interface HostState {
   /** Whether the host has said which providers are configured: until then an empty list means not yet told. */
   providersKnown: boolean;
   /** Who plans (ADR-0009): the backends offered, the one in use, and its runner + effort. */
-  planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string };
+  planner: { backends: PlannerBackend[]; provider: string; runner?: string; effort?: string; unusedPlanningKey?: AiProvider };
   /**
    * Whether the host has said who can plan, and which agents are installed.
    * Both come from its probe for coding agents, after the catalog may already
@@ -313,7 +315,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, isResearchActive: false, turnLost: true };
 
     case 'patchError':
-      return { ...state, error: action.error };
+      return { ...state, error: action.error, errorCode: undefined };
 
     case 'patchReady':
       return { ...state, isReady: action.ready };
@@ -429,7 +431,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'showError':
       if (state.sessionCleared) return state;
-      return { ...state, error: action.error, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
+      return { ...state, error: action.error, errorCode: action.code, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
 
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };
@@ -508,6 +510,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
           provider: action.provider ?? '',
           runner: action.runner,
           effort: action.effort || undefined,
+          unusedPlanningKey: action.unusedPlanningKey,
         },
       };
 

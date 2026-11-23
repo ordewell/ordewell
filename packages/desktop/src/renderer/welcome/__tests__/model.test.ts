@@ -9,6 +9,7 @@ import {
   needsYouCount,
   noRunnerOn,
   relativeTime,
+  runnerGroups,
   runnerCard,
   sessionLook,
   withTimeout,
@@ -132,22 +133,24 @@ describe('runnerCard', () => {
     expect(runnerCard({ id: 'openrouter', state: 'off', provider: 'openrouter' }, 'OpenRouter').word).toBe('Off in Settings');
   });
 
-  it("names a signed-out runner's own CLI sign-in from core's wording", () => {
+  // The welcome window has no composer, so a hint naming /login or /key-set points at nothing (F8).
+  it("names a signed-out runner's Log in button and its own CLI sign-in", () => {
     expect(runnerCard({ id: 'codex', state: 'signed-out', loginCommand: ['codex', 'login'], signIn: { runner: 'codex', label: 'Codex', login: ['codex', 'login'] } }, 'Codex')).toMatchObject({
-      tone: 'attention', word: 'Signed out', hint: 'Sign in with /login codex, or run codex login.', command: 'codex login', action: 'login', runnerLabel: 'Codex',
+      tone: 'attention', word: 'Signed out', hint: 'Sign in with the Log in button, or run codex login.', command: 'codex login', action: 'login', runnerLabel: 'Codex',
     });
   });
 
-  it('names the key entry when the agent has no login Ordewell can run', () => {
+  it('names the key entry button when the agent has no login Ordewell can run', () => {
     expect(runnerCard({ id: 'gemini-cli', state: 'signed-out', signIn: { runner: 'gemini-cli', label: 'Gemini CLI', key: { provider: 'google', label: 'Google Gemini' } } }, 'Gemini CLI')).toMatchObject({
-      tone: 'attention', word: 'Signed out', hint: 'Run /key-set and choose Google Gemini to hand it a key.', action: 'key', provider: 'google',
+      tone: 'attention', word: 'Signed out', hint: 'Use the Set API key… button and choose Google Gemini to hand it a key.', action: 'key', provider: 'google',
     });
     expect(runnerCard({ id: 'cursor-agent', state: 'signed-out' }, 'Cursor').hint).toBeUndefined();
   });
 
-  it('tells how to install a missing runner and links its install page', () => {
+  // Not having an agent is not a fault: a Claude-only user saw eight red cards around the one that works (F9).
+  it('tells how to install a missing runner and links its install page, in a neutral tone', () => {
     expect(runnerCard({ id: 'opencode', state: 'missing' }, 'OpenCode')).toMatchObject({
-      tone: 'failed', word: 'Not installed', hint: 'Install OpenCode, then Retry.', docs: 'https://opencode.ai/docs',
+      tone: 'idle', word: 'Not installed', hint: 'Install OpenCode, then Retry.', docs: 'https://opencode.ai/docs',
     });
     expect(runnerCard({ id: 'aider', state: 'missing' }, 'Aider').docs).toBeUndefined();
   });
@@ -164,6 +167,32 @@ describe('runnerCard', () => {
   it('says a runner is off in Settings, or was not checked', () => {
     expect(runnerCard({ id: 'codex', state: 'off' }, 'Codex')).toMatchObject({ tone: 'idle', word: 'Off in Settings' });
     expect(runnerCard({ id: 'codex', state: 'unknown', detail: 'timed out' }, 'Codex')).toMatchObject({ tone: 'idle', word: 'Not checked', hint: 'timed out' });
+  });
+
+  describe('runnerGroups (F9)', () => {
+    const ids = (lines: Array<{ id: string }>) => lines.map((line) => line.id);
+
+    it('puts the agents that can work first, the installed rest next, and the missing ones aside, each in core order', () => {
+      const groups = runnerGroups([
+        { id: 'claude-code', state: 'missing' },
+        { id: 'codex', state: 'signed-out' },
+        { id: 'opencode', state: 'off' },
+        { id: 'pi', state: 'signed-in' },
+        { id: 'copilot-cli', state: 'missing' },
+        { id: 'qwen-code', state: 'signed-in', unavailable: 'too old' },
+        { id: 'cline', state: 'unknown' },
+        { id: 'gemini-cli', state: 'signed-in' },
+      ]);
+      expect(ids(groups.shown)).toEqual(['pi', 'gemini-cli', 'codex', 'cline', 'opencode', 'qwen-code']);
+      expect(ids(groups.more)).toEqual(['claude-code', 'copilot-cli']);
+    });
+
+    it('sets nothing aside when every agent is installed, and everything when none is', () => {
+      expect(runnerGroups([{ id: 'codex', state: 'signed-in' }]).more).toEqual([]);
+      const none = runnerGroups([{ id: 'codex', state: 'missing' }, { id: 'pi', state: 'missing' }]);
+      expect(none.shown).toEqual([]);
+      expect(ids(none.more)).toEqual(['codex', 'pi']);
+    });
   });
 
   it('calls the row empty only when every runner is off', () => {

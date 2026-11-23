@@ -15,6 +15,7 @@ import {
   resolveDaemonPort,
   stopDaemonAt,
   type DaemonProbe,
+  withoutParentSession,
 } from '@ordewell/core';
 import { flag } from './utils/args';
 import { cliVersion } from './version';
@@ -62,6 +63,9 @@ export function daemonCommand(
   return { file: process.execPath, args: sea ? ['__daemon', ...daemonArgs] : [serverPath(), ...daemonArgs] };
 }
 
+/** The poll (of 500 ms each) after which a start that has not answered says so: about five seconds in. */
+const STILL_WAITING_POLL = 10;
+
 export async function startDaemon(
   port: number = DEFAULT_PORT,
   opts?: { detached?: boolean; quiet?: boolean; cwd?: string },
@@ -107,7 +111,7 @@ export async function startDaemon(
   const child = spawn(command.file, command.args, {
     detached,
     stdio: ['ignore', logFd, logFd],
-    env: { ...process.env },
+    env: withoutParentSession(process.env),
     // A daemon owned by a workspace client must ask that workspace's account
     // about a login (ADR-0016), not the directory the client was launched from.
     ...(opts?.cwd ? { cwd: opts.cwd } : {}),
@@ -123,6 +127,9 @@ export async function startDaemon(
       say(`Server started on http://127.0.0.1:${port} (PID ${readPidFile(pidFile) ?? child.pid})`);
       return;
     }
+    // A cold start can take a while, and the terminal UI draws nothing until
+    // it answers: past a few seconds, say what the wait is and where to look.
+    if (i === STILL_WAITING_POLL) say(`Still waiting for the daemon on port ${port} to answer. Its log: ${daemonLogPath()}`);
   }
 
   const failure = `Server did not respond within 15s. Check logs: ${daemonLogPath()}`;

@@ -251,7 +251,7 @@ async function main() {
     ? [
       ['Task N in execution log', () => findById('N') !== undefined],
       ['Task N did not pass', () => findById('N')?.verdict?.outcome !== 'pass'],
-      ['The failure names the missing task_complete', () => /task_complete/.test(findById('N')?.verdict?.reason ?? '')],
+      ['The failure says the runner stopped before reporting the task done', () => /stopped before reporting the task done/.test(findById('N')?.verdict?.reason ?? '')],
       ['Execution completed', () => executionComplete],
       ['Orchestrator is no longer running', () => !orchestrator.isRunning],
     ]

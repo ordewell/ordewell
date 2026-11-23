@@ -55,9 +55,11 @@ export { lastServedModel } from './models/TaskLog';
 // A script task's body as its card and the approval card show it (ADR-0035).
 export { scriptTaskText } from './models/ScriptTask';
 // The VS Code webview words a signed-out agent from the verdict it is handed (ADR-0052).
-export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from './services/signInHint';
+export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
+export { daemonWaitLine, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
 // The vendors' labels and key variables, pure data a webview may hold: the key entry names the vendor it is for.
 export { VENDORS, PROVIDER_PRIORITY, endpointUrlProblem, type ProviderRegistration } from './services/apiProviders';
+export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';
 // The built-in runner is one runner per provider, under the provider's id and name (ADR-0070): a surface
 // tells such a runner from a coding agent here, and never offers it as a harness planner or a Log in.
 export { PROVIDER_RUNNER_IDS, isProviderRunner, providerRunnerLabel, providerRunnerLoginNote, providerRunnerNamed, configuredProviderRunners } from './services/providerRunners';

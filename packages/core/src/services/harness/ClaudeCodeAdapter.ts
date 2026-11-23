@@ -7,6 +7,7 @@ import type { ApprovalDecision } from '../../interfaces/IApproval';
 import { findRunnerCommand, type RunnerCommand, type RunnerMcpServer, type RunnerModelRef } from '../../models/RunnerCommand';
 import { claudeThinkingArgs } from '../../plugins/resolveArgs';
 import { claudeConfigDir } from '../../plugins/builtin/claudeModels';
+import { CLAUDE_CODE_MANIFEST } from '../../plugins/builtin/claude-code.manifest';
 import type { RunnerEnv } from '../../plugins/types';
 import { expandRunnerHome } from '../../utils/runnerHome';
 import { privateTempDir } from '../../utils/privateTempDir';
@@ -26,6 +27,7 @@ import { claudeCompactWindowOf } from '../taskCompactWindow';
 import { SubagentTracker, subagentBrief } from './subagentTracker';
 import { TurnOutcome } from './turnOutcome';
 import { UsageRecordBuilder, type CallUsage } from './usageBuilder';
+import { modeRefusedMessage } from '../modeRefusal';
 import type { NativeShellLauncher } from '../sandbox/nativeShellLauncher';
 
 /**
@@ -1313,12 +1315,14 @@ export class ClaudeCodeAdapter extends StdioAgentAdapter implements TaskModeAgen
    * `--permission-mode auto` on a model or account without auto mode is not
    * refused: the CLI says nothing and starts in `default`, then asks about every
    * write — a request nobody is there to answer. The plan, not the CLI, decides
-   * the mode (ADR-0001), so a different one fails the turn rather than running.
+   * the mode (ADR-0001), so a different one fails the turn rather than running,
+   * naming both modes so the user can be offered the one it did start in.
    */
   private refuseOtherMode(msg: ClaudeLine, emit: (event: AgentEvent) => void): boolean {
     const asked = this.requestedMode;
     if (this.role !== 'task' || !asked || !msg.permissionMode || msg.permissionMode === asked) return false;
-    emit({ type: 'error', message: `Claude Code started in "${msg.permissionMode}" mode, not the "${asked}" mode the plan asked for. It does not report why; the model or the account may not offer it.` });
+    const refused = { asked, started: msg.permissionMode };
+    emit({ type: 'error', message: modeRefusedMessage(CLAUDE_CODE_MANIFEST.displayName, CLAUDE_CODE_MANIFEST.modes ?? [], refused), modeRefused: refused });
     this.dispose();
     return true;
   }

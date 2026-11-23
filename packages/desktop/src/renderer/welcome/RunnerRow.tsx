@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CircleCheck, CircleHelp, CircleSlash, CircleX, ExternalLink, LogIn, KeyRound, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { CircleCheck, CircleDashed, CircleHelp, CircleSlash, CircleX, ExternalLink, LogIn, KeyRound, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { Button, Icon, RunnerBadge, runnerName } from '@ordewell/ui/design';
 import type { AiProvider } from '@ordewell/core';
+import { daemonWaitLine, DETECTING_AGENTS_DETAIL } from '@ordewell/core/plan-utils';
 import type { DaemonStatus } from '../../shared/bridge';
 import { cardFor } from '../DaemonBar';
 import { KNOWN_RUNNERS, parseRunners, type RunnerLine } from '../runners';
-import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, type KeyEntryRequest } from '../session/KeyEntryDialog';
+import { askForKey, keyEntryEnv, keyEntryRefusal, unsavedKeyWarning, vendorNowPlansNote, type KeyEntryRequest } from '../session/KeyEntryDialog';
 import { DaemonCard, ErrorBanner, Skeleton } from './parts';
 import { LoginDialog } from './LoginDialog';
-import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, withTimeout, type RunnerTone } from './model';
+import { RUNNERS_TIMEOUT_MS, failureMessage, noRunnerOn, runnerCard, runnerGroups, withTimeout, type RunnerTone } from './model';
 
 type RunnersState =
   | { kind: 'loading' }
@@ -22,9 +23,6 @@ const TONE_ICON: Record<RunnerTone, LucideIcon> = {
   failed: CircleX,
 };
 
-/** A pending load past this long says what it loads (design, Shared states). */
-const SLOW_MS = 2_000;
-
 function RunnerCardView({ line, busy, onRetry, onLogin, onKey }: {
   line: RunnerLine;
   busy: boolean;
@@ -34,7 +32,7 @@ function RunnerCardView({ line, busy, onRetry, onLogin, onKey }: {
 }): JSX.Element {
   const name = line.name || runnerName(line.id);
   const card = runnerCard(line, name);
-  const icon = line.state === 'off' ? CircleSlash : TONE_ICON[card.tone];
+  const icon = line.state === 'off' ? CircleSlash : line.state === 'missing' ? CircleDashed : TONE_ICON[card.tone];
   return (
     <li className="welcome-card welcome-runner" data-runner={line.id} data-state={line.state}>
       <RunnerBadge runner={line.id} />
@@ -82,6 +80,42 @@ function SkeletonRunner({ id }: { id: string }): JSX.Element {
 }
 
 /**
+ * The installed agents, the working ones first, and the rest folded under
+ * *More agents*: a first look should land on what works (F9). With nothing
+ * installed the fold starts open, since the install pages are the next step.
+ */
+function ReadyRunners({ lines, busy, onRetry, onLogin, onKey }: {
+  lines: RunnerLine[];
+  busy: boolean;
+  onRetry(): void;
+  onLogin(line: RunnerLine): void;
+  onKey(line: RunnerLine, provider: AiProvider): void;
+}): JSX.Element {
+  const { shown, more } = runnerGroups(lines);
+  const cards = (group: RunnerLine[]): JSX.Element[] => group.map((line) => (
+    <RunnerCardView
+      key={line.id}
+      line={line}
+      busy={busy}
+      onRetry={onRetry}
+      onLogin={() => onLogin(line)}
+      onKey={(provider) => onKey(line, provider)}
+    />
+  ));
+  return (
+    <>
+      {shown.length > 0 && <ul className="welcome-grid welcome-runners">{cards(shown)}</ul>}
+      {more.length > 0 && (
+        <details className="welcome-more" open={shown.length === 0}>
+          <summary className="welcome-more-summary">More agents ({more.length})</summary>
+          <ul className="welcome-grid welcome-runners-more">{cards(more)}</ul>
+        </details>
+      )}
+    </>
+  );
+}
+
+/**
  * One card per runner from GET /api/runners. The call is bounded, so a daemon
  * that never answers ends in the error banner rather than a row that checks
  * for ever.
@@ -90,10 +124,10 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   const connected = status?.state === 'connected';
   const [state, setState] = useState<RunnersState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
-  const [slow, setSlow] = useState(false);
   const [login, setLogin] = useState<{ runner: string; label: string } | null>(null);
   const [keyError, setKeyError] = useState<string | undefined>(undefined);
   const [keyWarning, setKeyWarning] = useState<string | undefined>(undefined);
+  const [keyNext, setKeyNext] = useState<string | undefined>(undefined);
   const generation = useRef(0);
 
   const load = useCallback(async () => {
@@ -114,6 +148,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
     const answer = await askForKey(request);
     if (!answer) return;
     setKeyWarning(undefined);
+    setKeyNext(undefined);
     try {
       // The write a session's key entry sends, so Custom's endpoint is saved here too.
       const saved = await window.ordewell.daemon.call('settings.update', undefined, { env: keyEntryEnv(answer) });
@@ -128,6 +163,8 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
       }
       setKeyError(undefined);
       setKeyWarning(unsavedKeyWarning(saved.data, answer.provider));
+      // No project is open here to show Settings in, so the welcome names the step.
+      setKeyNext(vendorNowPlansNote(saved.data, answer.provider));
       await load();
     } catch (error) {
       setKeyError(error instanceof Error ? error.message : String(error));
@@ -141,21 +178,21 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   }, [connected, load]);
 
   const pending = state.kind === 'loading';
-  useEffect(() => {
-    if (!pending) return;
-    setSlow(false);
-    const timer = setTimeout(() => setSlow(true), SLOW_MS);
-    return () => clearTimeout(timer);
-  }, [pending]);
-
   const card = status && status.state !== 'connecting' ? cardFor(status) : undefined;
+  // Named from the first frame: a first probe on a cold machine is long, and
+  // skeletons alone read as a window that is stuck.
+  const waiting = !pending || card
+    ? undefined
+    : connected
+      ? DETECTING_AGENTS_DETAIL
+      : status?.state === 'connecting' ? daemonWaitLine(status.port, status.starting === true) : undefined;
   const retry = (): void => { void load(); };
 
   return (
     <section className="welcome-section" aria-labelledby="welcome-runners-heading" aria-busy={pending && !card}>
       <div className="welcome-heading-row">
         <h2 id="welcome-runners-heading" className="welcome-heading">Runners</h2>
-        {pending && slow && !card && <span className="welcome-loading">Loading runners …</span>}
+        {waiting && <span className="welcome-loading" role="status">{waiting}</span>}
       </div>
       {card ? (
         <DaemonCard card={card} />
@@ -167,20 +204,20 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
         <>
           {keyError && <p className="welcome-banner welcome-banner-error" role="alert">{keyError}</p>}
           {keyWarning && <p className="welcome-banner welcome-banner-warning" role="status">{keyWarning}</p>}
-          <ul className="welcome-grid welcome-runners">
-            {state.kind === 'ready'
-              ? state.lines.map((line) => (
-                <RunnerCardView
-                  key={line.id}
-                  line={line}
-                  busy={busy}
-                  onRetry={retry}
-                  onLogin={() => setLogin({ runner: line.id, label: line.name || runnerName(line.id) })}
-                  onKey={(provider) => { void setKey({ provider, runnerLabel: runnerName(line.id) }); }}
-                />
-              ))
-              : KNOWN_RUNNERS.map((id) => <SkeletonRunner key={id} id={id} />)}
-          </ul>
+          {keyNext && <p className="welcome-banner welcome-banner-info" role="status">{keyNext}</p>}
+          {state.kind === 'ready' ? (
+            <ReadyRunners
+              lines={state.lines}
+              busy={busy}
+              onRetry={retry}
+              onLogin={(line) => setLogin({ runner: line.id, label: line.name || runnerName(line.id) })}
+              onKey={(line, provider) => { void setKey({ provider, runnerLabel: runnerName(line.id) }); }}
+            />
+          ) : (
+            <ul className="welcome-grid welcome-runners">
+              {KNOWN_RUNNERS.map((id) => <SkeletonRunner key={id} id={id} />)}
+            </ul>
+          )}
           {/* A provider with no key has no card (ADR-0070), so its way in sits under them all, open to every provider. */}
           {state.kind === 'ready' && (
             <p className="welcome-key-line">

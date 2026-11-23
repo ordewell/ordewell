@@ -45,11 +45,16 @@ drive the same local daemon, so a run started in one shows up in the others.
 
 ## Getting started
 
-1. Install the extension.
+1. Install the extension. The first time it starts, it opens the Ordewell
+   panel, and the **Get started with Ordewell** walkthrough (**Welcome: Open
+   Walkthrough...** in the Command Palette) goes through the next three steps.
 2. Open the Ordewell panel from the activity bar.
 3. Type a goal. With a supported coding agent installed and signed in, the first
    usable one can plan for you. Choose another planner in the planner bar.
-4. Review the plan, then approve it to run.
+4. Review the plan, then click **Execute Plan** to approve it and start the run.
+
+Ordewell runs coding agents in your folder, so it is off in Restricted Mode:
+trust the folder to use it.
 
 Autorun and automatic merging are off by default, and the supervisor starts at
 Watch. In `/settings`, you can enable autorun, automatic merging or an Act
@@ -58,11 +63,13 @@ merge it or discard the run.
 
 To plan with an API key instead, set `ordewell.openAiApiKey` (OpenRouter) or
 `ordewell.apiKey` (Gemini), or export `OPENROUTER_API_KEY` or `GEMINI_API_KEY`. A key
-you have set takes priority over the installed agent.
+you have set plans only when no coding agent is installed, when the agent's
+last sign-in check found you signed out, or when you choose its provider: with `/planner`, the `ordewell.aiProvider`
+setting, or a planner model saved for it.
 
 Each runner you want to use must be installed and on your PATH. See the
-[full runner list](https://github.com/ordewell/ordewell#readme). If a runner appears greyed out right after installing it, reload the
-window so the extension picks up the new PATH.
+[full runner list](https://github.com/ordewell/ordewell#readme). If a runner appears greyed out right after installing it, run
+`/refresh`, which reads your login shell's PATH again.
 
 Skills are `SKILL.md` folders: type `/name` in the panel to load one into the
 conversation, and attach task skills as chips on a task's card. See

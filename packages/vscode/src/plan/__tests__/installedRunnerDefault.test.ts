@@ -164,6 +164,11 @@ describe('VS Code with no saved runner choice enables the installed agents', () 
     await handleStartPlanning('Build a ledger', h.deps);
     expect(boundary.spawned).toEqual([]);
     expect(h.errors()).toContainEqual({ type: 'showError', error: expect.stringContaining('No runner is enabled') });
+    // The pills are under Settings in the chat, not in a header (F8).
+    expect(h.errors()).toContainEqual({
+      type: 'showError',
+      error: 'No runner is enabled. Turn one on under Runners in the chat\'s Settings panel, or install a coding agent such as Claude Code or Codex and run /refresh.',
+    });
     expect(configUpdates).toEqual([]);
   });
 

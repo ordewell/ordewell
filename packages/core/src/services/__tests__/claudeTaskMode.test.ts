@@ -367,9 +367,11 @@ describe('ClaudeCodeAdapter in task mode', () => {
     const events: AgentEvent[] = [];
     await adapter.send('go', (e) => events.push(e));
 
+    // The modes in the CLI's own words, for Ordewell to offer the one it did start in (ADR-0018 B2).
     expect(events).toEqual([{
       type: 'error',
-      message: 'Claude Code started in "default" mode, not the "auto" mode the plan asked for. It does not report why; the model or the account may not offer it.',
+      message: 'Claude Code started in Ask before edits mode, not Auto, the mode this task asked for. Claude Code offers Auto only on some models and accounts, and it does not say why it was not offered here.',
+      modeRefused: { asked: 'auto', started: 'default' },
     }]);
     adapter.dispose();
   });

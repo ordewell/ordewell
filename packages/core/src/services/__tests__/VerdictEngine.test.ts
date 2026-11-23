@@ -258,14 +258,15 @@ describe('VerdictEngine', () => {
       expect(verdicts[0].verdict.reason).toBe('The runner reported the task failed: FAILED: check.py needs a marker no task can create.');
     });
 
-    it('fails an exit with no call, naming the missing call and the exit code', () => {
+    it('fails an exit with no call, in the user\'s words, with the missing call and the exit code in its checks', () => {
       const { verdicts, session } = watched();
 
       session.emitOutput('All done!\n');
       session.emitExit(0);
 
       expect(verdicts.map((v) => v.verdict.outcome)).toEqual(['fail']);
-      expect(verdicts[0].verdict.reason).toContain('task_complete');
+      expect(verdicts[0].verdict.reason).toBe('The runner stopped before reporting the task done, so nothing it did counts yet. Open its chat to see where it stopped, then retry it.');
+      expect(verdicts[0].verdict.checks[0].detail).toContain('task_complete');
       expect(verdicts[0].verdict.checks.map((c) => [c.name, c.passed])).toEqual([
         ['task_complete', false],
         ['exit_code', true],

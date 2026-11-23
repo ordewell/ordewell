@@ -73,6 +73,18 @@ export function unsavedKeyWarning(saved: unknown, provider: AiProvider): string 
   return `The ${meta.label} ${what} is in use, but it could not be saved to ~/.ordewell/.env: once Ordewell restarts, set it again.`;
 }
 
+/**
+ * The next step when the saved key's vendor now plans with no model picked:
+ * an API planner has no default model, so the first goal would be refused for
+ * want of one. Undefined while a coding agent still plans, or the vendor has
+ * its model (ADR-0076).
+ */
+export function vendorNowPlansNote(saved: unknown, provider: AiProvider): string | undefined {
+  const answer = saved !== null && typeof saved === 'object' ? saved as Record<string, unknown> : {};
+  if (answer.aiProvider !== provider || answer.orchestratorModel) return undefined;
+  return `${VENDORS[provider].label} now plans. Pick its planner model in Settings, under Planner, before your first goal.`;
+}
+
 /** One provider's name, as core words it. */
 function providerName(provider: AiProvider): string {
   return VENDORS[provider].label;

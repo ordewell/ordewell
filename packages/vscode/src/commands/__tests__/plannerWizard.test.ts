@@ -69,9 +69,9 @@ describe('/planner wizard: harness path', () => {
 
     qp = await step();
     expect(qp.step).toBe(2);
-    expect(labels(qp)).toEqual(['Claude Opus 5.5', 'Claude Haiku 5.5']);
+    expect(labels(qp)).toEqual(['Agent default', 'Claude Opus 5.5', 'Claude Haiku 5.5']);
     expect(deps.applyChoice).not.toHaveBeenCalled();
-    qp.__accept(0);
+    qp.__accept(1);
 
     qp = await step();
     expect(qp.step).toBe(3);
@@ -92,13 +92,42 @@ describe('/planner wizard: harness path', () => {
     (await step()).__accept(0);
     const qp = await step();
     expect(qp.totalSteps).toBe(3);
-    qp.__accept(1);
+    qp.__accept(2);
     await done;
 
     expect(__quickPicks).toHaveLength(1);
     expect(deps.applyChoice).toHaveBeenCalledOnce();
     expect(deps.applyChoice).toHaveBeenCalledWith('claude-code', 'claude-haiku-5-5', '');
     expect(info).toHaveBeenCalledWith('Planner: Claude Code · Claude Haiku 5.5');
+  });
+
+  // An agent with no model picked plans with its own default: a working choice, not a gap (F6).
+  it('offers the agent\'s own default first, highlighted while no model is picked, and applies it with no model', async () => {
+    const deps = makeDeps();
+    const done = runPlannerWizard(deps);
+
+    (await step()).__accept(0);
+    const qp = await step();
+    expect((qp.activeItems[0] as { label: string }).label).toBe('Agent default');
+    qp.__accept();
+    await done;
+
+    expect(deps.applyChoice).toHaveBeenCalledWith('claude-code', '', '');
+    expect(info).toHaveBeenCalledWith('Planner: Claude Code · Agent default');
+  });
+
+  it('still lets an agent whose catalog is empty plan with its own default, instead of giving up', async () => {
+    const deps = makeDeps({ modelsForRunner: async () => [] });
+    const done = runPlannerWizard(deps);
+
+    (await step()).__accept(0);
+    const qp = await step();
+    expect(labels(qp)).toEqual(['Agent default']);
+    qp.__accept();
+    await done;
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(deps.applyChoice).toHaveBeenCalledWith('claude-code', '', '');
   });
 });
 
@@ -128,7 +157,7 @@ describe('/planner wizard: leaving', () => {
     (await step()).__accept(0);
     let qp = await step();
     expect(qp.buttons).toHaveLength(1);
-    qp.__accept(1);
+    qp.__accept(2);
     qp = await step();
     expect(qp.step).toBe(3);
     qp.__back();
@@ -151,7 +180,8 @@ describe('/planner wizard: leaving', () => {
     const deps = makeDeps();
     const done = runPlannerWizard(deps);
 
-    for (let n = 1; n < stepNumber; n++) (await step()).__accept(0);
+    // Claude Code, then Claude Opus 5.5 (past the agent's own default), whose efforts make a third step.
+    for (let n = 1; n < stepNumber; n++) (await step()).__accept(n === 2 ? 1 : 0);
     expect((await step()).step).toBe(stepNumber);
     (await step()).__escape();
     await done;
@@ -179,14 +209,14 @@ describe('/planner wizard: leaving', () => {
     expect(deps.applyChoice).not.toHaveBeenCalled();
   });
 
-  it('warns and changes nothing when the catalog is empty', async () => {
-    const deps = makeDeps({ modelsForRunner: async () => [] });
+  it('warns and changes nothing when a vendor\'s catalog is empty, since a vendor has no default model', async () => {
+    const deps = makeDeps({ vendorModels: async () => [] });
     const done = runPlannerWizard(deps);
 
-    (await step()).__accept(0);
+    (await step()).__accept(1);
     await done;
 
-    expect(warn).toHaveBeenCalledWith('No Claude Code models discovered yet. Run /refresh.');
+    expect(warn).toHaveBeenCalledWith('No OpenRouter models discovered yet. Run /refresh.');
     expect(deps.applyChoice).not.toHaveBeenCalled();
   });
 });

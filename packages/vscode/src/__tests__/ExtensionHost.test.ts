@@ -167,6 +167,7 @@ function fakeConfig() {
     get openaiCompatibleBaseUrl() { return values.openaiCompatibleBaseUrl as string; },
     get configuredProviders() { return values.configuredProviders as ApiProvider[]; },
     get maxParallelSessions() { return values.maxParallelSessions as number; },
+    unusedPlanningKey: () => null,
     update: vi.fn(async (key: string, value: unknown) => { values[key] = value; }),
     onDidChange: vi.fn((listener: () => void) => { listeners.push(listener); return { dispose: vi.fn() }; }),
   };
@@ -575,7 +576,7 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
     expect(h.chat.provider.setRunSettings).toHaveBeenCalledWith(expect.any(Boolean), RUN_SETTINGS_DEFAULTS, 2);
     await vi.waitFor(() => expect(h.chat.provider.setPlannerBackends).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: 'claude-code', usable: true })]),
-      'openrouter', undefined, '',
+      'openrouter', undefined, '', undefined,
     ));
   });
 
@@ -634,6 +635,25 @@ describe('the extension host wires one state, one deps bag and one lifecycle', (
       await vi.waitFor(() => expect(local.chat.provider.postMessage)
         .toHaveBeenCalledWith({ type: 'agentDetection', state: 'detecting' }));
       await vi.waitFor(() => expect(local.chat.provider.setPlannerBackends).toHaveBeenCalled());
+    } finally {
+      fs.rmSync(local.workspace, { recursive: true, force: true });
+    }
+  });
+
+  // First-run audit F2: Detect again's first answer must not be a "not installed" cached before the install.
+  it('asks the install probe afresh, PATH included, before judging who plans on Detect again', async () => {
+    const installation = fakeRunnerInstallation(['claude-code']);
+    const local = harness({ runnerInstallation: installation });
+    try {
+      await local.host.start();
+      installation.refresh.mockClear();
+      installation.plannerUsability.mockClear();
+
+      local.chat.messages.fire({ type: 'refreshModels' });
+
+      await vi.waitFor(() => expect(installation.plannerUsability).toHaveBeenCalled());
+      expect(installation.refresh).toHaveBeenCalled();
+      expect(installation.refresh.mock.invocationCallOrder[0]).toBeLessThan(installation.plannerUsability.mock.invocationCallOrder[0]);
     } finally {
       fs.rmSync(local.workspace, { recursive: true, force: true });
     }

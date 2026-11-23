@@ -4,6 +4,7 @@ import type { RunnerId } from '@ordewell/core';
 import type { ChildCheckpointAnswer, SettingsChange, WebviewToHost } from '@ordewell/ui/protocol';
 import { ChatSessionHost } from '@ordewell/ui/host';
 import { isKnownSlashCommand } from '../commands/SlashParser';
+import { markWalkthroughStep } from '../firstRun';
 import { handleIsolationAction, mergePort } from './isolation';
 import {
   handleAddTask, handleCheckpointAnswer, handleEscalationAnswer, handleResolveApproval, handleNewSession, handleRemoveTask,
@@ -28,6 +29,8 @@ export interface ExtensionHandlers {
   openChildTaskLog(childId: string, taskId: string): Promise<void>;
   /** Open a workspace-relative file Ordewell kept, such as a handoff's saved patch (ADR-0050). */
   openFile(path: string): void;
+  /** Open an https page, such as an agent's install guide, in the user's browser. */
+  openLink(url: string): void;
   setPlanDockHeight(height: number): void;
   changeSettings(change: SettingsChange): Promise<void>;
   /** Sign a coding agent in with its own login in a terminal; no runner means the active planner. */
@@ -172,6 +175,9 @@ async function dispatchWebviewMessage(msg: WebviewToHost, deps: WebviewRouterDep
     case 'openFile':
       deps.extension.openFile(msg.path);
       return;
+    case 'openLink':
+      deps.extension.openLink(msg.url);
+      return;
     case 'setPlanDockHeight':
       deps.extension.setPlanDockHeight(msg.height);
       return;
@@ -219,6 +225,7 @@ function chatSession(deps: WebviewRouterDeps): ChatSessionHost {
     // The Session's busy state is the turn itself, with no frame to trail it.
     answering: () => deps.isGeneratingPlan(),
     converse: async (text, turn) => {
+      markWalkthroughStep('goalGiven');
       if (turn.now) return handleSendMessageNow(text, deps);
       await handleSendMessage(text, deps, turn.runners ? [...turn.runners] : deps.getPendingRunners(), deps.setPendingRunners);
       // Only a Send now's outcome is read, for its give-back; this turn reported its own failure.

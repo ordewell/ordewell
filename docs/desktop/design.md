@@ -375,13 +375,14 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 │   └────────────────────────────┘  └────────────────────────────┘  └────────────────────────┘│
 │                                                                                            │
 │   RUNNERS                                                                                  │
-│   ┌────────────────────────────┐  ┌────────────────────────────┐  ┌────────────────────────┐│
-│   │ [Claude Code]              │  │ [Codex]                    │  │ [OpenCode]             ││
-│   │ ✓ Signed in                │  │ ⚠ Signed out               │  │ ✕ Not installed        ││
-│   │ version 1.4.2              │  │ version 0.9.1              │  │ Install OpenCode,      ││
-│   │                            │  │ Sign in from its CLI       │  │ then Retry.            ││
-│   │                            │  │ [Retry]                    │  │ [Retry]  [Docs ↗]      ││
-│   └────────────────────────────┘  └────────────────────────────┘  └────────────────────────┘│
+│   ┌────────────────────────────┐  ┌────────────────────────────┐                           │
+│   │ [Claude Code]              │  │ [Codex]                    │                           │
+│   │ ✓ Signed in                │  │ ⚠ Signed out               │                           │
+│   │ version 1.4.2              │  │ version 0.9.1              │                           │
+│   │                            │  │ Sign in with the Log in …  │                           │
+│   │                            │  │ [Log in] [Retry]           │                           │
+│   └────────────────────────────┘  └────────────────────────────┘                           │
+│   ▸ More agents (7)                                                                        │
 │                                                                                            │
 │              ⌘O Open folder     ⌘K Command palette     ⌘, Settings     ⌘Q Quit             │
 ├────────────────────────────────────────────────────────────────────────────────────────────┤
@@ -452,21 +453,36 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     open in a window focuses that window (H6).
   - *Forget* removes a card from the list without asking: the folder itself is
     untouched, and the toast offers Undo.
-  - For a runner that is signed out, the hint names its own CLI sign-in, as the
-    chat does (ADR-0052), and the card offers that agent's own way in: *Log
-    in*, which runs the manifest's login in a terminal, or *Set API key…*,
-    which opens the key entry for a key-based agent.
-  - For a runner that is missing, the hint reads "Install <runner>, then
-    Retry". *Docs ↗* opens the runner's own install page through
-    `shell.openExternal`.
+  - The cards come in the order a first look wants: the agents that can work
+    first, then the installed ones with something to fix (signed out, not
+    checked), then those off in Settings or too old to start, each group in
+    core's order. The agents this machine does not have fold under *More
+    agents (N)*, closed, so one working agent is not lost among missing
+    ones. With none installed the fold starts open, since the install pages
+    are the next step.
+  - For a runner that is signed out, the hint names the card's own buttons and
+    the agent's CLI sign-in, worded by core (ADR-0052) for a window with no
+    composer: "Sign in with the Log in button, or run codex login." The card
+    offers that agent's own way in: *Log in*, which runs the manifest's login
+    in a terminal, or *Set API key…*, which opens the key entry for a
+    key-based agent.
+  - For a runner that is missing, the card is neutral, not an error, and the
+    hint reads "Install <runner>, then Retry". *Docs ↗* opens the runner's own
+    install page through `shell.openExternal`.
   - *Retry* asks `GET /api/runners` again and redraws that card.
 - **Loading.**
   - *Cards* draw at once from the app's own store (name, path, the last known
     branch and goal). The live lines (status, Needs you) are skeleton bars
     until the handshake.
   - *Runner cards* are skeletons with the runner's name until
-    `GET /api/runners` answers.
-  - *Footer* reads "daemon: connecting …".
+    `GET /api/runners` answers. From the first frame the heading's line
+    names the wait, in core's words (`startupWait.ts`): "Starting Ordewell's
+    daemon on port 3742…" while this app starts its own, "Connecting to
+    Ordewell's daemon on port 3742…" while it looks for one, then "Looking
+    for coding agents on your PATH, then asking each one whether it is
+    signed in." A first probe on a cold machine is long, and skeletons alone
+    read as a stuck window.
+  - *Footer* reads "daemon: starting …" or "daemon: connecting …".
 - **Empty.**
   - *Recent projects:* no workspaces opened yet. In place of the grid is one
     wide card with a dashed `--ow-border-control` border, reading "Open a

@@ -10,7 +10,7 @@ const execAsync = promisify(exec);
  * server) often inherit a minimal PATH that misses user-level install dirs
  * (~/.local/bin, ~/.opencode/bin, nvm shims, …), so spawning `claude` or
  * `opencode` fails even though the user has them installed. This module
- * resolves an augmented PATH once per process: the interactive login shell's
+ * resolves an augmented PATH, cached until agent detection asks again: the login shell's
  * PATH (which runs the user's profile, covering nvm/volta/asdf and friends)
  * merged over the current PATH, plus the well-known per-user bin dirs as a
  * final safety net when the login shell itself can't be queried. On Windows
@@ -142,8 +142,10 @@ async function loginShellPath(execImpl: ExecFn): Promise<string | null> {
 let cachedPath: Promise<string> | null = null;
 
 /**
- * The augmented PATH for spawning user-installed CLI tools. Resolved once per
- * process and cached (the login shell query costs ~50-200ms).
+ * The augmented PATH for spawning user-installed CLI tools. Cached (the login
+ * shell query costs ~50-200ms) until agent detection runs again, which drops
+ * it through {@link clearAugmentedPathCache} so a directory an installer added
+ * to the profile while the host runs is searched.
  */
 export function augmentedPath(execImpl: ExecFn = defaultExec): Promise<string> {
   if (!cachedPath) {
@@ -164,7 +166,7 @@ export function augmentedPath(execImpl: ExecFn = defaultExec): Promise<string> {
   return cachedPath;
 }
 
-/** Test seam: drop the per-process cache so the next call re-resolves. */
+/** Drop the cache so the next call asks the login shell again: agent detection's refresh, and tests. */
 export function clearAugmentedPathCache(): void {
   cachedPath = null;
 }

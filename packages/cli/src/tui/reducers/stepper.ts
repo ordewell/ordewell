@@ -104,6 +104,20 @@ export function openStepper(state: TuiState, definition: StepperDefinition): Ste
 }
 
 /**
+ * Opens `definition` on step `stepId` with the steps before it already chosen
+ * as `preset` says, for a flow that arrives knowing them. Null when that step
+ * does not apply or offers nothing to pick.
+ */
+export function openStepperAt(state: TuiState, definition: StepperDefinition, preset: StepChoices, stepId: string): Step | null {
+  const at = definition.steps.findIndex((def) => def.id === stepId);
+  const { choices, lists } = settle(state, definition, preset);
+  const list = lists[at];
+  const presetKept = Object.entries(preset).every(([id, value]) => choices[id] === value);
+  if (at === -1 || !list || !presetKept || !list.some((item) => !item.disabled)) return null;
+  return step({ ...state, overlay: { kind: 'stepper', stepper: show(state, definition, choices, at) } });
+}
+
+/**
  * Rebuilds the open stepper's rows from fresh state — runners, models or the
  * daemon's answer to a save, landed after it opened — keeping its step,
  * choices, filter and highlighted row. A step the new data would skip stays

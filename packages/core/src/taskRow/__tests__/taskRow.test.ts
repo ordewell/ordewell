@@ -791,3 +791,20 @@ describe('the rows of one plan', () => {
     expect(found.status).toBe('todo');
   });
 });
+
+describe('why a failed task failed, on its row', () => {
+  const failed = (reason: string) => subject({ status: 'failed', verdict: { outcome: 'fail', reason } });
+
+  it('is the first sentence of its verdict\'s reason, which the row shows before anything is opened', () => {
+    expect(taskRowView(failed('The runner stopped before reporting the task done, so nothing it did counts yet. Open its chat to see where it stopped, then retry it.')).failure)
+      .toBe('The runner stopped before reporting the task done, so nothing it did counts yet.');
+    expect(taskRowView(failed('The script failed: `npm test` exited with code 1.\n\nThe end of its error output:\nFAIL')).failure)
+      .toBe('The script failed: `npm test` exited with code 1.');
+  });
+
+  it('is absent on any task that has not failed, and on one failed with no reason', () => {
+    expect(taskRowView(subject({ status: 'completed', verdict: { outcome: 'pass', reason: 'Verified.' } })).failure).toBeNull();
+    expect(taskRowView(subject({ status: 'failed' })).failure).toBeNull();
+    expect(taskRowView(failed('  ')).failure).toBeNull();
+  });
+});

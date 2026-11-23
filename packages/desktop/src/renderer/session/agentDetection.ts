@@ -87,6 +87,8 @@ export class AgentDetection {
         provider,
         ...(runner ? { runner } : {}),
         ...(settings?.plannerThinkingEffort ? { effort: settings.plannerThinkingEffort } : {}),
+        // The daemon's word on a found key it does not plan with (ADR-0076), for the first screen.
+        ...(settings?.unusedPlanningKey ? { unusedPlanningKey: settings.unusedPlanningKey } : {}),
       });
     };
 

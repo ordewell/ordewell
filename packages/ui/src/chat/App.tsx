@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState, { type SignedOutPlannerRow } from './components/EmptyState';
 import PlannerLoginAction from './components/PlannerLogin';
-import GetStarted from './components/GetStarted';
+import GetStarted, { type RedetectState } from './components/GetStarted';
 import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
 import ElapsedTime from './components/ElapsedTime';
@@ -25,7 +25,7 @@ import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, compactionText, describeRunnerSignIn, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock, withRunStatus } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -67,7 +67,10 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
   );
 }
 
-const DETECTING = 'Detecting coding agents…';
+/** The chat's planner picker, as the desktop app and VS Code both spell it. */
+const CHAT_PICK_PLANNER = '/planner';
+/** A coding-agent planner's model while none is picked: its own default, a working state. */
+const AGENT_DEFAULT_LABEL = AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT_MODEL.slice(1);
 
 /**
  * "Detecting coding agents…" while the host's detection is under way, or why
@@ -75,7 +78,7 @@ const DETECTING = 'Detecting coding agents…';
  * is not coming.
  */
 function Detecting({ error, onRetry }: { error: string | null; onRetry: () => void }) {
-  if (error === null) return <>{DETECTING}</>;
+  if (error === null) return <>{DETECTING_AGENTS}</>;
   return (
     <span className="detection-failed">
       Couldn't detect coding agents: {error}{' '}
@@ -461,6 +464,29 @@ export default function App({ layout = 'chat', selection, goal }: {
   // task's model dropdown opens, same as the TUI does.
   const handleModelsRefreshNeeded = useCallback(() => {
     bridge.post({ type: 'refreshModels' });
+  }, []);
+
+  // The host's refresh re-probes every agent and re-reads the login shell's
+  // PATH, so an agent installed while the window was open is found; the next
+  // planner list or failure is its answer.
+  const [redetect, setRedetect] = useState<RedetectState>('idle');
+  const handleDetectAgain = useCallback(() => {
+    setRedetect('running');
+    bridge.post({ type: 'refreshModels' });
+  }, []);
+  useEffect(() => {
+    setRedetect((current) => (current === 'running' ? 'none-found' : current));
+  }, [planner, detectionError]);
+
+  // No planner was ready: its way out (an install, a sign-in) happens outside
+  // the window, so trying again means looking again, not only closing the box.
+  const handleTryAgain = useCallback(() => {
+    if (host.errorCode === 'planner_not_ready') bridge.post({ type: 'refreshModels' });
+    setError('');
+  }, [host.errorCode, setError]);
+
+  const handleOpenLink = useCallback((url: string) => {
+    bridge.post({ type: 'openLink', url });
   }, []);
 
   const handleModelChange = useCallback((taskId: string, assignment: TaskModelAssignment) => {
@@ -1277,6 +1303,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                 onChange={handleOrchestratorModelChange}
                 label={planner.runner ? 'Model & thinking effort' : 'Model'}
                 unavailable={switchingTo ? `Switching to ${switchingTo}…` : undefined}
+                unassigned={planner.runner ? AGENT_DEFAULT_LABEL : undefined}
               />
               {!switchingTo && modelDiscovery?.state === 'failed' && (
                 <div className="model-discovery-error" role="alert">
@@ -1400,10 +1427,13 @@ export default function App({ layout = 'chat', selection, goal }: {
       )}
 
       <div className="message-list" tabIndex={-1} ref={messageListCallbackRef}>
+        {/* Before the host's first answer it is probing for coding agents, which a
+            cold machine takes a while over: the wait is named, not "Loading…". */}
         {!hasContent && !isReady && (
           <div className="loading-state">
             <div className="loading-pulse" />
-            <p>Loading…</p>
+            <p>{DETECTING_AGENTS}</p>
+            <p className="loading-detail">{DETECTING_AGENTS_DETAIL}</p>
           </div>
         )}
 
@@ -1412,22 +1442,37 @@ export default function App({ layout = 'chat', selection, goal }: {
           <div className="loading-state">
             {detectionError === null && <div className="loading-pulse" />}
             <p><Detecting error={detectionError} onRetry={handleModelsRefreshNeeded} /></p>
+            {detectionError === null && <p className="loading-detail">{DETECTING_AGENTS_DETAIL}</p>}
           </div>
         )}
 
         {!hasContent && isReady && !canPlan && plannerKnown && (
-          <GetStarted runnerNames={agentNames} onConfigure={handleConfigureApiKey} runSettings={host.runSettings} isolationPreview={host.isolationPreview} />
+          <GetStarted
+            runnerNames={agentNames}
+            onConfigure={handleConfigureApiKey}
+            onDetectAgain={handleDetectAgain}
+            redetect={redetect}
+            onOpenLink={handleOpenLink}
+            runSettings={host.runSettings}
+            isolationPreview={host.isolationPreview}
+          />
         )}
 
         {emptyStateShown && (
-          <EmptyState onLoadSession={handleLoadSession} runSettings={host.runSettings} signedOut={signedOutPlanners} isolationPreview={host.isolationPreview} />
+          <EmptyState
+            onLoadSession={handleLoadSession}
+            runSettings={host.runSettings}
+            signedOut={signedOutPlanners}
+            isolationPreview={host.isolationPreview}
+            plannerNote={planner.unusedPlanningKey && planner.runner ? describeUnusedPlanningKey(planner.provider, planner.unusedPlanningKey, CHAT_PICK_PLANNER) : undefined}
+          />
         )}
 
         {error && (
           <div className="error-state">
             <div className="error-icon">!</div>
             <p className="error-message">{error}</p>
-            <button onClick={() => setError('')}>Try Again</button>
+            <button onClick={handleTryAgain}>Try Again</button>
           </div>
         )}
 
@@ -1473,7 +1518,7 @@ export default function App({ layout = 'chat', selection, goal }: {
           and a reader scrolled back up would not see a row in the list. */}
       {isResearchActive && !compacting && (
         <div className="chat-msg-working" role="status">
-          <span className="chat-msg-spinner" aria-hidden="true" /> {plannerDetecting ? DETECTING : <>Working&hellip;</>}
+          <span className="chat-msg-spinner" aria-hidden="true" /> {plannerDetecting ? DETECTING_AGENTS : <>Working&hellip;</>}
           <ElapsedTime since={plannerTurnStartedAt} className="chat-msg-working-time" />
         </div>
       )}

@@ -5,7 +5,10 @@ import * as path from 'path';
 import { SettingsService } from '../../services/SettingsService';
 import { getProviderMeta, PROVIDER_DETECT_PRIORITY } from '../../services/ProviderRegistry';
 import { recordInstalledPlanner, resetInstalledPlanner } from '../../services/InstalledPlanner';
+import { recordRunnerAuth, resetRunnerAuth } from '../../services/runnerAuth';
+import { describePlannerNotReady, plannerNotReadyFor, TERMINAL_UI_COMMANDS } from '../../services/plannerReadiness';
 import { BaseConfig } from '../BaseConfig';
+import { EnvConfig } from '../EnvConfig';
 import { AiProvider, PlannerBackendId } from '../IConfig';
 
 class TestConfig extends BaseConfig {
@@ -159,7 +162,7 @@ describe('BaseConfig', () => {
 
   describe('provider detection & key resolution', () => {
     // Every variable detection reads, so a key in the developer's own shell cannot decide a case.
-    const keys = [...new Set(['AI_PROVIDER', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_BASE_URL', ...PROVIDER_DETECT_PRIORITY.flatMap((p) => {
+    const keys = [...new Set(['AI_PROVIDER', 'ORCHESTRATOR_MODEL', 'GEMINI_MODEL', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_BASE_URL', ...PROVIDER_DETECT_PRIORITY.flatMap((p) => {
       const meta = getProviderMeta(p);
       return [...meta.detectEnvVars, ...(meta.baseUrlEnvVar ? [meta.baseUrlEnvVar] : [])];
     })])];
@@ -168,6 +171,7 @@ describe('BaseConfig', () => {
     afterEach(() => {
       for (const k of keys) { if (backup[k] !== undefined) process.env[k] = backup[k]; else delete process.env[k]; }
       resetInstalledPlanner();
+      resetRunnerAuth();
     });
 
     const detect = (config: BaseConfig = new TestConfig()) => (config as unknown as { detectProvider(): PlannerBackendId }).detectProvider();
@@ -178,10 +182,115 @@ describe('BaseConfig', () => {
       expect(detect()).toBe('google');
     });
 
-    it('a vendor key in the environment wins over an installed coding agent', () => {
+    // A key in a developer's shell is not a decision to plan with it (ADR-0076).
+    it('an installed coding agent plans though a vendor key is in the environment', () => {
       recordInstalledPlanner('claude-code');
-      process.env.GEMINI_API_KEY = 'gm-key';
-      expect(detect()).toBe('google');
+      process.env.OPENAI_API_KEY = 'sk-openai';
+      expect(detect()).toBe('claude-code');
+    });
+
+    it('a key\'s vendor plans when the installed agent says it is signed out', () => {
+      recordInstalledPlanner('claude-code');
+      recordRunnerAuth('claude-code', { state: 'signed-out' });
+      process.env.OPENAI_API_KEY = 'sk-openai';
+      expect(detect()).toBe('openai');
+    });
+
+    describe('unusedPlanningKey: the found key a detected agent plans past (ADR-0076)', () => {
+      it('names the vendor whose key was found while the detected agent plans', () => {
+        recordInstalledPlanner('claude-code');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        expect(new EnvConfig().unusedPlanningKey()).toBe('openai');
+      });
+
+      it('is null with no key, when the key\'s vendor plans, and when the user named the agent', () => {
+        recordInstalledPlanner('claude-code');
+        expect(new EnvConfig().unusedPlanningKey()).toBeNull();
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'openai:gpt-4o';
+        expect(new EnvConfig().unusedPlanningKey()).toBeNull();
+        delete process.env.ORCHESTRATOR_MODEL;
+        process.env.AI_PROVIDER = 'claude-code';
+        expect(new EnvConfig().unusedPlanningKey()).toBeNull();
+      });
+    });
+
+    describe('after an upgrade, a vendor the user already plans with keeps planning (ADR-0076)', () => {
+      it('a model saved under the vendor\'s own prefix keeps that vendor over the installed agent', () => {
+        recordInstalledPlanner('claude-code');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'openai:gpt-4o';
+        const config = new EnvConfig();
+        expect(config.aiProvider).toBe('openai');
+        expect(config.orchestratorModel).toBe('openai:gpt-4o');
+      });
+
+      it('an OpenRouter slug saved with an OpenRouter key keeps OpenRouter before its catalog is discovered', () => {
+        recordInstalledPlanner('claude-code');
+        process.env.OPENROUTER_API_KEY = 'sk-or';
+        process.env.ORCHESTRATOR_MODEL = 'anthropic/claude-sonnet-4';
+        expect(new EnvConfig().aiProvider).toBe('openrouter');
+      });
+
+      it('a bare model id written beside a key keeps the vendor that key detects', () => {
+        recordInstalledPlanner('codex');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'gpt-4o';
+        expect(new EnvConfig().aiProvider).toBe('openai');
+      });
+
+      it('a Gemini model saved in GEMINI_MODEL beside a Gemini key keeps Google', () => {
+        recordInstalledPlanner('claude-code');
+        process.env.GEMINI_API_KEY = 'gm-key';
+        process.env.GEMINI_MODEL = 'gemini-2.5-pro';
+        expect(new EnvConfig().aiProvider).toBe('google');
+      });
+
+      it('a model the user picked for the installed agent does not choose the vendor whose key is found', () => {
+        recordInstalledPlanner('claude-code');
+        new SettingsService().setPlannerModel('claude-code', { model: 'sonnet' });
+        try {
+          process.env.OPENAI_API_KEY = 'sk-openai';
+          process.env.ORCHESTRATOR_MODEL = 'sonnet';
+          expect(new EnvConfig().aiProvider).toBe('claude-code');
+        } finally {
+          new SettingsService().setPlannerModel('claude-code', undefined);
+        }
+      });
+
+      // The agent names these ids too, but only a pick for it is a choice of it.
+      class CatalogConfig extends EnvConfig {
+        constructor(private readonly listed: readonly string[]) { super(); }
+        protected agentCatalog(): readonly string[] { return this.listed; }
+      }
+
+      it('a bare id the agent\'s discovered catalog also lists keeps the vendor, before and after discovery', () => {
+        recordInstalledPlanner('codex');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'gpt-5';
+        expect(new CatalogConfig([]).aiProvider).toBe('openai');
+        expect(new CatalogConfig(['gpt-5', 'gpt-5-codex']).aiProvider).toBe('openai');
+
+        recordInstalledPlanner('claude-code');
+        delete process.env.OPENAI_API_KEY;
+        process.env.ANTHROPIC_API_KEY = 'sk-ant';
+        process.env.ORCHESTRATOR_MODEL = 'claude-sonnet-4-5';
+        expect(new CatalogConfig(['claude-sonnet-4-5']).aiProvider).toBe('anthropic');
+      });
+
+      it('a bare id that is also one of the agent\'s stable aliases keeps the vendor', () => {
+        recordInstalledPlanner('codex');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'gpt-5.5';
+        expect(new EnvConfig().aiProvider).toBe('openai');
+      });
+
+      it('a vendor model left without its key does not hand planning to another vendor\'s key', () => {
+        recordInstalledPlanner('claude-code');
+        process.env.OPENAI_API_KEY = 'sk-openai';
+        process.env.ORCHESTRATOR_MODEL = 'anthropic/claude-sonnet-4';
+        expect(new EnvConfig().aiProvider).toBe('claude-code');
+      });
     });
 
     it('an installed coding agent plans when nothing was chosen and no key is set (ADR-0009)', () => {
@@ -189,13 +298,28 @@ describe('BaseConfig', () => {
       expect(detect()).toBe('codex');
     });
 
-    it('a key the host keeps outside the environment keeps the installed agent out and selects its own vendor', () => {
-      // VS Code's secret store, say: a vendor key all the same.
-      class StoredKeyConfig extends TestConfig {
-        getProviderApiKey(provider: AiProvider): string { return provider === 'anthropic' ? 'sk-ant-stored' : ''; }
-      }
+    // VS Code's secret store, say, or a key saved to ~/.ordewell/.env: a vendor key all the same.
+    class StoredKeyConfig extends TestConfig {
+      getProviderApiKey(provider: AiProvider): string { return provider === 'anthropic' ? 'sk-ant-stored' : ''; }
+    }
+
+    it('an installed coding agent plans though a key is saved in Ordewell', () => {
       recordInstalledPlanner('claude-code');
+      expect(detect(new StoredKeyConfig())).toBe('claude-code');
+    });
+
+    it('with no agent installed, a key the host keeps outside the environment selects its own vendor', () => {
+      recordInstalledPlanner(null);
       expect(detect(new StoredKeyConfig())).toBe('anthropic');
+    });
+
+    it('with no agent installed, the key\'s vendor plans, and with no model its refusal names the next step', () => {
+      recordInstalledPlanner(null);
+      process.env.OPENAI_API_KEY = 'sk-openai';
+      const config = new EnvConfig();
+      expect(config.aiProvider).toBe('openai');
+      const reason = plannerNotReadyFor(config, () => undefined);
+      expect(reason && describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe('No planner model selected for OpenAI. Run /planner and pick a model for OpenAI.');
     });
 
     it('falls back to openrouter only when no coding agent is installed', () => {

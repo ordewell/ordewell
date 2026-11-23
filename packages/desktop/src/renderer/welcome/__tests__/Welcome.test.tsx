@@ -195,6 +195,12 @@ describe('Welcome: the hero and the footer', () => {
     expect(within(footer).getByText('daemon :7878 · owned · 0.4.0')).toBeInTheDocument();
   });
 
+  it('says the daemon is starting while this app starts its own', () => {
+    installBridge();
+    render(<Welcome status={{ state: 'connecting', port: 7878, starting: true }} />);
+    expect(within(screen.getByRole('contentinfo')).getByText('daemon: starting …')).toBeInTheDocument();
+  });
+
   it('offers Retry in the footer when the daemon failed', async () => {
     const bridge = installBridge();
     render(<Welcome status={{ state: 'failed', port: 7878, message: 'exited', logPath: '/tmp/d.log' }} />);
@@ -382,18 +388,49 @@ describe('Welcome: runners', () => {
     expect(opencode).toHaveTextContent('Install OpenCode, then Retry.');
   });
 
+  // A Claude-only user saw eight red Not installed cards around the one that works (F9).
+  it('puts the agents that work first and folds the missing ones under More agents, with their count, not in red', async () => {
+    installBridge({ routes: { 'runners.list': () => ok({ runners: [
+      { id: 'claude-code', enabled: true, auth: { state: 'signed-out', signIn: { runner: 'claude-code', label: 'Claude Code', login: ['claude', 'auth', 'login'] } } },
+      { id: 'codex', enabled: true, auth: { state: 'signed-in' } },
+    ] }) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    await within(runners).findByText('Signed in');
+    const top = runners.querySelector('ul.welcome-runners') as HTMLElement;
+    expect([...top.querySelectorAll(':scope > li')].map((card) => card.getAttribute('data-runner'))).toEqual(['codex', 'claude-code']);
+
+    const more = runners.querySelector('details.welcome-more') as HTMLDetailsElement;
+    expect(more.open).toBe(false);
+    expect(within(more).getByText('More agents (7)')).toBeInTheDocument();
+    const missing = [...more.querySelectorAll('li[data-runner]')];
+    expect(missing).toHaveLength(7);
+    for (const card of missing) {
+      expect(card).toHaveAttribute('data-state', 'missing');
+      expect(card.querySelector('.welcome-tone-failed')).toBeNull();
+    }
+  });
+
+  it('has no More agents when every agent is installed', async () => {
+    installBridge({ routes: { 'runners.list': () => ok({ runners: KNOWN_ON }) } });
+    render(<Welcome status={CONNECTED} />);
+    const runners = section('Runners');
+    await waitFor(() => expect(runners.querySelectorAll('[data-runner]')).toHaveLength(9));
+    expect(runners.querySelector('details.welcome-more')).toBeNull();
+  });
+
   it('words a signed-out agent as core does and offers its own Log in', async () => {
     installBridge({ routes: { 'runners.list': () => ok(RUNNERS) } });
     render(<Welcome status={CONNECTED} />);
     const codex = (await screen.findByText('Signed out')).closest('li') as HTMLElement;
-    expect(codex).toHaveTextContent('Sign in with /login codex, or run codex login.');
+    expect(codex).toHaveTextContent('Sign in with the Log in button, or run codex login.');
     expect(within(codex).getByRole('button', { name: 'Log in' })).toBeInTheDocument();
   });
 
   it('opens the key entry for an agent whose way in is a key', async () => {
     installBridge({ routes: { 'runners.list': () => ok(KEYED_RUNNERS) } });
     render(<Welcome status={CONNECTED} />);
-    const gemini = (await screen.findByText('Run /key-set and choose Google Gemini to hand it a key.')).closest('li') as HTMLElement;
+    const gemini = (await screen.findByText('Use the Set API key… button and choose Google Gemini to hand it a key.')).closest('li') as HTMLElement;
     expect(gemini).toHaveTextContent('Gemini CLI');
     fireEvent.click(within(gemini).getByRole('button', { name: 'Set API key…' }));
     expect(await screen.findByRole('dialog', { name: 'API key for Google Gemini' })).toBeInTheDocument();
@@ -451,6 +488,28 @@ describe('Welcome: runners', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  // Without this the first goal in the project window is refused for want of a model (ADR-0076).
+  it('names the planner model as the next step when the saved key\'s vendor now plans with none picked', async () => {
+    for (const [answer, says] of [[{ aiProvider: 'openai', orchestratorModel: '' }, true], [{ aiProvider: 'claude-code', orchestratorModel: '' }, false], [{ aiProvider: 'openai', orchestratorModel: 'gpt-5' }, false]] as const) {
+      installBridge({ routes: { 'runners.list': () => ok(RUNNERS), 'settings.update': () => ok(answer) } });
+      const { unmount } = render(<Welcome status={CONNECTED} />);
+      const runners = section('Runners');
+      await within(runners).findByText('Signed in');
+      const line = within(runners).getByText('An API key adds the built-in runner on that provider, unless it is marked planner only.').closest('p') as HTMLElement;
+      fireEvent.click(within(line).getByRole('button', { name: 'Set API key…' }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByRole('combobox', { name: 'Provider' }), { target: { value: 'openai' } });
+      fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'sk-test' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+      const note = 'OpenAI now plans. Pick its planner model in Settings, under Planner, before your first goal.';
+      if (says) expect(await within(runners).findByText(note)).toBeInTheDocument();
+      else await waitFor(() => expect(within(runners).queryByText(note)).toBeNull());
+      unmount();
+    }
+  });
+
   it('says the daemon refused Custom\'s endpoint, from the Welcome window too', async () => {
     installBridge({ routes: { 'runners.list': () => ok(RUNNERS), 'settings.update': () => ok({ rejectedEnvKeys: ['OPENAI_COMPATIBLE_BASE_URL'] }) } });
     render(<Welcome status={CONNECTED} />);
@@ -470,6 +529,8 @@ describe('Welcome: runners', () => {
     render(<Welcome status={CONNECTED} />);
     const runners = section('Runners');
     await waitFor(() => expect(runners.querySelectorAll('[data-runner]')).toHaveLength(9));
+    // With nothing installed the install pages are the next step, so they are not folded away.
+    expect((runners.querySelector('details.welcome-more') as HTMLDetailsElement).open).toBe(true);
     // Pi has no badge of its own yet, so it is named by its id on the neutral one.
     for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Pi', 'GitHub Copilot CLI', 'Qwen Code', 'Cline', 'Gemini CLI', 'Cursor']) {
       expect(within(runners).getByTitle(name)).toBeInTheDocument();
@@ -499,12 +560,24 @@ describe('Welcome: runners', () => {
     expect(await within(section('Runners')).findByText('Signed in')).toBeInTheDocument();
   });
 
+  // The first probe can take a while on a cold machine: the row names it from the start, not blank skeletons (F4).
+  it('names what the runner row waits for at once: the daemon starting, then the agents being detected', async () => {
+    installBridge({ routes: { 'runners.list': () => new Promise(() => undefined) } });
+    const { rerender } = render(<Welcome status={{ state: 'connecting', port: 7878, starting: true }} />);
+    expect(within(section('Runners')).getByRole('status')).toHaveTextContent("Starting Ordewell's daemon on port 7878…");
+    rerender(<Welcome status={{ state: 'connecting', port: 7878 }} />);
+    expect(within(section('Runners')).getByRole('status')).toHaveTextContent("Connecting to Ordewell's daemon on port 7878…");
+    rerender(<Welcome status={CONNECTED} />);
+    expect(within(section('Runners')).getByRole('status'))
+      .toHaveTextContent('Looking for coding agents on your PATH, then asking each one whether it is signed in.');
+  });
+
   it('never stays checking: a list that does not come times out into the error banner', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
     installBridge({ routes: { 'runners.list': () => new Promise(() => undefined) } });
     render(<Welcome status={CONNECTED} />);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(screen.getByText('Loading runners …')).toBeInTheDocument();
+    expect(within(section('Runners')).getByRole('status')).toHaveTextContent('Looking for coding agents on your PATH');
     await act(async () => { await vi.advanceTimersByTimeAsync(13_000); });
     const alert = within(section('Runners')).getByRole('alert');
     expect(alert).toHaveTextContent('did not answer within 15 seconds');
@@ -529,3 +602,4 @@ describe('Welcome: runners', () => {
 });
 
 const KNOWN_OFF = ['claude-code', 'codex', 'opencode', 'pi', 'copilot-cli', 'qwen-code', 'cline', 'gemini-cli', 'cursor-agent'].map((id) => ({ id, enabled: false }));
+const KNOWN_ON = KNOWN_OFF.map(({ id }) => ({ id, enabled: true, auth: { state: 'signed-in' } }));

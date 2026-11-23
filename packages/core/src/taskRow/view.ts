@@ -60,7 +60,7 @@ export interface TaskRowSubject {
   /** A loop's check, its round and what its evidence said: the row's words for the loop are read off them (ADR-0045). */
   loop?: TaskLoop;
   loopRound?: number;
-  verdict?: { outcome: string; reported?: string } | null;
+  verdict?: { outcome: string; reported?: string; reason?: string } | null;
   /** Between rounds with nothing to run it: only the run knows that, so it is told (ADR-0045 L5). */
   loopStranded?: boolean;
   /** The latest attempt's handoff as the plan keeps it (ADR-0047); a row shows it without opening the task. */
@@ -225,6 +225,8 @@ export interface TaskRowView {
   blockedBy: string[] | null;
   /** Why a skipped task was skipped, as whoever skipped it put it; null for any other, or one skipped without a reason. */
   skipReason: string | null;
+  /** Why a failed task failed: its verdict's first sentence, which says it for the user; null for any other, or one failed with no reason. */
+  failure: string | null;
   /** An ops task changed tracked files in the user's checkout and nothing was committed. */
   opsChangedFiles: boolean;
   /** The ancestors, by title, a force start went past the merge gate of. */
@@ -369,6 +371,14 @@ function flagOf(task: TaskRowSubject, scope: AssignmentScope | undefined): Pick<
     : { assignmentFlag: null, assignmentConsequence: null };
 }
 
+/** A reason's first sentence or line: a verdict says what happened first and what to do after (F7). */
+function firstSentence(reason: string | undefined): string | null {
+  const text = reason?.trim().split('\n')[0].trim();
+  if (!text) return null;
+  const end = text.search(/[.!?](?=\s)/);
+  return end < 0 ? text : text.slice(0, end + 1);
+}
+
 /**
  * Everything a plan row says about one task, decided once: each surface picks
  * its own words, glyphs and casing for these facts, and derives none of them.
@@ -418,6 +428,7 @@ export function taskRowView(task: TaskRowSubject, context: TaskRowContext = {}):
     mergeGate: task.mergeGate?.length ? refsOf(task.mergeGate, reading) : null,
     blockedBy: blocked.length > 0 ? refsOf(blocked, reading) : null,
     skipReason: task.status === 'skipped' ? task.skipReason ?? null : null,
+    failure: task.status === 'failed' ? firstSentence(task.verdict?.reason) : null,
     opsChangedFiles: task.status === 'awaiting_user' && task.awaitingReason === 'files-changed',
     forcedPastGate: task.forcedPastGate?.length ? task.forcedPastGate : null,
     loop,

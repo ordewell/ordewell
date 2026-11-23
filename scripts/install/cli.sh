@@ -596,12 +596,23 @@ main() {
   done <<EOF
 $AGENTS
 EOF
+  # Either route plans (ADR-0009): an agent on its own subscription, or a
+  # provider's key, whose /key-set goes on to the planner model.
   if [ -n "$found_agents" ]; then
     say "Coding agents found: $found_agents."
-    say "A coding agent, installed and signed in, is required; sign in to the one you want to use."
+    say "Ordewell plans with one of them, signed in (run it once to sign in), or with an API key (/key-set inside ordewell)."
   else
-    say "No coding agent was found on PATH. Ordewell needs one, installed and signed in: $all_agents."
+    say "No coding agent was found on PATH. Ordewell plans with a coding agent or with an API key."
+    say "A coding agent, installed and signed in: $all_agents. The two most used install with:"
+    say "  Claude Code:  ${bold}curl -fsSL https://claude.ai/install.sh | bash${off}"
+    say "  Codex:        ${bold}curl -fsSL https://chatgpt.com/codex/install.sh | sh${off}"
+    say "Signing in happens in the agent itself: run claude or codex once and follow its sign-in prompt."
+    say "Or an API key: run /key-set inside ordewell, then pick the planner model."
   fi
+
+  say ""
+  say "Next: change to your project and run ordewell:"
+  say "  ${bold}cd /path/to/your-project && ordewell${off}"
 
   exit_status=0
   if [ "$want_desktop" = 1 ]; then

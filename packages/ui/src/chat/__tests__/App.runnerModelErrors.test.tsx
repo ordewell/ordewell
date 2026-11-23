@@ -6,6 +6,24 @@ import { post } from './webview';
 
 // A signed-out agent's empty catalog is fixed by signing in, not by `/refresh`,
 // so the setup panel shows core's own reason instead of the generic hint.
+// An agent planner with no model picked plans with its own default (F6): the
+// picker says so, rather than asking for a model as if one were missing.
+describe('the planner model of a coding agent with none picked', () => {
+  it('reads as the agent\'s own default, while a vendor with none still asks for one', () => {
+    render(<App />);
+    post({ type: 'setConfiguredProviders', providers: ['openrouter'] });
+    post({ type: 'setPlannerBackends', backends: [{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor', usable: true }], provider: 'codex', runner: 'codex' });
+    post({ type: 'setModelsByRunner', modelsByRunner: { codex: [{ modelId: 'gpt-5', modelLabel: 'GPT-5', variants: [] }] } });
+
+    expect(screen.getByText('Agent default')).toBeInTheDocument();
+    expect(screen.queryByText('Select model...')).toBeNull();
+
+    post({ type: 'setPlannerBackends', backends: [{ id: 'codex', label: 'Codex', kind: 'harness', runner: 'codex', usable: true }, { id: 'openrouter', label: 'OpenRouter', kind: 'vendor', usable: true }], provider: 'openrouter' });
+
+    expect(screen.getByText('Select model...')).toBeInTheDocument();
+  });
+});
+
 describe('a runner that lists no models', () => {
   it('shows discovery progress until the catalog settles, then shows its models', () => {
     render(<App />);
@@ -22,7 +40,7 @@ describe('a runner that lists no models', () => {
     post({ type: 'modelDiscovery', state: 'ready' });
     expect(screen.queryByText('Loading models…')).toBeNull();
     expect(screen.queryByText(/No models discovered/)).toBeNull();
-    fireEvent.click(screen.getByText('Select model...'));
+    fireEvent.click(screen.getByText('Agent default'));
     expect(screen.getByText('GPT-5')).toBeInTheDocument();
   });
 
@@ -44,7 +62,7 @@ describe('a runner that lists no models', () => {
     post({ type: 'setModelsByRunner', modelsByRunner: { codex: [{ modelId: 'gpt-5', modelLabel: 'GPT-5', variants: [] }] } });
     post({ type: 'modelDiscovery', state: 'loading' });
     expect(screen.getByText('Refreshing models…')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Select model...'));
+    fireEvent.click(screen.getByText('Agent default'));
     expect(screen.getByText('GPT-5')).toBeInTheDocument();
     post({ type: 'modelDiscovery', state: 'failed', error: 'The daemon did not answer.' });
     expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load models: The daemon did not answer.");

@@ -67,6 +67,7 @@ function CardElapsed({ elapsed }: { elapsed: ElapsedView }): JSX.Element {
 function TaskCardView({ node, density, selected, tabbable, related, peek }: TaskCardProps): JSX.Element {
   const actions = useContext(CardActionsContext)!;
   const tab = tabbable ? 0 : -1;
+  const failure = node.row.failure;
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -121,13 +122,18 @@ function TaskCardView({ node, density, selected, tabbable, related, peek }: Task
             <span className="graph-card-order">#{node.orderLabel}</span> {node.title}
           </span>
         </span>
-        <CardAssignment lane={node.lane} density={density} />
+        {/* Compact has no foot: a failed task's reason takes the lane's row, since why it failed is what the card is for now (F7). */}
+        {density === 'compact' && failure
+          ? <span className="graph-card-failure" title={node.verdictReason ?? failure}>{failure}</span>
+          : <CardAssignment lane={node.lane} density={density} />}
         {density === 'comfortable' && (
           <span className="graph-card-foot">
             {node.badges.map((b) => <Badge key={b.kind} icon={TRAIT_ICONS[b.kind]} data-trait={b.kind} title={b.title}>{b.label}</Badge>)}
             {node.loop && <Badge icon={LoopGlyph} data-loop={node.loop.role} title={node.loop.title}>{node.loop.label}</Badge>}
             {node.flags.map((f) => <Badge key={f.kind} tone={FLAG_TONES[f.kind]} data-flag={f.kind} title={f.title}>{f.label}</Badge>)}
-            <span className="graph-card-status-line" title={node.verdictReason ?? node.statusLine}>{node.statusLine}</span>
+            <span className={failure ? 'graph-card-status-line graph-card-failure' : 'graph-card-status-line'} title={node.verdictReason ?? node.statusLine}>
+              {failure ?? node.statusLine}
+            </span>
             {node.elapsed && <CardElapsed elapsed={node.elapsed} />}
           </span>
         )}

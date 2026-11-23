@@ -238,6 +238,8 @@ export type Action =
   | { type: 'revertPreviewed'; sessionId: string; taskId: string; preview: TaskRevertPreview }
   | { type: 'rewindTargetsLoaded'; targets: RewindTargetView[]; sessionId?: string; pick?: number }
   | { type: 'runnersLoaded'; runners: RunnerView[]; orchestratorModel?: string }
+  /** A key was saved and its vendor now plans with no model: `/planner`'s model step for it. */
+  | { type: 'pickPlannerModel'; provider: string }
   /** The welcome's repositories and branches: `read` is the request this answers, so an older one cannot land on a newer. */
   | { type: 'isolationPreviewLoading'; read: number }
   | { type: 'isolationPreviewLoaded'; preview: IsolationPreview; read: number }

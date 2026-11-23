@@ -63,7 +63,7 @@ export function cardFor(status: DaemonStatus): Card | undefined {
 /** The connection in a few words, for the bar at the foot of a window. */
 export function daemonLabel(status: DaemonStatus): string {
   switch (status.state) {
-    case 'connecting': return `Connecting to :${status.port}…`;
+    case 'connecting': return status.starting ? `Starting the daemon on :${status.port}…` : `Connecting to :${status.port}…`;
     case 'connected': {
       const version = status.daemon.version ? ` v${status.daemon.version}` : '';
       return `Daemon${version} on :${status.port} · ${status.owned ? 'started by this app' : 'attached'}`;

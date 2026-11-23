@@ -158,6 +158,14 @@ describe('the Settings view', () => {
     expect(screen.getByRole('textbox', { name: /Parallel tasks/ })).toHaveValue('3');
   });
 
+  // An agent with no model picked plans with its own default (F6): the select names that choice, not a blank.
+  it('names an agent planner\'s missing model as the agent\'s own default', async () => {
+    await mount('dark', { settings: { orchestratorModel: '' } });
+    const model = await screen.findByRole('combobox', { name: 'Planner model' });
+    expect(model).toHaveValue('');
+    expect(within(model).getByRole('option', { name: 'Agent default' })).toBeInTheDocument();
+  });
+
   it('re-detects the catalog after the planner changes, so the chat follows it', async () => {
     const { w } = await mount();
     const planner = await screen.findByRole('combobox', { name: 'Planner' });

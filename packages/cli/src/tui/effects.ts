@@ -568,7 +568,9 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       const env: Record<string, string> = endpoint
         ? { [endpoint.name]: endpoint.url, [meta.apiKeyEnvVar]: effect.key }
         : effect.key ? { [meta.apiKeyEnvVar]: effect.key } : {};
-      await api.updateSettings({ env });
+      // The answer says who plans with the key saved, so the planner row is current at once.
+      const answer = await api.updateSettings({ env });
+      dispatchSettings(deps, answer);
       for (const [name, value] of Object.entries(env)) deps.setEnvVar(name, value);
       // Deliberately reports the provider, never the key — this line is on screen.
       const what = !endpoint ? 'key' : effect.key ? 'endpoint and key' : 'endpoint';
@@ -578,6 +580,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       await loadModels(deps);
       // The key lists that provider's built-in runner (ADR-0070), so the runner list is asked for again.
       await loadRunners(deps);
+      // A vendor that now plans has no default model, so the next goal would
+      // be refused for want of one: go on to that pick, its catalog now in. A
+      // coding agent that still plans needs none (ADR-0076).
+      if (answer.aiProvider === effect.provider && !answer.orchestratorModel) dispatch({ type: 'pickPlannerModel', provider: effect.provider });
       return;
     }
 
@@ -908,7 +914,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'loadScope':
-      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadIsolationPreview(deps)]);
       return;
 
     case 'loadIsolationPreview':
@@ -916,7 +922,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'refresh':
-      await Promise.all([loadRunners(deps), loadSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
@@ -1238,6 +1244,16 @@ async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
     orchestratorModel: state.orchestratorModel,
   });
   return state;
+}
+
+/**
+ * The runner list re-detects the installed agent on the daemon, which can
+ * change who plans, so the settings are read once it has answered: read beside
+ * it, they would still name the planner from before an agent was installed.
+ */
+async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
+  await loadRunners(deps);
+  await loadSettings(deps, sessionId);
 }
 
 async function loadSettings(deps: EffectDeps, sessionId?: string): Promise<void> {

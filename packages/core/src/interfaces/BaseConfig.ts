@@ -2,7 +2,7 @@ import type { IConfig, AiProvider, PlannerBackendId } from './IConfig';
 import { parseApprovalModeSetting, type ApprovalModeSetting } from '../services/ApprovalPolicy';
 import { DEFAULT_WEB_READ_BUDGET } from '../services/webReadPolicy';
 import { resolveProvider, type ProviderModelLists } from '../services/ProviderRouting';
-import { configuredProviders, getProviderMeta, isApiProvider, isPlannerBackend, PROVIDER_DETECT_PRIORITY, resolveProviderFromPrefix, runnerForProvider } from '../services/ProviderRegistry';
+import { configuredProviders, getProviderMeta, isApiProvider, isCliProvider, isPlannerBackend, PROVIDER_DETECT_PRIORITY, resolveProviderFromPrefix, runnerForProvider } from '../services/ProviderRegistry';
 import { BUILTIN_MANIFESTS } from '../plugins/builtin';
 import type { RunnerModelDiscovery } from '../plugins/types';
 import type { PlannerModelChoice } from '../services/PlannerModelMemory';
@@ -11,6 +11,7 @@ import { vendorApiKeyIn, vendorBaseUrlIn } from '../services/apiProviders';
 import { SettingsService } from '../services/SettingsService';
 import { parseNotifyCommand } from '../services/escalationNotifier';
 import { recordedInstalledPlanner } from '../services/InstalledPlanner';
+import { recordedRunnerAuth } from '../services/runnerAuth';
 
 export function normalizeGeminiModel(id: string): string {
   return id.replace(/^gemini:/, '').replace(/^google\//, '');
@@ -33,6 +34,15 @@ function envDetectedProvider(): AiProvider | null {
     if (meta.detectEnvVars.length === 0 && meta.baseUrlEnvVar && process.env[meta.baseUrlEnvVar]?.trim()) return provider;
   }
   return null;
+}
+
+/**
+ * Whether the agent's own status command last said the user is signed out.
+ * Only that verdict counts, as the preflight reads it: unknown says nothing.
+ */
+function agentSignedOut(agent: PlannerBackendId | null): boolean {
+  const runner = agent ? runnerForProvider(agent) : null;
+  return runner ? recordedRunnerAuth(runner)?.state === 'signed-out' : false;
 }
 
 /** A model and the effort it was chosen with; blank is the planner's own default. */
@@ -225,26 +235,78 @@ export abstract class BaseConfig implements IConfig {
   get notifyCommand(): string[] { return parseNotifyCommand(process.env.ORDEWELL_NOTIFY_COMMAND); }
 
   /**
-   * Who plans when no surface setting names a planner: an explicit
-   * AI_PROVIDER, then a vendor whose key is in the environment,
-   * then an installed coding agent (ADR-0009), and openrouter only when there
-   * is none of those. One answer for every host, so they cannot drift apart.
+   * Who plans when no surface setting names a planner (ADR-0076): an
+   * explicit AI_PROVIDER (a `/planner` pick persists as one); then a vendor
+   * whose key is found and for which a model is saved; then an installed
+   * coding agent that is not signed out (ADR-0009); then a vendor whose key
+   * is found; and openrouter only when there is none of those. A key alone
+   * is not a choice to plan with it, so it never takes planning from an
+   * agent. One answer for every host, so they cannot drift apart.
    */
-  protected detectProvider(): PlannerBackendId {
+  protected detectProvider(model: string = process.env.ORCHESTRATOR_MODEL ?? ''): PlannerBackendId {
     const env = process.env.AI_PROVIDER;
     if (env && isPlannerBackend(env)) return env;
 
+    const agent = recordedInstalledPlanner();
+    const keyed = this.keyedVendor();
+    if (agent && keyed) {
+      if (agentSignedOut(agent)) return keyed;
+      const saved = model ? this.vendorSavedWith(agent, model) : null;
+      if (saved) return saved;
+      if (this.savedGeminiModel() && configuredProviders(this).includes('google')) return 'google';
+    }
+    return agent ?? keyed ?? 'openrouter';
+  }
+
+  /**
+   * The vendor whose key was found but is not used for planning, because the
+   * coding agent detection found plans instead (ADR-0076); null when the
+   * user named the planner, when no key was found, or when the key's vendor
+   * plans. A surface says so once, so a key in the shell is not a surprise.
+   */
+  unusedPlanningKey(): AiProvider | null {
+    if (isPlannerBackend(this.namedPlanner())) return null;
+    const planner = this.aiProvider;
+    return isCliProvider(planner) && planner === recordedInstalledPlanner() ? this.keyedVendor() : null;
+  }
+
+  /** The planner the user named, as written; a host with a setting of its own reads that first. */
+  protected namedPlanner(): string {
+    return process.env.AI_PROVIDER ?? '';
+  }
+
+  /**
+   * Gemini's own model setting, which a Gemini planner reads before the
+   * planner's model: one saved beside a Gemini key chose Google as surely as a
+   * planner model does. A host with a setting of its own reads it too.
+   */
+  protected savedGeminiModel(): string {
+    return process.env.GEMINI_MODEL?.trim() ?? '';
+  }
+
+  /**
+   * The vendor a found key selects: one in the environment first, then one a
+   * host keeps outside it (VS Code's secret store), which names its own
+   * vendor, since any other would be refused for a key nobody set.
+   */
+  private keyedVendor(): AiProvider | null {
     const fromEnv = envDetectedProvider();
     if (fromEnv) return fromEnv;
-
-    // A key a host keeps outside the environment (VS Code's secret store) is a
-    // vendor key all the same, and wins over an installed agent as one in the
-    // environment does. It names its own vendor: any other would be refused
-    // for a key nobody set.
     const configured = configuredProviders(this);
-    const keyed = PROVIDER_DETECT_PRIORITY.find((provider) => configured.includes(provider));
-    if (keyed) return keyed;
-    return recordedInstalledPlanner() ?? 'openrouter';
+    return PROVIDER_DETECT_PRIORITY.find((provider) => configured.includes(provider)) ?? null;
+  }
+
+  /**
+   * The vendor a model configured beside a found key was saved for, unless
+   * the user picked it for the installed agent: the vendor it plainly names,
+   * if that vendor has its key, and for a bare id the vendor the key selects,
+   * as before an installed agent outranked a key (ADR-0076).
+   */
+  private vendorSavedWith(agent: PlannerBackendId, model: string): AiProvider | null {
+    if (isPickedForAgent(agent, model)) return null;
+    const named = vendorOfModel(agent, model);
+    if (named) return configuredProviders(this).includes(named) ? named : null;
+    return this.keyedVendor();
   }
 
   /**
@@ -264,7 +326,7 @@ export abstract class BaseConfig implements IConfig {
     if (explicit && isPlannerBackend(explicit)) return explicit;
     const inferred = model && lists ? resolveProvider(model, lists) : null;
     if (inferred && (configuredProviders(this).includes(inferred) || !recordedInstalledPlanner())) return inferred;
-    return this.detectProvider();
+    return this.detectProvider(model ?? '');
   }
 
   /**
@@ -277,12 +339,18 @@ export abstract class BaseConfig implements IConfig {
    * identity because a host swaps the whole object on discovery.
    */
   protected routedProvider(model: string | undefined, lists: ProviderModelLists | null | undefined): PlannerBackendId {
+    const agent = recordedInstalledPlanner();
     const basis = [
       process.env.AI_PROVIDER ?? '',
       model ?? '',
-      recordedInstalledPlanner() ?? '',
+      agent ?? '',
+      String(agentSignedOut(agent)),
+      // Whether the model was picked for the agent decides a found key's
+      // claim, and the remembered pick changes under a long-lived config.
+      String(agent && model ? isPickedForAgent(agent, model) : false),
       envDetectedProvider() ?? '',
       configuredProviders(this).join(','),
+      this.savedGeminiModel(),
     ].join('|');
     if (this._routed && this._routed.basis === basis && this._routed.lists === lists) return this._routed.provider;
     const provider = this.providerForModel(model, lists);
@@ -360,6 +428,17 @@ function discoveryOf(provider: PlannerBackendId): RunnerModelDiscovery | undefin
   return BUILTIN_MANIFESTS.find((m) => m.name === runnerForProvider(provider))?.modelDiscovery;
 }
 
+/**
+ * The vendor a configured model plainly belongs to, as `isVendorModelFor`
+ * reads it: its prefix's, or OpenRouter's for an `org/model` slug that
+ * `agent` would not have named itself.
+ */
+function vendorOfModel(agent: PlannerBackendId, model: string): AiProvider | null {
+  const prefixed = resolveProviderFromPrefix(model);
+  if (prefixed) return prefixed;
+  return !discoveryOf(agent)?.providerQualifiedIds && SLUG_SHAPE.test(model) ? 'openrouter' : null;
+}
+
 function isStableAlias(provider: PlannerBackendId, model: string): boolean {
   return discoveryOf(provider)?.canonicalAliases?.some((alias) => alias.modelId === model) ?? false;
 }
@@ -375,6 +454,27 @@ const SLUG_SHAPE = /^[\w.-]+\//;
 export function isVendorModelFor(agent: PlannerBackendId, model: string): boolean {
   if (resolveProviderFromPrefix(model)) return true;
   return !discoveryOf(agent)?.providerQualifiedIds && SLUG_SHAPE.test(model);
+}
+
+/**
+ * Whether a model picked with no switch, while `planner` plans, is that coding
+ * agent's pick: any model but one plainly a vendor's. A surface remembers such
+ * a pick for the agent before routing reads the model, since only the agent's
+ * remembered pick keeps a found key from claiming a bare id its vendor also
+ * names (ADR-0076): picking a model is no choice of who plans.
+ */
+export function isAgentPick(planner: PlannerBackendId, model: string): boolean {
+  return isCliProvider(planner) && !isVendorModelFor(planner, model);
+}
+
+/**
+ * A model the user picked for `agent`: its remembered pick. Its stable aliases
+ * and its catalog are no evidence, since a vendor names many of the same ids
+ * (Codex's `gpt-5.5` is OpenAI's too), and a catalog that arrives mid-session
+ * would move the planner between two goals.
+ */
+function isPickedForAgent(agent: PlannerBackendId, model: string): boolean {
+  return rememberedChoice(agent)?.model === model;
 }
 
 /**

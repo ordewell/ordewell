@@ -30,7 +30,7 @@ async function makeStore(initial: Record<string, string> = {}) {
 
 // Every ORDEWELL_* var BaseConfig or VsCodeConfig reads, so a developer shell
 // (the local .envrc exports several) cannot leak in and move a default.
-const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW', 'ORDEWELL_NOTIFY_COMMAND', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_PLANNER_NATIVE_SHELL', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
+const ENV_KEYS = ['ORDEWELL_WORKTREE_ISOLATION', 'ORDEWELL_WORKTREE_SETUP', 'ORDEWELL_CONFLICT_REPAIR_ATTEMPTS', 'ORDEWELL_WORKSPACE_REPOS', 'ORDEWELL_WORKTREE_LINKS', 'ORDEWELL_MAX_PARALLEL', 'ORDEWELL_RESEARCH_ENABLED', 'ORDEWELL_RESEARCH_MAX_STEPS', 'ORDEWELL_RESEARCH_MAX_FILE_SIZE', 'ORDEWELL_AUTONOMOUS_MODE', 'ORDEWELL_APPROVAL_MODE', 'ORDEWELL_APPROVAL_ALLOW', 'ORDEWELL_EFFECT_ALLOW', 'ORDEWELL_NOTIFY_COMMAND', 'ORDEWELL_WEB_READ_BUDGET', 'ORDEWELL_PLANNER_NATIVE_SHELL', 'ORDEWELL_SUBAGENT_MODEL', 'ORDEWELL_PLANNER_EFFORT', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'ORCHESTRATOR_MODEL', 'AI_PROVIDER'];
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -505,16 +505,13 @@ describe('VsCodeConfig.apiKey', () => {
 
   it('uses the OpenRouter key when the active provider is openrouter', async () => {
     const store = await makeStore({ openrouterKey: 'sk-or' });
-    // A stored key is a vendor key, so even with an agent installed nothing moves the planner off openrouter.
-    recordInstalledPlanner('claude-code');
     const config = new VsCodeConfig(store);
     expect(config.aiProvider).toBe('openrouter');
     expect(config.apiKey).toBe('sk-or');
   });
 
-  it('with several stored keys, picks the vendor first in detection order, as the environment does', async () => {
+  it('with several stored keys and no agent installed, picks the vendor first in detection order, as the environment does', async () => {
     const store = await makeStore({ openrouterKey: 'sk-or', geminiKey: 'g' });
-    recordInstalledPlanner('claude-code');
     const config = new VsCodeConfig(store);
     expect(config.aiProvider).toBe('google');
     expect(config.apiKey).toBe('g');
@@ -625,10 +622,11 @@ describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', ()
     expect(config.apiKey).toBe('');
   });
 
-  it('uses a vendor environment key before the detected agent', async () => {
+  // A key in the extension host's environment or in secret storage is not a choice to plan with it (ADR-0076).
+  it('plans with the installed agent though a vendor key is in the environment', async () => {
     recordInstalledPlanner('claude-code');
     process.env.GEMINI_API_KEY = 'g-test';
-    expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('google');
+    expect(new VsCodeConfig(await makeStore({})).aiProvider).toBe('claude-code');
   });
 
   it('keeps the detected agent with a stale vendor model and no key', async () => {
@@ -655,11 +653,43 @@ describe('VsCodeConfig.aiProvider with an installed coding agent (ADR-0009)', ()
     expect(config.aiProvider).toBe('codex');
   });
 
-  it('a stored vendor key with no model still wins over the installed agent', async () => {
+  it('plans with the installed agent though a key is stored in secret storage with no model saved for it', async () => {
     recordInstalledPlanner('claude-code');
     const config = new VsCodeConfig(await makeStore({ openrouterKey: 'sk-secret' }));
     config.setProviderModelLists({ openrouter: ['openai/gpt-4o'], google: [], openai_compatible: [] });
-    expect(config.aiProvider).toBe('openrouter');
+    expect(config.aiProvider).toBe('claude-code');
+  });
+
+  it('a Gemini model saved in the geminiModel setting beside a stored Gemini key keeps Google after the upgrade', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ geminiModel: 'gemini-2.5-pro' });
+    expect(new VsCodeConfig(await makeStore({ geminiKey: 'g-secret' })).aiProvider).toBe('google');
+  });
+
+  it('a Gemini model in the legacy planningModel setting beside a stored Gemini key keeps Google after the upgrade', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ planningModel: 'gemini-2.5-pro' });
+    expect(new VsCodeConfig(await makeStore({ geminiKey: 'g-secret' })).aiProvider).toBe('google');
+  });
+
+  it('a bare orchestratorModel the installed agent\'s catalog also lists keeps the stored key\'s vendor', async () => {
+    recordInstalledPlanner('codex');
+    __setConfig({ orchestratorModel: 'gpt-5' });
+    const catalog: string[] = [];
+    const config = new VsCodeConfig(await makeStore({ openaiKey: 'sk-openai' }), (provider) => (provider === 'codex' ? catalog : []));
+    expect(config.aiProvider).toBe('openai');
+
+    catalog.push('gpt-5', 'gpt-5-codex');
+
+    expect(config.aiProvider).toBe('openai');
+  });
+
+  it('an orchestratorModel saved under its vendor\'s prefix beside that vendor\'s stored key keeps the vendor', async () => {
+    recordInstalledPlanner('claude-code');
+    __setConfig({ orchestratorModel: 'openai:gpt-4o' });
+    const config = new VsCodeConfig(await makeStore({ openaiKey: 'sk-openai' }));
+    expect(config.aiProvider).toBe('openai');
+    expect(config.orchestratorModel).toBe('openai:gpt-4o');
   });
 
   it('with no installed agent a keyless vendor model still names its vendor', async () => {

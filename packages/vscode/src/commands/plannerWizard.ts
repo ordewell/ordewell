@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { PlannerBackendId, DiscoveredModel, PlannerModelRecall } from '@ordewell/core';
+import { AGENT_DEFAULT_MODEL, type PlannerBackendId, type DiscoveredModel, type PlannerModelRecall } from '@ordewell/core';
 import type { PlannerBackend } from '@ordewell/ui/protocol';
 import type { VendorModelOption } from '../plan/PlannerModelSwitch';
 
@@ -45,11 +45,24 @@ interface Candidate {
 const RUNNER_DEFAULT = '';
 
 /**
- * Harness → Model → Effort as one quick pick. Nothing is written until the
+ * A coding agent's own default model, offered first: an agent with no model
+ * picked plans, so the step must not read as a setting still missing, and an
+ * empty catalog leaves it as the one choice rather than ending the wizard.
+ */
+const AGENT_DEFAULT: Candidate = {
+  id: '',
+  label: AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT_MODEL.slice(1),
+  detail: "The agent's own default model and effort",
+  variants: [],
+};
+
+/**
+ * Harness → Model → Effort as one quick pick, or from the model step when
+ * `start` names the backend. Nothing is written until the
  * last step is accepted, so backing out — or dismissing — leaves the planner
  * exactly as it was; the three settings can't be left half-switched.
  */
-export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
+export async function runPlannerWizard(deps: PlannerWizardDeps, options: { start?: PlannerBackendId } = {}): Promise<void> {
   // Only what can actually plan is offered: an unavailable agent is left out of
   // the step rather than listed struck through (ADR-0009). A user naming one explicitly
   // still hears why through the `/planner <id>` command.
@@ -72,6 +85,19 @@ export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
     let recall: PlannerModelRecall | undefined;
     let modelId: string | undefined;
     let step: 'harness' | 'model' | 'effort' = 'harness';
+
+    // Opened on one backend's models, as after its key is saved: the harness
+    // is already chosen, and Back still reaches the list.
+    const start = options.start ? backends.find((b) => b.id === options.start) : undefined;
+    if (start) {
+      const catalog = await loadCatalog(start, deps);
+      if (catalog.candidates.length > 0) {
+        backend = start;
+        candidates = catalog.candidates;
+        recall = catalog.recall;
+        step = 'model';
+      }
+    }
 
     for (;;) {
       if (step === 'harness') {
@@ -98,6 +124,7 @@ export async function runPlannerWizard(deps: PlannerWizardDeps): Promise<void> {
           recall = catalog.recall;
         }
         backend = picked;
+        // Only a vendor can have nothing to offer: an agent always has its own default.
         if (candidates.length === 0) {
           vscode.window.showWarningMessage(`No ${picked.label} models discovered yet. Run /refresh.`);
           return;
@@ -169,14 +196,14 @@ async function loadCatalog(
   if (backend.kind === 'harness' && backend.runner) {
     const models = await deps.modelsForRunner(backend.runner);
     return {
-      candidates: models.map((m) => ({
+      candidates: [AGENT_DEFAULT, ...models.map((m) => ({
         id: m.modelId,
         label: m.modelLabel,
         detail: m.variants.length > 0
           ? `${m.variants.length} effort level${m.variants.length === 1 ? '' : 's'}`
           : 'runner default effort',
         variants: m.variants.map((v) => ({ id: v.id, label: v.label })),
-      })),
+      }))],
       recall: deps.recall(backend.id, models, undefined),
     };
   }
