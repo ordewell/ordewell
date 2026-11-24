@@ -852,8 +852,9 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
         dispatch({ type: 'notice', message: merged.message });
         return;
       }
+      // A merge that landed is told once, by the daemon's notice of it, which every surface draws; the reply's words are for a failure.
       const { ok, message } = mergeOutcome(merged, effect.branch, effect.group === true, effect.repaired ?? []);
-      dispatch({ type: ok ? 'notice' : 'failed', message });
+      if (!ok) dispatch({ type: 'failed', message });
       return;
     }
 
