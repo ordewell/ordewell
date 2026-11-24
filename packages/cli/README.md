@@ -51,7 +51,7 @@ Run `ordewell` in your project to open the terminal UI: the conversation on the
 left, the live plan on the right (or beneath it, below 70 columns). The first run lets you pick a planner and runners
 with `/planner` (also typed `/model`; Harness › Model › Effort, each step saved as you go) and `/runners`, and no API key is needed if you plan with a coding
 agent you already use.
-By default, submitted build plans wait for your approval. Autorun can start them
+By default, submitted build plans wait for you to run them (`/run`). Autorun can start them
 automatically; research tasks and consented script tasks can start during planning.
 Automatic merging is optional, and an Act supervisor can also merge.
 The welcome screen lists the repositories and branches code tasks will use, and

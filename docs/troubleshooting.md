@@ -402,6 +402,34 @@ when the limit resets, or hit it again right after a resend, or you moved the
 planner to another runner, nothing is resent on its own: send a message once
 the limit has reset.
 
+## The planner's tool calls time out
+
+The planner stays on **Planning…** for minutes and then ends with no plan, or
+with a warning that its tools failed on every call this turn. The terminal UI's
+status line names the call in flight, as in `Planning… 4m 19s · list_runners
+running 4m 09s`, or says `nothing received for 2m 55s` when the planner has been
+silent for a minute.
+
+Every call the planner makes to Ordewell is logged to `~/.ordewell/server.log`
+(the daemon's log; in VS Code the lines go to the extension host's console
+instead):
+
+```
+[ordewell-mcp] 2026-11-24T10:02:11.000Z planner call list_runners started (session s1)
+[ordewell-mcp] 2026-11-24T10:07:11.000Z planner call list_runners error after 300.0s (session s1)
+```
+
+A `started` line with no matching end means Ordewell never answered; an `error`
+after about 300 seconds means the planner's own CLI gave up waiting (Codex
+enforces a fixed 300 second deadline on a tool call, and Ordewell sets an hour
+on a Codex planner's thread). `refused` means the call named a tool the planner is not given, `cancelled`
+that the caller gave up on it, and `revoked` that its session had ended. If Ordewell
+answered quickly, the stall is in the planner, not in Ordewell. Send the goal
+again, or switch planner with `/planner`.
+
+A Codex task's checkpoint, which waits for a person, still ends at Codex's 300
+second deadline.
+
 ## The planner is paused on its context
 
 A turn of an API planner (OpenAI, OpenRouter, an OpenAI-compatible server,
@@ -473,7 +501,7 @@ The setting does not touch a planner.
 
 A row reads **waits for your approval** and the scheduler skips it.
 
-The planner added the task after you approved the plan, and autorun was off, so
+The planner added the task after you ran the plan, and autorun was off, so
 nothing may start it until you approve it
 ([ADR-0035](adr/supervision/0035-effects-are-consented-and-recorded.md)). Approve it with
 `f` in the terminal UI, `ordewell force-start <id>`, or its card in VS Code;

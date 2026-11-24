@@ -33,7 +33,7 @@ installed and signed in, or a provider API key. No Ordewell account or key.
    whether each is signed in; choose a planner and runners, then type a goal.
 2. The planner reads your repository without changing it, asks what is vague and
    writes a plan: tasks with dependencies, each with its own agent and model.
-3. You edit and approve the plan. Independent tasks run side by side; in a git
+3. You edit the plan, then run it. Independent tasks run side by side; in a git
    repository, each on its own branch in its own worktree.
 4. A task passes only on evidence: its agent's report, or a script's clean exit.
    You read the diff, then merge the run into your branch or discard it.
@@ -70,7 +70,7 @@ versions you can install and their release notes.
 4. **Done means evidence.** A clean exit with no report is a failure, and no
    second model decides. Check-and-fix loops repeat a check and its fix until
    it passes or reaches its round limit.
-5. **Your call on autonomy.** By default you approve the plan, answer
+5. **Your call on autonomy.** By default you run the plan, answer
    checkpoints and merge. Turn on autorun, automatic merging and an Act
    supervisor, and it runs and merges on its own; a merge conflict leaves your
    tree untouched and waits for you.
@@ -176,7 +176,8 @@ signed in, or a provider API key for the built-in runner. git is optional; 2.38
 or newer is recommended: tasks then run in their own worktrees. Without it, they
 run directly in your folder. Each commit Ordewell writes ends with a
 `Planned-with: Ordewell` trailer, on by default: `ordewell trailer off` turns it
-off and `ordewell trailer on` back on. A commit an agent made itself gets none.
+off and `ordewell trailer on` back on. The first merge that would write it says
+so once, in its confirmation. A commit an agent made itself gets none.
 
 ## Quick start
 
@@ -201,8 +202,8 @@ Tried it? [Tell us how your first run went](https://github.com/ordewell/ordewell
 
 A run follows the steps of [your first run](#what-happens-on-your-first-run).
 Autorun and automatic merging are off by default. During planning, research tasks
-can start without build-plan approval, and script tasks can run with consent under
-your approval and run settings. See [run settings](https://ordewell.ai/docs#run-settings).
+can start before you run the plan, and script tasks can run with consent under
+your run settings. See [run settings](https://ordewell.ai/docs#run-settings).
 
 The planner only reads; tasks run as you, in the mode the plan assigns. In Full
 and Guarded a task's agent can reach what you can, Ordewell's own daemon

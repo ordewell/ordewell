@@ -363,9 +363,10 @@ With a workspace open:
 1. Type a goal to the planner, in the middle of the window.
 2. Read the plan as it streams into the Plan panel on the right. Click a task
    to edit its prompt, dependencies, runner, model or mode in its tab; the
-   approval card at the foot of the conversation lists any script or effect you
+   plan card at the foot of the conversation lists any script or effect you
    should read first.
-3. **Approve plan** approves the plan and starts the run in one click.
+3. **Run plan** (or **Run** in the title bar) starts the run in one click:
+   running a plan is what approves it.
    Independent tasks run in parallel and dependent ones wait. **Run** is
    offered later, to carry on a run that stopped with tasks left.
 4. Follow a task in its tab, answer what **Needs you** asks, and read each diff
@@ -450,7 +451,7 @@ Project…** in the command palette opens it too. Then come the repository and
 the branch, and the **scope switcher** beside it chooses which tree the Explorer, Changes and the
 terminal look at: *Your checkout*, the run's *Integration branch*, or a task's
 *worktree*. The **Needs you** button counts what waits on you. One primary
-action sits at the right — *Approve plan*, *Run*, *Stop* or *Review & Merge
+action sits at the right — *Run*, *Stop* or *Review & Merge
 all*, whichever the session is at — and everything else is in the `⋯` menu.
 As the window narrows the breadcrumb shortens first, and the project switcher
 keeps its folder icon and chevron after its name drops; Needs you and the
@@ -462,7 +463,7 @@ The first tab in the middle is always the planner conversation. It is pinned
 and cannot be closed. Its header names the session's goal and status, and
 picks the planner, its model and its thinking effort, with the context fill
 and account limits beside them; `⋯` there forks, rewinds or compacts the
-conversation. When a plan is ready, its approval card appears at the foot of
+conversation. When a plan is ready, its plan card appears at the foot of
 the conversation. `⌘L`/`Ctrl+L` brings the planner tab forward and puts the
 cursor in the composer.
 
