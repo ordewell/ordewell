@@ -261,7 +261,9 @@ export default function ChatInput({
     }
     const lower = text.toLowerCase();
 
-    const all = [...COMMAND_SUGGESTIONS, ...skills.map(toSkillSuggestion)];
+    // A leading skill a built-in or alias already names is never invoked (the built-in wins), so it is not listed.
+    const reachable = skills.filter((skill) => !SLASH_COMMAND_NAMES.has(skill.name.toLowerCase()));
+    const all = [...COMMAND_SUGGESTIONS, ...reachable.map(toSkillSuggestion)];
     return all.filter((s) => s.label.toLowerCase().startsWith(lower));
   }, [text, midToken, skills]);
 
@@ -490,7 +492,7 @@ export default function ChatInput({
 
   const renderedSuggestions = () => suggestions.map((s, i) => (
     <div
-      key={s.label}
+      key={`${s.kind ?? 'command'} ${s.label}`}
       className={`slash-suggestion-item ${s.kind ?? ''} ${i === selectedIdx ? 'selected' : ''}`}
       onMouseEnter={() => setSelectedIdx(i)}
       onMouseDown={(e) => {

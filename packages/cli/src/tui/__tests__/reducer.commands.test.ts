@@ -512,7 +512,8 @@ describe('sessions', () => {
     expect(confirmed.state.sessionId).toBeNull();
     expect(confirmed.state.tasks).toEqual([]);
     expect(messagesOf(confirmed.state)).toEqual([]);
-    expect(confirmed.effects).toEqual([{ type: 'closeSession', sessionId: 'session-1' }]);
+    // The welcome it opens onto names the commit runs fork from, which may have moved since launch.
+    expect(confirmed.effects).toEqual([{ type: 'closeSession', sessionId: 'session-1' }, { type: 'loadIsolationPreview' }]);
   });
 
   it('/new cancelled with escape leaves the session untouched', () => {
@@ -526,7 +527,7 @@ describe('sessions', () => {
   it('/new resets immediately when there is nothing to lose', () => {
     const { state, effects } = run('/new');
     expect(state.sessionId).toBeNull();
-    expect(effects).toEqual([]);
+    expect(effects).toEqual([{ type: 'loadIsolationPreview' }]);
   });
 });
 

@@ -128,6 +128,16 @@ export function plannerEffortItems(state: TuiState, provider: string, modelId: s
   ];
 }
 
+/**
+ * A saved plan's status as a session row says it. A plan the user ran keeps
+ * 'approved' after its run stops, ends or merges, and there is no approving a
+ * plan (one verb: Run), so it reads as started; the desktop sidebar says the same.
+ */
+const SESSION_STATUS_WORD: Readonly<Record<string, string>> = {
+  approved: 'started',
+  completed: 'settled',
+};
+
 export function pickerItemsFor(state: TuiState, action: PickerState['action']): PickerItem[] {
   if (action.kind === 'rewind') {
     if (state.rewindTargets === null) return [];
@@ -140,7 +150,7 @@ export function pickerItemsFor(state: TuiState, action: PickerState['action']): 
     return state.sessions.map((s) => ({
       id: s.id,
       label: s.goal || s.id,
-      detail: `${s.taskCount} ${s.taskCount === 1 ? 'task' : 'tasks'} · ${s.status}`,
+      detail: `${s.taskCount} ${s.taskCount === 1 ? 'task' : 'tasks'} · ${SESSION_STATUS_WORD[s.status] ?? s.status}`,
     }));
   }
   if (action.kind === 'set-allowlist') {

@@ -91,7 +91,7 @@ export function sessionLook(status: string): SessionLook {
   switch (status) {
     case 'running': return { status: 'running', word: 'Running' };
     case 'completed': return { status: 'passed', word: 'Settled' };
-    case 'approved': return { status: 'not-started', word: 'Approved' };
+    case 'approved': return { status: 'not-started', word: 'Started' };
     case 'rejected': return { status: 'blocked', word: 'Rejected' };
     case 'draft': return { status: 'not-started', word: 'Draft' };
     default: return { status: 'not-started', word: status === '' || status === 'unknown' ? 'Unknown' : status };

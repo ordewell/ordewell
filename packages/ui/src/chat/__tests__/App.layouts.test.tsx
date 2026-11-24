@@ -97,6 +97,13 @@ describe('App — the desktop plan panel (docs/desktop/design.md, W4)', () => {
     expect(screen.getByText('No plan yet. Describe a goal to the planner.')).toBeTruthy();
   });
 
+  it('does not ask for a goal while the planner works on the one just sent', () => {
+    mount('plan');
+    post({ type: 'plannerTurn', active: true, startedAt: new Date().toISOString() });
+    expect(screen.queryByText(/Describe a goal/)).toBeNull();
+    expect(screen.getByText('The planner is drafting the plan.')).toBeTruthy();
+  });
+
   it('heads the plan with its goal, draws compact rows, and selects a task from its row without opening a tab', () => {
     const onChange = vi.fn();
     const onOpen = vi.fn();

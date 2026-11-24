@@ -14,6 +14,7 @@ interface Manifest {
     walkthroughs?: Array<{
       id: string;
       title: string;
+      description?: string;
       steps: Array<{ id: string; title: string; description: string; media: { markdown?: string }; completionEvents?: string[] }>;
     }>;
   };
@@ -73,6 +74,13 @@ describe('the walkthrough (F5)', () => {
       'Give it a goal',
       'Run the plan',
     ]);
+  });
+
+  // One verb: a plan is run, never approved, in what the walkthrough says as in the chat.
+  it('names no approving of a plan, in its description or any step\'s page', () => {
+    const { description, steps } = walkthrough();
+    const pages = steps.map((step) => fs.readFileSync(path.join(ROOT, step.media.markdown ?? ''), 'utf8'));
+    for (const text of [description ?? '', ...steps.map((step) => step.description), ...pages]) expect(text).not.toMatch(/approv/i);
   });
 
   it('gives each step a markdown page that ships in the extension', () => {

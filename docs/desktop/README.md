@@ -365,8 +365,7 @@ With a workspace open:
    to edit its prompt, dependencies, runner, model or mode in its tab; the
    plan card at the foot of the conversation lists any script or effect you
    should read first.
-3. **Run plan** (or **Run** in the title bar) starts the run in one click:
-   running a plan is what approves it.
+3. **Run plan** (or **Run** in the title bar) starts the run in one click.
    Independent tasks run in parallel and dependent ones wait. **Run** is
    offered later, to carry on a run that stopped with tasks left.
 4. Follow a task in its tab, answer what **Needs you** asks, and read each diff

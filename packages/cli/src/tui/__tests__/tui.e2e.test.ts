@@ -628,8 +628,9 @@ describe('TUI end to end', () => {
       expect(h.transcript()).toContain('Task #1 asks: Route added');
       expect(h.transcript()).toContain('Plan needs your sign-off: /run to continue.');
       expect(h.transcript()).toContain('Added a hardening task.');
-      expect(h.transcript()).toContain('Plan approved.');
     });
+    // Running the plan is the Run, so no line names an approve (one verb).
+    expect(h.transcript()).not.toContain('Plan approved');
     // The mid-run plan rewrite reached the task pane.
     expect(h.app.getState().tasks.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
 

@@ -77,8 +77,10 @@ describe('runNotice', () => {
       expect(runNotice({ type: 'review_needed', tasks: [] }, EMPTY_RUN)).toBe('Plan needs your sign-off.');
     });
 
-    it('says the plan was approved', () => {
-      expect(runNotice({ type: 'review_approved' }, EMPTY_RUN)).toBe('Plan approved.');
+    // Running a draft is the user's Run (one verb): the timeline's "You started the plan." says it, and no line names an approve.
+    it('earns no line when the plan is run, so nothing says it was approved', () => {
+      expect(runNotice({ type: 'review_approved' }, EMPTY_RUN)).toBeNull();
+      expect(runNotice({ type: 'review_approved' }, EMPTY_RUN, { runWith: '/run' })).toBeNull();
     });
   });
 

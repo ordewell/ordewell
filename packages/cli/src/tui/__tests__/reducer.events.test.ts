@@ -364,6 +364,18 @@ describe('the session picker', () => {
       type: 'sessionsLoaded',
       sessions: [{ id: 's1', goal: 'g', taskCount: 1, status: 'approved', createdAt: '' }, { id: 's2', goal: 'h', taskCount: 3, status: 'approved', createdAt: '' }],
     });
-    expect(pickerItemsFor(state, { kind: 'load-session' }).map((i) => i.detail)).toEqual(['1 task · approved', '3 tasks · approved']);
+    expect(pickerItemsFor(state, { kind: 'load-session' }).map((i) => i.detail)).toEqual(['1 task · started', '3 tasks · started']);
+  });
+
+  // One verb: a plan the user ran (and maybe merged) keeps the saved status 'approved', which no row may name.
+  it('words each saved status, so a plan that was run never reads as approved', () => {
+    const statuses = ['draft', 'approved', 'running', 'completed', 'rejected'];
+    const state = send(initialState(), {
+      type: 'sessionsLoaded',
+      sessions: statuses.map((status, i) => ({ id: `s${i}`, goal: 'g', taskCount: 2, status, createdAt: '' })),
+    });
+    expect(pickerItemsFor(state, { kind: 'load-session' }).map((i) => i.detail)).toEqual([
+      '2 tasks · draft', '2 tasks · started', '2 tasks · running', '2 tasks · settled', '2 tasks · rejected',
+    ]);
   });
 });

@@ -170,7 +170,7 @@ left, where VS Code users look for it.
 - **Primary action.** There is exactly one, chosen by the session's state, in
   this order:
   1. *Run*, when a plan is drafted, or a started plan is not running and has
-     tasks left (running a plan is what approves it);
+     tasks left;
   2. *Stop*, while a run is live;
   3. *Review & Merge all*, once a run has settled with unmerged landings.
 
@@ -564,17 +564,19 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - Click a draft row to open its task tab, where its prompt, assignment and
     dependencies are edited (the panel itself edits nothing).
   - *Run* in the title bar once drafting ends; the plan card
-    appears at the foot of the conversation ([W3](#w3-plan-approval)).
+    appears at the foot of the conversation ([W3](#w3-plan-ready-to-run)).
 - **Loading.** A turn in flight shows the planner's live step ("reading
   src/auth …") and Stop planning. The draft fills in row by row.
 - **Empty.**
   - *A new session:* the conversation area shows the planner picker and a
     larger composer, centred vertically, with the `composerTips` line under it.
   - *The plan panel* reads "No plan yet. Describe a goal to the planner." with
-    no action, since the composer is already focused.
+    no action, since the composer is already focused; while the planner works
+    on the first message it reads "The planner is drafting the plan.", and the
+    session's row reads *Planning*.
 - **Error.**
-  - A planner turn that fails shows the failure in the conversation, with
-    Resend.
+  - A planner turn that fails shows the failure once, after its message, with
+    Try Again, which sends the message again.
   - A usage limit shows the `PlannerPauseBar` above the composer (ADR-0044).
   - A signed-out planner shows `PlannerLogin` in place of the composer
     (ADR-0052).
@@ -1585,7 +1587,8 @@ A VS Code holder
     is a two-line row:
     - the goal, with an ellipsis;
     - the session's status as a shape plus a word (*Planning*, *Draft*,
-      *Approved*, *Running n/m*, *Settled*, *Failed*), and its relative time;
+      *Started* for a plan that was run and is not running now,
+      *Running n/m*, *Settled*, *Failed*), and its relative time;
     - a ⇄ when the session is joined, or a ⊡ when it is held read-only, with
       the holder in the tooltip.
 

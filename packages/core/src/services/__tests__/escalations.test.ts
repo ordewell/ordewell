@@ -128,6 +128,15 @@ describe('a loop\'s check between rounds that nothing will run (ADR-0045 L5)', (
   });
 });
 
+describe('a task added after the plan was run (ADR-0035)', () => {
+  // One verb: a plan is run, never approved, so its reason names the run.
+  it('says it was added since the plan ran, and names no approve', () => {
+    const [entry] = listFor([task('b', 1)], { added: ['b'] });
+    expect(entry.kind).toBe('unapproved');
+    expect(entry.reason).toBe('Added since you ran the plan, so it waits for you to start it.');
+  });
+});
+
 describe('a loop carried on with no scheduler (ADR-0045 L5)', () => {
   const closed = { run: { open: false } };
   const body = () => [task('b', 1, { status: 'approved' })];

@@ -51,7 +51,7 @@ drive the same local daemon, so a run started in one shows up in the others.
 2. Open the Ordewell panel from the activity bar.
 3. Type a goal. With a supported coding agent installed and signed in, the first
    usable one can plan for you. Choose another planner in the planner bar.
-4. Review the plan, then click **Execute Plan** to start the run: running a plan is what approves it.
+4. Review the plan, then click **Execute Plan** to start the run.
 
 Ordewell runs coding agents in your folder, so it is off in Restricted Mode:
 trust the folder to use it.

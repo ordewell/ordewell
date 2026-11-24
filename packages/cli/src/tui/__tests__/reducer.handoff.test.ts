@@ -673,6 +673,16 @@ describe('a merge result the pane did not ask for', () => {
     expect(lastMessage(state)).toMatchObject({ role: 'system', text: expect.stringContaining('Merged ordewell/r1/integration into your checked-out branch') });
   });
 
+  // The welcome names the commit runs fork from, which a merge has just moved.
+  it('reads the isolation preview again once a merge has landed, and not when it merged nothing', () => {
+    for (const trigger of [undefined, { kind: 'run_end' as const }]) {
+      const merged = apply(withHandoff(), { type: 'runMessage', message: { type: 'isolation_merge', result: { outcome: 'merged' }, ...(trigger ? { trigger } : {}) }, sessionId: 's1' });
+      expect(merged.effects).toContainEqual({ type: 'loadIsolationPreview' });
+    }
+    const refused = apply(withHandoff(), { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' });
+    expect(refused.effects).not.toContainEqual({ type: 'loadIsolationPreview' });
+  });
+
   it('says what a supervisor\'s or another window\'s Merge all did, which carries no trigger', () => {
     const { state } = apply(withHandoff(), { type: 'runMessage', message: { type: 'isolation_merge', result: blocked }, sessionId: 's1' });
 

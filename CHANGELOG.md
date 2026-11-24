@@ -19,10 +19,12 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   handoff if you remove any (ADR-0047).
 - **The Codex planner's tool calls are logged, and the status line shows the
   one in flight.** Each call the planner makes to Ordewell writes a start and
-  an end line, with its outcome, to the daemon's log, never its content. The
-  terminal UI's status line reads, for example, `Planning… 4m 19s ·
-  list_runners running 4m 09s`, or says how long nothing has arrived. A turn
-  whose Ordewell calls all failed now ends with a notice naming the log
+  an end line, with its outcome, to the log of the process that runs the
+  session (the daemon's, or VS Code's extension host), never its content. The
+  terminal UI's status line reads, for example, `Planning… 1m 12s ·
+  run_command running 58s`, or says how long nothing has arrived. A turn
+  whose Ordewell calls all failed now ends with a notice naming the log; a
+  command that ran and exited non-zero is not counted as a failed call
   (ADR-0022). The status line detail is terminal-only for now; the desktop and
   VS Code show the plain planning state.
 - **Typing `/` in the desktop app lists the workspace's skills**, as VS Code
@@ -53,12 +55,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **One gate, one verb: run.** With autorun off, the planner now submits the
   plan in the same reply as its outline instead of asking you to confirm the
   outline first, and tells you the draft waits for you to run it, naming your
-  surface's run control. Running a plan is what approves it, so no surface
-  names a separate approve step: the desktop's button reads **Run plan** and
+  surface's run control. No surface names a separate approve step, and
+  running a plan no longer prints "Plan approved.": the desktop's button reads **Run plan** and
   its card **Plan ready to run**, and the VS Code walkthrough step is **Run
   the plan**. `/approve` and `ordewell approve` still work and say they are
   now `/run` and `ordewell run`, but are listed nowhere; VS Code's **Approve
-  Plan** command is removed. A run on a plan that is already running no longer
+  Plan** command is removed. A plan that was run reads *started* in the
+  terminal UI's `/sessions` and the desktop's session lists, not *approved*.
+  A run on a plan that is already running no longer
   records a second "You started the plan." (ADR-0030).
 - **A session is saved when its first message is admitted.** It appears in the
   list while the planner works and keeps your goal if the first turn fails or
@@ -74,7 +78,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   or skip clears it (ADR-0053).
 - **A merge says `Merged` once.** The terminal UI drew the daemon's notice
   and its own reply's line for the same merge; now only the notice shows, and
-  the reply speaks only on a failure.
+  the reply speaks only on a failure. Your own merge's "You merged the run's
+  work into your branch." line is no longer drawn beside it.
 - **A planner's catalog reads no longer wait on one runner's hung model
   list.** `list_runners` discovers nothing, `list_models` only its own runner,
   and other reads wait at most 10 seconds, so one CLI that hangs while
@@ -88,6 +93,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
+- **A Codex planner's command that exits non-zero no longer reads as its
+  tools failing.** The "tools failed on every call" notice ignores a
+  `run_command` whose command ran, and names the log of the process that runs
+  the session and the planner picker on every surface (ADR-0022).
+- **The desktop app's first turn.** A failed turn's error shows once, after
+  its message, and Try Again sends the message again; while the planner works
+  on the first message the session reads *Planning*. Typing `/` lists a
+  skill that shares a built-in command's name once, as the built-in.
+- **The terminal UI's welcome names the current base commit after a merge**
+  and on `/new`, not the one it read at launch.
 - **`.ordewell/.gitignore` no longer shows up in `git status`.** Its rules
   un-ignored their own file, so a fresh project listed `.ordewell/`. The file
   now ignores itself: do not commit it, each machine writes its own. The

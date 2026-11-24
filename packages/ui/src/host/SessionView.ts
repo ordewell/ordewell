@@ -59,7 +59,7 @@ export class SessionView {
     // Worded before the run folds the message in: a start the run already
     // shows is a duplicate, and only the run as it stood can tell. The wording
     // is core's, so the terminal says the same (ADR-0017). There is a button to
-    // approve a plan here, so the sign-off line has nothing to point at.
+    // run a plan here, so the sign-off line has nothing to point at.
     const notice = runNotice(msg, this.run.current);
     if (notice !== null) this.conversation.note('system', notice);
     // Every message feeds the run view too: the card badges, isolation marks

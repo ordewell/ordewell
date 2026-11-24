@@ -1,4 +1,4 @@
-import { NO_TURN, closeTurn, everyTaskPassed, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type SerializedPlan } from '@ordewell/core';
+import { NO_TURN, closeTurn, everyTaskPassed, fromTranscript, holdPrompt, runNotice, taskLogCommands, type ChildPlanView, type DecisionRecordEntry, type ExecutionRecord, type SerializedPlan } from '@ordewell/core';
 import { bodyMode, chatEditorRoomFor } from './geometry';
 import { SPINNER_CYCLE, chatScrollGrowth, chatScrollMax } from './layout';
 import { activeToken, composerCompletions, findCommand, parseRunnerCommand, parseSlash, runnerCommandFor, type ParsedCommand } from './slash';
@@ -248,6 +248,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
       if (action.message.type === 'planner_detection') return step({ ...state, plannerDetecting: action.message.waiting });
+      // The merge's own notice ("Merged … into your checked-out branch.") is the
+      // line a user's Merge all earns here; the timeline's "You merged …" would
+      // announce the same merge a second time.
+      if (action.message.type === 'execution_action' && isOwnMerge(action.message.record)) return step(state);
       const followed = followSession(state, action.message);
       const plannerPulse = pulseAfter(state.plannerPulse, followed.conversation, action.message, action.at);
       const next = plannerPulse === followed.plannerPulse ? followed : { ...followed, plannerPulse };
@@ -296,7 +300,8 @@ function reduceAction(state: TuiState, action: Action): Step {
     // only what is its own (below).
     case 'runMessage':
       if (stale(state, action.sessionId)) return step(state);
-      return step(runMessage(state, action.message));
+      // A landed merge moves the commit the welcome says runs fork from.
+      return step(runMessage(state, action.message), action.message.type === 'isolation_merge' && action.message.result.outcome === 'merged' ? [{ type: 'loadIsolationPreview' }] : []);
 
     case 'taskCheckpoint':
       if (stale(state, action.sessionId)) return step(state);
@@ -609,6 +614,10 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (!state.stopArmed || action.arm !== state.stopArmToken) return step(state);
       return step(disarmStop(state));
   }
+}
+
+function isOwnMerge({ command, actor, outcome }: ExecutionRecord): boolean {
+  return command === 'merge_all' && actor === 'user' && outcome === 'done';
 }
 
 /**

@@ -944,6 +944,13 @@ describe('the outline gate and autorun (ADR-0030)', () => {
     expect(p).not.toMatch(/After the user confirms the outline|When the user confirms the outline/);
   });
 
+  // A rule that only says to show the outline before submitting reads, on its own, as a wait for its confirmation.
+  it('with autorun off, has the rules put the outline in the reply that calls submit_plan', () => {
+    const p = prompt(true, false);
+    expect(p).toContain('- Write the outline in the same reply that calls submit_plan. Do not skip the outline.');
+    expect(p).not.toContain('Show the outline before submitting');
+  });
+
   it.each([true, false])('with autorun on, writes the outline as the summary and submits without waiting, still asking what is unclear (harness: %s)', (harness) => {
     const p = prompt(harness, true);
     expect(p).not.toMatch(/AUTORUN is off/);

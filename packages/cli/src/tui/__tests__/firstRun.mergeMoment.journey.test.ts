@@ -105,8 +105,9 @@ describe('machine B, mergeMoment: /merge in the terminal UI', () => {
 
     const said = await confirmMerge(tui);
 
-    // The key phrase as the merge's notice words it: the timeline's own "You merged …" line is not a second one.
+    // The key phrase as the merge's notice words it, and no second line announcing the same merge ("You merged …").
     expect(said.filter((line) => /\bMerged\b/.test(line))).toHaveLength(1);
+    expect(said.filter((line) => /\bmerged\b/i.test(line))).toHaveLength(1);
   });
 });
 
