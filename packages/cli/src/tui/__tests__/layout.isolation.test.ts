@@ -212,6 +212,14 @@ describe('handoff overlay frame', () => {
     expect(out.split('\n').find((l) => l.includes('#2 Write the tests'))).not.toContain('repaired');
   });
 
+  it('says what each landed task changed, as Ordewell counted it, and nothing for one it did not count', () => {
+    const counted = { ...handoff, landed: [{ ...handoff.landed[0], change: { files: 2, added: 14, removed: 1, binary: 0 } }, handoff.landed[1]] };
+    const lines = frame(open({ handoff: counted })).split('\n');
+
+    expect(lines.find((l) => l.includes('#1 Add the route'))).toContain('#1 Add the route, 2 files, +14 -1');
+    expect(lines.find((l) => l.includes('#2 Write the tests'))).not.toMatch(/\+\d+ -\d+/);
+  });
+
   it('marks the highlighted action', () => {
     const line = render(open({ overlay: { kind: 'handoff', index: 1, diff: null } })).find((l) => l.includes('Merge'));
 

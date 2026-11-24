@@ -1,6 +1,12 @@
 import React from 'react';
-import { capConflictFiles, handoffBaseLine, handoffBranchName, isRepoGroup, mergeOutcome, repoBaseLine, repairedLanded } from '@ordewell/core/plan-utils';
+import { capConflictFiles, changeText, handoffBaseLine, handoffBranchName, isRepoGroup, mergeOutcome, repoBaseLine, repairedLanded } from '@ordewell/core/plan-utils';
 import type { IsolationHandoffRepo, IsolationLandedTask, IsolationMergeResult } from '@ordewell/core';
+
+/** What the task's landing changed, as Ordewell counted it from git: the runner's own account of it is not where this comes from. */
+function ChangeNote({ task }: { task: IsolationLandedTask }) {
+  const change = changeText(task);
+  return change ? <span className="isolation-handoff-change">, {change}</span> : null;
+}
 
 /** So the reviewer knows where to look (ADR-0015). */
 function RepairedNote({ files }: { files: string[] }) {
@@ -80,6 +86,7 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
                       <li key={t.taskId}>
                         <span className="isolation-handoff-order">{t.order}</span>
                         {t.title}
+                        <ChangeNote task={t} />
                         {t.repairedFiles && t.repairedFiles.length > 0 && <RepairedNote files={t.repairedFiles} />}
                       </li>
                     ))}
@@ -100,6 +107,7 @@ export default function HandoffCard({ repos, landed, deferredTo, mergeResult, mi
                 <li key={t.taskId}>
                   <span className="isolation-handoff-order">{t.order}</span>
                   {t.title}
+                  <ChangeNote task={t} />
                   {t.repairedFiles && t.repairedFiles.length > 0 && <RepairedNote files={t.repairedFiles} />}
                 </li>
               ))}

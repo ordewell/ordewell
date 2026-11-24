@@ -13,6 +13,7 @@ import type {
   RepoGroupLayout,
   TaskIsolation,
 } from '../interfaces/IWorktreeIsolation';
+import { totalChange } from '../models/Handoff';
 import { SELF_REPO } from './repoPath';
 import { marksRevertible, mergedIn, recordlessRevertible } from './LandingLedger';
 
@@ -118,10 +119,14 @@ export function handoffOf(run: IsolationRun): IsolationHandoff {
   const merged = Object.values(run.tasks)
     .filter((r) => r.status === 'merged' && !r.inHead)
     .sort((a, b) => a.order - b.order);
-  const entry = (r: IsolationTaskRecord): IsolationLandedTask => ({
-    taskId: r.taskId, order: r.order, title: r.title,
-    ...(r.repairedFiles?.length ? { repairedFiles: r.repairedFiles } : {}),
-  });
+  const entry = (r: IsolationTaskRecord, repoPath?: string): IsolationLandedTask => {
+    const change = repoPath === undefined ? totalChange(Object.values(r.repos).map((e) => e.change)) : r.repos[repoPath]?.change;
+    return {
+      taskId: r.taskId, order: r.order, title: r.title,
+      ...(r.repairedFiles?.length ? { repairedFiles: r.repairedFiles } : {}),
+      ...(change && change.files > 0 ? { change } : {}),
+    };
+  };
   return {
     repos: run.repos.map((repo) => ({
       path: repo.path,
@@ -129,9 +134,9 @@ export function handoffOf(run: IsolationRun): IsolationHandoff {
       baseRef: repo.baseRef,
       ...(repo.baseBranch ? { baseBranch: repo.baseBranch } : {}),
       ...(repo.startedDetached ? { startedDetached: true as const } : {}),
-      landed: merged.filter((r) => mergedIn(run, r, repo.path)).map(entry),
+      landed: merged.filter((r) => mergedIn(run, r, repo.path)).map((r) => entry(r, repo.path)),
     })),
-    landed: merged.map(entry),
+    landed: merged.map((r) => entry(r)),
   };
 }
 

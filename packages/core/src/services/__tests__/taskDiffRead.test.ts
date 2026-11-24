@@ -4,7 +4,8 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { patchFiles, readSavedPatch } from '../taskDiffRead';
+import { defaultExecFile } from '../gitExec';
+import { landedChange, patchFiles, readSavedPatch } from '../taskDiffRead';
 
 /**
  * `task_diff` on a read-only task that saved a patch (ADR-0050): its worktree
@@ -124,5 +125,42 @@ describe.skipIf(process.platform === 'win32')('patchFiles', () => {
     const patch = Buffer.from('diff --git a/a.ts b/a.ts\nnew file mode 100644\nindex 0000000..e69de29\n--- /dev/null\n+++ b/a.ts\n@@ -0,0 +1 @@\n+text\rdiff --git a/b.ts b/b.ts\n');
 
     expect(patchFiles(patch).map((f) => f.path)).toEqual(['a.ts']);
+  });
+});
+
+/**
+ * What a landing brought, as a done task shows it: the merge against the tip it
+ * merged onto, so a sibling that landed before it is not counted as its work,
+ * and a line it removed is counted as removed whatever its runner said.
+ */
+describe('landedChange', () => {
+  let repo: string;
+  const invoker = { exec: defaultExecFile, resolvePath: async () => process.env.PATH ?? '' };
+  const commit = (message: string) => git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', message);
+
+  beforeAll(() => {
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'ordewell-landed-change-')));
+    git(repo, 'init', '-q', '-b', 'integration');
+    writeFileSync(join(repo, 'README.md'), '# hello\nA greeter.\n');
+    git(repo, 'add', '-A');
+    commit('base');
+    git(repo, 'checkout', '-q', '-b', 'task');
+    writeFileSync(join(repo, 'README.md'), 'A greeter.\nRun it with --shout.\n');
+    writeFileSync(join(repo, 'logo.bin'), Buffer.from([0, 1, 2, 255]));
+    git(repo, 'add', '-A');
+    commit('task work');
+    git(repo, 'checkout', '-q', 'integration');
+    writeFileSync(join(repo, 'sibling.txt'), 'one\ntwo\nthree\n');
+    git(repo, 'add', '-A');
+    commit('a sibling landed first');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', '--no-ff', '--no-edit', 'task');
+  });
+
+  afterAll(() => rmSync(repo, { recursive: true, force: true }));
+
+  it('counts the files and lines the merge brought, a binary file counting no lines, and none of a sibling\'s', async () => {
+    const tip = git(repo, 'rev-parse', 'HEAD').trim();
+
+    expect(await landedChange(invoker, repo, tip)).toEqual({ files: 2, added: 1, removed: 1, binary: 1 });
   });
 });

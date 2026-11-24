@@ -7,7 +7,7 @@ import { SELF_REPO } from './isolationRecord';
 import { capConflictFiles } from './conflictFiles';
 import { buildConflictRepairPrompt, buildConflictResolutionPrompt } from './PlanPrompts';
 import { landsNothing, type AttemptKind } from './attemptKind';
-import type { HandoffCommit } from '../models/Handoff';
+import type { HandoffChange, HandoffCommit } from '../models/Handoff';
 import { landingMessage } from './landingMessage';
 import { underProtectedPath } from '../models/Delegation';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
@@ -31,7 +31,8 @@ export interface LandingMessage {
  * starts the repair and says the messages. By the time one is returned the
  * merge has happened or not, and the run record says so.
  *
- * - `landed`: the work is on the integration branch of every repo it changed.
+ * - `landed`: the work is on the integration branch of every repo it changed;
+ *   `change` is what that brought, as git counted it.
  * - `nothing-to-land`: the attempt ran in the workspace root, the task
  *   holds no unlanded work, or it is read-only and lands nothing (ADR-0046);
  *   it is done as it stands.
@@ -43,7 +44,7 @@ export interface LandingMessage {
  *   of them fails the task, so none blocks its dependents.
  */
 export type LandingOutcome =
-  | { kind: 'landed'; messages: LandingMessage[] }
+  | { kind: 'landed'; messages: LandingMessage[]; change?: HandoffChange }
   | { kind: 'nothing-to-land'; messages: LandingMessage[] }
   | { kind: 'repair-needed'; repair: RepairAttempt; messages: LandingMessage[] }
   | { kind: 'awaiting_user'; reason: 'conflict' | 'landing-failed' | 'repair-failed'; messages: LandingMessage[] };
@@ -111,7 +112,7 @@ export class Landing {
     if (!attempt.worktree) return NOTHING_TO_LAND;
     if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
     const landing = await this.runs.integrate(task, commit);
-    return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
+    return landing === 'merged' ? this.landed(task, []) : this.unmerged(task, landing);
   }
 
   /** Mark complete is a passed verdict the user vouches for: what the task holds unlanded lands the same way. */
@@ -119,7 +120,7 @@ export class Landing {
     if (this.runs.isReadOnly(task.id)) return this.discard(task, true);
     if (!this.hasUnlandedWork(task.id)) return NOTHING_TO_LAND;
     const landing = await this.runs.integrate(task);
-    return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
+    return landing === 'merged' ? this.landed(task, []) : this.unmerged(task, landing);
   }
 
   /**
@@ -130,7 +131,7 @@ export class Landing {
   async landKept(task: Task): Promise<LandingOutcome> {
     if (!this.hasUnlandedWork(task.id)) return this.unmerged(task, 'failed');
     const landing = await this.runs.integrate(task, task.handoff?.commit);
-    return landing === 'merged' ? { kind: 'landed', messages: [] } : this.unmerged(task, landing);
+    return landing === 'merged' ? this.landed(task, []) : this.unmerged(task, landing);
   }
 
   /**
@@ -154,10 +155,13 @@ export class Landing {
     const landing = await this.runs.integrate(task);
     if (landing !== 'merged') return this.unmerged(task, landing);
     const files = this.runs.repairedFilesOf(task.id);
-    return {
-      kind: 'landed',
-      messages: [{ level: 'info', text: `Task "${task.title}" landed after repairing a conflict${files.length > 0 ? ` in ${capConflictFiles(files)}` : ''}.`, repairLog: true }],
-    };
+    return this.landed(task, [{ level: 'info', text: `Task "${task.title}" landed after repairing a conflict${files.length > 0 ? ` in ${capConflictFiles(files)}` : ''}.`, repairLog: true }]);
+  }
+
+  /** A landing that went through, with what git counted it brought. */
+  private landed(task: Readonly<Task>, messages: LandingMessage[]): LandingOutcome {
+    const change = this.runs.landedChangeOf(task.id);
+    return { kind: 'landed', messages, ...(change ? { change } : {}) };
   }
 
   /** A repair lands after the verdict that held the work to its protected paths, so it is held to them here (ADR-0055 D7, D14). */
@@ -207,7 +211,7 @@ export class Landing {
   private async landConflicted(task: Readonly<Task>): Promise<LandingOutcome> {
     const landing = await this.runs.integrate(task);
     if (landing !== 'merged') return this.unmerged(task, landing);
-    return { kind: 'landed', messages: [{ level: 'info', text: `Task "${task.title}" landed through its conflict resolution.` }] };
+    return this.landed(task, [{ level: 'info', text: `Task "${task.title}" landed through its conflict resolution.` }]);
   }
 
   /**

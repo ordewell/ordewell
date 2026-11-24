@@ -52,7 +52,7 @@ import { landedOnOf } from './LandingLedger';
 import { inBranchRefusal, type RevertScope, type TaskRevertPreview } from './taskRevert';
 import type { RunMergeView, RunActivity } from './SessionMessage';
 import { ScriptRunner } from './ScriptRunner';
-import type { StoredHandoff } from '../models/Handoff';
+import { withChange, type StoredHandoff } from '../models/Handoff';
 import { userTaskHandoff } from '../models/DerivedHandoff';
 import type { TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
@@ -1733,6 +1733,7 @@ export class TaskOrchestrator {
    */
   private async applyLanding(task: Task, outcome: LandingOutcome, admission: Admitted, onLanded: () => void): Promise<void> {
     if (!completesTask(outcome)) return this.settleUnlanded(task, outcome, admission);
+    this.keepChange(task.id, outcome);
     this.store.markCompleted(task.id);
     this.retireResolvers(task.id);
     this.loops.close(task, LOOP_PASSED);
@@ -1741,6 +1742,18 @@ export class TaskOrchestrator {
     this.say(outcome.messages);
     await this.owedByLanding(task, outcome);
     await this.landResolved(task.id, admission);
+  }
+
+  /**
+   * What a landing after the verdict's brought, a repair's or a resolver's,
+   * joins the handoff the attempt already gave; a verdict's own landing
+   * handed it over with it.
+   */
+  private keepChange(taskId: string, outcome: LandingOutcome): void {
+    const task = this.store.get(taskId);
+    if (outcome.kind !== 'landed' || !outcome.change || !task) return;
+    if (JSON.stringify(task.handoff?.change) === JSON.stringify(outcome.change)) return;
+    this.store.setTaskOutputSummary(taskId, task.outputSummary, withChange(task.handoff, outcome.change));
   }
 
   /** Before anything the landing lets start: what a dependent reads of it should be there (ADR-0057 R6). A flat plan owes nothing, and waits on nothing. */
@@ -2079,7 +2092,7 @@ export class TaskOrchestrator {
     // claims starts with a summary of its own, not this one.
     this.store.setTaskVerdict(taskId, verdict);
     // A user task has no attempt to have written a handoff: the user's act is its.
-    const handoff = task.type === 'user' ? userTaskHandoff(task.userSteps) : undefined;
+    const handoff = withChange(task.type === 'user' ? userTaskHandoff(task.userSteps) : undefined, landing.kind === 'landed' ? landing.change : undefined);
     this.attempts.handOver(taskId, summarizeOutput(verdict.reason, ''), handoff);
     if (completesTask(landing)) {
       this.store.markCompleted(taskId);

@@ -1,6 +1,6 @@
 import type { TaskDiffRead, TaskDiffResult } from '../services/taskDiffRead';
 import type { Task } from '../models/Task';
-import type { HandoffCommit } from '../models/Handoff';
+import type { HandoffChange, HandoffCommit } from '../models/Handoff';
 
 /**
  * Why isolated execution is unavailable for a workspace. The orchestrator needs
@@ -122,6 +122,8 @@ export interface IsolationTaskRepo {
    * HEAD must contain for the task's work to count as merged (ADR-0020).
    */
   landedTip?: string;
+  /** What the task's latest landing brought onto this repo's integration branch, as git counts it; absent before it landed here, where git could not say, and in older saved runs. */
+  change?: HandoffChange;
 }
 
 export interface IsolationTaskRecord {
@@ -387,6 +389,8 @@ export interface IsolationLandedTask {
   title: string;
   /** Set when the task landed only after a conflict repair (ADR-0015): the files it was started for. */
   repairedFiles?: string[];
+  /** What its landing brought, as Ordewell counted it from git: in a repo's list that repo's share, in the run's the whole. Absent where it was not counted. */
+  change?: HandoffChange;
 }
 
 export interface IsolationHandoffRepo {

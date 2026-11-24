@@ -161,6 +161,12 @@ describe('a task\'s handoff in its view (ADR-0047)', () => {
     expect(at('No schema change.')).toBeLessThan(at('Added the route.'));
   });
 
+  it('heads the block with what its landing changed, Ordewell\'s count from git, before the finding count', () => {
+    const counted = { ...handoff, change: { files: 1, added: 1, removed: 1, binary: 0 } };
+    expect(plain(opened([{ type: 'handoff', handoff: counted }]))).toContain('Handoff · 1 file, +1 -1 · 2 findings · blocker');
+    expect(plain(opened([{ type: 'handoff', handoff: { summary: 'Done.', findings: [], findingCount: 0, change: counted.change } }]))).toContain('Handoff · 1 file, +1 -1');
+  });
+
   it('draws a handoff with only a commit', () => {
     const only: StoredHandoff = { summary: '', findings: [], findingCount: 0, commit: { subject: 'Just this' } };
     expect(plain(opened([{ type: 'handoff', handoff: only }]))).toContain('Commit: Just this');

@@ -15,7 +15,7 @@ import {
 } from './layout';
 import { chatEditorRoomFor, chatPromptLabel } from './geometry';
 import { currentHandoff, diffRoom, handoffActions } from './handoff';
-import { capConflictFiles, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
+import { capConflictFiles, changeText, elapsedSince, handoffBaseLine, handoffBranchName, isRepoGroup, repoResultLines, taskLogCommands, titledTaskRef, titledTaskRefOf, type RunnerCommand } from '@ordewell/core';
 import { matchingItems, scriptTaskView, rootFrame, viewOnly, visibleItems, type Overlay, type PickerItem, type PickerState, type TuiState } from './state';
 import type { StepperState } from './reducers/stepper';
 import { DELEGATION_OFFERED, SUPERVISOR_LEVEL_LABEL } from '@ordewell/core';
@@ -603,7 +603,9 @@ function renderHandoff(
       const repaired = task.repairedFiles?.length
         ? style.yellow(`: repaired (${capConflictFiles(task.repairedFiles)})`)
         : '';
-      return `  ${style.green('✓')} ${titledTaskRefOf(state.tasks, task.taskId) ?? titledTaskRef(task)}${repaired}`;
+      // Ordewell's count from git of what it landed, never its runner's words of it.
+      const change = changeText(task);
+      return `  ${style.green('✓')} ${titledTaskRefOf(state.tasks, task.taskId) ?? titledTaskRef(task)}${change ? `, ${change}` : ''}${repaired}`;
     });
   const actions = handoffActions(handoff).map((action, index) => {
     const active = index === overlay.index;

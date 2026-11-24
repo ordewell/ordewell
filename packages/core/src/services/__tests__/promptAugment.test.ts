@@ -503,6 +503,13 @@ describe('composeAugmentedPrompt', () => {
     expect(TASK_COMPLETION_CONTRACT).toContain('Once your brief\'s done criterion holds, commit (if your work lands as a commit) and call `task_complete`: work beyond your brief belongs to other tasks, so name it in your handoff (an open question or a follow-up) instead of doing it.');
   });
 
+  it('tells the runner to leave content its brief does not name, and to say so in its handoff if it removes any, in the contract and again after a compaction', () => {
+    const sentence = 'Leave content your brief does not name as it is; if you remove any, say so in your handoff.';
+    expect(TASK_COMPLETION_CONTRACT).toContain(sentence);
+    const task = createTask({ id: 'a', title: 'Docs', prompt: 'Add a line to the README.' });
+    expect(composeCompactionNudge(task, { lands: true })).toContain('Leave content the brief does not name as it is; if you removed any, say so in your handoff.');
+  });
+
   it('words the post-compaction nudge by whether the task lands a commit', () => {
     const task = createTask({ id: 'a', title: 'Audit', prompt: 'Read the parser.' });
     expect(composeCompactionNudge(task, { lands: true })).toContain('commit and call `task_complete` now');
