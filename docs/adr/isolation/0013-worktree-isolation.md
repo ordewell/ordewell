@@ -54,25 +54,37 @@ everything below applies per repo of the group.
   once it has reverted one
   ([ADR-0054](0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)):
   its branch then holds commits no record names, and a retry starts from its
-  tip. Once the user's branch holds everything the run landed and nothing else
-  is left in it (no task live, and no record but landed ones other than an
-  attempt left `active` whose branch and worktree git finds empty, as a start
-  held at launch leaves one, and which seats no child), a branch cut from HEAD
-  holds that work too. So a run the user opens with a start of their own (Run,
-  Start now or a retry) mints one there, and the old run goes as a replaced run
-  does. Continued, its base would stay behind the user's branch, and a start
-  held for configuration one of its tasks landed would be held again at every
-  start, where the user's own start of a run whose base holds it is how they
-  consent to it
-  ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
-  A run that a model's call opens, or the scheduler, a loop or a usage-limit
-  reset, continues the old one, so such a hold stands until the user starts the
-  task. That is how a run a Stop ended is cleared up, since a Stop hands nothing
-  over and no close follows it; a run that reverted a task still continues, as
-  HEAD may not hold its reverts. A record that seats a child keeps the run
-  whatever git finds in its worktree, which is the child's code root
+  tip. A run is spent once git finds every repository's integration tip in
+  the user's branch, checked out on a branch of theirs, and nothing else is
+  left in it: no task live, no record but landed ones and attempts left
+  `active` whose branch and worktree git finds empty, as a start held at
+  launch leaves one, none that seats a child or keeps branches a conflict's
+  fall-back left, nothing reverted and no landing cut short. Records alone
+  never say a run is spent: a retry drops a landed task's record, and its
+  landing stays on the branch. A detached HEAD, an integration branch gone, a
+  tip only a review or another branch holds, a squash merge, or git unable to
+  say, keeps the run. A spent run is replaced only by the start that decides
+  the next run, and only if that start is a person's own of a task that works
+  in a worktree and whose launch the configuration check reads: their Run,
+  Start now, retry or Continue of a change or delegated task. It mints the run
+  from HEAD, and the old run goes as a replaced run does. Continued, the old
+  run's base would stay behind the user's branch, and a start held for
+  configuration one of its tasks landed would be held again at every start,
+  where a person's start of a run whose base holds it is how they consent to
+  it ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
+  The release is the run's: no start in the new run is held for that
+  configuration, whoever makes it. Every other start that decides a run
+  continues the old one, and such a hold stands: a model's call at any level,
+  a subplanner's, the scheduler's (a dependent, a loop round, a resume at a
+  usage limit's reset, a start queued earlier), and a person's start of an ops,
+  read-only or script task, which grants nothing to a later start. So does any
+  start in a run already decided, whoever opened it. That is how a run a Stop
+  ended is cleared up, since a Stop hands nothing over and no close follows
+  it. A record that seats a child keeps the run whatever git finds in its
+  worktree, which is the child's code root
   ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)
-  D17). A record with nothing landed holds only superseded attempts and is
+  D17). In a child plan every start is its subplanner's, so none replaces its
+  run. A record with nothing landed holds only superseded attempts and is
   discarded whole before a new one is minted. `discardRun` is how a user
   starts over.
 - **Naming and location.** A task's worktrees are made by `prepare` when the task
@@ -327,7 +339,8 @@ everything below applies per repo of the group.
   work stays. So does one with an attempt left `active` and nothing live in it,
   as a start held at launch leaves one, whatever git finds in its worktree:
   cleared up, the run would leave the next start of anyone's a run from HEAD,
-  where only the user's own start may take one (ADR-0028). Adopting a run
+  where only a person's own start of a task in a worktree may take one
+  (ADR-0028). Adopting a run
   prunes such an attempt when git finds nothing on its branch or in its
   worktree, and keeps one that seats a child as kept work. A handoff names
   only landed work not yet merged; a repo whose
@@ -665,4 +678,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
-- 2026-11-24 — a run whose landed work the user's branch holds, with nothing live, unlanded or seating a child left in it, is replaced rather than continued when the user opens the next run with a start of their own; a run anything else opens continues it, and a merged run a held start is in stays at its clear-up (ADR-0028).
+- 2026-11-24 — a run git finds wholly in the user's branch, with nothing live, unlanded or seating a child left in it, is replaced rather than continued when a person's own start of a task in a worktree decides the next run; any other start continues it, and a merged run a held start is in stays at its clear-up (ADR-0028).

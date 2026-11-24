@@ -1,24 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import { runHeldDetail, standingDetail, untoldDetail, type RunHold } from '../runHolds';
-import { configHoldReason, isConfigHold } from '../taskStartConfig';
+import { configHoldReason, isChildPlanConfigHold, isConfigHold } from '../taskStartConfig';
 
 /**
- * A start held for repository configuration is released only by the user's
- * own start (ADR-0028): what a woken supervisor reads of one says so, and
- * names none of its own calls as a release, which would start the task in the
- * same run and be held again.
+ * A start held for repository configuration is released only by a person's
+ * own start, and per run (ADR-0028): what a woken supervisor reads of one says
+ * so, and names none of its own calls as a release, which would start the task
+ * in the run it was held in and be held again. In a child plan nothing
+ * releases it, and the lines say what can be done there instead.
  */
 
 const reason = configHoldReason(['.claude/settings.json']);
+const inChild = configHoldReason(['.claude/settings.json'], true);
 const describeTask = (id: string) => `#1 "Task ${id}"`;
-const RELEASE = 'Only the user can release a hold for repository configuration: a retry_task or run_task of yours starts it in this run, where it is held again. Tell the user what it is held for.';
+const RELEASE = 'Only the user can release a hold for repository configuration: once their branch holds everything this run landed, their own start of a task in a worktree begins a new run from it, where no task is held for it. Until then a retry_task or run_task of yours starts it in the run it was held in, where it is held again. Tell the user what it is held for.';
+const CHILD_RELEASE = 'Nothing in a child plan releases a hold for repository configuration: a retry_task or run_task of yours starts it in this run, where it is held again. If its work allows, make it read-only with edit_plan, which loads no project configuration, and start it with run_task; otherwise take it out with edit_plan and say why in your report.';
 
 describe('a start held for repository configuration, as the supervisor is told of it', () => {
-  it('says what releases it, which only the user can do', () => {
-    expect(reason).toBe('repository configuration ".claude/settings.json" differs from where this run started; remove it to continue, or merge the run into your branch, stop it and start this task yourself: only your own start begins a new run from your branch, and only once that holds all this run landed and no other task\'s work is left in it');
+  it('says what releases it, which only a person can do, for the whole run it opens', () => {
+    expect(reason).toBe('repository configuration ".claude/settings.json" differs from where this run started; remove it to continue, or merge everything this run landed into your branch, stop the run and start this task yourself: only your own start of a task that works in a worktree begins a new run from your branch, once that holds all this run landed and no other task\'s work is left in it, and no task of that new run is held for this configuration');
     expect(isConfigHold(reason)).toBe(true);
+    expect(isChildPlanConfigHold(reason)).toBe(false);
     expect(isConfigHold('cancelled; retry or force start to run it again')).toBe(false);
     expect(isConfigHold(undefined)).toBe(false);
+  });
+
+  it('says, in a child plan, that nothing gets past it there and what its subplanner can do, which a person can ask for', () => {
+    expect(inChild).toBe('repository configuration ".claude/settings.json" differs from where this run started, and no start in a child plan gets past that: only its subplanner starts tasks here, and each of its starts continues this run. The subplanner can make this task read-only, which loads no project configuration, and start it, or take it out of the plan and say why in its report; a person can ask it to with a message');
+    expect(isConfigHold(inChild)).toBe(true);
+    expect(isChildPlanConfigHold(inChild)).toBe(true);
+    expect(isChildPlanConfigHold(undefined)).toBe(false);
+  });
+
+  it.each([
+    ['standing after its turn', () => standingDetail({ taskId: 't1', block: { kind: 'on-hold', reason: inChild }, holdsBack: 1 }, describeTask)],
+    ['never told', () => untoldDetail({ taskId: 't1', block: { kind: 'on-hold', reason: inChild }, holdsBack: 1 }, describeTask, '')],
+    ['the run idle behind it', () => runHeldDetail([{ taskId: 't1', hold: { kind: 'on-hold', reason: inChild }, holdsBack: 1 }], describeTask, () => 'Ordewell')],
+  ])('tells a subplanner what it can do of its own when %s, and sends it to no user', (_when, line) => {
+    const said = line();
+    expect(said).toContain(CHILD_RELEASE);
+    expect(said).not.toContain(RELEASE);
+    expect(said).not.toContain('Tell the user');
   });
 
   it.each([

@@ -11,17 +11,21 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Fixed
 
 - **A task held because an earlier task changed agent configuration starts
-  again once your branch holds that change and you start it yourself.** After
-  the run's work was merged (by Merge all or by hand) and the run stopped,
-  starting the held task again kept the old run and held it again every time,
-  until the session was reloaded. Your own Run, Start now or Retry now begins a
-  new run from your branch, provided nothing else is left in the old one: no
-  task running, and no worktree holding work that never landed or a delegated
-  task's child plan. The same goes for any run your own start opens once your
-  branch holds everything it landed. A start the planner, the supervisor or
-  autorun makes, and one Ordewell makes by itself, still continues the old run,
-  so the task stays on hold until you start it: taking that configuration on is
-  yours to decide. The hold now says so.
+  again once your branch holds everything its run landed and you start it
+  yourself.** After the run's work was merged (by Merge all or by hand) and the
+  run stopped, starting the held task again kept the old run and held it again
+  every time, until the session was reloaded. Your own Run, Start now, Retry or
+  Continue of a task that works in a worktree now begins a new run from your
+  branch, provided git finds everything the old run landed in it and nothing
+  else is left in the run: no task running, and no worktree holding work that
+  never landed, a kept attempt or a delegated task's child plan. No task of
+  that new run is held for the configuration, whoever starts it. Any other
+  start still continues the old run, where the task stays on hold: one the
+  planner, the supervisor, a subplanner or autorun makes, one Ordewell makes
+  by itself, and your own start of an ops, read-only or script task. Taking
+  that configuration on is yours to decide. The hold now says so, and in a
+  child plan, where only its subplanner starts tasks, it says what can be done
+  there instead.
 - **The supervisor is no longer told to skip a task on hold,** which its
   `skip_task` refuses. It is told to retry the task, or to tell you, since only
   you can skip it; of a task held for configuration, it is told that only you

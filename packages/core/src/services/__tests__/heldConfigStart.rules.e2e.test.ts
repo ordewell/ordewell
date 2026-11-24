@@ -118,3 +118,47 @@ describe.skipIf(!hasGit)('rule 2: only a person\'s own start of a task in a work
     await opsThenSupervisor(held);
   });
 });
+
+describe.skipIf(!hasGit)('rule 3: a release is per run', () => {
+  it('C2: once the user\'s Start now of one held task begins a run from their branch, the supervisor\'s run_task of another starts it there', async () => {
+    const held = heldPlan([
+      { id: 't1', title: 'Add a hook', hook: true },
+      { id: 't2', title: 'Check the hook', dependencies: ['t1'] },
+      { id: 't4', title: 'Use the hook', dependencies: ['t1'] },
+    ]);
+    const { session } = held;
+    await ok(session, { command: 'run_plan' }, USER);
+    await vi.waitFor(() => expect([held.holdOf('t2'), held.holdOf('t4')]).toEqual([expect.stringContaining(HOOK), expect.stringContaining(HOOK)]), { timeout: 20_000 });
+    await ok(session, { command: 'merge_all' }, USER);
+    await ok(session, { command: 'stop_run' }, USER);
+
+    await startsAgain(held, 't4', () => ok(session, { command: 'run_task', task: 't4' }, USER));
+    const run = held.runId();
+    expect(run).toBe('run2');
+    expect(held.hookFor('t4')).toEqual([true]);
+
+    await startsAgain(held, 't2', () => ok(session, { command: 'run_task', task: 't2' }, SUPERVISOR));
+    expect({ run: held.runId(), t2: held.hookFor('t2') }).toEqual({ run, t2: [true] });
+  });
+});
+
+describe.skipIf(!hasGit)('rule 4: what the hold offers at the root starts the task', () => {
+  it('removing the configuration: the user reverts and skips the task that added it, then starts the held one, in the same run', async () => {
+    const held = heldPlan([
+      { id: 't1', title: 'Add a hook', hook: true },
+      { id: 't2', title: 'Check the hook', dependencies: ['t1'] },
+    ]);
+    const { session } = held;
+    await ok(session, { command: 'run_plan' }, USER);
+    await vi.waitFor(() => expect(held.holdOf('t2')).toContain(HOOK), { timeout: 20_000 });
+    const run = held.runId();
+    await ok(session, { command: 'stop_run' }, USER);
+
+    // t2 never landed, so the revert takes t1 alone.
+    await ok(session, { command: 'revert_task', task: 't1', confirmed: true, seen: ['t1'] }, USER);
+    await ok(session, { command: 'skip_task', task: 't1' }, USER);
+    await startsAgain(held, 't2', () => ok(session, { command: 'run_task', task: 't2' }, USER));
+
+    expect({ run: held.runId(), t2: held.hookFor('t2') }).toEqual({ run, t2: [false] });
+  });
+});

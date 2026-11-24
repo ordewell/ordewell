@@ -354,6 +354,9 @@ export class IsolationRunController {
 
   get isOpen(): boolean { return this.mode !== null; }
 
+  /** This is a child plan's run (ADR-0055 D11), where every start is its subplanner's. */
+  get inChildPlan(): boolean { return this.stateRoot !== undefined; }
+
   /** How many runs have opened: what tells one run's launches from the next one's. */
   get epoch(): number { return this.opened; }
 

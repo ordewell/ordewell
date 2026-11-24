@@ -3,14 +3,26 @@ import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution'
 import { repeatingChecks } from './blocking';
 import { afterAllReader } from './AfterAll';
 import type { StartWait } from './readiness';
-import { isConfigHold } from './taskStartConfig';
+import { isChildPlanConfigHold, isConfigHold } from './taskStartConfig';
 
 /**
- * What lifts a hold for repository configuration, as the tools take it: the
- * user's own start, once their branch holds it (ADR-0028). A model's start is
- * accepted, and held again.
+ * What lifts a hold for repository configuration, as the tools take it
+ * (ADR-0028): a person's own start of a task in a worktree, once their branch
+ * holds everything the run landed, begins a new run from it, and no task of
+ * that run is held for it. A model's start is accepted, and continues the run
+ * the task was held in, where it is held again.
  */
-const CONFIG_RELEASE = 'Only the user can release a hold for repository configuration: a retry_task or run_task of yours starts it in this run, where it is held again. Tell the user what it is held for.';
+const CONFIG_RELEASE = 'Only the user can release a hold for repository configuration: once their branch holds everything this run landed, their own start of a task in a worktree begins a new run from it, where no task is held for it. Until then a retry_task or run_task of yours starts it in the run it was held in, where it is held again. Tell the user what it is held for.';
+
+/**
+ * In a child plan every start is the subplanner's (ADR-0055 D20), so nothing
+ * lifts the hold: a read-only task loads no project configuration (ADR-0046),
+ * so the task can run as one, or go.
+ */
+const CHILD_CONFIG_RELEASE = 'Nothing in a child plan releases a hold for repository configuration: a retry_task or run_task of yours starts it in this run, where it is held again. If its work allows, make it read-only with edit_plan, which loads no project configuration, and start it with run_task; otherwise take it out with edit_plan and say why in your report.';
+
+/** What releases a hold for configuration, where it was held. */
+const configRelease = (reason: string | undefined): string => (isChildPlanConfigHold(reason) ? CHILD_CONFIG_RELEASE : CONFIG_RELEASE);
 
 /**
  * A task that holds a run idle (ADR-0057 R4): pulled out of the scheduler, or
@@ -127,7 +139,7 @@ function endedNote(ended: boolean): string {
 
 /** The calls that release a task standing this way. */
 function releaseLine(block: StandingBlock['block']): string {
-  if (block.kind === 'on-hold' && isConfigHold(block.reason)) return CONFIG_RELEASE;
+  if (block.kind === 'on-hold' && isConfigHold(block.reason)) return configRelease(block.reason);
   const release = block.kind === 'waiting' && block.reason === 'checkpoint'
     ? 'answer it with answer_checkpoint'
     : block.kind === 'waiting'
@@ -196,7 +208,7 @@ export function runHeldDetail(holds: readonly RunHold[], describe: (taskId: stri
   const forConfig = onHold.filter((h) => isConfigHold(h.hold.reason));
   const release = [
     ...(onHold.length > forConfig.length ? [' A task on hold starts again only once it is retried or force started; the user can also skip it, which releases what needs it.'] : []),
-    ...(forConfig.length > 0 ? [` ${CONFIG_RELEASE}`] : []),
+    ...[...new Set(forConfig.map((h) => configRelease(h.hold.reason)))].map((line) => ` ${line}`),
   ].join('');
   return `the run is idle: nothing is running and nothing can start. ${sentences.join(' ')}${release}`;
 }

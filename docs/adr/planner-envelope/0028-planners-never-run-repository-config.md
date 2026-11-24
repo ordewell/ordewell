@@ -578,4 +578,3 @@ specifies.
 - 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell; a change task's start is held for `.pi/` config added during the run (#78).
 - 2026-11-20 — every Pi start names its session directory, which a repository's `.pi/settings.json` could otherwise move; a read-only task's Pi starts with `--no-context-files` too, its context files handed over as text; a server in the user's Pi `mcp.json` that would displace Ordewell's fails the start (#78).
 - 2026-11-21 — on Windows every Pi start sets `NoDefaultCurrentDirectoryInExePath`, so a repository's `rg.exe` or `fd.exe` is never the search program Pi starts by bare name.
-- 2026-11-24 — the user's own start releases a hold for configuration once their branch holds it: it begins a new run from their branch, whose base holds the configuration.

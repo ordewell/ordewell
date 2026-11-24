@@ -92,20 +92,35 @@ function readDirs(root: string): Array<{ dir: string; prefix: string }> {
 }
 
 const HELD_FOR = 'repository configuration ';
+const IN_CHILD_PLAN = ', and no start in a child plan gets past that';
 
 /**
  * Why a start is held for configuration that would reach its launch without
- * the user's consent, and what releases it: removing it, or a run whose base
- * holds it, which only a start the user makes themselves opens (ADR-0028).
- * Read after "is on hold: ", so it opens in lower case.
+ * a person's consent (ADR-0028), and what releases it, as whoever reads it
+ * there can act on it. At the root: removing it, or a run whose base holds
+ * it, which only a person's own start of a task in a worktree opens, once
+ * their branch holds everything the run landed; that releases the run, so no
+ * task of it is held for the configuration. In a child plan every start is
+ * its subplanner's and a person only messages it (ADR-0055 D20), so nothing
+ * gets past the hold there: the task can only be made read-only, which loads
+ * no project configuration (ADR-0046), or taken out. Read after "is on hold:
+ * ", so it opens in lower case.
  */
-export function configHoldReason(paths: readonly string[]): string {
-  return `${HELD_FOR}${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started; remove it to continue, or merge the run into your branch, stop it and start this task yourself: only your own start begins a new run from your branch, and only once that holds all this run landed and no other task's work is left in it`;
+export function configHoldReason(paths: readonly string[], inChildPlan = false): string {
+  const held = `${HELD_FOR}${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started`;
+  return inChildPlan
+    ? `${held}${IN_CHILD_PLAN}: only its subplanner starts tasks here, and each of its starts continues this run. The subplanner can make this task read-only, which loads no project configuration, and start it, or take it out of the plan and say why in its report; a person can ask it to with a message`
+    : `${held}; remove it to continue, or merge everything this run landed into your branch, stop the run and start this task yourself: only your own start of a task that works in a worktree begins a new run from your branch, once that holds all this run landed and no other task's work is left in it, and no task of that new run is held for this configuration`;
 }
 
 /** Whether a hold is {@link configHoldReason}'s, which no model's call and nothing automatic can lift. */
 export function isConfigHold(reason: string | undefined): boolean {
   return reason?.startsWith(HELD_FOR) === true;
+}
+
+/** Whether a hold is {@link configHoldReason}'s in a child plan, where nothing lifts it. */
+export function isChildPlanConfigHold(reason: string | undefined): boolean {
+  return isConfigHold(reason) && reason!.includes(IN_CHILD_PLAN);
 }
 
 /** What a check reads of the run: where a task's worktrees are and the base each one started from. */
