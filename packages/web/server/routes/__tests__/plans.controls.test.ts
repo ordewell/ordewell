@@ -286,7 +286,7 @@ describe('a control from the daemon lands one execution_action line, worded by t
 
     expect(res.status).toBe(200);
     expect(await json(res)).toMatchObject({ plan: { tasks: [{ id: 't1' }] }, message: 'Approved the plan: it runs, each task starting once its dependencies finish.' });
-    expect(h.timeline().map((m) => m.text)).toEqual(['You approved the plan, which starts it.']);
+    expect(h.timeline().map((m) => m.text)).toEqual(['You started the plan.']);
   });
 
   it('runs and stops with the seam\'s words', async () => {

@@ -71,7 +71,6 @@ function followProgress(api: FrameApi, host: DaemonHost): Unregister {
 /** Each run action as the plan dock's button posts it, so the host asks and answers exactly as it does for the dock. */
 function perform(host: DaemonHost, action: RunAction): void {
   switch (action) {
-    case 'approve':
     case 'run':
       void host.handle({ type: 'sendSystemCommand', command: 'executePlan' });
       return;
@@ -86,15 +85,14 @@ function perform(host: DaemonHost, action: RunAction): void {
 }
 
 const COMMAND_IDS: Record<RunAction, string> = {
-  approve: 'plan.approve',
   run: 'plan.run',
   stop: 'plan.stop',
   merge: 'plan.mergeAll',
 };
 
 /**
- * The title bar's one action follows the session (Approve plan, Run, Stop,
- * Merge all, first that applies), and each other run action the session
+ * The title bar's one action follows the session (Run, Stop, Merge all,
+ * first that applies), and each other run action the session
  * offers is in the ⋯ menu. Followed here rather than in the tab, so the
  * button is right whichever tab is in front.
  */

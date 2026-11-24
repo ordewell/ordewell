@@ -35,7 +35,6 @@ export interface CommandDeps {
   getCurrentGoal: () => string;
   setCurrentGoal: (goal: string) => void;
   isGeneratingPlan: () => boolean;
-  handleApprovePlan: () => Promise<void>;
   handleStartPlanning: (text: string) => Promise<void>;
   sendRunnerAndModels: () => Promise<void>;
   runApiKeyWizard: (preselected?: ApiProvider) => Promise<void>;
@@ -456,16 +455,6 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
       }
       handleNewSession(deps);
       vscode.window.showInformationMessage('New session started.');
-    }),
-  );
-  context.subscriptions.push(
-    vscode.commands.registerCommand('ordewell.approvePlan', async () => {
-      const plan = deps.getCurrentPlan();
-      if (plan.tasks.length === 0) {
-        vscode.window.showInformationMessage('No plan to approve. Generate a plan first.');
-        return;
-      }
-      await deps.handleApprovePlan();
     }),
   );
   context.subscriptions.push(

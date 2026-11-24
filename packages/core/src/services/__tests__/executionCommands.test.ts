@@ -257,8 +257,8 @@ describe('the command seam: an unapproved plan or task never starts', () => {
       await env.run({ command: 'retry_task', task: 't1', from: 'fresh' }),
     ];
 
-    for (const result of results) expect(result).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/not approved/) });
-    expect(results[0].message).toBe(`The user has not approved this plan yet: they approve it themselves (${ANYWHERE.approvePlan}). Ask them to.`);
+    for (const result of results) expect(result).toMatchObject({ ok: false, outcome: 'refused', message: expect.stringMatching(/has not run this plan yet|has not approved task/) });
+    expect(results[0].message).toBe(`The user has not run this plan yet: running it is what approves it, and they run it themselves (${ANYWHERE.runPlan}). Ask them to.`);
     expect(env.spawn).not.toHaveBeenCalled();
     expect(env.cards()).toHaveLength(0);
   });
@@ -1092,7 +1092,7 @@ describe('the command seam: tasks started one by one with run_task', () => {
 
     const outcome = await env.run({ command: 'run_plan' });
 
-    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: `The user has not approved this plan yet: they approve it themselves (${ANYWHERE.approvePlan}). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` });
+    expect(outcome).toEqual({ ok: false, outcome: 'refused', message: `The user has not run this plan yet: running it is what approves it, and they run it themselves (${ANYWHERE.runPlan}). Ask them to. Tasks started with run_task are not a scheduled run, so their dependents start only once the user executes the plan.` });
     expect(env.session.status).not.toBe('running');
   });
 });
@@ -1210,7 +1210,7 @@ describe('the command seam\'s extension points', () => {
     const { commands } = seam({ host: { autonomous: () => false }, orchestrator: { getAttempt: attempts(false) }, approvals: { planApproved: false, isApproved: () => false } });
 
     expect((await commands.run({ command: 'run_task', task: 't1' }, PLANNER)).message)
-      .toBe('The user has not approved task #1 "Task t1": they approve the plan themselves (/approve), or a task by starting it (/force-start <id>). Ask them to.');
+      .toBe('The user has not approved task #1 "Task t1": they approve it by running the plan themselves (/run), or by starting the task (/force-start <id>). Ask them to.');
   });
 
   /** Parts whose plan takes the script task `run_script` drafts, which then runs until its wait ends. */

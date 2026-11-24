@@ -59,7 +59,7 @@ const sash = (page: Page, name: SashName): Locator => page.getByRole('separator'
 const planPanel = (page: Page): Locator => page.getByRole('complementary', { name: 'Plan', exact: true });
 const centre = (page: Page): Locator => page.getByRole('main', { name: 'Centre' });
 const needsYou = (page: Page): Locator => page.getByRole('button', { name: /^Needs you, / });
-const approveButton = (page: Page): Locator => page.locator('header.frame-title').getByRole('button', { name: 'Approve plan' });
+const approveButton = (page: Page): Locator => page.locator('header.frame-title').getByRole('button', { name: 'Run', exact: true });
 const composer = (page: Page): Locator => page.getByRole('textbox', { name: 'Message the planner' });
 const sync = (page: Page): Locator => page.getByRole('group', { name: 'Sync harbor' });
 const pullButton = (page: Page): Locator => sync(page).getByRole('button', { name: /^Pull/ });

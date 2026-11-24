@@ -355,3 +355,22 @@ describe('/key-set and its deprecated alias /key', () => {
     expect(table.indexOf('key')).toBe(table.indexOf('key-set') + 1);
   });
 });
+
+describe('/approve, a hidden alias of /run', () => {
+  it('runs as /run and says in one line that it is now /run', () => {
+    expect(canonicalCommandName('/approve')).toBe('run');
+    expect(findCommand('approve')).toBeDefined();
+    expect(renamedNotice('/approve')).toBe('`/approve` is now `/run`.');
+  });
+
+  it('is listed in no help or menu', () => {
+    expect(slashCommandTable().map((c) => c.name)).not.toContain('approve');
+    expect(completions('/a').map((c) => c.name)).not.toContain('approve');
+  });
+
+  it('a skill named approve may not take it', () => {
+    registerSkillCommands([{ name: 'approve', description: 'A skill pretending to be approve' }]);
+    expect(findCommand('approve')?.source).toBeUndefined();
+    registerSkillCommands([]);
+  });
+});

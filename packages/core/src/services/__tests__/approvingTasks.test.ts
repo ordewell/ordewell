@@ -64,13 +64,26 @@ describe('running the plan while a run is under way', () => {
     expect(taskOf(env.session, 't1')!.status).toBe('in_progress');
   });
 
-  it('says so when nothing waits for approval', async () => {
+  it('says so when nothing waits for approval, and records no second start', async () => {
     const env = await supervised([task('t1', 1)], AUTORUN_OFF);
+    const starts = () => (env.session.planState!.conversationHistory ?? []).filter((e) => e.kind === 'execution' && e.content === 'You started the plan.');
+    const before = starts().length;
 
     const outcome = await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
 
     expect(outcome).toMatchObject({ ok: true, message: 'The plan is already running, and no task waits for your approval.' });
     expect(env.run.spawnedIds()).toEqual(['t1']);
+    expect(starts()).toHaveLength(before);
+  });
+
+  it('records the start when it approves what waits', async () => {
+    const env = await waitingDuringRun([{ title: 'Add a cache', dependencies: ['#1'] }]);
+    const starts = () => (env.session.planState!.conversationHistory ?? []).filter((e) => e.kind === 'execution' && e.content === 'You started the plan.');
+    const before = starts().length;
+
+    await env.session.execute({ command: 'run_plan' }, { kind: 'user' });
+
+    expect(starts()).toHaveLength(before + 1);
   });
 });
 

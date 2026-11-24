@@ -269,7 +269,12 @@ How the user approves what waits, without starting anything early:
 - **`/run` (Execute) while a run is under way approves every task that waits.**
   It does not restart the run: each approved task starts once its dependencies
   finish, and the answer says how many were approved. A run the scheduler was
-  not driving, one task started on its own, becomes the plan's run.
+  not driving, one task started on its own, becomes the plan's run. With
+  nothing waiting in a scheduled run it approves and starts nothing: it answers
+  that the plan is already running, and the timeline records no start. Running
+  the plan is the user's one control for approving it, on every surface; the
+  review's sign-off (`approve_review`) stays a seam and a route for older
+  clients and the `/approve` alias, and approves as running does.
 - **The planner's `run_plan` during a run joins it and approves nothing.** Tasks
   started one by one with `run_task` are no scheduled run: when one finishes,
   nothing starts its dependents. In a plan the user has approved, `run_plan`
@@ -425,3 +430,4 @@ minute is recorded beside its start.
 - 2026-11-01 — below the root a mandate takes over the consent table and the allowlist, one list per level (ADR-0056 M6, M9).
 - 2026-11-01 — under the `containers` setting a script task runs in a container, on a copy of what the workspace has committed, and brings nothing back (ADR-0059 L5).
 - 2026-11-14 — a `script` body whose first line is a `#!` line runs with the shell it names, on every path a body takes; before, `sh -c` ignored the line and a bash-only body failed in dash (`set -o pipefail`).
+- 2026-11-24 — running the plan is the user's one control for approving it; a run with nothing waiting in a scheduled run answers that it is already running and records no start (ADR-0030).

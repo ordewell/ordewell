@@ -230,6 +230,17 @@ command line's are `ordewell` commands, `ordewell merge` for the merge, with
 the terminal UI's key named where no command exists. A surface is told only
 controls it has.
 
+Starting a drafted plan has one control on every surface, run (`/run`,
+`ordewell run`, VS Code's Execute Plan button, the desktop's Run in the title
+bar): running a plan is what approves it
+([ADR-0035](0035-effects-are-consented-and-recorded.md)), a plan waiting for
+review included, so the table names no plan-level approve, and neither does
+help, a slash menu, a button or a command palette. `/approve` and
+`ordewell approve` still run the plan, listed nowhere, and say in one line
+that they are now `/run` and `ordewell run`; the review route stays for older
+clients. Answering a task's checkpoint is a different control and keeps its
+approve and reject.
+
 A refusal or answer at the command seam that tells the planner what the user
 does reads the same table for the session's surface, and a refused merge with
 automatic merging on says the merge happens by itself rather than asking for
@@ -294,6 +305,17 @@ to the level chosen:
 It is a fresh consent, given after the notice that explained the lowering,
 which names `/settings` in the session as the way back: the change is
 nothing's but the user's to make.
+
+### Autorun off: one gate
+
+**With autorun off, the user's one gate is running the plan.** The planner
+still asks first when the goal is vague or a decision would change the outcome,
+then writes the outline and submits the plan in the same reply, never asking
+the user to confirm the outline first. The submitted plan stays a draft until
+the user runs it, and the planner says so, naming the surface's run control
+from SURFACE AND SETTINGS. A run asked for while the plan already runs answers
+that it is running; when it approves and starts nothing, no start is recorded,
+so the conversation does not show a second "You started the plan."
 
 ### Autorun
 
@@ -455,6 +477,15 @@ the daemon reads it from there at generation.
   on real ambiguity, and the guess would run unattended.
 - **Rejected: autorun skips only the final review.** The outline confirmation
   becomes the review, and the user still answers once per session.
+- **Dropped: with autorun off, the planner waits for the outline to be
+  confirmed before it submits.** It was the rule until 2026-11-24. With the
+  plan's own review after it, the user confirmed twice, once in the chat and
+  once to run, and could not tell the two apart; a first-time user was told to
+  approve and then run, and the second answered that the plan was already
+  running. A draft is as cheap to correct as an outline: the planner edits it.
+- **Dropped: an Approve control beside Run.** `/approve`, `ordewell approve`,
+  VS Code's Approve Plan command and the desktop's Approve plan button each
+  started the plan as Run does, so two names for one act read as two gates.
 - **Rejected: autorun holds plans with ops tasks for review, or holds the ops
   tasks back.** Safer against injection; recorded as a choice for #23 to
   revisit, not as safe.
@@ -501,9 +532,10 @@ the daemon reads it from there at generation.
   decides each automatic merge.
 - The TUI and VS Code gain `/settings` and the Setup rows, and lose `G`, `W`,
   `L` and the plan-card controls. VS Code's `ordewell.autonomousMode` goes.
-- The planner prompt gains an autorun branch: no outline gate, submit after the
-  summary. The rule is read each turn, so turning autorun on mid-conversation
-  changes the planner's next turn.
+- The planner prompt's outline phase follows autorun: the outline and the
+  plan go in one reply either way, and with autorun off the planner says the
+  draft waits for the user's run. The rule is read each turn, so turning
+  autorun on or off mid-conversation changes the planner's next turn.
 - The timeline gains autorun as an actor.
 - With autorun on, Full and Act, Ordewell can go from a goal to changes on real
   systems with no person reading anything. Each of the three is a separate
@@ -572,3 +604,4 @@ the daemon reads it from there at generation.
 - 2026-11-09 — the planner is told its user's surface and the run settings in a SURFACE AND SETTINGS block of its turn, not its system prompt, and texts that tell it what the user does name the action and that surface's control rather than a button; with automatic merging on they say the merge happens by itself. A TUI user was told to press buttons the terminal does not have, and asked for merges already automatic.
 - 2026-11-15 — the surface is the one the client sending the message states, kept for a wake turn, with the lease's host only for a client that states none; a `cli` surface names `ordewell` commands. A CLI user, and a TUI joining a shared daemon, were told every surface's controls.
 - 2026-11-22 — the user's level after a failure catches the supervisor up: a task failed or held with work waiting that it was never told of is named in one wake as the level becomes Act, or as a run starts or continues at Act, and a level set between runs lifts the last run's stop. Seen live: after an outage stopped supervision, a loop's check failed with four tasks waiting, the user set Act again, and nothing told the supervisor.
+- 2026-11-24 — one gate with autorun off: the planner submits the plan with its outline in one reply and says it waits for the user's run, naming the surface's run control; starting a plan has one control, run, on every surface, `/approve` and `ordewell approve` kept as unlisted aliases; a run on a plan already running records no second start. A first-time user confirmed the outline, was told to approve and then run, and saw "You started the plan." twice.

@@ -53,10 +53,6 @@ function dispatchCommand(state: TuiState, parsed: ParsedCommand): Step {
 
     case 'run':
       return withSession(state, (sessionId) => startPlan(state, sessionId));
-    case 'approve':
-      return withSession(state, (sessionId) =>
-        startPlan({ ...state, planApproved: true }, sessionId),
-      );
     case 'stop':
       // A planner turn first, as Esc does: a turn sent mid-run is the newer
       // thing the user started, and the run outlives it for a second /stop.

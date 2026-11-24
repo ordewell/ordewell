@@ -67,11 +67,11 @@ describe('the walkthrough (F5)', () => {
     return all[0];
   };
 
-  it('has three steps in order: open the view, give a goal, approve the plan', () => {
+  it('has three steps in order: open the view, give a goal, run the plan', () => {
     expect(walkthrough().steps.map((step) => step.title)).toEqual([
       'Open the Ordewell view',
       'Give it a goal',
-      'Approve the plan',
+      'Run the plan',
     ]);
   });
 

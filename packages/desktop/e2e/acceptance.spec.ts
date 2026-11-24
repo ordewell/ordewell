@@ -81,8 +81,8 @@ test('a goal goes from the welcome window to a merge on the checkout\'s branch',
   const planPanel = win.getByRole('complementary', { name: 'Plan', exact: true });
   const graph = editor.getByRole('grid', { name: 'Plan graph' });
   const changes = win.getByRole('navigation', { name: 'Changes' });
-  // The planner tab's approval card offers the same Approve: the title bar's is the frame's one.
-  const approve = win.locator('header.frame-title').getByRole('button', { name: 'Approve plan' });
+  // The planner tab's draft card offers the same Run: the title bar's is the frame's one.
+  const approve = win.locator('header.frame-title').getByRole('button', { name: 'Run', exact: true });
   const taskOneChanges = changes.getByRole('region', { name: 'Task #1: Add a greeting module' });
 
   await test.step('new session: describe a goal to the planner, and the draft plan appears in the plan panel', async () => {

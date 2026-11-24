@@ -41,7 +41,6 @@ Planning:
   ordewell tui                    Explicit TUI command for scripts and aliases
   ordewell plan --goal "text"     Plan a goal conversationally
   ordewell run                    Execute the last generated plan (streams status)
-  ordewell approve                Sign off a plan paused for review, and continue it
   ordewell stop                   Stop execution of the last session (or --server)
   ordewell status                 List recent sessions (use --session-id for detail)
   ordewell sessions list|load|delete            Manage named sessions

@@ -62,7 +62,7 @@ describe('run settings in the chat', () => {
       expect(document.body.textContent).not.toContain('Autorun is on');
 
       send({ type: 'setRunSettings', autonomous: false, run: { ...RUN_SETTINGS_DEFAULTS, autorun } });
-      const note = autorun ? 'Autorun is on' : 'Nothing runs until you approve the plan.';
+      const note = autorun ? 'Autorun is on' : 'Nothing runs until you run the plan.';
       expect(document.querySelector('.get-started')?.textContent).toContain(note);
       send({ type: 'setConfiguredProviders', providers: ['openrouter'] });
       expect(document.querySelector('.get-started')).toBeNull();

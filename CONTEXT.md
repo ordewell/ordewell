@@ -4057,8 +4057,9 @@ Execute while a supervisor's `merge_all` still merges is the user's.
 
 **Autorun** — the **Run setting** that starts a plan when the reply that
 submits it ends, approved as if the user had pressed Execute; off by default, set in
-`/settings` (or `ordewell autorun` headless; ADR-0030). The planner skips the outline gate but still asks
-clarifying questions. It fires on a submission only — never on a session's load
+`/settings` (or `ordewell autorun` headless; ADR-0030). Either way the planner submits the plan with its
+outline in one reply and still asks clarifying questions; with autorun off the plan stays a draft until the
+user runs it, which is their one gate. It fires on a submission only — never on a session's load
 or on the switch being turned on while a plan waits — and starts ops tasks too.
 Work already live, a task the planner started with `run_task` in that reply,
 joins it as one scheduled run in Full; in Guarded it does not, and a notice says why, as it
@@ -4322,14 +4323,16 @@ remains, because it is the only non-interactive way in.
 
 **Surface controls** (`SURFACE_CONTROLS`, `services/surfaceControls.ts`;
 ADR-0030) — how each surface takes each action only the user takes (merge,
-answer a checkpoint, approve or run the plan, skip, force start, mark, revert,
-interrupt, the queued-message controls, cancel a resume, approve the review,
-compact): one row each for the TUI, VS Code, the desktop app and an unknown
+answer a checkpoint, run the plan, skip, force start, mark, revert,
+interrupt, the queued-message controls, cancel a resume, compact): one row each for the TUI, VS Code, the desktop app and an unknown
 surface, which names every surface's. The TUI's are slash commands and keys
 (`/merge`). The surface is read from the live **Session lease**'s host
 (`surfaceOf`). The planner hears its row in the **SURFACE AND SETTINGS** block of
 its **Planner briefing**, and a refusal that tells it what the user does names
-the action and that row's control.
+the action and that row's control. Starting a drafted plan is run on every
+surface, since running it is what approves it: no row, help, menu or palette
+names a plan-level approve, and `/approve` and `ordewell approve` are unlisted
+aliases of run.
 *Avoid:* "buttons" for the actions — the TUI has none; name the action, and the
 control only as the surface's row words it.
 

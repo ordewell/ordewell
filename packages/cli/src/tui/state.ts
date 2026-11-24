@@ -495,7 +495,6 @@ export interface TuiState {
   tasks: TaskView[];
   /** What the planner has recorded as it went (ADR-0067), every entry, superseded ones included. */
   decisionRecord: DecisionRecordEntry[];
-  planApproved: boolean;
   focus: Focus;
   /** Index into `planRows` (top-level tasks, plus an expanded task's subtasks) for the plan pane's cursor. */
   selectedTask: number;
@@ -870,7 +869,6 @@ export const STATE_SCOPE = {
   run: 'session',
   tasks: 'session',
   decisionRecord: 'session',
-  planApproved: 'session',
   focus: 'screen',
   selectedTask: 'session',
   expandedTaskId: 'session',
@@ -981,7 +979,6 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     goal: '',
     tasks: [],
     decisionRecord: [],
-    planApproved: false,
     focus: 'chat',
     selectedTask: 0,
     expandedTaskId: null,

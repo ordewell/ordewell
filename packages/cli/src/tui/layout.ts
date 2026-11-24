@@ -1229,7 +1229,7 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
     ? ''
     : state.runSettings.autorun
       ? style.yellow('Autorun is on. A plan starts as soon as the planner submits it. Change it in /settings.')
-      : style.grey('Nothing runs until you approve the plan.');
+      : style.grey('Nothing runs until you run the plan.');
   const approval = approvalText ? wrap(approvalText, Math.max(1, cols - 1)) : [];
   const setup = [
     style.bold('Setup'),
