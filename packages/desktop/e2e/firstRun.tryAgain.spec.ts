@@ -152,3 +152,82 @@ test('Try Again on a failed later message draws and saves that message once', as
     await expect(bubbles(editor, GOAL)).toHaveCount(1);
   });
 });
+
+/** Typed while the failing turn is in flight, so it is held and goes on its own once that turn has failed. */
+const QUEUED = 'Also add a test for each';
+
+/**
+ * Fails the next turn with QUEUED typed behind it: QUEUED goes on its own and
+ * its turn starts, which ends what the failed turn offered. No Try Again is
+ * left to draw the failed message a second time.
+ */
+async function failWithQueued(current: FirstRun, planner: HeldPlanner, text: string): Promise<void> {
+  const { composer } = current;
+  await test.step(`send "${text}" and queue another message behind it: the planner fails its turn`, async () => {
+    planner.hold();
+    planner.failNext(FAILURE);
+    const before = planner.requests();
+    await expect(composer).toBeEditable({ timeout: 30_000 });
+    await composer.fill(text);
+    await composer.press('Enter');
+    await expect.poll(() => planner.requests(), { timeout: 30_000 }).toBeGreaterThan(before);
+    await composer.fill(QUEUED);
+    await composer.press('Enter');
+    planner.release();
+  });
+}
+
+test('a message queued behind a failed first message goes on its own, and leaves no Try Again to draw the goal twice', async () => {
+  run = await startFirstRun('ordewell-firstrun-tryagain-queued-first-', { planner: { held: false } });
+  const current = run;
+  const { win, editor, workspace } = current;
+  const planner = current.planner!;
+  const planPanel = win.getByRole('complementary', { name: 'Plan', exact: true });
+
+  await failWithQueued(current, planner, GOAL);
+
+  await test.step('the queued message lands, and the goal is drawn and saved once with no Try Again left', async () => {
+    await expect(planPanel.getByRole('button', { name: PLANNED })).toBeVisible({ timeout: 60_000 });
+    await expect(bubbles(editor, QUEUED)).toHaveCount(1);
+    await expect(editor.getByRole('button', { name: 'Try Again' })).toHaveCount(0);
+    await holdsFor(2_000, async () => await bubbles(editor, GOAL).count() === 1, 'one bubble for the goal once the queued turn landed');
+    await expect.poll(() => savedTimes(workspace, GOAL), { timeout: 30_000 }).toEqual([1]);
+  });
+
+  await test.step('opened again, the session draws the goal once', async () => {
+    await reopened(current, GOAL);
+  });
+});
+
+test('a message queued behind a failed later message goes on its own, and leaves no Try Again to draw that message twice', async () => {
+  run = await startFirstRun('ordewell-firstrun-tryagain-queued-later-', { planner: { held: false } });
+  const current = run;
+  const { win, editor, composer, workspace } = current;
+  const planner = current.planner!;
+  const planPanel = win.getByRole('complementary', { name: 'Plan', exact: true });
+
+  await test.step('the first message drafts a plan', async () => {
+    await composer.fill(GOAL);
+    await composer.press('Enter');
+    await expect(planPanel.getByRole('button', { name: PLANNED })).toBeVisible({ timeout: 60_000 });
+  });
+
+  await failWithQueued(current, planner, LATER);
+
+  await test.step('the queued message lands, and the failed one is drawn and saved once with no Try Again left', async () => {
+    await expect(editor).toContainText(LATER_ANSWER, { timeout: 60_000 });
+    await expect(bubbles(editor, QUEUED)).toHaveCount(1);
+    await expect(editor.getByRole('button', { name: 'Try Again' })).toHaveCount(0);
+    await holdsFor(2_000, async () => await bubbles(editor, LATER).count() === 1, 'one bubble for the failed message once the queued turn landed');
+    await expect.poll(() => savedTimes(workspace, QUEUED), { timeout: 30_000 }).toEqual([1]);
+    // A later message whose turn failed is not saved unless it is tried again,
+    // so the most it may be is once.
+    expect(savedTimes(workspace, LATER).every((n) => n <= 1)).toBe(true);
+  });
+
+  await test.step('opened again, the session draws each message at most once', async () => {
+    await reopened(current, QUEUED);
+    await expect(bubbles(editor, GOAL)).toHaveCount(1);
+    await holdsFor(2_000, async () => await bubbles(editor, LATER).count() <= 1, 'at most one bubble for the failed message once the session is open again');
+  });
+});

@@ -540,6 +540,10 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
     case 'heldPrompts':
       return { ...state, held: action.prompts };
 
+    // The held message's turn is a new one, as the user's own send is (turnRequested).
+    case 'heldPromptsSent':
+      return { ...state, error: '', errorCode: undefined, errorResend: undefined };
+
     case 'promptUnsent':
       return { ...state, unsent: { text: action.text, seq: (state.unsent?.seq ?? 0) + 1 } };
 

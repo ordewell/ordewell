@@ -285,6 +285,11 @@ export type HostToWebview =
   /** Queued text the host gave back, to go above whatever is in the input. */
   | { type: 'promptUnsent'; text: string }
   /**
+   * The host sent what was held as the next turn's message, as the user's own
+   * send would: what the turn before it failed with, and its Try Again, are over.
+   */
+  | { type: 'heldPromptsSent' }
+  /**
    * `code` names an error whose way out is detecting again: no planner was
    * ready for the goal. `resend` is the message whose planner turn failed, which
    * Try Again sends again.
