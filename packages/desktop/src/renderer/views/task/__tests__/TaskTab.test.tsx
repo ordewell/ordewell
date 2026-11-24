@@ -46,9 +46,9 @@ function frameApi(): FrameApi {
   return { openTab: vi.fn(), announce: vi.fn() } as unknown as FrameApi;
 }
 
-async function openedHost(): Promise<DaemonHost> {
+async function openedHost(plan = PLAN): Promise<DaemonHost> {
   const daemon = fakeDaemon({
-    'sessions.load': ok({ ok: true, plan: PLAN, goal: 'Ship the parser' }),
+    'sessions.load': ok({ ok: true, plan, goal: 'Ship the parser' }),
     'sessions.taskLog': ok({ attempts: [] }),
   });
   const host = new DaemonHost('/work/acme');
@@ -76,6 +76,18 @@ describe('TaskTab', () => {
     expect(within(handoff).getByText(/Config parsing lands in src\/config.ts/)).toBeInTheDocument();
     expect(within(handoff).getByText(/Unknown keys are ignored/)).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Attempts' })).getByText('Not run yet.')).toBeInTheDocument();
+  });
+
+  it('says "after all other tasks" for a dependency on "*", in the header and the details (ADR-0077)', async () => {
+    const host = await openedHost(surfacePlan([
+      surfaceTask({ id: 't0', order: 1, title: 'Read the spec' }),
+      surfaceTask({ id: 't1', order: 2, title: 'Parse the config', assignedRunner: 'claude-code', dependencies: ['*'] }),
+    ]));
+    render(<TaskTab tab={TAB} host={host} api={frameApi()} />);
+
+    const header = (await screen.findByRole('heading', { name: '#2 Parse the config' })).closest('header') as HTMLElement;
+    expect(within(header).getByLabelText('Depends on')).toHaveTextContent('after all other tasks');
+    expect(within(screen.getByRole('region', { name: 'Depends on' })).getByText('after all other tasks')).toBeInTheDocument();
   });
 
   it('chats with the task\'s runner under a composer that names the task and the runner', async () => {
