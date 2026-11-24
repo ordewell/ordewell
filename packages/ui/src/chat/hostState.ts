@@ -39,6 +39,8 @@ export interface HostState {
   error: string;
   /** Set with an error the host marked as no planner being ready, whose Try Again detects again. */
   errorCode?: 'planner_not_ready';
+  /** Set with an error that ended the planner turn for this message, whose Try Again sends it again. */
+  errorResend?: string;
   models: DiscoveredModel[];
   modelsByRunner: Partial<Record<string, DiscoveredModel[]>>;
   modelAllowlist: Record<string, string[]>;
@@ -315,7 +317,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
       return { ...state, isResearchActive: false, turnLost: true };
 
     case 'patchError':
-      return { ...state, error: action.error, errorCode: undefined };
+      return { ...state, error: action.error, errorCode: undefined, errorResend: undefined };
 
     case 'patchReady':
       return { ...state, isReady: action.ready };
@@ -431,7 +433,7 @@ export function reduceHost(state: HostState, action: HostAction): HostState {
 
     case 'showError':
       if (state.sessionCleared) return state;
-      return { ...state, error: action.error, errorCode: action.code, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
+      return { ...state, error: action.error, errorCode: action.code, errorResend: action.resend, isResearchActive: false, turnLost: false, plannerTurnStartedAt: undefined, starting: false, startRequestId: null };
 
     case 'taskOutput':
       return { ...state, taskOutput: appendTaskOutput(state.taskOutput, action.taskId, action.text ?? '') };

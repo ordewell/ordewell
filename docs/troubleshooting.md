@@ -406,8 +406,8 @@ the limit has reset.
 
 The planner stays on **Planning…** for minutes and then ends with no plan, or
 with a warning that its tools failed on every call this turn. The terminal UI's
-status line names the call in flight, as in `Planning… 4m 19s · list_runners
-running 4m 09s`, or says `nothing received for 2m 55s` when the planner has been
+status line names the call in flight, as in `Planning… 1m 12s · run_command
+running 58s`, or says `nothing received for 1m 00s` when the planner has been
 silent for a minute.
 
 Every call the planner makes to Ordewell is logged to `~/.ordewell/server.log`
@@ -415,17 +415,21 @@ Every call the planner makes to Ordewell is logged to `~/.ordewell/server.log`
 instead):
 
 ```
-[ordewell-mcp] 2026-11-24T10:02:11.000Z planner call list_runners started (session s1)
-[ordewell-mcp] 2026-11-24T10:07:11.000Z planner call list_runners error after 300.0s (session s1)
+[ordewell-mcp] 2026-11-24T10:02:11.000Z planner call run_command started (session s1)
+[ordewell-mcp] 2026-11-24T10:03:11.000Z planner call run_command cancelled after 60.0s (session s1)
 ```
 
-A `started` line with no matching end means Ordewell never answered; an `error`
-after about 300 seconds means the planner's own CLI gave up waiting (Codex
-enforces a fixed 300 second deadline on a tool call, and Ordewell sets an hour
-on a Codex planner's thread). `refused` means the call named a tool the planner is not given, `cancelled`
-that the caller gave up on it, and `revoked` that its session had ended. If Ordewell
-answered quickly, the stall is in the planner, not in Ordewell. Send the goal
-again, or switch planner with `/planner`.
+A `started` line with no matching end means Ordewell never answered.
+`cancelled` means the caller gave up on the call: the planner's own CLI stopped
+waiting, or the turn was stopped. Codex ends a tool call at a fixed deadline,
+and Ordewell sets an hour on a Codex planner's thread, so a planner call
+cancelled well before that was stopped by the planner or by you. `error` means
+the tool answered with an error; for `run_command` that includes a command that
+ran and exited non-zero, which is the command's answer and does not count
+towards the warning. `refused` means the call named a tool the planner is not
+given, and `revoked` that its session had ended. If Ordewell answered quickly,
+the stall is in the planner, not in Ordewell. Send the goal again, or pick
+another planner (`/planner` in the terminal).
 
 A Codex task's checkpoint, which waits for a person, still ends at Codex's 300
 second deadline.

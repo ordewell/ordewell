@@ -26,3 +26,24 @@ describe('a call at the command seam, from the daemon (ADR-0029)', () => {
     expect(lastMessage(state)).toMatchObject({ role: 'system', text: 'The planner stopped task #2 "Add the cache".' });
   });
 });
+
+describe('the user\'s own Merge all, from the daemon', () => {
+  const merged: unknown = {
+    type: 'execution_action',
+    record: { command: 'merge_all', actor: 'user', outcome: 'done', at: '2026-10-11T10:00:00.000Z' },
+    text: 'You merged the run\'s work into your branch.',
+    stream: 'd1',
+    seq: 5,
+  };
+
+  // The merge's own notice ("Merged … into your checked-out branch.") is its one line: a second announcing it read as the merge twice.
+  it('adds no line of its own to the conversation', () => {
+    const actions: Action[] = [];
+    const { receive } = createInbound((action) => actions.push(action), 's1');
+    receive(merged as WsEvent);
+
+    const state = actions.reduce((s, action) => reduce(s, action).state, initialState({ sessionId: 's1' }));
+
+    expect(JSON.stringify(state.conversation)).not.toContain('You merged the run\'s work into your branch.');
+  });
+});

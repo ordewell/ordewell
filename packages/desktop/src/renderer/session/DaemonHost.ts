@@ -1089,7 +1089,8 @@ export class DaemonHost {
       }
       this.showPlan(response.plan);
     }, (error) => {
-      this.showError(error);
+      // A Send now's message the chat gives back to the composer instead.
+      this.showError(error, now ? undefined : text);
       outcome = { ok: false, ...(error instanceof DaemonRefusal ? { code: error.code } : {}) };
     });
     return outcome;
@@ -1721,10 +1722,15 @@ export class DaemonHost {
     this.emit({ type: 'setState', state: plan.tasks.length === 0 ? 'empty' : plan.status === 'draft' || plan.status === 'rejected' ? 'planDraft' : 'approved' });
   }
 
-  private showError(error: unknown): void {
-    // No planner ready is the one refusal whose Try Again means detecting again.
+  /** `resend` is the message a failed planner turn answered, which Try Again sends again. */
+  private showError(error: unknown, resend?: string): void {
+    // No planner ready is the one refusal whose Try Again means detecting again:
+    // its message is back in the composer already.
     const noPlanner = error instanceof DaemonRefusal && error.code === 'planner_not_ready';
-    this.emit({ type: 'showError', error: messageOf(error), ...(noPlanner ? { code: 'planner_not_ready' as const } : {}) });
+    this.emit({
+      type: 'showError', error: messageOf(error),
+      ...(noPlanner ? { code: 'planner_not_ready' as const } : resend !== undefined ? { resend } : {}),
+    });
   }
 
   private cue(cue: SessionCue): void {

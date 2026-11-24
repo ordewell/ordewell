@@ -259,8 +259,9 @@ export function newSession(state: TuiState): Step {
   // task updates keep landing on whatever id matches in the fresh state below.
   const closeEffects: Effect[] = state.sessionId ? [{ type: 'closeSession', sessionId: state.sessionId }] : [];
   // Prompts belong to the session that raised them; the old planner is gone
-  // and its pending requests deny on their own timeout.
-  return step(leaveSession(state), closeEffects);
+  // and its pending requests deny on their own timeout. The welcome it opens
+  // onto names the commit runs fork from, which a merge may have moved.
+  return step(leaveSession(state), [...closeEffects, { type: 'loadIsolationPreview' }]);
 }
 
 function setPlanner(state: TuiState, args: string[]): Step {

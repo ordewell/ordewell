@@ -791,7 +791,7 @@ function buildConversationBody(
     ...(tools
       ? [
         '- Submit the plan only through submit_plan: JSON written in your reply is never read as a plan.',
-        ...(autorun ? [] : ['- Show the outline before submitting. Do not skip the outline.']),
+        ...(autorun ? [] : ['- Write the outline in the same reply that calls submit_plan. Do not skip the outline.']),
       ]
       : [
         '- When committing the plan, output only the JSON object, with no markdown code block around it: anything else fails to parse.',

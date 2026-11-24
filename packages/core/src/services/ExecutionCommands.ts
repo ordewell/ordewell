@@ -1712,8 +1712,8 @@ export class ExecutionCommands {
     const approving = command.command === 'run_script'
       ? ' Allowing approves it to run as shown; otherwise it stays in the plan, not approved, for you to start or remove.'
       : approves.length === 0 ? '' : command.command === 'run_plan'
-        ? ` Allowing approves ${named(approves)}, added since you approved the plan, and starts ${one ? 'it' : 'them'} with the rest.`
-        : ` Allowing approves ${named(approves)}, added since you approved the plan.`;
+        ? ` Allowing approves ${named(approves)}, added since you ran the plan, and starts ${one ? 'it' : 'them'} with the rest.`
+        : ` Allowing approves ${named(approves)}, added since you ran the plan.`;
     const wants = script ? 'wants to run a script task' : 'wants to start work';
     const body = script ? scriptBodyText(script) : scriptsShown(approves);
     return {

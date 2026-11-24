@@ -14,7 +14,7 @@ import { useSessionList } from './useSessionList';
 const SESSION_STATUS: Readonly<Record<string, { status: StatusId; word: string }>> = {
   planning: { status: 'not-started', word: 'Planning' },
   draft: { status: 'not-started', word: 'Draft' },
-  approved: { status: 'not-started', word: 'Approved' },
+  approved: { status: 'not-started', word: 'Started' },
   running: { status: 'running', word: 'Running' },
   completed: { status: 'passed', word: 'Settled' },
   settled: { status: 'passed', word: 'Settled' },
@@ -57,9 +57,11 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   // A read-only view draws its holder's saved file and hears none of its run, so its row is the list's to say, as any other's.
   const ownId = readOnly ? undefined : sessionId;
   const planStatus = state.plan?.status;
-  // The saved plan says Approved for as long as its run lasts, so the open session's row reads its live run instead.
+  // The saved plan says approved (Started) for as long as its run lasts, so the open session's row reads its live run instead.
   const progress = state.isExecuting || state.activity.advancesOnItsOwn ? planProgress(host) : undefined;
-  const live = progress ? { status: 'running' as const, word: `Running ${progress.done}/${progress.total}` } : undefined;
+  // The daemon lists a goal it admitted as a draft at once: until the planner drafts a task, its turn is the row's news.
+  const planning = !progress && state.isResearchActive && !state.plan?.tasks.length ? sessionStatus('planning') : undefined;
+  const live = progress ? { status: 'running' as const, word: `Running ${progress.done}/${progress.total}` } : planning;
   // Read again when the session changes, the planner names a new one's goal, or
   // the open plan moves on (approved, running, done): each is a row this list
   // lacks or shows stale. Every other row's run is the list's own word.

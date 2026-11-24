@@ -2051,7 +2051,9 @@ out of rounds, or, in an open run, a task that nothing but a person holds back
 (its *Merge gate*, a hold, its approval, nothing to run, a user task), or a
 reverted task in any run; and of the run itself, landed work with nothing left
 to move it, a *Blocked run*, and, below Act, a planner reply to a *Wake-up turn*
-that nothing will follow, which the user answers by writing to the planner.
+that nothing will follow, which the user answers by writing to the planner or
+by acting on the run (a merge, run, retry or skip). The reply to the end-of-run
+wake-up alone is the wrap-up and asks nothing, so it is none.
 It carries an id that names the wait and not just its attempt, which can wait
 many times, so a later wait is another escalation; the task it belongs to, which
 links to the

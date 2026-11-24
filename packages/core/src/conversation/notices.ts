@@ -53,8 +53,11 @@ export function runNotice(message: SessionMessage, run: RunView, { runWith }: Ru
     }
     case 'review_needed':
       return runWith ? `Plan needs your sign-off: ${runWith} to continue.` : 'Plan needs your sign-off.';
+    // Running a draft is the Run itself, and the timeline's own line ("You
+    // started the plan.") says so: a second line here once named an approve
+    // the user never gave, since there is one verb for it.
     case 'review_approved':
-      return 'Plan approved.';
+      return null;
     case 'execution_complete':
       return executionNotice('finished', message.summary);
     // A stop sends no tally, and defaulting it to zero reported a run halted

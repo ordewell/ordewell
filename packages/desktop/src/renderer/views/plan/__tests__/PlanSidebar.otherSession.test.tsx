@@ -82,7 +82,7 @@ describe('Sessions: a run in a session that is not the open one', () => {
     let leased = false;
     const daemon = fakeDaemon({
       'sessions.load': () => ok({ ok: true, plan: surfacePlan(TASKS, 'draft'), goal: 'Fix flaky CI' }),
-      // A daemon that predates `run` lists s1 the same way, Approved and nothing more.
+      // A daemon that predates `run` lists s1 the same way, Started and nothing more.
       'sessions.list': () => ok([
         { id: 's1', goal: 'Ship the parser', status: 'approved', taskCount: 1, updatedAt: '2026-11-03T09:00:00.000Z', ...(leased ? { run: { live: true } } : {}) },
         { id: 's2', goal: 'Fix flaky CI', status: 'draft', taskCount: 1, updatedAt: '2026-11-03T08:00:00.000Z' },
@@ -92,7 +92,7 @@ describe('Sessions: a run in a session that is not the open one', () => {
     hosts.push(host);
     await act(() => host.open('s2'));
     render(<Sessions host={host} />);
-    expect(await screen.findByRole('button', { name: /Ship the parser.*Approved/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Ship the parser.*Started · / })).toBeInTheDocument();
     expect(rowStatus(/Ship the parser/)).not.toBe('running');
     const before = daemon.calls('sessions.list').length;
 
@@ -215,7 +215,7 @@ describe('Sessions: a run in a session that is not the open one', () => {
     // The holder's run ends: the open row settles within one live read, not the idle one.
     holderLive = false;
     await act(async () => { await vi.advanceTimersByTimeAsync(LIVE_LIST_MS); });
-    expect(screen.getByRole('button', { name: /Ship the parser.*Approved/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Ship the parser.*Started · / })).toBeInTheDocument();
     expect(rowStatus(/Ship the parser/)).not.toBe('running');
     expect(daemon.calls('sessions.close')).toHaveLength(0);
   });
@@ -234,7 +234,7 @@ describe('Sessions: a run in a session that is not the open one', () => {
     expect(await screen.findByRole('button', { name: /Ship the parser.*Running 1\/3/ })).toBeInTheDocument();
     fail = true;
     await act(async () => { await vi.advanceTimersByTimeAsync(LIVE_LIST_MS); });
-    expect(screen.getByRole('button', { name: /Ship the parser.*Approved/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Ship the parser.*Started · / })).toBeInTheDocument();
     expect(screen.queryByText('The daemon could not list the sessions.')).not.toBeInTheDocument();
   });
 });

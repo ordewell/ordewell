@@ -164,8 +164,9 @@ interface OrdewellCalls {
 export function toolsFailedNotice(logPath: string = daemonLogPath()): string {
   return [
     "The planner's tools failed on every call this turn, so it could not plan.",
-    `Each call is in the daemon's log, ${logPath}.`,
-    'Send the goal again, or switch planner with the planner picker (/planner in the terminal).',
+    // The log is the owning process's (ADR-0022 T4), and a VS Code session runs in its extension host, not the daemon.
+    `Each call is in the log of the process that runs the session: the daemon's, ${logPath}, or in VS Code the extension host's.`,
+    'Send the goal again, or pick another planner in the planner picker.',
   ].join(' ');
 }
 
@@ -742,6 +743,10 @@ export class CliAgentAiService implements IAiService {
     // The planner's own calls to Ordewell's tools, by call id, until they settle.
     const ordewellCallIds = new Set<string>();
     const ordewellCalls: OrdewellCalls = { answered: 0, failed: 0 };
+    // A command that ran and exited non-zero comes back as an error too, but
+    // that is the command's answer, not Ordewell's tools failing: a Codex
+    // planner, its own shell off, runs every command through run_command.
+    const commandCallIds = new Set<string>();
 
     const truncate = (value: string) =>
       value.length > LOG_MAX_CHARS ? `${value.slice(0, LOG_MAX_CHARS)}\n[... truncated, total ${value.length} chars]` : value;
@@ -756,7 +761,8 @@ export class CliAgentAiService implements IAiService {
       // this step persists into the session file is ours, and it must not hold
       // credentials in plaintext.
       const output = redactSourceText(rawOutput);
-      if (ordewellCallIds.delete(id) && outcome !== 'denied') ordewellCalls[success ? 'answered' : 'failed'] += 1;
+      const command = commandCallIds.delete(id);
+      if (ordewellCallIds.delete(id) && outcome !== 'denied' && (success || !command)) ordewellCalls[success ? 'answered' : 'failed'] += 1;
       const call = pendingCalls.get(id);
       pendingCalls.delete(id);
       const subagentId = call?.subagentId ?? reportedBy;
@@ -803,7 +809,10 @@ export class CliAgentAiService implements IAiService {
           const mapped = mapAgentTool(event.name);
           const args = JSON.stringify(normalizeAgentArgs(mapped.tool, event.args));
           const subagentId = event.subagentId;
-          if (!subagentId && isOrdewellTool(event.name)) ordewellCallIds.add(event.id);
+          if (!subagentId && isOrdewellTool(event.name)) {
+            ordewellCallIds.add(event.id);
+            if (/run_command$/i.test(event.name.trim())) commandCallIds.add(event.id);
+          }
           pendingCalls.set(event.id, {
             tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1,
           });

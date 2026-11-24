@@ -4,6 +4,7 @@
  * only runner is bench/pipeline's fake-claude, and the Electron launch.
  */
 import { _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test';
+import { SETTINGS_ENV_ALLOWLIST } from '@ordewell/core';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -100,12 +101,22 @@ export interface EnvOptions {
   readonly runners?: string;
 }
 
+/**
+ * What picks the app's planner, its model or a provider's key and endpoint: the
+ * provider and planner keys a settings write may set, the model choices the
+ * daemon and its runners read from the environment alone, and any key or
+ * endpoint by its suffix, since the daemon reads endpoints no vendor registers.
+ */
+const PROVIDER_ENV: ReadonlySet<string> = new Set([...SETTINGS_ENV_ALLOWLIST, 'GEMINI_MODEL', 'OPENAI_MODEL', 'CLINE_MODEL']);
+const providerEnv = (key: string): boolean => PROVIDER_ENV.has(key) || /_(API_KEY|BASE_URL)$/.test(key);
+
 /** The environment of the app, or of a daemon started beside it: the same HOME, PATH and planner. */
 export function appEnv(sandbox: Sandbox, daemonPort: number, mockPort: number, options: EnvOptions = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    // A developer's own Ordewell, Claude Code or VS Code settings would steer the app under test.
-    if (value === undefined || /^(ORDEWELL_|VSCODE_|CLAUDE)/.test(key) || key === 'ELECTRON_RUN_AS_NODE' || key === 'ANTHROPIC_API_KEY') continue;
+    // A developer's own Ordewell, Claude Code or VS Code settings, or provider
+    // keys and model, would steer the app under test and take it online.
+    if (value === undefined || /^(ORDEWELL_|VSCODE_|CLAUDE)/.test(key) || key === 'ELECTRON_RUN_AS_NODE' || providerEnv(key)) continue;
     env[key] = value;
   }
   return {

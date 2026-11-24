@@ -90,7 +90,7 @@
       {
         "id": "ordewell.firstRun",
         "title": "Get started with Ordewell",
-        "description": "From a goal to a plan of coding-agent tasks, run when you approve it.",
+        "description": "From a goal to a plan of coding-agent tasks, run when you say so.",
         "steps": [
           {
             "id": "openView",

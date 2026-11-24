@@ -86,7 +86,7 @@ describe('a task removed after the user approved it', () => {
 
     expect(cards(env)[0]).toMatchObject({
       subject: 'Start task #1 "Deploy"',
-      detail: expect.stringContaining('Allowing approves task #1 "Deploy", added since you approved the plan.'),
+      detail: expect.stringContaining('Allowing approves task #1 "Deploy", added since you ran the plan.'),
     });
     expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);
     env.session.resolveApproval(cards(env)[0].id, false);
@@ -167,7 +167,7 @@ describe('the Guarded card', () => {
     // The edit is in the plan as its call answers (ADR-0022 P2), so the start asks at once.
     const pending = env.planner.tools().runPlan!({}, ctx);
     await until(() => cards(env).length === 1);
-    expect(cards(env)[0].detail).toContain('Allowing approves task #2 "Add a cache", added since you approved the plan, and starts it with the rest.');
+    expect(cards(env)[0].detail).toContain('Allowing approves task #2 "Add a cache", added since you ran the plan, and starts it with the rest.');
 
     env.session.resolveApproval(cards(env)[0].id, true);
     expect((await pending).isError).toBeFalsy();

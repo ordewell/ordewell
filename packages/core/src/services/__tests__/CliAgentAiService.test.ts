@@ -1290,11 +1290,33 @@ describe('CliAgentAiService — Codex', () => {
       expect(notices[0]).toMatch(/planner's tools failed/);
       expect(notices[0]).toContain(daemonLogPath());
       expect(notices[0]).toMatch(/send the goal again/i);
-      expect(notices[0]).toMatch(/\/planner/);
+      expect(notices[0]).toMatch(/another planner/);
+    });
+
+    // VS Code runs the session in its extension host, whose console has the per-call lines, and its user has no /planner.
+    it('names the log of each process that can own the session, and a next step every surface has', async () => {
+      const turn = turnOf(call('c1', 'list_runners', timedOut('list_runners')), 'I could not list the runners.');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices[0]).toContain('extension host');
+      expect(notices[0]).not.toMatch(/\/planner in the terminal/);
     });
 
     it('says nothing when one of them answered', async () => {
       const turn = turnOf(call('c1', 'run_command', timedOut('run_command')) + call('c2', 'list_runners'), 'Which runner should run the tests?');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices).toEqual([]);
+    });
+
+    // A Codex planner's own shell is off, so every command it runs is a run_command: a command that exits
+    // non-zero is the command's answer, not Ordewell's tools failing, and the planner may well go on to ask.
+    it('says nothing when the only call was a command that exited non-zero', async () => {
+      const turn = turnOf(call('c1', 'run_command', 'cat: missing.txt: No such file or directory'), 'There is no missing.txt here: which file did you mean?');
       const { svc } = service('codex', [...codexHandshake(), turn]);
       const notices: string[] = [];
       await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));

@@ -484,7 +484,7 @@ function unstarted(row: TaskWithParent, input: EscalationInput, rows: Rows): Wai
   if (task.type === 'user') return waitOf(waits, 'by-hand') ? { kind: 'by-hand', reason: BY_HAND, options: completeOption(row, input.run) } : null;
   if (waitOf(waits, 'unapproved')) {
     const afterDelegated = task.dependencies.some((id) => rows.get(id)?.task.type === 'delegated');
-    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you approved the plan, so it waits for you to start it.' : afterDelegated ? 'Its delegated task has ended, and it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
+    return { kind: 'unapproved', reason: input.waitsForApproval(task.id) ? 'Added since you ran the plan, so it waits for you to start it.' : afterDelegated ? 'Its delegated task has ended, and it waits for you to start it.' : 'Its loop is carried on, and waits for you to start it.', options: [{ id: 'run', label: 'Start' }] };
   }
   return null;
 }

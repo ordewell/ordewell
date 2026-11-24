@@ -33,7 +33,7 @@ describe('DaemonHost on a first run with nothing that can plan', () => {
     expect(seen.filter((m) => m.type === 'showError')).toEqual([{ type: 'showError', error: 'No planner is ready.', code: 'planner_not_ready' }]);
   });
 
-  it('leaves any other refusal unmarked', async () => {
+  it('leaves any other refusal unmarked, naming the goal its Try Again sends again', async () => {
     fakeDaemon({
       'plans.converseStart': { ok: false, status: 500, error: 'failed', data: { error: 'The planner failed.' } },
     });
@@ -41,7 +41,7 @@ describe('DaemonHost on a first run with nothing that can plan', () => {
 
     await act(() => host.handle({ type: 'sendMessage', text: 'Add a login page', typed: true }));
 
-    expect(seen.filter((m) => m.type === 'showError')).toEqual([{ type: 'showError', error: 'The planner failed.' }]);
+    expect(seen.filter((m) => m.type === 'showError')).toEqual([{ type: 'showError', error: 'The planner failed.', resend: 'Add a login page' }]);
   });
 
   it('opens an install guide in the browser through main', async () => {
