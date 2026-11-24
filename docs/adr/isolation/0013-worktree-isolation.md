@@ -214,7 +214,7 @@ everything below applies per repo of the group.
   never linked: Ordewell's session state stays at the main root where a runner
   cannot corrupt it. `.ordewell/skills/` is the one committed part — the
   generated `.ordewell/.gitignore` ignores everything in the state directory
-  except itself and `skills/` — so a project's skills reach a worktree through
+  except `skills/`, itself included — so a project's skills reach a worktree through
   git, as its own checked-out copy ([ADR-0024](../planner/0024-unified-skills.md)). A
   runner only ever edits that copy, which lands through the merge gate and the
   user's handoff merge; the main root's state is never written by a runner. In
@@ -641,3 +641,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
+- 2026-11-24 — the generated `.ordewell/.gitignore` ignores itself, so it is no longer swept into a landing (the hazard ADR-0055 recorded) or listed by `git status`.

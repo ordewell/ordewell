@@ -4532,7 +4532,10 @@ unparseable answer or a reader that cannot judge one: only the runner can say it
 user is logged out. `unknown` never blocks and is never flagged, because an
 older or offline CLI, a custom provider with its own key and a changed output
 shape must not cost work that will succeed. `signed-out` rides beside *usable*,
-never inside it: the agent stays listed and choosable, is flagged, and a planner
+never inside it: the agent stays listed, enabled and choosable, is flagged, is
+not offered to a planner as a runner (left out of `list_runners`, `list_models`
+and what a plan may assign, with the reason `Codex: signed out, not offered
+until signed in`) until its check reads signed in, and a planner
 turn is refused before it is sent with the *login command* the manifest declares;
 the TUI's `/login` (or `/login <runner>`) and VS Code's Log in run that command
 in a real terminal and then ask again, and naming another agent signs it in

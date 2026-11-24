@@ -84,7 +84,7 @@ user who wants the old behaviour sets the flag after the refresh, not before.
 **Two scopes.** Global `~/.ordewell/skills/` holds the built-in seeds and the
 user's own skills, and is written by the user only. Workspace
 `.ordewell/skills/` is committed: the `.ordewell/.gitignore` rules ignore the
-state directory but carve out `skills/`. Because it is committed, it reaches
+state directory, the rules file included, but carve out `skills/`. Because it is committed, it reaches
 every task worktree through git (ADR-0013) and a task can write a skill there
 that later tasks use, through the normal worktree → merge gate path
 (ADR-0020). **Global wins on a name clash**; the workspace copy is reported as
@@ -229,3 +229,4 @@ server).
 - 2026-10-21 — amended: the `diagnose` and `explore` built-ins are model-invocable planner skills.
 - 2026-11-10 — amended: skill bodies are capped at 2,000 words.
 - 2026-11-17 — amended: a missing skill name is refused at submit unless a task it depends on writes it (dropped with a warning from a one-shot API plan); the spawn failure says how to fix it.
+- 2026-11-24 — amended: the generated `.ordewell/.gitignore` no longer un-ignores itself, so a fresh project's `git status` lists nothing under `.ordewell/`; the previous text is upgraded in place unless git tracks it.

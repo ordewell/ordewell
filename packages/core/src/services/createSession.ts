@@ -571,6 +571,8 @@ export function createSession(deps: SessionDeps): Session {
     settings: deps.settings,
     // Read through the Session, which holds the plan; the catalog is built first.
     planRunners: (): RunnerId[] => session.planState?.runners ?? [],
+    // Read at each call, so an agent the runner list finds signed in again is offered again (ADR-0052).
+    withheld: (runner) => (recordedRunnerAuth(runner, deps.workspaceRoot())?.state === 'signed-out' ? 'signed out' : undefined),
     liveRunner: (taskId) => orchestrator.getAttempt(taskId) !== undefined,
   });
 
@@ -2179,14 +2181,14 @@ export class Session {
   }
 
   /**
-   * The runners a first turn may plan for. None requested means every enabled
+   * The runners a first turn may plan for. None requested means every offered
    * one, read here, after the planner gate: until the installed-agent probe
    * answers, the enabled default is a stale guess a request must not freeze.
    */
   private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
-    const enabled = this.catalog.enabledRunners();
-    const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
-    if (chosen.length === 0) throw new Error(noRunnerEnabled(enabled));
+    const offered = this.catalog.offeredRunners();
+    const chosen = requested ? requested.filter((r) => offered.includes(r)) : offered;
+    if (chosen.length === 0) throw new Error(noRunnerEnabled(offered, this.catalog.withheld().map((w) => w.reason)));
     return chosen;
   }
 
@@ -3269,12 +3271,17 @@ export class Session {
 /**
  * The refusal of a goal with no enabled runner to plan for, with the way on:
  * the runners that are enabled when the request named others, else where to
- * turn one on or how to get one. Every surface shows it as it is.
+ * turn one on or how to get one. An enabled agent left out for its sign-in
+ * is named with why, and signing it in is a way on (ADR-0052). Every surface
+ * shows it as it is.
  */
-function noRunnerEnabled(enabled: readonly RunnerId[]): string {
-  const lead = 'None of the requested runners are enabled.';
+function noRunnerEnabled(enabled: readonly RunnerId[], withheld: readonly string[] = []): string {
+  const lead = withheld.length > 0
+    ? `None of the requested runners can be planned for. ${withheld.join('; ')}.`
+    : 'None of the requested runners are enabled.';
   const switchOn = 'under Runners (/runners in the terminal UI)';
   if (enabled.length === 0) {
+    if (withheld.length > 0) return `${lead} Sign in to one and send the goal again, or turn on another ${switchOn}.`;
     return `${lead} Turn one on ${switchOn}, or install a coding agent such as Claude Code or Codex and run /refresh.`;
   }
   const names = enabled.map((id) => RUNNER_LABELS[id] ?? id);

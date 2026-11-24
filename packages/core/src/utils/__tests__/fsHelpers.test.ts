@@ -40,7 +40,7 @@ afterEach(() => {
 describe('ensureStateDirIgnored', () => {
   it('writes the ignore file with the skills carve-out', () => {
     ensureStateDirIgnored(tmpDir);
-    expect(fs.readFileSync(ignorePath(), 'utf8')).toBe('*\n!.gitignore\n!skills/\n!skills/**\n');
+    expect(fs.readFileSync(ignorePath(), 'utf8')).toBe('*\n!skills/\n!skills/**\n');
   });
 
   it.each(['*\n', '*'])('upgrades the legacy match-everything rule %j', (legacy) => {
@@ -49,13 +49,36 @@ describe('ensureStateDirIgnored', () => {
     expect(fs.readFileSync(ignorePath(), 'utf8')).toBe(STATE_DIR_IGNORE);
   });
 
+  const PREVIOUS = '*\n!.gitignore\n!skills/\n!skills/**\n';
+
+  it('upgrades the previously generated text in a folder that is not a git repository', () => {
+    write(tmpDir, '.ordewell/.gitignore', PREVIOUS);
+    ensureStateDirIgnored(tmpDir);
+    expect(fs.readFileSync(ignorePath(), 'utf8')).toBe(STATE_DIR_IGNORE);
+  });
+
+  it.skipIf(!hasGit)('upgrades the previously generated text when git does not track it', () => {
+    git(tmpDir, 'init', '-q', '-b', 'main');
+    write(tmpDir, '.ordewell/.gitignore', PREVIOUS);
+    ensureStateDirIgnored(tmpDir);
+    expect(fs.readFileSync(ignorePath(), 'utf8')).toBe(STATE_DIR_IGNORE);
+  });
+
+  it.skipIf(!hasGit)('leaves the previously generated text alone when git tracks it', () => {
+    git(tmpDir, 'init', '-q', '-b', 'main');
+    write(tmpDir, '.ordewell/.gitignore', PREVIOUS);
+    git(tmpDir, 'add', '.ordewell/.gitignore');
+    ensureStateDirIgnored(tmpDir);
+    expect(fs.readFileSync(ignorePath(), 'utf8')).toBe(PREVIOUS);
+  });
+
   it.each(['*\n\n', '# mine\n*\n', 'sessions/\n'])('leaves a customised ignore file %j untouched', (custom) => {
     write(tmpDir, '.ordewell/.gitignore', custom);
     ensureStateDirIgnored(tmpDir);
     expect(fs.readFileSync(ignorePath(), 'utf8')).toBe(custom);
   });
 
-  it.skipIf(!hasGit)('tracks .ordewell/skills and the ignore file, and ignores the rest of the state directory', () => {
+  it.skipIf(!hasGit)('lists only .ordewell/skills, and ignores the rest of the state directory', () => {
     git(tmpDir, 'init', '-q', '-b', 'main');
     ensureStateDirIgnored(tmpDir);
     write(tmpDir, '.ordewell/skills/x/SKILL.md', '---\nname: x\n---\n\nBody.\n');
@@ -66,7 +89,6 @@ describe('ensureStateDirIgnored', () => {
 
     const untracked = git(tmpDir, 'status', '--porcelain', '--untracked-files=all').split('\n').map((l) => l.slice(3)).sort();
     expect(untracked).toEqual([
-      '.ordewell/.gitignore',
       '.ordewell/skills/x/SKILL.md',
       '.ordewell/skills/x/notes/extra.md',
     ]);

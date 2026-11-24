@@ -810,3 +810,4 @@ the child cannot reach follows it in the parent's plan.**
 - 2026-11-02 — from review: D7's list holds every path a branch changes, beside a folder workspace too, and nothing starts behind a report, whose branch is read again as it is published. D17: a Continue whose worktree cannot open keeps the child, and one whose restore falls back says so.
 - 2026-11-05 — D19's three limits are run settings, defaulting to the table and bounded by its caps; D21's desktop shows Subplanners in Advanced's Experimental group.
 - 2026-11-10 — D20's TUI holds what is typed while a subplanner answers: Esc takes the newest held message back before it goes up a plan, and ctrl-s sends all held without interrupting.
+- 2026-11-24 — the stray `.ordewell/.gitignore` swept into a landing (above) is gone: the generated rules file now ignores itself (ADR-0013, ADR-0024).
