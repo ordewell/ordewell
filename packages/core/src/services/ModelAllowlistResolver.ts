@@ -95,10 +95,11 @@ export function clampThinkingEffort(
   const idx = EFFORT_LADDER.indexOf(canon);
   if (idx < 0) return undefined;
   for (let d = 1; d < EFFORT_LADDER.length; d++) {
-    const lower = EFFORT_LADDER[idx - d];
-    if (lower && ids.has(lower)) return lower;
+    // A tie goes up: a plan that says medium on a model with no medium wants the thinking it asked for, not less (PlanPrompts DEFAULT_EFFORT).
     const higher = EFFORT_LADDER[idx + d];
     if (higher && ids.has(higher)) return higher;
+    const lower = EFFORT_LADDER[idx - d];
+    if (lower && ids.has(lower)) return lower;
   }
   return undefined;
 }

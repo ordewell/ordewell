@@ -271,7 +271,9 @@ function sliceTable(shape: FanOutShape): string {
 
 /** What every task before the slices is done by, besides its brief: the slices start from the tree it lands. */
 const COLLECTS = 'the test command the slices\' briefs run (the project\'s own, if they name none) collects its tests without an error, though tests may still fail';
-const SHOWN = 'run both, a collection-only run where the test runner has one, and put each command and the last lines of its output in your report';
+// Two checks, named: a note that said "run both" had an opening run the whole suite as part of its own criterion.
+// A fan-out with no closing check has no task to name: the slices alone run the tests.
+const shown = (shape: FanOutShape) => `run two checks, building or importing the project and a collection-only run of the test runner where it has one (pytest --collect-only, for example). The full test suite is not part of this check: ${shape.closers.length > 0 ? 'the slices and the closing check run the tests' : 'the slices run their own tests'}. Put each command and the last lines of its output in your report`;
 
 /**
  * The opening task's note: the slices wait for it, so it is short, it leaves
@@ -282,14 +284,14 @@ const SHOWN = 'run both, a collection-only run where the test runner has one, an
 export function openingNote(shape: FanOutShape): string {
   const gate = shape.opening ?? shape.gates[0];
   return [
-    `Plan shape: ${gate ? waitingFor(shape, gate) : shape.slices.length} slices wait for this task to land before any of them starts, and they start from the tree you land. Besides your brief's own criterion, you are done only when the project builds or imports and ${COLLECTS}: ${SHOWN}. For that alone you may edit any file, whichever task below owns it: add only the smallest placeholder that lets it import (a missing name, a function that raises NotImplementedError or its like), and list each placeholder in your summary with the task that owns it. Leave everything else in a module a slice owns to that slice, and finish it as soon as your brief allows. End with status failed when the project still does not import or its tests do not collect for a cause in the repository's code, saying what stops them. A cause outside that code which no placeholder fixes, such as a dependency that is not installed, is not yours to fix: report it as a finding with the command and its output, and end with status done. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:`,
+    `Plan shape: ${gate ? waitingFor(shape, gate) : shape.slices.length} slices wait for this task to land before any of them starts, and they start from the tree you land. Besides your brief's own criterion, you are done only when the project builds or imports and ${COLLECTS}: ${shown(shape)}. For that alone you may edit any file, whichever task below owns it: add only the smallest placeholder that lets it import (a missing name, a function that raises NotImplementedError or its like), and list each placeholder in your summary with the task that owns it. Leave everything else in a module a slice owns to that slice, and finish it as soon as your brief allows. End with status failed when the project still does not import or its tests do not collect for a cause in the repository's code, saying what stops them. A cause outside that code which no placeholder fixes, such as a dependency that is not installed, is not yours to fix: report it as a finding with the command and its output, and end with status done. End your report with a map the slices read before they explore: for each module the tests import, its path, its public names, and the task below that owns it. Say in your summary that the map is in your report. The tasks and the paths their briefs name:`,
     ownershipTable(shape),
   ].join('\n');
 }
 
 /** Another task before the slices: they start from the tree it lands too, so it leaves the import and the collection no worse than it found them. */
 export function gateNote(shape: FanOutShape, gate: Task): string {
-  return `Plan shape: ${waitingFor(shape, gate)} slices wait for this task to land before they start, and they start from the tree you land, so finish as soon as your brief allows and leave every module a slice owns to that slice. Besides your brief's own criterion, you are done only when your change leaves the project building or importing and ${COLLECTS}, as it did when you started or better: ${SHOWN}.`;
+  return `Plan shape: ${waitingFor(shape, gate)} slices wait for this task to land before they start, and they start from the tree you land, so finish as soon as your brief allows and leave every module a slice owns to that slice. Besides your brief's own criterion, you are done only when your change leaves the project building or importing and ${COLLECTS}, as it did when you started or better: ${shown(shape)}.`;
 }
 
 /**

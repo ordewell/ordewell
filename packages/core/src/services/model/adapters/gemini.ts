@@ -12,9 +12,11 @@ import {
 } from '@google/genai';
 import { v4 as uuidv4 } from 'uuid';
 import { classifyHttpFailure, ModelError } from '../ModelError';
+import { effortBeforeFirst } from '../effortFirst';
 import type {
   AdapterOptions,
   EffortLevel,
+  EffortSent,
   FinishReason,
   ModelClient,
   ModelEvent,
@@ -98,9 +100,19 @@ export function createGeminiClient(options: AdapterOptions): ModelClient {
         refusesThinking.add(request.model);
         chunks = await open(request, false, signal);
       }
-      yield* readStream(chunks, signal);
+      yield* effortBeforeFirst(
+        request.effort ? effortSent(request.model, request.effort, refusesThinking.has(request.model)) : undefined,
+        readStream(chunks, signal),
+      );
     },
   };
+}
+
+/** The thinking level or budget the request carried for the effort it asked, in the API's own terms. */
+function effortSent(model: string, effort: EffortLevel, refused: boolean): EffortSent {
+  const thinking = refused ? undefined : thinkingConfig(model, effort);
+  const sent = thinking?.thinkingLevel?.toLowerCase() ?? (thinking?.thinkingBudget !== undefined ? `thinkingBudget ${thinking.thinkingBudget}` : undefined);
+  return { type: 'effort', ...(sent ? { sent } : {}), ...(refused ? { refused: true as const } : {}) };
 }
 
 /** A 400 that blames the thinking setting; a missing-signature refusal names a signature, not a setting. */

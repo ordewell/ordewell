@@ -129,13 +129,31 @@ export interface ModelUsage {
 export type FinishReason = 'stop' | 'tool-calls' | 'length' | 'content-filter';
 
 /**
+ * The effort a request asking for one actually carried, in the provider's own
+ * word: an adapter maps a level its provider lacks onto one it has, and leaves
+ * one out where the provider or the model takes none. Without it the planned
+ * effort and the sent one differ silently.
+ */
+export interface EffortSent {
+  type: 'effort';
+  /** Absent: the request went without one. */
+  sent?: string;
+  /** The provider refused the effort for this model, so this request, and every later one to it, goes without. */
+  refused?: true;
+}
+
+/**
  * A request's stream. Tool calls start, stream their arguments and complete by
  * id; `usage` and `provider-state` come at most once each, after every tool
  * call completes; `finish` is always last, exactly once. A stream that ends
  * without one throws a `ModelError` instead. On `length`, a call the limit cut
  * short never completes: only one whose arguments came through whole does.
+ * `effort` comes once, ahead of the first of the others, on a request that asked
+ * for one: never before the stream has sent something, which timeouts and retry
+ * would take for it having started.
  */
 export type ModelEvent =
+  | EffortSent
   | { type: 'text-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'tool-call-start'; id: string; name: string }

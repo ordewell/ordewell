@@ -377,6 +377,24 @@ describe('anthropic-messages adapter: tool choice', () => {
     expect(transport.sent[2].body.tool_choice).toEqual({ type: 'auto' });
   });
 
+  it('reports the effort each request carried: the level, a thinking budget, none on a model without thinking, and a refusal', async () => {
+    const effortOf = async (model: string, effort: ModelRequest['effort']) => ofType(await collect(clientFor(replay(recorded('text.sse'))), { ...BASE_REQUEST, model, effort }), 'effort');
+    expect(await effortOf('claude-sonnet-4-6', 'max')).toEqual([{ type: 'effort', sent: 'high' }]);
+    expect(await effortOf('claude-haiku-4-5', 'high')).toEqual([{ type: 'effort', sent: 'budget_tokens 10000' }]);
+    expect(await effortOf('claude-3-5-haiku', 'high')).toEqual([{ type: 'effort' }]);
+    expect(await effortOf('claude-opus-5-5', undefined)).toEqual([]);
+    const client = clientFor(replay(refusal(400, error('invalid_request_error', 'output_config.effort: not supported')), recorded('text.sse'), recorded('text.sse')));
+    const request: ModelRequest = { ...BASE_REQUEST, model: 'claude-opus-5-5', effort: 'medium' };
+    expect(ofType(await collect(client, request), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+    expect(ofType(await collect(client, request), 'effort')).toEqual([{ type: 'effort', refused: true }]);
+  });
+
+  // Switching thinking off to force a tool is the step's own choice, not the effort's fate.
+  it('reports no effort on a step that switches thinking off to force a tool', async () => {
+    const events = await collect(clientFor(replay(recorded('text.sse'))), { ...BASE_REQUEST, model: 'claude-opus-4-7', effort: 'high', tools: COMPLETE, toolChoice: { name: 'task_complete' } });
+    expect(ofType(events, 'effort')).toEqual([]);
+  });
+
   it('retries without thinking when a model refuses it, and gives up on a second refusal', async () => {
     const refuse = () => refusal(400, error('invalid_request_error', 'thinking.budget_tokens: not supported'));
     const transport = replay(refuse(), refuse());

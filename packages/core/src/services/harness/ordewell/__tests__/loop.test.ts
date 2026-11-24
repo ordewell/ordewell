@@ -77,6 +77,37 @@ describe('OrdewellLoop', () => {
     expect(eventsOf(events, 'usage')[0]?.record).toMatchObject({ provider: 'DeepInfra', generationId: 'gen-1' });
   });
 
+  // A planned max went out as high on every recorded OpenRouter run, and nothing said so.
+  it('records the effort sent beside the one planned, and notes a downgrade once in the task log', async () => {
+    const step = (sent: ModelEvent): ScriptedStep => [sent, { type: 'text-delta', text: 'Done.' }, { type: 'usage', usage: { inputTokens: 9, outputTokens: 4 } }, STOP];
+    const { loop, events } = loopWith([step({ type: 'effort', sent: 'high' }), step({ type: 'effort', sent: 'high' })], { effort: 'max' });
+    await loop.runTurn('Work.', signals().both);
+    await loop.runTurn('More.', signals().both);
+
+    expect(eventsOf(events, 'usage').map((e) => e.record.effort)).toEqual([{ planned: 'max', sent: 'high' }, { planned: 'max', sent: 'high' }]);
+    expect(eventsOf(events, 'command_output').map((e) => e.text)).toEqual([
+      '[Ordewell] This task planned thinking effort max; its model requests carry high, the nearest its provider takes.',
+    ]);
+  });
+
+  it('notes a refused effort, and an effort the provider takes none of, and says nothing when the planned one is sent', async () => {
+    const step = (sent: ModelEvent): ScriptedStep => [sent, { type: 'text-delta', text: 'Done.' }, { type: 'usage', usage: { inputTokens: 9, outputTokens: 4 } }, STOP];
+    const notes = async (effort: LoopOptions['effort'], sent: ModelEvent) => {
+      const { loop, events } = loopWith([step(sent)], { effort });
+      await loop.runTurn('Work.', signals().both);
+      return { records: eventsOf(events, 'usage').map((e) => e.record.effort), notes: eventsOf(events, 'command_output').map((e) => e.text) };
+    };
+    expect(await notes('high', { type: 'effort', refused: true })).toEqual({
+      records: [{ planned: 'high', refused: true }],
+      notes: ['[Ordewell] This task planned thinking effort high, which the provider refused for this model: its model requests go without one for the rest of this attempt.'],
+    });
+    expect(await notes('low', { type: 'effort' })).toEqual({
+      records: [{ planned: 'low' }],
+      notes: ['[Ordewell] This task planned thinking effort low; its model requests carry none, since this provider or model takes none.'],
+    });
+    expect(await notes('medium', { type: 'effort', sent: 'medium' })).toEqual({ records: [{ planned: 'medium', sent: 'medium' }], notes: [] });
+  });
+
   it('rebuilds every request from the transcript, with the same tools on every step', async () => {
     const { loop, client, worktree } = loopWith([[call('c1', 'read', { path: 'notes.txt' }), STOP], [{ type: 'text-delta', text: 'Read it.' }, STOP]]);
     writeFileSync(path.join(worktree, 'notes.txt'), 'first line\n');

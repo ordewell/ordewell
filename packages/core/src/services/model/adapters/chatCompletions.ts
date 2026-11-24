@@ -3,9 +3,11 @@ import { v4 as uuidv4 } from 'uuid';
 import type { AiProvider } from '../../../interfaces/IConfig';
 import { classifyHttpFailure, ModelError } from '../ModelError';
 import { cameThroughWhole } from './cutShort';
+import { effortBeforeFirst } from '../effortFirst';
 import type {
   AdapterOptions,
   EffortLevel,
+  EffortSent,
   FinishReason,
   ModelClient,
   ModelEvent,
@@ -148,9 +150,17 @@ export function createChatCompletionsClient(options: AdapterOptions): ModelClien
         body = requestBody(provider, request, true);
         chunks = await open(body, signal);
       }
-      yield* readStream(provider, request.model, chunks, signal);
+      yield* effortBeforeFirst(
+        request.effort ? effortSent(body, refusesEffort.has(request.model)) : undefined,
+        readStream(provider, request.model, chunks, signal),
+      );
     },
   };
+}
+
+function effortSent(body: Body, refused: boolean): EffortSent {
+  const sent = body.reasoning?.effort ?? body.reasoning_effort;
+  return { type: 'effort', ...(sent ? { sent } : {}), ...(refused ? { refused: true as const } : {}) };
 }
 
 /** A refusal that blames the effort field this request carried, by the provider's own `param`. */

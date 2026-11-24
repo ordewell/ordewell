@@ -3,6 +3,7 @@ export type {
   AdapterOptions,
   CacheHints,
   EffortLevel,
+  EffortSent,
   FinishReason,
   ModelClient,
   ModelEvent,

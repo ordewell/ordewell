@@ -56,13 +56,13 @@ describe('resolveAssignment: a task moved to another runner', () => {
 
     expect(landed(outcome)).toMatchObject({
       assignedRunner: 'codex',
-      // 'adaptive' is Claude-only; the ladder maps it to medium, then down to the nearest level Codex offers.
-      assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5-CODEX', thinkingEffort: 'low', availableVariants: ['low', 'high'] },
+      // 'adaptive' is Claude-only; the ladder maps it to medium, then up to the nearest level Codex offers (a tie goes up).
+      assignedModel: { modelId: 'gpt-5-codex', modelLabel: 'GPT-5-CODEX', thinkingEffort: 'high', availableVariants: ['low', 'high'] },
       taskMode: 'agent',
     });
     expect(outcome.ok && outcome.adjustments).toEqual([
       { taskId: 't1', title: 'Refactor PlanStore', field: 'assignedModel', from: 'claude-sonnet-4-5', to: 'gpt-5-codex' },
-      { taskId: 't1', title: 'Refactor PlanStore', field: 'thinkingEffort', from: 'adaptive', to: 'low' },
+      { taskId: 't1', title: 'Refactor PlanStore', field: 'thinkingEffort', from: 'adaptive', to: 'high' },
     ]);
   });
 
