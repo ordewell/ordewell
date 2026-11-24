@@ -4,6 +4,7 @@ import { CLI_PROVIDERS, runnerForProvider } from './ProviderRegistry';
 import { configuredProviderRunners } from './providerRunners';
 import { withHostCredentials } from './hostCredentials';
 import type { RunnerInstallation } from './RunnerInstallation';
+import type { RunnerAuth } from './runnerAuth';
 
 /**
  * The planner a host falls back to when the user chose none (ADR-0009): an
@@ -21,6 +22,10 @@ import type { RunnerInstallation } from './RunnerInstallation';
 let recorded: PlannerBackendId | null = null;
 /** Every usable agent the latest probe found, in registry order; empty until one answers. */
 let installedAgents: RunnerId[] = [];
+/** The installed agents the latest probe's status commands said are signed out. */
+let signedOutAgents = new Set<RunnerId>();
+/** The installed agents the latest probe's status commands said are signed in, in registry order. */
+let signedInAgents: RunnerId[] = [];
 let answered = true;
 /**
  * Callers of {@link installedPlannerDetected} parked until the state next
@@ -41,29 +46,48 @@ function wakeWaiters(): void {
  */
 let generation = 0;
 
+/** An installed agent and what its own status command said of the sign-in; undefined when it was not asked. */
+interface FoundAgent {
+  id: RunnerId;
+  signIn: RunnerAuth['state'] | undefined;
+}
+
 /**
  * Every harness planner, in the order every planner picker lists them, whose
- * agent `plannerUsability` calls usable. The agents are asked together, so a
- * start waits for the slowest of them rather than for each in turn.
+ * agent `plannerUsability` calls usable, with the sign-in verdict that rode
+ * beside it. The agents are asked together, so a start waits for the slowest
+ * of them rather than for each in turn.
  */
-async function findInstalledAgents(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<RunnerId[]> {
-  const usable = await Promise.all(CLI_PROVIDERS.map(async (id) => {
+async function findInstalledAgents(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<FoundAgent[]> {
+  const found = await Promise.all(CLI_PROVIDERS.map(async (id): Promise<FoundAgent | null> => {
     const runner = runnerForProvider(id);
-    if (runner === null) return false;
+    if (runner === null) return null;
     // One agent's failing check is that agent not usable, not the end of the
     // search: another may be installed and must still be found.
     try {
-      return (await installation.plannerUsability(runner)).usable;
+      const usability = await installation.plannerUsability(runner);
+      return usability.usable ? { id, signIn: usability.auth?.state } : null;
     } catch {
-      return false;
+      return null;
     }
   }));
-  return CLI_PROVIDERS.filter((_, i) => usable[i]);
+  return found.filter((agent): agent is FoundAgent => agent !== null);
 }
 
-/** The first of {@link findInstalledAgents}; null when none is usable. */
+/**
+ * The default among the usable agents (ADR-0076): the first, in registry
+ * order, not known to be signed out. A sign-in nobody could read (a slow or
+ * failing status command) counts as good enough, so an unanswered check never
+ * hands the default to a later agent. Only when every installed agent is
+ * signed out is the first of them the default, so the refusal names its login.
+ */
+function defaultOf(agents: FoundAgent[]): RunnerId | null {
+  return (agents.find((agent) => agent.signIn !== 'signed-out') ?? agents[0])?.id ?? null;
+}
+
+/** The default of {@link findInstalledAgents}; null when none is usable. */
 export async function findInstalledPlanner(installation: Pick<RunnerInstallation, 'plannerUsability'>): Promise<PlannerBackendId | null> {
-  return (await findInstalledAgents(installation))[0] ?? null;
+  return defaultOf(await findInstalledAgents(installation));
 }
 
 /**
@@ -75,12 +99,14 @@ export function detectInstalledPlanner(installation: Pick<RunnerInstallation, 'p
   // A probe that throws is no agent found: the turn waiting on it must still
   // start, and say what the openrouter fallback is missing.
   const mine = ++generation;
-  const probe: Promise<PlannerBackendId | null> = findInstalledAgents(installation).catch((): RunnerId[] => []).then((agents) => {
-    const id = agents[0] ?? null;
+  const probe: Promise<PlannerBackendId | null> = findInstalledAgents(installation).catch((): FoundAgent[] => []).then((agents) => {
+    const id = defaultOf(agents);
     // Only the latest probe speaks for the recorded answer.
     if (mine === generation) {
       recordInstalledPlanner(id);
-      installedAgents = agents;
+      installedAgents = agents.map((agent) => agent.id);
+      signedOutAgents = new Set(agents.filter((agent) => agent.signIn === 'signed-out').map((agent) => agent.id));
+      signedInAgents = agents.filter((agent) => agent.signIn === 'signed-in').map((agent) => agent.id);
       answered = true;
       wakeWaiters();
     }
@@ -115,6 +141,25 @@ export function recordedInstalledPlanner(): PlannerBackendId | null {
 }
 
 /**
+ * Whether the latest probe found this installed agent signed out. Read by the
+ * sync `detectProvider`, which hands planning to a found key instead: the probe
+ * that picked the default is the one whose verdict counts, whatever workspace
+ * its installation records sign-ins under.
+ */
+export function installedAgentSignedOut(agent: PlannerBackendId): boolean {
+  return signedOutAgents.has(agent);
+}
+
+/**
+ * The first installed agent, other than `except`, that the latest probe found
+ * signed in; null when there is none. A refusal of a signed-out planner names
+ * it, so the way on is a switch rather than a login.
+ */
+export function signedInInstalledAgent(except: PlannerBackendId): RunnerId | null {
+  return signedInAgents.find((agent) => agent !== except) ?? null;
+}
+
+/**
  * The runners enabled while the user has never saved a choice: the agents the
  * latest probe found installed, so a Codex-only or OpenCode-only host can plan
  * and run on its first start, then the built-in runner on every provider the
@@ -140,6 +185,8 @@ export function resetInstalledPlanner(): void {
   generation++;
   recorded = null;
   installedAgents = [];
+  signedOutAgents = new Set();
+  signedInAgents = [];
   answered = true;
   wakeWaiters();
 }

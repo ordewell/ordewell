@@ -8,7 +8,7 @@ import { CODEX_MANIFEST } from '../../plugins/builtin/codex.manifest';
 import { OPENCODE_MANIFEST } from '../../plugins/builtin/opencode.manifest';
 import type { RunnerAuthExec } from '../runnerAuth';
 import {
-  defaultEnabledRunners, detectInstalledPlanner, findInstalledPlanner, installedPlannerAnswered, installedPlannerDetected, recordedInstalledPlanner, resetInstalledPlanner,
+  defaultEnabledRunners, detectInstalledPlanner, findInstalledPlanner, installedAgentSignedOut, installedPlannerAnswered, installedPlannerDetected, signedInInstalledAgent, recordedInstalledPlanner, resetInstalledPlanner,
 } from '../InstalledPlanner';
 
 const ALL = [CLAUDE_CODE_MANIFEST, CODEX_MANIFEST, OPENCODE_MANIFEST];
@@ -81,6 +81,59 @@ describe('findInstalledPlanner', () => {
       return { usable: true };
     }) };
     expect(await findInstalledPlanner(allUsableButClaudeThrows)).toBe('codex');
+  });
+});
+
+describe('the default among usable agents: sign-in', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  type State = 'signed-in' | 'signed-out' | 'unknown';
+  /** Every listed agent usable, with the sign-in verdict given; the rest not installed. */
+  function signIns(states: Partial<Record<string, State>>): Pick<RunnerInstallation, 'plannerUsability'> {
+    return {
+      plannerUsability: async (runner: string) => {
+        const state = states[runner];
+        return state ? { usable: true, auth: { state } } : { usable: false };
+      },
+    };
+  }
+
+  it('passes over a signed-out first agent for a signed-in one, and still lists both as installed', async () => {
+    const probe = signIns({ 'claude-code': 'signed-out', codex: 'signed-in' });
+    expect(await findInstalledPlanner(probe)).toBe('codex');
+    expect(await detectInstalledPlanner(probe)).toBe('codex');
+    expect(recordedInstalledPlanner()).toBe('codex');
+    expect(defaultEnabledRunners()).toEqual(['claude-code', 'codex']);
+  });
+
+  it('counts a sign-in that could not be checked as good enough to plan with', async () => {
+    expect(await findInstalledPlanner(signIns({ 'claude-code': 'signed-out', codex: 'signed-out', opencode: 'unknown' }))).toBe('opencode');
+  });
+
+  it('keeps the first agent when its sign-in reads as not checked, rather than letting a later signed-in one win', async () => {
+    expect(await findInstalledPlanner(signIns({ 'claude-code': 'unknown', codex: 'signed-in' }))).toBe('claude-code');
+  });
+
+  it('keeps an agent with no sign-in verdict at all ahead of a later signed-in one', async () => {
+    const probe = { plannerUsability: async (runner: string) => (runner === 'claude-code' ? { usable: true } : runner === 'codex' ? { usable: true, auth: { state: 'signed-in' as const } } : { usable: false }) };
+    expect(await findInstalledPlanner(probe)).toBe('claude-code');
+  });
+
+  it('picks the first installed agent when every one is signed out', async () => {
+    expect(await findInstalledPlanner(signIns({ 'claude-code': 'signed-out', codex: 'signed-out' }))).toBe('claude-code');
+  });
+
+  it('remembers which installed agent the probe found signed out, for the key to take over from', async () => {
+    await detectInstalledPlanner(signIns({ 'claude-code': 'signed-out', codex: 'signed-out' }));
+    expect(installedAgentSignedOut('claude-code')).toBe(true);
+    await detectInstalledPlanner(signIns({ 'claude-code': 'signed-in' }));
+    expect(installedAgentSignedOut('claude-code')).toBe(false);
+  });
+
+  it('names a signed-in installed agent other than the one asked about', async () => {
+    await detectInstalledPlanner(signIns({ 'claude-code': 'signed-out', codex: 'unknown', opencode: 'signed-in' }));
+    expect(signedInInstalledAgent('claude-code')).toBe('opencode');
+    expect(signedInInstalledAgent('opencode')).toBeNull();
   });
 });
 

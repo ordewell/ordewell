@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect } from 'vitest';
 import { plannerNotReady, plannerNotReadyFor, describePlannerNotReady, TERMINAL_UI_COMMANDS, CHAT_COMMANDS, HEADLESS_CLI_COMMANDS, type PlannerNotReady, type PlannerReadinessConfig } from '../plannerReadiness';
 import { recordRunnerAuth, resetRunnerAuth, runnerSignIn, type RunnerAuth } from '../runnerAuth';
 import { describeUnusedPlanningKey } from '../plannerNotices';
+import { detectInstalledPlanner, resetInstalledPlanner } from '../InstalledPlanner';
 
 function config(over: Partial<PlannerReadinessConfig> & { key?: string }): PlannerReadinessConfig {
   const { key = '', ...rest } = over;
@@ -166,6 +167,50 @@ describe('describePlannerNotReady', () => {
 
     expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
       'Claude Code is not signed in. Run claude auth login to sign in. Then try again.',
+    );
+  });
+});
+
+describe('a signed-out planner refused while another installed agent is signed in', () => {
+  afterEach(() => resetInstalledPlanner());
+
+  const machineA = { plannerUsability: async (runner: string) => (
+    runner === 'claude-code' ? { usable: true, auth: signedOutClaude }
+      : runner === 'codex' ? { usable: true, auth: { state: 'signed-in' as const } }
+        : { usable: false }
+  ) };
+
+  it('names the signed-in agent to switch to', async () => {
+    await detectInstalledPlanner(machineA);
+    recordRunnerAuth('claude-code', signedOutClaude);
+
+    expect(plannerNotReadyFor(hostConfig({ aiProvider: 'claude-code', planningModel: '' }))).toMatchObject({
+      code: 'signed_out',
+      runner: 'claude-code',
+      signedIn: { provider: 'codex', label: 'Codex' },
+    });
+  });
+
+  it('names none when the other agent has been found signed out since', async () => {
+    await detectInstalledPlanner(machineA);
+    recordRunnerAuth('claude-code', signedOutClaude);
+    recordRunnerAuth('codex', { state: 'signed-out' });
+
+    expect(plannerNotReadyFor(hostConfig({ aiProvider: 'claude-code', planningModel: '' }))).not.toHaveProperty('signedIn');
+  });
+
+  it('words the switch first, with the surface\'s planner control, then the way back in', () => {
+    const signIn = runnerSignIn('claude-code')!;
+    const reason: PlannerNotReady = {
+      code: 'signed_out', provider: 'claude-code', label: 'Claude Code', runner: 'claude-code', signIn,
+      signedIn: { provider: 'codex', label: 'Codex' },
+    };
+
+    expect(describePlannerNotReady(reason, TERMINAL_UI_COMMANDS)).toBe(
+      'Claude Code is not signed in. Codex is signed in: switch with /planner, or sign in with /login claude-code, or run claude auth login. Then try again.',
+    );
+    expect(describePlannerNotReady(reason, HEADLESS_CLI_COMMANDS)).toBe(
+      'Claude Code is not signed in. Codex is signed in: switch with ordewell planner codex, or run claude auth login to sign in. Then try again.',
     );
   });
 });
