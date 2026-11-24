@@ -3,7 +3,7 @@ import * as path from 'path';
 import type { LegacyPlanState, PlanState, ResearchLogEntry } from '../models/Task';
 import { dropRetiredPlanFields, failInterruptedTasks, migratePlanState, migrateLoadedTasks, releaseMadeManual, settleOwedRepairs } from '../models/Task';
 import { migratePlanStateIsolation } from '../services/isolationRecord';
-import type { SessionMeta, SessionData } from '../models/Session';
+import { listedPlanStatus, type SessionMeta, type SessionData } from '../models/Session';
 import { defaultLogger, type ILogger } from '../interfaces/ILogger';
 import { ensureDir, ensureStateDirIgnored, getStateDir, writeFileAtomic } from './fsHelpers';
 import { mintSessionId } from './sessionId';
@@ -176,7 +176,7 @@ function sessionData(plan: LegacyPlanState, goal: string, id: string | undefined
     goal: goal || '(untitled)',
     runners: plan.runners,
     taskCount: plan.tasks.flatMap((t) => [t, ...(((t as unknown) as { subtasks?: unknown[] }).subtasks || [])]).length,
-    status: plan.status,
+    status: listedPlanStatus(plan),
     createdAt: plan.generatedAt || now,
     updatedAt: now,
   };

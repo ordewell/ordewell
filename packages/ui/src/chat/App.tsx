@@ -488,12 +488,15 @@ export default function App({ layout = 'chat', selection, goal }: {
 
   // No planner was ready: its way out (an install, a sign-in) happens outside
   // the window, so trying again means looking again, not only closing the box.
-  // A turn that failed is tried again by sending its message again.
+  // A turn that failed is tried again by sending its message again, which
+  // the conversation shows already.
   const handleTryAgain = useCallback(() => {
     if (host.errorCode === 'planner_not_ready') bridge.post({ type: 'refreshModels' });
     setError('');
-    if (host.errorResend !== undefined) handleSend(host.errorResend);
-  }, [host.errorCode, host.errorResend, setError, handleSend]);
+    if (host.errorResend === undefined) return;
+    dispatch({ type: 'turnRequested' });
+    bridge.post({ type: 'sendMessage', text: host.errorResend, runners, typed: true, again: true });
+  }, [host.errorCode, host.errorResend, setError, runners]);
 
   const handleOpenLink = useCallback((url: string) => {
     bridge.post({ type: 'openLink', url });

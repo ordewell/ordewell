@@ -183,7 +183,7 @@ describe('a planner start of a plan the user never executed', () => {
     const start = await env.planner.tools().runPlan!({}, ctx);
 
     expect(start.isError).toBe(true);
-    expect(answer(start).reason).toBe(`The user has not run this plan yet: running it is what approves it, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`);
+    expect(answer(start).reason).toBe(`The user has not run this plan yet, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`);
     env.planner.calls[0].finish(prose('Added it.'));
     await settled();
     expect(cards(env)).toEqual([]);

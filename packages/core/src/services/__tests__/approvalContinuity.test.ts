@@ -69,7 +69,7 @@ describe('a task removed after the user approved it', () => {
     await turn(env, 'run t1', async () => { start = await env.planner.tools().runTask!({ task: 't1' }, ctx); });
 
     expect(start!.isError).toBe(true);
-    expect(answer(start!).reason).toBe('Task #1 "Deploy" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+    expect(answer(start!).reason).toBe('Task #1 "Deploy" was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.');
     expect(env.session.isApproved('t1')).toBe(false);
     expect(env.session.isApproved('t2')).toBe(true);
     expect(env.run.spawnedIds().filter((id) => id === 't1')).toHaveLength(1);

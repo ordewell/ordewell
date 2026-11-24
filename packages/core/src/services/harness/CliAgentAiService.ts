@@ -158,8 +158,10 @@ interface OrdewellCalls {
 /**
  * A harness planner plans only through `submit_plan` (ADR-0025), so a turn
  * whose every call to Ordewell's tools failed, a runner's own deadline
- * included, ends in prose with nothing planned and nothing to say why. Said
- * once that turn is over, with the log that has each call and the two ways on (ADR-0022 T4).
+ * included, ends in prose with nothing planned and nothing to say why. A
+ * session that holds a plan was not kept from planning: a refused control is
+ * the planner asking for what the user does. Said once that turn is over,
+ * with the log that has each call and the two ways on (ADR-0022 T4).
  */
 export function toolsFailedNotice(logPath: string = daemonLogPath()): string {
   return [
@@ -213,6 +215,8 @@ class PlannerSession {
    * one-shot session has none: no surface is showing it.
    */
   notice?: (level: 'info' | 'warn' | 'error', message: string) => void;
+  /** See {@link ConversationRequest.holdsPlan}. */
+  holdsPlan?: () => boolean;
   /** The setting's reason was already said this session; see {@link CliAgentAiService.noticeNativeShell}. */
   nativeShellNoticed = false;
   /** Where spend the agent reports between turns is booked; see {@link ConversationRequest.onUsage}. */
@@ -449,6 +453,7 @@ export class CliAgentAiService implements IAiService {
     const session = new PlannerSession(this.mcpServer);
     this.session = session;
     session.notice = req.notice;
+    session.holdsPlan = req.holdsPlan;
     session.onUsage = req.onUsage;
 
     // Only a runner whose own agents are withheld gets Ordewell's (ADR-0066); a session refused agents gets none.
@@ -647,7 +652,7 @@ export class CliAgentAiService implements IAiService {
         onProgress,
         signal: combined,
       });
-      if (turn.kind === 'message' && !turn.aborted && !turn.failed && calls.failed > 0 && calls.answered === 0) session.notice?.('warn', toolsFailedNotice());
+      if (turn.kind === 'message' && !turn.aborted && !turn.failed && calls.failed > 0 && calls.answered === 0 && !session.holdsPlan?.()) session.notice?.('warn', toolsFailedNotice());
       return turn;
     } finally {
       this.activeAbort = null;

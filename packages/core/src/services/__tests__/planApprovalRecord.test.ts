@@ -143,7 +143,7 @@ describe('plan approval is read from the approval record, never from the display
     await vi.waitFor(() => expect(env.session.isExecuting).toBe(false));
 
     expect((await env.session.execute({ command: 'run_plan' }, PLANNER)).message)
-      .toBe(`The user has not run this plan yet: running it is what approves it, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`);
+      .toBe(`The user has not run this plan yet, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`);
   });
 
   it('still leaves a task added after the approval unapproved (ADR-0029)', async () => {
@@ -154,6 +154,6 @@ describe('plan approval is read from the approval record, never from the display
     env.session.loadPlan({ ...plan, tasks: [...plan.tasks, task('t3', 3)] }, 'goal', testWorkspace, { persist: false });
 
     expect((await env.session.execute({ command: 'run_task', task: 't3' }, PLANNER)).message)
-      .toBe('Task #3 "Task t3" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+      .toBe('Task #3 "Task t3" was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.');
   });
 });

@@ -43,7 +43,8 @@ describe('a planner turn that failed', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try Again' }));
 
-    expect(sent()).toContainEqual(expect.objectContaining({ type: 'sendMessage', text: GOAL, typed: true }));
+    // Sent as it was: the conversation draws it already (first-run review round 2, F3).
+    expect(sent()).toContainEqual(expect.objectContaining({ type: 'sendMessage', text: GOAL, typed: true, again: true }));
     expect(screen.queryByRole('button', { name: 'Try Again' })).toBeNull();
   });
 });

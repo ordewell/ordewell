@@ -103,7 +103,7 @@ describe('tasks the supervisor adds at Act', () => {
     expect(docs.addedBy).toBeUndefined();
 
     expect(await env.session.execute({ command: 'run_task', task: byTitle(env, 'Add a cache').id }, SUPERVISOR)).toMatchObject({ ok: true });
-    expect(await env.session.execute({ command: 'run_task', task: docs.id }, SUPERVISOR)).toMatchObject({ ok: false, message: expect.stringMatching(/added after the user approved the plan/) });
+    expect(await env.session.execute({ command: 'run_task', task: docs.id }, SUPERVISOR)).toMatchObject({ ok: false, message: expect.stringMatching(/added after the user ran the plan/) });
     expect(env.run.spawnedIds()).not.toContain(docs.id);
   });
 
@@ -417,7 +417,7 @@ describe('the loop guards', () => {
     expect(env.run.spawnedIds()).toEqual(['t1']);
   });
 
-  it('refuses at once, not after the turn, a retry behind an edit that could never run: the task was added after the user approved the plan', async () => {
+  it('refuses at once, not after the turn, a retry behind an edit that could never run: the task was added after the user ran the plan', async () => {
     const env = await finishedWithAFailure();
     env.session.planState!.approvedTasks = ['t1'];
 
@@ -425,7 +425,7 @@ describe('the loop guards', () => {
     const retry = await env.planner.tools().retryTask!({ task: '2', from: 'fresh' }, ctx);
 
     expect(retry.isError).toBe(true);
-    expect(JSON.parse(retry.text).reason).toBe('Task #2 "Task t2" was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.');
+    expect(JSON.parse(retry.text).reason).toBe('Task #2 "Task t2" was added after the user ran the plan, so it waits for them. Ask the user to start it, or to run the plan again.');
   });
 
   it('runs a retry after an edit as edited, on a run that had already finished', async () => {

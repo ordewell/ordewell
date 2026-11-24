@@ -2,7 +2,7 @@ import { act } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { HostToWebview } from '@ordewell/ui/protocol';
 import { DaemonHost } from '../DaemonHost';
-import { fakeDaemon, ok } from './fakeDaemon';
+import { fakeDaemon, ok, surfacePlan } from './fakeDaemon';
 
 const WORKSPACE = '/work/acme';
 
@@ -42,6 +42,33 @@ describe('DaemonHost on a first run with nothing that can plan', () => {
     await act(() => host.handle({ type: 'sendMessage', text: 'Add a login page', typed: true }));
 
     expect(seen.filter((m) => m.type === 'showError')).toEqual([{ type: 'showError', error: 'The planner failed.', resend: 'Add a login page' }]);
+  });
+
+  // First-run review round 2, F3: the failed turn's message is drawn already.
+  it('sends the failed first message again on Try Again without drawing it a second time', async () => {
+    const daemon = fakeDaemon({
+      'plans.converseStart': { ok: false, status: 500, error: 'failed', data: { error: 'The planner failed.' } },
+      'sessions.get': ok({ id: 'kept' }),
+      'plans.converseMessage': ok({ plan: surfacePlan([], 'draft') }),
+    });
+    const { host, seen } = started();
+    const chat = host.port('conversation');
+    chat.subscribe((msg) => seen.push(msg));
+    chat.post({ type: 'ready' });
+    const drawn = () => {
+      const blocks = new Map<string, { role?: string; text?: string }>();
+      for (const msg of seen) if (msg.type === 'conversationPatch') for (const block of msg.changed) blocks.set(block.id, block as { role?: string; text?: string });
+      return [...blocks.values()].filter((b) => b.role === 'user').map((b) => b.text);
+    };
+    await act(() => host.handle({ type: 'sendMessage', text: 'Add a login page', typed: true }));
+    await vi.waitFor(() => expect(drawn()).toEqual(['Add a login page']));
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'Add a login page', typed: true, again: true }));
+    // The chat's patches go out on a short timer: let any that is due go.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+
+    expect(daemon.call).toHaveBeenCalledWith('plans.converseMessage', expect.anything(), expect.objectContaining({ message: 'Add a login page' }));
+    expect(drawn()).toEqual(['Add a login page']);
   });
 
   it('opens an install guide in the browser through main', async () => {

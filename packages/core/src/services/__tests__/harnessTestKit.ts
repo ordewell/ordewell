@@ -434,7 +434,7 @@ export function codexToolTimeoutError(tool: string, seconds: number, server = 'o
  * URL and with the header its thread config named (read from `env()`, the
  * spawn's environment, as Codex reads it), gives up after `deadlineMs` as
  * Codex's fixed deadline does (the SDK client cancels the call on the
- * server), and completes the item failed in Codex's words. Then it ends the
+ * server), and completes the item failed in Codex's words and shape. Then it ends the
  * turn on `reply`. Hand it a real {@link OrdewellMcpServer}: a fake one does
  * not listen.
  */
@@ -454,11 +454,12 @@ export function codexPastToolDeadline(env: () => NodeJS.ProcessEnv, opts: { tool
       for (const [i, [tool, args]] of Object.entries(opts.tools).entries()) {
         const id = `call_${i + 1}`;
         proc.emitStdout(line({ method: 'item/started', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, status: 'inProgress', arguments: args } } }));
-        const error = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: opts.deadlineMs }).then(
-          (result) => (result.isError ? JSON.stringify(result.content) : undefined),
-          () => codexToolTimeoutError(tool, opts.deadlineSeconds ?? 300),
+        // codex-cli 0.171.0's own shapes: a reply marked isError is the result of a failed call, a deadline an error object with none.
+        const ended = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: opts.deadlineMs }).then(
+          (result) => ({ status: result.isError ? 'failed' : 'completed', result: { content: result.content, structuredContent: null, _meta: null }, error: null }),
+          () => ({ status: 'failed', result: null, error: { message: codexToolTimeoutError(tool, opts.deadlineSeconds ?? 300) } }),
         );
-        proc.emitStdout(line({ method: 'item/completed', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, arguments: args, ...(error ? { status: 'failed', error } : { status: 'completed' }) } } }));
+        proc.emitStdout(line({ method: 'item/completed', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, arguments: args, ...ended } } }));
       }
       await client.close();
       proc.emitStdout(line({ method: 'item/completed', params: { ...at, item: { id: 'msg_1', type: 'agentMessage', text: opts.reply } } }));
