@@ -1,8 +1,9 @@
 import { spawnSync } from 'child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'fs';
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { removeDir } from '../../../testing';
 
 /**
  * How Windows, through Node, finds a program started by bare name, the way Pi
@@ -35,7 +36,8 @@ describe.runIf(process.platform === 'win32')('a bare program name on Windows, st
     copyFileSync(process.execPath, path.join(repo, 'rg.exe'));
     copyFileSync(process.execPath, path.join(onPath, 'rg.exe'));
   });
-  afterAll(() => rmSync(root, { recursive: true, force: true }));
+  // Windows can still hold an rg.exe it just ran (EBUSY) for a moment after the process has exited: wait it out.
+  afterAll(() => removeDir(root));
 
   /** This process's environment with PATH replaced and `extra` added, one key per name as Windows holds them. */
   function env(pathValue: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
