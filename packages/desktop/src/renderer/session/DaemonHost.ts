@@ -88,6 +88,7 @@ export type Confirm = <C extends string>(request: ConfirmationRequest<C>) => Pro
 const CATALOG: ReadonlySet<HostToWebview['type']> = new Set<HostToWebview['type']>([
   'setRunners', 'setModels', 'setModelsByRunner', 'setModesByRunner', 'setConfiguredProviders', 'setModelConfig',
   'setPlannerBackends', 'agentDetection', 'modelDiscovery', 'setModelDiscoveryErrors', 'setModelOptions', 'setModelAllowlist', 'setRunSettings',
+  'setSkills', 'setTaskSkills',
 ]);
 
 // The last of each of these says all there is: a chat that mounts after it was sent is given it again.
@@ -386,7 +387,29 @@ export class DaemonHost {
   /** Detect the agents again and tell every catalog reader, after a save that changed them. */
   private async refreshCatalog(): Promise<void> {
     await this.agents.detect();
+    await this.sendSkills();
     for (const listener of [...this.catalogListeners]) listener();
+  }
+
+  /**
+   * The workspace's skills for the slash menu and the task cards' chips, as
+   * VS Code sends them: the user-invocable ones to type, and every task skill
+   * to attach by hand. A read that fails leaves the menu as it was.
+   */
+  private async sendSkills(): Promise<void> {
+    try {
+      const { skills } = await callDaemon('skills.list', { workspace: this.workspace });
+      this.emit({
+        type: 'setSkills',
+        skills: skills.filter((s) => s.userInvocable).map((s) => ({ name: s.name, description: s.description, appliesTo: s.appliesTo })),
+      });
+      this.emit({
+        type: 'setTaskSkills',
+        skills: skills.filter((s) => s.appliesTo === 'task').map((s) => ({ name: s.name, description: s.description })),
+      });
+    } catch {
+      // The built-in commands still list; the next catalog read asks again.
+    }
   }
 
   /** The height the person last dragged the plan dock to, as the chat expects it on its ready. */
@@ -884,7 +907,7 @@ export class DaemonHost {
         this.view.conversation.resync();
         this.replayPlanDockHeight();
         void this.readIsolationPreview();
-        if (!this.catalogRead) { this.catalogRead = true; await this.agents.detect(); }
+        if (!this.catalogRead) { this.catalogRead = true; await Promise.all([this.agents.detect(), this.sendSkills()]); }
         return;
       case 'refreshModels':
         await this.agents.detect();

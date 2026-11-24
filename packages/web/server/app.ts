@@ -5,6 +5,7 @@ import { childrenRoute } from './routes/children';
 import { sessionsRoute } from './routes/sessions';
 import { plansRoute } from './routes/plans';
 import { runnersRoute } from './routes/runners';
+import { skillsRoute } from './routes/skills';
 import { modelsRoute } from './routes/models';
 import { workspacesRoute } from './routes/workspaces';
 import { approvalsRoute } from './routes/approvals';
@@ -89,6 +90,7 @@ export function createApp(
   app.route('/api/plans', mergePreflightRoute(reader));
   app.route('/api/plans', plansRoute(pool));
   app.route('/api/runners', runnersRoute(pool));
+  app.route('/api/skills', skillsRoute());
   app.route('/api/models', modelsRoute(pool));
   app.route('/api/settings', settingsRoute(pool));
   app.route('/api/workspaces', workspacesRoute(pool));
