@@ -54,13 +54,19 @@ describe('plannerBackendEntries', () => {
     expect(claude.reason).toBe('not logged in');
   });
 
-  it('carries a signed-in verdict without changing the usual no-key reason', () => {
+  it('says in words that a signed-in agent is signed in', () => {
     const auth = { state: 'signed-in' as const, loginCommand: ['claude', 'auth', 'login'] };
     const claude = plannerBackendEntries({ 'claude-code': { usable: true, auth } }, [])
       .find((e) => e.id === 'claude-code')!;
 
     expect(claude.auth).toEqual(auth);
-    expect(claude.reason).toBe(HARNESS_PLANNER_REASON);
+    expect(claude.reason).toBe('signed in · no API key needed');
+  });
+
+  it('says in words that an agent with no status command was not checked', () => {
+    const codex = plannerBackendEntries({ codex: { usable: true, auth: { state: 'unknown' } } }, [])
+      .find((e) => e.id === 'codex')!;
+    expect(codex.reason).toBe('sign-in not checked · no API key needed');
   });
 
   it('offers vendors with their API-key variable as the reason, always usable', () => {

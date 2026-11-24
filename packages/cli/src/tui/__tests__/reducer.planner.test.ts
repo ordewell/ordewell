@@ -4,6 +4,7 @@ import type { StepperState } from '../reducers/stepper';
 import type { SessionMessage } from '@ordewell/core';
 import type { TuiState } from '../state';
 import { lastMessage, messagesOf } from './chat';
+import { plannerEffortItems, plannerItems, plannerModelItems } from '../reducers/pickers';
 import { normalizeCatalog } from '../../catalog';
 
 /**
@@ -461,3 +462,31 @@ describe('the planner model step a saved key opens', () => {
   });
 });
 
+
+describe('planner and task pickers: sign-in words and effort counts', () => {
+  const runner = (id: string, auth?: { state: 'signed-in' | 'signed-out' | 'unknown'; loginCommand?: string[] }) =>
+    ({ id, name: id, enabled: true, usable: true, ...(auth ? { auth } : {}) }) as TuiState['runners'][number];
+
+  it('words each row\'s sign-in state and marks a signed-out current pick as (current)', () => {
+    const state = {
+      ...initialState(),
+      plannerProvider: 'claude-code',
+      runners: [
+        runner('claude-code', { state: 'signed-out', loginCommand: ['claude', 'auth', 'login'] }),
+        runner('codex', { state: 'signed-in' }),
+        runner('opencode', { state: 'unknown' }),
+      ],
+    };
+    const items = plannerItems(state);
+    expect(items.find((i) => i.id === 'claude-code')?.detail).toMatch(/^\(current\) .*\/login claude-code/);
+    expect(items.find((i) => i.id === 'codex')?.detail).toContain('signed in');
+    expect(items.find((i) => i.id === 'opencode')?.detail).toContain('sign-in not checked');
+  });
+
+  it('counts the effort rows it offers: levels plus the default row', () => {
+    const model = { id: 'm', label: 'M', provider: 'p', runners: ['codex'], variants: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }] };
+    const state = { ...initialState(), plannerProvider: 'codex', models: [model] };
+    expect(plannerModelItems(state, 'codex', '')[0].detail).toContain('2 effort levels + default');
+    expect(plannerEffortItems(state, 'codex', 'm', '')).toHaveLength(3);
+  });
+});

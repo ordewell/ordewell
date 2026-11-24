@@ -56,6 +56,14 @@ describe('picker rows', () => {
     ]);
   });
 
+  it('never draws the check mark on a warn row, selected or not', () => {
+    const out = pickerScreen({
+      items: [{ id: 'a', label: 'Alpha', detail: '(current) Alpha is signed out.', warn: true, selected: true }],
+    });
+    expect(out.join('\n')).toContain('1. Alpha');
+    expect(out.join('\n')).not.toContain('✔');
+  });
+
   it('wraps a long detail under its own column', () => {
     const out = pickerScreen({
       items: [

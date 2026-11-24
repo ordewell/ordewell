@@ -725,7 +725,8 @@ function pickerRows(list: PickerRowList, room: number, inner: number): string[] 
   const digits = String(items.length).length;
   const prefixWidth = 2 + (numbered ? digits + 2 : 0) + (chosen ? 4 : 0);
   const rowWidth = Math.max(1, inner - prefixWidth);
-  const isCurrent = (item: PickerItem): boolean => !chosen && item.selected === true;
+  // A warn row never wears the green check, which reads as 'ready': its detail says '(current)'.
+  const isCurrent = (item: PickerItem): boolean => !chosen && item.selected === true && !item.warn;
   const widest = Math.max(0, ...items.map((item) => width(item.label) + (isCurrent(item) ? 2 : 0)));
   // The label column gives way first: a detail squeezed into a few columns
   // stops reading as a sentence, while a long label still reads cut short.

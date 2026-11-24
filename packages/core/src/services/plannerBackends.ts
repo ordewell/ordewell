@@ -40,7 +40,19 @@ export interface PlannerBackendEntry {
 export const HARNESS_PLANNER_REASON = 'coding agent · no API key needed';
 
 /** Shown for a harness planner no host has reported a status for: it may not be installed. */
+/** The same detail once the agent's own status command said it is signed in. */
+export const HARNESS_PLANNER_SIGNED_IN_REASON = 'signed in · no API key needed';
+
+/** The same detail for an agent with no status command, or one whose answer was unreadable. */
+export const HARNESS_PLANNER_NOT_CHECKED_REASON = 'sign-in not checked · no API key needed';
+
 export const HARNESS_PLANNER_UNAVAILABLE_REASON = 'not available';
+
+function usableReason(state: RunnerAuth['state'] | undefined): string {
+  return state === 'signed-in' ? HARNESS_PLANNER_SIGNED_IN_REASON
+    : state === 'unknown' ? HARNESS_PLANNER_NOT_CHECKED_REASON
+    : HARNESS_PLANNER_REASON;
+}
 
 /**
  * The planner backends every surface offers, in order: the harness planners
@@ -66,7 +78,7 @@ export function plannerBackendEntriesFor(
       runner,
       usable: status?.usable ?? false,
       reason: status
-        ? (status.reason ?? (signedOut ? (status.auth?.detail ?? 'not logged in') : HARNESS_PLANNER_REASON))
+        ? (status.reason ?? (signedOut ? (status.auth?.detail ?? 'not logged in') : usableReason(status.auth?.state)))
         : HARNESS_PLANNER_UNAVAILABLE_REASON,
       ...(status?.auth ? { auth: status.auth } : {}),
     };
