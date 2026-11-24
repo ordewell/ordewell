@@ -1001,6 +1001,26 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
     });
   }
 
+  /**
+   * Strict, since a yes lets a run's branches go: a detached HEAD, an
+   * integration branch git cannot find, a tip HEAD lacks or that only a review
+   * or another branch holds, is no, in any one repository. A squash merge
+   * leaves the tip out of HEAD, so it is no too: the run then goes on, as it
+   * would have.
+   */
+  async userBranchHolds(run: IsolationRun): Promise<boolean> {
+    if (run.repos.length === 0) return false;
+    for (const repo of run.repos) {
+      if (!(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok) return false;
+      const tip = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `refs/heads/${repo.integrationBranch}^{commit}`]);
+      if (!tip.ok) return false;
+      const merge = tip.stdout.trim();
+      if ((await this.isAncestor(repo.root, merge, 'HEAD')) !== 'yes') return false;
+      if ((await this.inUserBranch(repo, merge)) !== true) return false;
+    }
+    return true;
+  }
+
   async findInHead(run: IsolationRun): Promise<string[]> {
     const changed: string[] = [];
     for (const record of Object.values(run.tasks)) {

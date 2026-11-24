@@ -1324,42 +1324,43 @@ export class IsolationRunController {
   }
 
   /**
-   * The plan's run, when the user's branch holds everything it landed and
-   * nothing else is left in it ({@link leavesNothing}). Asked only as a start
-   * the user made themselves opens a run: continued, the run would keep a
-   * base the user's branch has moved past, and a start held for configuration
-   * one of its tasks landed would be held again at every start. A new run from
-   * a branch that holds the configuration, started by the user, is how they
-   * consent to it (ADR-0028), so the next run is minted from HEAD, as after a
-   * reload (ADR-0013). A model's call, the scheduler or a usage-limit reset
-   * never asks, so the run it opens continues and the hold stands. A run that
-   * reverted a task continues: its branch holds the reverts, which HEAD may
-   * not (ADR-0054). Asked of git, so only as a run opens.
+   * The plan's run, when nothing is left in it a new run would lose: no record
+   * holds anything ({@link leavesNothing}), and git finds every repository's
+   * integration tip in the user's branch, which records alone cannot say: a
+   * retry drops a landed task's record, and its landing stays on the branch.
+   * Asked only by a person's own start as it decides the run: continued, the
+   * run keeps a base the user's branch has moved past, and a start held for
+   * configuration one of its tasks landed is held again at every start. A new
+   * run from a branch that holds the configuration, which a person starts, is
+   * how they consent to it (ADR-0028), so the next run is minted from HEAD, as
+   * after a reload (ADR-0013), and no start in it is held for that
+   * configuration. Any other start continues the run, and the hold stands. A
+   * run that reverted a task, or whose landing was cut short, continues: its
+   * branch holds what HEAD may not (ADR-0054).
    */
   private async spentRun(root: string): Promise<IsolationRun | null> {
     const run = this.continuableRun(root);
-    if (!run || hasReverted(run)) return null;
-    await this.refreshInHead();
-    if (this.run !== run || !this.allMerged(run)) return null;
-    const spent = await this.leavesNothing(run);
-    return this.run === run && spent ? run : null;
+    if (!run || hasReverted(run) || run.landing) return null;
+    if (!(await this.leavesNothing(run)) || this.run !== run) return null;
+    const held = await this.isolation.userBranchHolds(run).catch(() => false);
+    return this.run === run && held ? run : null;
   }
 
   /**
-   * Whether a merged run holds nothing a new run would lose: no task live, no
-   * record off `active` but landed ones, and no `active` one whose branch or
-   * worktree git finds work in. An `active` one with neither is an attempt
-   * that ended with its worktree as it was cut, as a start held at launch
-   * leaves one (ADR-0028). One that seats a child holds the child's code root
-   * whatever git finds in it, as the prune of an adopted run keeps it
-   * (ADR-0055 D17).
+   * Whether the run's records hold nothing a new run would lose: no task
+   * live, no record off `active` but landed ones, none that seats a child,
+   * whose code root its worktree is (ADR-0055 D17), or keeps branches a
+   * conflict's fall-back left, and no `active` one whose branch or worktree
+   * git finds work in. An `active` one with neither is an attempt that ended
+   * with its worktree as it was cut, as a start held at launch leaves one
+   * (ADR-0028). What the run landed is git's to say ({@link spentRun}).
    */
   private async leavesNothing(run: IsolationRun): Promise<boolean> {
     const live = this.liveTasks();
     for (const record of Object.values(run.tasks)) {
-      if (live.has(record.taskId)) return false;
+      if (live.has(record.taskId) || record.childSession || (record.continuationWork?.length ?? 0) > 0) return false;
       if (record.status === 'merged') continue;
-      if (record.status !== 'active' || record.childSession) return false;
+      if (record.status !== 'active') return false;
       if (await this.isolation.holdsUnlandedWork(run, record).catch(() => true)) return false;
     }
     return true;

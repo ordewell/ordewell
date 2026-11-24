@@ -677,6 +677,7 @@ describe('IsolationRunController', () => {
         const env = await closedRun('active');
         env.isolation.unlandedWork = new Set(t2HoldsWork ? ['t2'] : []);
         env.isolation.mergedByHand.add('t1');
+        env.isolation.branchHolds = true;
         return env;
       }
 
@@ -710,12 +711,14 @@ describe('IsolationRunController', () => {
 
         expect(runs.planIsolation?.run.id).toBe('run1');
         expect(ops(isolation).filter((op) => op === 'findInHead')).toHaveLength(asked);
+        expect(ops(isolation)).not.toContain('userBranchHolds');
         expect(ops(isolation)).not.toContain('discard');
       });
 
       it.each([
         ['its worktree holds work that never landed', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.unlandedWork = new Set(['t2']); }],
-        ['landed work is not in HEAD', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.mergedByHand.clear(); }],
+        // The records still say it is: git alone decides (rule 1).
+        ['git finds landed work missing from HEAD', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.branchHolds = false; }],
         ['the attempt was kept', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { await env.runs.release('t2', { keep: true }); }],
         ['the task is live', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.live.add('t2'); }],
         // A child's code root, whatever git finds in it (ADR-0055 D17): a Continue held at its start leaves the record so.
@@ -748,6 +751,7 @@ describe('IsolationRunController', () => {
       it('leaves a run the user opens to continue a stopped run that failed a landing, its failed task held out', async () => {
         const env = setup();
         env.isolation.unlandedWork = new Set();
+        env.isolation.branchHolds = true;
         env.isolation.outcomes.set('t2', 'failed');
         await env.runs.decide(async () => undefined);
         for (const t of [task('t1', 1), task('t2', 2)]) {

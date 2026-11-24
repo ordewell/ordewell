@@ -791,6 +791,15 @@ export interface IWorktreeIsolation {
    */
   holdsUnlandedWork(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean>;
 
+  /**
+   * Whether the user's branch holds everything the run's integration branches
+   * do, git asked of every repository now: HEAD on a branch, the integration
+   * branch there, and its tip in HEAD and on the user's own branch, as a merge
+   * is judged. False where git cannot say. Records never answer this: a retry
+   * drops a landed task's, and its landing stays on the branch.
+   */
+  userBranchHolds(run: IsolationRun): Promise<boolean>;
+
   /** Unified diff of each repo's integration branch against its base ref. */
   reviewDiff(run: IsolationRun): Promise<string>;
   taskDiff?(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;
