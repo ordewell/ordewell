@@ -11,8 +11,8 @@ export interface CodexAsk {
 export interface CodexOrdewellBinding extends OrdewellToolBinding<CodexAsk> {
   /** The variables that carry the server's headers, with their values, for the app-server's environment. */
   env(mcp: McpClientConfig): Record<string, string>;
-  /** The thread config's `mcp_servers`. */
-  threadServers(mcp: McpClientConfig): Record<string, unknown>;
+  /** The thread config's `mcp_servers`; a planner's carries {@link CODEX_PLANNER_TOOL_TIMEOUT_SEC}. */
+  threadServers(mcp: McpClientConfig, role: 'planner' | 'task'): Record<string, unknown>;
   /** What a task thread's instructions say about the tools, and how the task is to end. */
   taskInstructions(task?: { readOnly?: boolean; commits?: true; extra?: readonly string[] }): string;
   /** What a planner thread's instructions add about the tools (ADR-0026), and where its web reads go (ADR-0027). */
@@ -46,6 +46,20 @@ function headerEnv(mcp: McpClientConfig): Record<string, string> {
   return Object.fromEntries(Object.keys(mcp.headers).map((header, i) => [header, `${MCP_TOKEN_VARIABLE_PREFIX}${i}`]));
 }
 
+/**
+ * How long Codex lets one call to a planner's Ordewell tool run (ADR-0022 T5).
+ * Codex bounds a call with `tool_timeout_sec`, 300s unless set, as a fixed
+ * wall-clock deadline: it sends a progress token but only logs the progress
+ * that comes back, so the server's heartbeat buys nothing here, and its clock
+ * pauses only for its own elicitations (codex-cli 0.171.0, read in its source;
+ * the docs' 60s is stale). Ordewell's own planner tools end themselves sooner,
+ * `run_command` at 120s and model discovery behind `list_runners` at 90s, but
+ * `run_command` and `fetch` may first ask a person's approval inside the call,
+ * which Codex cannot see. An hour lets that answer arrive; a connection that
+ * truly hangs still ends the turn, and the status line shows the wait meanwhile.
+ */
+export const CODEX_PLANNER_TOOL_TIMEOUT_SEC = 3600;
+
 const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 const countOf = (names: string[]) => COUNT_WORDS[names.length] ?? String(names.length);
 const quoted = (names: string[]) => listed(names.map((name) => `\`${name}\``));
@@ -72,8 +86,9 @@ export const CODEX_ORDEWELL: CodexOrdewellBinding = {
    * a bad `default_tools_approval_mode`). `approve` pre-authorizes every tool
    * of this server and no other, in every sandbox and approval policy.
    */
-  threadServers(mcp) {
-    return { [mcp.name]: { url: mcp.url, env_http_headers: headerEnv(mcp), default_tools_approval_mode: 'approve' } };
+  threadServers(mcp, role) {
+    const deadline = role === 'planner' ? { tool_timeout_sec: CODEX_PLANNER_TOOL_TIMEOUT_SEC } : {};
+    return { [mcp.name]: { url: mcp.url, env_http_headers: headerEnv(mcp), default_tools_approval_mode: 'approve', ...deadline } };
   },
 
   /**

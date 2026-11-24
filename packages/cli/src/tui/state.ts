@@ -1,5 +1,6 @@
 import { taskPlacement } from '@ordewell/core/plan-utils';
 import { DEFAULT_MAX_PARALLEL, EMPTY_CONVERSATION, TERMINAL_UI_SIGN_IN, describeRunnerSignIn, signInOfVerdict, EMPTY_HOLD, EMPTY_RUN, NO_TURN, RUN_SETTINGS_DEFAULTS, isTaskRunning, logContinues, logResumes, taskRef, taskRefOf, titledTaskRef, titledTaskRefOf, type AccountLimitSnapshot, type GlobalRunSettings, type OverrideDirection, type TaskStatus, type AttemptUsage, type AiProvider, type ApprovalBlock, type AwaitingReason, type ChildPlanEntry, type ConversationView, type DecisionRecordEntry, type HandoffDigest, type IsolationHandoff, type IsolationLandedTask, type IsolationPreview, type PromptHold, type QueuedTaskMessage, type RunTask, type RunView, type SkipOrigin, type SupervisorLevel, type TaskIsolation, type TaskLogFollow, type TaskType, type TurnGate } from '@ordewell/core';
+import type { PlannerPulse } from './plannerPulse';
 import { emptyEditor, type EditorState } from './editor';
 import type { RunnersResponse } from '../apiClient';
 import type { SaveSettingsEffect } from './reducers/settings';
@@ -640,6 +641,8 @@ export interface TuiState {
   plannerResend: { runner?: string; at: string } | null;
   /** The planner paused on its context, waiting for `/compact retry` or `/stop` (read off the plan); null when it is not. */
   plannerPause: { model: string } | null;
+  /** When the planner's open turn was last heard from, and its call in flight (see `plannerPulse.ts`). */
+  plannerPulse: PlannerPulse | null;
   overlay: Overlay | null;
   /**
    * Approval prompts not yet shown. The planner blocks on each one, so they are
@@ -919,6 +922,7 @@ export const STATE_SCOPE = {
   mergeAsked: 'session',
   plannerResend: 'session',
   plannerPause: 'session',
+  plannerPulse: 'session',
   // An approval prompt is the session's, and `leaveSession` drops it; any other
   // overlay is the person's and stays.
   overlay: 'screen',
@@ -1025,6 +1029,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     runMerge: null,
     plannerResend: null,
     plannerPause: null,
+    plannerPulse: null,
     overlay: null,
     pendingApprovals: [],
     queuedPrompts: EMPTY_HOLD,

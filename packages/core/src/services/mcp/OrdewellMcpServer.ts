@@ -307,7 +307,9 @@ export class OrdewellMcpServer {
   private start(): Promise<string> {
     this.listening ??= new Promise<string>((resolve, reject) => {
       const http = createServer((req, res) => {
-        this.handle(req, res).catch(() => {
+        this.handle(req, res).catch((err: unknown) => {
+          // The transport's own failure, never a tool's: no argument or result is in it.
+          console.warn(`[ordewell-mcp] ${new Date().toISOString()} a request failed: ${err instanceof Error ? err.message : String(err)}`);
           if (!res.headersSent) reply(res, 500, 'Internal error');
           else res.destroy();
         });
@@ -362,7 +364,7 @@ export class OrdewellMcpServer {
     else if (grant.role === 'research') serveTools(mcp, RESEARCH_READ_TOOLS, researchInventory(), grant.handler, grant, this.heartbeatMs);
     else {
       const tools = plannerToolSet(grant.scope);
-      serveTools(mcp, tools.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? [], tools), grant.handler, grant, this.heartbeatMs);
+      serveTools(mcp, tools.filter((tool) => !grant.scope.hidden?.includes(tool.name)), plannerInventory(grant.scope.hidden ?? [], tools), grant.handler, grant, this.heartbeatMs, grant.scope.sessionId);
     }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
@@ -444,7 +446,28 @@ function plannerInventory(hidden: readonly string[], tools: readonly McpTool<Pla
   };
 }
 
-function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inventory: ToolInventory, handler: H, { revoked, calls }: Pick<Grant, 'revoked' | 'calls'>, heartbeatMs: number): void {
+/** How a logged call ended: `cancelled` is its caller giving up (a client's own deadline), `revoked` its session or attempt ending. */
+type CallOutcome = 'ok' | 'error' | 'refused' | 'cancelled' | 'revoked';
+
+/**
+ * One planner call's two lines in the daemon's log (`~/.ordewell/server.log`, ADR-0022 T4),
+ * for a planner whose turn stalls on a tool: what was called, for which
+ * session, how long it took and how it ended. Never its arguments or its
+ * result, which can hold code and secrets.
+ */
+function journalCall(sessionId: string, tool: string): (outcome: CallOutcome) => void {
+  const started = Date.now();
+  console.log(`[ordewell-mcp] ${new Date(started).toISOString()} planner call ${tool} started (session ${sessionId})`);
+  return (outcome) => {
+    const now = Date.now();
+    const line = `[ordewell-mcp] ${new Date(now).toISOString()} planner call ${tool} ${outcome} after ${((now - started) / 1000).toFixed(1)}s (session ${sessionId})`;
+    if (outcome === 'ok') console.log(line);
+    else console.warn(line);
+  };
+}
+
+/** `journalOf` names the session whose calls are logged; a task's and a research agent's are not. */
+function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inventory: ToolInventory, handler: H, { revoked, calls }: Pick<Grant, 'revoked' | 'calls'>, heartbeatMs: number, journalOf?: string): void {
   mcp.setNotificationHandler(CancelledNotificationSchema, ({ params }) => {
     if (params.requestId === undefined) return;
     for (const call of calls.get(String(params.requestId)) ?? []) call.abort();
@@ -453,7 +476,11 @@ function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inv
   mcp.setRequestHandler(ListToolsRequestSchema, () => ({ tools: toolListing(tools) }));
   mcp.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const tool = tools.find((t) => t.name === request.params.name || t.alias === request.params.name);
-    if (!tool) throw new McpError(ErrorCode.InvalidParams, unknownToolMessage(request.params.name, inventory));
+    const ended = journalOf === undefined ? undefined : journalCall(journalOf, tool?.name ?? request.params.name);
+    if (!tool) {
+      ended?.('refused');
+      throw new McpError(ErrorCode.InvalidParams, unknownToolMessage(request.params.name, inventory));
+    }
     const progressToken = request.params._meta?.progressToken;
     const id = String(extra.requestId);
     const cancelled = new AbortController();
@@ -464,16 +491,20 @@ function serveTools<H>(mcp: McpProtocolServer, tools: readonly McpTool<H>[], inv
       beats += 1;
       extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: beats } }).catch(() => undefined);
     }, heartbeatMs);
+    let outcome: CallOutcome = 'error';
     try {
       const caller = callerOf(request.params._meta);
       const result = await tool.call(handler, request.params.arguments, {
         signal: AbortSignal.any([revoked.signal, extra.signal, cancelled.signal]),
         ...(caller ? { caller } : {}),
       });
+      if (!result.isError) outcome = 'ok';
       return { content: [{ type: 'text', text: result.text }], isError: result.isError ?? false };
     } catch (err) {
       return { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true };
     } finally {
+      // A call its caller gave up on reads as that, whatever the tool made of the abort.
+      ended?.(revoked.signal.aborted ? 'revoked' : extra.signal.aborted || cancelled.signal.aborted ? 'cancelled' : outcome);
       clearInterval(heartbeat);
       same.delete(cancelled);
       if (same.size === 0 && calls.get(id) === same) calls.delete(id);
