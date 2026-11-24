@@ -325,10 +325,13 @@ function blockedBy(task: TaskRowSubject, reading: PlanReading | null): string[] 
 
 /** What moves a check on that nothing will run: a start of it once its body landed and its dependencies finished, Execute before that (ADR-0045 L5, L7). */
 function strandedDetail(check: LoopCheckFacts, dependencies: readonly string[], reading: PlanReading | null): string {
-  const status = (id: string) => reading?.byId.get(id)?.status;
-  const landed = reading && check.loop.body.every((id) => status(id) === 'completed');
-  const finished = (reading?.depsOf({ id: check.id, dependencies }) ?? dependencies).every((id) => [undefined, 'completed', 'skipped'].includes(status(id)));
-  return landed && finished ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : 'Nothing runs it now: execute the plan and the loop goes on';
+  const wait = 'Nothing runs it now: execute the plan and the loop goes on';
+  // With no plan to read, nothing says its body landed.
+  if (!reading) return wait;
+  const status = (id: string) => reading.byId.get(id)?.status;
+  const landed = check.loop.body.every((id) => status(id) === 'completed');
+  const finished = reading.depsOf({ id: check.id, dependencies }).every((id) => [undefined, 'completed', 'skipped'].includes(status(id)));
+  return landed && finished ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : wait;
 }
 
 function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop | null {

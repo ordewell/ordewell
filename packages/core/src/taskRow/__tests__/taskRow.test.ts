@@ -455,6 +455,14 @@ describe('the row view, every status against every annotation', () => {
     expect(titledRefs(['t1', '*'], tree)).toEqual(['#1 Setup', 'after all other tasks']);
   });
 
+  it('leaves a failed research task out of what "*" waits for (ADR-0077)', () => {
+    const tree = [
+      { id: 't1', order: 1, title: 'Survey', status: 'failed', dependencies: [], research: true },
+      { id: 't2', order: 2, title: 'Suite', status: 'pending', dependencies: ['*'] },
+    ];
+    expect(taskRowView(subject({ dependencies: ['*'] }), { tasks: tree })).toMatchObject({ status: 'todo', blockedBy: null });
+  });
+
   it('shows a dependency by its id when there is no plan tree to label it against', () => {
     expect(taskRowView(subject({ dependencies: ['t1'] })).dependencies).toEqual(['t1']);
     expect(taskRowView(subject({ dependencies: ['t1'] }), { tasks: [] }).dependencies).toEqual(['t1']);
