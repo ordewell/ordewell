@@ -54,6 +54,10 @@ question is put depends on how the plan arrives.
   counted with the merge gate's own walk, which passes through subtasks and
   their parents' dependencies: the merge gate and the check rest on those
   ancestors, and the question asking to keep such edges does not ensure it. A redundant direct edge may still go.
+  A `"*"` in a task's list ([ADR-0077](0077-a-dependency-on-star-runs-a-task-after-every-other-task.md))
+  is no edge the question judges: a reply that drops it gets it back, every
+  walk here (the chain, the ancestry, the fan-out shape) reads what it stands
+  for, and one a reply adds is a wait on each task it stands for.
   The first plan's closing check, as R5 reads the plan as written, when it is
   an AI task that edits, is held too, but the other way: a reply that leaves it
   no longer waiting for a top-level task it waited for, directly or through
@@ -532,3 +536,4 @@ conversation's as they stand.
 - 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.
 - 2026-11-24 — R5: the opening and gate notes name the two checks they ask for (importing, and a collection-only run) and say the full test suite is not part of them, since "run both" had an opening run the whole suite as its own criterion.
 - 2026-11-24 — R5: the two checks are building or importing the project, which fits a project with no package, and the note names no closing check in a fan-out that has none.
+- 2026-11-24 — R1: a reply cannot take `"*"` from a task, and every walk reads what it stands for (ADR-0077); the one-shot wording R4 measured does not mention it.

@@ -2946,6 +2946,17 @@ same rules. `Session.setTaskDependencies` throws rather than returning null so a
 surface can say why (`PUT` maps it to 400, VS Code to a warning, and both re-show
 the accepted list after a refusal).
 
+**After all (`"*"`, `AfterAll`)** — the dependency entry `"*"` on a top-level
+task: it runs after every other top-level task that does not itself come after
+it, directly or through others, leaving out research tasks, loop bodies (waited
+for through their check), and every other `"*"` task with whatever comes after
+one (ADR-0077). It is read from the plan as it stands by every walk of what a
+task waits on, never written out into the stored list, so a closing check
+covers a task added later. A subtask or a loop's body task may not hold it.
+Surfaces name it "after all other tasks".
+*Avoid:* "wildcard" or "pattern" — it matches no ids by their spelling, and
+stands for nothing but this one set.
+
 **Hand-added task (`Session.addTask`, done by *PlanEditor*)** — async, and for the same reason
 `setTaskRunner` is: a task with no model or mode is not a lighter task but an
 unspawnable one, so its assignment is resolved from the runner's catalog as the
