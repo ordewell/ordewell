@@ -326,7 +326,7 @@ describe('signed-out planners', () => {
     }
   });
 
-  it('paints only the signed-out agent\'s name red in the Runners row', () => {
+  it('paints only the signed-out agent red in the Runners row, and says it in words', () => {
     style.enabled = true;
     try {
       const out = screen({
@@ -335,8 +335,8 @@ describe('signed-out planners', () => {
       });
       const row = out.find((l) => stripAnsi(l).trimStart().startsWith('Runners'));
       expect(row).toBeDefined();
-      expect(stripAnsi(row!)).toContain('Claude Code, Codex');
-      expect(row!).toContain('\x1b[31mClaude Code\x1b[0m');
+      expect(stripAnsi(row!)).toContain('Claude Code (signed out · /login claude-code), Codex');
+      expect(row!).toContain('\x1b[31mClaude Code (signed out · /login claude-code)\x1b[0m');
       expect(row!).not.toContain('\x1b[31mCodex');
       expect(width(row!)).toBeLessThanOrEqual(80);
     } finally {

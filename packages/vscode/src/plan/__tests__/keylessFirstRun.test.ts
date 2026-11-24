@@ -416,6 +416,23 @@ describe('VS Code keyless first-run process boundary', () => {
     });
   }
 
+  // VS Code runs its own copy of core's detection, so it must pick as the daemon does (ADR-0076).
+  const signIns = (states: Record<string, 'signed-in' | 'signed-out'>) => ({
+    plannerUsability: async (runner: string): Promise<PlannerUsability> => (
+      states[runner] ? { usable: true, auth: { state: states[runner] } } : { usable: false }),
+  });
+
+  it('plans with a signed-in Codex rather than the signed-out Claude Code before it', async () => {
+    await detectInstalledPlanner(signIns({ 'claude-code': 'signed-out', codex: 'signed-in' }));
+    expect(harness().config.aiProvider).toBe('codex');
+  });
+
+  it('hands planning to a found key when every installed agent is signed out', async () => {
+    await detectInstalledPlanner(signIns({ 'claude-code': 'signed-out', codex: 'signed-out' }));
+    process.env.OPENROUTER_API_KEY = 'or-key';
+    expect(harness().config.aiProvider).toBe('openrouter');
+  });
+
   for (const held of ['secret store', 'settings'] as const) {
     it(`a Google key kept only in the VS Code ${held} plans with Google, not OpenRouter`, async () => {
       recordInstalledPlanner('claude-code');
