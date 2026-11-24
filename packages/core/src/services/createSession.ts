@@ -1526,6 +1526,8 @@ export class Session {
       this.conversation.recordExecution(record, text);
       return true;
     }, () => this.broadcast({ type: 'execution_action', record, text }), 'after');
+    // The user's own act on the run answers a reply that waits on them (ADR-0053), and may move nothing else the list reads.
+    if (record.actor === 'user') this.events.waitsMayHaveChanged(this.plan);
   }
 
   /** Whether the user approved this task to run; see {@link ApprovalRecord.isApproved}. */

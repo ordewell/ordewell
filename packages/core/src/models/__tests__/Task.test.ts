@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason, migrateLoadedTasks, wakeUpReply } from '../Task';
+import { createTask, createEmptyPlan, migratePlanState, taskOrderLabel, flattenTasksWithParents, keepExecutionState, isAwaitingReason, migrateLoadedTasks, wakeUpReply, isWrapUpWakeUp } from '../Task';
 import { serializeTask, serializeTaskStatus, surfaceTask } from '../../services/SessionMessage';
 import type { LegacyPlanState, Task, PlanState, Message, TaskSnapshot, ConversationMessage } from '../Task';
 
@@ -568,5 +568,52 @@ describe('wakeUpReply (ADR-0029)', () => {
     ['a conversation with no wake-up', [user(0), said(1, 'plan_generated')], undefined],
   ])('%s', (_name, history, expected) => {
     expect(wakeUpReply(history)).toBe(expected);
+  });
+});
+
+describe('the end-of-run wrap-up (ADR-0053)', () => {
+  const at = (n: number) => `2026-11-14T10:00:0${n}.000Z`;
+  const wakeWith = (n: number, content: string): ConversationMessage => ({ role: 'user', content, timestamp: at(n), kind: 'wake_up' });
+  const said = (n: number, kind?: ConversationMessage['kind']): ConversationMessage => ({ role: 'assistant', content: 'noted', timestamp: at(n), ...(kind ? { kind } : {}) });
+  const clean = 'Run update:\n- the run finished: 2 of 2 tasks completed; its landed work is not merged yet\nSince the last update:\n- task #1 passed';
+  const failed = 'Run update:\n- the run finished: 1 of 2 tasks completed, 1 failed\n- task #2 "Test" failed: pytest is missing';
+  const byUser = (n: number): ConversationMessage => ({
+    role: 'assistant', content: 'merged', timestamp: at(n), kind: 'execution',
+    execution: { command: 'merge_all', actor: 'user', outcome: 'done', at: at(n) },
+  });
+
+  it('is a digest that says only that everything finished', () => {
+    expect(isWrapUpWakeUp(clean)).toBe(true);
+    expect(isWrapUpWakeUp('Run update:\n- the run finished: 3 of 3 tasks completed, 1 skipped')).toBe(true);
+  });
+
+  it.each([
+    ['a failure beside the end', failed],
+    ['a run that ended with a failed count alone', 'Run update:\n- the run finished: 1 of 2 tasks completed, 1 failed'],
+    ['a blocked task', 'Run update:\n- the run finished: 1 of 2 tasks completed, 1 blocked'],
+    ['another item beside a clean end', `${clean.split('\n')[0]}\n- the run finished: 1 of 1 tasks completed\n- task #1 is waiting for input`],
+  ])('is not %s', (_name, content) => {
+    expect(isWrapUpWakeUp(content)).toBe(false);
+  });
+
+  it('leaves no wait for the reply to it alone', () => {
+    expect(wakeUpReply([wakeWith(0, clean), said(1, 'supervisor')])).toBeUndefined();
+  });
+
+  it('leaves a wait for the reply to a failure, even one that ends the run', () => {
+    expect(wakeUpReply([wakeWith(0, failed), said(1, 'supervisor')])).toBe(at(1));
+  });
+
+  it('leaves a wait when another wake-up came with the end', () => {
+    expect(wakeUpReply([wakeWith(0, failed), wakeWith(0, clean), said(1, 'supervisor')])).toBe(at(1));
+  });
+
+  it('is answered by the user\'s own act on the run after the reply', () => {
+    expect(wakeUpReply([wakeWith(0, failed), said(1, 'supervisor'), byUser(2)])).toBeUndefined();
+  });
+
+  it('is not answered by the planner\'s or the supervisor\'s act', () => {
+    const planner: ConversationMessage = { ...byUser(2), execution: { command: 'retry_task', actor: 'planner-turn', outcome: 'done', at: at(2) } };
+    expect(wakeUpReply([wakeWith(0, failed), said(1, 'supervisor'), planner])).toBe(at(1));
   });
 });
