@@ -389,6 +389,85 @@ describe('DaemonHost', () => {
   });
 });
 
+/**
+ * A chat is a session from its first message: the daemon saves it as it
+ * admits the goal, so the goal is the open session's as the first turn
+ * starts, not once the planner has answered, and it stays with a first turn
+ * that fails; only a goal refused before any turn starts leaves none.
+ */
+describe('DaemonHost first message', () => {
+  /** A first turn the test holds: the daemon admits it (its start frame) and answers once `finish` or `fail` is called. */
+  function heldFirstTurn() {
+    let answer: ((result: ReturnType<typeof ok>) => void) | undefined;
+    const daemon = fakeDaemon({
+      'plans.converseStart': (params) => new Promise((resolve) => {
+        answer = resolve;
+        const sessionId = (params as { sessionId: string }).sessionId;
+        daemon.push(sessionId, { type: 'planner_turn_started', turnId: 'turn-1', prompt: 'Add a parser', startedAt: new Date().toISOString(), sessionId, stream: 'd1', seq: 1 });
+      }),
+    });
+    const host = hostWith();
+    const seen = watch(host);
+    const sent = host.handle({ type: 'sendMessage', text: 'Add a parser', typed: true });
+    const finish = (result: ReturnType<typeof ok>) => {
+      answer!(result);
+      return sent;
+    };
+    return { daemon, host, seen, sent, finish };
+  }
+
+  it('is the open session\'s goal as soon as its first turn starts, before the planner answers', async () => {
+    const { host, daemon, finish } = heldFirstTurn();
+    await waitFor(() => expect(daemon.calls('plans.converseStart')).toHaveLength(1));
+
+    await waitFor(() => expect(host.getSnapshot().goal).toBe('Add a parser'));
+
+    await act(() => finish(ok({ plan: surfacePlan([], 'draft') })));
+    expect(host.getSnapshot().goal).toBe('Add a parser');
+  });
+
+  it('keeps its goal, and reads the session from the daemon after, when the first turn fails once started', async () => {
+    const { host, daemon, finish, seen } = heldFirstTurn();
+    await waitFor(() => expect(daemon.calls('plans.converseStart')).toHaveLength(1));
+
+    await act(() => finish({ ok: false, status: 500, error: 'Internal Server Error', data: { error: 'the planner crashed' } }));
+
+    expect(host.getSnapshot().goal).toBe('Add a parser');
+    expect(seen).toContainEqual(expect.objectContaining({ type: 'showError', error: 'the planner crashed' }));
+    // The daemon holds it now: a stop reaches it, as it does for any session but a fresh one.
+    await act(() => host.handle({ type: 'stopResearch' }));
+    expect(daemon.calls('plans.stopPlanning')).toEqual([[{ sessionId: host.sessionId }, undefined]]);
+  });
+
+  it('stops the daemon\'s turn when Stop is pressed during the first turn', async () => {
+    const { host, daemon, finish } = heldFirstTurn();
+    await waitFor(() => expect(daemon.calls('plans.converseStart')).toHaveLength(1));
+
+    await act(() => host.handle({ type: 'stopResearch' }));
+
+    expect(daemon.calls('plans.stopPlanning')).toEqual([[{ sessionId: host.sessionId }, undefined]]);
+    await act(() => finish(ok({ plan: surfacePlan([], 'draft') })));
+  });
+
+  it('leaves no goal, and hands the message back, when the planner is not ready', async () => {
+    const daemon = fakeDaemon({
+      'plans.converseStart': { ok: false, status: 409, error: 'Conflict', data: { error: 'Claude Code is not signed in.', code: 'planner_not_ready' } },
+    });
+    const host = hostWith();
+    const seen = watch(host);
+
+    await act(() => host.handle({ type: 'sendMessage', text: 'Add a parser', typed: true }));
+
+    expect(daemon.calls('plans.converseStart')).toHaveLength(1);
+    expect(host.getSnapshot().goal).toBe('');
+    expect(seen).toContainEqual({ type: 'promptUnsent', text: 'Add a parser' });
+    expect(seen).toContainEqual(expect.objectContaining({ type: 'showError', code: 'planner_not_ready' }));
+    // Nothing was sent, so no session holds a turn to stop.
+    await act(() => host.handle({ type: 'stopResearch' }));
+    expect(daemon.calls('plans.stopPlanning')).toEqual([]);
+  });
+});
+
 describe('DaemonHost held prompts', () => {
   it('sends a prompt the chat asked to hold once the turn it waited for has already ended', async () => {
     const daemon = fakeDaemon({ 'plans.converseStart': ok({ ok: true, sessionId: 'p1', turnId: 'turn-1' }) });

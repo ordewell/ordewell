@@ -164,8 +164,16 @@ export class ChatSessionHost {
   }
 
   private async answer(text: string, typed: boolean, runners?: readonly RunnerId[]): Promise<void> {
-    if (typed && text.trim()) this.conversation.note('user', text);
-    await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
+    const shown = typed && text.trim() !== '';
+    if (shown) this.conversation.note('user', text);
+    const outcome = await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
+    // Refused before any turn started, nothing was sent: the message, and what
+    // was held behind it, go back to the composer. A turn that started and
+    // then failed was sent, and keeps its place (ADR-0017 Q2).
+    if (shown && !outcome.ok && outcome.code === 'planner_not_ready') {
+      this.conversation.unsent(text);
+      return;
+    }
     await this.turnEnded();
   }
 }

@@ -14,7 +14,7 @@ import { announceApprovals, announceCheckpoint, answerCheckpoint, continueTaskSt
 import { newSession, pickRewindTarget, runCommand, updatePlanned } from './reducers/commands';
 import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
-import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
+import { disarmStop, drainQueue, forceSendPlanner, giveBackUnsent, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
 import { pulseAfter } from './plannerPulse';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
@@ -511,6 +511,7 @@ function reduceAction(state: TuiState, action: Action): Step {
         if (action.code === 'planner_turn_stopped') return step({ ...state, forceSendPending: null, planner: plannerInFlight(state) ? 'planning' : 'idle' });
         state = restoreForced(state, action.code);
       }
+      if (action.unsent !== undefined) state = giveBackUnsent(state, action.unsent);
       const quiet = plannerInFlight(state) && state.stopRequested;
       // The daemon's own end for a compaction may have been lost with the call.
       const settled = state.planner === 'condensing' ? endRunningCompactions(state, quiet || action.code === 'planner_turn_stopped' ? 'stopped' : 'failed') : state;

@@ -430,6 +430,13 @@ or `unknown`). The planner-turn calls carry no idle timeout for that reason; the
 user's Stop is their bound. A reply that arrived but cannot be used or shown (a
 200 with no plan, a plan the surface cannot fold) is not a lost reply: it is
 `answered`, keeps the session, and surfaces as its own error.
+A message *refused before any turn started* (409 `planner_not_ready`: the
+planner cannot plan) was never sent: a refused first message leaves no
+session, and every surface takes the message off the chat and gives its text
+back to the composer, ahead of anything typed since (the TUI's
+`giveBackUnsent`, ui's `ConversationViewHost.unsent`). A later message refused
+so keeps its session. A turn admitted and then failed was sent, and keeps its
+place.
 *Avoid:* "planning abort" or "generating" for it — both named a surface's copy
 of this state, and the copies drifted; *Avoid:* confusing it with **Turn**, the
 streamed span a surface draws under one `turnId`: every user turn is a planner
@@ -4144,7 +4151,12 @@ has, so one refused op refuses its batch. A whole plan is refused while a task
 runs, and the planner is asked for task edits. Inputs wait on the plan
 (`pendingTurns`), saved as they arrive and dropped in the save that lands their
 turn's outcome, so a reload keeps exactly what no turn answered for the next
-input without opening a turn; a turn that fails drops the user's inputs but leaves a wake-up batch for the next turn. A
+input without opening a turn; a turn that fails drops the user's inputs but leaves a wake-up batch for the next turn.
+The conversation's opening goal waits there too from the moment the planner
+gate admits it (`PlanTurns.opened`), the opening's own to land and never the
+queue's, so a session is saved, and listed, while its first turn runs; an
+opening that fails or is stopped keeps the goal in the transcript, with the
+failure after it, for the next message to answer. A
 load also carries over the mid-run edits older builds queued
 (`queuedMessages`).
 *Avoid:* "pending plan edit" or "queued edit" for it — nothing waits for a

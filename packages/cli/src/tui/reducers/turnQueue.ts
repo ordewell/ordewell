@@ -1,7 +1,7 @@
 import { aheadOfDraft, sendNowGivesBack, unsendAll, unsendLatest as unsendNewest, type DaemonErrorCode } from '@ordewell/core';
 import { commit } from '../editor';
 import { plannerInFlight, planPaneOpen, type TuiState } from '../state';
-import { cutTurn, say } from '../transcript';
+import { cutTurn, say, unsay } from '../transcript';
 import { step, type Effect, type Step } from './shared';
 
 /**
@@ -42,6 +42,18 @@ export function restoreForced(state: TuiState, code: DaemonErrorCode | undefined
   if (!sendNowGivesBack(code)) return { ...state, forceSendPending: null };
   const text = aheadOfDraft(forced.text, state.editor.text);
   return { ...state, forceSendPending: null, editor: { ...state.editor, text, cursor: text.length } };
+}
+
+/**
+ * A message refused before any turn started (409 planner_not_ready) was never
+ * sent: it leaves the pane and goes back to the composer, ahead of the prompts
+ * held behind it and of what was typed since, so none of them is sent into
+ * the same refusal and nothing has to be typed again (ADR-0017 Q2).
+ */
+export function giveBackUnsent(state: TuiState, text: string): TuiState {
+  const held = queueToEditor(unsay(state, text));
+  const draft = aheadOfDraft(text, held.editor.text);
+  return { ...held, editor: { ...held.editor, text: draft, cursor: text.length } };
 }
 
 /** The arm lapsed — through the scheduled effect or a different key. */
