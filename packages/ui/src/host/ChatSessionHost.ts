@@ -79,6 +79,7 @@ export class ChatSessionHost {
 
   /** Try Again: the message of a turn that failed, shown in the conversation already, sent as it was. */
   async sendAgain(text: string, runners?: readonly RunnerId[]): Promise<void> {
+    this.conversation.resend(text);
     await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
     await this.turnEnded();
   }

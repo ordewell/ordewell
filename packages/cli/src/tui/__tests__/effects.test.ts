@@ -1944,6 +1944,22 @@ describe('loading an in-flight conversation', () => {
     expect(state.conversation.blocks.filter((b) => b.type === 'skill_load')).toMatchObject([{ name: 'tdd', path: '~/tdd/SKILL.md' }]);
   });
 
+  it('draws an unanswered goal once while the turn that answers it again is in flight', async () => {
+    const h = harness({ adoptSession: vi.fn().mockResolvedValue({ goal: 'Build it', plannerTurnId: 't2', plan: {
+      tasks: [],
+      conversationHistory: [
+        { role: 'user', content: 'Build it', timestamp: '2026-10-11T10:00:00Z' },
+        { role: 'assistant', content: 'The planner failed.', timestamp: '2026-10-11T10:00:05Z', kind: 'error' },
+      ],
+      pendingTurns: [{ id: 'p1', source: 'user', text: 'Build it', timestamp: '2026-10-11T10:01:00Z' }],
+    } }) });
+    await runEffect({ type: 'loadSession', sessionId: 's1' }, h.deps);
+    let state = h.actions.reduce((s, action) => reduce(s, action).state, initialState());
+    state = reduce(state, { type: 'sessionMessage', sessionId: 's1', message: { type: 'planner_text_delta', turnId: 't2', segmentId: 's1', text: 'Planning.' } }).state;
+
+    expect(messagesOf(state).filter((b) => b.role === 'user').map((b) => b.text)).toEqual(['Build it']);
+  });
+
   it('keeps a send failure visible and accepts the same prompt again', async () => {
     let state = initialState({ sessionId: 's1' });
     state = { ...state, editor: { ...state.editor, text: 'check tests', cursor: 11 } };

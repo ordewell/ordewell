@@ -1,4 +1,4 @@
-import type { ResearchLogEntry, ResearchStep, SkillLoadNotice, SubagentLogEntry } from '../models/Task';
+import { repeatsUnansweredOpening, type ResearchLogEntry, type ResearchStep, type SkillLoadNotice, type SubagentLogEntry } from '../models/Task';
 import type { SerializedConversationMessage, SerializedPendingTurn } from '../services/SessionMessage';
 import { isMeasured, usageLine, type PlannerUsage } from '../models/Usage';
 import type { DisplayBlock, MessageRole } from './blocks';
@@ -136,7 +136,9 @@ function research(log: readonly ResearchLogEntry[]): Placed[] {
  * legacy compaction, which replaced what it condensed and stands first, drops
  * the research older than its first kept message with the turns it took.
  * Pending inputs follow the landed records in arrival order; they are not
- * transcript entries until their turn lands.
+ * transcript entries until their turn lands. The one exception is the goal of
+ * an opening that went unanswered, sent again: it is drawn once, where it
+ * stands.
  */
 export function fromTranscript(
   conversationHistory: readonly SerializedConversationMessage[] | undefined,
@@ -165,8 +167,21 @@ export function fromTranscript(
   const blocks = placed.map((item) => item.build(id));
   const pendingInputs: NonNullable<ConversationView['pendingInputs']>[number][] = [];
 
+  // The conversation answers it where it stands and never writes it twice
+  // (PlannerConversation.replyTurn): its pending input is that line.
+  let opening = history;
   for (const input of pendingTurns) {
     const start = blocks.length;
+    if (input.source === 'user' && repeatsUnansweredOpening(opening, input)) {
+      opening = [];
+      const at = blocks.findIndex((block) => block.type === 'message' && block.role === 'user' && block.text === input.text);
+      if (at >= 0) {
+        let end = at + 1;
+        while (blocks[end]?.type === 'skill_load') end++;
+        pendingInputs.push({ input: { ...input, skills: input.skills?.map(skillLoadNotice) }, blockIds: blocks.slice(at, end).map((block) => block.id) });
+        continue;
+      }
+    }
     if (input.source === 'supervisor') {
       blocks.push(settledMessage(id(), 'wake_up', input.text));
     } else {

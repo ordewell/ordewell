@@ -146,6 +146,25 @@ export class ConversationViewHost {
   }
 
   /**
+   * Try Again: `text`, drawn already as the newest message, is sent again. The
+   * failed turn that answered it lets the line go, with the skill loads drawn
+   * under it, so the turn answering it now takes that line over instead of
+   * drawing it a second time.
+   */
+  resend(text: string): void {
+    const { blocks } = this.view;
+    let at = blocks.length - 1;
+    while (at >= 0 && !isUserMessage(blocks[at])) at--;
+    const drawn = blocks[at];
+    if (drawn?.type !== 'message' || drawn.text !== text || drawn.turnId === undefined) return;
+    let end = at + 1;
+    for (let next = blocks[end]; next?.type === 'skill_load' && next.turnId === drawn.turnId; next = blocks[end]) end++;
+    const line = { ...drawn };
+    delete line.turnId;
+    this.show({ ...this.view, blocks: [...blocks.slice(0, at), line, ...blocks.slice(end)] });
+  }
+
+  /**
    * The user stopped the planner. The turn ends on screen now rather than when
    * the backend notices the abort, and whatever it still streams until its
    * real end is dropped. Queued prompts go back to the input rather than

@@ -156,6 +156,25 @@ describe('ChatSessionHost', () => {
     expect(userBlocks(h.conversation)).toEqual(['Add a greeting module']);
   });
 
+  it('sends a failed message again on Try Again, and its turn takes over the line and skill load drawn for it', async () => {
+    const skill = { invokedBy: 'user' as const, name: 'tdd', source: 'global' as const, path: '~/tdd/SKILL.md' };
+    let n = 0;
+    // Each turn opens with its message, as the session announces it; the first fails.
+    const h = harness((text) => {
+      const turnId = `t${++n}`;
+      h.conversation.receive({ type: 'planner_turn_started', turnId, prompt: text, skills: [skill] });
+      h.conversation.receive({ type: 'planner_turn_ended', turnId, outcome: n === 1 ? 'error' : 'message' });
+      return n === 1 ? { ok: false } : { ok: true };
+    });
+
+    await h.chat.send('/tdd add a login page', true);
+    await h.chat.sendAgain('/tdd add a login page');
+
+    expect(h.sent()).toEqual([['/tdd add a login page', false], ['/tdd add a login page', false]]);
+    expect(userBlocks(h.conversation)).toEqual(['/tdd add a login page']);
+    expect(h.conversation.blocks.filter((b) => b.type === 'skill_load')).toHaveLength(1);
+  });
+
   it('answers a button\'s message at once, neither held nor shown as the user\'s', async () => {
     const h = harness();
     h.state.busy = true;
