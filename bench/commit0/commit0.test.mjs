@@ -2445,6 +2445,11 @@ test('planReview reads the last "chain review" line of the research log: the cha
   assert.deepEqual(L.planReview([sys('chain review: 5, first plan kept: unknown task "t9"')]), { reviewed: true, firstChain: 5, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'first plan kept' });
   assert.deepEqual(L.planReview([sys('chain review: 5, failed: socket closed')]), { reviewed: true, firstChain: 5, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'failed' });
   assert.deepEqual(L.planReview([sys('chain review: 12, reply cut off at the output limit [reply 3 tokens out]; asked once more with the plan alone')]), { reviewed: true, firstChain: 12, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'no answer' });
+  // A review the slices' wall asked for names the wall too, before and after (ADR-0072 R1).
+  assert.deepEqual(L.planReview([sys('chain review: 4 -> 4, waits 7 of 7 -> 1, kept; 20 tasks changed: "A" drops "B"')]), { reviewed: true, firstChain: 4, reviewedChain: 4, tasksChanged: 20, kept: true, outcome: 'kept', wall: { before: 7, median: 7, reviewed: 1 } });
+  assert.deepEqual(L.planReview([sys('chain review: 4 -> 4, waits 6 of 7 -> 6, first plan kept, neither shorter nor fewer waits; 1 task changed')]), { reviewed: true, firstChain: 4, reviewedChain: 4, tasksChanged: 1, kept: false, outcome: 'first plan kept, neither shorter nor fewer waits', wall: { before: 7, median: 6, reviewed: 6 } });
+  assert.deepEqual(L.planReview([sys('chain review: 4, waits 7 of 7, first plan kept: unknown task "t9"')]), { reviewed: true, firstChain: 4, reviewedChain: null, tasksChanged: null, kept: false, outcome: 'first plan kept', wall: { before: 7, median: 7, reviewed: null } });
+  assert.deepEqual(L.planReview([sys('chain review: 4, waits 7 of 7, failed: socket closed')]).outcome, 'failed');
   // No such line: a chain under the review's minimum, or an arm with no planner. Nothing to say, and nothing guessed.
   assert.equal(L.planReview([{ id: 'x', type: 'user_prompt', content: 'hello' }, { id: 'y', type: 'tool_call' }]), null);
   assert.equal(L.planReview([]), null);

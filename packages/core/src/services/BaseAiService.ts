@@ -7,7 +7,7 @@ import { IWebFetcher } from '../interfaces/IWebFetcher';
 import { buildPlanWithResults } from './PlanPrompts';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from './plannerModes';
 import { generatePlanWithRepair, classifyPlannerReply, repairLoop } from './PlanRepair';
-import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain } from './PlanChainReview';
+import { CHAIN_REVIEW_MIN, applyChainReview, chainReviewMessage, longestChain, waitWall, waitsAfter } from './PlanChainReview';
 import { shapeFanOut } from './PlanFanOut';
 import { settleReply, type ReplyAttempt } from './settleReply';
 import { compactResearchResults, type CompactableMessage } from './contextCompaction';
@@ -845,8 +845,10 @@ export abstract class BaseAiService {
 
   /**
    * One more call when the first valid plan's longest chain reaches
-   * CHAIN_REVIEW_MIN: the revision is kept only when it parses and its chain is
-   * shorter, so the review can shorten a plan and never lose one (ADR-0072 R1).
+   * CHAIN_REVIEW_MIN, or its slices wait behind a wall (`waitWall`): the
+   * revision is kept only when it parses and its chain is shorter, or, behind
+   * a wall, its slices wait on fewer of the tasks before them and its chain is
+   * no longer, so the review can improve a plan and never lose one (ADR-0072 R1).
    * A reply the output limit cut off is asked for once more, with the plan
    * and the question alone, the least reasoning and the longest reply; after
    * that the first plan stands.
@@ -873,7 +875,10 @@ export abstract class BaseAiService {
       for (const line of lines) note(line);
       return out;
     };
-    if (chain.length < CHAIN_REVIEW_MIN) return shaped(tasks);
+    // One review whichever trigger holds, or both: a long chain, or slices behind a wall (ADR-0072 R1).
+    const wall = waitWall(tasks);
+    if (chain.length < CHAIN_REVIEW_MIN && !wall) return shaped(tasks);
+    const asked = `${chain.length}${wall ? `, waits ${wall.median} of ${wall.before}` : ''}`;
     // The reply is a list of changes, not a plan, so it streams to no plan view.
     // Low effort: each edge is a yes-or-no question, and a reasoning model left at
     // its default can think past the output limit before it writes the list.
@@ -907,14 +912,14 @@ export abstract class BaseAiService {
     try {
       const prompt = buildPlanWithResults(userDescription, contextStr, compactResearchResults(researchResults), modelsByRunner, runners, runnerModes, modes);
       const { applied, cutOff, out } = await repairLoop<Asked, Asked>({
-        first: () => ask(prompt, chainReviewMessage(tasks, chain), false),
+        first: () => ask(prompt, chainReviewMessage(tasks, chain, false, wall), false),
         // Only a cut-off is asked again (ADR-0072 R2): an invalid reply the model finished would come back the same.
         interpret: (r) => {
           if (r.applied.ok || !r.cutOff) return { done: r };
           // A function runs only when the re-ask follows, so a second cut-off is not noted as asked again.
           const corrective = () => {
-            note(`chain review: ${chain.length}, reply cut off at the output limit${r.out}; asked once more with the plan alone`);
-            return chainReviewMessage(tasks, chain, true);
+            note(`chain review: ${asked}, reply cut off at the output limit${r.out}; asked once more with the plan alone`);
+            return chainReviewMessage(tasks, chain, true, wall);
           };
           return { retry: { errors: [r.applied.error], corrective } };
         },
@@ -923,11 +928,14 @@ export abstract class BaseAiService {
         onExhausted: ({ reply }) => reply,
       });
       if (!applied.ok) {
-        note(`chain review: ${chain.length}, first plan kept: ${cutOff ? 'reply cut off at the output limit; ' : ''}${applied.error}${out}`);
+        note(`chain review: ${asked}, first plan kept: ${cutOff ? 'reply cut off at the output limit; ' : ''}${applied.error}${out}`);
         return shaped(tasks);
       }
       const after = longestChain(applied.tasks);
-      const kept = after.length > 0 && after.length < chain.length;
+      // A wall can thin with the chain as long as it was: the slices wait for fewer tasks, and none for more.
+      const thinned = wall ? waitsAfter(tasks, applied.tasks) : undefined;
+      const thinner = wall !== undefined && thinned !== undefined && thinned < wall.median && after.length <= chain.length;
+      const kept = after.length > 0 && (after.length < chain.length || thinner);
       const title = (id: string) => tasks.find((t) => t.id === id)?.title ?? id;
       // A task the rules gave its dependencies back to ends as the plan wrote it: it is counted below, not named as changed.
       const changed = applied.changes.filter((c) => c.removed.length || c.added.length || c.restored?.length).map((c) => `"${title(c.id)}"${c.removed.length ? ` drops ${c.removed.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.added.length ? ` adds ${c.added.map((d) => `"${title(d)}"`).join(', ')}` : ''}${c.restored?.length ? `, kept as the closing check after ${c.restored.length} task${c.restored.length === 1 ? '' : 's'} the reply cut it from` : ''}`);
@@ -935,11 +943,11 @@ export abstract class BaseAiService {
       const dropped = applied.changes.reduce((n, c) => n + (c.dropped?.length ?? 0), 0);
       const openingKept = applied.changes.reduce((n, c) => n + (c.openingKept?.length ?? 0), 0);
       const held = dropped || openingKept ? `, ${dropped} added wait${dropped === 1 ? '' : 's'} dropped, ${openingKept} opening wait${openingKept === 1 ? '' : 's'} kept` : '';
-      note(`chain review: ${chain.length} -> ${after.length}, ${kept ? 'kept' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${held}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
+      note(`chain review: ${chain.length} -> ${after.length}${wall ? `, waits ${wall.median} of ${wall.before} -> ${thinned}` : ''}, ${kept ? 'kept' : wall ? 'first plan kept, neither shorter nor fewer waits' : 'first plan kept, not shorter'}; ${changed.length} task${changed.length === 1 ? '' : 's'} changed${changed.length ? `: ${changed.join('; ')}` : ''}${held}${applied.ignored.length ? `; ignored subtask${applied.ignored.length === 1 ? '' : 's'} ${applied.ignored.join(', ')}` : ''}${out}`);
       return shaped(kept ? applied.tasks : tasks);
     } catch (err) {
       if (signal?.aborted) throw err;
-      note(`chain review: ${chain.length}, failed: ${err instanceof Error ? err.message : String(err)}`);
+      note(`chain review: ${asked}, failed: ${err instanceof Error ? err.message : String(err)}`);
       return shaped(tasks);
     }
   }
