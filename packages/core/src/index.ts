@@ -279,6 +279,7 @@ export { ChildDirectory, type ChildFrame, type ChildPlanHandle } from './service
 export { IDLE_ACTIVITY } from './services/SessionMessage';
 export { serializeTask, serializeTaskStatus, serializePlan, surfacePlan, surfacePlanState, executionSummary, everyTaskPassed, truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, type ExecutionSummary } from './services/SessionMessage';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
+export { AFTER_ALL, AFTER_ALL_TEXT, afterAllReader, resolveAfterAll, waitsOnAll, type AfterAllSubject } from './services/AfterAll';
 export { notifyCommandOf } from './services/escalationNotifier';
 export { escalations, type Escalation, type EscalationInput, type EscalationKind, type EscalationOption, type EscalationOptionId, type EscalationRun } from './services/escalations';
 export { summarizeToolCall, classifyOutcome, ranSealed, withoutSealedMark } from './services/researchStepSummary';

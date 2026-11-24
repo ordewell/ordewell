@@ -278,8 +278,9 @@ The planner conversation, its harness backends, its research and its skills.
 | [0024](planner/0024-unified-skills.md) | Unified skills: one format, one loader, two audiences | accepted | — | — |
 | [0044](planner/0044-the-planners-usage-limit-waits-and-resends.md) | A planner's usage limit waits and resends, and a limit counts only in a turn Ordewell started | accepted | [0018](runners/0018-structured-runner-transport.md), [0029](supervision/0029-the-supervisor.md) | — |
 | [0067](planner/0067-the-planners-decision-record.md) | The planner keeps a decision record, and a checkpoint is seeded with it | accepted | [0002](planner/0002-planner-as-conversation-loop.md) | — |
-| [0072](planner/0072-a-long-dependency-chain-is-reviewed-once-by-the-planner.md) | A long dependency chain is reviewed once, edge by edge, by the planner that wrote it | accepted | [0022](runners/0022-ordewell-mcp-server.md) | — |
+| [0072](planner/0072-a-long-dependency-chain-is-reviewed-once-by-the-planner.md) | A long dependency chain is reviewed once, edge by edge, by the planner that wrote it | accepted | [0022](runners/0022-ordewell-mcp-server.md) | [0077](planner/0077-a-dependency-on-star-runs-a-task-after-every-other-task.md) |
 | [0076](planner/0076-an-installed-coding-agent-outranks-a-found-api-key.md) | An installed coding agent outranks a found API key unless the user chose the key's vendor | accepted | [0009](planner/0009-coding-agents-as-planners.md), [0038](routing/0038-runner-install-verdicts-expire.md) | — |
+| [0077](planner/0077-a-dependency-on-star-runs-a-task-after-every-other-task.md) | A dependency on "*" runs a task after every other task that does not come after it | accepted | [0072](planner/0072-a-long-dependency-chain-is-reviewed-once-by-the-planner.md) | — |
 
 ### planner-envelope/
 

@@ -2,6 +2,7 @@ import { flattenTasks, type Task } from './Task';
 import { checkOf } from './Loop';
 import { onOneLine, splitLines } from './lineBreaks';
 import { resolveTaskRef, taskRefOf, taskRefsOf, titledTaskRefOf } from '../services/TaskRefs';
+import { afterAllReader } from '../services/AfterAll';
 import { redactAgentText } from '../utils/redactSecrets';
 
 /*
@@ -740,12 +741,17 @@ export function handoffLines(handoff: HandoffDigest | StoredHandoff, taskName: H
 export function readableTaskIds(plan: readonly Task[], taskId: string): Set<string> {
   const tasks = flattenTasks(plan);
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const depsOf = afterAllReader(plan);
   const readable = new Set<string>([taskId]);
-  const pending = [...(byId.get(taskId)?.dependencies ?? [])];
+  const dependenciesOf = (id: string): readonly string[] => {
+    const task = byId.get(id);
+    return task ? depsOf(task) : [];
+  };
+  const pending = [...dependenciesOf(taskId)];
   for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
     if (readable.has(id)) continue;
     readable.add(id);
-    pending.push(...(byId.get(id)?.dependencies ?? []));
+    pending.push(...dependenciesOf(id));
   }
   for (const check of [byId.get(taskId), checkOf(tasks, taskId)]) {
     if (check?.loop) for (const id of [check.id, ...check.loop.body]) readable.add(id);

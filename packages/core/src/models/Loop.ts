@@ -1,5 +1,6 @@
 import { flattenTasksWithParents, type Task } from './Task';
 import type { SkipOrigin } from './SkipOrigin';
+import { AFTER_ALL } from '../services/AfterAll';
 
 /*
  * A loop (ADR-0045): a check that repeats with its fix until it passes. The
@@ -181,6 +182,10 @@ export function loopErrors(tasks: readonly Task[]): LoopError[] {
     }
     for (const dep of body.dependencies) {
       if (dep === check.id || check.dependencies.includes(dep) || bodyOwner.get(dep) === check) continue;
+      if (dep === AFTER_ALL) {
+        errors.push({ taskId: body.id, field: 'dependencies', message: `${where}, so it cannot depend on "${AFTER_ALL}": it depends only on "${check.title}", on what "${check.title}" depends on, or on other tasks of that body` });
+        continue;
+      }
       errors.push({ taskId: body.id, field: 'dependencies', message: `${where}, so it depends only on "${check.title}", on what "${check.title}" depends on, or on other tasks of that body; "${byId.get(dep)?.task.title ?? dep}" is none of these` });
     }
   }

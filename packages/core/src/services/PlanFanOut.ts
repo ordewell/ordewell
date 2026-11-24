@@ -1,6 +1,7 @@
 import * as path from 'path';
 import type { IFileSystem } from '../interfaces/IFileSystem';
 import { runsAsOps, type Task } from '../models/Task';
+import { afterAllReader } from './AfterAll';
 
 /**
  * A one-shot plan that fans out over code whose parts call each other (a
@@ -47,9 +48,10 @@ export interface FanOutShape {
 
 const NONE: FanOutShape = { wide: false, width: 0, gates: [], waits: new Map(), slices: [], closers: [], sliceEdges: 0, faults: [] };
 
-/** Every top-level task's ancestors and level, or null for a cycle. Dependencies on no task are left out. */
+/** Every top-level task's ancestors and level, "*" read (ADR-0077), or null for a cycle. Dependencies on no task are left out. */
 function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: Map<string, number> } | null {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const depsOf = afterAllReader(tasks);
   const anc = new Map<string, Set<string>>();
   const level = new Map<string, number>();
   const visiting = new Set<string>();
@@ -59,7 +61,7 @@ function graph(tasks: readonly Task[]): { anc: Map<string, Set<string>>; level: 
     visiting.add(t.id);
     const mine = new Set<string>();
     let deepest = 0;
-    for (const id of t.dependencies) {
+    for (const id of depsOf(t)) {
       const dep = byId.get(id);
       if (!dep) continue;
       if (!visit(dep)) return false;

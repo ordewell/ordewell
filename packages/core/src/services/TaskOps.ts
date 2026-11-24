@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { resolveTaskRef } from './TaskRefs';
 import { taskPlacement } from './PlanTree';
 import * as PlanGraph from './PlanGraph';
+import { AFTER_ALL } from './AfterAll';
 import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings, PlanParseError, TASK_OPS_ENVELOPE_KEY } from './JsonExtractor';
 import { reshapeRefusal } from './TaskEditValidator';
 import type { AssignmentAdjustment, AssignmentCatalog } from './TaskAssignment';
@@ -302,6 +303,8 @@ export function applyTaskOps(
     const bad: string[] = [];
     const liveFlat = flattenTasks(tasks);
     for (const d of Array.isArray(deps) ? deps : []) {
+      // Read where the plan's graph is, never written out here (ADR-0077).
+      if (d === AFTER_ALL) { ids.push(AFTER_ALL); continue; }
       const r = resolveRef(d, currentTasks, tasks, handleOwner, handleId, opIndex, earlierHandles);
       if ('error' in r) { bad.push(`${String(d)} (${r.error})`); continue; }
       if (!liveFlat.some((t) => t.id === r.id)) { bad.push(`${String(d)} (no longer exists in this batch)`); continue; }

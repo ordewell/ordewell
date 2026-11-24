@@ -1,5 +1,6 @@
 import { prepareTaskEdit, UPDATABLE_FIELDS } from './TaskEdit';
 import { subtreeIds } from './PlanTree';
+import { AFTER_ALL } from './AfterAll';
 import { startedEditRefusal } from './TaskEditValidator';
 import { NOT_STARTED } from '../taskRow/status';
 import { liveRunnerRefusal, resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog, type RunnerCatalog } from './TaskAssignment';
@@ -305,7 +306,7 @@ export class PlanEditor {
     // Left out, or null, it is an AI task, as createTask makes it.
     if (draft.type !== undefined && draft.type !== null && !isTaskType(draft.type)) throw new PlanEditError(`This task ${unknownTypeRefusal(draft.type)}`);
     const runner = draft.assignedRunner ?? plan.runners[0];
-    const dependencies = (draft.dependencies ?? []).filter((id) => this.store.get(id));
+    const dependencies = (draft.dependencies ?? []).filter((id) => id === AFTER_ALL || this.store.get(id));
     const discovered = (draft.type ?? 'ai') !== 'ai' ? undefined : await this.discover(runner);
     const written: Task = { ...createTask({ ...draft, assignedRunner: runner, dependencies }), taskMode: draft.taskMode };
     const catalog = this.assignmentCatalog(runner, discovered);
