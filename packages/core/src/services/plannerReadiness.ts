@@ -1,7 +1,8 @@
 import type { AiProvider, IConfig, PlannerBackendId } from '../interfaces/IConfig';
 import { CLI_PROVIDERS, getProviderMeta, isApiProvider, isCliProvider, runnerForProvider } from './ProviderRegistry';
 import { recordedRunnerAuth, runnerSignIn, type RunnerAuth } from './runnerAuth';
-import { describeSignIn, HEADLESS_CLI_SIGN_IN, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
+import { signedInInstalledAgent } from './InstalledPlanner';
+import { describeSignIn, describeSignInWays, HEADLESS_CLI_SIGN_IN, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
 
 /** What the preflight reads: the planner choice and whatever it needs to be reachable. */
 export type PlannerReadinessConfig = Pick<IConfig, 'aiProvider' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>;
@@ -15,7 +16,11 @@ export type PlannerNotReady =
   | { code: 'no_key'; provider: AiProvider; label: string; keyEnvVar: string }
   | { code: 'no_base_url'; provider: AiProvider; label: string; baseUrlEnvVar: string }
   | { code: 'no_model'; provider: AiProvider; label: string }
-  | { code: 'signed_out'; provider: PlannerBackendId; label: string; runner: string; signIn: RunnerSignIn };
+  | {
+    code: 'signed_out'; provider: PlannerBackendId; label: string; runner: string; signIn: RunnerSignIn;
+    /** An installed agent found signed in, which a switch to would plan at once (ADR-0076). */
+    signedIn?: { provider: PlannerBackendId; label: string };
+  };
 
 /** A runner's latest login verdict, read synchronously because every planner turn is judged that way. */
 export type RunnerAuthLookup = (runner: string) => RunnerAuth | undefined;
@@ -47,12 +52,17 @@ export function plannerNotReady(
     // manifest instead; one for a runner Ordewell does not ship has none to name.
     const signIn = verdict.signIn ?? runnerSignIn(runner);
     if (!signIn) return null;
+    const other = signedInInstalledAgent(provider);
+    const otherRunner = other ? runnerForProvider(other) : null;
+    // A verdict recorded since the probe (a refused turn) outranks what it found.
+    const switchable = other && otherRunner && auth(otherRunner)?.state !== 'signed-out' ? other : null;
     return {
       code: 'signed_out',
       provider,
       label: getProviderMeta(provider)?.label ?? provider,
       runner,
       signIn,
+      ...(switchable ? { signedIn: { provider: switchable, label: getProviderMeta(switchable)?.label ?? switchable } } : {}),
     };
   }
   if (!isApiProvider(provider)) return null;
@@ -139,7 +149,14 @@ function harnessPlannerNames(): string {
 export const PLANNER_ESCAPE_HINT = `or pick a coding agent with ${TERMINAL_UI_COMMANDS.pickPlanner}: it plans with no API key`;
 
 export function describePlannerNotReady(reason: PlannerNotReady, commands: PlannerCommandSyntax): string {
-  if (reason.code === 'signed_out') return `${describeSignIn(reason.signIn, commands)} Then try again.`;
+  if (reason.code === 'signed_out') {
+    if (!reason.signedIn) return `${describeSignIn(reason.signIn, commands)} Then try again.`;
+    // A signed-in agent is the shorter way on than a login, so it comes first.
+    const ways = describeSignInWays(reason.signIn, commands);
+    const login = ways ? `, or ${ways[0].toLowerCase()}${ways.slice(1, -1)}` : '';
+    const pick = commands.pickPlanner.replace('<id>', reason.signedIn.provider);
+    return `${reason.signIn.label} is not signed in. ${reason.signedIn.label} is signed in: switch with ${pick}${login}. Then try again.`;
+  }
   if (reason.code === 'no_model') {
     // An API planner has no default model on purpose, so the refusal names
     // the one step that ends it. The TUI, the desktop app and VS Code pick the

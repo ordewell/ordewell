@@ -10,7 +10,7 @@ import { DEFAULT_MAX_PARALLEL, parseMaxParallel } from '../utils/maxParallel';
 import { vendorApiKeyIn, vendorBaseUrlIn } from '../services/apiProviders';
 import { SettingsService } from '../services/SettingsService';
 import { parseNotifyCommand } from '../services/escalationNotifier';
-import { recordedInstalledPlanner } from '../services/InstalledPlanner';
+import { installedAgentSignedOut, recordedInstalledPlanner } from '../services/InstalledPlanner';
 import { recordedRunnerAuth } from '../services/runnerAuth';
 
 export function normalizeGeminiModel(id: string): string {
@@ -39,9 +39,14 @@ function envDetectedProvider(): AiProvider | null {
 /**
  * Whether the agent's own status command last said the user is signed out.
  * Only that verdict counts, as the preflight reads it: unknown says nothing.
+ * The probe that picked the default is asked first, since every host's
+ * installation records sign-ins under its workspace, which this config has no
+ * name for; a verdict recorded unscoped (a host planning in its own cwd) counts too.
  */
 function agentSignedOut(agent: PlannerBackendId | null): boolean {
-  const runner = agent ? runnerForProvider(agent) : null;
+  if (!agent) return false;
+  if (installedAgentSignedOut(agent)) return true;
+  const runner = runnerForProvider(agent);
   return runner ? recordedRunnerAuth(runner)?.state === 'signed-out' : false;
 }
 

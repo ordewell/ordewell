@@ -418,3 +418,4 @@ this backend should understand they are trading speed for not holding a key.
 - 2026-11-20 — Pi plans, over its RPC mode; it has no in-turn agents, so it delegates through research tasks (#78).
 - 2026-11-16 — only a runner that plans keeps off the vendors' ids; the built-in runner's runners take their vendor's id by design and never plan ([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)).
 - 2026-11-21 — a usable installed coding agent plans ahead of a found vendor key unless the user named a planner or saved a model for that key's vendor; a first screen says when a key is passed over ([ADR-0076](0076-an-installed-coding-agent-outranks-a-found-api-key.md)).
+- 2026-11-24 — the detected planner is the first usable installed agent not known to be signed out, or the first usable one when every one is ([ADR-0076](0076-an-installed-coding-agent-outranks-a-found-api-key.md)).

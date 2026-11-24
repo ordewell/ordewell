@@ -42,7 +42,16 @@ order:
    which keeps the vendor the found key selects; or Gemini's own model setting
    (`GEMINI_MODEL`, VS Code's `geminiModel`) beside a Gemini key.
 3. The installed coding agent detection found (ADR-0009, ADR-0038), unless its
-   own status command last said the user is signed out.
+   own status command last said the user is signed out. Detection records the
+   first usable agent, in registry order, that is signed in or whose sign-in
+   could not be checked; an agent known to be signed out is recorded only when
+   every installed agent is. Usability is unchanged (a signed-out agent stays
+   usable and listed, ADR-0052): only which usable agent is the default moves,
+   and a status command too slow to answer reads as not checked, so it never
+   hands the default to a later agent. The sign-in verdicts that probe read are
+   kept beside its answer (`installedAgentSignedOut`), since every host's
+   installation records a verdict under its workspace and `detectProvider` has
+   no workspace to look one up by.
 4. A vendor whose key or endpoint is found, environment first.
 5. `openrouter`, so the preflight names what is missing.
 
@@ -71,15 +80,22 @@ refusal names the exact step on each surface: `/planner` and a model for that
 vendor in the terminal UI, the desktop app and VS Code; `ordewell models`, then
 `ordewell model set <id>`, from the command line.
 
+A harness planner refused as signed out names, when detection found one, an
+installed agent that is signed in, and the surface's planner control, ahead of
+the way back in: "Claude Code is not signed in. Codex is signed in: switch with
+/planner, or sign in with /login claude-code, or run claude auth login. Then
+try again." (`describePlannerNotReady`).
+
 ## Key properties
 
 - **No change for a user who already plans with a vendor.** A persisted pick is
   `AI_PROVIDER` or the VS Code setting, which come first; a saved model for the
   key's vendor keeps that vendor. Only a key with nothing chosen beside it,
   which could not plan before because it had no model, moves to the agent.
-- **A signed-out agent does not take planning from a key.** The same verdict
-  the preflight refuses on (ADR-0052) lets the key's vendor plan; an unknown
-  verdict says nothing.
+- **A signed-out agent does not take planning from a key, nor from a signed-in
+  agent.** The same verdict the preflight refuses on (ADR-0052) passes the
+  default to a later installed agent that is not signed out, and otherwise lets
+  the key's vendor plan; an unknown verdict says nothing.
 - **Routing stays memoized on what it reads.** `routedProvider`'s basis adds
   the agent's sign-in verdict, whether the configured model is the agent's
   remembered pick and Gemini's model setting, so a long-lived config answers what a fresh one
@@ -132,3 +148,4 @@ the desktop host's messages.
 ## History
 
 - 2026-11-21 — accepted and implemented.
+- 2026-11-24 — detection's default skips an installed agent known to be signed out for one signed in or unchecked; the signed-out check reads that probe's verdicts, so a key takes over in production; the signed-out refusal names a signed-in agent and `/planner`.
