@@ -796,7 +796,7 @@ export class Session {
     skills: () => this.workspaceSkills().listSkills(),
     turnId: () => this.conversation.currentTurnId,
     recordSkillLoad: (skill) => this.conversation.recordPlannerSkill(skill),
-    liveCatalog: () => this.liveCatalog(),
+    liveCatalog: (runners) => this.liveCatalog(runners),
     checkPlan: async (tasks) => {
       // Discovered first: a model is resolved against what the runner was found to offer.
       await this.liveCatalog();
@@ -2060,8 +2060,8 @@ export class Session {
   }
 
   /** What a planner may assign right now; see {@link SessionCatalog.live}. */
-  liveCatalog(): Promise<TaskQueryCatalog> {
-    return this.catalog.live();
+  liveCatalog(runners?: readonly RunnerId[]): Promise<TaskQueryCatalog> {
+    return this.catalog.live(runners);
   }
 
   get planState(): LegacyPlanState | null { return this.plan; }

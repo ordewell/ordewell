@@ -112,8 +112,8 @@ A runner-facing tool joins the task side on the same mechanism.
   deadline and still reports its own `mcpToolCall` item (codex-cli 0.171.0,
   read in its source; its documentation's 10s and 60s are stale). A planner
   thread's `ordewell` server is given `tool_timeout_sec = 3600`: Ordewell's own
-  planner tools end themselves sooner (`run_command` at 120s, model discovery
-  behind `list_runners` at 90s), but `run_command` and `fetch` may first ask a
+  planner tools end themselves sooner (`run_command` at 120s, a wait on model
+  discovery at 10s, L4), but `run_command` and `fetch` may first ask a
   person's approval inside the call, which Codex cannot see. A task thread's
   server sets none, so a Codex task's `checkpoint` is held to the 300s default.
 
@@ -306,8 +306,26 @@ planner tools are recorded here as an explicit entry against both:
   runner's instead: nobody changes a setting under a plan written at once, each
   call would be charged its whole context, and `submit_plan` refuses what has gone
   stale ([ADR-0057](../supervision/0057-information-moves-by-reference.md) R5).
+- **A read waits on no other runner's discovery, and on none for long (L4).**
+  `list_runners` answers no models and discovers none; `list_models` discovers
+  only the runner it names. A read of every runner's models (`submit_plan`'s
+  and `edit_plan`'s check, `task_query`'s catalog) and planning's start wait at
+  most 10s (`DISCOVERY_WAIT_MS`), then answer with what is known. Each runner's
+  discovery runs apart and goes on past the wait, and what it finds is kept for
+  the next read. Until then the runner reads as one discovery found nothing
+  for: an assignment to it is accepted as written and the runner validates
+  last, and `list_models` says its models are still being listed. The planning
+  agent's own catalog is still waited on whole, since its model is judged by
+  it. One CLI that hangs while listing its models took minutes per read
+  (OpenCode runs three commands, each retried once at 45s), and a Codex planner
+  ended its turn with no plan.
 
 ## Considered options
+
+- **Every read waits for every enabled runner's discovery.** A read then
+  answers with each runner's whole catalog, but one slow or hung CLI holds every
+  planner call and planning's start for as long as it takes, past a planner's
+  tool deadline, and it is the user's agent the planner never asked about.
 
 - **Two servers, one for tasks and one for the planner.** Two listeners, two
   lifecycles and two injection paths, for an isolation the token already
@@ -426,3 +444,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-20 — S1: Pi uses the server, through Ordewell's own per-process extension, as a task runner and a planner.
 - 2026-11-21 — a change task's token gains `wait_for` (ADR-0074).
 - 2026-11-24 — T4: each planner call is logged, and a turn whose Ordewell calls all failed ends with a notice. T5: Codex's tool deadline checked against 0.171.0's source (300s, fixed, not reset by progress; the 200s call of 2026-10-05 fit inside it), and a planner thread's server sets an hour.
+- 2026-11-24 — L4: `list_runners` waits on no discovery and `list_models` on its runner's alone; any other read, and planning's start, waits at most 10s and answers with what is known. T5's figure follows.
