@@ -8,6 +8,40 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.11] - 2026-11-24
+
+### Added
+
+- **A task can depend on `"*"` to run after everything else in the plan.** A
+  task whose dependency is `"*"` runs after every other task that does not
+  itself come after it, so a final check, a summary or a merge-up step no
+  longer needs a hand-kept list of every task id. Tasks added later are picked
+  up on their own. A finished task that is retried keeps its landed work, and
+  a retried or running `"*"` task is read from the plan, so reverting work it
+  now stands on is refused as a live dependent, as when it names that task.
+  The CLI, the task view, the desktop graph and task tab, the planner's tool
+  and prompt text and the handoff all read `"*"` (ADR-0077).
+- **The effort actually sent is recorded beside the planned one.** Each
+  attempt's usage keeps the thinking effort sent to the model next to the one
+  the plan asked for, and notes when the two differ. It is recorded once the
+  model's reply begins, so a request that fails or stalls before any data
+  claims no effort.
+
+### Changed
+
+- **Planned tasks default to medium reasoning effort.** The planner is told to
+  set `thinkingEffort` to medium unless a task needs more or less. A model
+  that does not offer medium gets the nearest level it offers, the higher one
+  on a tie.
+- **The plan review also catches walls of setup tasks.** Besides a long chain,
+  the one-shot review of a plan now triggers when most parallel tasks wait on
+  more than 5 setup tasks before them (ADR-0072).
+- **The opening task's note is clearer about what it checks.** It names its two
+  checks, building or importing the project, and leaves the full suite out of
+  them. It mentions a closing check only when the plan has one.
+- The Commit0 and planner-eval bench harnesses (development only) read the
+  wall-of-setup review and the `"*"` dependency.
+
 ## [0.14.10] - 2026-11-23
 
 ### Changed
@@ -5240,7 +5274,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.10...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.11...HEAD
+[0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
 [0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
