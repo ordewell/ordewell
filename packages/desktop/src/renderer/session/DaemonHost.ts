@@ -271,8 +271,15 @@ export class DaemonHost {
   private snapshot: SessionSnapshotView;
   private stream: SessionStream | null = null;
   private unsubscribe: (() => void) | null = null;
-  /** A session the planner is starting: the daemon has no file for it until its first turn returns. */
+  /**
+   * A session the planner is starting: the chat draws its first turn from the
+   * socket, and a load takes only the run. The daemon saves it as soon as it
+   * admits the first message, so the goal is the session's from the turn's
+   * start ({@link firstMessage}), and stays its own when that turn fails.
+   */
   private fresh = true;
+  /** The first message of the fresh session, while the daemon has it: a Stop reaches the daemon, and its turn's start names the goal. */
+  private firstMessage: string | null = null;
   /**
    * Planner turns in flight, by the session each was asked in: a switch does
    * not end the last session's turn, and its end must not count against the
@@ -958,7 +965,7 @@ export class DaemonHost {
         return;
       case 'stopResearch':
         this.view.conversation.stop();
-        if (!this.fresh) await callDaemon('plans.stopPlanning', { sessionId: this.sessionId });
+        if (!this.fresh || this.firstMessage !== null) await this.stopPlanning(this.sessionId);
         return;
       case 'newSession':
         this.newSession();
@@ -1064,7 +1071,15 @@ export class DaemonHost {
         // The chat sends the runners its pills have on, including a click still
         // being saved; the daemon's list is only the fallback (as VS Code does).
         const chosen = runners ?? this.snapshot.state.enabledRunnerIds;
-        response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, surface: 'desktop', ...(chosen.length ? { runners: [...chosen] } : {}) });
+        this.firstMessage = text;
+        try {
+          response = await callDaemon('plans.converseStart', { sessionId, workspace: this.workspace }, { goal: text, surface: 'desktop', ...(chosen.length ? { runners: [...chosen] } : {}) });
+        } catch (error) {
+          if (sessionId === this.sessionId) await this.firstTurnFailed(sessionId, text, error);
+          throw error;
+        } finally {
+          if (sessionId === this.sessionId) this.firstMessage = null;
+        }
         if (sessionId !== this.sessionId) return;
         this.fresh = false;
         this.update({ goal: text });
@@ -1078,6 +1093,35 @@ export class DaemonHost {
       outcome = { ok: false, ...(error instanceof DaemonRefusal ? { code: error.code } : {}) };
     });
     return outcome;
+  }
+
+  /**
+   * A fresh session's first turn failed. Refused before any turn started (the
+   * planner not ready), nothing was sent and no session came of it: the chat
+   * gives the message back. Otherwise the daemon saved the session as it
+   * admitted the goal and keeps it, goal and failure, so it is this window's
+   * session from now on; a refusal that came before admission (no runner
+   * enabled, say) left the daemon none, which only it can say.
+   */
+  private async firstTurnFailed(sessionId: string, goal: string, error: unknown): Promise<void> {
+    if (error instanceof DaemonRefusal && error.code === 'planner_not_ready') return;
+    try {
+      await callDaemon('sessions.get', { id: sessionId, workspace: this.workspace });
+    } catch {
+      return;
+    }
+    if (sessionId !== this.sessionId) return;
+    this.fresh = false;
+    this.update({ goal });
+  }
+
+  /** Stop the planner's turn on the daemon. One it holds no session for has nothing to stop: the goal never reached it. */
+  private async stopPlanning(sessionId: string): Promise<void> {
+    try {
+      await callDaemon('plans.stopPlanning', { sessionId });
+    } catch (error) {
+      if (!(error instanceof DaemonRefusal && error.code === 'session_not_found')) throw error;
+    }
   }
 
   /**
@@ -1814,6 +1858,8 @@ export class DaemonHost {
       this.rejoinBackoff.reset();
       const wasGenerating = this.generating;
       stream.receive(event.frame);
+      // The daemon saved the session as it admitted the first message, before the turn started: it is listed now.
+      if (event.frame.type === 'planner_turn_started' && this.fresh && this.firstMessage !== null && this.snapshot.goal !== this.firstMessage) this.update({ goal: this.firstMessage });
       this.toTaskLogs(event.frame);
       // A turn's ended frame can trail the answer of the route that ran it, so
       // the frame releases what that answer could not (a Retry compaction's).

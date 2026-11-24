@@ -99,6 +99,10 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
   };
 }
 
+/** The user's messages the chat draws. */
+const userBlocks = (conversation: ConversationViewHost): string[] =>
+  conversation.blocks.flatMap((b) => (b.type === 'message' && b.role === 'user' ? [b.text] : []));
+
 describe('ChatSessionHost', () => {
   it('holds a prompt typed while a turn holds the session, and sends one typed after it as the user\'s', async () => {
     const h = harness();
@@ -116,6 +120,40 @@ describe('ChatSessionHost', () => {
       { text: 'and add tests', turn: { now: false } },
     ]);
     expect(h.userNotes()).toEqual(['ship it', 'and add tests']);
+  });
+
+  // Refused before any turn started (planner_not_ready), nothing was sent:
+  // the message is not left drawn as the user's, and nothing has to be typed again.
+  it('takes a message refused before its turn back off the chat and gives it to the composer', async () => {
+    const h = harness(() => ({ ok: false, code: 'planner_not_ready' }));
+
+    await h.chat.send('Add a greeting module', true);
+
+    expect(h.unsent()).toEqual(['Add a greeting module']);
+    expect(userBlocks(h.conversation)).toEqual([]);
+  });
+
+  it('gives back what was held behind a refused message with it, and sends none of it into the same refusal', async () => {
+    const h = harness((text) => {
+      if (text === 'Add a greeting module') h.chat.hold('in Python');
+      return { ok: false, code: 'planner_not_ready' };
+    });
+
+    await h.chat.send('Add a greeting module', true);
+
+    expect(h.sent()).toEqual([['Add a greeting module', false]]);
+    expect(h.unsent()).toEqual(['Add a greeting module\nin Python']);
+    expect(h.held()).toEqual([]);
+    expect(userBlocks(h.conversation)).toEqual([]);
+  });
+
+  it('leaves a message whose turn started and then failed where it was drawn', async () => {
+    const h = harness(() => ({ ok: false }));
+
+    await h.chat.send('Add a greeting module', true);
+
+    expect(h.unsent()).toEqual([]);
+    expect(userBlocks(h.conversation)).toEqual(['Add a greeting module']);
   });
 
   it('answers a button\'s message at once, neither held nor shown as the user\'s', async () => {

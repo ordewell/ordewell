@@ -10,6 +10,8 @@ import type { HostToWebview } from '../shared/protocol';
 
 const FLUSH_MS = 30;
 
+const isUserMessage = (block: DisplayBlock): boolean => block.type === 'message' && block.role === 'user';
+
 export type SavedConversation = Pick<SurfacePlan, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'> | Pick<LegacyPlanState, 'conversationHistory' | 'researchLog' | 'plannerUsage' | 'pendingTurns'>;
 
 /**
@@ -123,6 +125,24 @@ export class ConversationViewHost {
    */
   giveBack(text: string): void {
     if (text.trim()) this.post({ type: 'promptUnsent', text });
+  }
+
+  /**
+   * A message the planner refused before any turn started (planner_not_ready):
+   * it was never sent, so it is taken back off the chat rather than left drawn
+   * as the user's, and goes back to the composer with what was held behind it,
+   * above anything typed since, so none of it is sent into the same refusal
+   * and nothing has to be typed again (as the TUI's giveBackUnsent does).
+   */
+  unsent(text: string): void {
+    const { blocks } = this.view;
+    let at = blocks.length - 1;
+    while (at >= 0 && !isUserMessage(blocks[at])) at--;
+    const drawn = blocks[at];
+    if (drawn?.type === 'message' && drawn.text === text) this.show({ ...this.view, blocks: [...blocks.slice(0, at), ...blocks.slice(at + 1)] });
+    const held = unsendAll(this.held);
+    if (held) this.showHeld(held.rest);
+    this.giveBack(held ? aheadOfDraft(text, held.text) : text);
   }
 
   /**

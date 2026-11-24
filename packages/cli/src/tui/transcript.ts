@@ -29,6 +29,22 @@ export function say(state: TuiState, role: LocalEntry['role'], text: string, fol
   return said.conversation.nextId > state.conversation.nextId ? { ...said, scroll: 0 } : said;
 }
 
+/**
+ * The user's latest line of `text` taken back off the pane: the daemon refused
+ * it before any turn started, so it was never sent, and is not left drawn as
+ * if it had been.
+ */
+export function unsay(state: TuiState, text: string): TuiState {
+  const { blocks } = state.conversation;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i];
+    if (block.type !== 'message' || block.role !== 'user') continue;
+    if (block.text !== text) return state;
+    return { ...state, conversation: { ...state.conversation, blocks: [...blocks.slice(0, i), ...blocks.slice(i + 1)] } };
+  }
+  return state;
+}
+
 /** A planner message from the session, folded into the conversation. */
 export function hear(state: TuiState, message: ConversationInput): TuiState {
   return show(state, followTurn(state.conversation, state.turnGate, message));

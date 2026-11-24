@@ -1246,8 +1246,10 @@ export class PlannerConversation {
    * Open the conversation on the host's fresh plan: the goal is its first
    * message. `prepare` (discovery) runs inside the turn, so a stop reaches it.
    */
-  async start(goal: SkillInvocation, prepare: () => Promise<ConversationOpening>, signal?: AbortSignal): Promise<LegacyPlanState> {
+  async start(goal: SkillInvocation, prepare: () => Promise<ConversationOpening>, signal?: AbortSignal, onCommit?: () => void): Promise<LegacyPlanState> {
     return this.userTurn('supersede', goal, signal, async (userTurn) => {
+      // The goal was saved as it was sent: the save that lands it in the transcript drops it from there.
+      userTurn.onCommit = onCommit;
       const opening = await prepare();
       this.assertCurrent(userTurn);
       // Held like any turn's input: an opening that never lands — a usage
@@ -1272,6 +1274,19 @@ export class PlannerConversation {
       this.assertNotLimited(settleable, userTurn);
       return this.settle(settleable, userTurn);
     });
+  }
+
+  /**
+   * An opening that ended without landing — it failed, or was stopped before
+   * the planner answered — keeps its goal as the conversation's first
+   * message, and the failure after it: the session was saved when the goal
+   * was sent, and reads as sent and unanswered, not as empty. A later turn
+   * replays the goal from here; the failure it never does. Call inside the
+   * host's mutation ritual.
+   */
+  recordUnansweredOpening(goal: SkillInvocation, timestamp: string, failure?: string): void {
+    this.appendEntries(this.userEntries(goal, timestamp));
+    if (failure) this.recordFailure(failure);
   }
 
   /**

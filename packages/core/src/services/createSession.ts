@@ -2278,6 +2278,8 @@ export class Session {
     const pending: PendingOpening = { held: [] };
     this.opening = pending;
     let opened: Promise<{ landed: LegacyPlanState; effects: TurnEffects }>;
+    let draft: LegacyPlanState | null = null;
+    const sent = this.resolveSkillInvocation(goal);
     try {
       // Wrapped: what this waits on is the opening's admission, not the opening.
       ({ opened } = await this.gate.admit('goal', options?.signal, () => {
@@ -2288,8 +2290,11 @@ export class Session {
         this.beginFreshPlanForTurn();
 
         const now = new Date().toISOString();
-        this.plan = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
-        return { opened: this.openTurn(() => this.conversation.start(this.resolveSkillInvocation(goal), () => this.conversationOpening(chosenRunners), options?.signal)) };
+        draft = { tasks: [], generatedAt: now, status: 'draft', runners: chosenRunners, lastUpdated: now };
+        this.plan = draft;
+        // Admitted, the goal is sent: saved now, so every surface lists the session while its first turn runs (ADR-0029).
+        this.turns.opened({ source: 'user', ...sent });
+        return { opened: this.openTurn(() => this.conversation.start(sent, () => this.conversationOpening(chosenRunners), options?.signal, () => this.turns.openingTaken())) };
       }));
     } catch (err) {
       // What was sent behind an opening that never opened shares its end: a
@@ -2308,17 +2313,38 @@ export class Session {
       if (this.orchestrator.startsPending) await this.saves.control(() => this.orchestrator.tick());
       return landed;
     } catch (err) {
-      if (err instanceof PlannerContextPausedError && this.plan) {
-        this.turns.waitOnPause({ source: 'user', ...this.resolveSkillInvocation(goal) });
-        return this.plan;
+      // A newer goal or another session replaced this one's plan: what this opening sent is not that plan's.
+      const plan = this.plan;
+      if (!plan || plan !== draft || this.opening !== pending) throw err;
+      if (err instanceof PlannerContextPausedError) {
+        this.turns.waitOnPause();
+        return plan;
       }
-      if (!(err instanceof PlannerUsageLimitError) || !this.plan) throw err;
-      // A goal its own submit_plan already answered is not sent again to be planned twice (ADR-0022 P2).
-      if (!err.answered) this.turns.waitOnLimit({ source: 'user', ...this.resolveSkillInvocation(goal) });
-      return this.plan;
+      if (err instanceof PlannerUsageLimitError) {
+        this.turns.waitOnLimit(err.answered === true);
+        return plan;
+      }
+      this.keepUnansweredOpening(err);
+      throw err;
     } finally {
       if (this.opening === pending) this.opening = null;
     }
+  }
+
+  /**
+   * The opening failed, or was stopped, after its goal was admitted: the
+   * session it was saved in stays, its goal the first message and the
+   * failure after it, for the user to read and answer (a reply replays the
+   * goal), on every surface and on reload.
+   */
+  private keepUnansweredOpening(err: unknown): void {
+    const goal = this.turns.openingEnded();
+    if (!goal) return;
+    const failure = err instanceof PlannerTurnStoppedError ? undefined : (err instanceof Error ? err.message : String(err)) || 'The planner\'s first turn failed.';
+    this.mutatePlan(() => {
+      this.conversation.recordUnansweredOpening({ text: goal.text, skills: goal.skills ?? [] }, goal.timestamp, failure);
+      return true;
+    });
   }
 
   /**

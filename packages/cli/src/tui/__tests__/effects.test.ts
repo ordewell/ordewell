@@ -553,16 +553,47 @@ describe('planning', () => {
   it('clears the optimistic session id when the very first planning call fails', async () => {
     // A refusal the daemon answered leaves no conversation a reply could
     // continue, so keeping the id would route every following message to nothing.
-    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key', 400)) });
+    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key', 400)), getSession: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })), });
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
 
     expect(types(h.actions)).toContain('sessionCleared');
     expect(types(h.actions)).toContain('failed');
   });
 
+  // The daemon saved the session as it admitted the goal: a first turn that
+  // started and then failed leaves it, goal and failure, for a reply.
+  it('keeps the session when the daemon holds it after its first turn failed', async () => {
+    const h = harness({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('the planner crashed', 500)) });
+    await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
+
+    expect(h.api.getSession).toHaveBeenCalledWith('session-new', expect.anything());
+    expect(types(h.actions)).not.toContain('sessionCleared');
+    expect(h.actions).toContainEqual({ type: 'failed', message: 'the planner crashed', turn: true, sessionId: 'session-new' });
+    expect(h.daemon.sockets[0].close).not.toHaveBeenCalled();
+  });
+
+  it('lets go of a goal refused because the planner is not ready, and gives its text back', async () => {
+    const refusal = new DaemonRefusal('Claude Code is not signed in.', 409, { code: 'planner_not_ready' });
+    const h = harness({ startConversation: vi.fn().mockRejectedValue(refusal) });
+    await runEffect({ type: 'startConversation', goal: 'Add a flag' }, h.deps);
+
+    expect(h.api.getSession).not.toHaveBeenCalled();
+    expect(types(h.actions)).toContain('sessionCleared');
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', code: 'planner_not_ready', unsent: 'Add a flag', turn: true }));
+  });
+
+  it('gives back a later message refused because the planner is not ready', async () => {
+    const refusal = new DaemonRefusal('Codex is not signed in.', 409, { code: 'planner_not_ready' });
+    const h = harness({ sendConversationMessage: vi.fn().mockRejectedValue(refusal) });
+    await runEffect({ type: 'sendMessage', sessionId: 's1', message: 'Yes' }, h.deps);
+
+    expect(h.actions).toContainEqual(expect.objectContaining({ type: 'failed', code: 'planner_not_ready', unsent: 'Yes', sessionId: 's1' }));
+  });
+
   it('stops following a session that failed to start, even when planning fails', async () => {
     const h = harness({
       startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('no key', 400)),
+      getSession: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })),
     });
 
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
@@ -2924,7 +2955,7 @@ describe('following the session', () => {
   });
 
   it('drops the follow of a first turn the daemon never registered', async () => {
-    const h = following({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('planner down', 500)) });
+    const h = following({ startConversation: vi.fn().mockRejectedValue(new DaemonRefusal('planner down', 500)), getSession: vi.fn().mockRejectedValue(new DaemonRefusal('Session not found', 404, { code: 'session_not_found' })), });
     await runEffect({ type: 'startConversation', goal: 'ship it' }, h.deps);
 
     expect(h.follows[0].close).toHaveBeenCalled();
