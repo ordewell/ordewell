@@ -5,7 +5,7 @@ import { ApiClient } from '../apiClient';
 import { createApprovalHandler } from '../approvals';
 import { createStepLog, type LogLine } from './researchLog';
 import type { SerializedTask, DiscoveredModel } from '@ordewell/core';
-import { costText, formatTokenCount, loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
+import { AFTER_ALL, AFTER_ALL_TEXT, costText, formatTokenCount, loopRowParts, mintSessionId, scriptTaskText, taskOrderLabel, taskRowView } from '@ordewell/core';
 import type { PlanBody, WsEvent } from '../apiClient';
 import { fail, headlessPlannerRefusal, headlessSignedOut, lostReplyHint } from './shared';
 
@@ -161,7 +161,7 @@ function printPlan(plan: PlanBody, sessionId: string, runners: string[], models:
 
   for (const t of tasks) {
     const typeIcon = t.type === 'user' ? '[MAN]' : t.type === 'script' ? '[SCR]' : t.ops ? '[OPS]' : t.research ? '[RES]' : '[ AI]';
-    const deps = t.dependencies?.length ? ` ← ${t.dependencies.join(', ')}` : '';
+    const deps = t.dependencies?.length ? ` ← ${t.dependencies.map((d) => (d === AFTER_ALL ? AFTER_ALL_TEXT : d)).join(', ')}` : '';
     console.log(`  ${taskOrderLabel(t).padStart(2)}. ${typeIcon} ${t.title}${modelSuffix(t)}${deps}`);
     // What the user approves and what runs: the body as the plan holds it, not a summary.
     if (t.type === 'script') {

@@ -1,5 +1,6 @@
 import { titledTaskRef, titledTaskRefOf } from '../services/TaskRefs';
 import { checkOf, type TaskLoop } from '../models/Loop';
+import { AFTER_ALL, AFTER_ALL_TEXT } from '../services/AfterAll';
 
 interface Named {
   id: string;
@@ -9,9 +10,9 @@ interface Named {
   loop?: TaskLoop;
 }
 
-/** Each id as "#N title", subtasks dotted, by the plan's tree; one it no longer holds stays a bare id. */
+/** Each id as "#N title", subtasks dotted, by the plan's tree, "*" in words (ADR-0077); one it no longer holds stays a bare id. */
 export function titledRefs(ids: readonly string[], tasks: readonly Named[]): string[] {
-  return ids.map((id) => titledTaskRefOf(tasks, id) ?? id);
+  return ids.map((id) => (id === AFTER_ALL ? AFTER_ALL_TEXT : titledTaskRefOf(tasks, id) ?? id));
 }
 
 /**

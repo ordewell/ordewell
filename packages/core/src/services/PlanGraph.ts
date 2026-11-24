@@ -1,5 +1,6 @@
 import { renumberTasks, waitsMidAttempt, type Task } from '../models/Task';
 import { subtreeIds } from './PlanTree';
+import { AFTER_ALL, afterAllReader } from './AfterAll';
 
 /**
  * What the plan's edges become when tasks leave it or are swapped for others,
@@ -93,14 +94,22 @@ function isPinned(t: Task): boolean {
  * started. A dependency outside the list (a task of another level) constrains
  * nothing here. Assumes an acyclic graph (the caller checks first). `moves`
  * says what moved, as `"B" #2→#1, "A" #1→#3`, or is null when nothing did.
+ *
+ * A task that depends on "*" goes after what it stands for (ADR-0077), so a
+ * closing check follows a task added after it. A pinned one keeps only what
+ * it names: work added once it has started or finished is not work it ran
+ * after, and moving it is what pinning refuses.
  */
 export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | null } | { error: string } {
+  const read = afterAllReader(tasks);
+  const waits = new Map(tasks.map((t) => [t.id, isPinned(t) ? t.dependencies.filter((d) => d !== AFTER_ALL) : read(t)]));
+  const depsOf = (t: Task): readonly string[] => waits.get(t.id)!;
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const placed = new Set<string>();
   const movable = tasks.filter((t) => !isPinned(t));
   const result: Task[] = [];
   const blockerOf = (t: Task): Task | undefined => {
-    const id = t.dependencies.find((d) => byId.has(d) && !placed.has(d));
+    const id = depsOf(t).find((d) => byId.has(d) && !placed.has(d));
     return id ? byId.get(id) : undefined;
   };
   const place = (t: Task) => { result.push(t); placed.add(t.id); };
@@ -133,7 +142,7 @@ export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | nul
       for (const t of left) {
         const d = due.get(t.id);
         if (d === undefined) continue;
-        for (const id of t.dependencies) {
+        for (const id of depsOf(t)) {
           if (!byId.has(id) || placed.has(id)) continue;
           if ((due.get(id) ?? Infinity) > d - 1) { due.set(id, d - 1); owner.set(id, owner.get(t.id)!); changed = true; }
         }
@@ -143,7 +152,7 @@ export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | nul
     for (let at = result.length; at < tasks.length; at++) {
       let best: Task | undefined;
       for (const t of left) {
-        if (done.has(t.id) || t.dependencies.some((d) => byId.has(d) && !done.has(d))) continue;
+        if (done.has(t.id) || depsOf(t).some((d) => byId.has(d) && !done.has(d))) continue;
         if (!best || (due.get(t.id) ?? Infinity) < (due.get(best.id) ?? Infinity)) best = t;
       }
       if (!best || (due.get(best.id) ?? Infinity) < at) { late = best && owner.get(best.id); return false; }
@@ -155,13 +164,13 @@ export function repairOrder(tasks: Task[]): { tasks: Task[]; moves: string | nul
   // dependency its refusal names, since a later-listed one is what it cannot be kept ahead of.
   const listedAfter = (pin: Task): Task | undefined => {
     const seen = new Set<string>();
-    const queue = [...pin.dependencies];
+    const queue = [...depsOf(pin)];
     for (let i = 0; i < queue.length; i++) {
       const dep = byId.get(queue[i]);
       if (!dep || seen.has(dep.id)) continue;
       seen.add(dep.id);
       if (slot.get(dep.id)! > slot.get(pin.id)!) return dep;
-      queue.push(...dep.dependencies);
+      queue.push(...depsOf(dep));
     }
     return undefined;
   };

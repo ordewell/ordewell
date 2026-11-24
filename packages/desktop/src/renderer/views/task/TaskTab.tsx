@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import type { AttemptUsage, SurfaceTask, TaskType } from '@ordewell/core';
-import { taskRowView, titledRefs, titledTaskRefOf, usageText, walkPlan } from '@ordewell/core/plan-utils';
+import { AFTER_ALL, AFTER_ALL_TEXT, taskRowView, titledRefs, titledTaskRefOf, usageText, walkPlan } from '@ordewell/core/plan-utils';
 import { checkLabel, TaskHandoff, TaskLogApp, TaskLogBridgeContext, verdictSummary } from '@ordewell/ui';
 import {
   Button, IconButton, RunnerBadge, RunnerGlyph, StatusIndicator, Tabs, runnerName as nameOf, statusLineOf, statusOf,
@@ -119,6 +119,8 @@ function TaskLinks({ label, ids, labels, host }: { label: string; ids: readonly 
     <span className="session-task-links" aria-label={label}>
       <span aria-hidden="true">{label === 'Depends on' ? '⇠' : '⇢'}</span>
       {ids.map((id) => {
+        // "*" names no one task to link to (ADR-0077).
+        if (id === AFTER_ALL) return <span key={id} className="session-task-link">{AFTER_ALL_TEXT}</span>;
         const placed = labels.get(id);
         return placed && (
           <button key={id} type="button" className="session-task-link" title={`#${placed.label} ${placed.title}`}

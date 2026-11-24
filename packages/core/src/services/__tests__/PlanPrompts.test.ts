@@ -998,8 +998,8 @@ describe('the strategy step and the context rules (#108)', () => {
     const rules = section(p, 'WHO EXPLORES:');
     expect(rules).toMatch(/Stop when you can decide the next step, not when you understand the whole architecture/);
     expect(rules).toMatch(/self-contained brief, since a task never sees this conversation: its goal, its inputs, what to report back, and how its result will be checked/);
-    expect(rules).toMatch(/Plan the integration step/);
-    expect(rules).toMatch(/prefer evidence you can check .* over a task's own word/);
+    expect(rules).toMatch(/Plan the integration step to depend on "\*"/);
+    expect(rules).toMatch(/prefer evidence you can check .* over a task's word/);
     expect(rules).toMatch(/how full your context is and what remains of your reads/);
     expect(p).not.toContain('\nYOUR CONTEXT:\n');
   });

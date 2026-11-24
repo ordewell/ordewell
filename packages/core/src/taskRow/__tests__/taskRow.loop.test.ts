@@ -36,6 +36,18 @@ describe('a loop\'s check between rounds that nothing will run (ADR-0045 L5)', (
     expect(rowWith('completed').loop).toMatchObject({ state: 'stopped', detail: 'Nothing runs it now: start it for round 2 of 3' });
   });
 
+  it('says to execute the plan when there is no plan to show its body landed', () => {
+    expect(taskRowView({ ...stranded, type: 'ai', loopStranded: true } as TaskRowSubject).loop).toMatchObject({ state: 'stopped', detail: 'Nothing runs it now: execute the plan and the loop goes on' });
+  });
+
+  it('waits for what its "*" stands for before offering its next round (ADR-0077)', () => {
+    const starred = { ...stranded, dependencies: ['*'] };
+    const other = { id: 'o', order: 3, title: 'Other', status: 'in_progress', dependencies: [] };
+    const rowFor = (otherStatus: string) => taskRowView({ ...starred, type: 'ai', loopStranded: true } as TaskRowSubject, { tasks: [starred, fix({ status: 'completed' }), { ...other, status: otherStatus }] });
+    expect(rowFor('in_progress').loop).toMatchObject({ detail: 'Nothing runs it now: execute the plan and the loop goes on' });
+    expect(rowFor('completed').loop).toMatchObject({ detail: 'Nothing runs it now: start it for round 2 of 3' });
+  });
+
   it('is told on the status stream, and only when it is so', () => {
     const task = createTask({ id: 'c', loop: { body: ['f'], maxRounds: 3 } });
     expect(serializeTaskStatus(task).loopStranded).toBeUndefined();

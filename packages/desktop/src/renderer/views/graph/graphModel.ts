@@ -1,6 +1,6 @@
 import type { RunTask, RunView, SurfacePlan, TaskRowAction, TaskRowSubject, TaskRowView, TaskType } from '@ordewell/core';
 import {
-  EMPTY_RUN, formatElapsed, holdLabel, loopRowParts, loopRoundOf, reduceRun, scriptTaskText, taskRowView,
+  EMPTY_RUN, afterAllReader, formatElapsed, holdLabel, loopRowParts, loopRoundOf, reduceRun, scriptTaskText, taskRowView,
   type TaskStatusKind,
 } from '@ordewell/core/plan-utils';
 import { effortLabel, modelLabel, runnerName, statusLineOf, statusOf, type StatusLook } from '@ordewell/ui/design';
@@ -301,9 +301,11 @@ export function buildGraph(tasks: readonly RunTask[], ctx: GraphContext): GraphM
     visit(task.subtasks);
   }
   const depsOf = new Map<string, string[]>();
+  // "*" is drawn as the edges it stands for, as the scheduler reads it (ADR-0077).
+  const read = afterAllReader(top);
   for (const task of top) {
     const deps = new Set<string>();
-    for (const dep of task.dependencies) {
+    for (const dep of read(task)) {
       const holder = owner.get(dep);
       if (holder && holder !== task.id && topIds.has(holder)) deps.add(holder);
     }

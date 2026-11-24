@@ -1,5 +1,6 @@
 import type { IsolationRepoRevert, IsolationRun, IsolationTaskRecord, LandedTask } from '../interfaces/IWorktreeIsolation';
 import type { Task } from '../models/Task';
+import { AFTER_ALL, afterAllReader, waitsOnAll } from './AfterAll';
 
 /*
  * The landing ledger (ADR-0054): what an isolated run keeps of who landed what
@@ -134,11 +135,18 @@ export function recordlessRevertible(run: IsolationRun): string[] {
   return Object.keys(run.landings ?? {}).filter((taskId) => run.carried && !run.carried[taskId]);
 }
 
-/** What a task depends on in the plan, a check counting on its body as it does at a merge gate (ADR-0045 L9). */
-const dependenciesOf = (task: Readonly<Task>): string[] => [...task.dependencies, ...task.loop?.body ?? []];
+/**
+ * What each task depends on in the plan, "*" read (ADR-0077), a check
+ * counting on its body as it does at a merge gate (ADR-0045 L9).
+ */
+function dependenciesIn(tasks: readonly Readonly<Task>[]): (task: Readonly<Task>) => string[] {
+  const read = afterAllReader(tasks);
+  return (task) => [...read(task), ...task.loop?.body ?? []];
+}
 
 /** What a task depends on, directly or not, for {@link keepLandedOn} to keep as it is cut and as it lands. */
 export function landedOnOf(taskId: string, tasks: readonly Readonly<Task>[]): string[] {
+  const dependenciesOf = dependenciesIn(tasks);
   const found = new Set<string>();
   const queue = [taskId];
   for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
@@ -154,7 +162,12 @@ export function landedOnOf(taskId: string, tasks: readonly Readonly<Task>[]): st
 
 /** Everything that depends on the task, directly or not, by the plan or by what the ledger kept: the plan lets go of a task that leaves it, and of what stood on it through that task. */
 export function dependentsOf(tasks: readonly Readonly<Task>[], run: IsolationRun | null, taskId: string): Set<string> {
-  const edges = new Map(tasks.map((t) => [t.id, dependenciesOf(t)]));
+  const dependenciesOf = dependenciesIn(tasks);
+  // A "*" task the ledger kept a landing base for stood on that base, not on work the plan gained after it was cut (ADR-0077 A5).
+  const kept = run?.landedOn ?? {};
+  // A retry keeps the base but runs from today's tip, so only a completed "*" task is read from it.
+  const planned = (t: Readonly<Task>): string[] => (waitsOnAll(t) && t.status === 'completed' && kept[t.id] ? [...t.dependencies.filter((d) => d !== AFTER_ALL), ...t.loop?.body ?? []] : dependenciesOf(t));
+  const edges = new Map(tasks.map((t) => [t.id, planned(t)]));
   for (const [id, landedOn] of Object.entries(run?.landedOn ?? {})) edges.set(id, [...edges.get(id) ?? [], ...landedOn]);
   const found = new Set<string>([taskId]);
   const queue = [taskId];

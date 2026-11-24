@@ -2676,6 +2676,9 @@ export function runEnding({ arm, plan, taskLogs, stopped, stalled, ran = true, s
  * how many tasks' dependencies it changed. The last line is the outcome; a
  * cut-off reply that was asked again leaves an earlier line of its own. Null
  * when the log holds none: a chain under the review's minimum, or no planner.
+ * A review the slices' wall asked for (ADR-0072 R1) also carries `wall`: how
+ * many tasks run before the slices, how many of them most slices waited for,
+ * and, once a revision was read, how many after it.
  */
 export function planReview(researchLog) {
   const lines = (Array.isArray(researchLog) ? researchLog : [])
@@ -2684,11 +2687,17 @@ export function planReview(researchLog) {
   const last = lines.at(-1);
   if (!last) return null;
   const firstChain = Number(last[1]);
-  const rest = last[2];
-  const done = /^ -> (\d+), (kept|first plan kept, not shorter); (\d+) tasks? changed/.exec(rest);
-  if (done) return { reviewed: true, firstChain, reviewedChain: Number(done[1]), tasksChanged: Number(done[3]), kept: done[2] === 'kept', outcome: done[2] };
+  const WAITS = ', waits (\\d+) of (\\d+)';
+  const done = new RegExp(`^ -> (\\d+)(?:${WAITS} -> (\\d+))?, (kept|first plan kept, not shorter|first plan kept, neither shorter nor fewer waits); (\\d+) tasks? changed`).exec(last[2]);
+  if (done) {
+    const wall = done[2] ? { wall: { before: Number(done[3]), median: Number(done[2]), reviewed: Number(done[4]) } } : {};
+    return { reviewed: true, firstChain, reviewedChain: Number(done[1]), tasksChanged: Number(done[6]), kept: done[5] === 'kept', outcome: done[5], ...wall };
+  }
+  const asked = new RegExp(`^(?:${WAITS})?(.*)$`, 's').exec(last[2]);
+  const rest = asked[3];
+  const wall = asked[1] ? { wall: { before: Number(asked[2]), median: Number(asked[1]), reviewed: null } } : {};
   const outcome = /^, first plan kept/.test(rest) ? 'first plan kept' : /^, failed/.test(rest) ? 'failed' : 'no answer';
-  return { reviewed: true, firstChain, reviewedChain: null, tasksChanged: null, kept: false, outcome };
+  return { reviewed: true, firstChain, reviewedChain: null, tasksChanged: null, kept: false, outcome, ...wall };
 }
 
 /** A copied-out session's research log (core's research-log.json), or null when it holds none that parses. */

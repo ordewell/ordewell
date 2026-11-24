@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { resolveHandoffReferences } from './handoffReferences';
 import { readSavedPatch } from './taskDiffRead';
+import { afterAllReader } from './AfterAll';
 import { savedPatchOf } from '../models/Handoff';
 import { createAiService, type IAiService } from './AiService';
 import type { PlannerContextDeps } from './plannerContextBudget';
@@ -2627,12 +2628,12 @@ export class Session {
   }
 
   /** Whether a task, and the unfinished work it builds on, may start before anyone approves the plan. */
-  private startsUnapproved(taskId: string, seen = new Set<string>()): boolean {
+  private startsUnapproved(taskId: string, seen = new Set<string>(), depsOf = afterAllReader(this.store.planTasks)): boolean {
     const task = this.store.get(taskId);
     if (!task || task.status === 'completed' || task.status === 'skipped' || this.record.planApproved) return true;
     if (seen.has(taskId) || !this.record.isApproved(taskId)) return false;
     seen.add(taskId);
-    return task.dependencies.every((dep) => this.startsUnapproved(dep, seen));
+    return depsOf(task).every((dep) => this.startsUnapproved(dep, seen, depsOf));
   }
 
   private preparePlannerTaskUpdates(tasks: Task[]): Task[] {

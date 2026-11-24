@@ -26,9 +26,11 @@ dependency blocks the closing check that waits for it.
 
 ## Decision
 
-**When a plan's longest dependency chain reaches a threshold, the planner that
-wrote it is asked once to review the plan edge by edge, and only the planner
-decides what changes. The review asks that chain question and nothing else; a
+**When a plan's longest dependency chain reaches a threshold, or a one-shot
+plan that fans out has most of its slices waiting on more than five tasks before
+them, the planner that wrote it is asked once to review the plan edge by edge,
+and only the planner decides what changes. The review asks that chain question
+and nothing else; a
 wide one-shot plan's fan-out shape is read by Ordewell and noted on each role's
 brief, never asked about, the tasks every slice waits for are held to leaving
 the project importing and its tests collecting, the tasks before its slices,
@@ -42,18 +44,37 @@ question is put depends on how the plan arrives.
 - **An API planner's one-shot plan, before it is returned (R1).**
   `BaseAiService.reviewLongChain`, at the end of `researchAndPlan`, makes one
   more call to the planner's model when the first valid plan's longest chain is
-  `CHAIN_REVIEW_MIN` tasks or more, and only then, at the lowest effort, with the
-  planner's prompt and research and the plan as written. The reply is only the
-  changed dependency lists (`applyChainReview`), never a plan. Ordewell applies
-  them, holds the result to the plan's invariants, and keeps it only when the
-  longest chain is shorter; anything else, a reply that does not parse, names an
-  unknown task, breaks an invariant or does not shorten the chain, leaves the
-  first plan as it was. The reply adds no task. Ordewell also refuses,
+  `CHAIN_REVIEW_MIN` tasks or more, or when it waits behind a wall, and only
+  then, at the lowest effort, with the planner's prompt and research and the
+  plan as written. A plan waits behind a wall (`waitWall`) when it fans out, as
+  R5 reads it (`fanOutShape(...).wide`), and the lower median, over its slices,
+  of how many of the tasks before the slices each waits for, directly or through
+  others, is above `WAIT_WALL_MIN` (5). A chain can be short with every slice
+  behind such a wall, and the slowest task of the wall then holds them all: a
+  recorded plan's 30 slices each waited for all 13 tasks before them, and the
+  last of those finished at minute 156; another's 37 slices waited for 7 with a
+  chain of four, and no review ran. A plan that meets both triggers is asked
+  once, as one that meets either. Behind a wall the message adds one sentence
+  after the chain's edges, *Most of its N parallel tasks wait on all K tasks
+  before them; keep only the waits each needs.* (*M of the K* when the median
+  is fewer than all), and is otherwise the measured message word for word. The
+  reply is only the changed dependency lists (`applyChainReview`), never a
+  plan. Ordewell applies them, holds the result to the plan's invariants, and
+  keeps it only when the longest chain is shorter, or, for a plan behind a
+  wall, when the lower median of how many of the first plan's tasks before the
+  slices its slices still run after is lower and the chain is no longer, since
+  a thinner wall need not shorten the chain; anything else, a reply that does
+  not parse, names an unknown task, breaks an invariant or does neither, leaves
+  the first plan as it was. The reply adds no task. Ordewell also refuses,
   whatever the reply says, one that leaves an ops, script or user task, or a loop's check, a subtask among
   them, no longer waiting for a task it waited for, directly or through others,
   counted with the merge gate's own walk, which passes through subtasks and
   their parents' dependencies: the merge gate and the check rest on those
   ancestors, and the question asking to keep such edges does not ensure it. A redundant direct edge may still go.
+  A `"*"` in a task's list ([ADR-0077](0077-a-dependency-on-star-runs-a-task-after-every-other-task.md))
+  is no edge the question judges: a reply that drops it gets it back, every
+  walk here (the chain, the ancestry, the fan-out shape) reads what it stands
+  for, and one a reply adds is a wait on each task it stands for.
   The first plan's closing check, as R5 reads the plan as written, when it is
   an AI task that edits, is held too, but the other way: a reply that leaves it
   no longer waiting for a top-level task it waited for, directly or through
@@ -335,7 +356,11 @@ check or one noted already.
 `bench/commit0/reshape.mjs` shapes a recorded plan again through `shapeFanOut`,
 sized from its run's repository, and checks it offline. That a wide plan with a fault and a short chain makes no review call,
 and a long one is asked R1's message word for word, is tested through
-`reviewLongChain`. `reviewLongChain` is tested through
+`reviewLongChain`. So is the wall: on the shapes of two recorded plans, one
+with a short chain and one that also has a long chain, asked once with the
+sentence, its retry with the sentence too, a revision kept for a thinner wall
+with its chain no shorter and one kept as neither; and no call on a plan whose
+slices wait for five, or one that does not fan out. `reviewLongChain` is tested through
 a `BaseAiService` whose `streamPlanText` answers from a queue and keeps what each
 call asked for. The `submit_plan` review is tested through `plannerToolHandler`
 over a stub host, and the one-shot session's through `CliAgentAiService` with a
@@ -391,6 +416,14 @@ conversation's as they stand.
   for**, as one that cuts an ops task's is refused. Rejected: the reply's other
   changes are the chain fix, and refusing it keeps the first plan's whole
   chain. Giving the check back what it waited for keeps both.
+- **A new shape heuristic for the wall.** Not taken: R5's `fanOutShape`
+  already tells the tasks before the slices from the slices, and the role
+  notes read the plan by it, so the trigger counts the waits it records.
+  Replayed with no model call on 52 recorded one-shot first plans, the wall
+  trigger held on 13, 11 of them already reviewed for their chain; it newly
+  sends two, whose median slice waited for all 8 and all 7 tasks before it. A
+  recorded plan whose slices each waited for five tasks before them is left to
+  the chain trigger alone.
 - **`submit_plan` refuses a long chain.** Rejected: a long chain can be right (a
   serial rename, an expand-contract change), and a refusal makes the planner
   fight the tool instead of weighing the edges.
@@ -488,8 +521,8 @@ conversation's as they stand.
 
 ## Consequences
 
-- A one-shot plan with a long chain costs one more planner call, two when the
-  first is cut off; a conversation plan with a long chain may cost one more
+- A one-shot plan with a long chain, or behind a wall, costs one more planner
+  call, two when the first is cut off; a conversation plan with a long chain may cost one more
   `submit_plan` in the same turn.
 - The one-shot and conversation prompts differ in two dependency rules, so a
   change to either is measured on its own path.
@@ -532,3 +565,5 @@ conversation's as they stand.
 - 2026-11-22 — R5: the closing check's note names the test directories no brief of the plan names, so that code is written at the end; stubbed modules are not looked for, since that reads file contents.
 - 2026-11-24 — R5: the opening and gate notes name the two checks they ask for (importing, and a collection-only run) and say the full test suite is not part of them, since "run both" had an opening run the whole suite as its own criterion.
 - 2026-11-24 — R5: the two checks are building or importing the project, which fits a project with no package, and the note names no closing check in a fan-out that has none.
+- 2026-11-24 — R1: a one-shot plan that fans out with its median slice waiting on more than five tasks before the slices is reviewed too, once, its message naming the wall in one sentence, and a revision that thins the wall with its chain no longer is kept.
+- 2026-11-24 — R1: a reply cannot take `"*"` from a task, and every walk reads what it stands for (ADR-0077); the one-shot wording R4 measured does not mention it.

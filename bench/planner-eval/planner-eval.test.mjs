@@ -1016,6 +1016,14 @@ describe("G6's fixture and key", () => {
     assert.equal(changePath([task('x', 'X', { dependencies: ['y'] }), task('y', 'Y', { dependencies: ['x'] })]), null);
   });
 
+  it('reads "*" as core does (ADR-0077): a check that writes it waits for every change, and a task after it waits for it', () => {
+    const plan = [task('r', 'Map the modules', { research: true }), impl('money'), impl('lines'),
+      task('c', 'Integration check', { dependencies: ['*'] }), task('pr', 'Open the pull request', { type: 'script', dependencies: ['c'] })];
+    const m = runMetrics({ plan: { tasks: plan } });
+    assert.deepEqual([m.endsInCheck, m.criticalPath, m.changePath, m.afterAllTasks], [true, 3, 1, 1]);
+    assert.deepEqual(sessionParts({ plan: { tasks: plan } }).tasks.find((t) => t.id === 'c').dependencies, ['money', 'lines']);
+  });
+
   it('cuts its template from the fixture, as one commit, and again when the fixture changes', async () => {
     const templatesDir = tmp();
     const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
