@@ -54,7 +54,10 @@ function setup(maxParallelSessions = 3, options: Setup = {}) {
   const updates: { update: StatusUpdate; statuses: Record<string, string> }[] = [];
   // Set once made: the session broadcasts as it is built, before it can be read.
   const built: { session?: Session } = {};
+  /** What says the run has ended: none of it may go out while a task waits on a person. */
+  const ended: string[] = [];
   const broadcast = (msg: SessionMessage) => {
+    if (msg.type === 'execution_complete' || msg.type === 'run_concluded' || msg.type === 'execution_stopped') ended.push(msg.type);
     if (msg.type !== 'status_update' || !built.session) return;
     const statuses = Object.fromEntries(built.session.planTasks.map((t) => [t.id, t.status]));
     updates.push({ update: msg, statuses });
@@ -73,6 +76,7 @@ function setup(maxParallelSessions = 3, options: Setup = {}) {
     session: made,
     spawn,
     updates,
+    ended,
     latest: (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!,
     orchestrator: (made as unknown as { orchestrator: TaskOrchestrator }).orchestrator,
     load: (tasks: Task[], over: Partial<LegacyPlanState> = {}) => made.loadPlan(plan(tasks, over), 'goal', workspace, { persist: false }),
@@ -257,5 +261,59 @@ describe('a pending manual task, with the run moved on by something else', () =>
     // No scheduler drives this run: only the carried loop starts anything, and nothing of it can start unasked.
     expect(env.session.activity).toMatchObject({ scheduled: false, running: false, waitsOnUser: true });
     await vi.waitFor(() => expect(env.lastUpdate()?.activity?.waitsOnUser).toBe(true));
+  });
+});
+
+/**
+ * A task's own wait that only a person moves on: the run stays open behind it
+ * and says it waits on the user, with the wait listed, and nothing ends it, so
+ * `ordewell run --unattended` has the escalation alone to return on.
+ */
+describe('a task whose own wait only a person moves on', () => {
+  type Kind = 'conflict' | 'landing-failed' | 'files-changed' | 'usage-limit';
+
+  /** What `kind` needs of the session, and how its task ends its attempt. */
+  function waitOn(kind: Kind) {
+    const isolation = new FakeWorktreeIsolation();
+    if (kind === 'conflict') isolation.outcomes.set('t1', 'conflict');
+    if (kind === 'landing-failed') isolation.outcomes.set('t1', 'failed');
+    if (kind === 'files-changed') isolation.changedFiles = ['package.json'];
+    const end = (session: FakeRunnerSession): void => {
+      if (kind !== 'usage-limit') return session.reportComplete({ status: 'done', summary: 'done' });
+      // No reset time: nothing resumes it by itself.
+      session.emitEvent({ type: 'error', message: 'Rate limit exceeded. Please try again later.' });
+      session.emitOutput('Rate limit exceeded. Please try again later.\n');
+      session.emitTurnEnd('failed');
+    };
+    return { isolation, end, over: kind === 'files-changed' ? { ops: true } : {} };
+  }
+
+  it.each<[Kind, boolean]>([
+    ['conflict', false], ['landing-failed', false], ['files-changed', false], ['usage-limit', false],
+    ['conflict', true], ['landing-failed', true], ['files-changed', true], ['usage-limit', true],
+  ])('lists %s, and the run stays open waiting on the user (beside a failed task: %s)', async (kind, besideFailed) => {
+    const { isolation, end, over } = waitOn(kind);
+    const env = setup(3, { isolation, config: { worktreeIsolation: true } });
+    env.load([task('t1', 1, over), ...(besideFailed ? [task('f2', 2)] : [])]);
+    await env.run({ command: 'run_plan' });
+    await vi.waitFor(() => expect(env.status('t1')).toBe('in_progress'));
+    if (besideFailed) {
+      await vi.waitFor(() => expect(env.status('f2')).toBe('in_progress'));
+      env.latest('f2').reportComplete({ status: 'failed', summary: 'It broke.', reason: 'It broke.' });
+      await vi.waitFor(() => expect(env.status('f2')).toBe('failed'));
+    }
+
+    end(env.latest('t1'));
+
+    await vi.waitFor(() => expect(env.status('t1')).toBe('awaiting_user'));
+    expect(env.orchestrator.storeInstance.get('t1')!.awaitingReason).toBe(kind);
+    await vi.waitFor(() => expect(env.lastUpdate()?.activity?.waitsOnUser).toBe(true));
+    expect(env.lastUpdate()?.escalations?.map((e) => [e.kind, e.task?.id])).toContainEqual([kind, 't1']);
+    expect(env.session.escalations().map((e) => [e.kind, e.task?.id])).toContainEqual([kind, 't1']);
+    expect(env.session.runSnapshot()).toMatchObject({ activity: { waitsOnUser: true } });
+    // Nothing concludes the run: its waiting task is no failure (TaskOrchestrator's settleRun).
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(env.session.activity.scheduled).toBe(true);
+    expect(env.ended).toEqual([]);
   });
 });
