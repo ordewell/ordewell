@@ -26,7 +26,8 @@ const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 }
 /**
  * A run the supervisor or a subplanner opens continues the last; every other
  * actor asks for the user (ADR-0029, ADR-0030, ADR-0056 M6), and only the
- * user's own call is a person's start (ADR-0028).
+ * user's own call is a person's (ADR-0028). A person's control on a child
+ * plan's task is its subplanner's call (ADR-0055 D20), so it is not one.
  */
 export function runOrigin(actor: ExecutionActor): RunOrigin {
   return actor.kind === 'user' ? 'person' : actorAuthority(actor.kind);

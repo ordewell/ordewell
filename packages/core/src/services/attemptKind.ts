@@ -134,6 +134,27 @@ export function decidesIsolation(kind: AttemptKind): boolean {
 }
 
 /**
+ * Whether the attempt's launch is held for repository configuration that
+ * differs from where its run started (ADR-0028). A script has no runner to
+ * load any, and a read-only attempt withholds project configuration
+ * (ADR-0046), so neither is checked.
+ */
+export function checksConfig(kind: AttemptKind, script: boolean): boolean {
+  return !script && !landsNothing(kind);
+}
+
+/**
+ * Whether a person's own start of the attempt, as it decides its run, takes
+ * on the configuration a run from their branch holds (ADR-0028): one in a
+ * worktree whose launch {@link checksConfig}. An ops task's decides nothing,
+ * and a script's or a read-only task's would load none, so none of those
+ * replaces a run or grants anything to a later start.
+ */
+export function consentsToConfig(kind: AttemptKind, script: boolean): boolean {
+  return decidesIsolation(kind) && checksConfig(kind, script);
+}
+
+/**
  * Whether the attempt is given its task's skills: one in a fresh session is.
  * A repair resolves a merge, not the task's work; a continue resumes a
  * session that already holds them.

@@ -2730,7 +2730,7 @@ export class Session {
     this.turnEffects.ran(this.orchestrator.admittedNow());
     await this.saves.control(async () => {
       this.record.approvePlan();
-      // Any other join opens a run as the user's, as it always has; only theirs is a person's start (ADR-0028).
+      // Any other join opens a run as the user's, as it always has; only theirs is a person's, whose starts as it ticks may take on configuration (ADR-0028).
       await this.orchestrator.joinRun(actor.kind === 'user' ? 'person' : 'user');
     });
     const line = approved === 0

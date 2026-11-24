@@ -672,7 +672,7 @@ describe('IsolationRunController', () => {
     });
 
     describe('an attempt left active with nothing live in it, as a start held at launch leaves one (ADR-0028)', () => {
-      /** t1 landed and is in HEAD; t2's start was held, its record left `active`, and the run stopped. */
+      /** t1 landed and is in HEAD, as its record and git both say; t2's start was held, its record left `active`, and the run stopped. */
       async function stoppedMerged(t2HoldsWork: boolean) {
         const env = await closedRun('active');
         env.isolation.unlandedWork = new Set(t2HoldsWork ? ['t2'] : []);
@@ -692,17 +692,16 @@ describe('IsolationRunController', () => {
         expect(notifications.info).toHaveBeenCalledWith('The run is not cleared up: Task "Task t2" was held at its start, so its worktree stays, and so do the run\'s branches.');
       });
 
-      it('leaves a run the user opens with a start of their own to mint from HEAD, replacing the stopped run with all it landed merged', async () => {
+      it('leaves a person\'s start that decides the next run to mint it from HEAD, replacing the stopped run with all it landed merged', async () => {
         const { runs, isolation } = await stoppedMerged(false);
 
-        runs.open(true);
-        expect(await runs.decide(async () => undefined)).toEqual({ epoch: 2, mode: 'isolated' });
+        expect(await runs.decide(async () => undefined, true)).toEqual({ epoch: 2, mode: 'isolated' });
 
         expect(runs.planIsolation?.run.id).toBe('run2');
         expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
       });
 
-      it('leaves a run anything else opens to continue the stopped run, never asking git whether it is spent', async () => {
+      it('leaves a run any other start decides to continue the stopped run, never asking git whether it is spent', async () => {
         const { runs, isolation } = await stoppedMerged(false);
         const asked = ops(isolation).filter((op) => op === 'findInHead').length;
 
@@ -723,32 +722,30 @@ describe('IsolationRunController', () => {
         ['the task is live', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.live.add('t2'); }],
         // A child's code root, whatever git finds in it (ADR-0055 D17): a Continue held at its start leaves the record so.
         ['its worktree seats a child', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.runs.hostChild('t2', () => 'child-1'); }],
-      ])('leaves even a run the user opens to continue the stopped run while %s', async (_why, arrange) => {
+      ])('leaves even a person\'s start that decides the next run to continue the stopped run while %s', async (_why, arrange) => {
         const env = await stoppedMerged(false);
         await arrange(env);
 
-        env.runs.open(true);
-        await env.runs.decide(async () => undefined);
+        await env.runs.decide(async () => undefined, true);
 
         expect(env.runs.planIsolation?.run.id).toBe('run1');
         expect(ops(env.isolation).filter((op) => op === 'startRun')).toHaveLength(1);
         expect(ops(env.isolation)).not.toContain('discard');
       });
 
-      it('keeps, at Merge all and at the user\'s next start, a run whose held start seats a child, its code root with it', async () => {
+      it('keeps, at Merge all and at a person\'s next start, a run whose held start seats a child, its code root with it', async () => {
         const env = await stoppedMerged(false);
         env.runs.hostChild('t2', () => 'child-1');
 
         expect(await env.runs.merge()).toEqual({ outcome: 'merged' });
-        env.runs.open(true);
-        await env.runs.decide(async () => undefined);
+        await env.runs.decide(async () => undefined, true);
 
         expect(env.runs.planIsolation?.run.id).toBe('run1');
         expect(env.runs.childSession('t2')).toBe('child-1');
         expect(ops(env.isolation)).not.toContain('discard');
       });
 
-      it('leaves a run the user opens to continue a stopped run that failed a landing, its failed task held out', async () => {
+      it('leaves a person\'s start to continue a stopped run that failed a landing, its failed task held out', async () => {
         const env = setup();
         env.isolation.unlandedWork = new Set();
         env.isolation.branchHolds = true;
@@ -761,8 +758,7 @@ describe('IsolationRunController', () => {
         env.isolation.mergedByHand.add('t1');
         env.runs.interrupt();
 
-        env.runs.open(true);
-        await env.runs.decide(async () => undefined);
+        await env.runs.decide(async () => undefined, true);
 
         expect(env.runs.taskState('t2')).toBe('failed');
         expect(env.runs.planIsolation?.run.id).toBe('run1');

@@ -350,7 +350,8 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       orchestrator.stop();
       expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
 
-      await startedFromHead(held, () => orchestrator.start('person'));
+      // The user's Run, as Session's own Execute begins it.
+      await startedFromHead(held, () => orchestrator.beginRun('person'));
     });
 
     it('still holds the start in the run it continues while the user\'s branch does not hold the configuration', async () => {
@@ -543,7 +544,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
   });
 
-  it('a merged run whose held start left work in its worktree stays, worktree and all, and even the user\'s next start continues it', async () => {
+  it('a merged run whose held start left work in its worktree stays, worktree and all, and even a person\'s next start continues it', async () => {
     const root = repo();
     const runs = controllerOver(root);
     const t1 = createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' });
@@ -560,15 +561,14 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     runs.interrupt();
 
     expect(await runs.merge()).toEqual({ outcome: 'merged' });
-    runs.open(true);
-    await runs.decide(async () => undefined);
+    await runs.decide(async () => undefined, true);
 
     expect(runs.planIsolation!.run.id).toBe(runId);
     expect(runs.taskState('t2')).toBe('active');
     expect(readFileSync(join(held.cwd, 'draft.txt'), 'utf8')).toBe('not landed\n');
   });
 
-  it('a merged run whose held start left nothing in its worktree stays at Merge all, and a run the user opens replaces it', async () => {
+  it('a merged run whose held start left nothing in its worktree stays at Merge all, and a person\'s start that decides the next run replaces it', async () => {
     const root = repo();
     const runs = controllerOver(root);
     const t1 = createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' });
@@ -583,7 +583,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
 
     expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
-    // Cleared up, it would leave any start a run from HEAD: only the user's own start may take one (ADR-0028).
+    // Cleared up, it would leave any start a run from HEAD: only a person's own start may take one (ADR-0028).
     expect(runs.planIsolation!.run.id).toBe(runId);
     expect(existsSync(held.cwd)).toBe(true);
     runs.open();
@@ -591,8 +591,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(runs.planIsolation!.run.id).toBe(runId);
 
     runs.interrupt();
-    runs.open(true);
-    await runs.decide(async () => undefined);
+    await runs.decide(async () => undefined, true);
     expect(runs.planIsolation!.run.id).not.toBe(runId);
     expect(runs.planIsolation!.run.repos[0].baseRef).toBe(git(root, 'rev-parse', 'HEAD'));
     expect(existsSync(held.cwd)).toBe(false);

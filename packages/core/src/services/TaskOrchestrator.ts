@@ -40,7 +40,7 @@ import { blockingFailures, planBlocks } from './blocking';
 import { loopRoundOf, outOfRounds } from '../models/Loop';
 import { LOOP_CHECK_MARKED_COMPLETE, LOOP_CHECK_SKIPPED, LOOP_PASSED } from '../models/SkipOrigin';
 import { LEFT_UNDONE, LoopRounds } from './LoopRounds';
-import { decidesIsolation, handoffKept, mergeExcludes, type AttemptKind, type Continuation } from './attemptKind';
+import { consentsToConfig, decidesIsolation, handoffKept, mergeExcludes, type AttemptKind, type Continuation } from './attemptKind';
 import { attemptLeaves, CANCELLED_HOLD, endKeeps, type AttemptEnding } from './attemptLeaves';
 import type { SkillLookup } from './taskSkills';
 import { SkillsService } from './SkillsService';
@@ -72,16 +72,30 @@ export { TaskControlError } from './TaskControlError';
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
 
 /**
- * Who opened a run (ADR-0029): a start the user made themselves, with a
- * control of theirs (`person`), or a call made for them, by a planner turn,
+ * Who made a call that starts work (ADR-0029): a person, with a control of
+ * their own (`person`), or a call made for the user, by a planner turn,
  * autorun or Ordewell (`user`); a call of the supervisor's own, or a
  * subplanner's, which has no user to make one for (ADR-0056 M6); a usage-limit
  * reset resuming what it paused; or a loop carried on with no scheduler
  * (ADR-0045 L5). Only the user's, either way, starts a run's supervision
- * afresh, and only a person's may replace a spent run, which is how a start
- * held for configuration gets past its hold (ADR-0028).
+ * afresh. A person's start of a task in a worktree, if it is the start that
+ * decides its run, may also replace a spent run, which is how a start held
+ * for configuration gets past its hold (ADR-0028): see {@link PersonStarts}.
  */
 export type RunOrigin = 'person' | 'user' | 'supervisor' | 'limit-reset' | 'loop';
+
+/**
+ * Which starts a tick makes are a person's own (ADR-0028): every one a
+ * person's Run or approval makes as it ticks, or the one task their retry
+ * hands the scheduler. A tick's own starts consent as one: if any of them is
+ * a task in a worktree, whichever decides the run consents. Nobody's
+ * otherwise: a dependent, a loop round, a resume at a reset, a queued start
+ * drained later, and every start of a skip's or a model's call are not a
+ * person's starts, though one of theirs may have come before.
+ */
+type PersonStarts = (taskId: string) => boolean;
+const NOBODY: PersonStarts = () => false;
+const EVERY: PersonStarts = () => true;
 
 /** What the scheduler reads of the open run's settings, at each decision it makes from them. */
 export type SchedulerRunSettings = Pick<RunSettings, 'mergeAtGatesAutomatically'>;
@@ -1345,13 +1359,14 @@ export class TaskOrchestrator {
    * again; a new run would take back the run's failures (ADR-0053).
    */
   async joinRun(origin: RunOrigin): Promise<void> {
+    const person = origin === 'person' ? EVERY : NOBODY;
     if (this.isScheduling) {
       await this.continueBlockedRun('reread');
-      return this.tick();
+      return this.tick(person);
     }
     if (!this.reviewApproved) return this.approveReview(origin);
     if (this.runHeld) return this.joinHold();
-    return this.start(origin);
+    return this.start(origin, person);
   }
 
   private joinHold(): void {
@@ -1370,8 +1385,8 @@ export class TaskOrchestrator {
     if (!this.scheduledRun) this.store.readyFailed((id) => this.attempts.has(id));
   }
 
-  /** Start the full-plan run, or continue one that is held or ended on a failure. */
-  async start(origin: RunOrigin = 'user'): Promise<void> {
+  /** Start the full-plan run, or continue one that is held or ended on a failure. `person`: which of the starts it ticks are a person's own. */
+  async start(origin: RunOrigin = 'user', person: PersonStarts = NOBODY): Promise<void> {
     if (this.runs.blocked) return;
     if (this.isScheduling) {
       console.error('[TaskOrchestrator] start() called but already running: no-op');
@@ -1386,7 +1401,7 @@ export class TaskOrchestrator {
     console.log(`[TaskOrchestrator] Starting with ${this.store.allTasks.length} tasks (${this.store.allTasks.filter(t => t.type === 'ai' && t.prompt).length} AI ready)`);
     this.transition({ type: 'schedule' });
     this.emit('onTaskChanged');
-    await this.tick();
+    await this.tick(person);
   }
 
   /**
@@ -1937,15 +1952,15 @@ export class TaskOrchestrator {
    * stays held, and one held from an ended run is the plan's run once the
    * reset lets it go. Null when no run starts.
    */
-  private continueRun(origin: RunOrigin): Promise<void> | null {
-    if (this.runState.kind === 'endedOnFailure') return this.start(origin);
+  private continueRun(origin: RunOrigin, person: PersonStarts = NOBODY): Promise<void> | null {
+    if (this.runState.kind === 'endedOnFailure') return this.start(origin, person);
     this.transition({ type: 'continue' });
     return null;
   }
 
   private openRun(origin: RunOrigin): void {
     const opening = !this.runs.isOpen;
-    this.runs.open(origin === 'person');
+    this.runs.open();
     if (!opening) return;
     this.autoMergeBlocked = false;
     this.emit('onRunStarted', { origin });
@@ -1954,11 +1969,18 @@ export class TaskOrchestrator {
   /**
    * Open the run a task starts in, and decide whether it isolates if the
    * task's next attempt needs that ({@link decidesIsolation}). A dirty tree
-   * parks it; `resume` is what the user's choice replays.
+   * parks it; `resume` is what the user's choice replays. `person`: this is a
+   * person's own start of the task, which consents if it decides the run.
    */
-  private async openFor(taskId: string, origin: RunOrigin, resume: () => Promise<void>): Promise<IsolationStart | 'checkout'> {
+  private async openFor(taskId: string, origin: RunOrigin, resume: () => Promise<void>, person = false): Promise<IsolationStart | 'checkout'> {
     this.openRun(origin);
-    return decidesIsolation(this.attempts.nextKind(taskId)) ? this.runs.decide(resume) : 'checkout';
+    return decidesIsolation(this.attempts.nextKind(taskId)) ? this.runs.decide(resume, person && this.consents(taskId)) : 'checkout';
+  }
+
+  /** Whether a person's start of the task takes on the configuration of a run it decides from their branch ({@link consentsToConfig}). */
+  private consents(taskId: string): boolean {
+    const task = this.store.get(taskId);
+    return !!task && consentsToConfig(this.attempts.nextKind(taskId), task.type === 'script');
   }
 
   /**
@@ -1972,7 +1994,7 @@ export class TaskOrchestrator {
    */
   private async openForAdmitted(taskId: string, origin: RunOrigin, resume: () => Promise<void>, admission: Admitted, revives: boolean): Promise<IsolationDecision | 'checkout' | false> {
     for (;;) {
-      const opened = await this.openFor(taskId, origin, resume);
+      const opened = await this.openFor(taskId, origin, resume, origin === 'person');
       if (!admission.current() || opened === 'interrupted') throw new TaskControlError(STOPPED_BEFORE_START);
       if (isRefused(opened)) throw new TaskControlError(opened.refused);
       if (opened !== 'closed') return opened === 'blocked' ? false : opened;
@@ -2328,7 +2350,9 @@ export class TaskOrchestrator {
       }
       // A Stop while the worktree went leaves the run stopped, the task back to not started.
       if (!admission.current()) return;
-      await (this.continueRun(origin) ?? this.tick());
+      // The retried task is the person's start, whichever tick makes it; the rest are the scheduler's.
+      const person: PersonStarts = origin === 'person' ? (id) => id === taskId : NOBODY;
+      await (this.continueRun(origin, person) ?? this.tick(person));
     });
   }
 
@@ -2468,14 +2492,16 @@ export class TaskOrchestrator {
     const asked = now?.taskId === taskId;
     await this.whileAdmitted(async (admission) => {
       const replay = () => this.resumeTask(taskId, now);
-      let opened = await this.openFor(taskId, origin, replay);
+      // Only the task a person's Resume now names is their start: the rest are swept along.
+      const person = asked && origin === 'person';
+      let opened = await this.openFor(taskId, origin, replay, person);
       // One asked for now answers its caller as {@link openForAdmitted} does,
       // inline so it still claims before the tasks swept along with it; any
       // other was stopped with its run, which said so.
       while (asked && opened === 'closed') {
         const refused = this.startRefusal(taskId, admission);
         if (refused) throw new TaskControlError(refused);
-        opened = await this.openFor(taskId, origin, replay);
+        opened = await this.openFor(taskId, origin, replay, person);
       }
       if (asked && (!admission.current() || opened === 'interrupted')) throw new TaskControlError(STOPPED_BEFORE_START);
       if (isRefused(opened)) {
@@ -2866,11 +2892,13 @@ export class TaskOrchestrator {
     this.emit('onTaskChanged');
     this.emit('onReviewApproved', { tasks: this.store.planTasks });
     if (this.runHeld) return this.joinHold();
-    await this.start(origin);
+    // Every start a person's Run or approval makes as it ticks is theirs (ADR-0028).
+    await this.start(origin, origin === 'person' ? EVERY : NOBODY);
   }
 
-  tick(): Promise<void> {
-    return this.deciding(() => this.ticked());
+  /** `person`: which of the starts this tick makes are a person's own; nobody's unless a person's control ticks. */
+  tick(person: PersonStarts = NOBODY): Promise<void> {
+    return this.deciding(() => this.ticked(person));
   }
 
   /**
@@ -2896,7 +2924,7 @@ export class TaskOrchestrator {
     return work;
   }
 
-  private async ticked(): Promise<void> {
+  private async ticked(person: PersonStarts): Promise<void> {
     // What this tick starts was admitted as it began: a Stop during one of its awaits withdraws it.
     const admission = this.admittedNow();
     this.recoverOrphans();
@@ -2940,7 +2968,10 @@ export class TaskOrchestrator {
     if (ready.length === 0 && this.attempts.size === 0) return this.settleRun('tick');
 
     const waiting = ready.map(({ id }) => id);
-    await Promise.all(Array.from({ length: Math.min(STARTS_AT_ONCE, waiting.length) }, () => this.startReady(waiting, admission)));
+    // A person's Run starts a task in a worktree or it does not, whichever of its starts decides first: a read-only one ahead of it in the plan included.
+    const consenting = waiting.some((id) => person(id) && this.consents(id));
+    const consent = (id: string) => person(id) && consenting;
+    await Promise.all(Array.from({ length: Math.min(STARTS_AT_ONCE, waiting.length) }, () => this.startReady(waiting, admission, person, consent)));
     const refused = this.refusedStart;
     if (refused) this.deps.startRefused(refused);
     this.emit('onTick');
@@ -2980,8 +3011,8 @@ export class TaskOrchestrator {
     return selectReadyTasks({ ...this.startRule(), active: this.attempts.slotsHeld, maxParallel: this.config.maxParallelSessions, ...(this.isScheduling ? {} : { within: this.carriedTasks() }) }).ready;
   }
 
-  /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. */
-  private async startReady(waiting: string[], admission: Admitted): Promise<void> {
+  /** One of a tick's starters: takes the next of `waiting` as each start it made has attached. `consent`: whether a start that decides the run consents for the tick. */
+  private async startReady(waiting: string[], admission: Admitted, person: PersonStarts, consent: (taskId: string) => boolean): Promise<void> {
     for (let id = waiting.shift(); id !== undefined; id = waiting.shift()) {
       // Readiness was read before this loop awaited any start: a stop, a plan
       // load, a Merge all, a user control or a concurrent tick may have come
@@ -2991,7 +3022,7 @@ export class TaskOrchestrator {
       if (!this.stillReady(id)) continue;
       // The run a stopped loop settled is gone by the time a retry resumes it.
       if (!this.isScheduling) this.openRun('loop');
-      const decision = decidesIsolation(this.attempts.nextKind(id)) ? await this.runs.decide(() => this.tick()) : 'checkout';
+      const decision = decidesIsolation(this.attempts.nextKind(id)) ? await this.runs.decide(() => this.tick(person), consent(id)) : 'checkout';
       if (isRefused(decision)) return this.refuseScheduledRun(decision.refused);
       if (decision === 'blocked' || decision === 'interrupted' || decision === 'closed') continue;
       if (!this.startsOnTick) return;

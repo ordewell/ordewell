@@ -20,7 +20,7 @@ import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
 import {
-  composeAttemptPrompt, attemptWorkspace, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
+  composeAttemptPrompt, attemptWorkspace, checksConfig, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
   type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
@@ -888,7 +888,7 @@ export class Attempts {
       if (kind.kind === 'continuation' || attempt.delegated) await this.windDowns.get(task.id);
       // A fresh attempt by any route starts its child over; a Continue, which is another kind, reopens it.
       if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
-      if (!attempt.script && kind.kind === 'repair') {
+      if (kind.kind === 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
         if (paths.length) throw new TaskStartConfigError(paths);
       }
@@ -906,8 +906,7 @@ export class Attempts {
       const { cwd, worktree, previousWork, writable } = attempt.opened.workspace;
       attempt.cwd = cwd;
       attempt.worktree = worktree;
-      // A read-only task withholds project configuration (ADR-0046), so none reaches it.
-      if (!attempt.script && kind.kind !== 'repair' && !landsNothing(kind)) {
+      if (kind.kind !== 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
         if (paths.length) throw new TaskStartConfigError(paths);
       }

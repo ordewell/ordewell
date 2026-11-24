@@ -455,7 +455,7 @@ describe('whose run an actor opens', () => {
     for (const kind of ['planner-turn', 'autorun'] as const) expect(runOrigin({ kind })).toBe('user');
   });
 
-  it('makes only the user\'s own call a person\'s start, which alone replaces a spent run (ADR-0028): a person\'s control on a child\'s task is its subplanner\'s', () => {
+  it('makes only the user\'s own call a person\'s, whose start in a worktree alone may replace a spent run as it decides one (ADR-0028): a person\'s control on a child\'s task is its subplanner\'s', () => {
     expect(runOrigin({ kind: 'user' })).toBe('person');
     expect(runOrigin({ kind: 'subplanner', depth: 1, person: true })).toBe('supervisor');
   });

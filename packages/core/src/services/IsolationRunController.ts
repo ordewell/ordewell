@@ -300,8 +300,6 @@ export class IsolationRunController {
    * run, from its start until it settles or is stopped.
    */
   private mode: 'undecided' | 'isolated' | 'shared' | null = null;
-  /** The open run was opened by a start the user made themselves, which alone replaces a spent run ({@link spentRun}). */
-  private openedByUser = false;
   /** Resolver task id → the conflicted task it resolves; see {@link linkResolver}. */
   private resolvers: Record<string, string> = {};
   private opening: Promise<IsolationStart> | null = null;
@@ -620,16 +618,11 @@ export class IsolationRunController {
     return removal;
   }
 
-  /**
-   * Open a run if none is, leaving whether it isolates to its first change
-   * task. `byUser`: a start the user made themselves opens it, which alone may
-   * replace the plan's run when that is spent ({@link spentRun}).
-   */
-  open(byUser = false): void {
+  /** Open a run if none is, leaving whether it isolates to its first change task. */
+  open(): void {
     if (this.mode) return;
     this.mode = 'undecided';
     this.opened += 1;
-    this.openedByUser = byUser;
   }
 
   /**
@@ -638,13 +631,19 @@ export class IsolationRunController {
    * tasks never asks. `resume` is what a dirty tree parks until the user
    * chooses how to go on. An interrupted activation is refused separately
    * from one parked on a dirty tree, so an explicit start never disappears.
+   *
+   * `consent`: the start asking is a person's own, of a task whose launch in
+   * a worktree the configuration check reads, so if it is the one that
+   * decides, it may replace a spent run ({@link spentRun}). Only the start
+   * that decides is judged: one that comes while another decides, or after,
+   * takes that decision, whoever opened the run (ADR-0028).
    */
-  decide(resume: () => Promise<void>): Promise<IsolationStart> {
+  decide(resume: () => Promise<void>, consent = false): Promise<IsolationStart> {
     this.open();
     if (this.opening) return this.opening;
     if (this.decided) return Promise.resolve(this.decision);
     if (this.blockedStart) return Promise.resolve('blocked');
-    const opening = this.activate(resume, this.activations).finally(() => {
+    const opening = this.activate(resume, this.activations, consent).finally(() => {
       if (this.opening === opening) this.opening = null;
     });
     this.opening = opening;
@@ -1139,7 +1138,8 @@ export class IsolationRunController {
    * that never landed, or one a start held at launch left, keeps the whole
    * run, worktrees and branches. A held start's worktree may hold nothing,
    * but cleared up, its run would give any start a new one from HEAD, which
-   * only the user's own start may take (ADR-0028, {@link spentRun}).
+   * only a person's own start of a task in a worktree may take (ADR-0028,
+   * {@link spentRun}).
    */
   private async clearMerged(run: IsolationRun): Promise<void> {
     // A plan loaded, or a start opened, while the merge went decides about this run itself.
@@ -1247,9 +1247,9 @@ export class IsolationRunController {
     return { mode: 'shared', reason: availability.reason, repos: availability.repos ?? [] };
   }
 
-  private async activate(resume: () => Promise<void>, activation: number): Promise<IsolationStart> {
+  private async activate(resume: () => Promise<void>, activation: number, consent: boolean): Promise<IsolationStart> {
     const root = this.workspaceRoot();
-    const decision = await this.assess(root, this.openedByUser ? await this.spentRun(root) : null);
+    const decision = await this.assess(root, consent ? await this.spentRun(root) : null);
     const interrupted = () => activation !== this.activations;
     // Only a close with nothing after it: a stop or a plan load since has the last word.
     const ended = (): 'interrupted' | 'closed' => activation === this.closedActivation && this.activations === activation + 1 ? 'closed' : 'interrupted';

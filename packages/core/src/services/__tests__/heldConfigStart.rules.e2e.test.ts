@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanUp, hasGit, heldPlan, HOOK, ok, refExists, startsAgain, USER } from './heldConfigKit';
+import { cleanUp, hasGit, heldPlan, HOOK, ok, refExists, startsAgain, SUPERVISOR, USER } from './heldConfigKit';
 
 /**
  * The second review's reproductions, on real git (ADR-0028, ADR-0013): a run
@@ -74,5 +74,47 @@ describe.skipIf(!hasGit)('rule 1: a run whose landed work the user\'s branch lac
     await startsAgain(held, 't1', () => ok(session, { command: 'run_task', task: 't1' }, USER));
 
     keptWithItsLanding(held, run);
+  });
+});
+
+/** t1 lands the hook; t2, after it, is held; t3, an ops task after t1, waits at its merge gate and, once started, keeps running. */
+async function heldBesideOps() {
+  const held = heldPlan([
+    { id: 't1', title: 'Add a hook', hook: true },
+    { id: 't2', title: 'Check the hook', dependencies: ['t1'] },
+    { id: 't3', title: 'Run the hook', dependencies: ['t1'], ops: true },
+  ], { hold: ['t3'] });
+  await ok(held.session, { command: 'run_plan' }, USER);
+  await vi.waitFor(() => expect(held.holdOf('t2')).toContain(HOOK), { timeout: 20_000 });
+  return held;
+}
+
+/** The user's own start of t3 alone, an ops task, which keeps running; then the supervisor's start of t2. */
+async function opsThenSupervisor(held: Awaited<ReturnType<typeof heldBesideOps>>) {
+  const { session } = held;
+  const run = held.runId();
+  const t3 = held.spawns('t3');
+  await ok(session, { command: 'retry_task', task: 't3', from: 'fresh' }, USER);
+  await vi.waitFor(() => expect(held.spawns('t3')).toBe(t3 + 1), { timeout: 20_000 });
+  await startsAgain(held, 't2', () => ok(session, { command: 'run_task', task: 't2' }, SUPERVISOR));
+  expect({ run: held.runId(), t2: held.hookFor('t2') }).toEqual({ run, t2: [] });
+  expect(held.holdOf('t2')).toContain(HOOK);
+}
+
+describe.skipIf(!hasGit)('rule 2: only a person\'s own start of a task in a worktree, as it activates the run, replaces it', () => {
+  it('C1: the user\'s Merge all and Stop, their start of an ops task alone, then the supervisor\'s run_task', async () => {
+    const held = await heldBesideOps();
+    await ok(held.session, { command: 'merge_all' }, USER);
+    await ok(held.session, { command: 'stop_run' }, USER);
+    expect(held.inCheckout(HOOK)).not.toBeNull();
+    await opsThenSupervisor(held);
+  });
+
+  it('C1\': the supervisor\'s Stop and Merge all, the user\'s start of an ops task alone, then the supervisor\'s run_task', async () => {
+    const held = await heldBesideOps();
+    await ok(held.session, { command: 'stop_run' }, SUPERVISOR);
+    await ok(held.session, { command: 'merge_all' }, SUPERVISOR);
+    expect(held.inCheckout(HOOK)).not.toBeNull();
+    await opsThenSupervisor(held);
   });
 });
