@@ -861,6 +861,21 @@ export function isUserMessage(entry: Pick<ConversationMessage, 'role' | 'kind'>)
 }
 
 /**
+ * Whether the transcript is only an opening that went unanswered (its goal,
+ * its skills' loads and the failure after it) and `message` is that goal: sent
+ * again (the desktop's Try Again), it is answered where it stands, neither
+ * written nor drawn a second time.
+ */
+export function repeatsUnansweredOpening(
+  transcript: readonly Pick<ConversationMessage, 'role' | 'kind' | 'content'>[],
+  message: { readonly text: string; readonly skills?: readonly unknown[] },
+): boolean {
+  const [goal, ...rest] = transcript.filter((entry) => entry.kind !== 'error');
+  return goal !== undefined && isUserMessage(goal) && goal.content === message.text
+    && rest.length === (message.skills?.length ?? 0) && rest.every((entry) => entry.kind === 'skill_load');
+}
+
+/**
  * Whether a wake-up digest only says the run finished with everything done,
  * or skipped by the user: its reply is the wrap-up, which asks nothing
  * (ADR-0053). One that also names a failure, a block or any other attention

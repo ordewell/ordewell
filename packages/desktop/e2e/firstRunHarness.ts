@@ -25,6 +25,10 @@ export interface HeldPlanner {
   answered(): number;
   /** Lets every held request, and every later one, through. */
   release(): void;
+  /** Holds each later request again, until the next {@link release}. */
+  hold(): void;
+  /** Fails the next request let through with `message`, as `failWith` fails every one. */
+  failNext(message: string): void;
   close(): Promise<void>;
 }
 
@@ -40,6 +44,7 @@ export async function startHeldPlanner(upstream: number, options: { held?: boole
   let requests = 0;
   let abandoned = 0;
   let answered = 0;
+  let failOnce: string | undefined;
   const waiting = new Set<() => void>();
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -51,8 +56,10 @@ export async function startHeldPlanner(upstream: number, options: { held?: boole
       res.on('close', () => { if (!res.writableFinished) closed = true; });
       const go = (): void => {
         if (closed) { abandoned += 1; return; }
-        if (options.failWith !== undefined) {
-          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: options.failWith, type: 'invalid_request_error' } }));
+        const failure = failOnce ?? options.failWith;
+        failOnce = undefined;
+        if (failure !== undefined) {
+          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: failure, type: 'invalid_request_error' } }));
           answered += 1;
           return;
         }
@@ -85,6 +92,8 @@ export async function startHeldPlanner(upstream: number, options: { held?: boole
       for (const go of waiting) go();
       waiting.clear();
     },
+    hold: () => { held = true; },
+    failNext: (message) => { failOnce = message; },
     close: async () => {
       held = false;
       waiting.clear();

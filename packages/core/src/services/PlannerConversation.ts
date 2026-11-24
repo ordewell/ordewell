@@ -10,7 +10,7 @@ import type { ForkedDialogue } from './conversationFork';
 import { compactionCut, condensedNotice, contextFloor, extractSummary, modelContext, seededRecord, summaryRequest } from './conversationSummary';
 import { addToRecord, recordBefore, recordBlock, type DecisionRecordInput } from './decisionRecord';
 import type { ContextCheckpoint, ConversationMessage, DecisionRecordEntry, LegacyPlanState, PlannerCompactionOutcome, PlannerContextPause, ReplyRun, ResearchLogEntry, ResearchProgress, RunnerId, SkillLoad, Task } from '../models/Task';
-import { flattenTasksWithParents, isUserMessage } from '../models/Task';
+import { flattenTasksWithParents, isUserMessage, repeatsUnansweredOpening } from '../models/Task';
 import type { ExecutionActor, ExecutionRecord } from '../models/Execution';
 import { plannerMessage, plannerTranscript, skillLoadLabel, type SkillInvocation } from './skillInvocation';
 import { skillLoadNotice, surfaceStep } from '../conversation/records';
@@ -308,16 +308,6 @@ export type RecordAnswer =
 interface SettledTurn {
   plan: LegacyPlanState;
   outcome: Exclude<PlannerTurnOutcome, 'stopped' | 'error'>;
-}
-
-/**
- * Whether the transcript is only an opening that went unanswered (its goal,
- * its skills' loads and the failure after it) and `message` is that goal.
- */
-function repeatsUnansweredOpening(transcript: readonly ConversationMessage[], message: SkillInvocation): boolean {
-  const [goal, ...rest] = transcript.filter((entry) => entry.kind !== 'error');
-  return goal !== undefined && isUserMessage(goal) && goal.content === message.text
-    && rest.length === message.skills.length && rest.every((entry) => entry.kind === 'skill_load');
 }
 
 /** Everything (re)opening a conversation needs besides the dialogue itself. */
