@@ -96,12 +96,15 @@ export class ConversationViewHost {
    * Everything held, as the one message the next turn answers: the prompts
    * glued in the order typed. Asked by whoever owns the host's turn once it
    * has fully ended — the `planner_turn_ended` event comes while the turn is
-   * still unwinding, too early to start the next one.
+   * still unwinding, too early to start the next one. The webview is told
+   * they went, since it did not send them itself: a Try Again still offered
+   * for the turn before would draw that turn's message a second time.
    */
   nextPrompt(): string | undefined {
     const all = unsendAll(this.held);
     if (!all) return undefined;
     this.showHeld(all.rest);
+    this.post({ type: 'heldPromptsSent' });
     return all.text;
   }
 

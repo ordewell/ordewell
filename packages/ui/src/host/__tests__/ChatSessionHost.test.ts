@@ -90,7 +90,7 @@ function harness(answer: (text: string, turn: ChatTurn) => TurnOutcome | Promise
   };
   const chat = new ChatSessionHost(conversation, port);
   return {
-    chat, conversation, state, turns, port, executed, asked, refused, events, merged,
+    chat, conversation, state, turns, port, executed, asked, refused, events, merged, posts,
     mergeCalls: () => mergeCalls,
     sent: () => turns.map((t) => [t.text, t.turn.now]),
     held: () => posts.filter((m): m is Extract<HostToWebview, { type: 'heldPrompts' }> => m.type === 'heldPrompts').at(-1)?.prompts ?? [],
@@ -173,6 +173,24 @@ describe('ChatSessionHost', () => {
     expect(h.sent()).toEqual([['/tdd add a login page', false], ['/tdd add a login page', false]]);
     expect(userBlocks(h.conversation)).toEqual(['/tdd add a login page']);
     expect(h.conversation.blocks.filter((b) => b.type === 'skill_load')).toHaveLength(1);
+  });
+
+  // The held message's turn is a new one, as the user's own send is: the failed
+  // turn's Try Again is over, and pressed now it would draw that message twice.
+  it('tells the chat what was held went on its own, after the failed turn ahead of it and before its own turn', async () => {
+    const h = harness((text) => {
+      if (text === 'first') {
+        h.chat.hold('one');
+        return { ok: false };
+      }
+      expect(h.posts.filter((m) => m.type === 'heldPromptsSent')).toHaveLength(1);
+      return { ok: true };
+    });
+
+    await h.chat.send('first', true);
+    expect(h.posts.filter((m) => m.type === 'heldPromptsSent')).toHaveLength(1);
+
+    expect(h.sent()).toEqual([['first', false], ['one', false]]);
   });
 
   it('answers a button\'s message at once, neither held nor shown as the user\'s', async () => {

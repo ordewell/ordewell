@@ -107,7 +107,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   planner's reply is kept.
 - **The desktop app's first turn.** A failed turn's error shows once, after
   its message, and Try Again sends the message again without drawing or
-  saving it a second time; while the planner works
+  saving it a second time; a message queued behind the failed one closes
+  the error once it goes, Try Again with it. While the planner works
   on the first message the session reads *Planning*. Typing `/` lists a
   skill that shares a built-in command's name once, as the built-in.
 - **The terminal UI's welcome names the current base commit after a merge**
