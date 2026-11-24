@@ -1,10 +1,13 @@
 import type { HostState } from '@ordewell/ui';
 
-/** The session's run actions, each the chat's own message for it. */
-export type RunAction = 'approve' | 'run' | 'stop' | 'merge';
+/**
+ * The session's run actions, each the chat's own message for it. A draft is
+ * started with Run too: running a plan is what approves it (ADR-0035), and an
+ * Approve beside Run read as two gates.
+ */
+export type RunAction = 'run' | 'stop' | 'merge';
 
 export const RUN_ACTION_LABEL: Record<RunAction, string> = {
-  approve: 'Approve plan',
   run: 'Run',
   stop: 'Stop',
   // The review comes first: the action opens the run's changes, whose Merge all asks the preflight (ADR-0062 G8).
@@ -30,16 +33,16 @@ export function runActions(state: HostState): ReadonlySet<RunAction> {
   if (!plan || plan.tasks.length === 0) return actions;
   const advancing = state.isExecuting || state.activity.advancesOnItsOwn || state.run.activity?.advancesOnItsOwn === true;
   const idle = !advancing && !state.starting;
-  if (idle && (plan.status === 'draft' || plan.status === 'rejected')) actions.add('approve');
-  else if (idle && unfinished(state.run.tasks.length > 0 ? state.run.tasks : plan.tasks)) actions.add('run');
+  const drafted = plan.status === 'draft' || plan.status === 'rejected';
+  if (idle && (drafted || unfinished(state.run.tasks.length > 0 ? state.run.tasks : plan.tasks))) actions.add('run');
   if (advancing) actions.add('stop');
   if (state.run.handoff || (state.run.runMerge && state.run.runMerge.landed.length > 0)) actions.add('merge');
   return actions;
 }
 
-const PRIORITY: readonly RunAction[] = ['approve', 'run', 'stop', 'merge'];
+const PRIORITY: readonly RunAction[] = ['run', 'stop', 'merge'];
 
-/** The one the title bar shows: Approve plan, then Run, then Stop, then Merge all. */
+/** The one the title bar shows: Run, then Stop, then Merge all. */
 export function primaryAction(actions: ReadonlySet<RunAction>): RunAction | undefined {
   return PRIORITY.find((action) => actions.has(action));
 }

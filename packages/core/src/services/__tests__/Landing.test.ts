@@ -58,6 +58,15 @@ describe('Landing', () => {
       expect(listener.changed).toHaveBeenCalledTimes(2);
     });
 
+    it('says what the landing brought, as the isolation counted it from git', async () => {
+      const { landing, prepare, record } = await setup();
+      const t1 = task('t1', 1);
+      await prepare(t1);
+      record('t1')!.repos['.'].change = { files: 1, added: 1, removed: 1, binary: 0 };
+
+      expect(await landing.landPassed(t1, { worktree: true, kind: CHANGE })).toEqual({ kind: 'landed', messages: [], change: { files: 1, added: 1, removed: 1, binary: 0 } });
+    });
+
     it('has nothing to land from an attempt that ran in the workspace root', async () => {
       const { landing, isolation } = await setup();
 

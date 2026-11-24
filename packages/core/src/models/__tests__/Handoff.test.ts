@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkHandoff, handoffPreviewLines, handoffReferenceText, handoffWakeLines, parseFindingRef, readableTaskIds, savedPatchOf, severityLabel, storedHandoff, withPatch, worstSeverity, type HandoffDigest, type HandoffPatch } from '../Handoff';
+import { changeText, checkHandoff, handoffDigest, handoffPreviewLines, totalChange, withChange, handoffReferenceText, handoffWakeLines, parseFindingRef, readableTaskIds, savedPatchOf, severityLabel, storedHandoff, withPatch, worstSeverity, type HandoffDigest, type HandoffPatch } from '../Handoff';
 import { createTask } from '../Task';
 
 describe('the tasks a task may read (ADR-0047)', () => {
@@ -272,5 +272,36 @@ describe('a reference pinned to its attempt (ADR-0057 R1)', () => {
     expect(parseFindingRef('#4@2')).toEqual({ task: '#4', attempt: 2 });
     expect(parseFindingRef('#4')).toEqual({ task: '#4' });
     expect(parseFindingRef('Fix the auth/F3 thing')).toEqual({ task: 'Fix the auth/F3 thing' });
+  });
+});
+
+describe('what a landed task changed, as Ordewell counts it', () => {
+  const change = { files: 1, added: 1, removed: 1, binary: 0 };
+
+  it('joins the runner\'s handoff, or stands alone where the task landed without one, and the plan keeps it', () => {
+    const authored = { summary: 'Only added lines.', findings: [], findingCount: 0 };
+
+    expect(withChange(authored, change)).toEqual({ ...authored, change });
+    expect(withChange(undefined, change)).toEqual({ summary: '', findings: [], findingCount: 0, change });
+    expect(handoffDigest({ ...authored, change, report: 'long' })).toEqual({ ...authored, change });
+  });
+
+  it('is no count at all for a landing of no file, or none counted', () => {
+    const authored: HandoffDigest = { summary: 'Nothing.', findings: [], findingCount: 0 };
+
+    expect(withChange(authored, { files: 0, added: 0, removed: 0, binary: 0 })).toBe(authored);
+    expect(withChange(authored, undefined)).toBe(authored);
+    expect(changeText(authored)).toBeNull();
+    expect(changeText(undefined)).toBeNull();
+  });
+
+  it('reads as the patch rows word it: "1 file, +1 -1", binary files named', () => {
+    expect(changeText({ change })).toBe('1 file, +1 -1');
+    expect(changeText({ change: { files: 3, added: 14, removed: 2, binary: 1 } })).toBe('3 files, 1 binary, +14 -2');
+  });
+
+  it('adds up a repo group\'s shares, leaving out a repo git could not count', () => {
+    expect(totalChange([change, undefined, { files: 2, added: 13, removed: 0, binary: 1 }])).toEqual({ files: 3, added: 14, removed: 1, binary: 1 });
+    expect(totalChange([undefined])).toBeUndefined();
   });
 });

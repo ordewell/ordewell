@@ -410,13 +410,13 @@ describe('approve_review', () => {
     const env = setup();
     env.load([task('t1', 1), task('t2', 2, { dependencies: ['t1'] })], { status: 'draft' });
 
-    expect((await env.run({ command: 'approve_review' }, PLANNER)).message).toMatch(/^Only the user may approve the review/);
+    expect((await env.run({ command: 'approve_review' }, PLANNER)).message).toMatch(/^Only the user may run the plan/);
     expect(env.spawned('t1')).toHaveLength(0);
     await env.session.execute({ command: 'approve_review' }, { kind: 'user' });
 
     expect(env.spawned('t1')).toHaveLength(1);
     expect(env.session.isApproved('t2')).toBe(true);
-    expect(env.timeline().at(-1)).toMatchObject({ record: { command: 'approve_review', actor: 'user', outcome: 'done' }, text: 'You approved the plan, which starts it.' });
+    expect(env.timeline().at(-1)).toMatchObject({ record: { command: 'approve_review', actor: 'user', outcome: 'done' }, text: 'You started the plan.' });
   });
 });
 

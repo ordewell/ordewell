@@ -91,7 +91,7 @@ describe('ordewell run on a tree that blocks isolation', () => {
   });
 
   it('ordewell approve reports a block the same way', async () => {
-    const { api, client } = liveDaemon({ approve: [blocked] });
+    const { api, client } = liveDaemon({ execute: [blocked] });
 
     const { exit } = await capture(() => handleApprove(['--session-id', 's1'], client));
 

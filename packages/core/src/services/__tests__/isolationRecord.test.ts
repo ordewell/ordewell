@@ -168,6 +168,42 @@ describe('handoffOf', () => {
   });
 });
 
+describe('handoffOf: what each landed task changed', () => {
+  it('says each repo\'s share in its own list and the whole in the run\'s, and nothing for a task git did not count', () => {
+    const counted: IsolationTaskRecord = {
+      taskId: 'c', order: 1, title: 'Task c', branch: 'ordewell/r1/1-c', workspace: '/wt/1-c', status: 'merged',
+      repos: {
+        api: { worktree: '/wt/1-c/api', linked: [], changed: true, landedTip: 'aaaa', change: { files: 1, added: 1, removed: 1, binary: 0 } },
+        web: { worktree: '/wt/1-c/web', linked: [], changed: true, landedTip: 'bbbb', change: { files: 1, added: 13, removed: 0, binary: 0 } },
+      },
+    };
+    const older: IsolationTaskRecord = {
+      taskId: 'o', order: 2, title: 'Task o', branch: 'ordewell/r1/2-o', workspace: '/wt/2-o', status: 'merged',
+      repos: { api: { worktree: '/wt/2-o/api', linked: [], changed: true, landedTip: 'cccc' } },
+    };
+    const run: IsolationRun = {
+      id: 'r1', workspaceRoot: '/work',
+      repos: [
+        { path: 'api', root: '/work/api', baseRef: '0123abcd', integrationBranch: 'ordewell/r1/integration' },
+        { path: 'web', root: '/work/web', baseRef: '4567abcd', integrationBranch: 'ordewell/r1/integration' },
+      ],
+      shared: [], sharedRepos: [], tasks: { c: counted, o: older },
+    };
+
+    const handoff = handoffOf(run);
+
+    expect(handoff.landed).toEqual([
+      { taskId: 'c', order: 1, title: 'Task c', change: { files: 2, added: 14, removed: 1, binary: 0 } },
+      { taskId: 'o', order: 2, title: 'Task o' },
+    ]);
+    expect(handoff.repos[0].landed).toEqual([
+      { taskId: 'c', order: 1, title: 'Task c', change: { files: 1, added: 1, removed: 1, binary: 0 } },
+      { taskId: 'o', order: 2, title: 'Task o' },
+    ]);
+    expect(handoff.repos[1].landed).toEqual([{ taskId: 'c', order: 1, title: 'Task c', change: { files: 1, added: 13, removed: 0, binary: 0 } }]);
+  });
+});
+
 describe('which tasks a surface offers Revert on', () => {
   const merged = (over: Partial<IsolationTaskRecord> = {}): IsolationTaskRecord => ({
     taskId: 't', order: 1, title: 'Task t', branch: 'ordewell/r1/1-t', workspace: '/work/1-t', status: 'merged',

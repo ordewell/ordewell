@@ -32,6 +32,17 @@ describe('HandoffCard (ADR-0013)', () => {
     expect([...items].map((li) => li.textContent)).toEqual(['1First task', '2Second task']);
   });
 
+  it('says what each landed task changed, as Ordewell counted it from git: the whole run\'s, and each repository\'s share', () => {
+    const counted = [{ taskId: 't1', order: 1, title: 'First task', change: { files: 2, added: 14, removed: 1, binary: 0 } }, { taskId: 't2', order: 2, title: 'Second task' }];
+    const { unmount } = render(<HandoffCard {...handoff} landed={counted} onAction={vi.fn()} />);
+    expect([...document.querySelectorAll('.isolation-handoff-landed li')].map((li) => li.textContent)).toEqual(['1First task, 2 files, +14 -1', '2Second task']);
+    unmount();
+
+    const share = (path: string, change: { files: number; added: number; removed: number; binary: number }) => ({ ...groupHandoff.repos.find((r) => r.path === path)!, landed: [{ ...groupHandoff.landed[0], change }] });
+    render(<HandoffCard {...groupHandoff} repos={[share('api', { files: 1, added: 1, removed: 1, binary: 0 }), share('web', { files: 1, added: 13, removed: 0, binary: 0 })]} onAction={vi.fn()} />);
+    expect([...document.querySelectorAll('.isolation-handoff-landed li')].map((li) => li.textContent)).toEqual(['1Add rate limiting, 1 file, +1 -1', '1Add rate limiting, 1 file, +13 -0']);
+  });
+
   it('offers review, merge, clean up and discard', () => {
     render(<HandoffCard {...handoff} onAction={vi.fn()} />);
 

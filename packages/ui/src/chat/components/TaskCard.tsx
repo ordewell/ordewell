@@ -615,7 +615,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
 
             {handoff && (
               <TaskFold label="Handoff" className="task-fold-handoff"
-                preview={[firstLine(handoff.summary), handoffFindingsText(handoff.findingCount)].filter(Boolean).join(' · ')}>
+                preview={[row.handoff?.change, firstLine(handoff.summary), handoffFindingsText(handoff.findingCount)].filter(Boolean).join(' · ')}>
                 <TaskHandoff handoff={handoff} taskName={(id) => taskRefOf(siblings ?? [], id)}
                   onReadFull={onOpenLog && chatAvailable ? () => onOpenLog(task.id) : undefined} />
               </TaskFold>

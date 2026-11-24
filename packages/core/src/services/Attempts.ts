@@ -30,7 +30,7 @@ import { supportsTaskMode } from './harness/connectors';
 import { quotedList } from '../utils/quotedList';
 import { scriptBodyOf } from '../models/ScriptTask';
 import { SCRIPT_RUNNER } from './ScriptRunner';
-import { checkHandoff, heldHandoff, readableTaskIds, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
+import { checkHandoff, heldHandoff, readableTaskIds, withChange, withPatch, type HandoffPatch, type StoredHandoff } from '../models/Handoff';
 import { applySavedPatch, capturePatch, patchArtifact, patchReply } from './PatchCapture';
 import { handoffLogs, readTask, type TaskLogReader } from './readTask';
 import type { Subtree } from './Subtree';
@@ -1704,7 +1704,8 @@ export class Attempts {
     }
     store.setTaskVerdict(taskId, verdict);
     const reason = unresumed ?? (signedOut ? `${signedOut}\n\n${verdict.reason}` : verdict.reason);
-    this.handOver(taskId, summarizeOutput(reason, authored ? '' : summary), handoff, attempt);
+    // What landed is counted by Ordewell from git, beside the runner's own words of it.
+    this.handOver(taskId, summarizeOutput(reason, authored ? '' : summary), withChange(handoff, landing?.kind === 'landed' ? landing.change : undefined), attempt);
     console.error(`[Attempts] Output summary:\n${summary || '(empty: no output captured)'}`);
     // The evidence the ops rule rests on: a runner cannot be kept from
     // writing, only caught.

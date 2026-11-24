@@ -124,9 +124,9 @@ describe('a Stop withdraws every start admitted before it', () => {
     await settled();
 
     expect(env.run.spawnedIds()).toEqual([]);
+    // The user's run joined the one the planner's start made and started nothing, so it records no start of its own.
     expect(timeline(env)).toEqual([
       'The planner started the plan.',
-      'You started the plan.',
       'You stopped the run.',
     ]);
     expect(taskOf(env.session, 't1')!.prompt).toBe('do t1, carefully');

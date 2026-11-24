@@ -6,7 +6,7 @@ import { git, isAncestor, tryGit, type GitInvoker } from './gitExec';
 import { integratedIn } from './LandingLedger';
 import { stateRootOf } from './stateRoot';
 import { realPathOf } from '../utils/realPath';
-import type { HandoffPatch } from '../models/Handoff';
+import type { HandoffChange, HandoffPatch } from '../models/Handoff';
 
 export interface TaskDiffRead {
   /**
@@ -98,6 +98,20 @@ function stats(raw: string): Array<{ path: string; added: string; removed: strin
     const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(row);
     return match ? [{ path: match[3], added: match[1], removed: match[2] }] : [];
   });
+}
+
+/**
+ * What a task's landing merge brought onto a repository's integration branch,
+ * against the tip it merged onto (its first parent: a landing is always a merge
+ * of its own): the count a surface shows of a done task, from git and never
+ * from its runner's words.
+ */
+export async function landedChange(invoker: GitInvoker, root: string, merge: string): Promise<HandoffChange> {
+  const common = await readOnlyGitArgs(invoker, root);
+  const files = stats(await git(invoker, root, [...common, 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', `${merge}^1`, merge]));
+  const binary = files.filter((file) => file.added === '-').length;
+  const lines = (count: (file: { added: string; removed: string }) => string) => files.reduce((sum, file) => sum + (file.added === '-' ? 0 : Number(count(file))), 0);
+  return { files: files.length, added: lines((f) => f.added), removed: lines((f) => f.removed), binary };
 }
 
 function inside(root: string, target: string): boolean {

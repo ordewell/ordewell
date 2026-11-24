@@ -1981,7 +1981,7 @@ export class PlannerConversation {
     if (!this.host.plan()) return null;
     if (this.host.subplanner?.()) return null;
     if (this.host.aiService().plannerToolsAttached?.()) return PLANNER_TOOLS_REMINDER;
-    const { runners, models, modes } = this.host.catalog();
+    const { runners, models, modes, withheld } = this.host.catalog();
 
     const modelLines = runners.map((runner) => {
       const list = models[runner] ?? [];
@@ -1998,6 +1998,8 @@ export class PlannerConversation {
       ...modelLines,
       '</available_models>',
       `<read_only_runners>${readOnly.join(', ') || '(none)'}</read_only_runners>`,
+      // Why an enabled runner is missing above, so it is neither assigned nor asked for (ADR-0052).
+      ...(withheld?.length ? [`<not_offered>${withheld.map((w) => w.reason).join('; ')}</not_offered>`] : []),
     ].join('\n');
   }
 

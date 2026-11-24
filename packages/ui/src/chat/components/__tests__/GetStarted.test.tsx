@@ -28,7 +28,7 @@ describe('GetStarted — plan approval', () => {
 
   it('says nothing runs until approval while autorun is known to be off', () => {
     const { container } = render(<GetStarted runnerNames={[]} {...ACTIONS} runSettings={withAutorun(false)} />);
-    expect(container.textContent).toContain('Nothing runs until you approve the plan.');
+    expect(container.textContent).toContain('Nothing runs until you run the plan.');
   });
 
   it('warns instead while autorun is known to be on', () => {

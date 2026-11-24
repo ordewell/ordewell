@@ -1,5 +1,5 @@
 import {
-  DELEGATION_OFFERED, subtreeView, accountLimitsText, contextMeterText, type AccountLimitSnapshot, approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
+  DELEGATION_OFFERED, changeText, subtreeView, accountLimitsText, contextMeterText, type AccountLimitSnapshot, approvalKindText, approvalStatusText, compactionText, diffRows, diffSummary, handoffFindingsText, handoffReferenceText, loadedSkillTokens, outputPreview, planMarkerParts, savedPatchViews, severityLabel, usageText, wakeUpItems, worstSeverity, REPORT_PREVIEW_LINES,
   type DiffRow, type DiffStat,
   type ApprovalBlock, type DisplayBlock, type MessageBlock, type MessageRole, type MessageSectionGroup, type PlanBlock,
   type CommandBlock, type CommandStatus, type CompactionBlock, type RunnerLoadedBlock,
@@ -773,15 +773,18 @@ function handoffLines(block: HandoffBlock, cols: number, detailAll: boolean): st
   const summary = handoff.findingCount > 0
     ? `${handoffFindingsText(handoff.findingCount)}${severity ? ` · ${severityLabel(severity).toLowerCase()}` : ''}`
     : null;
-  const rows = [`${style.brand('◆')} ${style.bold('Handoff')}${summary ? style.grey(` · ${summary}`) : ''}`];
+  // Ordewell's count from git, first: the runner's words below are its own account.
+  const change = changeText(handoff);
+  const said = [change, summary].filter((part): part is string => part !== null).join(' · ');
+  const rows = [`${style.brand('◆')} ${style.bold('Handoff')}${said ? style.grey(` · ${said}`) : ''}`];
   if (handoff.commit) {
     const room = Math.max(1, cols - HANDOFF_INDENT.length);
     const body = handoff.commit.body ? sanitize(handoff.commit.body).trim() : '';
     rows.push(...wrap(`Commit: ${sanitize(handoff.commit.subject).trim()}`, room).map((line) => `${HANDOFF_INDENT}${style.bold(line)}`));
     if (body) rows.push(...body.split('\n').flatMap((line) => wrap(line, room)).map((line) => `${HANDOFF_INDENT}${line}`));
   }
-  const said = sanitize(handoff.summary).trim();
-  if (said) rows.push(...wrap(said, Math.max(1, cols - HANDOFF_INDENT.length)).map((line) => `${HANDOFF_INDENT}${line}`));
+  const words = sanitize(handoff.summary).trim();
+  if (words) rows.push(...wrap(words, Math.max(1, cols - HANDOFF_INDENT.length)).map((line) => `${HANDOFF_INDENT}${line}`));
   if (handoff.findings.length > 0) {
     rows.push(`${HANDOFF_INDENT}${style.grey('Findings:')}`, ...handoff.findings.flatMap((f) => findingLines(f, cols)));
   }

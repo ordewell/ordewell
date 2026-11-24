@@ -31,3 +31,11 @@ describe('confirmations as data', () => {
     expect(forkStopsRunConfirmation().choices).toEqual([{ id: 'fork', label: 'Fork and stop the run' }]);
   });
 });
+
+describe('mergeAllConfirmation trailer disclosure', () => {
+  it('adds the line it is given, and nothing without one', () => {
+    const said = mergeAllConfirmation('main', '', false, 'This commit will end with Planned-with: Ordewell. `ordewell trailer off` removes it.');
+    expect(said.message).toContain('Planned-with: Ordewell');
+    expect(mergeAllConfirmation('main', '', false).message).not.toContain('Planned-with');
+  });
+});

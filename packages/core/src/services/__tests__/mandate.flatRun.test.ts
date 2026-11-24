@@ -39,7 +39,7 @@ const USERS_CONTROLS: Partial<Record<ExecutionCommandName, Consent>> = {
   force_send_queued: usersOwn('force send a queued message', 'ctrl-s in the task\'s view (/open <id>)'),
   remove_queued: usersOwn('take back a queued message', 'ctrl-r on the queued message in the task\'s view (/open <id>)'),
   cancel_resume: usersOwn('cancel a scheduled resume', 'the c key on the task in the plan'),
-  approve_review: usersOwn('approve the review', '/approve'),
+  approve_review: usersOwn('run the plan', '/run'),
 };
 
 const SHARED: readonly ExecutionCommandName[] = ['run_plan', 'run_task', 'stop_task', 'stop_run', 'retry_task', 'message_task', 'answer_approval', 'merge_all', 'skip_task', 'answer_checkpoint', 'run_script'];

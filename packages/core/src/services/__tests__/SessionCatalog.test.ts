@@ -16,6 +16,7 @@ function setup(opts: {
   planRunners?: RunnerId[];
   aiProvider?: PlannerBackendId;
   held?: SessionCatalogDeps['held'];
+  withheld?: SessionCatalogDeps['withheld'];
 } = {}) {
   let settings = opts.settings ?? { enabledRunners: ['claude-code'] };
   let planRunners = opts.planRunners ?? [];
@@ -33,6 +34,7 @@ function setup(opts: {
     settings: () => settings,
     planRunners: () => planRunners,
     ...(opts.held ? { held: opts.held } : {}),
+    ...(opts.withheld ? { withheld: opts.withheld } : {}),
   });
   return {
     catalog,
@@ -117,6 +119,29 @@ describe('SessionCatalog of a child, held to its mandate (ADR-0056 M3)', () => {
     const models = { codex: [model('g1'), model('g2')] };
     const { catalog } = setup({ resolverCache: models, settings: { enabledRunners: ['codex'] }, held: held(['codex'], { codex: ['g1'] }) });
     expect(ids(catalog.current().models.codex)).toEqual(['g1']);
+  });
+});
+
+describe('SessionCatalog of a signed-out agent (ADR-0052)', () => {
+  it('leaves it out of what a planner may assign, says why, and keeps it in the user\'s scope', async () => {
+    let signedOut = true;
+    const { catalog } = setup({
+      settings: { enabledRunners: ['claude-code', 'codex'] },
+      discovered: { 'claude-code': [model('sonnet')], codex: [model('gpt-5')] },
+      withheld: (runner) => (runner === 'codex' && signedOut ? 'signed out' : undefined),
+    });
+    expect(catalog.offeredRunners()).toEqual(['claude-code']);
+    expect(catalog.runnersFor('plan')).toEqual(['claude-code']);
+    expect(catalog.runnersFor('edit')).toEqual(['claude-code']);
+    const live = await catalog.live();
+    expect(live.runners).toEqual(['claude-code']);
+    expect(live.withheld).toEqual([{ runner: 'codex', reason: 'Codex: signed out, not offered until signed in' }]);
+    // The user enabled it: a task on it is not flagged as switched off.
+    expect(catalog.scope().enabledRunners).toEqual(['claude-code', 'codex']);
+
+    signedOut = false;
+    expect(catalog.offeredRunners()).toEqual(['claude-code', 'codex']);
+    expect(catalog.current().withheld).toBeUndefined();
   });
 });
 

@@ -1,6 +1,6 @@
 import React from 'react';
 import type { HandoffDigest, StoredHandoff } from '@ordewell/core';
-import { handoffFindingsText, handoffReferenceText, heldWords, onOneLine, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
+import { changeText, handoffFindingsText, handoffReferenceText, heldWords, onOneLine, savedPatchViews, severityLabel, subtreeView, worstSeverity } from '@ordewell/core/plan-utils';
 import type { SubtreeItemView } from '@ordewell/core/plan-utils';
 import { useOpenPatch } from '../openPatch';
 import { useDelegationOffered } from '../delegationOffered';
@@ -32,6 +32,7 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
   onReadFull?: () => void;
 }) {
   const severity = worstSeverity(handoff.findings);
+  const change = changeText(handoff);
   const report = 'report' in handoff ? handoff.report : undefined;
   const more = handoff.findingCount - handoff.findings.length;
   // A patch gets its own block below (ADR-0050); the artifacts list keeps the
@@ -42,7 +43,8 @@ export default function TaskHandoff({ handoff, taskName, onReadFull }: {
   const delegationOffered = useDelegationOffered();
   return (
     <section className="task-handoff" aria-label="Handoff">
-      <div className="task-handoff-heading">Handoff · {handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
+      {/* Ordewell's count from git first: the words below are the runner's own account. */}
+      <div className="task-handoff-heading">Handoff · {change ? `${change} · ` : ''}{handoffFindingsText(handoff.findingCount)}{severity ? ` · ${severityLabel(severity)}` : ''}</div>
       {handoff.commit && (
         <div className="task-handoff-commit">
           <div className="task-handoff-commit-subject">Commit: {onOneLine(handoff.commit.subject)}</div>

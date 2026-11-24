@@ -346,7 +346,7 @@ describe('sessionStore', () => {
     it('writes the state directory ignore file on first save', () => {
       saveSession(planFixture(), 'Goal', tmpDir);
 
-      expect(fs.readFileSync(path.join(tmpDir, '.ordewell', '.gitignore'), 'utf-8')).toBe('*\n!.gitignore\n!skills/\n!skills/**\n');
+      expect(fs.readFileSync(path.join(tmpDir, '.ordewell', '.gitignore'), 'utf-8')).toBe('*\n!skills/\n!skills/**\n');
     });
 
     it('creates and modifies nothing outside the state directory', () => {

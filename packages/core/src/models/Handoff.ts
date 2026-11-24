@@ -115,6 +115,20 @@ export interface HandoffPatch {
   flags?: PatchFlag[];
 }
 
+/**
+ * What a task's work changed as it landed, counted by Ordewell from git, never
+ * taken from the runner's words: what its landing merges brought onto the
+ * integration branches, summed over the repositories it changed.
+ */
+export interface HandoffChange {
+  files: number;
+  /** Lines added and removed, binary files counting none. */
+  added: number;
+  removed: number;
+  /** Of {@link files}, those whose change is binary. */
+  binary: number;
+}
+
 /** What a task produced: the four kinds of evidence, or a patch Ordewell saved for it. */
 export type HandoffArtifact = HandoffEvidence | HandoffPatch;
 
@@ -179,6 +193,8 @@ export interface HandoffDigest {
   held?: true;
   /** How the attempt ended, as its call said, where it did not pass: a reader is told so before it builds on the words. */
   outcome?: 'blocked' | 'failed';
+  /** What its work changed as it landed, Ordewell's count; absent for a task that landed nothing, and on a plan saved before it was kept. */
+  change?: HandoffChange;
 }
 
 /** The whole handoff, as the attempt's log keeps it. */
@@ -264,6 +280,23 @@ export function withPatch(handoff: StoredHandoff | undefined, patch: HandoffPatc
   return { ...handoff, artifacts: [...(handoff.artifacts ?? []), patch] };
 }
 
+/** Several repositories' changes as one; undefined when none was counted. */
+export function totalChange(changes: ReadonlyArray<HandoffChange | undefined>): HandoffChange | undefined {
+  const counted = changes.filter((c): c is HandoffChange => c !== undefined);
+  if (counted.length === 0) return undefined;
+  return counted.reduce((a, b) => ({ files: a.files + b.files, added: a.added + b.added, removed: a.removed + b.removed, binary: a.binary + b.binary }));
+}
+
+/**
+ * A handoff that also says what its task's work changed as it landed. Ordewell
+ * adds it, as it does a saved patch, and a task that landed without any
+ * handoff of its own is still shown with it. A change of no file is none.
+ */
+export function withChange<H extends HandoffDigest>(handoff: H | undefined, change: HandoffChange | undefined): H | StoredHandoff | undefined {
+  if (!change || change.files === 0) return handoff;
+  return handoff ? { ...handoff, change } : { summary: '', findings: [], findingCount: 0, change };
+}
+
 /** The patch a handoff names, if its attempt saved one (ADR-0050). */
 export function savedPatchOf(handoff: HandoffDigest | undefined): HandoffPatch | undefined {
   return handoff?.artifacts?.find((a): a is HandoffPatch => a.kind === 'patch');
@@ -308,6 +341,7 @@ export function handoffDigest(handoff: StoredHandoff): HandoffDigest {
     ...(handoff.subtree ? { subtree: handoff.subtree } : {}),
     ...(handoff.held ? { held: true } : {}),
     ...(handoff.outcome ? { outcome: handoff.outcome } : {}),
+    ...(handoff.change ? { change: handoff.change } : {}),
   };
 }
 
@@ -452,10 +486,15 @@ export function patchChangesText(patch: HandoffPatch): string {
   return `${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}, ${byteSize(patch.bytes)}`;
 }
 
-/** The same without the size, for a row that already names the patch and has little room (ADR-0050). */
-export function patchLinesText(patch: HandoffPatch): string {
+/** The same without the size, for a row that already names the patch and has little room (ADR-0050); also what a landed change says: "1 file, +1 -1". */
+export function patchLinesText(patch: HandoffChange): string {
   const binary = patch.binary > 0 ? `, ${patch.binary} binary` : '';
   return `${counted(patch.files, 'file')}${binary}, +${patch.added} -${patch.removed}`;
+}
+
+/** What a handoff's task changed as it landed, "1 file, +1 -1"; null where it landed nothing or the count was not kept. */
+export function changeText(handoff: Pick<HandoffDigest, 'change'> | undefined): string | null {
+  return handoff?.change && handoff.change.files > 0 ? patchLinesText(handoff.change) : null;
 }
 
 /** A saved patch as one line: where, how big, from which commit, and its flags (ADR-0050). */
