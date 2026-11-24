@@ -19,6 +19,15 @@ const npm = (args, opts) => (npmCli
   ? must(process.execPath, [npmCli, ...args], opts)
   : must('npm', args, { ...opts, shell: process.platform === 'win32' }));
 
+/**
+ * `env` as a nested project install may take it. Under `npm run`, npm re-exports
+ * its config as npm_config_*, and npm refuses an allow-scripts list it finds there
+ * (EALLOWSCRIPTS: not allowed in project-scoped installs) though it accepts the
+ * same list in a user's .npmrc, which the nested npm still reads for itself.
+ */
+export const installEnv = (env) => Object.fromEntries(Object.entries(env)
+  .filter(([key]) => key.toLowerCase().replace(/-/g, '_') !== 'npm_config_allow_scripts'));
+
 export async function resolveRef(repo, ref) {
   return (await must('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: repo })).trim();
 }
@@ -59,7 +68,7 @@ export async function ensureBuild({ repo, buildsDir, sha, say = () => {} }) {
     await must('git', ['worktree', 'add', '--force', '--detach', dir, sha], { cwd: repo });
   }
   // No install scripts: the build needs none, and Electron's would download a binary no run uses.
-  const env = { ...process.env, ELECTRON_SKIP_BINARY_DOWNLOAD: '1', NODE_OPTIONS: '' };
+  const env = { ...installEnv(process.env), ELECTRON_SKIP_BINARY_DOWNLOAD: '1', NODE_OPTIONS: '' };
   say(`installing ${sha.slice(0, 12)}`);
   await npm(['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: dir, env });
   for (const pkg of ['core', 'web', 'cli']) {
