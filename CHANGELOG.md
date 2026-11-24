@@ -61,12 +61,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the plan**. `/approve` and `ordewell approve` still work and say they are
   now `/run` and `ordewell run`, but are listed nowhere; VS Code's **Approve
   Plan** command is removed. A plan that was run reads *started* in the
-  terminal UI's `/sessions` and the desktop's session lists, not *approved*.
+  terminal UI's `/sessions` and the desktop's session lists, not *approved*,
+  and *settled* once every task in it is done or skipped.
   A run on a plan that is already running no longer
   records a second "You started the plan." (ADR-0030).
 - **A session is saved when its first message is admitted.** It appears in the
   list while the planner works and keeps your goal if the first turn fails or
-  you stop it, with an error entry saying it went unanswered. Stop now reaches the
+  you stop it, with an error entry saying it went unanswered; the desktop
+  lists it as *No plan yet*. Stop now reaches the
   daemon during the first turn on the desktop (ADR-0029).
 - **A message the planner refuses because it is not ready comes back.** The
   text returns to the composer, with anything queued behind it, instead of
@@ -93,12 +95,19 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
-- **A Codex planner's command that exits non-zero no longer reads as its
-  tools failing.** The "tools failed on every call" notice ignores a
-  `run_command` whose command ran, and names the log of the process that runs
-  the session and the planner picker on every surface (ADR-0022).
+- **The "tools failed on every call" notice is said only when it is true.**
+  It ignores a Codex planner's `run_command` whose command ran and exited
+  non-zero, and a turn whose calls were refused while the session holds a plan
+  (a planner asking to start the run itself). It names the log of the process
+  that runs the session and the planner picker on every surface (ADR-0022).
+- **A Codex planner's failed tool calls read as failed.** codex-cli 0.171's
+  shape for a reply Ordewell marked as an error showed it as answered, and a
+  call Codex ended at its tool deadline failed the whole turn with
+  a `TypeError`; both now show as a failed call, and the
+  planner's reply is kept.
 - **The desktop app's first turn.** A failed turn's error shows once, after
-  its message, and Try Again sends the message again; while the planner works
+  its message, and Try Again sends the message again without drawing or
+  saving it a second time; while the planner works
   on the first message the session reads *Planning*. Typing `/` lists a
   skill that shares a built-in command's name once, as the built-in.
 - **The terminal UI's welcome names the current base commit after a merge**

@@ -310,6 +310,16 @@ interface SettledTurn {
   outcome: Exclude<PlannerTurnOutcome, 'stopped' | 'error'>;
 }
 
+/**
+ * Whether the transcript is only an opening that went unanswered (its goal,
+ * its skills' loads and the failure after it) and `message` is that goal.
+ */
+function repeatsUnansweredOpening(transcript: readonly ConversationMessage[], message: SkillInvocation): boolean {
+  const [goal, ...rest] = transcript.filter((entry) => entry.kind !== 'error');
+  return goal !== undefined && isUserMessage(goal) && goal.content === message.text
+    && rest.length === message.skills.length && rest.every((entry) => entry.kind === 'skill_load');
+}
+
 /** Everything (re)opening a conversation needs besides the dialogue itself. */
 export type ConversationOpening = Omit<ConversationRequest, 'goal' | 'onProgress' | 'signal' | 'priorHistory' | 'initialMessage'>;
 
@@ -1309,9 +1319,12 @@ export class PlannerConversation {
   private async replyTurn(message: SkillInvocation, wakeUps: readonly string[], userTurn: UserTurn): Promise<SettledTurn> {
     const { signal } = userTurn;
     const plan = this.requirePlan();
-    const priorHistory = modelContext(plan.conversationHistory ?? []);
     const now = new Date().toISOString();
     const fromUser = wakeUps.length === 0 || message.text !== '' || message.skills.length > 0;
+    // The goal of an opening that went unanswered, sent again (the desktop's
+    // Try Again): it is answered where it stands, not written and told twice.
+    const again = fromUser && wakeUps.length === 0 && repeatsUnansweredOpening(plan.conversationHistory ?? [], message);
+    const priorHistory = again ? [] : modelContext(plan.conversationHistory ?? []);
     // Held, not written: a save mid-turn must never land these in the
     // transcript while their pending turns still hold them (ADR-0029).
     // Deferring the write — rather than tagging the entries and skipping them
@@ -1319,7 +1332,7 @@ export class PlannerConversation {
     // holding the same input after a save; the two leave together in the save
     // that lands the outcome.
     const entries: ConversationMessage[] = wakeUps.map((content): ConversationMessage => ({ role: 'user', content, timestamp: now, kind: 'wake_up' }));
-    if (fromUser) entries.push(...this.userEntries(message, now, userTurn.forced));
+    if (fromUser && !again) entries.push(...this.userEntries(message, now, userTurn.forced));
     // A retry of a pause whose turn committed a change answers inputs that change landed already.
     if (!userTurn.recovery?.pause.landed) this.holdWrites(userTurn, entries, fromUser ? [this.userPrompt(message.text, now)] : []);
 

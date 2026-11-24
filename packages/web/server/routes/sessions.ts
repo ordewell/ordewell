@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { OrchestratorPool, getSessionList, removeSession } from '../pool/orchestratorPool';
 import {
   listTaskLogAttempts,
+  listedPlanStatus,
   migratePlanState,
   readSession,
   readTaskLog,
@@ -30,7 +31,7 @@ function liveMeta(id: string, goal: string, plan: LegacyPlanState): SessionMeta 
     goal: goal || '(untitled)',
     runners: plan.runners,
     taskCount: plan.tasks.flatMap((t) => [t, ...(((t as unknown) as { subtasks?: unknown[] }).subtasks || [])]).length,
-    status: plan.status,
+    status: listedPlanStatus(plan),
     createdAt: plan.generatedAt,
     updatedAt: plan.lastUpdated,
   };

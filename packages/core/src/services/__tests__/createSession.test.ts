@@ -83,6 +83,45 @@ describe('model allowlist wiring', () => {
     expect(callArgs.modelsByRunner['claude-code'][0].modelId).toBe('kimi-2.6');
   });
 
+  // The desktop's Try Again after a first turn that failed sends its message again.
+  it('answers the unanswered goal when it is sent again, keeping it once', async () => {
+    const goal = 'Add greeting and farewell modules';
+    const startConversation = vi.fn()
+      .mockRejectedValueOnce(new Error('claude exited with code 1'))
+      .mockResolvedValueOnce({ kind: 'message', text: 'Which language?', researchLog: [] });
+    const session = makeSession({ aiService: { startConversation, hasActiveConversation: () => false, reset: vi.fn() } });
+
+    await expect(session.startPlanning(goal, ['claude-code'])).rejects.toThrow('claude exited');
+    await session.continueConversation(goal);
+
+    const history = session.planState?.conversationHistory ?? [];
+    expect(history.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([goal]);
+    expect(history.map((m) => m.kind ?? m.role)).toEqual(['user', 'error', 'assistant']);
+    // Told once: as this turn's message, not also replayed before it.
+    const resent = startConversation.mock.calls[1][0];
+    expect(resent.priorHistory ?? []).toEqual([]);
+    expect(resent.initialMessage).toContain(goal);
+  });
+
+  // A harness planner's tools-failed notice is for a turn that left nothing planned.
+  it('tells the planner backend whether the session holds a plan as each turn ends', async () => {
+    const startConversation = vi.fn().mockResolvedValue({ kind: 'message', text: 'Which file?', researchLog: [] });
+    const continueConversation = vi.fn().mockResolvedValue({
+      kind: 'plan',
+      tasks: [createTask({ id: 'p1', order: 1, title: 'Planned', prompt: 'go', assignedRunner: 'claude-code' })],
+      text: 'done',
+      researchLog: [],
+    });
+    const session = makeSession({ aiService: { startConversation, continueConversation, hasActiveConversation: () => true, reset: vi.fn() } });
+
+    await session.startPlanning('test goal', ['claude-code']);
+    const holdsPlan = startConversation.mock.calls[0][0].holdsPlan as () => boolean;
+    expect(holdsPlan()).toBe(false);
+
+    await session.continueConversation('hello.py');
+    expect(holdsPlan()).toBe(true);
+  });
+
   it('live semantic: a plan committed mid-conversation is coerced against the CURRENT allowlist', async () => {
     const mutableSettings = {
       modelAllowlist: { 'claude-code': ['kimi-2.6'] } as Record<string, string[]>,

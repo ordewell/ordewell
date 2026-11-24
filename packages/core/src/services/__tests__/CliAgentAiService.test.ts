@@ -12,7 +12,7 @@ import type { GuaranteeReport } from '../executionLease';
 import { TurnBudgets } from '../PlannerBudgets';
 import { daemonLogPath } from '../../utils/daemonProcess';
 import type { PlannerNativeSession, ResearchProgress, ResearchStep } from '../../models/Task';
-import { codexPastToolDeadline, fakeMcpServer, fakeSpawn, fixture, flagFile, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
+import { codexPastToolDeadline, codexToolTimeoutError, fakeMcpServer, fakeSpawn, fixture, flagFile, openCodeFixture, planJson, scriptedAdapter, sseResponse, type FakeAgentProcess, type FakeMcpServer, type FakeSpawnOptions, type ScriptedReply } from './harnessTestKit';
 import type { McpToolReply, SubmitPlanArgs } from '../mcp/tools';
 import type { SkillLookup } from '../taskSkills';
 import type { SkillInfo } from '../SkillsService';
@@ -1267,11 +1267,20 @@ describe('CliAgentAiService — Codex', () => {
   describe('a turn whose Ordewell tools all failed', () => {
     const line = (value: unknown) => `${JSON.stringify(value)}\n`;
     const at = { threadId: 'thr-codex-1', turnId: 'turn-1' };
-    // What codex-cli 0.171.0 makes of a call past its tool deadline.
-    const timedOut = (tool: string) => 'tool call error: tool call failed for `ordewell/' + tool + '`\n\nCaused by:\n    timed out awaiting tools/call after 300s';
-    const call = (id: string, tool: string, error?: string) => [
+    // How codex-cli 0.171.0 completes a failed call, as its app-server sent them: a call past
+    // its tool deadline carries an error object and no result, and a reply Ordewell marked
+    // isError carries that reply as its result, with no error.
+    type Failure = { timedOut: true } | { replied: string };
+    const timedOut: Failure = { timedOut: true };
+    const replied = (text: string): Failure => ({ replied: text });
+    const ended = (tool: string, failure?: Failure) => {
+      if (!failure) return { status: 'completed', result: { content: [{ type: 'text', text: 'codex, claude-code' }], structuredContent: null, _meta: null }, error: null };
+      if ('timedOut' in failure) return { status: 'failed', result: null, error: { message: codexToolTimeoutError(tool, 300) } };
+      return { status: 'failed', result: { content: [{ type: 'text', text: failure.replied }], structuredContent: null, _meta: null }, error: null };
+    };
+    const call = (id: string, tool: string, failure?: Failure) => [
       line({ jsonrpc: '2.0', method: 'item/started', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, status: 'inProgress', arguments: {} } } }),
-      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, arguments: {}, ...(error ? { status: 'failed', error } : { status: 'completed', result: { content: [{ type: 'text', text: 'codex, claude-code' }] } }) } } }),
+      line({ jsonrpc: '2.0', method: 'item/completed', params: { ...at, item: { id, type: 'mcpToolCall', server: 'ordewell', tool, arguments: {}, ...ended(tool, failure) } } }),
     ].join('');
     const turnOf = (calls: string, reply: string) => [
       line({ jsonrpc: '2.0', method: 'turn/started', params: at }),
@@ -1281,7 +1290,7 @@ describe('CliAgentAiService — Codex', () => {
     ].join('');
 
     it('says the tools failed, where the log is, and what to try', async () => {
-      const turn = turnOf(call('c1', 'run_command', timedOut('run_command')) + call('c2', 'list_runners', timedOut('list_runners')), 'The workspace tool timed out, so I could not inspect hello.py.');
+      const turn = turnOf(call('c1', 'run_command', timedOut) + call('c2', 'list_runners', timedOut), 'The workspace tool timed out, so I could not inspect hello.py.');
       const { svc } = service('codex', [...codexHandshake(), turn]);
       const notices: string[] = [];
       await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
@@ -1295,7 +1304,7 @@ describe('CliAgentAiService — Codex', () => {
 
     // VS Code runs the session in its extension host, whose console has the per-call lines, and its user has no /planner.
     it('names the log of each process that can own the session, and a next step every surface has', async () => {
-      const turn = turnOf(call('c1', 'list_runners', timedOut('list_runners')), 'I could not list the runners.');
+      const turn = turnOf(call('c1', 'list_runners', timedOut), 'I could not list the runners.');
       const { svc } = service('codex', [...codexHandshake(), turn]);
       const notices: string[] = [];
       await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
@@ -1305,7 +1314,7 @@ describe('CliAgentAiService — Codex', () => {
     });
 
     it('says nothing when one of them answered', async () => {
-      const turn = turnOf(call('c1', 'run_command', timedOut('run_command')) + call('c2', 'list_runners'), 'Which runner should run the tests?');
+      const turn = turnOf(call('c1', 'run_command', timedOut) + call('c2', 'list_runners'), 'Which runner should run the tests?');
       const { svc } = service('codex', [...codexHandshake(), turn]);
       const notices: string[] = [];
       await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
@@ -1316,10 +1325,49 @@ describe('CliAgentAiService — Codex', () => {
     // A Codex planner's own shell is off, so every command it runs is a run_command: a command that exits
     // non-zero is the command's answer, not Ordewell's tools failing, and the planner may well go on to ask.
     it('says nothing when the only call was a command that exited non-zero', async () => {
-      const turn = turnOf(call('c1', 'run_command', 'cat: missing.txt: No such file or directory'), 'There is no missing.txt here: which file did you mean?');
+      const turn = turnOf(call('c1', 'run_command', replied('Command exited 1: cat: missing.txt: No such file or directory')), 'There is no missing.txt here: which file did you mean?');
       const { svc } = service('codex', [...codexHandshake(), turn]);
       const notices: string[] = [];
       await svc.startConversation(request({ runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(notices).toEqual([]);
+    });
+
+    it('keeps the reply and shows each call failed when Codex gave up on them at its deadline', async () => {
+      const turn = turnOf(call('c1', 'run_command', timedOut), 'The workspace tool timed out, so I could not inspect hello.py.');
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const { events, onProgress } = collector();
+      const reply = await svc.startConversation(request({ onProgress, runners: ['codex'] }));
+
+      expect(reply).toMatchObject({ kind: 'message', text: 'The workspace tool timed out, so I could not inspect hello.py.' });
+      const result = events.find((e) => e.type === 'tool_result');
+      expect(result?.step?.outcome).toBe('failure');
+      expect(result?.step?.result).toContain('timed out awaiting tools/call after 300s');
+    });
+
+    it('says so when every call was refused in Ordewell\'s own reply', async () => {
+      const turn = turnOf(
+        call('c1', 'submit_plan', replied('The plan was not accepted: task #1 names no runner.')) + call('c2', 'list_models', replied('No runner named "gpt".')),
+        'I could not submit the plan.',
+      );
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const { events, onProgress } = collector();
+      const notices: string[] = [];
+      await svc.startConversation(request({ onProgress, runners: ['codex'], notice: (_level, message) => notices.push(message) }));
+
+      expect(events.filter((e) => e.type === 'tool_result').map((e) => e.step?.outcome)).toEqual(['failure', 'failure']);
+      expect(notices).toEqual([toolsFailedNotice()]);
+    });
+
+    // A refused control is Ordewell answering, and the plan the refusal is about is there to run.
+    it('says nothing when the session already holds a plan', async () => {
+      const turn = turnOf(
+        call('c1', 'run_task', replied('The user has not run this plan yet: they run it themselves (/run). Ask them to.')),
+        'I could not start it myself.',
+      );
+      const { svc } = service('codex', [...codexHandshake(), turn]);
+      const notices: string[] = [];
+      await svc.startConversation(request({ runners: ['codex'], holdsPlan: () => true, notice: (_level, message) => notices.push(message) }));
 
       expect(notices).toEqual([]);
     });

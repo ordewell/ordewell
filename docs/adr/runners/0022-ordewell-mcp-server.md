@@ -105,9 +105,12 @@ A runner-facing tool joins the task side on the same mechanism.
   prose would otherwise end the turn with no hint. A `run_command` whose
   command ran and exited non-zero is not a failed call there: its error is the
   command's answer, and a Codex planner, its own shell off, runs every command
-  through it. One notice serves every surface, so it names both logs a session
-  can be in (the daemon's, or VS Code's extension host) and the planner picker
-  rather than one surface's command.
+  through it. Nor is a session that holds a plan when the turn ends kept from
+  planning: a refused call there is the planner asking for what the user does
+  (running the plan), and the notice would send them to plan again. One
+  notice serves every surface, so it names both logs a session can be in (the
+  daemon's, or VS Code's extension host) and the planner picker rather than
+  one surface's command.
 - **A runner's own call deadline covers the planner's tools (T5).** Codex
   bounds one tool call with the server's `tool_timeout_sec` (300s unless set;
   `startup_timeout_sec`, 30s, bounds its start), a fixed wall-clock deadline
@@ -451,3 +454,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-24 — T4: each planner call is logged, and a turn whose Ordewell calls all failed ends with a notice. T5: Codex's tool deadline checked against 0.171.0's source (300s, fixed, not reset by progress; the 200s call of 2026-10-05 fit inside it), and a planner thread's server sets an hour.
 - 2026-11-24 — L4: `list_runners` waits on no discovery and `list_models` on its runner's alone; any other read, and planning's start, waits at most 10s and answers with what is known. T5's figure follows.
 - 2026-11-24 — T4: a `run_command` whose command exited non-zero is not a failed call; the notice names both logs and the planner picker.
+- 2026-11-24 — T4: no notice for a turn that ends with the session holding a plan.

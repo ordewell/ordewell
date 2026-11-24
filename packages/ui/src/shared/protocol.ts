@@ -123,6 +123,8 @@ export type WebviewToHost =
       runners?: RunnerId[];
       /** The user typed it, so the conversation shows it as theirs; a button's message is not echoed. */
       typed?: boolean;
+      /** Try Again's: the message of a turn that failed, sent as it was, and shown already. */
+      again?: boolean;
     }
   | { type: 'sendSystemCommand'; command: SystemCommand; taskId?: string; requestId?: number }
   | { type: 'editTask'; taskId: string; edit: TaskEdit }

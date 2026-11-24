@@ -46,7 +46,8 @@ interface ThreadItem {
   tool?: string;
   arguments?: Record<string, unknown>;
   result?: unknown;
-  error?: string;
+  /** `mcpToolCall`: `{ message }` (codex-cli 0.171.0), a string from older app-servers. */
+  error?: string | { message?: string } | null;
   status?: string;
   success?: boolean;
   query?: string;
@@ -193,6 +194,11 @@ function flattenText(value: unknown): string {
     if (content !== undefined) return flattenText(content);
   }
   return '';
+}
+
+function itemError(error: ThreadItem['error']): string {
+  if (typeof error === 'string') return error;
+  return typeof error?.message === 'string' ? error.message : '';
 }
 
 /**
@@ -1376,8 +1382,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         this.mcpCallsInProgress.delete(id);
         emit({
           type: 'tool_result', id, name: item.type === 'mcpToolCall' ? shownToolName(item) : item.tool ?? 'tool',
-          output: item.error ?? flattenText(item.result) ?? '',
-          success: item.status !== 'error' && item.success !== false && !item.error,
+          output: itemError(item.error) || flattenText(item.result),
+          // A reply its server marked isError comes as a `failed` call whose result is that reply, with no error.
+          success: item.status !== 'error' && item.status !== 'failed' && item.success !== false && !itemError(item.error),
           ...(subagentId ? { subagentId } : {}),
         });
         return;

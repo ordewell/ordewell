@@ -404,7 +404,7 @@ the limit has reset.
 
 ## The planner's tool calls time out
 
-The planner stays on **Planning…** for minutes and then ends with no plan, or
+The planner stays on **Planning…** for minutes and then ends with no plan, often
 with a warning that its tools failed on every call this turn. The terminal UI's
 status line names the call in flight, as in `Planning… 1m 12s · run_command
 running 58s`, or says `nothing received for 1m 00s` when the planner has been
@@ -421,13 +421,14 @@ instead):
 
 A `started` line with no matching end means Ordewell never answered.
 `cancelled` means the caller gave up on the call: the planner's own CLI stopped
-waiting, or the turn was stopped. Codex ends a tool call at a fixed deadline,
-and Ordewell sets an hour on a Codex planner's thread, so a planner call
-cancelled well before that was stopped by the planner or by you. `error` means
+waiting. Codex ends a tool call at a fixed deadline, and Ordewell sets an hour
+on a Codex planner's thread, so a planner call cancelled well before that was
+stopped by the planner. `error` means
 the tool answered with an error; for `run_command` that includes a command that
 ran and exited non-zero, which is the command's answer and does not count
 towards the warning. `refused` means the call named a tool the planner is not
-given, and `revoked` that its session had ended. If Ordewell answered quickly,
+given, and `revoked` that the planner's session ended under it: you stopped the
+turn, which ends the planner's process, or the session closed. If Ordewell answered quickly,
 the stall is in the planner, not in Ordewell. Send the goal again, or pick
 another planner (`/planner` in the terminal).
 

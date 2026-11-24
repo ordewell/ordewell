@@ -48,6 +48,25 @@ describe('sessionStore', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  // First-run review round 2, F5: a plan keeps 'approved' after its run, so the list cannot tell a finished one by it.
+  describe('the status a session is listed with', () => {
+    const run = (statuses: Task['status'][]) => ({
+      ...createEmptyPlan(), runners: ['claude-code'], status: 'approved' as const, generatedAt: '2026-01-01T00:00:00.000Z',
+      tasks: statuses.map((status, i) => ({ ...createTask({ id: `t${i + 1}`, order: i + 1, title: `Task ${i + 1}`, prompt: 'p' }), status })),
+    });
+
+    it('is completed once every task of a run plan is done or skipped', () => {
+      expect(saveSession(run(['completed', 'skipped']), 'Goal', tmpDir, 'session-4444444444444444').status).toBe('completed');
+      expect(listSessions(tmpDir).find((s) => s.id === 'session-4444444444444444')?.status).toBe('completed');
+    });
+
+    it('stays as the plan says while a task is still to run or failed', () => {
+      expect(saveSession(run(['completed', 'in_progress']), 'Goal', tmpDir, 'session-5555555555555555').status).toBe('approved');
+      expect(saveSession(run(['completed', 'failed']), 'Goal', tmpDir, 'session-6666666666666666').status).toBe('approved');
+      expect(saveSession({ ...run(['completed']), status: 'draft' }, 'Goal', tmpDir, 'session-7777777777777777').status).toBe('draft');
+    });
+  });
+
   describe('the state directory\'s ignore file', () => {
     it('is checked once per directory, not on every save', () => {
       const plan = { ...createEmptyPlan(), runners: ['claude-code'], tasks: [], generatedAt: '2026-01-01T00:00:00.000Z' };

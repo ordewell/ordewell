@@ -77,6 +77,12 @@ export class ChatSessionHost {
     await this.answer(text, typed, runners);
   }
 
+  /** Try Again: the message of a turn that failed, shown in the conversation already, sent as it was. */
+  async sendAgain(text: string, runners?: readonly RunnerId[]): Promise<void> {
+    await this.port.converse(text, { now: false, ...(runners ? { runners } : {}) });
+    await this.turnEnded();
+  }
+
   /**
    * A prompt the chat held because it saw a turn in flight. Whether it is held
    * here is the surface's call; false means that turn has ended since, and the

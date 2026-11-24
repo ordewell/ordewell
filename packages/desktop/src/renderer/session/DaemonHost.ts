@@ -934,7 +934,8 @@ export class DaemonHost {
             return;
           }
         }
-        await this.chat.send(msg.text, msg.typed ?? false, msg.runners);
+        if (msg.again) await this.chat.sendAgain(msg.text, msg.runners);
+        else await this.chat.send(msg.text, msg.typed ?? false, msg.runners);
         return;
       }
       case 'loginPlanner':

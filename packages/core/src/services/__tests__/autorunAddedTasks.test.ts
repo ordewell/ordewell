@@ -178,7 +178,7 @@ describe('a task the planner adds after approval waits for the user', () => {
 
   it('with autorun off', async () => {
     const env = await finishedRun({ settings: { supervisorLevel: 'off', autorun: false }, config: { autonomousMode: true } });
-    expect(await refusedStart(env)).toMatch(/was added after the user approved the plan/);
+    expect(await refusedStart(env)).toMatch(/was added after the user ran the plan/);
   });
 
   it('when autorun is turned off before the edit is made: the setting is read as it commits', async () => {
