@@ -169,17 +169,17 @@ left, where VS Code users look for it.
     [Title bar priority](#title-bar-priority).
 - **Primary action.** There is exactly one, chosen by the session's state, in
   this order:
-  1. *Approve plan*, when a draft waits for approval;
-  2. *Run*, when an approved plan is not running;
-  3. *Stop*, while a run is live;
-  4. *Review & Merge all*, once a run has settled with unmerged landings.
+  1. *Run*, when a plan is drafted, or a started plan is not running and has
+     tasks left (running a plan is what approves it);
+  2. *Stop*, while a run is live;
+  3. *Review & Merge all*, once a run has settled with unmerged landings.
 
   Everything else is in `⋯`: Retry failed, Clean up, Discard run, New session,
   Close session, Take over…, Open in editor, Reveal in Finder or Explorer,
   Reset layout, Check for updates….
 
-  The same action may also appear where the decision is made: Approve plan at
-  the foot of the plan's approval card, Review & Merge all on the run diff.
+  The same action may also appear where the decision is made: Run plan at
+  the foot of the plan's card, Review & Merge all on the run diff.
   There it is the same action with the same label. A view never shows a second,
   different filled button.
 - **Status bar.** As in the first build, at 24 px, and always one line. It
@@ -512,7 +512,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 ### W2. Session while planning
 
 ```
-┌ ● ● ●  acme-app › web › main ▾   ◫ Your checkout ▾                         [✓ Approve plan]  ⋯ ┐
+┌ ● ● ●  acme-app › web › main ▾   ◫ Your checkout ▾                         [▶ Run]  ⋯ ┐
 ├────┬──────────────────┬────────────────────────────────────────────────────┬─────────────────────┤
 │▌☰  │ ☰ SESSIONS     + │ Planner │                                          │ PLAN  Draft · 4  ⑃ ⇥│
 │    │ NEEDS YOU (0)    │ ┌──────────────────────────────────────────────────┐│ ○ #1 Read the auth  │
@@ -563,7 +563,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - A planner question with options draws as buttons in the conversation.
   - Click a draft row to open its task tab, where its prompt, assignment and
     dependencies are edited (the panel itself edits nothing).
-  - *Approve plan* in the title bar once drafting ends; the approval card
+  - *Run* in the title bar once drafting ends; the plan card
     appears at the foot of the conversation ([W3](#w3-plan-approval)).
 - **Loading.** A turn in flight shows the planner's live step ("reading
   src/auth …") and Stop planning. The draft fills in row by row.
@@ -579,7 +579,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
   - A signed-out planner shows `PlannerLogin` in place of the composer
     (ADR-0052).
 
-### W3. Plan approval
+### W3. Plan ready to run
 
 ```
 │ Planner │                                                            │ PLAN  Ready · 4    ⑃ ⇥│
@@ -588,7 +588,7 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 │ │        Here is the plan: four tasks over two repositories …       │ │   Claude · sonnet · lo│
 │ │                                                                   │ │ ○ #2 Add SAML callbac…│
 │ │        ┌───────────────────────────────────────────────────────┐  │ │   Codex · gpt-5 · med │
-│ │        │ Plan ready for approval · 4 tasks · 2 runners         │  │ │   ⇠ #1                │
+│ │        │ Plan ready to run · 4 tasks · 2 runners         │  │ │   ⇠ #1                │
 │ │        │ Isolation  worktree per task in web, api (2 repos)    │  │ │ ○ #3 Add login button │
 │ │        │            lands on main in each                      │  │ │   Claude · sonnet     │
 │ │        │ Run        2 at a time · supervisor Observe ·         │  │ │   ⇠ #2                │
@@ -597,14 +597,14 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
 │ │        │ ⚠ #4 is a script. It runs `npm run test:e2e`          │  │ │                       │
 │ │        │   in its worktree.            ☐ I have read it        │  │ │                       │
 │ │        │                                                       │  │ │                       │
-│ │        │              [Ask for changes]   [✓ Approve plan]     │  │ │                       │
+│ │        │              [Ask for changes]   [▶ Run plan]         │  │ │                       │
 │ │        └───────────────────────────────────────────────────────┘  │ │                       │
 │ │        ┌───────────────────────────────────────────────────────┐  │ │                       │
 │ │        │ Message the planner …                                 │  │ │                       │
 ```
 
 - **Shows.**
-  - *The approval card,* at the foot of the conversation, where the person is
+  - *The plan card,* at the foot of the conversation, where the person is
     already reading. It holds:
     - the plan's size;
     - the isolation preview (`GET /api/workspaces/isolation-preview`): the
@@ -614,21 +614,21 @@ wireframes are drawn at about a 1512 px window. The sizes are the ones in
     - the `PlanApprovalNote`, including any script or effect that needs reading
       (ADR-0035).
   - *The plan panel* shows the whole plan, as rows.
-  - The title bar's primary is *Approve plan*. It is the same action as the
+  - The title bar's primary is *Run*. It is the same action as the
     card's button, so the view still has one primary ([checklist A2](#design-review-checklist)).
 - **Actions.**
-  - Approve (`POST review/approve`), from the card or the title bar.
+  - Run the plan (`POST execute`), from the card or the title bar.
   - Tick each effect.
   - Edit the run settings.
   - *Ask for changes* focuses the composer.
   - Open a task from the panel to edit it in its tab.
 
-  *Approve plan* stays disabled in both places until each effect the note
+  *Run* and *Run plan* stay disabled in both places until each effect the note
   lists is ticked. Its tooltip names what is left.
 - **Loading.** The isolation line shows "Checking repositories …".
 - **Empty.** Not reachable: a plan with no tasks shows W2's empty state.
 - **Error.** A plan that fails validation lists each problem in the card, each
-  one linking to its task, and marks those rows with `✕`. Approval stays
+  one linking to its task, and marks those rows with `✕`. Run stays
   disabled.
 
 ### W4. Run in progress — the plan panel
@@ -1935,7 +1935,7 @@ chrome and canvas values.
 ### Surfaces
 
 A discrete object is drawn as a card: a task card, the planner chat's cards
-(plan approval, an approval, the isolation notice and handoff, a subagent),
+(plan ready to run, an approval, the isolation notice and handoff, a subagent),
 the add-task form. In the desktop app also the Welcome project and runner
 cards and banners, the graph cards, the Needs you items, the Settings groups,
 a Changes task's summary, a Merge all repository, the sidebars' notices and the
@@ -2816,7 +2816,7 @@ routes and the views' data stay as they are.
    `GET /api/runners`. Done: W1's states, each drawn from a test fixture.
 5. **The plan panel, task tab and planner tab.** W2, W3, W4, W6, W7, W14 and
    W17 in the new frame, all built on `TaskSummary`. Done: row parity with the
-   table above, and the approval card's effects gating Approve in both places.
+   table above, and the plan card's effects gating Run in both places.
 6. **The plan graph.** [W5](#w5-the-plan-graph-tab): the stage layout
    function, stage strip, snapping scroller, cards, edge lanes, highlight,
    folding, the critical path, density and keys. Done: the layout function is
@@ -2889,7 +2889,7 @@ them.
    Done: a tag build produces the seven installers. node-pty's native rebuild
    was left to the slice that needed a terminal (the `REBUILD NODE-PTY` marker
    in `packages/desktop/scripts/package.mjs`).
-8. **Session view.** W2, W3, W4, W6, W14 and W17: planning, approval, the List
+8. **Session view.** W2, W3, W4, W6, W14 and W17: planning, the plan card, the List
    with full row parity, the task tab, and the restored and failed states. One
    window per workspace (H6), and Welcome (W1).
 9. **Attention, connection and settings.** Needs you (W7), Reconnecting and
@@ -2911,7 +2911,7 @@ them.
     [the terminal rule](#the-terminal-rule).
 16. **Offline e2e.** Playwright's Electron driver, against the packaged app,
     the mock provider (`bench/live/mock-provider.mjs`) and fake runners, with
-    no API key. It opens, plans, approves, runs, follows a task, answers an
+    no API key. It opens, plans, runs, follows a task, answers an
     approval, reviews a diff, commits in the checkout, and runs Merge all
     through the preflight. It runs once owning the daemon and once attached to
     a CLI one. It is part of `npm run ci`.
