@@ -4,6 +4,7 @@ import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings
 import { checkPlanInvariants } from './PlannedTask';
 import { planAncestors } from './readiness';
 import { fanOutShape, type FanOutShape } from './PlanFanOut';
+import { AFTER_ALL, afterAllReader, waitsOnAll } from './AfterAll';
 
 /**
  * A planner filling in code whose interfaces exist still orders slices by what
@@ -25,9 +26,10 @@ export const CHAIN_REVIEW_MIN = 5;
 /** The key of the review's reply object. */
 export const CHAIN_REVIEW_KEY = 'dependencyChanges';
 
-/** The longest dependency chain among top-level tasks, first task to last; empty for a graph that is not one. */
+/** The longest dependency chain among top-level tasks, "*" read (ADR-0077), first task to last; empty for a graph that is not one. */
 export function longestChain(tasks: readonly Task[]): Task[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const depsOf = afterAllReader(tasks);
   const memo = new Map<string, Task[]>();
   const visiting = new Set<string>();
   const chainTo = (t: Task): Task[] | null => {
@@ -36,7 +38,7 @@ export function longestChain(tasks: readonly Task[]): Task[] {
     if (visiting.has(t.id)) return null;
     visiting.add(t.id);
     let best: Task[] = [];
-    for (const id of t.dependencies) {
+    for (const id of depsOf(t)) {
       const dep = byId.get(id);
       if (!dep) continue;
       const c = chainTo(dep);
@@ -181,10 +183,13 @@ function restoredWaits(tasks: readonly Task[], rewired: readonly Task[], closer:
 function newAncestry(tasks: readonly Task[], next: ReadonlyMap<string, string[]>, gates: ReadonlySet<string>): Map<string, string[]> {
   const first = planAncestors(tasks);
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const readAll = afterAllReader(tasks);
   const out = new Map<string, string[]>();
   for (const [id, deps] of next) {
     const had = new Set(first(byId.get(id)!));
-    const extra = deps.filter((d) => !had.has(d) && !(gates.has(id) && gates.has(d)));
+    // "*" is new only for what it stands for (ADR-0077): on a closing check that waited for everything it adds nothing.
+    const newWait = (d: string) => (d === AFTER_ALL ? !waitsOnAll(byId.get(id)!) && readAll({ id, dependencies: [AFTER_ALL] }).some((a) => !had.has(a)) : !had.has(d));
+    const extra = deps.filter((d) => newWait(d) && !(gates.has(id) && gates.has(d)));
     if (extra.length) out.set(id, extra);
   }
   return out;
@@ -229,9 +234,10 @@ export function applyChainReview(
     }
     if (!byId.has(e.id)) return { ok: false, error: `unknown task "${e.id}"` };
     const deps = [...new Set(e.dependencies as string[])];
-    const unknown = deps.find((d) => !byId.has(d));
+    const unknown = deps.find((d) => d !== AFTER_ALL && !byId.has(d));
     if (unknown) return { ok: false, error: `task "${e.id}" names unknown dependency "${unknown}"` };
-    next.set(e.id, deps);
+    // "*" is no edge the question judges, and its tasks are the plan's to say: a reply cannot take it away (ADR-0077).
+    next.set(e.id, waitsOnAll(byId.get(e.id)!) && !deps.includes(AFTER_ALL) ? [...deps, AFTER_ALL] : deps);
   }
   // Subtasks kept: the merge gate walks through them and their parents' edges.
   const wired = () => tasks.map((t) => ({ ...t, dependencies: next.get(t.id) ?? t.dependencies }));
@@ -261,7 +267,7 @@ export function applyChainReview(
   const heldBack = new Map<string, string[]>();
   for (const [id, extra] of dropped) {
     const own = new Set(firstAncestors(byId.get(id)!));
-    const wanted = [...new Set(extra.flatMap((d) => firstAncestors(byId.get(d)!).filter((a) => own.has(a) && top.has(a))))];
+    const wanted = [...new Set(extra.flatMap((d) => (d === AFTER_ALL ? [] : firstAncestors(byId.get(d)!)).filter((a) => own.has(a) && top.has(a))))];
     const rewiredNow = wired();
     const back = givenBack(rewiredNow, byId.get(id)!, wanted);
     if (!back.length) continue;

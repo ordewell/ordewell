@@ -3,6 +3,7 @@ import { GRANTS, type Grant } from '../services/Mandate';
 import { flattenTasks } from './Task';
 import { ONE_LINE, splitLines } from './lineBreaks';
 import { taggedReadOnlyMode, type RunnerModeInfo } from '../services/ModeResolver';
+import { afterAllReader } from '../services/AfterAll';
 
 /** A delegated task's budget: tokens, and optionally wall-clock time (ADR-0056 M5). */
 export interface DelegatedBudget {
@@ -113,8 +114,9 @@ function atAGate(task: Task): boolean {
 /** Everything `taskId` depends on, directly or through other tasks. */
 function reaches(tasks: readonly Task[], from: Task, target: (task: Task) => boolean): boolean {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const depsOf = afterAllReader(tasks);
   const seen = new Set<string>();
-  const walk = (task: Task): boolean => task.dependencies.some((id) => {
+  const walk = (task: Task): boolean => depsOf(task).some((id) => {
     if (seen.has(id)) return false;
     seen.add(id);
     const dep = byId.get(id);

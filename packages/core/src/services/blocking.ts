@@ -1,15 +1,18 @@
 import { betweenRounds, type LoopSubject } from '../models/Loop';
 import { stopsLoop } from '../models/SkipOrigin';
+import { afterAllReader } from './AfterAll';
 
 /**
  * What the blocked rule reads of a task; structural, so a surface's own task
  * shape answers it too. The loop fields are read only on a loop's check
  * (ADR-0045); a shape without them reads every failed task as a failure.
+ * `research` is read by "*" (ADR-0077), which a research task is no part of.
  */
 export interface BlockingSubject extends Omit<LoopSubject, 'id' | 'status'> {
   id: string;
   status: string;
   dependencies: readonly string[];
+  research?: boolean;
   subtasks?: readonly BlockingSubject[];
 }
 
@@ -30,9 +33,11 @@ export interface HeldDependency {
  * itself waits, through any task, on that ancestor's own subtree is not
  * inherited: the subtask is part of what it waits for, and would wait on
  * itself. Takes the plan tree, or a flat list whose tasks keep their
- * subtasks; a task outside it is held to its own dependencies alone.
+ * subtasks; a task outside it is held to its own dependencies alone. "*" is
+ * read here, for every rule that asks what a task waits on (ADR-0077).
  */
 export function heldDependencies(tasks: readonly BlockingSubject[]): (task: Pick<BlockingSubject, 'id' | 'dependencies'>) => HeldDependency[] {
+  const depsOf = afterAllReader(tasks);
   const byId = new Map<string, BlockingSubject>();
   const parentOf = new Map<string, string>();
   const index = (list: readonly BlockingSubject[], parent?: string): void => {
@@ -58,7 +63,8 @@ export function heldDependencies(tasks: readonly BlockingSubject[]): (task: Pick
       if (inside.has(id)) return true;
       if (seen.has(id)) continue;
       seen.add(id);
-      stack.push(...byId.get(id)?.dependencies ?? []);
+      const task = byId.get(id);
+      if (task) stack.push(...depsOf(task));
       const parent = parentOf.get(id);
       if (parent !== undefined) stack.push(parent);
     }
@@ -73,13 +79,13 @@ export function heldDependencies(tasks: readonly BlockingSubject[]): (task: Pick
     if (known) return known;
     const inside = subtreeOf(parent);
     const found = [
-      ...byId.get(parent)!.dependencies.filter((dep) => !reachesInto(dep, inside)).map((dep) => ({ id: dep, holder: parent })),
+      ...depsOf(byId.get(parent)!).filter((dep) => !reachesInto(dep, inside)).map((dep) => ({ id: dep, holder: parent })),
       ...inheritedOf(parent),
     ];
     passedDown.set(parent, found);
     return found;
   };
-  return (task) => [...task.dependencies.map((id) => ({ id, holder: task.id })), ...inheritedOf(task.id)];
+  return (task) => [...depsOf(task).map((id) => ({ id, holder: task.id })), ...inheritedOf(task.id)];
 }
 
 /** Statuses of a task that has not started, the only ones a block holds back. */

@@ -1,6 +1,7 @@
 import { flattenTasks, type AwaitingReason, type ConversationMessage, type Task } from '../models/Task';
 import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution';
 import { repeatingChecks } from './blocking';
+import { afterAllReader } from './AfterAll';
 import type { StartWait } from './readiness';
 
 /**
@@ -41,8 +42,9 @@ function holdOf(task: Readonly<Task>, waits: ReadonlyMap<string, readonly StartW
 /** How many tasks not yet done need each task, however far down. */
 function holdsBackIn(tasks: readonly Task[]): (id: string) => number {
   const dependents = new Map<string, string[]>();
+  const depsOf = afterAllReader(tasks);
   for (const task of tasks) {
-    for (const dep of task.dependencies) dependents.set(dep, [...(dependents.get(dep) ?? []), task.id]);
+    for (const dep of depsOf(task)) dependents.set(dep, [...(dependents.get(dep) ?? []), task.id]);
   }
   const open = new Set(tasks.filter((t) => t.status !== 'completed' && t.status !== 'skipped').map((t) => t.id));
   return (id) => {

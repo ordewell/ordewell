@@ -7,6 +7,7 @@ import { renderTaskSkills } from './taskSkills';
 import { joinPromptParts, type PromptPart } from '../models/PromptPart';
 import { betweenRounds, loopRoundOf, type TaskLoop } from '../models/Loop';
 import { quotedMessageArgs } from './landingMessage';
+import { afterAllReader } from './AfterAll';
 import { REPORT_MAX_CHARS, artifactLines, boundedHandoffLines, findingLines, namedHandoff, openingLines, wordsFrom, type HandoffDigest, type StoredHandoff } from '../models/Handoff';
 
 const MAX_TAIL_CHARS = 500;
@@ -46,7 +47,7 @@ export function summarizeOutput(reviewReason: string | undefined, output: string
 
 /** `allTasks` is the plan tree, read in plan order, so a subtask is named by its dotted label. */
 export function collectDirectDependencyOutputs(task: Task, allTasks: readonly Task[]): PriorOutput[] {
-  const deps = new Set(task.dependencies ?? []);
+  const deps = new Set(afterAllReader(allTasks)(task));
   const out: PriorOutput[] = [];
   for (const { task: dep, label } of flattenTasksWithParents(allTasks)) {
     const skipped = dep.status === 'skipped' ? { ...(dep.skipReason ? { reason: dep.skipReason } : {}) } : undefined;
@@ -177,7 +178,8 @@ export interface LandingBeside {
  */
 function waitingFor(task: Task, plan: readonly Task[]): Set<string> {
   const flat = flattenTasksWithParents(plan);
-  const waits = new Map(flat.map(({ task: t, parent }) => [t.id, { deps: t.dependencies, parent: parent?.id }]));
+  const depsOf = afterAllReader(plan);
+  const waits = new Map(flat.map(({ task: t, parent }) => [t.id, { deps: depsOf(t), parent: parent?.id }]));
   const found = new Set<string>();
   let grew = true;
   while (grew) {

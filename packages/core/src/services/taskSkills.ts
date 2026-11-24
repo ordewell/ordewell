@@ -5,6 +5,7 @@ import { opLabel, type OpRef, type TaskOp } from './TaskOps';
 import { requestedSkills } from './PlanValidator';
 import { cleanEnv, execFileWithTimeout } from './gitExec';
 import { quotedList } from '../utils/quotedList';
+import { afterAllReader } from './AfterAll';
 
 /**
  * Task skills end to end (ADR-0024): a skill reaches a runner only by being
@@ -245,13 +246,14 @@ function unprovided(tasks: readonly Task[], lookup: Pick<SkillLookup, 'findSkill
     }
   };
   visit(tasks);
+  const depsOf = afterAllReader(tasks);
   const upstream = (task: Task): Task[] => {
     const seen = new Set<string>();
     const queue = [task];
     for (let p = parentOf.get(task.id); p; p = parentOf.get(p.id)) queue.push(p);
     const found: Task[] = [];
     for (let at = queue.shift(); at; at = queue.shift()) {
-      for (const id of at.dependencies ?? []) {
+      for (const id of depsOf(at)) {
         const dep = byId.get(id);
         if (!dep || seen.has(id)) continue;
         seen.add(id);

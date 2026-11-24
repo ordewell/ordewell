@@ -8,8 +8,10 @@
  * What is resolved is what has one obvious reading: a dependency that, after a
  * normalisation, names exactly one task. Two readings is a guess, and a guess
  * would wire work to the wrong task; those are left for the validator to
- * refuse and the repair loop to put back to the model.
+ * refuse and the repair loop to put back to the model. "*" names every other
+ * task (ADR-0077), never one it resembles.
  */
+import { AFTER_ALL } from './AfterAll';
 
 type Json = Record<string, unknown>;
 
@@ -71,7 +73,7 @@ export function resolveDependencyIds(plan: unknown): string[] {
     const next: unknown[] = [];
     for (const dep of t.dependencies) {
       const written = typeof dep === 'string' ? dep : undefined;
-      if (written === undefined || known.has(written)) { next.push(dep); continue; }
+      if (written === undefined || written === AFTER_ALL || known.has(written)) { next.push(dep); continue; }
       let target: { id: string; title: string } | undefined;
       for (const [i, keyOf] of KEY_OF_DEPENDENCY.entries()) {
         const key = keyOf(written);
@@ -104,7 +106,7 @@ export function unknownDependencies(plan: unknown): UnknownDependency[] {
   walk(tasks, (t) => {
     if (!Array.isArray(t.dependencies)) return;
     for (const dep of t.dependencies) {
-      if (typeof dep === 'string' && !known.has(dep)) found.push({ taskId: str(t.id) ?? '', title: str(t.title) ?? '', dependency: dep, valid });
+      if (typeof dep === 'string' && dep !== AFTER_ALL && !known.has(dep)) found.push({ taskId: str(t.id) ?? '', title: str(t.title) ?? '', dependency: dep, valid });
     }
   });
   return found;
