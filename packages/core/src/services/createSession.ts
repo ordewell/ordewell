@@ -61,6 +61,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
+import { claimTrailerDisclosure, TRAILER_DISCLOSURE } from './TrailerDisclosure';
 import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
@@ -1857,6 +1858,8 @@ export class Session {
           return true;
         });
         this.broadcast({ type: 'isolation_merge', result, trigger });
+        // No confirmation was asked of an automatic merge, so the trailer is disclosed beside it (ADR-0030).
+        if (result.outcome === 'merged' && claimTrailerDisclosure({ trailerOn: this.plannedWithTrailer() })) this.notice('info', TRAILER_DISCLOSURE);
         this.announceClosed();
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
       },

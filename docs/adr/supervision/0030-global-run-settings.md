@@ -171,6 +171,16 @@ Ordewell; off for those who would rather keep history free of it. The run keeps
 no copy: the line is read from the user's setting as each message is written,
 so a change reaches the next landing, in any session, without a restart.
 
+The line is disclosed once per machine, at the moment it matters: the first
+merge that would write it adds one sentence to its confirmation (the terminal
+UI's, and `mergeAllConfirmation` on the hosts that share it) saying the commit
+will end with `Planned-with: Ordewell` and that `ordewell trailer off` removes
+it. With automatic merging there is no confirmation, so the sentence is posted
+once as a notice beside the merge. With the setting off nothing is said. Core's
+`claimTrailerDisclosure` is the record, an exclusively created file in the
+global data directory shared by every surface, claimed only where the line is
+shown, as the first-run feedback notice is (ADR-0075).
+
 ### Seeing them
 
 The welcome screen's Setup block, in the TUI and in VS Code's empty chat, gains
@@ -572,3 +582,4 @@ the daemon reads it from there at generation.
 - 2026-11-09 — the planner is told its user's surface and the run settings in a SURFACE AND SETTINGS block of its turn, not its system prompt, and texts that tell it what the user does name the action and that surface's control rather than a button; with automatic merging on they say the merge happens by itself. A TUI user was told to press buttons the terminal does not have, and asked for merges already automatic.
 - 2026-11-15 — the surface is the one the client sending the message states, kept for a wake turn, with the lease's host only for a client that states none; a `cli` surface names `ordewell` commands. A CLI user, and a TUI joining a shared daemon, were told every surface's controls.
 - 2026-11-22 — the user's level after a failure catches the supervisor up: a task failed or held with work waiting that it was never told of is named in one wake as the level becomes Act, or as a run starts or continues at Act, and a level set between runs lifts the last run's stop. Seen live: after an outage stopped supervision, a loop's check failed with four tasks waiting, the user set Act again, and nothing told the supervisor.
+- 2026-11-24 — the Planned-with line is disclosed once per machine, in the first merge confirmation that would write it (or as a notice beside an automatic merge), with the way to turn it off.
