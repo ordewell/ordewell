@@ -322,6 +322,18 @@ export interface RunnerEntry {
   provider?: AiProvider;
 }
 
+/** One skill as a composer lists it: never its body (a task card shows the name, the planner reads the rest). */
+export interface SkillEntry {
+  name: string;
+  description: string;
+  appliesTo: 'planner' | 'task';
+  userInvocable: boolean;
+}
+
+export interface SkillsResponse {
+  skills: SkillEntry[];
+}
+
 export interface RunnersResponse {
   runners: RunnerEntry[];
   orchestratorModel: string;

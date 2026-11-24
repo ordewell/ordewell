@@ -229,12 +229,12 @@ describe('planning', () => {
     await runEffect({ type: 'startConversation', goal: 'x' }, h.deps);
 
     expect(h.actions.filter((a) => a.type === 'sessionMessage')).toEqual([
-      { type: 'sessionMessage', message: { type: 'planner_turn_started', turnId: 't1', prompt: 'x' }, sessionId: 'session-new' },
-      { type: 'sessionMessage', message: { type: 'research_step', tool: 'bash', args: '{"command":"rm -rf /"}', toolCallId: 'tc-1', turnId: 't1' }, sessionId: 'session-new' },
-      { type: 'sessionMessage', message: { type: 'research_step_done', step, turnId: 't1' }, sessionId: 'session-new' },
-      { type: 'sessionMessage', message: { type: 'subagent_started', subagentId: 'sa1', brief: 'look', turnId: 't1' }, sessionId: 'session-new' },
-      { type: 'sessionMessage', message: { type: 'planner_usage', turnId: 't1', totals: { inputTokens: 10 } }, sessionId: 'session-new' },
-      { type: 'sessionMessage', message: { type: 'planner_turn_ended', turnId: 't1', outcome: 'message' }, sessionId: 'session-new' },
+      { type: 'sessionMessage', message: { type: 'planner_turn_started', turnId: 't1', prompt: 'x' }, sessionId: 'session-new', at: expect.any(String) },
+      { type: 'sessionMessage', message: { type: 'research_step', tool: 'bash', args: '{"command":"rm -rf /"}', toolCallId: 'tc-1', turnId: 't1' }, sessionId: 'session-new', at: expect.any(String) },
+      { type: 'sessionMessage', message: { type: 'research_step_done', step, turnId: 't1' }, sessionId: 'session-new', at: expect.any(String) },
+      { type: 'sessionMessage', message: { type: 'subagent_started', subagentId: 'sa1', brief: 'look', turnId: 't1' }, sessionId: 'session-new', at: expect.any(String) },
+      { type: 'sessionMessage', message: { type: 'planner_usage', turnId: 't1', totals: { inputTokens: 10 } }, sessionId: 'session-new', at: expect.any(String) },
+      { type: 'sessionMessage', message: { type: 'planner_turn_ended', turnId: 't1', outcome: 'message' }, sessionId: 'session-new', at: expect.any(String) },
     ]);
   });
 
@@ -691,7 +691,7 @@ describe('execution', () => {
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
 
     expect(h.actions).toEqual([
-      { type: 'sessionMessage', message: event, sessionId: 's1' },
+      { type: 'sessionMessage', message: event, sessionId: 's1', at: expect.any(String) },
       { type: 'planBroadcast', plan, sessionId: 's1' },
       { type: 'runMessage', message: RUN_DONE, sessionId: 's1' },
     ]);
@@ -761,7 +761,7 @@ describe('execution', () => {
     const h = withEvents({ type: 'task_output', taskId: 'a', text: 'npm test' }, token);
     await runEffect({ type: 'execute', sessionId: 's1' }, h.deps);
     expect(h.actions).toEqual([
-      { type: 'sessionMessage', message: token, sessionId: 's1' },
+      { type: 'sessionMessage', message: token, sessionId: 's1', at: expect.any(String) },
       { type: 'runMessage', message: RUN_DONE, sessionId: 's1' },
     ]);
   });

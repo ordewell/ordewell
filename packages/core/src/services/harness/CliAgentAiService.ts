@@ -35,6 +35,7 @@ import { settleReply, type ReplyAttempt } from '../settleReply';
 import { ReplySplitter } from '../replyStream';
 import { redactSourceText } from '../../utils/redactSecrets';
 import { abortScope } from '../../utils/abortScope';
+import { daemonLogPath } from '../../utils/daemonProcess';
 import { harnessResearchAgent, withResearchAgent, type HarnessResearchAgentDeps } from './harnessResearchAgent';
 import { researchAgentSetting, type OfferedResearchAgent, type ResearchAgentSetting } from './researchAgentSetting';
 import { loginResearchAgent, openCodeVersion } from './openCodeResearchAgent';
@@ -51,7 +52,7 @@ import { sensitiveEnvValues } from '../outboundSecrets';
 import type { AgentAdapter, AgentEvent, AgentProcessDeps, PlannerAsk, PlannerStartOptions, UsageLimitSignal } from './AgentAdapter';
 import type { PlannerReadLimit } from '../plannerReadLimit';
 import { connectorFor, createPlannerAdapter } from './connectors';
-import { mapAgentTool, normalizeAgentArgs } from './agentTools';
+import { isOrdewellTool, mapAgentTool, normalizeAgentArgs } from './agentTools';
 import { decidePlannerPermission, type PlannerPermissionGate } from './plannerPermissions';
 import { DEFAULT_PLANNER_MODES, type PlannerModes } from '../plannerModes';
 import { mcpClientConfig, sharedMcpServer, type OrdewellMcpServer } from '../mcp';
@@ -145,6 +146,27 @@ interface HarnessTurn {
   aborted?: boolean;
   /** Subagents the agent left running when it ended the turn. See {@link MAX_AGENT_WAITS}. */
   backgroundAgents: number;
+  /** How the planner's own calls to Ordewell's tools ended: an envelope's denial is neither. */
+  ordewellCalls?: OrdewellCalls;
+}
+
+interface OrdewellCalls {
+  answered: number;
+  failed: number;
+}
+
+/**
+ * A harness planner plans only through `submit_plan` (ADR-0025), so a turn
+ * whose every call to Ordewell's tools failed, a runner's own deadline
+ * included, ends in prose with nothing planned and nothing to say why. Said
+ * once that turn is over, with the log that has each call and the two ways on (ADR-0022 T4).
+ */
+export function toolsFailedNotice(logPath: string = daemonLogPath()): string {
+  return [
+    "The planner's tools failed on every call this turn, so it could not plan.",
+    `Each call is in the daemon's log, ${logPath}.`,
+    'Send the goal again, or switch planner with the planner picker (/planner in the terminal).',
+  ].join(' ');
 }
 
 /** What a planner session is spawned with and decides its runner's requests against. */
@@ -586,12 +608,19 @@ export class CliAgentAiService implements IAiService {
     const carriedRuns: TurnRun[] = [];
 
     const waits = { used: 0 };
+    const calls: OrdewellCalls = { answered: 0, failed: 0 };
+    const count = (turn: HarnessTurn) => {
+      calls.answered += turn.ordewellCalls?.answered ?? 0;
+      calls.failed += turn.ordewellCalls?.failed ?? 0;
+    };
     const send = async (text: string): Promise<ReplyAttempt> => {
       const { turn, researchLog } = await this.runTurnAwaitingAgents(session, text, onProgress, combined, waits, (past) => {
+        count(past);
         carried.push(past.text);
         // The wait that follows is a call the turn made after them.
         carriedRuns.push(...past.runs.map((run): TurnRun => ({ ...run, narration: true })));
       });
+      count(turn);
       return {
         text: turn.text,
         runs: [...carriedRuns.splice(0), ...turn.runs],
@@ -617,6 +646,7 @@ export class CliAgentAiService implements IAiService {
         onProgress,
         signal: combined,
       });
+      if (turn.kind === 'message' && !turn.aborted && !turn.failed && calls.failed > 0 && calls.answered === 0) session.notice?.('warn', toolsFailedNotice());
       return turn;
     } finally {
       this.activeAbort = null;
@@ -709,6 +739,9 @@ export class CliAgentAiService implements IAiService {
     let usageLimit: UsageLimitSignal | false | undefined;
     let stepIndex = 0;
     let backgroundAgents = 0;
+    // The planner's own calls to Ordewell's tools, by call id, until they settle.
+    const ordewellCallIds = new Set<string>();
+    const ordewellCalls: OrdewellCalls = { answered: 0, failed: 0 };
 
     const truncate = (value: string) =>
       value.length > LOG_MAX_CHARS ? `${value.slice(0, LOG_MAX_CHARS)}\n[... truncated, total ${value.length} chars]` : value;
@@ -723,6 +756,7 @@ export class CliAgentAiService implements IAiService {
       // this step persists into the session file is ours, and it must not hold
       // credentials in plaintext.
       const output = redactSourceText(rawOutput);
+      if (ordewellCallIds.delete(id) && outcome !== 'denied') ordewellCalls[success ? 'answered' : 'failed'] += 1;
       const call = pendingCalls.get(id);
       pendingCalls.delete(id);
       const subagentId = call?.subagentId ?? reportedBy;
@@ -769,6 +803,7 @@ export class CliAgentAiService implements IAiService {
           const mapped = mapAgentTool(event.name);
           const args = JSON.stringify(normalizeAgentArgs(mapped.tool, event.args));
           const subagentId = event.subagentId;
+          if (!subagentId && isOrdewellTool(event.name)) ordewellCallIds.add(event.id);
           pendingCalls.set(event.id, {
             tool: mapped.tool, toolLabel: mapped.toolLabel, args, subagentId, at: new Date().toISOString(), slot: logSlots.push(null) - 1,
           });
@@ -937,9 +972,9 @@ export class CliAgentAiService implements IAiService {
 
     if (error) {
       const failure = await this.explainSignedOut(reply.fail(error));
-      return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents };
+      return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error: failure, usageLimit, aborted: signal?.aborted, backgroundAgents, ordewellCalls };
     }
-    return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error, aborted: signal?.aborted, backgroundAgents };
+    return { text: reply.text, runs: reply.runs(), researchLog: settledLog(), error, aborted: signal?.aborted, backgroundAgents, ordewellCalls };
   }
 
   /**
