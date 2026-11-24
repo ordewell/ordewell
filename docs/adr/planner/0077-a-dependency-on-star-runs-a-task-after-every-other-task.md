@@ -92,6 +92,8 @@ path and closing-check metrics measure the plan the scheduler runs.
 - The one-shot planner's prompt, whose dependency wording ADR-0072 R4 holds
   as measured: it does not mention `"*"`, and the one-shot intake accepts it.
 - Groups of tasks, id patterns or any other set a dependency could name.
+- A delegated task's check: it is still a task that names the delegated task
+  directly (ADR-0055 D8), and `"*"` makes no task one.
 
 ## Considered options
 
