@@ -6,6 +6,7 @@ import { taggedReadOnlyMode, type RunnerModeInfo } from './ModeResolver';
 import { resolveAssignment, type AssignmentAdjustment, type AssignmentCatalog } from './TaskAssignment';
 import { scriptBodyErrors } from '../models/ScriptTask';
 import { readSpec } from './TaskSpec';
+import { AFTER_ALL } from './AfterAll';
 import { loopErrors, loopSpec } from '../models/Loop';
 import { DELEGATION_UNAVAILABLE, delegationErrors, notOnADelegatedMessage, type DelegatedBudget, type DelegationRules, type TaskScope } from '../models/Delegation';
 
@@ -224,6 +225,8 @@ export function plannedTask(spec: unknown, catalog: IntakeCatalog, at: Placement
   if (freshIds && plannerId) renamed.set(plannerId, id);
   // A field in a shape it cannot hold is refused before anything reads it: read loosely, a string of dependencies was no list, and planned none.
   for (const e of readSpec(spec, 'new')) errors.push({ taskId: id, field: e.field, message: `${where} ${e.message}` });
+  // A dependency on this id would read as after-all (ADR-0077), and no task could then be named alone.
+  if (plannerId === AFTER_ALL) errors.push({ taskId: id, field: 'id', message: `${where} has the id "${AFTER_ALL}", which is not an id a task can have: "${AFTER_ALL}" in a dependency list means every other task` });
 
   const delegating = catalog.delegationRefusal === null;
   const type: Task['type'] = raw.type === 'user' || raw.type === 'ai' || raw.type === 'script' || raw.type === 'delegated' ? raw.type : base.type ?? 'ai';

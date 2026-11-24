@@ -46,18 +46,24 @@ that names a dependency names `"*"` as "after all other tasks".
   subtask waits on this task or one of its subtasks comes after it); a
   research task, which reports to the planner and lands nothing; a loop's
   body, which runs only for its check and is waited for through it (ADR-0045
-  L3, L4); and every other `"*"` task and whatever comes after one. A PR
-  opener after the closing check, a loop's fix after its check, and a task
-  after a loop are left out by construction, so phases in sequence still work.
+  L3, L4); and every other `"*"` task and, unless this task itself comes
+  after that `"*"` task, whatever comes after it. A PR opener after the
+  closing check, a loop's fix after its check, and a task after a loop are
+  left out by construction, so phases in sequence still work.
 - **Two "*" tasks (A2).** They do not wait for each other, nor for each
-  other's followers, unless one names the other. That is also why `"*"`
-  closes no cycle: a task it stands for reaches no `"*"` task through stated
-  edges, so a cycle through one is a cycle the stated edges already make, and
-  the plan's cycle check, which reads stated edges, refuses it.
+  other's followers, unless one comes after the other: a `"*"` task after
+  another one, by a stated edge, also waits for the work between them, since
+  it comes after that work too. That is also why `"*"` closes no cycle: of the
+  tasks that do not come after a `"*"` task T, every stated edge stays among
+  them, and no other `"*"` task among them stands for T or what follows T, so
+  no path leaves T's followers and returns, and the plan's cycle check, which
+  reads stated edges, refuses any cycle the plan wrote.
 - **Top-level only (A3).** A subtask that holds `"*"` is refused with why: it
   already waits for what its parent waits for. A loop's body task that holds
   it is refused too, since it depends only on its check, on what its check
-  depends on, and on its fellow body tasks.
+  depends on, and on its fellow body tasks, even where its check holds `"*"`
+  itself. No task has the id `"*"`: a plan that gives one is refused, since a
+  dependency on it would read as after-all.
 - **Never written out (A4).** The stored plan, the session file and every
   snapshot keep `"*"` as written. A session saved before this decision has no
   `"*"` and reads exactly as it did.
@@ -65,7 +71,9 @@ that names a dependency names `"*"` as "after all other tasks".
   pending `"*"` task after everything it stands for, so a closing check
   follows a task added after it. A running or finished one is read by the ids
   it names alone there: work added once it started is not work it ran after,
-  and moving it is what pinning refuses.
+  and moving it is what pinning refuses. What a revert reaches reads it the
+  same way: a task that landed on a recorded base depends on that base, so
+  reverting a task added after it leaves it alone.
 - **The chain review keeps it (A6).** A review reply that gives a `"*"` task a
   list without `"*"` gets `"*"` back, and the rest of the reply stands: `"*"`
   is no edge the chain question judges. A reply may name `"*"` itself; on a
@@ -113,7 +121,9 @@ path and closing-check metrics measure the plan the scheduler runs.
 - **Reading "after" over every edge, `"*"` ones included, as the only rule.**
   Rejected: two `"*"` tasks each with a follower then wait on each other's
   followers, which can close a cycle the plan never wrote. Leaving out what
-  follows another `"*"` task makes that impossible.
+  follows another `"*"` task makes that impossible, except for a `"*"` task
+  that itself comes after it: leaving them out there too skipped the work
+  between two closing checks.
 
 ## Consequences
 
@@ -127,3 +137,7 @@ path and closing-check metrics measure the plan the scheduler runs.
 ## History
 
 - 2026-11-24 — accepted.
+- 2026-11-24 — review fixes: a `"*"` task after another waits for the work
+  between them (A1, A2); a revert reads a finished `"*"` task's recorded base
+  (A5); a loop body may not hold `"*"` whatever its check holds (A3); `"*"` is
+  no task id.
