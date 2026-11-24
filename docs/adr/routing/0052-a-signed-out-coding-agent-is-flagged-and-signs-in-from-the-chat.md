@@ -28,8 +28,9 @@ or the extension host.
 ## Decision
 
 **The preflight asks each runner's own status command with the workspace
-environment; a signed-out agent stays listed and usable but is flagged, and a
-planner turn is refused before it is sent with the way in kept in the message;
+environment; a signed-out agent stays listed, enabled and usable but is flagged
+to the user and not offered to a planner as a runner until its check reads
+signed in, and a planner turn is refused before it is sent with the way in kept in the message;
 the user signs in from the chat by Ordewell handing the terminal to the login
 command the runner declares, then asks again. Wherever Ordewell says an agent is
 signed out, it names the way in, from one core function.**
@@ -81,6 +82,25 @@ also re-probes installs and the Codex sandbox
 and workspace (`recordRunnerAuth`, `recordedRunnerAuth`) because the planner gate
 is synchronous and one daemon may serve workspaces whose accounts differ
 (ADR-0016).
+
+### Not offered to the planner
+
+An enabled agent whose recorded verdict for the session's workspace is
+`signed-out` is not offered to a planner: `SessionCatalog.offeredRunners` leaves
+it out of `list_runners`, `list_models`, the per-turn `<available_models>` block,
+the runners a first turn plans for and what a plan or edit may assign
+(`runnersFor('plan' | 'edit')`), so the supervisor moving work never picks it
+either. The planner is told why, once per agent, as `Codex: signed out, not
+offered until signed in`: `list_runners`' `notOffered`, `list_models`' refusal,
+a refused plan's reply beside its `enabledRunners`, and a `<not_offered>` line in
+the per-turn block. The user's `enabledRunners` setting is never rewritten: the
+catalog reads the record at each call, so the agent is offered again by itself
+once a runner-list probe or a turn records it signed in, and the assignment
+scope the user's flags read keeps it, so a task already on it is not called
+switched off; it fails at its start with the sign-in hint, as above. An
+`unknown` verdict (OpenCode, Pi, Copilot CLI, which declare no status command)
+leaves the agent offered. A goal with every enabled agent signed out is refused
+with the reasons and `Sign in to one and send the goal again`.
 
 ### The way in, worded once
 
@@ -215,9 +235,11 @@ both surfaces.
   one.
 - **Signed out is never said without the way in.** Every surface words it with
   `describeSignIn` and its own syntax: Ordewell's way first, then the agent's.
-- **A signed-out agent is flagged, never hidden.** Usability stays about the
-  binary and the connector; the login is a flag with the action that fixes it
-  beside it, for every flagged agent and not only the planner.
+- **A signed-out agent is flagged to the user, never hidden from them, and not
+  offered to the planner.** Usability stays about the binary and the connector;
+  the login is a flag with the action that fixes it beside it, for every flagged
+  agent and not only the planner. A planner is told why it is missing, and
+  offered it again once its check reads signed in.
 - **A login names one runner and never moves the planner.** The command comes
   from that runner's manifest, and no path writes the planner choice.
 - **The probe reads no credential.** It runs the runner's status command and
@@ -265,6 +287,12 @@ art for the TTL and the refresh trigger.
   would remove the row where the user wants to act and make the planner vanish
   and reappear as they log in. ADR-0009 dropped greyed-out rows for agents that
   cannot plan at all; a signed-out one is a different case.
+- **Keep offering a signed-out agent to the planner, flagged.** Chosen first,
+  then dropped: the planner assigned tasks to it, and each failed once it
+  started, with the sign-in hint, after the plan was approved.
+- **Switch a signed-out agent off in `enabledRunners`.** Rejected: the setting
+  is the user's choice, and rewriting it would keep the agent off after the
+  login that fixes it.
 - **Treat `unknown` as signed-out.** Rejected: an older or offline CLI, an
   unparseable answer or a custom provider with its own key would be refused work
   it can do.
@@ -353,3 +381,6 @@ art for the TTL and the refresh trigger.
 - 2026-11-16 — the key entry is `/key-set` (`/key` still opens it); the built-in runner is no key-based signed-out agent: a provider runner is listed only with its key, signed in, with no sign-in route ([ADR-0070](../runners/0070-the-built-in-ordewell-runner-runs-in-process.md)).
 - 2026-11-21 — the desktop welcome window words its runner cards with a syntax of
   its own that names the card's buttons; `SignInSyntax` gains `keyVerb`.
+- 2026-11-24 — a signed-out agent is no longer offered to the planner: left out
+  of what it may list and assign, with the reason, and offered again once signed
+  in; the user's `enabledRunners` is untouched.

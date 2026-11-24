@@ -2457,7 +2457,8 @@ describe('worktree isolation', () => {
       await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', pastChecks: true }, h.deps);
 
       expect(mergeRun).toHaveBeenCalledWith('s1', { pastChecks: true });
-      expect(messageOf(h.actions, 'notice')).toMatch(/Merged ordewell\/r1\/integration/);
+      // The daemon's own notice says it merged; the reply says nothing, so it is not said twice.
+      expect(messageOf(h.actions, 'notice')).toBeUndefined();
     });
 
     it('still reports any other refusal as a failure', async () => {
@@ -2510,12 +2511,12 @@ describe('worktree isolation', () => {
     expect(messageOf(h.actions, 'failed')).toContain('api was merged already and stays merged.');
   });
 
-  it('says a group merged into every repository', async () => {
+  it('leaves a group merge\'s one "Merged" line to the daemon\'s notice', async () => {
     const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'merged' }) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration', group: true }, h.deps);
 
-    expect(messageOf(h.actions, 'notice')).toBe('Merged ordewell/r1/integration into the checked-out branch of every repository.');
+    expect(types(h.actions)).toEqual([]);
   });
 
   it('ignores socket greetings that are not session messages', async () => {
@@ -2534,13 +2535,13 @@ describe('worktree isolation', () => {
     expect(h.actions).toEqual([{ type: 'handoffDiff', diff: 'diff --git a/x b/x', sessionId: 's1' }]);
   });
 
-  it('a merged run says where it landed, and leaves the run to the Session\'s own word on whether it closed', async () => {
+  it('a merged run says nothing of its own, and leaves the run to the Session\'s own word on whether it closed', async () => {
     const h = harness({ mergeRun: vi.fn().mockResolvedValue({ outcome: 'merged' }) } as Partial<OrdewellApi>);
 
     await runEffect({ type: 'isolationMerge', sessionId: 's1', branch: 'ordewell/r1/integration' }, h.deps);
 
-    expect(messageOf(h.actions, 'notice')).toMatch(/Merged ordewell\/r1\/integration into your checked-out branch/);
-    expect(types(h.actions)).toEqual(['notice']);
+    // The daemon's notice of the merge is the one "Merged" line; the reply adds none.
+    expect(types(h.actions)).toEqual([]);
   });
 
   it('keeps the run to hand over after a Merge all that did not merge everything', async () => {

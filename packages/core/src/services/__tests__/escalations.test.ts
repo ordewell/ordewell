@@ -476,6 +476,10 @@ describe('a planner reply to a wake-up that waits on the user (ADR-0053, ADR-002
     expect(entry.reason).toContain('Reply to the planner');
   });
 
+  it('is listed beside a failed task, which a run that ended on it leaves open', () => {
+    expect(shape(listFor([task('t1', 1, { status: 'completed' })], { run: { open: true, plannerWaits: at } })).map((e) => e.kind)).toEqual(['planner']);
+  });
+
   it('comes after the work waiting to be merged', () => {
     const merge: RunMergeView = { waitingAtGate: false, paused: false, repos: [], landed: [{ taskId: 't1', order: 1, title: 'Task t1' }] };
     expect(shape(listFor([task('t1', 1, { status: 'completed' })], { attempts: { t1: 1 }, run: { ...closed, merge, id: 'r1' } })).map((e) => e.kind))
@@ -483,7 +487,6 @@ describe('a planner reply to a wake-up that waits on the user (ADR-0053, ADR-002
   });
 
   it.each<[string, Partial<EscalationRun>]>([
-    ['while the run is open', { open: true, plannerWaits: at }],
     ['while something moves a task on unasked', { open: false, advancing: true, plannerWaits: at }],
     ['when no reply waits', { open: false }],
   ])('is left out %s', (_name, run) => {
