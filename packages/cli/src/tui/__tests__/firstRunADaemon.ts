@@ -3,7 +3,7 @@ import http from 'http';
 import https from 'https';
 import type { AddressInfo } from 'net';
 import type { Duplex } from 'stream';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -24,7 +24,7 @@ import {
   type IConfig,
   type IRunner,
 } from '@ordewell/core';
-import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
+import { FakeRunnerSession, homeEnv, removeDir, setEnv } from '@ordewell/core/testing';
 import { stageMachine, writeTwoFileProject, type MachineAgents, type StagedMachine } from '../../../../core/src/services/__tests__/firstRunAMachine';
 import { attachWsHandler, createApp } from '../../../../web/server/app';
 import { createRequestListener } from '../../../../web/server/nodeAdapter';
@@ -230,7 +230,8 @@ export async function firstRunADaemon(agents: MachineAgents, options: FirstRunOp
       restoreEnv();
       clearAugmentedPathCache();
       vi.restoreAllMocks();
-      rmSync(dir, { recursive: true, force: true });
+      // Windows keeps a directory busy (EBUSY) while work the pool started winds down: wait it out without blocking the loop it needs.
+      await removeDir(dir);
     },
   };
 }
