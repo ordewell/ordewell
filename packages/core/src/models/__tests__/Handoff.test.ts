@@ -287,7 +287,7 @@ describe('what a landed task changed, as Ordewell counts it', () => {
   });
 
   it('is no count at all for a landing of no file, or none counted', () => {
-    const authored = { summary: 'Nothing.', findings: [], findingCount: 0 };
+    const authored: HandoffDigest = { summary: 'Nothing.', findings: [], findingCount: 0 };
 
     expect(withChange(authored, { files: 0, added: 0, removed: 0, binary: 0 })).toBe(authored);
     expect(withChange(authored, undefined)).toBe(authored);
