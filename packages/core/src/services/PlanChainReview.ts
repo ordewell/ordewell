@@ -22,6 +22,51 @@ import { fanOutShape, type FanOutShape } from './PlanFanOut';
  */
 export const CHAIN_REVIEW_MIN = 5;
 
+/**
+ * A plan can run slowly with a short chain too: a planner set every slice
+ * after a wall of tasks beside each other before them, and the slowest of
+ * those held them all. A recorded plan's 30 slices each waited for all 13
+ * tasks before them and the last of those finished at minute 156; another's
+ * 37 waited for 7 with a chain of four, and no review ran. So a plan that fans
+ * out is reviewed too when most slices wait for more than this many of the
+ * tasks before the slices, directly or through others (ADR-0072 R1).
+ */
+export const WAIT_WALL_MIN = 5;
+
+/** The wall a plan's slices wait behind, as the review's message names it. */
+export interface WaitWall {
+  /** How many slices the plan fans out to. */
+  slices: number;
+  /** How many tasks run before the slices. */
+  before: number;
+  /** The lower median, over the slices, of how many of those each waits for: at least half wait for as many. */
+  median: number;
+}
+
+/** The lower median, so the message's "most" holds and its count is whole. */
+const lowerMedian = (counts: readonly number[]): number => [...counts].sort((a, b) => a - b)[Math.floor((counts.length - 1) / 2)];
+
+/** The wall when the plan fans out and its median slice waits for more than {@link WAIT_WALL_MIN} tasks before the slices (ADR-0072 R1). */
+export function waitWall(tasks: readonly Task[], shape: FanOutShape = fanOutShape(tasks)): WaitWall | undefined {
+  if (!shape.wide || shape.slices.length === 0) return undefined;
+  const median = lowerMedian(shape.slices.map((s) => shape.waits.get(s.id)!.length));
+  return median > WAIT_WALL_MIN ? { slices: shape.slices.length, before: shape.gates.length, median } : undefined;
+}
+
+/**
+ * The first plan's wall measured on a revision: for each of its slices, how
+ * many of its tasks before the slices the revision still runs it after.
+ */
+export function waitsAfter(first: readonly Task[], revised: readonly Task[], shape: FanOutShape = fanOutShape(first)): number {
+  const after = planAncestors(revised);
+  const byId = new Map(revised.map((t) => [t.id, t]));
+  const gates = shape.gates.map((g) => g.id);
+  return lowerMedian(shape.slices.map((s) => {
+    const reached = new Set(after(byId.get(s.id)!));
+    return gates.filter((g) => reached.has(g)).length;
+  }));
+}
+
 /** The key of the review's reply object. */
 export const CHAIN_REVIEW_KEY = 'dependencyChanges';
 
@@ -79,16 +124,19 @@ function asPlanJson(tasks: readonly Task[]): string {
  * The review's message: the plan as written, its longest chain by title, the
  * question for each edge, and the reply's shape. `alone` is the message sent
  * with no planner prompt before it, so it does not claim the reader wrote the
- * plan.
+ * plan. A `wall` adds the one sentence that names it; the rest is worded as
+ * measured.
  */
-export function chainReviewMessage(tasks: readonly Task[], chain: readonly Task[], alone = false): string {
+export function chainReviewMessage(tasks: readonly Task[], chain: readonly Task[], alone = false, wall?: WaitWall): string {
   const edges = chain.slice(1).map((t, i) => `- "${t.title}" (${t.id}) depends on "${chain[i].title}" (${chain[i].id})`);
+  const waited = wall && (wall.median === wall.before ? `all ${wall.before}` : `${wall.median} of the ${wall.before}`);
   return [
     alone ? 'This is a plan of tasks that coding agents will run, each task once its dependencies are done:' : 'This is the plan you wrote:',
     asPlanJson(tasks),
     '',
     `Its longest chain of dependencies is ${chain.length} tasks, which run one after another:`,
     ...edges,
+    ...(wall ? [`Most of its ${wall.slices} parallel tasks wait on ${waited} tasks before them; keep only the waits each needs.`] : []),
     '',
     'Review the plan edge by edge, every dependency, not only these. For each, ask: does the dependent need a file, name, signature or schema that does not exist in the repository until the other task writes it? Filling in a stub or an interface that already exists creates nothing to consume, and a slice whose tests also run code another slice writes does not need it either: it runs them, reports which fail only for that reason, and leaves those to the closing check.',
     'Keep an edge all the same when the dependent needs the other task\'s finding (research before the build it informs, a reproduction before its fix), or when another rule orders them: an ops task after the changes it acts on, a loop\'s body after its check, two tasks that would collide in one checkout, the steps of an expand-contract change. Keep a leading task that makes the project build, import or collect its tests, and a closing check that depends on every task.',
