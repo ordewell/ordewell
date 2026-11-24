@@ -13,12 +13,12 @@ import { configHoldReason, isChildPlanConfigHold, isConfigHold } from '../taskSt
 const reason = configHoldReason(['.claude/settings.json']);
 const inChild = configHoldReason(['.claude/settings.json'], true);
 const describeTask = (id: string) => `#1 "Task ${id}"`;
-const RELEASE = 'Only the user can release a hold for repository configuration: once their branch holds everything this run landed, their own start of a task in a worktree begins a new run from it, where no task is held for it. Until then a retry_task or run_task of yours starts it in the run it was held in, where it is held again. Tell the user what it is held for.';
+const RELEASE = 'Only the user can release a hold for repository configuration: once their branch holds everything this run landed, merged and not squashed or rebased, their own start of a task in a worktree begins a new run from it, where no task is held for it. Until then a retry_task or run_task of yours starts it in the run it was held in, where it is held again. Tell the user what it is held for.';
 const CHILD_RELEASE = 'Nothing in a child plan releases a hold for repository configuration: a retry_task or run_task of yours starts it in this run, where it is held again. If its work allows, make it read-only with edit_plan, which loads no project configuration, and start it with run_task; otherwise take it out with edit_plan and say why in your report.';
 
 describe('a start held for repository configuration, as the supervisor is told of it', () => {
   it('says what releases it, which only a person can do, for the whole run it opens', () => {
-    expect(reason).toBe('repository configuration ".claude/settings.json" differs from where this run started; remove it to continue, or merge everything this run landed into your branch, stop the run and start this task yourself: only your own start of a task that works in a worktree begins a new run from your branch, once that holds all this run landed and no other task\'s work is left in it, and no task of that new run is held for this configuration');
+    expect(reason).toBe('repository configuration ".claude/settings.json" differs from where this run started; remove it to continue, or merge everything this run landed into your branch, with Merge all or a merge of your own (a squash or a rebase does not count), stop the run and start this task yourself: only your own start of a task that works in a worktree begins a new run from your branch, once that holds all this run landed and no other task\'s work is left in it, and no task of that new run is held for this configuration');
     expect(isConfigHold(reason)).toBe(true);
     expect(isChildPlanConfigHold(reason)).toBe(false);
     expect(isConfigHold('cancelled; retry or force start to run it again')).toBe(false);

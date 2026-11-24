@@ -67,7 +67,7 @@ everything below applies per repo of the group.
   say a run is spent, nor that it is not: a retry drops a landed task's
   record, and its landing stays on the branch. A detached HEAD, an
   integration branch gone, a tip only a review or another branch holds, a
-  squash merge, or git unable to say, keeps the run. A spent run
+  squash merge or a rebase, or git unable to say, keeps the run. A spent run
   is replaced only by the start that decides the next run, and only if that
   start is a person's own of a task that works
   in a worktree and whose launch the configuration check reads: their Run,

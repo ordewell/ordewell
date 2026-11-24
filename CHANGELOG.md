@@ -17,10 +17,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   every time, until the session was reloaded. Your own Run, Start now, Retry or
   Continue of a task that works in a worktree now begins a new run from your
   branch, provided git finds everything the old run landed in it, its reverts
-  included, and nothing else is left in the run: no task running, and no
-  worktree holding work that never landed, a kept attempt or a delegated
-  task's child plan. No task of that new run is held for the configuration,
-  whoever starts it. Any other start still
+  included (a squash or a rebase leaves it out), and nothing else is left in
+  the run: no task running, and no worktree holding work that never landed, a
+  kept attempt or a delegated task's child plan. No task of that new run is
+  held for the configuration, whoever starts it. Any other start still
   continues the old run, where the task stays on hold: one the planner, the
   supervisor, a subplanner or autorun makes, one Ordewell makes by itself, and
   your own start of an ops, read-only or script task. Taking that

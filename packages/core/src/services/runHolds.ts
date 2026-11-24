@@ -12,7 +12,7 @@ import { isChildPlanConfigHold, isConfigHold } from './taskStartConfig';
  * that run is held for it. A model's start is accepted, and continues the run
  * the task was held in, where it is held again.
  */
-const CONFIG_RELEASE = 'Only the user can release a hold for repository configuration: once their branch holds everything this run landed, their own start of a task in a worktree begins a new run from it, where no task is held for it. Until then a retry_task or run_task of yours starts it in the run it was held in, where it is held again. Tell the user what it is held for.';
+const CONFIG_RELEASE = 'Only the user can release a hold for repository configuration: once their branch holds everything this run landed, merged and not squashed or rebased, their own start of a task in a worktree begins a new run from it, where no task is held for it. Until then a retry_task or run_task of yours starts it in the run it was held in, where it is held again. Tell the user what it is held for.';
 
 /**
  * In a child plan every start is the subplanner's (ADR-0055 D20), so nothing
