@@ -1,5 +1,6 @@
 import { flattenTasks, landsOnBranch, type Task } from '../models/Task';
 import { planBlocks } from './blocking';
+import { afterAllReader } from './AfterAll';
 import { ROOT_NODE, type HandoffFinding, type TaskEvidence } from '../models/Handoff';
 import { fanOutShape } from './PlanFanOut';
 
@@ -98,13 +99,16 @@ function waitsOn(finding: HandoffFinding, reporter: Task, byId: ReadonlyMap<stri
 
 /** Whether `task` depends, directly or not, on the task `id`. */
 function waitsFor(task: Task, id: string, byId: ReadonlyMap<string, Task>): boolean {
+  // `byId` is the flattened plan, its tasks keeping their subtasks, so "*" reads off it as off the tree (ADR-0077).
+  const depsOf = afterAllReader([...byId.values()]);
   const seen = new Set<string>();
-  const queue = [...task.dependencies];
+  const queue = [...depsOf(task)];
   for (let dep = queue.pop(); dep !== undefined; dep = queue.pop()) {
     if (dep === id) return true;
     if (seen.has(dep)) continue;
     seen.add(dep);
-    queue.push(...(byId.get(dep)?.dependencies ?? []));
+    const next = byId.get(dep);
+    if (next) queue.push(...depsOf(next));
   }
   return false;
 }

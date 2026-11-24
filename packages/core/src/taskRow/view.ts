@@ -7,6 +7,7 @@ import type { RepairWait, TaskIsolationState } from '../interfaces/IWorktreeIsol
 import { taskOrderLabel, taskRefsOf } from '../services/TaskRefs';
 import { capConflictFiles } from '../services/conflictFiles';
 import { planBlocks, type BlockingSubject, type PlanBlocks } from '../services/blocking';
+import { AFTER_ALL, AFTER_ALL_TEXT, afterAllReader, type AfterAllQuery } from '../services/AfterAll';
 import type { SkipOrigin } from '../models/SkipOrigin';
 import { checksOfBodies, loopRoundOf, type LoopSubject } from '../models/Loop';
 import { assignedRunnerOf, assignmentConsequence, assignmentIssue, assignmentIssueText, type AssignmentScope } from '../services/AssignmentScope';
@@ -96,6 +97,8 @@ interface PlanRefTask {
   status?: string;
   dependencies?: readonly string[];
   subtasks?: readonly PlanRefTask[];
+  /** Read so "*" leaves a research task out, as the scheduler does (ADR-0077). */
+  research?: boolean;
   /** A loop's check and its round, read so its dependents are not shown blocked between rounds (ADR-0045 L3). */
   loop?: TaskLoop;
   loopRound?: number;
@@ -258,7 +261,7 @@ export function taskChatAvailable(task: { type?: string; attempted?: boolean; at
 }
 
 const refsOf = (ids: readonly string[], reading: PlanReading | null): string[] =>
-  ids.map((id) => reading?.refs.get(id) ?? id);
+  ids.map((id) => (id === AFTER_ALL ? AFTER_ALL_TEXT : reading?.refs.get(id) ?? id));
 
 /** A lone repository at the workspace root is not named: a group of one reads as it did before repo groups. */
 const namedRepo = (repo: string | undefined): string | null => (repo && repo !== '.' ? repo : null);
@@ -271,6 +274,7 @@ const filesOf = (files: string[] | undefined): string | null => (files?.length ?
 const asBlocking = (tasks: readonly PlanRefTask[]): BlockingSubject[] =>
   tasks.map((t) => ({
     id: t.id, status: t.status ?? '', dependencies: t.dependencies ?? [], subtasks: asBlocking(t.subtasks ?? []),
+    ...(t.research ? { research: true } : {}),
     ...(t.skipOrigin ? { skipOrigin: t.skipOrigin } : {}),
     ...(t.loop ? { loop: t.loop, loopRound: t.loopRound, ...(t.verdict ? { verdict: t.verdict } : {}) } : {}),
   }));
@@ -282,6 +286,8 @@ interface PlanReading {
   /** The top-level tasks, by id: a loop's check and its body stand there. */
   byId: ReadonlyMap<string, PlanRefTask>;
   checks: ReadonlyMap<string, PlanRefTask>;
+  /** What a task's dependencies stand for, "*" read (ADR-0077). */
+  depsOf: (task: AfterAllQuery) => readonly string[];
 }
 
 function readPlan(tasks: readonly PlanRefTask[]): PlanReading {
@@ -290,6 +296,7 @@ function readPlan(tasks: readonly PlanRefTask[]): PlanReading {
     refs: taskRefsOf(tasks),
     byId: new Map(tasks.map((t) => [t.id, t])),
     checks: checksOfBodies(tasks),
+    depsOf: afterAllReader(tasks),
   };
 }
 
@@ -320,7 +327,7 @@ function blockedBy(task: TaskRowSubject, reading: PlanReading | null): string[] 
 function strandedDetail(check: LoopCheckFacts, dependencies: readonly string[], reading: PlanReading | null): string {
   const status = (id: string) => reading?.byId.get(id)?.status;
   const landed = reading && check.loop.body.every((id) => status(id) === 'completed');
-  const finished = dependencies.every((id) => [undefined, 'completed', 'skipped'].includes(status(id)));
+  const finished = (reading?.depsOf({ id: check.id, dependencies }) ?? dependencies).every((id) => [undefined, 'completed', 'skipped'].includes(status(id)));
   return landed && finished ? `Nothing runs it now: start it for round ${loopRoundOf(check) + 1} of ${check.loop.maxRounds}` : 'Nothing runs it now: execute the plan and the loop goes on';
 }
 

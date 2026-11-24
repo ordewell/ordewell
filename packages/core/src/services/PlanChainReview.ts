@@ -4,6 +4,7 @@ import { extractObjectsWithKey, stripTrailingCommas, escapeControlCharsInStrings
 import { checkPlanInvariants } from './PlannedTask';
 import { planAncestors } from './readiness';
 import { fanOutShape, type FanOutShape } from './PlanFanOut';
+import { AFTER_ALL, afterAllReader, waitsOnAll } from './AfterAll';
 
 /**
  * A planner filling in code whose interfaces exist still orders slices by what
@@ -22,12 +23,58 @@ import { fanOutShape, type FanOutShape } from './PlanFanOut';
  */
 export const CHAIN_REVIEW_MIN = 5;
 
+/**
+ * A plan can run slowly with a short chain too: a planner set every slice
+ * after a wall of tasks beside each other before them, and the slowest of
+ * those held them all. A recorded plan's 30 slices each waited for all 13
+ * tasks before them and the last of those finished at minute 156; another's
+ * 37 waited for 7 with a chain of four, and no review ran. So a plan that fans
+ * out is reviewed too when most slices wait for more than this many of the
+ * tasks before the slices, directly or through others (ADR-0072 R1).
+ */
+export const WAIT_WALL_MIN = 5;
+
+/** The wall a plan's slices wait behind, as the review's message names it. */
+export interface WaitWall {
+  /** How many slices the plan fans out to. */
+  slices: number;
+  /** How many tasks run before the slices. */
+  before: number;
+  /** The lower median, over the slices, of how many of those each waits for: at least half wait for as many. */
+  median: number;
+}
+
+/** The lower median, so the message's "most" holds and its count is whole. */
+const lowerMedian = (counts: readonly number[]): number => [...counts].sort((a, b) => a - b)[Math.floor((counts.length - 1) / 2)];
+
+/** The wall when the plan fans out and its median slice waits for more than {@link WAIT_WALL_MIN} tasks before the slices (ADR-0072 R1). */
+export function waitWall(tasks: readonly Task[], shape: FanOutShape = fanOutShape(tasks)): WaitWall | undefined {
+  if (!shape.wide || shape.slices.length === 0) return undefined;
+  const median = lowerMedian(shape.slices.map((s) => shape.waits.get(s.id)!.length));
+  return median > WAIT_WALL_MIN ? { slices: shape.slices.length, before: shape.gates.length, median } : undefined;
+}
+
+/**
+ * The first plan's wall measured on a revision: for each of its slices, how
+ * many of its tasks before the slices the revision still runs it after.
+ */
+export function waitsAfter(first: readonly Task[], revised: readonly Task[], shape: FanOutShape = fanOutShape(first)): number {
+  const after = planAncestors(revised);
+  const byId = new Map(revised.map((t) => [t.id, t]));
+  const gates = shape.gates.map((g) => g.id);
+  return lowerMedian(shape.slices.map((s) => {
+    const reached = new Set(after(byId.get(s.id)!));
+    return gates.filter((g) => reached.has(g)).length;
+  }));
+}
+
 /** The key of the review's reply object. */
 export const CHAIN_REVIEW_KEY = 'dependencyChanges';
 
-/** The longest dependency chain among top-level tasks, first task to last; empty for a graph that is not one. */
+/** The longest dependency chain among top-level tasks, "*" read (ADR-0077), first task to last; empty for a graph that is not one. */
 export function longestChain(tasks: readonly Task[]): Task[] {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const depsOf = afterAllReader(tasks);
   const memo = new Map<string, Task[]>();
   const visiting = new Set<string>();
   const chainTo = (t: Task): Task[] | null => {
@@ -36,7 +83,7 @@ export function longestChain(tasks: readonly Task[]): Task[] {
     if (visiting.has(t.id)) return null;
     visiting.add(t.id);
     let best: Task[] = [];
-    for (const id of t.dependencies) {
+    for (const id of depsOf(t)) {
       const dep = byId.get(id);
       if (!dep) continue;
       const c = chainTo(dep);
@@ -79,16 +126,19 @@ function asPlanJson(tasks: readonly Task[]): string {
  * The review's message: the plan as written, its longest chain by title, the
  * question for each edge, and the reply's shape. `alone` is the message sent
  * with no planner prompt before it, so it does not claim the reader wrote the
- * plan.
+ * plan. A `wall` adds the one sentence that names it; the rest is worded as
+ * measured.
  */
-export function chainReviewMessage(tasks: readonly Task[], chain: readonly Task[], alone = false): string {
+export function chainReviewMessage(tasks: readonly Task[], chain: readonly Task[], alone = false, wall?: WaitWall): string {
   const edges = chain.slice(1).map((t, i) => `- "${t.title}" (${t.id}) depends on "${chain[i].title}" (${chain[i].id})`);
+  const waited = wall && (wall.median === wall.before ? `all ${wall.before}` : `${wall.median} of the ${wall.before}`);
   return [
     alone ? 'This is a plan of tasks that coding agents will run, each task once its dependencies are done:' : 'This is the plan you wrote:',
     asPlanJson(tasks),
     '',
     `Its longest chain of dependencies is ${chain.length} tasks, which run one after another:`,
     ...edges,
+    ...(wall ? [`Most of its ${wall.slices} parallel tasks wait on ${waited} tasks before them; keep only the waits each needs.`] : []),
     '',
     'Review the plan edge by edge, every dependency, not only these. For each, ask: does the dependent need a file, name, signature or schema that does not exist in the repository until the other task writes it? Filling in a stub or an interface that already exists creates nothing to consume, and a slice whose tests also run code another slice writes does not need it either: it runs them, reports which fail only for that reason, and leaves those to the closing check.',
     'Keep an edge all the same when the dependent needs the other task\'s finding (research before the build it informs, a reproduction before its fix), or when another rule orders them: an ops task after the changes it acts on, a loop\'s body after its check, two tasks that would collide in one checkout, the steps of an expand-contract change. Keep a leading task that makes the project build, import or collect its tests, and a closing check that depends on every task.',
@@ -181,10 +231,13 @@ function restoredWaits(tasks: readonly Task[], rewired: readonly Task[], closer:
 function newAncestry(tasks: readonly Task[], next: ReadonlyMap<string, string[]>, gates: ReadonlySet<string>): Map<string, string[]> {
   const first = planAncestors(tasks);
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const readAll = afterAllReader(tasks);
   const out = new Map<string, string[]>();
   for (const [id, deps] of next) {
     const had = new Set(first(byId.get(id)!));
-    const extra = deps.filter((d) => !had.has(d) && !(gates.has(id) && gates.has(d)));
+    // "*" is new only for what it stands for (ADR-0077): on a closing check that waited for everything it adds nothing.
+    const newWait = (d: string) => (d === AFTER_ALL ? !waitsOnAll(byId.get(id)!) && readAll({ id, dependencies: [AFTER_ALL] }).some((a) => !had.has(a)) : !had.has(d));
+    const extra = deps.filter((d) => newWait(d) && !(gates.has(id) && gates.has(d)));
     if (extra.length) out.set(id, extra);
   }
   return out;
@@ -229,9 +282,10 @@ export function applyChainReview(
     }
     if (!byId.has(e.id)) return { ok: false, error: `unknown task "${e.id}"` };
     const deps = [...new Set(e.dependencies as string[])];
-    const unknown = deps.find((d) => !byId.has(d));
+    const unknown = deps.find((d) => d !== AFTER_ALL && !byId.has(d));
     if (unknown) return { ok: false, error: `task "${e.id}" names unknown dependency "${unknown}"` };
-    next.set(e.id, deps);
+    // "*" is no edge the question judges, and its tasks are the plan's to say: a reply cannot take it away (ADR-0077).
+    next.set(e.id, waitsOnAll(byId.get(e.id)!) && !deps.includes(AFTER_ALL) ? [...deps, AFTER_ALL] : deps);
   }
   // Subtasks kept: the merge gate walks through them and their parents' edges.
   const wired = () => tasks.map((t) => ({ ...t, dependencies: next.get(t.id) ?? t.dependencies }));
@@ -261,7 +315,7 @@ export function applyChainReview(
   const heldBack = new Map<string, string[]>();
   for (const [id, extra] of dropped) {
     const own = new Set(firstAncestors(byId.get(id)!));
-    const wanted = [...new Set(extra.flatMap((d) => firstAncestors(byId.get(d)!).filter((a) => own.has(a) && top.has(a))))];
+    const wanted = [...new Set(extra.flatMap((d) => (d === AFTER_ALL ? [] : firstAncestors(byId.get(d)!)).filter((a) => own.has(a) && top.has(a))))];
     const rewiredNow = wired();
     const back = givenBack(rewiredNow, byId.get(id)!, wanted);
     if (!back.length) continue;

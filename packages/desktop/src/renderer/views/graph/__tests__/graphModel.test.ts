@@ -33,6 +33,16 @@ describe('buildGraph: dependencies', () => {
     expect(model.edges.map((e) => e.id)).toEqual(['a->b']);
   });
 
+  it('draws "*" as an edge from every task it stands for, and none from what follows it (ADR-0077)', () => {
+    const model = built(buildGraph([
+      runTask({ id: 'a', order: 1 }),
+      runTask({ id: 'b', order: 2 }),
+      runTask({ id: 'suite', order: 3, dependencies: ['*'] }),
+      runTask({ id: 'pr', order: 4, dependencies: ['suite'] }),
+    ], CTX));
+    expect(model.edges.map((e) => e.id).sort()).toEqual(['a->suite', 'b->suite', 'suite->pr']);
+  });
+
   it('ignores a dependency on a task that is not in the plan, and on itself', () => {
     const model = built(buildGraph([runTask({ id: 'a', order: 1, dependencies: ['gone', 'a'] })], CTX));
     expect(model.edges).toEqual([]);

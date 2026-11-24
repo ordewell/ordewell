@@ -445,6 +445,16 @@ describe('the row view, every status against every annotation', () => {
     expect(taskRowView(subject({ id: 's2', order: 2, dependencies: ['t1'] }), { parent: { order: 2 }, tasks: tree }).dependencies).toEqual(['#1']);
   });
 
+  it('says "after all other tasks" for "*", and is blocked by a failed task it covers (ADR-0077)', () => {
+    const tree = [
+      { id: 't1', order: 1, title: 'Setup', status: 'failed', dependencies: [] },
+      { id: 't2', order: 2, title: 'Suite', status: 'pending', dependencies: ['*'] },
+    ];
+    expect(taskRowView(subject({ dependencies: ['*'] }), { tasks: tree })).toMatchObject({ dependencies: ['after all other tasks'], status: 'blocked', blockedBy: ['#1'] });
+    expect(taskRowView(subject({ dependencies: ['*'] })).dependencies).toEqual(['after all other tasks']);
+    expect(titledRefs(['t1', '*'], tree)).toEqual(['#1 Setup', 'after all other tasks']);
+  });
+
   it('shows a dependency by its id when there is no plan tree to label it against', () => {
     expect(taskRowView(subject({ dependencies: ['t1'] })).dependencies).toEqual(['t1']);
     expect(taskRowView(subject({ dependencies: ['t1'] }), { tasks: [] }).dependencies).toEqual(['t1']);

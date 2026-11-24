@@ -1,3 +1,5 @@
+import { AFTER_ALL, afterAllRefusal } from './AfterAll';
+
 /** Plan placement and dependency rules, shared with browser-bundled surfaces. */
 export interface TreeTask<T> {
   id: string;
@@ -65,6 +67,11 @@ export function dependencyTargetErrors<T extends TreeTask<T>>(
   const descendants = subtreeIds(tasks, taskId);
   const errors: string[] = [];
   for (const dep of dependencies) {
+    if (dep === AFTER_ALL) {
+      const refusal = afterAllRefusal(found.task, found.parent);
+      if (refusal) errors.push(refusal);
+      continue;
+    }
     if (dep === taskId) { errors.push(`"${found.task.title}" cannot depend on itself`); continue; }
     const target = taskPlacement(tasks, dep)?.task;
     if (!target) { errors.push(`Unknown dependency "${dep}"`); continue; }
@@ -75,7 +82,11 @@ export function dependencyTargetErrors<T extends TreeTask<T>>(
   return errors;
 }
 
-/** The tasks on one dependency cycle, in dependency order, or null. */
+/**
+ * The tasks on one dependency cycle, in dependency order, or null. "*" names
+ * no task here: it never closes a cycle of its own (ADR-0077), so only the
+ * edges a plan states can make one.
+ */
 export function findDependencyCycle<T extends DependencyTask<T>>(tasks: readonly T[]): T[] | null {
   const byId = new Map([...walkPlan(tasks)].map(({ task }) => [task.id, task]));
   const path: string[] = [];

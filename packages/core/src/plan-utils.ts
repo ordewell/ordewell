@@ -23,6 +23,8 @@ export type { IsolationPreviewNotice } from './services/isolationPreviewText';
 export { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeBesideOpsConfirmation, mergePastChecksConfirmation, mergeTarget, repoBaseLine, repoResultLines } from './services/mergeWording';
 export type { HandoffForkRepo } from './services/mergeWording';
 export { blockingFailures, repeatingChecks, planBlocks, type BlockingSubject, type PlanBlocks } from './services/blocking';
+// "*" in a dependency list (ADR-0077), read and named the way core reads it.
+export { AFTER_ALL, AFTER_ALL_TEXT, afterAllReader, resolveAfterAll, waitsOnAll, type AfterAllSubject } from './services/AfterAll';
 // What a loop's rows say (ADR-0045) is read the way the scheduler reads it.
 export { betweenRounds, outOfRounds, loopRoundOf, checkOf, loopRemovalRefusal, type TaskLoop } from './models/Loop';
 // The run settings' own defaults, for a surface that restores them; pure, so a renderer may read them.

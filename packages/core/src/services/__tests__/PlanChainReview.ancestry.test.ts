@@ -137,7 +137,8 @@ class OneReply extends BaseAiService {
 describe('the review\'s log line counts what the rules dropped and kept', () => {
   it('counts the added waits dropped', async () => {
     const line = await new OneReply(everySliceOnAll).logLine(longOpening());
-    expect(line).toMatch(/^chain review: 14 -> 4, kept; 40 tasks changed: .*, 29 added waits dropped, 0 opening waits kept$/);
+    // Its slices wait behind a wall of twelve as well as on a long chain, so the line counts both (ADR-0072 R1).
+    expect(line).toMatch(/^chain review: 14 -> 4, waits 12 of 12 -> 12, kept; 40 tasks changed: .*, 29 added waits dropped, 0 opening waits kept$/);
   });
 
   it('counts the opening waits kept, and keeps the first plan when they leave it no shorter', async () => {
@@ -147,6 +148,6 @@ describe('the review\'s log line counts what the rules dropped and kept', () => 
 
   it('says nothing of either when neither rule changed the reply', async () => {
     const line = await new OneReply(reply({ s2: ['g12', 'g11'] })).logLine(longOpening());
-    expect(line).toBe('chain review: 14 -> 14, first plan kept, not shorter; 1 task changed: "T s2" adds "T g11"');
+    expect(line).toBe('chain review: 14 -> 14, waits 12 of 12 -> 12, first plan kept, neither shorter nor fewer waits; 1 task changed: "T s2" adds "T g11"');
   });
 });
