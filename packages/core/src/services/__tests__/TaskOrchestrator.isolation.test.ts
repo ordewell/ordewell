@@ -1093,6 +1093,23 @@ describe('TaskOrchestrator with worktree isolation', () => {
       expect(orchestrator.runs.taskIsolation('t1')).toMatchObject({ state: 'integrated', repair: { attempt: 1, limit: 2 }, repairedFiles: ['a.ts'] });
     });
 
+    it('gives the task\'s handoff what its repaired landing brought, as git counted it', async () => {
+      const { orchestrator, isolation, pass, passLatest, spawn } = repairing();
+      const t1 = task('t1', 1);
+      orchestrator.loadPlan([t1]);
+      await orchestrator.approveReview();
+      pass(t1);
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+      expect(orchestrator.storeInstance.get('t1')!.handoff?.change).toBeUndefined();
+
+      for (const entry of Object.values(orchestrator.runs.planIsolation!.run.tasks.t1.repos)) entry.change = { files: 2, added: 14, removed: 1, binary: 0 };
+      isolation.outcomes.set('t1', 'merged');
+      passLatest(t1);
+
+      await vi.waitFor(() => expect(orchestrator.storeInstance.get('t1')!.status).toBe('completed'));
+      expect(orchestrator.storeInstance.get('t1')!.handoff?.change).toEqual({ files: 2, added: 14, removed: 1, binary: 0 });
+    });
+
     it('repairs again when the repaired work conflicts again, then leaves the conflict for the user once the repairs are used up', async () => {
       const { orchestrator, isolation, pass, passLatest, spawn, notifications } = repairing();
       const t1 = task('t1', 1);

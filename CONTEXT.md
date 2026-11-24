@@ -1695,7 +1695,10 @@ never a transcript. A handoff is not a *Report* (the report is its long form,
 stored and never pushed), and not a *Verdict*: the verdict is what
 `VerdictEngine` derives from the completion call's status, and a finding's
 severity is advice to a reader that reaches it nowhere. A task saved without
-one is rendered from `outputSummary.report`.
+one is rendered from `outputSummary.report`. A landed task's handoff also
+carries its `change`: the files and the lines added and removed its landing
+brought, which Ordewell counts from git and the author never states, shown as
+`1 file, +1 -1` wherever the task shows as done.
 *Avoid:* a bare "handoff" where the *Isolation handoff* (the end of an isolated
 run, for the user to merge) could be meant; "result" or "output" for it;
 "summary" for the whole (the summary is its first field).

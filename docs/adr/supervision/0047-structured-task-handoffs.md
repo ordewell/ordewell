@@ -212,6 +212,19 @@ Wake-ups use the same 4,000-character ceiling, including omission and report
 pull pointers; artifacts remain outside it. A surface reads the digest from
 the plan and the rest through the same task log read as everything else.
 
+Beside the author's words, a done task shows what its work changed as it
+landed, which Ordewell counts from git and never takes from the author: the
+files, and the lines added and removed, worded as a patch's row is
+(`1 file, +1 -1`). Each landing merge is counted against the tip it merged
+onto, per repository, in the isolation record; the landing hands the total to
+the handoff as `change`, which only Ordewell sets, as it does a `patch`. The
+row's handoff peek, the handoff in task details and logs, and the run
+handoff's list of what landed (each repository's share in a group) show it;
+a task that landed nothing shows none. Nothing compares the change with the
+brief, since no model is the judge of one: the contract instead tells the
+runner to leave content its brief does not name as it is, and to say so in
+its handoff if it removes any.
+
 ## Key properties
 
 - **Two readers, two texts.** The commit is for the human who reviews the
@@ -327,3 +340,4 @@ merges findings; and any new setting.
 - 2026-11-10 — the readable set is the whole loop across rounds; `read` falls back to the newest attempt that left a handoff, labelled with how it ended; measured numbers go in the summary or findings.
 - 2026-11-17 — the `summary` parameter's description says a longer one is refused and where the rest goes.
 - 2026-11-21 — a `task` reference may cite any task of the plan; a finding id stays within the readable set (ADR-0073).
+- 2026-11-24 — a done task shows what its landing changed, counted from git; the contract tells a runner to leave content its brief does not name and to say if it removed any.

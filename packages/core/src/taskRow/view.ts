@@ -1,7 +1,7 @@
 import { taskUsageSummary, type AttemptUsage, type TaskUsageSummary } from '../models/Usage';
 import type { AwaitingReason, TaskType, Verdict } from '../models/Task';
 import type { FindingSeverity, HandoffCommit, HandoffDigest } from '../models/Handoff';
-import { savedPatchView, worstSeverity, type PatchView } from '../models/Handoff';
+import { changeText, savedPatchView, worstSeverity, type PatchView } from '../models/Handoff';
 import type { TaskLoop } from '../models/Loop';
 import type { RepairWait, TaskIsolationState } from '../interfaces/IWorktreeIsolation';
 import { taskOrderLabel, taskRefsOf } from '../services/TaskRefs';
@@ -148,6 +148,8 @@ export interface TaskRowHandoff {
   severity: FindingSeverity | null;
   /** The patch its attempt saved (ADR-0050), when it saved one. */
   patch?: PatchView;
+  /** What its work changed as it landed, as Ordewell counted it from git: "1 file, +1 -1". Only on a done task that landed some. */
+  change?: string;
 }
 
 /**
@@ -365,12 +367,15 @@ function loopOf(task: TaskRowSubject, reading: PlanReading | null): TaskRowLoop 
 function handoffOf(task: TaskRowSubject): TaskRowHandoff | null {
   if (!task.handoff) return null;
   const patch = savedPatchView(task.handoff);
+  // A count says what is on the integration branch: a task reverted or retried since is not done with it.
+  const change = task.status === 'completed' ? changeText(task.handoff) : null;
   return {
     ...(task.handoff.commit ? { commit: task.handoff.commit } : {}),
     summary: task.handoff.summary,
     findingCount: task.handoff.findingCount,
     severity: worstSeverity(task.handoff.findings),
     ...(patch ? { patch } : {}),
+    ...(change ? { change } : {}),
   };
 }
 

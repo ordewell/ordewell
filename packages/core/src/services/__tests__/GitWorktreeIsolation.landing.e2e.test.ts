@@ -35,6 +35,26 @@ describe.skipIf(!hasGit)('WorktreeIsolation over a repo group', () => {
       expect(git(join(dir, 'api'), 'log', '--format=%s', integrationOf(run))).not.toContain('Web only');
     });
 
+    it('counts what each landing brought in each repository it changed, from git, a sibling\'s landing apart', async () => {
+      const dir = pair();
+      const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
+      const run = await iso.startRun(dir);
+      const [first, both] = [task(1, 'Add a route'), task(2, 'Edit both')];
+      const f = await iso.prepare(first, run);
+      const b = await iso.prepare(both, run);
+      writeFileSync(join(f.cwd, 'api', 'route.ts'), 'one\ntwo\nthree\n');
+      writeFileSync(join(b.cwd, 'api', 'api.txt'), 'API\n');
+      writeFileSync(join(b.cwd, 'web', 'web.txt'), 'web\nmore\n');
+
+      expect(await iso.integrate(first, run)).toBe('merged');
+      expect(await iso.integrate(both, run)).toBe('merged');
+
+      expect(run.tasks['task-1'].repos.api.change).toEqual({ files: 1, added: 3, removed: 0, binary: 0 });
+      expect(run.tasks['task-1'].repos.web).not.toHaveProperty('change');
+      expect(run.tasks['task-2'].repos.api.change).toEqual({ files: 1, added: 1, removed: 1, binary: 0 });
+      expect(run.tasks['task-2'].repos.web.change).toEqual({ files: 1, added: 1, removed: 0, binary: 0 });
+    });
+
     it('writes the same stated commit for the merge in every repository the task changed', async () => {
       const dir = pair();
       const iso = create({ config: fakeConfig({ worktreeIsolation: true }) });
