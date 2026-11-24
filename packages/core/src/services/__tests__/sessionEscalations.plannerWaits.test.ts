@@ -34,13 +34,31 @@ async function ended(level: SupervisorLevel): Promise<Env> {
   return env;
 }
 
-describe('a planner reply to a wake-up that leaves nothing to run', () => {
-  it('waits on the user at Watch, and surfaces hear of it as it lands', async () => {
-    const env = await ended('watch');
-    expect(plannerWaits(env)).toEqual([]);
+/** A one-task run under `level` whose task failed, the planner woken for it and not yet answered. */
+async function failed(level: SupervisorLevel): Promise<Env> {
+  const env = await supervised([task('t1', 1)], { settings: { supervisorLevel: level } });
+  env.run.of('t1').reportComplete({ status: 'failed', summary: 'nope', reason: 'nope' });
+  await until(() => env.planner.calls.length === 1);
+  expect(env.planner.calls[0].message).toContain('failed');
+  return env;
+}
 
+describe('a planner reply to a wake-up that leaves nothing to run', () => {
+  it('is no wait for the reply to a clean end of the run: it is the wrap-up', async () => {
+    const env = await ended('watch');
     env.planner.calls[0].finish(prose('Task 1 is done. Shall I plan the fix next?'));
     await settled();
+
+    expect(plannerWaits(env)).toEqual([]);
+  });
+
+  it('waits on the user at Watch, and surfaces hear of it as it lands', async () => {
+    const env = await failed('watch');
+    expect(plannerWaits(env)).toEqual([]);
+
+    env.planner.calls[0].finish(prose('Task 1 failed. Shall I plan the fix next?'));
+    await settled();
+    await vi.advanceTimersByTimeAsync(STATUS_WINDOW_MS);
 
     expect(plannerWaits(env)).toEqual([expect.objectContaining({ kind: 'planner', options: [] })]);
     expect(plannerWaits(env)[0].task).toBeUndefined();
@@ -48,7 +66,7 @@ describe('a planner reply to a wake-up that leaves nothing to run', () => {
   });
 
   it('is answered by the user\'s message: gone while the planner works on it, and after', async () => {
-    const env = await ended('watch');
+    const env = await failed('watch');
     env.planner.calls[0].finish(prose('Task 1 is done. Shall I plan the fix next?'));
     await settled();
     expect(plannerWaits(env)).toHaveLength(1);
