@@ -66,7 +66,25 @@ interface ThreadItem {
   agentsStates?: Record<string, { status?: string; message?: string | null } | undefined>;
   /** `userMessage`: the `clientUserMessageId` the input was steered under. */
   clientId?: string | null;
+  /** `functionCallOutput`, and whatever later item names its call so: the tool it reports on. */
+  name?: string;
+  /** `functionCallOutput`: what the call returned. */
+  output?: unknown;
 }
+
+/**
+ * The item types this adapter reads. Any other is still something the model
+ * did, so it shows as activity under its own name rather than vanishing: a
+ * turn whose work is all in such items would otherwise look idle for as long
+ * as it runs (codex-cli 0.171.0 adds `functionCallOutput`, `sleep` and others).
+ */
+const READ_ITEM_TYPES = new Set([
+  'userMessage', 'agentMessage', 'reasoning', 'contextCompaction', 'commandExecution', 'mcpToolCall',
+  'dynamicToolCall', 'webSearch', 'fileChange', 'collabAgentToolCall',
+]);
+
+/** What an item of a type this adapter does not read is shown as. */
+const otherItemName = (item: ThreadItem): string => item.tool ?? item.name ?? item.type ?? 'item';
 
 /** codex-cli 0.162.0's v2 `WebSearchAction`. */
 interface WebSearchAction {
@@ -431,6 +449,8 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
   );
   /** MCP calls started and not yet completed, by item id, oldest first: what names the tool an approval asks about when its question does not. */
   private readonly mcpCallsInProgress = new Map<string, { server: string; tool: string }>();
+  /** Items of a type this adapter does not read, announced at their start and still open. */
+  private readonly otherItemsInProgress = new Set<string>();
   /**
    * The files each in-flight `fileChange` item touches. Its approval request
    * names only the item, and a person deciding needs to see the files.
@@ -690,7 +710,7 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
     };
     const config = {
       ...(Object.keys(features).length > 0 ? { features } : {}),
-      ...(opts?.mcp ? { mcp_servers: CODEX_ORDEWELL.threadServers(opts.mcp) } : {}),
+      ...(opts?.mcp ? { mcp_servers: CODEX_ORDEWELL.threadServers(opts.mcp, opts.kind === 'planner' ? 'planner' : 'task') } : {}),
       ...this.compactLimit,
     };
     const threadConfig = Object.keys(config).length ? { config } : {};
@@ -1305,6 +1325,9 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         });
         return;
       default:
+        if (!item.type || READ_ITEM_TYPES.has(item.type)) return;
+        this.otherItemsInProgress.add(item.id);
+        emit({ type: 'tool_call', id: item.id, name: otherItemName(item), args: {}, ...(subagentId ? { subagentId } : {}) });
         return;
     }
   }
@@ -1378,8 +1401,15 @@ export class CodexAdapter extends StdioAgentAdapter implements TaskModeAgentAdap
         // was bypassed; reporting it keeps that visible rather than silent.
         emit({ type: 'tool_result', id, name: 'file_change', output: JSON.stringify(item), success: false, ...(subagentId ? { subagentId } : {}) });
         return;
-      default:
+      default: {
+        if (READ_ITEM_TYPES.has(item.type) || !id) return;
+        const name = otherItemName(item);
+        // Some arrive completed only, with no start to have announced them.
+        if (!this.otherItemsInProgress.delete(id)) emit({ type: 'tool_call', id, name, args: {}, ...(subagentId ? { subagentId } : {}) });
+        const output = flattenText(item.output) || item.text || '';
+        emit({ type: 'tool_result', id, name, output, success: item.status !== 'failed' && item.status !== 'error', ...(subagentId ? { subagentId } : {}) });
         return;
+      }
     }
   }
 

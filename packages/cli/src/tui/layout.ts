@@ -4,12 +4,13 @@ import { cursorInLines, type CursorPosition } from './editor';
 import { assignmentFlagText, checkpointCardLines, conversationLength, conversationTail, subplannerCardLines, tokenLine } from './blocks';
 import { bodyMode, chatEditorRoomFor, chatPaneWidth, planPaneWidth, stackRows, type BodyMode, type PaneRect } from './geometry';
 import { slashCommandTable, type SlashCategory } from './slash';
-import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type TaskView, type TuiState } from './state';
+import { checkpointsBelow, continuesTask, findTask, isTaskRunning, newestRemovable, planPaneOpen, planRows, plannerInFlight, questionAbove, queuedTarget, refFor, rootFrame, scriptTaskView, runnerSignInLine, selectedPlanRow, signedOutWithWayIn, viewOnly, waitingApproval, waitingCheckpoint, type ApprovalRequestView, type Focus, type ModelView, type PlanRow, type RunnerView, type TaskView, type TuiState } from './state';
 import { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, DELEGATION_OFFERED, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_COMMANDS, describeUnusedPlanningKey, isCliProvider, type DecisionRecordEntry, type DiscoveredModel } from '@ordewell/core';
 import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
+import { pulseActivity } from './plannerPulse';
 import { plannerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, elapsedSince, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
@@ -411,10 +412,12 @@ export function activityTime(state: TuiState, now: number): string {
 }
 
 /**
- * The status row relates to the chat on screen and to nothing else. What the
- * planner or a runner is doing is already in that chat, so this names only the
- * state of the chat itself — never a tool, never the run. A subtask has no
- * attempt of its own: it runs inside its parent's, so its view follows it.
+ * The status row relates to the chat on screen and to nothing else, never the
+ * run. Mostly it names the state of the chat itself, since what the planner or
+ * a runner is doing is already in that chat; the exception is a planner turn
+ * running long, whose call in flight or silence it names with its time. A
+ * subtask has no attempt of its own: it runs inside its parent's, so its view
+ * follows it.
  */
 export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
@@ -424,6 +427,9 @@ export function chatActivity(state: TuiState): ChatActivity | null {
     const label = state.plannerDetecting ? DETECTING_AGENTS : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     // A compaction or a wait for the planner opens no turn of its own.
     const since = state.turnGate.open !== null ? state.turnGate.openedAt : undefined;
+    // A call in flight or a silence names itself, beside the turn's time: a turn stuck on one reads as just that.
+    const pulse = label === 'Planning…' && state.turnGate.open !== null ? pulseActivity(state.plannerPulse, state.conversation, since, state.now) : null;
+    if (pulse) return { ...pulse, busy: true };
     return since ? { label, busy: true, since } : { label, busy: true };
   }
   const own = findTask(state.tasks, tv.taskId);
@@ -986,6 +992,22 @@ function setupRow(label: string, value: string, command: string, cols: number): 
   return truncate(`${head}${gap}${style.grey(command)}`, cols - 1);
 }
 
+/**
+ * The welcome's Runners row. A line too long for the pane wraps under its own
+ * value rather than cutting a sign-in hint off, and an installed agent Ordewell
+ * cannot use gets a grey line of its own with the reason.
+ */
+function runnersRows(value: string, unusable: readonly RunnerView[], cols: number): string[] {
+  const room = Math.max(1, cols - 1 - 2 - SETUP_KEY_COLS);
+  const [first = '', ...more] = wrap(value, room);
+  const indent = ' '.repeat(2 + SETUP_KEY_COLS);
+  return [
+    setupRow('Runners', first, '/runners', cols),
+    ...more.map((line) => `${indent}${line}`),
+    ...unusable.flatMap((row) => wrap(style.grey(`${row.name}: ${row.reason ?? 'not usable'}`), room).map((line) => `${indent}${line}`)),
+  ];
+}
+
 interface MarkCell { glyph: string; dot: boolean }
 
 /** Dot bits of a braille cell, by [row][column] within its 2×4 grid. */
@@ -1182,7 +1204,8 @@ function noPlannerNotice(cols: number): string[] {
 /** `rows` is the pane the welcome is painted into. */
 function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const planner = plannerSetup(state);
-  const enabledRunners = state.runners.filter((r) => r.enabled);
+  const enabledRunners = state.runners.filter((r) => r.enabled && r.usable !== false);
+  const unusableRunners = state.runners.filter((r) => r.usable === false);
   const canPlan = planner.ready
     || state.runners.length > 0
     || state.configuredProviders.length > 0;
@@ -1211,14 +1234,14 @@ function welcomeLines(state: TuiState, rows: number, cols: number): string[] {
   const setup = [
     style.bold('Setup'),
     setupRow('Planner', plannerValue, '/planner', cols),
-    setupRow(
-      'Runners',
+    ...runnersRows(
       detecting
         ? style.grey(DETECTING_AGENTS)
         : enabledRunners.length > 0
-          ? enabledRunners.map((row) => (signedOutWithWayIn(row) ? style.red(row.name) : row.name)).join(', ')
+          // In words too, so it survives colour being off: colour alone says nothing there.
+          ? enabledRunners.map((row) => (signedOutWithWayIn(row) ? style.red(`${row.name} (signed out · /login ${row.id})`) : row.name)).join(', ')
           : style.yellow('none enabled'),
-      '/runners',
+      detecting ? [] : unusableRunners,
       cols,
     ),
     setupRow('Autonomy', state.autonomous ? style.yellow('Full') : 'Guarded', '', cols),
