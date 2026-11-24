@@ -57,7 +57,7 @@ describe('"*" in a dependency list', () => {
     expect(depsOf(starred, 'loopcheck')).toEqual(['a']);
   });
 
-  it('two "*" tasks do not wait for each other, nor for what follows the other, unless one names the other', () => {
+  it('two "*" tasks do not wait for each other, nor for what follows the other, unless one comes after the other', () => {
     const plan = [
       task('a'),
       task('suite', { dependencies: ['*'] }),
@@ -67,7 +67,7 @@ describe('"*" in a dependency list', () => {
     expect(depsOf(plan, 'suite')).toEqual(['a']);
     expect(depsOf(plan, 'docs')).toEqual(['a']);
     const named = plan.map((t) => (t.id === 'docs' ? { ...t, dependencies: ['*', 'suite'] } : t));
-    expect(depsOf(named, 'docs')).toEqual(['suite', 'a']);
+    expect(depsOf(named, 'docs')).toEqual(['suite', 'a', 'pr']);
     expect(depsOf(named, 'suite')).toEqual(['a']);
   });
 

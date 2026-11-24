@@ -10,11 +10,12 @@
  * - research tasks, which report to the planner and land nothing;
  * - a loop's body, which runs only for its check and is waited for through it
  *   (ADR-0045 L3), and which no task outside the loop may name (L4);
- * - every other "*" task and whatever comes after one. Two closing checks do
- *   not wait for each other, nor for each other's followers, unless one names
- *   the other. That is also what keeps "*" from ever closing a cycle: a task
- *   it reaches reaches no "*" task, so only a cycle the plan already wrote
- *   can run through one.
+ * - every other "*" task and, unless this task comes after that one, whatever
+ *   comes after it. Two closing checks do not wait for each other, nor for
+ *   each other's followers, unless one comes after the other: that one runs
+ *   after the work between them too. That is also what keeps "*" from ever
+ *   closing a cycle: a task it reaches never leads back to a task that comes
+ *   after it, so only a cycle the plan already wrote can run through one.
  *
  * "Comes after" is read on the stated edges alone, a whole top-level task at
  * a time: a task one of whose subtasks waits on this task, or on one of its
@@ -64,7 +65,10 @@ export function afterAllReader(tasks: readonly AfterAllSubject[]): (task: AfterA
     if (known) return known;
     const named = deps.filter((d) => d !== AFTER_ALL);
     const isSubtask = task.id !== undefined && plan.rootOf.has(task.id) && plan.rootOf.get(task.id) !== task.id;
-    const rest = isSubtask ? [] : plan.candidates.filter((id) => id !== task.id && !(task.id !== undefined && plan!.followersOf(task.id).has(id)));
+    const own = task.id === undefined ? new Set<string>() : plan.followersOf(task.id);
+    // Another "*" task's followers are left out only where this task does not itself come after that task: one that does runs after them too.
+    const held = plan.starred.filter((s) => s !== task.id && !(task.id !== undefined && plan!.followersOf(s).has(task.id)));
+    const rest = isSubtask ? [] : plan.candidates.filter((id) => id !== task.id && !own.has(id) && !held.some((s) => plan!.followersOf(s).has(id)));
     const resolved = [...new Set([...named, ...rest])];
     if (key !== undefined) memo.set(key, resolved);
     return resolved;
@@ -93,6 +97,7 @@ interface ReadPlan {
   rootOf: ReadonlyMap<string, string>;
   /** The top-level tasks a "*" may stand for, in plan order, before the asking task's followers are taken out. */
   candidates: readonly string[];
+  starred: readonly string[];
   followersOf(id: string): ReadonlySet<string>;
 }
 
@@ -140,9 +145,7 @@ function readPlan(tasks: readonly AfterAllSubject[]): ReadPlan {
   for (const top of tops) {
     if (top.research) outside.add(top.id);
     for (const id of top.loop?.body ?? []) outside.add(id);
-    if (!waitsOnAll(top)) continue;
-    outside.add(top.id);
-    for (const id of followersOf(top.id)) outside.add(id);
+    if (waitsOnAll(top)) outside.add(top.id);
   }
-  return { rootOf, candidates: tops.map((t) => t.id).filter((id) => !outside.has(id)), followersOf };
+  return { rootOf, candidates: tops.map((t) => t.id).filter((id) => !outside.has(id)), starred: tops.filter(waitsOnAll).map((t) => t.id), followersOf };
 }

@@ -30,6 +30,11 @@ describe('a plan that uses "*"', () => {
     expect(notes).toEqual([]);
   });
 
+  it('is refused as a task id, which a dependency on it would read as after-all', () => {
+    const messages = refusals([spec('*', 1), spec('a', 2), spec('b', 3, { dependencies: ['*'] })]);
+    expect(messages).toEqual([expect.stringContaining('not an id a task can have')]);
+  });
+
   it('is refused on a subtask, with why', () => {
     const messages = refusals([spec('a', 1), spec('b', 2, { subtasks: [spec('b1', 1, { dependencies: ['*'] })] })]);
     expect(messages).toEqual([expect.stringContaining('only a top-level task can')]);

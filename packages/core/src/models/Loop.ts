@@ -181,11 +181,12 @@ export function loopErrors(tasks: readonly Task[]): LoopError[] {
       errors.push({ taskId: body.id, field: 'dependencies', message: `${where}, so it depends on "${check.title}": the check's report is what it fixes. Add "${check.title}" to its dependencies` });
     }
     for (const dep of body.dependencies) {
-      if (dep === check.id || check.dependencies.includes(dep) || bodyOwner.get(dep) === check) continue;
+      // "*" first: a check that holds it does not let its body hold it too (ADR-0077 A3).
       if (dep === AFTER_ALL) {
         errors.push({ taskId: body.id, field: 'dependencies', message: `${where}, so it cannot depend on "${AFTER_ALL}": it depends only on "${check.title}", on what "${check.title}" depends on, or on other tasks of that body` });
         continue;
       }
+      if (dep === check.id || check.dependencies.includes(dep) || bodyOwner.get(dep) === check) continue;
       errors.push({ taskId: body.id, field: 'dependencies', message: `${where}, so it depends only on "${check.title}", on what "${check.title}" depends on, or on other tasks of that body; "${byId.get(dep)?.task.title ?? dep}" is none of these` });
     }
   }
