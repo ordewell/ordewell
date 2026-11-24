@@ -124,7 +124,10 @@ function releaseLine(block: StandingBlock['block']): string {
     : block.kind === 'waiting'
       ? 'message_task its runner with what to do next, or call retry_task from "fresh" with a message, your note on what to do differently'
       : 'call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply';
-  return `Release it: ${release}; or skip_task it with your reason; or tell the user.`;
+  // The supervisor skips only a task that already needs someone, and a hold is not that (ADR-0029): skipping a held one is the user's.
+  return block.kind === 'on-hold'
+    ? `Release it: ${release}; or tell the user, who can skip it.`
+    : `Release it: ${release}; or skip_task it with your reason; or tell the user.`;
 }
 
 /** One key per distinct set of holds: the same tasks, held the same way. */
@@ -180,6 +183,6 @@ export function runHeldDetail(holds: readonly RunHold[], describe: (taskId: stri
       : `is ${WAITING_WORDS[hold.reason ?? 'input']},`;
     return `Task ${describe(taskId)} ${what} and ${back}.`;
   });
-  const release = holds.some((h) => h.hold.kind === 'on-hold') ? ' A task on hold starts again only once it is retried or force started, or skipped, which releases what needs it.' : '';
+  const release = holds.some((h) => h.hold.kind === 'on-hold') ? ' A task on hold starts again only once it is retried or force started; the user can also skip it, which releases what needs it.' : '';
   return `the run is idle: nothing is running and nothing can start. ${sentences.join(' ')}${release}`;
 }

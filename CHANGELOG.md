@@ -21,6 +21,9 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   being cleared up; one that holds work that never landed still keeps the whole
   run, as do landed work your branch does not hold yet and a kept or failed
   task.
+- **The supervisor is no longer told to skip a task on hold,** which its
+  `skip_task` refuses. It is told to retry the task, or to tell you, since only
+  you can skip it.
 
 ## [0.14.11] - 2026-11-24
 
