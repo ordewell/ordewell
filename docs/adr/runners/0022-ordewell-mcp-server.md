@@ -93,6 +93,29 @@ A runner-facing tool joins the task side on the same mechanism.
   `@ordewell/core`. npm installs it with the package, and the VS Code `.vsix`
   bundles it (`packages/vscode/tsup.config.ts` `noExternal`, checked by
   `packages/vscode/scripts/verify-bundle.mjs`), so users download nothing extra.
+- **Each planner call is logged, never its content (T4).** A planner token's
+  call writes one line to the owning process's log as it arrives and one as it
+  ends (the daemon's is `~/.ordewell/server.log`), with the tool, the session,
+  the duration and the outcome: `ok`, `error`, `refused` for a tool the token
+  does not serve, `cancelled` when the caller gave up on it, `revoked` when
+  its session ended. Never the arguments or the result, which can hold code and
+  secrets. A turn whose every call to Ordewell's tools failed ends with a notice
+  that says so, names that log and offers sending the goal again or another
+  planner, since a harness planner plans only through `submit_plan` and its
+  prose would otherwise end the turn with no hint.
+- **A runner's own call deadline covers the planner's tools (T5).** Codex
+  bounds one tool call with the server's `tool_timeout_sec` (300s unless set;
+  `startup_timeout_sec`, 30s, bounds its start), a fixed wall-clock deadline
+  that pauses only for its own elicitations: it sends a progress token but only
+  logs the progress that comes back, so the V5 heartbeat buys a Codex call
+  nothing. A call made from inside Codex's `exec` takes the same path and
+  deadline and still reports its own `mcpToolCall` item (codex-cli 0.171.0,
+  read in its source; its documentation's 10s and 60s are stale). A planner
+  thread's `ordewell` server is given `tool_timeout_sec = 3600`: Ordewell's own
+  planner tools end themselves sooner (`run_command` at 120s, model discovery
+  behind `list_runners` at 90s), but `run_command` and `fetch` may first ask a
+  person's approval inside the call, which Codex cannot see. A task thread's
+  server sets none, so a Codex task's `checkpoint` is held to the 300s default.
 
 ### Scope
 
@@ -179,7 +202,8 @@ A runner-facing tool joins the task side on the same mechanism.
   waits, with the idle timer paused as for any other wait (ADR-0018, W1). A
   waiting call sends MCP progress notifications, so a runner that aborts a
   silent call (Claude Code, 300s by default) does not end a checkpoint that
-  waits for a person; no runner setting is raised. Cancel, stop and retry end
+  waits for a person; no runner setting is raised. Codex's deadline is not
+  reset by them (T5). Cancel, stop and retry end
   the call with a refusal, as they deny a pending runner approval. A
   subplanner's call is the one that does not wait: it answers at once that the
   question is asked, and the subplanner parks, since a call held open would hold
@@ -401,3 +425,4 @@ planner tools are recorded here as an explicit entry against both:
 - 2026-11-18 — P2: an accepted `submit_plan` whose longest chain is long answers with a `review` for the planner, once a turn (ADR-0072 R3).
 - 2026-11-20 — S1: Pi uses the server, through Ordewell's own per-process extension, as a task runner and a planner.
 - 2026-11-21 — a change task's token gains `wait_for` (ADR-0074).
+- 2026-11-24 — T4: each planner call is logged, and a turn whose Ordewell calls all failed ends with a notice. T5: Codex's tool deadline checked against 0.171.0's source (300s, fixed, not reset by progress; the 200s call of 2026-10-05 fit inside it), and a planner thread's server sets an hour.

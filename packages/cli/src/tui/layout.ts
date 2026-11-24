@@ -10,6 +10,7 @@ import { RECORD_EMPTY, recordView } from '../decisionRecordView';
 import { modesForTask } from './taskAssignment';
 import { DEFAULT_EFFORT, plannerEffortItems } from './reducers/pickers';
 import { cliVersion } from '../version';
+import { pulseActivity } from './plannerPulse';
 import { plannerNamesOr } from '../runnerNames';
 import { TASK_EDITOR_KEYS, planFooterHints, planKeysByGroup } from './planKeys';
 import { accountLimitsText, attachingLabel, contextMeterText, accountLimitsOf, assignedRunnerOf, describeIsolationPreview, elapsedSince, scriptTaskText, getProviderMeta, isApiProvider, blockedByLabel, handoffPeekParts, holdLabel, skippedLabel, hasHiddenDetail, loopRowParts, resumeTime, runnerForProvider, taskLogHeaderView, taskActivity, taskRowView, taskStatusKind, tasksTotalText, type ApprovalBlock, type DisplayBlock, type QueuedTaskMessage, type TaskLogHeaderTask, type TaskLogHeaderView, type TaskRowLoop, type LoopCheckState, type TaskStatusKind } from '@ordewell/core';
@@ -411,10 +412,12 @@ export function activityTime(state: TuiState, now: number): string {
 }
 
 /**
- * The status row relates to the chat on screen and to nothing else. What the
- * planner or a runner is doing is already in that chat, so this names only the
- * state of the chat itself — never a tool, never the run. A subtask has no
- * attempt of its own: it runs inside its parent's, so its view follows it.
+ * The status row relates to the chat on screen and to nothing else, never the
+ * run. Mostly it names the state of the chat itself, since what the planner or
+ * a runner is doing is already in that chat; the exception is a planner turn
+ * running long, whose call in flight or silence it names with its time. A
+ * subtask has no attempt of its own: it runs inside its parent's, so its view
+ * follows it.
  */
 export function chatActivity(state: TuiState): ChatActivity | null {
   const tv = state.taskView;
@@ -424,6 +427,9 @@ export function chatActivity(state: TuiState): ChatActivity | null {
     const label = state.plannerDetecting ? DETECTING_AGENTS : state.planner === 'condensing' ? 'Condensing…' : state.planner === 'compacting' ? 'Compacting…' : state.planner === 'awaiting' ? 'Waiting for the planner…' : 'Planning…';
     // A compaction or a wait for the planner opens no turn of its own.
     const since = state.turnGate.open !== null ? state.turnGate.openedAt : undefined;
+    // A call in flight or a silence names itself, beside the turn's time: a turn stuck on one reads as just that.
+    const pulse = label === 'Planning…' && state.turnGate.open !== null ? pulseActivity(state.plannerPulse, state.conversation, since, state.now) : null;
+    if (pulse) return { ...pulse, busy: true };
     return since ? { label, busy: true, since } : { label, busy: true };
   }
   const own = findTask(state.tasks, tv.taskId);
