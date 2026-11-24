@@ -22,13 +22,13 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   the run.** A task whose work conflicted as it landed, one git refused to land
   (no author identity in CI, say), an ops task that changed tracked files in
   your checkout and a task paused on a usage limit with no reset time used to
-  leave it following for good, printing nothing about the wait, at every
-  supervisor level, and so did a failed task beside one of them. It now returns
-  with exit status 3 on each, as on a checkpoint: below Act once the wait
-  stands, at Act once the supervisor's turn on it has left it standing, though
-  other tasks of the run may still be running. `ordewell run` prints a line for
-  each, naming the task and what answers it. A usage limit with a reset time
-  still resumes by itself, and is followed.
+  leave it following for good at every supervisor level, and so did a failed
+  task beside one of them. It now returns with exit status 3 on each, as on a
+  checkpoint: below Act once the wait stands, at Act once the supervisor's turn
+  on it has left it standing, though other tasks of the run may still be
+  running. `ordewell run` prints a line for each, naming the task and what
+  answers it. A usage limit with a reset time still resumes by itself, and is
+  followed.
 
 ## [0.14.11] - 2026-11-24
 
