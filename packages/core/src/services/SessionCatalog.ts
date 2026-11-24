@@ -13,6 +13,15 @@ import { RUNNER_LABELS } from './runnerCatalog';
 
 type ModelsByRunner = Partial<Record<RunnerId, DiscoveredModel[]>>;
 
+/**
+ * How long a planner's read, or planning's start, waits on model discovery
+ * before answering with what is known (ADR-0022 L4). A discovery still
+ * running goes on, and what it finds is kept for the next read: one CLI that
+ * hangs while listing its models costs minutes (`opencode` runs three
+ * commands, each retried once at 45s), longer than a planner's turn can wait.
+ */
+export const DISCOVERY_WAIT_MS = 10_000;
+
 export interface SessionCatalogDeps {
   config: Pick<IConfig, 'enabledRunners' | 'autonomousMode' | 'aiProvider'>;
   /** Whether a task's mode defaults to its runner's autonomous one: a child's mandate says, the config's level unless set (ADR-0056 M6). */
@@ -48,6 +57,10 @@ export interface SessionCatalogDeps {
  */
 export class SessionCatalog {
   private discovered: ModelsByRunner = {};
+  /** Each runner's discovery still running, so a later read joins it rather than asking the resolver again. */
+  private pending = new Map<RunnerId, Promise<DiscoveredModel[]>>();
+  /** Bumped by {@link reset}: a discovery begun for the last goal lands nothing in the next one's catalog. */
+  private generation = 0;
 
   constructor(private readonly deps: SessionCatalogDeps) {}
 
@@ -136,9 +149,28 @@ export class SessionCatalog {
 
   /** Discover the runners' models, spawning their CLIs where the resolver has none cached, and remember them. */
   async discover(runners: RunnerId[]): Promise<ModelsByRunner> {
-    const found = await this.deps.modelResolver.modelsForRunners(runners);
-    this.discovered = { ...this.discovered, ...found };
-    return found;
+    const found = await Promise.all([...new Set(runners)].map(async (runner) => [runner, await this.discoverOne(runner)] as const));
+    return Object.fromEntries(found);
+  }
+
+  /**
+   * One runner's discovery, remembered as it lands. Apart from the others:
+   * one CLI that hangs while listing its models must not keep what every
+   * other runner was found to offer out of the catalog.
+   */
+  private discoverOne(runner: RunnerId): Promise<DiscoveredModel[]> {
+    const running = this.pending.get(runner);
+    if (running) return running;
+    const generation = this.generation;
+    const started = this.deps.modelResolver.modelsForRunners([runner])
+      .then((found) => {
+        // Merged, never replaced: a runner the answer leaves out keeps what was learned before.
+        if (generation === this.generation) this.discovered = { ...this.discovered, ...found };
+        return found[runner] ?? [];
+      }, () => [])
+      .finally(() => { if (this.pending.get(runner) === started) this.pending.delete(runner); });
+    this.pending.set(runner, started);
+    return started;
   }
 
   /**
@@ -153,6 +185,8 @@ export class SessionCatalog {
   /** Session boundaries are hard: nothing discovered for one goal informs the next. */
   reset(): void {
     this.discovered = {};
+    this.pending.clear();
+    this.generation++;
   }
 
   modes(runners: RunnerId[]): Record<RunnerId, RunnerModeInfo[]> {
@@ -160,13 +194,27 @@ export class SessionCatalog {
   }
 
   /**
-   * What a planner may assign right now: every enabled runner, its modes, and
-   * its allowlisted models. Discovers a runner's models the first time it is
-   * asked for.
+   * What a planner may assign right now: every offered runner, its modes, and
+   * its allowlisted models. Discovers the models of `runners` (every offered
+   * one unless named) where the resolver has none cached; a read that needs
+   * one runner's models, or none, waits on no other runner's CLI.
    */
-  async live(): Promise<TaskQueryCatalog> {
-    await this.discover(this.offeredRunners());
+  async live(runners: readonly RunnerId[] = this.offeredRunners()): Promise<TaskQueryCatalog> {
+    await this.discoverWithin(runners);
     return this.current();
+  }
+
+  /**
+   * Discover `runners` for at most {@link DISCOVERY_WAIT_MS}. A runner whose
+   * models are not found by then is answered as one discovery found nothing
+   * for, which an assignment accepts as written and the runner validates last.
+   */
+  private async discoverWithin(runners: readonly RunnerId[]): Promise<void> {
+    if (runners.length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, DISCOVERY_WAIT_MS); });
+    await Promise.race([this.discover([...runners]), waited]);
+    clearTimeout(timer);
   }
 
   /**
@@ -177,7 +225,10 @@ export class SessionCatalog {
    */
   current(): TaskQueryCatalog {
     const withheld = this.withheld();
-    return { ...this.queryCatalog(this.runnersFor('plan') ?? []), ...(withheld.length > 0 ? { withheld } : {}) };
+    const catalog = this.queryCatalog(this.runnersFor('plan') ?? []);
+    // An empty list a planner reads as "no models" may be one still being listed.
+    const discovering = catalog.runners.filter((runner) => this.pending.has(runner) && !catalog.models[runner]?.length);
+    return { ...catalog, ...(withheld.length > 0 ? { withheld } : {}), ...(discovering.length > 0 ? { discovering } : {}) };
   }
 
   queryCatalog(runners: RunnerId[]): TaskQueryCatalog {
@@ -232,12 +283,18 @@ export class SessionCatalog {
     // The planning agent's own catalog too, though it is not offered: it is
     // the evidence its model is judged by, and OpenCode's ids share an
     // OpenRouter slug's shape, so a cold one would let a model left from an
-    // old setup reach the agent when it is not also a task runner.
+    // old setup reach the agent when it is not also a task runner. So it is
+    // waited on whole, and the task runners only for the discovery wait (ADR-0022 L4).
     const planner = runnerForProvider(this.deps.config.aiProvider);
-    const [modelsByRunner] = await Promise.all([
-      this.discover(runners),
+    await Promise.all([
+      this.discoverWithin(runners),
       planner && !runners.includes(planner) ? this.deps.modelResolver.modelsForRunners([planner]) : undefined,
+      planner && runners.includes(planner) ? this.discoverOne(planner) : undefined,
     ]);
+    const modelsByRunner: ModelsByRunner = Object.fromEntries(runners.flatMap((runner) => {
+      const models = this.discovered[runner];
+      return models ? [[runner, models]] : [];
+    }));
     return {
       modelsByRunner,
       filteredModels: filterModelsForPrompt(modelsByRunner, this.allowlist()),

@@ -36,8 +36,11 @@ export interface PlannerToolsHost {
   /** The open planner turn's id: a call commits its plan or edit only in the turn it was made in. */
   turnId(): string | undefined;
   recordSkillLoad(skill: SkillLoad): boolean;
-  /** Enabled runners, their modes and their allowlisted models, as of now. */
-  liveCatalog(): Promise<TaskQueryCatalog>;
+  /**
+   * Offered runners, their modes and their allowlisted models, as of now,
+   * discovering the models of `runners` (every offered one unless named).
+   */
+  liveCatalog(runners?: readonly RunnerId[]): Promise<TaskQueryCatalog>;
   /** A submitted plan held to the one check of a plan change (`PlanChangeCheck`), against the live catalog. */
   checkPlan(tasks: unknown): Promise<CheckedChange>;
   /**
@@ -91,6 +94,9 @@ export interface PlannerToolsHost {
  * that never asked for it.
  */
 export const PLANNER_TURN_ENDED = 'The planning turn this call was made in has ended, so nothing was changed.';
+
+/** What `list_models` adds for a runner whose models discovery has not found yet (ADR-0022 L4). */
+export const STILL_DISCOVERING = 'Ordewell is still listing this runner\'s models: call list_models again shortly for them.';
 
 /** Refused by a child whose report is taken: its plan and work stay as that report describes them (ADR-0055 D7). */
 export const NODE_REPORTED = 'This child plan has reported, so nothing starts here and its plan takes no more edits.';
@@ -189,7 +195,8 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async listRunners() {
-      const catalog = await host.liveCatalog();
+      // It answers no models, so it waits on no runner's discovery.
+      const catalog = await host.liveCatalog([]);
       return answer({
         autonomy: autonomyLevelLabel(catalog.autonomousDefault),
         // No mode names: the planner says only whether a task is read-only (ADR-0031).
@@ -200,7 +207,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
     },
 
     async listModels({ runner }) {
-      const catalog = await host.liveCatalog();
+      const catalog = await host.liveCatalog([runner]);
       if (!catalog.runners.includes(runner)) return notEnabled(runner, catalog);
       return answer({
         runner,
@@ -209,6 +216,7 @@ export function plannerToolHandler(host: PlannerToolsHost): PlannerToolHandler {
           modelLabel: m.modelLabel,
           variants: (m.variants ?? []).map((v) => ({ id: v.id, label: v.label })),
         })),
+        ...(catalog.discovering?.includes(runner) ? { discovering: STILL_DISCOVERING } : {}),
       });
     },
 
