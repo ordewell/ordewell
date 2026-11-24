@@ -165,7 +165,8 @@ export function dependentsOf(tasks: readonly Readonly<Task>[], run: IsolationRun
   const dependenciesOf = dependenciesIn(tasks);
   // A "*" task the ledger kept a landing base for stood on that base, not on work the plan gained after it was cut (ADR-0077 A5).
   const kept = run?.landedOn ?? {};
-  const planned = (t: Readonly<Task>): string[] => (waitsOnAll(t) && kept[t.id] ? [...t.dependencies.filter((d) => d !== AFTER_ALL), ...t.loop?.body ?? []] : dependenciesOf(t));
+  // A retry keeps the base but runs from today's tip, so only a completed "*" task is read from it.
+  const planned = (t: Readonly<Task>): string[] => (waitsOnAll(t) && t.status === 'completed' && kept[t.id] ? [...t.dependencies.filter((d) => d !== AFTER_ALL), ...t.loop?.body ?? []] : dependenciesOf(t));
   const edges = new Map(tasks.map((t) => [t.id, planned(t)]));
   for (const [id, landedOn] of Object.entries(run?.landedOn ?? {})) edges.set(id, [...edges.get(id) ?? [], ...landedOn]);
   const found = new Set<string>([taskId]);
