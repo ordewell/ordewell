@@ -318,7 +318,8 @@ const USERS_ONLY: Partial<Record<ExecutionCommandName, UserAction>> = {
   force_send_queued: 'forceSend',
   remove_queued: 'takeBackQueued',
   cancel_resume: 'cancelResume',
-  approve_review: 'approveReview',
+  // The review's sign-off is an older client's way to run the plan: the user's control for it is run.
+  approve_review: 'runPlan',
 };
 
 /**
@@ -333,7 +334,7 @@ function userTurnRefusals(controls: SurfaceControls, mergesByThemselves: boolean
     merge: mergesByThemselves
       ? 'Merging is the user\'s, and automatic merging is on: landed work merges by itself at its merge gate and at the end of the run. Do not ask the user to merge.'
       : `Merging the run's landed work is the user's: they are in this conversation, and merge it themselves (${controls.merge}). Tell them the work is ready to merge.`,
-    notApprovedYet: `The user has not approved this plan yet: they approve it themselves (${controls.approvePlan}). Ask them to.`,
+    notApprovedYet: `The user has not run this plan yet: running it is what approves it, and they run it themselves (${controls.runPlan}). Ask them to.`,
     checkpointIsUsers: `A checkpoint is the user's to answer in their own turn: they are in this conversation. ${checkpoint} Only the supervisor at Act answers one, in a wake-up turn.`,
     /** The supervisor's own refusal for a checkpoint, by the level that denies it: the general one says the user's reply applies a suggestion, which a checkpoint's cannot. */
     checkpointBelowAct: {
@@ -381,6 +382,8 @@ interface Located {
 interface Acted {
   message: string;
   payload?: CommandPayload;
+  /** It approved and started nothing, a run on a plan already running: the answer says so, and no start is recorded. */
+  startedNothing?: boolean;
 }
 
 /**
@@ -568,7 +571,7 @@ export class ExecutionCommands {
     // A Stop while the act awaited withdrew the start it reports, whichever verb it was: the claim under way
     // ended its attempt quietly, so only the seam's admission sees that the Stop came.
     if (stopped()) return this.refuse(command, actor, located, STOPPED_BEFORE_START);
-    this.keep(command, actor, located, 'done', doneDetail(command));
+    if (!acted.startedNothing) this.keep(command, actor, located, 'done', doneDetail(command));
     return { ok: true, message: acted.message, ...(acted.payload ? { payload: acted.payload } : {}) };
   }
 
@@ -971,10 +974,12 @@ export class ExecutionCommands {
       if (actor.kind === 'user' || actor.kind === 'autorun') {
         return {
           act: async () => {
+            // A scheduled run already has every approved task, and readies no failure: with nothing waiting, the join starts nothing.
+            const startedNothing = waiting.length === 0 && this.orchestrator.scheduledRun;
             // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
             if (actor.kind === 'user') this.orchestrator.readyFailed();
             const joined = await this.host.joinRun(waiting.length, 0);
-            return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined };
+            return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined, ...(startedNothing ? { startedNothing } : {}) };
           },
         };
       }
@@ -1682,7 +1687,7 @@ export class ExecutionCommands {
     if (actor.kind === 'user' || actor.kind === 'autorun' || this.startsUnattended(actor) || this.approvals.isApproved(located.task.id)) return null;
     const label = describe(located);
     if (!this.approvals.planApproved) {
-      return { refusal: `The user has not approved ${label}: they approve the plan themselves (${this.host.userControls().approvePlan}), or a task by starting it (${this.host.userControls().forceStart}). Ask them to.` };
+      return { refusal: `The user has not approved ${label}: they approve it by running the plan themselves (${this.host.userControls().runPlan}), or by starting the task (${this.host.userControls().forceStart}). Ask them to.` };
     }
     if (this.asksToApprove(actor)) return { approves: [located] };
     return { refusal: `${capitalize(label)} was added after the user approved the plan, so it is not approved to run. Ask the user to start it, or to execute the plan, which approves it.` };
@@ -1745,7 +1750,7 @@ export class ExecutionCommands {
       case 'remove_queued': return `take back a queued message to ${label}`;
       case 'cancel_resume': return `cancel the scheduled resume of ${label}`;
       case 'answer_checkpoint': return `answer the checkpoint of ${label}`;
-      case 'approve_review': return 'approve the plan';
+      case 'approve_review': return 'run the plan';
       case 'run_script': return located ? `run script ${label}` : `run a script task "${command.title}"`;
     }
   }
@@ -2062,7 +2067,7 @@ function describeExecution(record: ExecutionRecord, command: ExecutionCommand, f
       remove_queued: `take back a queued message to ${label}`,
       cancel_resume: `cancel the scheduled resume of ${label}`,
       answer_checkpoint: `answer the checkpoint of ${label}`,
-      approve_review: 'approve the plan',
+      approve_review: 'run the plan',
       run_script: record.task ? `run script ${label}` : `run a script task${command.command === 'run_script' ? ` "${command.title}"` : ''}`,
     }[record.command];
     return record.outcome === 'declined'
@@ -2104,7 +2109,7 @@ function doneWords(record: ExecutionRecord, command: ExecutionCommand, label: st
     case 'force_send_queued': return { action: `force sent a queued message to ${label}`, tail: '.' };
     case 'remove_queued': return { action: `took back a queued message to ${label}`, tail: '.' };
     case 'cancel_resume': return { action: `cancelled the scheduled resume of ${label}`, tail: '.' };
-    case 'approve_review': return { action: 'approved the plan, which starts it', tail: '.' };
+    case 'approve_review': return { action: 'started the plan', tail: '.' };
     case 'answer_checkpoint': return command.answer === 'reject' ? { action: `rejected the checkpoint of ${label}`, tail: quoted } : { action: `approved the checkpoint of ${label}${command.raiseTokens === undefined ? '' : `, raising its budget by ${command.raiseTokens} tokens`}`, tail: '.' };
     case 'run_script': return record.result === 'gated'
       ? { action: `added script ${label}, to run once its merge gate opens`, tail: `${consentWords(record.consent)}.` }

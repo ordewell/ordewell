@@ -934,15 +934,19 @@ describe('the outline gate and autorun (ADR-0030)', () => {
   const prompt = (harness: boolean, autorun?: boolean) =>
     buildConversationSystemPrompt('goal', '', {}, ['claude-code'], undefined, { harness, autorun });
 
-  it.each([true, false])('waits for the outline to be confirmed with autorun off (harness: %s)', (harness) => {
+  it.each([true, false])('with autorun off, submits with the outline in one reply and says the draft waits for the user to run it (harness: %s)', (harness) => {
     const p = prompt(harness, false);
-    expect(p).toContain('After the user confirms the outline');
+    expect(p).toContain('5. Write the outline in your reply, then');
+    expect(p).toMatch(/AUTORUN is off: a plan you submit stays a draft, and nothing runs until the user runs it\./);
+    expect(p).toMatch(/do not hold it back for a reply to the outline/);
+    expect(p).toMatch(/naming their control to run the plan from SURFACE AND SETTINGS/);
     expect(p).toMatch(/Do not skip the outline/);
+    expect(p).not.toMatch(/After the user confirms the outline|When the user confirms the outline/);
   });
 
   it.each([true, false])('with autorun on, writes the outline as the summary and submits without waiting, still asking what is unclear (harness: %s)', (harness) => {
     const p = prompt(harness, true);
-    expect(p).not.toContain('After the user confirms the outline');
+    expect(p).not.toMatch(/AUTORUN is off/);
     expect(p).not.toMatch(/Do not skip the outline/);
     expect(p).toMatch(/AUTORUN is on/);
     expect(p).toMatch(/do not wait for the user to confirm it/i);

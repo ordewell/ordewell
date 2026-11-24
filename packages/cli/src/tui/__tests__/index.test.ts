@@ -282,7 +282,7 @@ describe('handleTui', () => {
       void handleTui([]);
 
       await vi.waitFor(() => expect(fakeTerminal.draw).toHaveBeenCalled());
-      expect(firstFrame()).toContain('Nothing runs until you approve the plan.');
+      expect(firstFrame()).toContain('Nothing runs until you run the plan.');
     });
 
     describe('attached to a daemon this TUI did not start', () => {
@@ -325,13 +325,13 @@ describe('handleTui', () => {
         let painted!: () => void;
         const approval = new Promise<void>((resolve) => { painted = resolve; });
         fakeTerminal.draw.mockImplementation(() => {
-          if (lastFrame().includes('Nothing runs until you approve the plan.')) painted();
+          if (lastFrame().includes('Nothing runs until you run the plan.')) painted();
         });
         apiClient.getSettings.mockImplementation(async () => ({ run: { autorun: false } }));
         void handleTui(['--port', '4000']);
 
         await approval;
-        expect(lastFrame()).toContain('Nothing runs until you approve the plan.');
+        expect(lastFrame()).toContain('Nothing runs until you run the plan.');
       });
     });
   });

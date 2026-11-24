@@ -47,15 +47,14 @@ describe('/fork', () => {
 });
 
 describe('switching to a fork', () => {
-  it('adopts the fork as the current session, not running and not yet approved', () => {
-    const from = initialState({ ...planned, status: 'executing', planApproved: true, planner: 'condensing' });
+  it('adopts the fork as the current session, not running', () => {
+    const from = initialState({ ...planned, status: 'executing', planner: 'condensing' });
 
     const { state } = reduce(from, { type: 'sessionForked', sessionId: 'session-2', goal: 'build me a parser' });
 
     expect(state.sessionId).toBe('session-2');
     expect(state.goal).toBe('build me a parser');
     expect(state.status).toBe('idle');
-    expect(state.planApproved).toBe(false);
     expect(state.planner).toBe('idle');
   });
 

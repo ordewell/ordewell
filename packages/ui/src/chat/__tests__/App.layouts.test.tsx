@@ -60,24 +60,24 @@ describe('App — the desktop planner tab (docs/desktop/design.md, W2/W3)', () =
     expect(settings().getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('answers a draft at the foot of the conversation: approve starts it, ask for changes goes to the composer', () => {
+  it('answers a draft at the foot of the conversation: run starts it, ask for changes goes to the composer', () => {
     mount('conversation');
     converse();
     post({ type: 'planUpdated', plan: plan('draft') });
-    const card = screen.getByRole('region', { name: 'Plan approval' });
+    const card = screen.getByRole('region', { name: 'Plan ready to run' });
     expect(within(card).getByRole('heading').textContent).toContain('2 tasks · 1 runner');
 
     fireEvent.click(within(card).getByRole('button', { name: 'Ask for changes' }));
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message the planner' }));
 
-    fireEvent.click(within(card).getByRole('button', { name: /Approve plan/ }));
+    fireEvent.click(within(card).getByRole('button', { name: /Run plan/ }));
     expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendSystemCommand', command: 'executePlan' }));
   });
 
-  it('offers no approval once the plan is approved', () => {
+  it('offers no run card once the plan is approved', () => {
     mount('conversation');
     post({ type: 'planUpdated', plan: plan('approved') });
-    expect(screen.queryByRole('region', { name: 'Plan approval' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Plan ready to run' })).toBeNull();
   });
 
   it('keeps VS Code’s sidebar as it was: no speaker names and no approval card', () => {
@@ -85,7 +85,7 @@ describe('App — the desktop planner tab (docs/desktop/design.md, W2/W3)', () =
     converse();
     post({ type: 'planUpdated', plan: plan('draft') });
     expect(document.querySelector('.chat-msg-speaker')).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Plan approval' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Plan ready to run' })).toBeNull();
   });
 });
 

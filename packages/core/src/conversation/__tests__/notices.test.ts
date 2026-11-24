@@ -70,7 +70,7 @@ describe('runNotice', () => {
 
   describe('the plan awaiting review', () => {
     it('asks for the sign-off, pointing at the surface\'s own way to give it', () => {
-      expect(runNotice({ type: 'review_needed', tasks: [] }, EMPTY_RUN, { approveWith: '/approve' })).toBe('Plan needs your sign-off: /approve to continue.');
+      expect(runNotice({ type: 'review_needed', tasks: [] }, EMPTY_RUN, { runWith: '/run' })).toBe('Plan needs your sign-off: /run to continue.');
     });
 
     it('stops at the ask on a surface whose button needs no pointing at', () => {

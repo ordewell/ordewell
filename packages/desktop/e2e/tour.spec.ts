@@ -1181,8 +1181,8 @@ test('the visual tour', async () => {
   const editor = win?.getByRole('main', { name: 'Centre' });
   const planPanel = win?.getByRole('complementary', { name: 'Plan', exact: true });
   const changes = win?.getByRole('navigation', { name: 'Changes' });
-  // The planner tab's approval card offers the same Approve: the title bar's is the frame's one.
-  const approve = win?.locator('header.frame-title').getByRole('button', { name: 'Approve plan' });
+  // The planner tab's draft card offers the same Run: the title bar's is the frame's one.
+  const approve = win?.locator('header.frame-title').getByRole('button', { name: 'Run', exact: true });
   const graphTab = async (): Promise<Locator> => {
     const tab = need(editor).getByRole('tab', { name: /Plan graph/ });
     if (await tab.count() > 0) await tab.click();

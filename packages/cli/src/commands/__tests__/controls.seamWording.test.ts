@@ -58,13 +58,13 @@ describe('the CLI words Stop, Execute and Approve as the seam does', () => {
     expect(said.err).toContain('The plan is running: #1 "Build" started.');
   });
 
-  it('says what the seam said of the review it approved', async () => {
+  it('runs the plan for `ordewell approve`, saying it is now `ordewell run`', async () => {
     const said = capture();
-    const api = streaming({ approveReview: vi.fn().mockResolvedValue({ plan: {}, message: 'Approved the plan: it runs, each task starting once its dependencies finish.' }) });
+    const api = streaming({ executePlan: vi.fn().mockResolvedValue({ status: 'running', message: 'The plan is running: #1 "Build" started.' }) });
 
     await handleApprove(['--session-id', 's1'], api);
 
-    expect(said.err).toContain('Approved the plan: it runs, each task starting once its dependencies finish.');
-    expect(said.err).not.toContain('Plan approved: continuing execution.');
+    expect(said.err).toContain('`ordewell approve` is now `ordewell run`.');
+    expect(said.err).toContain('The plan is running: #1 "Build" started.');
   });
 });

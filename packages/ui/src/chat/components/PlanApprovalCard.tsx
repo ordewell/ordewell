@@ -16,10 +16,11 @@ interface PlanApprovalCardProps {
 }
 
 /**
- * The draft plan's approval, at the foot of the conversation where the person
- * is already reading (docs/desktop/design.md, W3): what approving it commits
- * to, then the two answers. Approve is the title bar's own action, so the view
- * still has one primary (checklist A2).
+ * The draft plan's answer, at the foot of the conversation where the person
+ * is already reading (docs/desktop/design.md, W3): what running it commits to,
+ * then the two answers. Running a plan is what approves it (ADR-0035), so the
+ * answer is Run, the title bar's own action, and the view still has one
+ * primary (checklist A2).
  */
 export default function PlanApprovalCard({ tasks, isolationPreview, runSettings, settings, onApprove, onAskForChanges, onEditSettings }: PlanApprovalCardProps) {
   const runners = new Set(tasks.map((task) => task.assignedRunner).filter(Boolean)).size;
@@ -28,8 +29,8 @@ export default function PlanApprovalCard({ tasks, isolationPreview, runSettings,
     ...(runners > 0 ? [`${runners} runner${runners === 1 ? '' : 's'}`] : []),
   ].join(' · ');
   return (
-    <section className="plan-approval-card" aria-label="Plan approval">
-      <h3 className="plan-approval-title">Plan ready for approval <span className="plan-approval-size">· {size}</span></h3>
+    <section className="plan-approval-card" aria-label="Plan ready to run">
+      <h3 className="plan-approval-title">Plan ready to run <span className="plan-approval-size">· {size}</span></h3>
       <IsolationNotice preview={isolationPreview} />
       {settings && (
         <div className="plan-approval-settings">
@@ -41,7 +42,7 @@ export default function PlanApprovalCard({ tasks, isolationPreview, runSettings,
       <PlanApprovalNote runSettings={runSettings} />
       <div className="plan-approval-actions">
         <Button onClick={onAskForChanges}>Ask for changes</Button>
-        <Button variant="primary" onClick={onApprove}><span aria-hidden="true">✓ </span>Approve plan</Button>
+        <Button variant="primary" onClick={onApprove}>Run plan</Button>
       </div>
     </section>
   );

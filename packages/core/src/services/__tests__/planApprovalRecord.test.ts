@@ -17,7 +17,7 @@ import { SURFACE_CONTROLS } from '../surfaceControls';
  */
 
 const PLANNER: ExecutionActor = { kind: 'planner-turn' };
-const NOT_APPROVED = /not approved/;
+const NOT_APPROVED = /not approved|has not run this plan/;
 
 const task = (id: string, order: number, over: Partial<Task> = {}) =>
   createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, assignedRunner: 'claude-code', taskMode: 'acceptEdits', ...over });
@@ -143,7 +143,7 @@ describe('plan approval is read from the approval record, never from the display
     await vi.waitFor(() => expect(env.session.isExecuting).toBe(false));
 
     expect((await env.session.execute({ command: 'run_plan' }, PLANNER)).message)
-      .toBe(`The user has not approved this plan yet: they approve it themselves (${SURFACE_CONTROLS.unknown.approvePlan}). Ask them to.`);
+      .toBe(`The user has not run this plan yet: running it is what approves it, and they run it themselves (${SURFACE_CONTROLS.unknown.runPlan}). Ask them to.`);
   });
 
   it('still leaves a task added after the approval unapproved (ADR-0029)', async () => {

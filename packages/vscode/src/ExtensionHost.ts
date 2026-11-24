@@ -8,7 +8,7 @@ import { registerCommands, type CommandDeps } from './commands/CommandRegistry';
 import { setRunnerEnabled } from './commands/enabledRunners';
 import { handleSlashCommand, type SlashDeps } from './commands/SlashParser';
 import { confirmRisks } from './commands/runSettings';
-import { handleApprovePlan, handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
+import { handleSessionMessage, handleStartPlanning, type PlanManagerDeps } from './plan/PlanManager';
 import { ChildViewHost } from './providers/ChildViewHost';
 import { ChildTaskLogs } from './providers/ChildTaskLogs';
 import { routeWebviewMessage, sendNextHeldPrompt, type WebviewRouterDeps } from './plan/webviewRouter';
@@ -304,7 +304,6 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     runnerInstallation: services.runnerInstallation,
     settingsService: services.settingsService,
     secretStore: services.secretStore,
-    handleApprovePlan: () => handleApprovePlan(managerDeps),
     handleStartPlanning: (text) => handleStartPlanning(text, managerDeps, state.pendingRunners),
     sendRunnerAndModels: () => discovery.refresh(),
     // The palette's key entry goes on to the planner model as /key-set does.

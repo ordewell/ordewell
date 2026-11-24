@@ -92,7 +92,7 @@ describe('welcome — plan approval', () => {
 
   it('says nothing runs until the plan is approved while autorun is off', () => {
     const text = plain(welcome(false));
-    expect(text).toContain('Nothing runs until you approve the plan.');
+    expect(text).toContain('Nothing runs until you run the plan.');
     expect(text).not.toContain('Autorun is on');
   });
 

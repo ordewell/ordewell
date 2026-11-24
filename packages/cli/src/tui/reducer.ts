@@ -625,7 +625,7 @@ function withoutHandoffOverlay(state: TuiState): TuiState {
  * handoff announcement and the overlay a merge closes.
  */
 function runMessage(state: TuiState, message: RunMessage): TuiState {
-  const notice = runNotice(message, state.run, { approveWith: '/approve' });
+  const notice = runNotice(message, state.run, { runWith: '/run' });
   const heard = notice === null ? state : say(state, 'system', notice);
   switch (message.type) {
     // A start the run already shows is a duplicate: it changes nothing here.

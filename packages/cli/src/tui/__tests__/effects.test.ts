@@ -681,7 +681,7 @@ describe('execution', () => {
     expect(runMessages(h.actions, 'review_needed')).toHaveLength(1);
     let state: TuiState = { ...initialState(), sessionId: 's1' };
     for (const action of h.actions) ({ state } = reduce(state, action));
-    expect(state.conversation.blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Plan needs your sign-off: /approve to continue.' }));
+    expect(state.conversation.blocks).toContainEqual(expect.objectContaining({ type: 'message', role: 'system', text: 'Plan needs your sign-off: /run to continue.' }));
   });
 
   it('takes a plan pushed over the stream, and hands its transcript to the conversation', async () => {

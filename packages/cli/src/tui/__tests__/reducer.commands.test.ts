@@ -541,10 +541,10 @@ describe('execution', () => {
     expect(lastMessage(state)?.role).toBe('error');
   });
 
-  it('/approve marks the plan approved and starts it', () => {
+  it('/approve still starts the plan, as /run does, and says it is now /run', () => {
     const { state, effects } = run('/approve', planned);
-    expect(state.planApproved).toBe(true);
     expect(effects).toEqual([{ type: 'execute', sessionId: 'session-1' }]);
+    expect(lastMessage(state)).toMatchObject({ role: 'system', text: '`/approve` is now `/run`.' });
   });
 
   it('/stop halts the run', () => {

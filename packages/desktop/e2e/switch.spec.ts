@@ -171,7 +171,7 @@ test('a project window switches in place, focuses an open folder, and never leav
     const box = editor.getByRole('textbox', { name: 'Message the planner' });
     await box.fill(GOAL);
     await box.press('Enter');
-    const approve = win.locator('header.frame-title').getByRole('button', { name: 'Approve plan' });
+    const approve = win.locator('header.frame-title').getByRole('button', { name: 'Run', exact: true });
     await expect(approve).toBeVisible({ timeout: 60_000 });
     await planPanel.getByRole('button', { name: 'Open the plan graph' }).click();
     await approve.click();

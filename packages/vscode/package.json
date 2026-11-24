@@ -108,8 +108,8 @@
           },
           {
             "id": "approvePlan",
-            "title": "Approve the plan",
-            "description": "Read the plan: each task names its runner, model and mode. Click Execute Plan to approve it and start the run, or tell the planner what to change.\n[Open the chat](command:ordewell.focusChat)",
+            "title": "Run the plan",
+            "description": "Read the plan: each task names its runner, model and mode. Click Execute Plan to start the run, or tell the planner what to change.\n[Open the chat](command:ordewell.focusChat)",
             "media": { "markdown": "media/walkthrough/approve-plan.md" },
             "completionEvents": ["onContext:ordewell.walkthrough.planApproved"]
           }
@@ -172,10 +172,6 @@
       {
         "command": "ordewell.cancelTask",
         "title": "Ordewell: Cancel Task"
-      },
-      {
-        "command": "ordewell.approvePlan",
-        "title": "Ordewell: Approve Plan"
       },
       {
         "command": "ordewell.regeneratePlan",
