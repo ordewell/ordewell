@@ -311,7 +311,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       return { root, runner, orchestrator, runId: run.id, integration: run.repos[0].integrationBranch };
     }
 
-    /** Started again, t2 runs and lands, in a run cut from what HEAD is now; the run it was held in is gone. */
+    /** Started again by the user, t2 runs and lands, in a run cut from what HEAD is now; the run it was held in is gone. */
     async function startedFromHead({ root, runner, orchestrator, runId }: Awaited<ReturnType<typeof heldRun>>, start: () => Promise<unknown>) {
       const head = git(root, 'rev-parse', 'HEAD');
       await start();
@@ -326,13 +326,13 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     it('starts again in a run from HEAD once Merge all brought the configuration in and the run was stopped', async () => {
       const held = await heldRun();
       const { root, orchestrator, integration } = held;
-      // As the supervisor did: Merge all on the idle run, which stays open for the held task, then Stop.
+      // Merge all on the idle run, which stays open for the held task, then Stop.
       expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
       orchestrator.stop();
       expect(orchestrator.runs.isOpen).toBe(false);
       expect(git(root, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', integration));
 
-      await startedFromHead(held, () => orchestrator.forceStartTask('t2'));
+      await startedFromHead(held, () => orchestrator.forceStartTask('t2', 'person'));
     });
 
     it('starts again in a run from HEAD once the user merged the configuration in by hand', async () => {
@@ -341,7 +341,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       orchestrator.stop();
       git(root, 'merge', '-q', '--ff-only', integration);
 
-      await startedFromHead(held, () => orchestrator.forceStartTask('t2'));
+      await startedFromHead(held, () => orchestrator.forceStartTask('t2', 'person'));
     });
 
     it('starts again when the plan is executed after a Stop and a Merge all', async () => {
@@ -350,7 +350,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       orchestrator.stop();
       expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
 
-      await startedFromHead(held, () => orchestrator.start());
+      await startedFromHead(held, () => orchestrator.start('person'));
     });
 
     it('still holds the start in the run it continues while the user\'s branch does not hold the configuration', async () => {
@@ -359,7 +359,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       orchestrator.stop();
       expect(orchestrator.holdReason('t2')).toBeNull();
 
-      await orchestrator.forceStartTask('t2');
+      await orchestrator.forceStartTask('t2', 'person');
 
       await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.claude-plugin/plugin.json'));
       expect(runner.spawn).toHaveBeenCalledTimes(1);
@@ -543,7 +543,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
   });
 
-  it('a merged run whose held start left work in its worktree stays, worktree and all, and the next start continues it', async () => {
+  it('a merged run whose held start left work in its worktree stays, worktree and all, and even the user\'s next start continues it', async () => {
     const root = repo();
     const runs = controllerOver(root);
     const t1 = createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' });
@@ -560,6 +560,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     runs.interrupt();
 
     expect(await runs.merge()).toEqual({ outcome: 'merged' });
+    runs.open(true);
     await runs.decide(async () => undefined);
 
     expect(runs.planIsolation!.run.id).toBe(runId);
@@ -567,7 +568,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     expect(readFileSync(join(held.cwd, 'draft.txt'), 'utf8')).toBe('not landed\n');
   });
 
-  it('a merged run whose held start left nothing in its worktree is cleared up at Merge all', async () => {
+  it('a merged run whose held start left nothing in its worktree stays at Merge all, and a run the user opens replaces it', async () => {
     const root = repo();
     const runs = controllerOver(root);
     const t1 = createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' });
@@ -577,15 +578,25 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     writeFileSync(join(landed.cwd, '.claude-plugin', 'plugin.json'), '{}\n');
     expect(await runs.integrate(t1)).toBe('merged');
     const held = await runs.attemptCwd(createTask({ id: 't2', order: 2, title: 'Check the plugin', prompt: 'check it' }), 'fresh', runs.decision);
+    const runId = runs.planIsolation!.run.id;
     runs.interrupt();
 
     expect(await runs.merge()).toEqual({ outcome: 'merged' });
 
-    expect(runs.planIsolation).toBeNull();
-    expect(existsSync(held.cwd)).toBe(false);
-    expect(git(root, 'branch', '--list', 'ordewell/*')).toBe('');
+    // Cleared up, it would leave any start a run from HEAD: only the user's own start may take one (ADR-0028).
+    expect(runs.planIsolation!.run.id).toBe(runId);
+    expect(existsSync(held.cwd)).toBe(true);
+    runs.open();
     await runs.decide(async () => undefined);
+    expect(runs.planIsolation!.run.id).toBe(runId);
+
+    runs.interrupt();
+    runs.open(true);
+    await runs.decide(async () => undefined);
+    expect(runs.planIsolation!.run.id).not.toBe(runId);
     expect(runs.planIsolation!.run.repos[0].baseRef).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(existsSync(held.cwd)).toBe(false);
+    expect(git(root, 'branch', '--list', `ordewell/${runId}/*`)).toBe('');
   });
 
   it('a run started after one that landed nothing replaces it whole', async () => {

@@ -72,13 +72,16 @@ export { TaskControlError } from './TaskControlError';
 export type AutoMergeTrigger = { kind: 'gate'; taskId: string } | { kind: 'run_end' };
 
 /**
- * Who opened a run (ADR-0029): a call the user made, or one made for them; a
- * call of the supervisor's own, or a subplanner's, which has no user to make
- * one for (ADR-0056 M6); a usage-limit reset resuming what it paused; or a loop
- * carried on with no scheduler (ADR-0045 L5). Only the user's starts a run's
- * supervision afresh.
+ * Who opened a run (ADR-0029): a start the user made themselves, with a
+ * control of theirs (`person`), or a call made for them, by a planner turn,
+ * autorun or Ordewell (`user`); a call of the supervisor's own, or a
+ * subplanner's, which has no user to make one for (ADR-0056 M6); a usage-limit
+ * reset resuming what it paused; or a loop carried on with no scheduler
+ * (ADR-0045 L5). Only the user's, either way, starts a run's supervision
+ * afresh, and only a person's may replace a spent run, which is how a start
+ * held for configuration gets past its hold (ADR-0028).
  */
-export type RunOrigin = 'user' | 'supervisor' | 'limit-reset' | 'loop';
+export type RunOrigin = 'person' | 'user' | 'supervisor' | 'limit-reset' | 'loop';
 
 /** What the scheduler reads of the open run's settings, at each decision it makes from them. */
 export type SchedulerRunSettings = Pick<RunSettings, 'mergeAtGatesAutomatically'>;
@@ -1929,7 +1932,7 @@ export class TaskOrchestrator {
 
   private openRun(origin: RunOrigin): void {
     const opening = !this.runs.isOpen;
-    this.runs.open();
+    this.runs.open(origin === 'person');
     if (!opening) return;
     this.autoMergeBlocked = false;
     this.emit('onRunStarted', { origin });

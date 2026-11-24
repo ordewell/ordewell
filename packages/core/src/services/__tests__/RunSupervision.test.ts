@@ -116,10 +116,10 @@ describe('a child plan ending (ADR-0057 R4)', () => {
 });
 
 describe('a run starting', () => {
-  it('copies the user\'s settings when the user starts it', () => {
+  it.each(['person', 'user'] as const)('copies the user\'s settings when the user starts it, as %s', (origin) => {
     const { supervision, plan } = harness({ supervisorLevel: 'act', mergeAtGatesAutomatically: true, supervisorRetryLimit: 4, wakeUpReadBudget: 7 });
 
-    supervision.runStarted('user');
+    supervision.runStarted(origin);
 
     expect(plan.runSettings).toEqual({ supervisorLevel: 'act', mergeAtGatesAutomatically: true, supervisorRetryLimit: 4, wakeUpReadBudget: 7 });
     expect(supervision.level).toBe('act');
@@ -137,14 +137,14 @@ describe('a run starting', () => {
     expect(supervision.snapshot().guards?.retries).toEqual({ t1: 1 });
   });
 
-  it('starts afresh when the user opens a run after the supervisor\'s, forgetting what the guards remember', () => {
+  it.each(['person', 'user'] as const)('starts afresh when the user opens a run after the supervisor\'s, as %s, forgetting what the guards remember', (origin) => {
     const { supervision, plan, settings } = harness({ supervisorLevel: 'act' });
     supervision.runStarted('user');
     supervision.executed(SUPERVISOR_RETRY);
     supervision.runStarted('supervisor');
     settings.supervisorRetryLimit = 5;
 
-    supervision.runStarted('user');
+    supervision.runStarted(origin);
 
     expect(plan.runSettings).toMatchObject({ supervisorLevel: 'act', supervisorRetryLimit: 5 });
     expect(supervision.snapshot().guards?.retries).toEqual({});
@@ -452,7 +452,12 @@ describe('whose run an actor opens', () => {
   it('carries on the run for a supervisor or a subplanner, and asks for the user for anyone else (ADR-0056 M6)', () => {
     expect(runOrigin({ kind: 'supervisor', level: 'act' })).toBe('supervisor');
     expect(runOrigin({ kind: 'subplanner', depth: 1 })).toBe('supervisor');
-    for (const kind of ['user', 'planner-turn', 'autorun'] as const) expect(runOrigin({ kind })).toBe('user');
+    for (const kind of ['planner-turn', 'autorun'] as const) expect(runOrigin({ kind })).toBe('user');
+  });
+
+  it('makes only the user\'s own call a person\'s start, which alone replaces a spent run (ADR-0028): a person\'s control on a child\'s task is its subplanner\'s', () => {
+    expect(runOrigin({ kind: 'user' })).toBe('person');
+    expect(runOrigin({ kind: 'subplanner', depth: 1, person: true })).toBe('supervisor');
   });
 });
 

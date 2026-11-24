@@ -23,9 +23,13 @@ import { FAN_OUT_ROLE_WORDS, notedRole } from './PlanFanOut';
 /** Supervisor levels, lowest first: an automatic lowering only ever goes down. */
 const LEVEL_RANK: Record<SupervisorLevel, number> = { off: 0, watch: 1, act: 2 };
 
-/** A run the supervisor or a subplanner opens continues the last; every other actor asks for the user (ADR-0029, ADR-0030, ADR-0056 M6). */
+/**
+ * A run the supervisor or a subplanner opens continues the last; every other
+ * actor asks for the user (ADR-0029, ADR-0030, ADR-0056 M6), and only the
+ * user's own call is a person's start (ADR-0028).
+ */
 export function runOrigin(actor: ExecutionActor): RunOrigin {
-  return actorAuthority(actor.kind);
+  return actor.kind === 'user' ? 'person' : actorAuthority(actor.kind);
 }
 
 /** The tasks that may stand failed or held: what {@link standingBlock} judges, without walking the whole plan once a task. */
@@ -230,7 +234,8 @@ export class RunSupervision {
   runStarted(origin: RunOrigin): void {
     const plan = this.host.plan();
     if (!plan) return;
-    const continued = plan.runSettings !== undefined && origin !== 'user';
+    const byUser = origin === 'person' || origin === 'user';
+    const continued = plan.runSettings !== undefined && !byUser;
     if (!continued) {
       const user = this.host.userSettings();
       plan.runSettings = {
@@ -241,7 +246,7 @@ export class RunSupervision {
       };
       this.guards.forget();
     }
-    if (origin === 'user') {
+    if (byUser) {
       this.supervisor.userStarted();
       this.holdsSeen = undefined;
       this.standingWoken.clear();

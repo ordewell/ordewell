@@ -55,17 +55,26 @@ everything below applies per repo of the group.
   ([ADR-0054](0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)):
   its branch then holds commits no record names, and a retry starts from its
   tip. Once the user's branch holds everything the run landed and nothing else
-  is left in it (no task live, no worktree holding work that never landed), a
-  branch cut from HEAD holds that work too, so the next run's first start
-  mints one there and the old run goes as a replaced run does. Continued, its
-  base would stay behind the user's branch, and a start held for configuration
-  one of its tasks landed would be held again at every start
+  is left in it (no task live, and no record but landed ones other than an
+  attempt left `active` whose branch and worktree git finds empty, as a start
+  held at launch leaves one, and which seats no child), a branch cut from HEAD
+  holds that work too. So a run the user opens with a start of their own (Run,
+  Start now or a retry) mints one there, and the old run goes as a replaced run
+  does. Continued, its base would stay behind the user's branch, and a start
+  held for configuration one of its tasks landed would be held again at every
+  start, where the user's own start of a run whose base holds it is how they
+  consent to it
   ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
-  That is how a run a Stop ended is cleared up, since a Stop hands nothing over
-  and no close follows it; a run that reverted a task still continues, as HEAD
-  may not hold its reverts. A record with nothing landed holds only superseded
-  attempts and is discarded whole before a new one is minted. `discardRun` is
-  how a user starts over.
+  A run that a model's call opens, or the scheduler, a loop or a usage-limit
+  reset, continues the old one, so such a hold stands until the user starts the
+  task. That is how a run a Stop ended is cleared up, since a Stop hands nothing
+  over and no close follows it; a run that reverted a task still continues, as
+  HEAD may not hold its reverts. A record that seats a child keeps the run
+  whatever git finds in its worktree, which is the child's code root
+  ([ADR-0055](../supervision/0055-a-delegated-task-is-a-child-plan-behind-the-runner-seam.md)
+  D17). A record with nothing landed holds only superseded attempts and is
+  discarded whole before a new one is minted. `discardRun` is how a user
+  starts over.
 - **Naming and location.** A task's worktrees are made by `prepare` when the task
   starts, not when the run opens. They live together in one *task
   workspace*, `.ordewell/worktrees/<run-id>/<order>-<slug>/`, each at its repo's
@@ -315,9 +324,12 @@ everything below applies per repo of the group.
   above instead of handed over. So is a settled run whose session is loaded
   after the user merged it: the saved record cannot know what was merged since,
   so adopting a run asks git again, and a run still holding kept or conflicted
-  work stays. An attempt left `active` with nothing live in it, as a start held
-  at launch leaves one, holds work only where git finds some on its branch or
-  in its worktree, as the prune of an adopted run judges it. A handoff names
+  work stays. So does one with an attempt left `active` and nothing live in it,
+  as a start held at launch leaves one, whatever git finds in its worktree:
+  cleared up, the run would leave the next start of anyone's a run from HEAD,
+  where only the user's own start may take one (ADR-0028). Adopting a run
+  prunes such an attempt when git finds nothing on its branch or in its
+  worktree, and keeps one that seats a child as kept work. A handoff names
   only landed work not yet merged; a repo whose
   integration branch is gone has nothing Merge all could merge, so its landed
   work counts as merged there, while a repo git cannot read at all counts as not
@@ -653,4 +665,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
-- 2026-11-24 — a run whose landed work the user's branch holds, with nothing live or unlanded left in it, is replaced at the next run's start rather than continued, and an attempt left `active` with nothing in its worktree, as a start held for configuration leaves one, no longer keeps a merged run from being cleared up (ADR-0028).
+- 2026-11-24 — a run whose landed work the user's branch holds, with nothing live, unlanded or seating a child left in it, is replaced rather than continued when the user opens the next run with a start of their own; a run anything else opens continues it, and a merged run a held start is in stays at its clear-up (ADR-0028).

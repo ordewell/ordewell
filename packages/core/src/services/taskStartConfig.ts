@@ -91,6 +91,23 @@ function readDirs(root: string): Array<{ dir: string; prefix: string }> {
   return dirs;
 }
 
+const HELD_FOR = 'repository configuration ';
+
+/**
+ * Why a start is held for configuration that would reach its launch without
+ * the user's consent, and what releases it: removing it, or a run whose base
+ * holds it, which only a start the user makes themselves opens (ADR-0028).
+ * Read after "is on hold: ", so it opens in lower case.
+ */
+export function configHoldReason(paths: readonly string[]): string {
+  return `${HELD_FOR}${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started; remove it to continue, or merge the run into your branch, stop it and start this task yourself: only your own start begins a new run from your branch, and only once that holds all this run landed and no other task's work is left in it`;
+}
+
+/** Whether a hold is {@link configHoldReason}'s, which no model's call and nothing automatic can lift. */
+export function isConfigHold(reason: string | undefined): boolean {
+  return reason?.startsWith(HELD_FOR) === true;
+}
+
 /** What a check reads of the run: where a task's worktrees are and the base each one started from. */
 export type StartConfigRuns = Pick<IsolationRunController, 'taskRepos' | 'workspaceOf'>;
 

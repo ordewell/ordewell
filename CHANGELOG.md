@@ -11,19 +11,25 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 ### Fixed
 
 - **A task held because an earlier task changed agent configuration starts
-  again once your branch holds that change.** After the run's work was merged
-  (by Merge all or by hand) and the run stopped, starting the held task again
-  kept the old run and held it again every time, until the session was
-  reloaded. The next start now begins a new run from your branch. The same goes
-  for any run: once your branch holds everything it landed and nothing else is
-  left in it, the next start begins a new run, as reopening the session already
-  did. The empty worktree a held start leaves no longer keeps a merged run from
-  being cleared up; one that holds work that never landed still keeps the whole
-  run, as do landed work your branch does not hold yet and a kept or failed
-  task.
+  again once your branch holds that change and you start it yourself.** After
+  the run's work was merged (by Merge all or by hand) and the run stopped,
+  starting the held task again kept the old run and held it again every time,
+  until the session was reloaded. Your own Run, Start now or Retry now begins a
+  new run from your branch, provided nothing else is left in the old one: no
+  task running, and no worktree holding work that never landed or a delegated
+  task's child plan. The same goes for any run your own start opens once your
+  branch holds everything it landed. A start the planner, the supervisor or
+  autorun makes, and one Ordewell makes by itself, still continues the old run,
+  so the task stays on hold until you start it: taking that configuration on is
+  yours to decide. The hold now says so.
 - **The supervisor is no longer told to skip a task on hold,** which its
   `skip_task` refuses. It is told to retry the task, or to tell you, since only
-  you can skip it.
+  you can skip it; of a task held for configuration, it is told that only you
+  can release it.
+- **A start made while Merge all was clearing up a finished run is no longer
+  lost.** The clear-up forgot the plan's run once git had finished, even when a
+  start had opened a new one meanwhile, which left that run's branches with no
+  record naming them.
 
 ## [0.14.11] - 2026-11-24
 

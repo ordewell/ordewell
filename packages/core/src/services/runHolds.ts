@@ -3,6 +3,14 @@ import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution'
 import { repeatingChecks } from './blocking';
 import { afterAllReader } from './AfterAll';
 import type { StartWait } from './readiness';
+import { isConfigHold } from './taskStartConfig';
+
+/**
+ * What lifts a hold for repository configuration, as the tools take it: the
+ * user's own start, once their branch holds it (ADR-0028). A model's start is
+ * accepted, and held again.
+ */
+const CONFIG_RELEASE = 'Only the user can release a hold for repository configuration: a retry_task or run_task of yours starts it in this run, where it is held again. Tell the user what it is held for.';
 
 /**
  * A task that holds a run idle (ADR-0057 R4): pulled out of the scheduler, or
@@ -119,6 +127,7 @@ function endedNote(ended: boolean): string {
 
 /** The calls that release a task standing this way. */
 function releaseLine(block: StandingBlock['block']): string {
+  if (block.kind === 'on-hold' && isConfigHold(block.reason)) return CONFIG_RELEASE;
   const release = block.kind === 'waiting' && block.reason === 'checkpoint'
     ? 'answer it with answer_checkpoint'
     : block.kind === 'waiting'
@@ -183,6 +192,11 @@ export function runHeldDetail(holds: readonly RunHold[], describe: (taskId: stri
       : `is ${WAITING_WORDS[hold.reason ?? 'input']},`;
     return `Task ${describe(taskId)} ${what} and ${back}.`;
   });
-  const release = holds.some((h) => h.hold.kind === 'on-hold') ? ' A task on hold starts again only once it is retried or force started; the user can also skip it, which releases what needs it.' : '';
+  const onHold = holds.filter((h) => h.hold.kind === 'on-hold');
+  const forConfig = onHold.filter((h) => isConfigHold(h.hold.reason));
+  const release = [
+    ...(onHold.length > forConfig.length ? [' A task on hold starts again only once it is retried or force started; the user can also skip it, which releases what needs it.'] : []),
+    ...(forConfig.length > 0 ? [` ${CONFIG_RELEASE}`] : []),
+  ].join('');
   return `the run is idle: nothing is running and nothing can start. ${sentences.join(' ')}${release}`;
 }

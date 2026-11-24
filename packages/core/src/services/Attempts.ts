@@ -15,7 +15,7 @@ import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
-import { TaskStartConfig } from './taskStartConfig';
+import { configHoldReason, TaskStartConfig } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
@@ -57,7 +57,7 @@ import { modeRefusalOf, modeRefusedReason } from './modeRefusal';
 
 class TaskStartConfigError extends Error {
   constructor(paths: string[]) {
-    super(`repository configuration ${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started; remove it to continue, or start a new run once your branch holds it`);
+    super(configHoldReason(paths));
   }
 }
 

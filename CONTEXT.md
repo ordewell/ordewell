@@ -2634,12 +2634,14 @@ the orchestrator at persist time and saved whenever it changes; adopting a saved
 plan prunes the run's orphans. A plan's record is *continued* rather than
 replaced while anything has landed on it — a resumed plan's dependents need
 their predecessors' work, which a fresh branch from the checked-out commit does
-not have — unless the user's branch holds all of it and nothing else is left in
-the run, no task live and no worktree holding work that never landed: the next
-run then mints its own from HEAD, as a Stop leaves no close to clear the old one
-up. A record with nothing landed is discarded whole when the next run
-mints its own. One with landed work that cannot be continued (it ran from another
-workspace path) loses its worktrees, and its integration branch in each repo
+not have — unless the user's branch holds all of it, nothing else is left in
+the run (no task live, no worktree holding work that never landed, none seating
+a child), and the user opens the next run with a start of their own: that run
+then mints its own from HEAD, as a Stop leaves no close to clear the old one up.
+A run a model's call or the scheduler opens continues it, so a start held for
+configuration stays held until the user starts it. A record with nothing landed
+is discarded whole when the next run mints its own. One with landed work that
+cannot be continued (it ran from another workspace path) loses its worktrees, and its integration branch in each repo
 whose HEAD already contains it; it keeps the others. A run closes
 when its last attempt ends, however it ends — verdict, cancel, Mark complete or a
 failed spawn — so the next one decides its own mode. The field belongs to one
