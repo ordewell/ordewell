@@ -716,6 +716,12 @@ describe('TUI end to end', () => {
   it('a failed planner turn reports in the transcript, clears the session, and the TUI keeps working', async () => {
     const h = harness();
     h.daemon.mocks.startConversation.mockRejectedValueOnce(new DaemonRefusal('planner exploded', 500));
+    // The daemon never registered the session: a first turn it kept would keep its session (effects.test.ts).
+    const saved = h.daemon.mocks.getSession.getMockImplementation()!;
+    h.daemon.mocks.getSession.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === 'session-1') throw new DaemonRefusal('Session not found', 404, { code: 'session_not_found' });
+      return saved();
+    });
 
     h.type('Build the login flow');
     h.type('\r');
