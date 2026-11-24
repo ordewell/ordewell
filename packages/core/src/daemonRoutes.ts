@@ -57,6 +57,7 @@ import type {
   ResolveConflictResponse,
   RewindTargetsResponse,
   RunnersResponse,
+  SkillsResponse,
   ServerInfoResponse,
   SessionListResponse,
   SessionResponse,
@@ -203,6 +204,7 @@ export const DAEMON_ROUTES = {
   'models.list': row<ModelsResponse>()({ method: 'GET', path: '/api/models', query: [...WS, 'cached'] }),
 
   'runners.list': row<RunnersResponse>()({ method: 'GET', path: '/api/runners', query: WS }),
+  'skills.list': row<SkillsResponse>()({ method: 'GET', path: '/api/skills', query: WS }),
   'runners.setEnabled': row<OkResponse, { enabled: boolean }>()({ method: 'PUT', path: '/api/runners/:id' }),
 
   'files.tree': row<FileTreeResponse>()({ method: 'GET', path: '/api/files/tree', query: [...AT, 'dir'] }),

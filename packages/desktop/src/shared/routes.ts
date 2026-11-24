@@ -79,6 +79,7 @@ const RENDERER_ROUTES = [
 
   'runners.list',
   'runners.setEnabled',
+  'skills.list',
 
   'files.tree',
   'files.content',
