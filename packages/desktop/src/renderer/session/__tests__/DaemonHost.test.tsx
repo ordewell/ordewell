@@ -791,6 +791,30 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     expect(daemon.calls('settings.get')[0]?.[0]).toEqual({ workspace: WORKSPACE, sessionId: host.sessionId });
   });
 
+  it('sends the workspace\'s skills on ready: user-invocable ones to type, task skills to the cards', async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+      'skills.list': ok({ skills: [
+        { name: 'review-pr', description: 'Review a PR', appliesTo: 'planner', userInvocable: true },
+        { name: 'hidden', description: 'Model only', appliesTo: 'planner', userInvocable: false },
+        { name: 'tdd', description: 'Test first', appliesTo: 'task', userInvocable: false },
+      ] }),
+    });
+    const host = hostWithOptions({});
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    expect(daemon.calls('skills.list')[0]?.[0]).toEqual({ workspace: WORKSPACE });
+    expect(seen.filter((m) => m.type === 'setSkills').at(-1)).toEqual({
+      type: 'setSkills', skills: [{ name: 'review-pr', description: 'Review a PR', appliesTo: 'planner' }],
+    });
+    expect(seen.filter((m) => m.type === 'setTaskSkills').at(-1)).toEqual({
+      type: 'setTaskSkills', skills: [{ name: 'tdd', description: 'Test first' }],
+    });
+  });
+
   it('names the coding agent behind a harness planner, so the chat lists that agent\'s models', async () => {
     const model = { modelId: 'sonnet', modelLabel: 'Sonnet', variants: [{ id: 'high', label: 'High' }] };
     fakeDaemon({
