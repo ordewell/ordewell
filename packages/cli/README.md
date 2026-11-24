@@ -93,14 +93,17 @@ review its dependencies before the plan is kept.
 Act, that is after the closing turn the supervisor is woken to, and it keeps
 following if that turn continues the run. It prints the run's supervisor level,
 each action the supervisor takes, and, at a task waiting on a person, the
-command that answers it and who can, and, at a task on hold, the commands
-that release it. Below Act nobody answers such a wait unattended, so the run
-waits until someone does. `ordewell run --unattended` returns instead, with
-exit status 3, once the run waits on a person (a checkpoint, an input, an
-approval or a task on hold) that nobody unattended will answer: at Act after
-the supervisor's turn on it left it standing, below Act at once. It prints what
-waits and leaves the run as it is in the daemon: nothing is answered, stopped
-or skipped. It exits 0 when every task completed or was skipped, 2 when a task
+command that answers it and who can, and, at a task on hold or a manual task,
+the commands that release it. Below Act nobody answers such a wait unattended,
+so the run waits until someone does, and nobody does a manual task unattended
+at any level. `ordewell run --unattended` returns instead, with exit status 3,
+once the run waits on a person (a checkpoint, an input, an approval or a task
+on hold) that nobody unattended will answer: at Act after the supervisor's turn
+on it left it standing, below Act at once. A manual task, a merge gate, a task
+waiting to be started or one with nothing to run counts too, but only once
+nothing else can run: while a task is at work or another can start, it keeps
+following. It prints what waits and leaves the run as it is in the daemon:
+nothing is answered, stopped or skipped. It exits 0 when every task completed or was skipped, 2 when a task
 failed or is blocked, 3 as above, and 1 when the command itself failed; a
 stopped run exits 0.
 

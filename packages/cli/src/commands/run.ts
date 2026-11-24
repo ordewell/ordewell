@@ -1,7 +1,7 @@
 import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { CLOSING_TURN_BOUND_MS, handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type Escalation, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
+import { CLOSING_TURN_BOUND_MS, WAKE_DEBOUNCE_MS, handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type Escalation, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect, headlessSignedOut } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -67,10 +67,22 @@ export const RUN_WAITS_EXIT = 3;
 const PERSON_WAITS: ReadonlySet<Escalation['kind']> = new Set<Escalation['kind']>(['checkpoint', 'input', 'approval', 'on-hold']);
 
 /**
+ * What alone keeps a task from starting: a manual task, a merge gate, a task
+ * waiting to be started, nothing to run. Listed as soon as nothing else holds the task, so
+ * `--unattended` counts one only once the daemon says the run waits on the
+ * user (`waitsOnUser`): beside work still going on it is not the run's wait.
+ * No supervisor is woken to one (ADR-0057 R4).
+ */
+const START_WAITS: ReadonlySet<Escalation['kind']> = new Set<Escalation['kind']>(['by-hand', 'merge-gate', 'unapproved', 'no-prompt']);
+
+/**
  * How long a wait has to stand before `--unattended` returns on it: the status
  * update that drops an answered wait may trail the answer by a second.
  */
 const WAIT_STANDS_MS = 2_000;
+
+/** At Act, how long a start wait stands: a wake the idle run owes for anything else begins within its merge window. */
+const START_WAIT_STANDS_AT_ACT_MS = WAKE_DEBOUNCE_MS + WAIT_STANDS_MS;
 
 /** A run's own settings, as a plan or a run view carries them. */
 type RunSettingsOf = { supervisorLevel?: SupervisorLevel; unsupervised?: string } | undefined;
@@ -243,19 +255,29 @@ async function followRun(
   let standing = new Map<string, { wait: Escalation; turnsBefore: number }>();
   let turnsBegun = 0;
   let turnsEnded = 0;
+  /** The daemon said, last, that the run moves only when a person acts. */
+  let runWaitsOnUser = false;
   let standsCheck: ReturnType<typeof setTimeout> | undefined;
   let noteWaits: () => void = () => {};
   const waitsOnPerson = new Promise<'waits'>((resolve) => { noteWaits = () => resolve('waits'); });
-  const unanswered = (): Escalation[] => [...standing.values()]
-    .filter(({ turnsBefore }) => level !== 'act' || (turnsEnded > turnsBefore && turnsBegun === turnsEnded))
-    .map(({ wait }) => wait);
+  const unanswered = (): Escalation[] => {
+    const all = [...standing.values()];
+    if (level !== 'act') return all.map(({ wait }) => wait);
+    const turned = ({ turnsBefore }: { turnsBefore: number }): boolean => turnsEnded > turnsBefore && turnsBegun === turnsEnded;
+    // No turn is woken to a start wait, but one in flight, or owed to a person's wait beside it, may still move the run.
+    const owed = all.some((s) => !START_WAITS.has(s.wait.kind) && !turned(s));
+    return all.filter((s) => (START_WAITS.has(s.wait.kind) ? turnsBegun === turnsEnded && !owed : turned(s))).map(({ wait }) => wait);
+  };
   const judgeWaits = (): void => {
     if (!unattended) return;
     clearTimeout(standsCheck);
-    if (unanswered().length > 0) standsCheck = setTimeout(() => { if (unanswered().length > 0) noteWaits(); }, WAIT_STANDS_MS);
+    const waits = unanswered();
+    const stands = level === 'act' && waits.some((w) => START_WAITS.has(w.kind)) ? START_WAIT_STANDS_AT_ACT_MS : WAIT_STANDS_MS;
+    if (waits.length > 0) standsCheck = setTimeout(() => { if (unanswered().length > 0) noteWaits(); }, stands);
   };
   const noteEscalations = (list: readonly Escalation[]): void => {
-    standing = new Map(list.filter((w) => PERSON_WAITS.has(w.kind) && w.task).map((w) => [w.id, standing.get(w.id) ?? { wait: w, turnsBefore: turnsBegun }]));
+    const counted = (w: Escalation): boolean => PERSON_WAITS.has(w.kind) || (runWaitsOnUser && START_WAITS.has(w.kind));
+    standing = new Map(list.filter((w) => counted(w) && w.task).map((w) => [w.id, standing.get(w.id) ?? { wait: w, turnsBefore: turnsBegun }]));
     judgeWaits();
   };
 
@@ -274,6 +296,7 @@ async function followRun(
         refs.set(task.id, `#${label}`);
       }
       level = levelOf(event.view.runSettings) ?? level;
+      if (event.view.activity) runWaitsOnUser = event.view.activity.waitsOnUser === true;
       if (event.view.escalations) noteEscalations(event.view.escalations);
     }
     if (event.type === 'plan_generated' && 'tasks' in event.plan) {
@@ -314,6 +337,7 @@ async function followRun(
       const ref = refs.get(String(event.taskId)) ?? String(event.taskId);
       process.stderr.write(`· Checkpoint: ${ref} ${event.taskTitle}: ${truncateCheckpointSummary(event.summary)}: \`ordewell checkpoint ${bare(ref)} approve|reject [reason]\` answers it.${whoAnswers(level)}\n`);
     }
+    if (event.type === 'status_update' && event.activity) runWaitsOnUser = event.activity.waitsOnUser === true;
     if (event.type === 'status_update' && event.escalations) {
       for (const wait of event.escalations) {
         if (wait.task) refs.set(wait.task.id, wait.task.ref);
@@ -322,6 +346,11 @@ async function followRun(
         if (wait.kind === 'on-hold') {
           waitsSaid.add(wait.id);
           process.stderr.write(`· On hold: ${wait.task.ref} ${wait.task.title}: ${wait.reason.replace(/^On hold: /, '').replace(/[.\s]+$/, '')}: ${releasing(wait, bare(wait.task.ref))} releases it and what needs it.${whoReleases(level)}\n`);
+          continue;
+        }
+        if (wait.kind === 'by-hand') {
+          waitsSaid.add(wait.id);
+          process.stderr.write(`· Yours to do: ${wait.task.ref} ${wait.task.title}: a manual task: ${releasing(wait, bare(wait.task.ref))} releases it and what needs it. Nobody does it unattended: it waits until you do.\n`);
           continue;
         }
         if (wait.kind !== 'input' && wait.kind !== 'approval') continue;
