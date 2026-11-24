@@ -47,7 +47,10 @@ export interface StagedMachine {
   bin: string;
   /** The PATH on which every built-in agent's command starts its fake here. */
   PATH: string;
-  /** Change what the agents answer from the next call on, as a login or logout in another terminal does. */
+  /**
+   * Change what the agents answer from the next call on, as a login or logout
+   * in another terminal does. Only an agent staged at the start can answer.
+   */
   set(agents: MachineAgents): void;
   /** What the agents answer now. */
   agents(): MachineAgents;
@@ -99,11 +102,15 @@ export function stageMachine(dir: string, agents: MachineAgents): StagedMachine 
 
   let PATH = process.env.PATH ?? '';
   for (const command of agentCommands()) {
+    // An agent the machine lacks starts no Node at all: a probe of every
+    // agent at once must not crowd out the ones that are installed. One the
+    // machine has is the script, so a test can install it later with `set`.
     const posix = join(bin, command);
-    writeFileSync(posix, `#!/bin/sh\nexec "${process.execPath}" "${script}" ${command} "$@"\n`);
+    const node = command in agents;
+    writeFileSync(posix, node ? `#!/bin/sh\nexec "${process.execPath}" "${script}" ${command} "$@"\n` : '#!/bin/sh\nexit 127\n');
     chmodSync(posix, 0o755);
-    writeFileSync(join(bin, `${command}.cmd`), `@"${process.execPath}" "${script}" ${command} %*\r\n`);
-    writeFileSync(join(bin, `${command}.ps1`), `& "${process.execPath}" "${script}" ${command} @args\r\nexit $LASTEXITCODE\r\n`);
+    writeFileSync(join(bin, `${command}.cmd`), node ? `@"${process.execPath}" "${script}" ${command} %*\r\n` : '@exit /b 127\r\n');
+    writeFileSync(join(bin, `${command}.ps1`), node ? `& "${process.execPath}" "${script}" ${command} @args\r\nexit $LASTEXITCODE\r\n` : 'exit 127\r\n');
     PATH = pathWithFake(bin, command, PATH);
   }
   // Each call put the directory first again; once is enough.
