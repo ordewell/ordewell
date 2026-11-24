@@ -191,7 +191,8 @@ export type Action =
   /** A plan the daemon broadcast, not one a call of this surface returned. */
   | { type: 'planBroadcast'; plan: unknown; sessionId: string }
   /** One planner message from the session, as it came: core's conversation view decides what it shows. */
-  | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string }
+  /** `at`: when it arrived here (ISO), set by whoever reads the socket, so the reducer reads no clock. */
+  | { type: 'sessionMessage'; message: SessionMessage; sessionId?: string; at?: string }
   /** The next events of a structured task's attempt, live (ADR-0018, P1). */
   | { type: 'accountLimits'; limits: readonly AccountLimitSnapshot[]; sessionId: string }
   | { type: 'taskLog'; position?: StreamStamp; taskId: string; attempt: number; events: TaskLogEvent[]; sessionId?: string }

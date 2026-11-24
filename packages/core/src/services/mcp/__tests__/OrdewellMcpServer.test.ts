@@ -565,3 +565,47 @@ describe('task read schemas', () => {
     expect((await planner.callTool({ name: 'task_diff', arguments: { task: '#1', since: -1 } })).isError).toBe(true);
   });
 });
+
+describe("the daemon's log of planner tool calls", () => {
+  const logged = () => {
+    const lines: string[] = [];
+    const keep = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    vi.spyOn(console, 'log').mockImplementation(keep);
+    vi.spyOn(console, 'warn').mockImplementation(keep);
+    return () => lines.filter((line) => line.startsWith('[ordewell-mcp]'));
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  it('writes a line when a call arrives and one when it ends, naming the tool, the session and the duration, never the arguments or the result', async () => {
+    const lines = logged();
+    const server = newServer();
+    const listRunners = vi.fn(async (): Promise<McpToolReply> => ({ text: 'secret-result-text' }));
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 'sess-42' }, { listRunners }));
+
+    await planner.callTool({ name: 'list_runners', arguments: { refresh: 'secret-argument-text' } });
+
+    const calls = lines().filter((line) => line.includes('list_runners'));
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatch(/planner call list_runners started .*session sess-42/);
+    expect(calls[1]).toMatch(/planner call list_runners ok after \d+\.\d+s .*session sess-42/);
+    expect(lines().join('\n')).not.toMatch(/secret-/);
+  });
+
+  it("logs a call its client's own deadline gave up on as cancelled, an error as error, and an unknown tool as refused", async () => {
+    const lines = logged();
+    const server = newServer();
+    const listRunners = vi.fn((_args: unknown, { signal }: McpToolContext) => new Promise<McpToolReply>((resolve) => {
+      signal.addEventListener('abort', () => resolve({ text: 'aborted', isError: true }), { once: true });
+    }));
+    const listModels = vi.fn(async (): Promise<McpToolReply> => { throw new Error('discovery failed'); });
+    const planner = await connect(await server.issuePlannerToken({ sessionId: 's1' }, { listRunners, listModels }));
+
+    await expect(planner.callTool({ name: 'list_runners', arguments: {} }, undefined, { timeout: 100 })).rejects.toThrow(/timed out/i);
+    await vi.waitFor(() => expect(lines().some((line) => /list_runners cancelled after/.test(line))).toBe(true));
+    await planner.callTool({ name: 'list_models', arguments: {} });
+    await expect(planner.callTool({ name: 'no_such_tool', arguments: {} })).rejects.toThrow();
+
+    expect(lines().find((line) => line.includes('list_models') && !line.includes('started'))).toMatch(/list_models error after/);
+    expect(lines().find((line) => line.includes('no_such_tool') && !line.includes('started'))).toMatch(/no_such_tool refused after/);
+  });
+});

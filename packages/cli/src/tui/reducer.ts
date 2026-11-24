@@ -16,6 +16,7 @@ import { revertPreviewed } from './reducers/revert';
 import { adoptCompaction, followCompaction } from './reducers/compaction';
 import { disarmStop, drainQueue, forceSendPlanner, plannerEscape, queueToEditor, restoreForced } from './reducers/turnQueue';
 import { applySettings, foldRun, followSession, leaveSession, planSnapshot, withRun } from './reducers/incoming';
+import { pulseAfter } from './plannerPulse';
 import { refillPicker, reseedRunnerChoice } from './reducers/pickers';
 import { openStepperAt, refreshStepper } from './reducers/stepper';
 import { plannerStepper } from './reducers/plannerStepper';
@@ -247,7 +248,9 @@ function reduceAction(state: TuiState, action: Action): Step {
       if (stale(state, action.sessionId)) return step(state);
       if (action.message.type === 'planner_compaction') return followCompaction(state, action.message);
       if (action.message.type === 'planner_detection') return step({ ...state, plannerDetecting: action.message.waiting });
-      const next = followSession(state, action.message);
+      const followed = followSession(state, action.message);
+      const plannerPulse = pulseAfter(state.plannerPulse, followed.conversation, action.message, action.at);
+      const next = plannerPulse === followed.plannerPulse ? followed : { ...followed, plannerPulse };
       // A child's turns start on the daemon, so no call here has told the status.
       if (state.child && action.message.type === 'planner_turn_started') return step({ ...next, planner: 'joined' });
       const { sessionId } = state;

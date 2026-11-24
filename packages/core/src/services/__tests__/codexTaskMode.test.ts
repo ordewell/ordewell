@@ -1346,7 +1346,7 @@ describe('CodexAdapter with the Ordewell MCP server (ADR-0022)', () => {
       cwd: '/repo',
       sandbox: 'read-only',
       approvalPolicy: 'on-request',
-      config: { mcp_servers: { ordewell: ordewellServer }, web_search: 'disabled', projects: untrustedRepo() },
+      config: { mcp_servers: { ordewell: { ...ordewellServer, tool_timeout_sec: 3600 } }, web_search: 'disabled', projects: untrustedRepo() },
       developerInstructions: `PLAN\n\n${CODEX_ORDEWELL.plannerInstructions(false)}`,
     });
     // Codex lists MCP tools only behind its own discovery, and its shell has no network (ADR-0026).

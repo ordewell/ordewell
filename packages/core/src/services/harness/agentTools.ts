@@ -43,6 +43,9 @@ const KNOWN_TOOLS: Record<string, ResearchToolType> = {
  */
 const ORDEWELL_TOOL_PREFIX = /^(mcp__ordewell__|ordewell_)/i;
 
+/** Whether a runner's name for a tool is one of Ordewell's own. */
+export const isOrdewellTool = (name: string): boolean => ORDEWELL_TOOL_PREFIX.test(name.trim());
+
 /**
  * The tools that write a file, by their normalized names: Claude Code's,
  * OpenCode's, and the change kinds a Codex row is named for. Their output is
