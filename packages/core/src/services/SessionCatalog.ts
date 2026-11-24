@@ -9,6 +9,7 @@ import type { AssignmentScope } from './AssignmentScope';
 import { runnerForProvider } from './ProviderRegistry';
 import { withinLimits, type MandateLimits } from './Mandate';
 import type { DiscoveredModel, RunnerId } from '../models/Task';
+import { RUNNER_LABELS } from './runnerCatalog';
 
 type ModelsByRunner = Partial<Record<RunnerId, DiscoveredModel[]>>;
 
@@ -24,6 +25,13 @@ export interface SessionCatalogDeps {
   settings: () => { enabledRunners?: RunnerId[]; modelAllowlist?: Record<string, string[]> };
   /** The runners of the plan being edited; empty while the session has none. */
   planRunners: () => RunnerId[];
+  /**
+   * Why an enabled runner is not offered to a planner right now, read at each
+   * call: an agent known to be signed out ('signed out'), which is offered
+   * again by itself once its check reads signed in (ADR-0052). Undefined
+   * offers it. The user's settings keep it enabled either way.
+   */
+  withheld?: (runner: RunnerId) => string | undefined;
   /** Whether a task's runner is up: an attempt claimed, running, quiet or waiting on someone. */
   liveRunner?: (taskId: string) => boolean;
 }
@@ -60,9 +68,29 @@ export class SessionCatalog {
     return this.assignable().runners;
   }
 
-  /** The runners `writer` may put a task on now ({@link assignableRunners}); undefined means any. */
+  /** The enabled runners a planner is offered now: those not {@link withheld}. */
+  offeredRunners(): RunnerId[] {
+    return this.enabledRunners().filter((runner) => this.deps.withheld?.(runner) === undefined);
+  }
+
+  /**
+   * The enabled runners a planner is not offered now, each with the line it is
+   * told why, so it neither assigns one nor asks the user to enable it.
+   */
+  withheld(): { runner: RunnerId; reason: string }[] {
+    return this.enabledRunners().flatMap((runner) => {
+      const why = this.deps.withheld?.(runner);
+      return why === undefined ? [] : [{ runner, reason: `${RUNNER_LABELS[runner] ?? runner}: ${why}, not offered until signed in` }];
+    });
+  }
+
+  /**
+   * The runners `writer` may put a task on now ({@link assignableRunners});
+   * undefined means any. A planner, the supervisor included, is held to the
+   * offered ones; the user's own edit is not.
+   */
   runnersFor(writer: AssignmentWriter): RunnerId[] | undefined {
-    return assignableRunners(writer, this.enabledRunners());
+    return assignableRunners(writer, this.offeredRunners());
   }
 
   /**
@@ -74,7 +102,12 @@ export class SessionCatalog {
     return this.assignable().allowlist;
   }
 
-  /** The enabled runners and allowlist together, for whoever compares an assignment with them. */
+  /**
+   * The enabled runners and allowlist together, for whoever compares an
+   * assignment with them. The user's enabled runners, not the offered ones: a
+   * task on a signed-out agent is not switched off, and fails at its start
+   * with the sign-in hint.
+   */
   scope(): AssignmentScope {
     return { enabledRunners: this.enabledRunners(), allowlist: this.allowlist(), models: this.models() };
   }
@@ -132,17 +165,19 @@ export class SessionCatalog {
    * asked for.
    */
   async live(): Promise<TaskQueryCatalog> {
-    await this.discover(this.enabledRunners());
+    await this.discover(this.offeredRunners());
     return this.current();
   }
 
   /**
    * What {@link live} answers, from what is cached and without discovering:
-   * the enabled runners, however the plan was started. The per-turn block
+   * the offered runners, however the plan was started, and why any enabled
+   * one is not. The per-turn block
    * reads this, so it can never offer a different set than `list_runners`.
    */
   current(): TaskQueryCatalog {
-    return this.queryCatalog(this.runnersFor('plan') ?? []);
+    const withheld = this.withheld();
+    return { ...this.queryCatalog(this.runnersFor('plan') ?? []), ...(withheld.length > 0 ? { withheld } : {}) };
   }
 
   queryCatalog(runners: RunnerId[]): TaskQueryCatalog {
