@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.14.11] - 2026-11-24
+
+### Added
+
+- A task can depend on `"*"` to run after everything else in the plan, tasks
+  added later included.
+- The effort actually sent to the model is recorded beside the planned one.
+
+### Changed
+
+- Planned tasks default to medium reasoning effort.
+- The plan review also catches plans whose parallel tasks wait on a wall of
+  setup tasks.
+- The opening task's note is clearer about what it checks.
+
 ## [0.14.10] - 2026-11-23
 
 ### Changed
@@ -1918,7 +1933,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.10...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.11...HEAD
+[0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9
 [0.14.8]: https://github.com/ordewell/ordewell/compare/v0.14.7...v0.14.8
