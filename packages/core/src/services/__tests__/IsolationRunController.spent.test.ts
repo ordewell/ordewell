@@ -15,14 +15,16 @@ import { fakeNotification } from './sessionTestKit';
  * - Rule 1: a run is replaced only when git confirms the user's branch holds
  *   every integration tip and no record holds unlanded work, a kept attempt,
  *   a failed landing or a conflict, a live attempt, a child, or kept branches;
- *   nor may the run hold reverts or a landing cut short. Records alone never
- *   decide: git is asked last, and only of a start that consents.
+ *   nor may the run hold a landing cut short. A revert keeps nothing back:
+ *   its commits are on the tip git finds. Records alone never decide, either
+ *   way: git is asked last, and only of a start that consents, and a landing
+ *   only the ledger still names keeps the run for every other start.
  * - Rule 2: only a person's own start of a task in a worktree, as it decides
  *   the run, replaces it. Who opened the run is not read.
  *
- * A run that is not continuable at all, its records all `active` with no child
- * and nothing reverted, holds only superseded attempts and is minted anew for
- * any start, as on main.
+ * A run that is not continuable at all, its records all `active` with no child,
+ * nothing reverted and no landing in its ledger, holds only superseded
+ * attempts and is minted anew for any start, as on main.
  *
  * The git edges (several repositories with one merged, HEAD on another branch
  * or detached, an integration branch deleted by hand, a squash merge, a review
@@ -32,7 +34,8 @@ import { fakeNotification } from './sessionTestKit';
 
 const STATES = ['absent', 'merged', 'active-empty', 'active-unlanded', 'kept', 'failed', 'conflict', 'child', 'merged-child', 'kept-branches'] as const;
 type State = typeof STATES[number];
-const FLAGS = ['none', 'reverted', 'landing'] as const;
+/** `ledger`: the ledger names a landing of t0's, whose record a held start dropped (the third review's F1). */
+const FLAGS = ['none', 'reverted', 'landing', 'ledger'] as const;
 type Flag = typeof FLAGS[number];
 const LIVE = ['none', 't1', 't2'] as const;
 type Live = typeof LIVE[number];
@@ -69,6 +72,7 @@ async function arrange(c: Case) {
   const run = runs.planIsolation!.run;
   if (c.flag === 'reverted') run.reverted = true;
   if (c.flag === 'landing') run.landing = { taskId: 't1', tips: { '.': 'tip-before' } };
+  if (c.flag === 'ledger') run.landings = { ...run.landings, t0: { '.': ['tip-t0'] } };
   if (c.live !== 'none') live.add(c.live);
   runs.interrupt();
   return env;
@@ -78,12 +82,12 @@ async function arrange(c: Case) {
 function recordsClear(c: Case): boolean {
   const states = [c.t1, c.t2];
   const liveRecord = c.live !== 'none' && c[c.live] !== 'absent';
-  return c.flag === 'none' && !liveRecord && states.every((s) => s === 'absent' || s === 'merged' || s === 'active-empty');
+  return c.flag !== 'landing' && !liveRecord && states.every((s) => s === 'absent' || s === 'merged' || s === 'active-empty');
 }
 
-/** The run is continued unless replaced: only a run with nothing but plain `active` records and no revert is superseded for anyone. */
+/** The run is continued unless replaced: only a run with nothing but plain `active` records, no revert and nothing in its ledger is superseded for anyone. */
 function continuable(c: Case): boolean {
-  return c.flag === 'reverted' || [c.t1, c.t2].some((s) => s !== 'absent' && s !== 'active-empty' && s !== 'active-unlanded' && s !== 'kept-branches');
+  return c.flag === 'reverted' || c.flag === 'ledger' || [c.t1, c.t2].some((s) => s !== 'absent' && s !== 'active-empty' && s !== 'active-unlanded' && s !== 'kept-branches');
 }
 
 function expectedReplaced(c: Case): boolean {

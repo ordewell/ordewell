@@ -50,8 +50,10 @@ everything below applies per repo of the group.
   failure, the next Execute preserves completed tasks, and a fresh integration
   branch cut from the checked-out commit would hand their dependents a tree
   without the work they depend on. So a run continues the plan's `IsolationRun`
-  (same integration branches, same base refs) while it has a `merged` task, or
-  once it has reverted one
+  (same integration branches, same base refs) while it has a `merged` task,
+  while its ledger names a landing whose record has gone (a held start of the
+  task that landed leaves an `active` record in its place), or once it has
+  reverted one
   ([ADR-0054](0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)):
   its branch then holds commits no record names, and a retry starts from its
   tip. A run is spent once git finds every repository's integration tip in
@@ -59,12 +61,15 @@ everything below applies per repo of the group.
   left in it: no task live, no record but landed ones and attempts left
   `active` whose branch and worktree git finds empty, as a start held at
   launch leaves one, none that seats a child or keeps branches a conflict's
-  fall-back left, nothing reverted and no landing cut short. Records alone
-  never say a run is spent: a retry drops a landed task's record, and its
-  landing stays on the branch. A detached HEAD, an integration branch gone, a
-  tip only a review or another branch holds, a squash merge, or git unable to
-  say, keeps the run. A spent run is replaced only by the start that decides
-  the next run, and only if that start is a person's own of a task that works
+  fall-back left, and no landing cut short. A run that reverted a task is
+  spent the same way: its reverts are on the tip git finds, and the later
+  attempt a revert leaves is kept, which keeps the run. Records alone never
+  say a run is spent, nor that it is not: a retry drops a landed task's
+  record, and its landing stays on the branch. A detached HEAD, an
+  integration branch gone, a tip only a review or another branch holds, a
+  squash merge, or git unable to say, keeps the run. A spent run
+  is replaced only by the start that decides the next run, and only if that
+  start is a person's own of a task that works
   in a worktree and whose launch the configuration check reads: their Run,
   Start now, retry or Continue of a change or delegated task. It mints the run
   from HEAD, and the old run goes as a replaced run does. Continued, the old
@@ -678,4 +683,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
-- 2026-11-24 — a run git finds wholly in the user's branch, with nothing live, unlanded or seating a child left in it, is replaced rather than continued when a person's own start of a task in a worktree decides the next run; any other start continues it, and a merged run a held start is in stays at its clear-up (ADR-0028).
+- 2026-11-24 — a run git finds wholly in the user's branch, with nothing live, unlanded or seating a child left in it, is replaced rather than continued when a person's own start of a task in a worktree decides the next run, reverted or not; any other start continues it, as it does a run whose ledger names a landing no record speaks for, and a merged run a held start is in stays at its clear-up (ADR-0028).

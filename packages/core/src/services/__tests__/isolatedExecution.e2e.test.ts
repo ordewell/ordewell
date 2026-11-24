@@ -524,7 +524,8 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     });
   }
 
-  it('a run started after a retry dropped the only record of landed work keeps that work for the user', async () => {
+  /** t1 landed landed.txt, the run closed, and a retry dropped t1's record, the only one in the run; `older`: in a run saved before landings were kept. */
+  async function droppedOnlyRecord(older: boolean) {
     const root = repo();
     const runs = controllerOver(root);
     const t1 = createTask({ id: 't1', order: 1, title: 'Add landed', prompt: 'write landed.txt' });
@@ -532,15 +533,32 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     const { cwd } = await runs.attemptCwd(t1, 'fresh', runs.decision);
     writeFileSync(join(cwd, 'landed.txt'), 'landed\n');
     expect(await runs.integrate(t1)).toBe('merged');
-    const integration = runs.planIsolation!.run.repos[0].integrationBranch;
+    const run = runs.planIsolation!.run;
+    if (older) for (const key of ['landings', 'landedTasks', 'keepsEveryLanding', 'carried'] as const) delete run[key];
+    const integration = run.repos[0].integrationBranch;
     await runs.close();
     // What retrying the task does: its record, the only one in the run, goes.
     await runs.release('t1', { keep: false });
     expect(runs.planIsolation!.run.tasks).toEqual({});
+    return { root, runs, integration };
+  }
+
+  it('a run started after a retry dropped the only record of landed work keeps that work for the user', async () => {
+    // Saved before landings were kept, the run has nothing but its records to say what it landed, so it is superseded.
+    const { root, runs, integration } = await droppedOnlyRecord(true);
 
     await runs.decide(async () => undefined);
 
     expect(runs.planIsolation!.run.repos[0].integrationBranch).not.toBe(integration);
+    expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
+  });
+
+  it('a run whose ledger names a landing a retry dropped the only record of goes on, that work on its branch (ADR-0013)', async () => {
+    const { root, runs, integration } = await droppedOnlyRecord(false);
+
+    await runs.decide(async () => undefined);
+
+    expect(runs.planIsolation!.run.repos[0].integrationBranch).toBe(integration);
     expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
   });
 

@@ -12,9 +12,11 @@ import { closeSessions, makeSession, taskOf, testWorkspace } from './sessionTest
 /**
  * Who may replace a run a start was held in for configuration (ADR-0028,
  * ADR-0013), enumerated at the session over every caller, command, kind of
- * task started, way the configuration reached the user's branch and state of
- * the run, and over two-command sequences: a person's command that starts no
- * task in a worktree, then each start a model or Ordewell makes by itself.
+ * task started, way the configuration reached the user's branch, state of the
+ * run and what its records still say of what it landed, and over sequences: a
+ * person's command that starts no task in a worktree, then each start a model
+ * or Ordewell makes by itself, after a held start that dropped the only
+ * landed record or not.
  * The isolation is a fake, so no start is truly held: what is observed is the
  * decision the hold follows from, whether the run is replaced by one from
  * HEAD (no hold) or continued (held again, as the real-git tests in
@@ -24,7 +26,8 @@ import { closeSessions, makeSession, taskOf, testWorkspace } from './sessionTest
  *
  * The expected outcome is computed from the rules:
  * - Rule 1: git says the user's branch holds everything the run landed (any
- *   merge, by anyone, or by hand) and nothing is live in it.
+ *   merge, by anyone, or by hand) and nothing is live in it, whatever its
+ *   records say: one a held start dropped, or a revert took, changes nothing.
  * - Rule 2: the start that decides the run is a person's own, of a task in a
  *   worktree whose launch the configuration check reads, and nothing else.
  */
@@ -49,7 +52,19 @@ type Route = typeof ROUTES[number];
 const STATES = ['stopped', 'closed', 'open'] as const;
 type RunState = typeof STATES[number];
 
-interface Case { who: Who; command: Command; starts: Starts; route: Route; state: RunState }
+/**
+ * What the run's records still say of what it landed (the third review's F1
+ * and F2). `record`: t1's landed record. `continued`: none, as the
+ * supervisor's Continue of t1, held, replaced it with an `active` one, and
+ * only the ledger and git still say t1 landed. `marked`: the same, by the
+ * user's Mark not done of t1 and the planner's Start now of it, held.
+ * `reverted`: t1's record, beside t7's landing, which the user reverted, so
+ * the branch holds a revert no record names.
+ */
+const SHAPES = ['record', 'continued', 'marked', 'reverted'] as const;
+type Shape = typeof SHAPES[number];
+
+interface Case { who: Who; command: Command; starts: Starts; route: Route; state: RunState; shape: Shape }
 
 const TARGET: Record<Starts, string> = { held: 't2', worktree: 't4', ops: 't3', readOnly: 't5', script: 't6' };
 
@@ -57,10 +72,12 @@ const TARGET: Record<Starts, string> = { held: 't2', worktree: 't4', ops: 't3', 
  * What a case's command acts on. A held task has never run, so it has no
  * saved session to continue and no completion to take back: those commands
  * take the task that landed the configuration, whose next attempt is held
- * the same way (the second review's L1 and L2).
+ * the same way (the second review's L1 and L2). Where a held start of that
+ * task dropped its record, it is the task held, and the one after it waits
+ * for it.
  */
-function targetOf(c: Pick<Case, 'command' | 'starts'>): string {
-  if (c.starts === 'held' && (c.command === 'continue' || c.command === 'mark_not_done_then_run_task')) return 't1';
+function targetOf(c: Pick<Case, 'command' | 'starts' | 'shape'>): string {
+  if (c.starts === 'held' && (dropped(c.shape) || c.command === 'continue' || c.command === 'mark_not_done_then_run_task')) return 't1';
   return TARGET[c.starts];
 }
 
@@ -75,8 +92,14 @@ function cannotOccur(c: Case): string | null {
   if (c.command === 'retry_fresh' && c.starts === 'script' && c.who !== 'user') return 'a model retries a failed script only once it has edited it';
   // A run kept open by a task started on its own neither ends nor has a scheduler reach a gate (heldConfigStart.e2e covers a gate's merge).
   if (c.route === 'auto-merge' && c.state === 'open') return 'automatic merging merges as a run ends, or at a gate a scheduler reaches';
+  if (c.shape === 'marked' && c.state === 'open') return 'Mark not done waits for the run to stop';
+  // Held again, t1 is not done, so there is nothing to mark not done.
+  if (dropped(c.shape) && c.command === 'mark_not_done_then_run_task' && targetOf(c) === 't1') return 'a held task is not done';
   return null;
 }
+
+/** Whether a held start of t1 dropped its landed record, which only the ledger and git still speak for. */
+const dropped = (shape: Shape) => shape === 'continued' || shape === 'marked';
 
 /**
  * The tasks the command starts, by kind. A Run starts every task ready, and
@@ -126,9 +149,9 @@ const SCRIPT: Pick<Task, 'type' | 'commands'> = { type: 'script', commands: [['n
  * gate (ADR-0020) where the user's branch lacks t1's work. `only` keeps of
  * those the ones a case acts on, so a Run starts nothing it does not name.
  */
-function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = false): LegacyPlanState {
+function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = false, shape: Shape = 'record'): LegacyPlanState {
   const now = new Date().toISOString();
-  const kept = (task: Task) => only === null || ['t1', 't2', 'keep', 't0'].includes(task.id) || only.includes(task.id);
+  const kept = (task: Task) => only === null || ['t1', 't2', 'keep', 't0', 't7'].includes(task.id) || only.includes(task.id);
   return {
     tasks: [
       // Ahead of every other task, a read-only one is the first a Run starts.
@@ -140,6 +163,7 @@ function plan(state: RunState, only: readonly string[] | null, readOnlyFirst = f
       createTask({ id: 't5', order: 5, title: 'Read the hook', prompt: 'read it', taskMode: 'plan', assignedRunner: 'claude-code' }),
       createTask({ id: 't6', order: 6, title: 'Script the hook', ...SCRIPT }),
       ...(state === 'open' ? [createTask({ id: 'keep', order: 7, title: 'Keep the run open', prompt: 'keep going' })] : []),
+      ...(shape === 'reverted' ? [createTask({ id: 't7', order: 8, title: 'Write beside the hook', prompt: 'write it' })] : []),
       createTask({ id: 't9', order: 9, title: 'Follow the hook', prompt: 'follow it', dependencies: ['t3'] }),
     ].filter(kept),
     generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now,
@@ -185,8 +209,10 @@ const WAIT = { timeout: patient(5_000), interval: 2 };
 /**
  * The world a case's command meets: t1 landed the configuration; the case's
  * target done, failed or not started, as its command needs; t2's start held,
- * its record left `active`; the configuration brought into the user's branch
- * by the case's route; and the run stopped, closed or kept open.
+ * its record left `active`; t7's landing reverted, in the `reverted` shape;
+ * the configuration brought into the user's branch by the case's route; the
+ * run stopped, closed or kept open; and then, in the `continued` and `marked`
+ * shapes, t1's landed record dropped by a start of t1 that is held.
  */
 async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
   const isolation = new HeldStartIsolation();
@@ -197,7 +223,7 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', mergeAtGatesAutomatically: c.route === 'auto-merge' } }),
   });
   const target = targetOf(c);
-  session.loadPlan(plan(c.state, every ? null : [target], readOnlyFirst), 'goal', testWorkspace, { persist: false });
+  session.loadPlan(plan(c.state, every ? null : [target], readOnlyFirst, c.shape), 'goal', testWorkspace, { persist: false });
 
   // t1 runs while the rest is set up, so t2's held start comes in the run t1 lands in, before that run can close and be cleared up.
   r.hold.add('t1');
@@ -205,6 +231,10 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
   if (c.state === 'open') {
     r.hold.add('keep');
     await ok(session, { command: 'run_task', task: 'keep' });
+  }
+  if (c.shape === 'reverted') {
+    await ok(session, { command: 'run_task', task: 't7' });
+    await vi.waitFor(() => expect(statusOf(session, 't7')).toBe('completed'), WAIT);
   }
   if (target !== 't1' && target !== 't2' && (c.command === 'continue' || c.command === 'mark_not_done_then_run_task' || c.command === 'retry_fresh')) {
     if (c.command === 'retry_fresh') r.fail.add(target);
@@ -217,6 +247,10 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
   r.release('t1');
   await vi.waitFor(() => expect(session.runSnapshot().tasks.find((t) => t.id === 't2')?.holdReason).toBeTruthy(), WAIT);
   expect(session.planState?.isolation?.run.tasks).toMatchObject({ t1: { status: 'merged' }, t2: { status: 'active' } });
+  if (c.shape === 'reverted') {
+    await ok(session, { command: 'revert_task', task: 't7', confirmed: true, seen: ['t7'] });
+    expect(session.planState?.isolation?.run).toMatchObject({ reverted: true, tasks: { t1: { status: 'merged' } } });
+  }
 
   if (c.route === 'user-merge') await ok(session, { command: 'merge_all' });
   if (c.route === 'supervisor-merge') await ok(session, { command: 'merge_all' }, WHO.supervisor);
@@ -224,8 +258,31 @@ async function world(c: Case, { readOnlyFirst = false, every = false } = {}) {
   if (c.route === 'by-hand') { for (const id of Object.keys(session.planState?.isolation?.run.tasks ?? {})) isolation.mergedByHand.add(id); isolation.branchHolds = true; }
   if (c.route === 'auto-merge') await vi.waitFor(() => expect(isolation.branchHolds).toBe(true), WAIT);
   if (c.state === 'stopped') await ok(session, { command: 'stop_run' });
+  if (dropped(c.shape)) await dropLanded(session, isolation, r, c.shape);
   if (c.command === 'mark_not_done_then_run_task') await ok(session, { command: 'mark_not_done', task: target, confirmed: true, seen: 'completed' });
   return { session, isolation, r, runs: () => isolation.calls.filter((call) => call.op === 'startRun').length };
+}
+
+/**
+ * A start of t1 that is held, as its worktree is cut from a tip that holds
+ * the configuration it landed: its record goes `active`, and only the ledger
+ * and git still say t1 landed. The supervisor's Continue, or the user's Mark
+ * not done and then the planner's Start now: no start a model makes decides
+ * to replace a run, so the run it comes in is the run held.
+ */
+async function dropLanded(session: Session, isolation: HeldStartIsolation, r: Runners, shape: 'continued' | 'marked') {
+  const run = session.planState?.isolation?.run;
+  isolation.heldOnce.add('t1');
+  r.refuse.add('t1');
+  if (shape === 'continued') await ok(session, { command: 'retry_task', task: 't1', from: 'session', message: 'go on' }, WHO.supervisor);
+  else {
+    await ok(session, { command: 'mark_not_done', task: 't1', confirmed: true, seen: 'completed' });
+    await ok(session, { command: 'run_task', task: 't1' }, WHO.planner);
+  }
+  await vi.waitFor(() => expect(session.runSnapshot().tasks.find((t) => t.id === 't1')?.holdReason).toBeTruthy(), WAIT);
+  expect(session.planState?.isolation?.run).toBe(run);
+  expect(run?.tasks.t1?.status).toBe('active');
+  expect(run?.landings?.t1).toBeDefined();
 }
 
 /** The case's command, as its caller sends it. */
@@ -253,10 +310,13 @@ async function decides(c: Case): Promise<{ refused: string | null; replaced: boo
   return { refused: null, replaced: runs() > before };
 }
 
-const ALL: Case[] = (Object.keys(WHO) as Who[]).flatMap((who) => COMMANDS.flatMap((command) => STARTS.flatMap((starts) => ROUTES.flatMap((route) => STATES.map((state) => ({ who, command, starts, route, state }))))));
+const ALL: Case[] = SHAPES.flatMap((shape) => (Object.keys(WHO) as Who[]).flatMap((who) => COMMANDS.flatMap((command) => STARTS.flatMap((starts) => ROUTES.flatMap((route) => STATES.map((state) => ({ who, command, starts, route, state, shape })))))));
+
+/** What a case is called; the `record` shape's names are the ones the table had before it had shapes. */
+const nameOf = (shape: Shape, rest: string) => (shape === 'record' ? rest : `${shape}: ${rest}`);
 
 describe('who replaces a run a start was held in for configuration (enumerated)', () => {
-  it.each(ALL.filter((c) => cannotOccur(c) === null).map((c) => [`${c.who} ${c.command} of ${c.starts}, ${c.route}, ${c.state}`, c] as const))('%s', async (_name, c) => {
+  it.each(ALL.filter((c) => cannotOccur(c) === null).map((c) => [nameOf(c.shape, `${c.who} ${c.command} of ${c.starts}, ${c.route}, ${c.state}`), c] as const))('%s', async (_name, c) => {
     const { refused, replaced } = await decides(c);
     expect({ refused, replaced }).toEqual({ refused: null, replaced: expectedReplaced(c) });
   });
@@ -301,20 +361,23 @@ const SECONDS = {
 
 const keepsT3 = (first: keyof typeof FIRSTS) => first.includes('ops task, kept running');
 
-const SEQUENCES = (Object.keys(FIRSTS) as (keyof typeof FIRSTS)[]).flatMap((first) => (Object.keys(SECONDS) as (keyof typeof SECONDS)[])
-  // A queued start needs its dependency still running, which only those first steps leave.
-  .filter((second) => !second.startsWith('a queued') || keepsT3(first))
-  .flatMap((second) => (['user-merge', 'auto-merge', 'by-hand'] as const).flatMap((route) => (['stopped', 'closed'] as const).map((state) => ({ first, second, route, state })))));
+const SEQUENCES = SHAPES.flatMap((shape) => (Object.keys(FIRSTS) as (keyof typeof FIRSTS)[])
+  // Held again, t1 is not done, so there is nothing to mark not done.
+  .filter((first) => !(dropped(shape) && first.startsWith('Mark not done')))
+  .flatMap((first) => (Object.keys(SECONDS) as (keyof typeof SECONDS)[])
+    // A queued start needs its dependency still running, which only those first steps leave.
+    .filter((second) => !second.startsWith('a queued') || keepsT3(first))
+    .flatMap((second) => (['user-merge', 'auto-merge', 'by-hand'] as const).flatMap((route) => (['stopped', 'closed'] as const).map((state) => ({ first, second, route, state, shape }))))));
 
 /** Per second step, how many sequences it was the start that decided the run in: what makes the table more than a run of no-ops. */
 const decidedBy = new Map<string, number>();
 
 describe('a person\'s command that starts no task in a worktree, then a start a model or Ordewell makes (enumerated)', () => {
-  it.each(SEQUENCES.map((q) => [`${q.first}, then ${q.second}; ${q.route}, ${q.state}`, q] as const))('%s: the run goes on', async (_name, q) => {
-    const c: Case = { who: 'user', command: 'run_task', starts: 'held', route: q.route, state: q.state };
+  it.each(SEQUENCES.map((q) => [nameOf(q.shape, `${q.first}, then ${q.second}; ${q.route}, ${q.state}`), q] as const))('%s: the run goes on', async (_name, q) => {
+    const c: Case = { who: 'user', command: 'run_task', starts: 'held', route: q.route, state: q.state, shape: q.shape };
     const { session, isolation, r, runs } = await world(c, { every: true });
-    // Marked not done, t1 holds back t2, and its own next attempt is the one held (the second review's L2).
-    const held = q.first.startsWith('Mark not done') ? 't1' : 't2';
+    // Marked not done, or held again, t1 holds back t2, and its own next attempt is the one held (the second review's L2).
+    const held = q.first.startsWith('Mark not done') || dropped(q.shape) ? 't1' : 't2';
     const before = runs();
     const assessed = () => isolation.calls.filter((call) => call.op === 'isActive').length;
     await FIRSTS[q.first](session, r);
@@ -337,7 +400,7 @@ describe('a person\'s Run whose first start is a read-only task\'s', () => {
     ['run_plan', 'held'],
     ['approve_review', 'worktree'],
   ] as const)('%s still replaces the spent run, as it starts a task in a worktree too, though the read-only start decides it', async (command, starts) => {
-    const { session, isolation, runs } = await world({ who: 'user', command, starts, route: 'user-merge', state: 'stopped' }, { readOnlyFirst: true });
+    const { session, isolation, runs } = await world({ who: 'user', command, starts, route: 'user-merge', state: 'stopped', shape: 'record' }, { readOnlyFirst: true });
     const other = TARGET[starts];
     const before = runs();
     await ok(session, { command });

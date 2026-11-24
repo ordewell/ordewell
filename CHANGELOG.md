@@ -16,16 +16,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   run stopped, starting the held task again kept the old run and held it again
   every time, until the session was reloaded. Your own Run, Start now, Retry or
   Continue of a task that works in a worktree now begins a new run from your
-  branch, provided git finds everything the old run landed in it and nothing
-  else is left in the run: no task running, and no worktree holding work that
-  never landed, a kept attempt or a delegated task's child plan. No task of
-  that new run is held for the configuration, whoever starts it. Any other
-  start still continues the old run, where the task stays on hold: one the
-  planner, the supervisor, a subplanner or autorun makes, one Ordewell makes
-  by itself, and your own start of an ops, read-only or script task. Taking
-  that configuration on is yours to decide. The hold now says so, and in a
-  child plan, where only its subplanner starts tasks, it says what can be done
-  there instead.
+  branch, provided git finds everything the old run landed in it, its reverts
+  included, and nothing else is left in the run: no task running, and no
+  worktree holding work that never landed, a kept attempt or a delegated
+  task's child plan. No task of that new run is held for the configuration,
+  whoever starts it. Any other start still
+  continues the old run, where the task stays on hold: one the planner, the
+  supervisor, a subplanner or autorun makes, one Ordewell makes by itself, and
+  your own start of an ops, read-only or script task. Taking that
+  configuration on is yours to decide. The hold now says so, and in a child
+  plan, where only its subplanner starts tasks, it says what can be done there
+  instead.
+- **A run is kept when a held start replaced the only record of what it
+  landed.** Once the start of a task that had landed was held (a Continue, or
+  a start after Mark not done), the next start by anyone began a new run from
+  your branch. Where your branch held the run's work, a start by the
+  supervisor or the planner then ran the task with configuration no person had
+  let in; where it did not, the task started without its own earlier work, and
+  the old run's integration branch was left with nothing naming it. Such a run
+  now goes on, as any run with landed work does, and the start is held again
+  there until git finds the run's work in your branch and you start the task
+  yourself.
 - **The supervisor is no longer told to skip a task on hold,** which its
   `skip_task` refuses. It is told to retry the task, or to tell you, since only
   you can skip it; of a task held for configuration, it is told that only you

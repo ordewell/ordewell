@@ -34,7 +34,7 @@ import { describeMergeResult, repairedLanded } from './mergeResultNotice';
 import type { ChildSessionPlace } from '../utils/sessionStore';
 import { quotedList } from '../utils/quotedList';
 import { changedReposOf, handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
-import { hasReverted, keepLandedOn, revertReach } from './LandingLedger';
+import { hasLedgeredLanding, hasReverted, keepLandedOn, revertReach } from './LandingLedger';
 import type { LandingSubject } from './landingMessage';
 import { revertScope, type RevertScope, type RevertScopeInput } from './taskRevert';
 import { handoffBranchName } from './mergeWording';
@@ -1316,14 +1316,18 @@ export class IsolationRunController {
    * means a resumed plan's dependents must start from a tip that holds their
    * predecessors' work, and anything held — a kept attempt, a conflict, a
    * repair — is work the user may still want, which a fresh run's mint would
-   * delete. Only a run with no records at all is superseded, and not one that
-   * reverted the tasks it had: a retry starts from its tip (ADR-0054). A record
-   * that names a child holds a code root, on a path that child's own run is tied
-   * to, whether or not a Stop has yet taken it off `active` (ADR-0055 D17).
+   * delete. So does one whose ledger names a landing no record speaks for any
+   * more, as a held start of the task that landed leaves it, since records
+   * alone never say a run is spent ({@link spentRun}). Only a run with no
+   * records but superseded attempts, and nothing landed, is superseded, and
+   * not one that reverted the tasks it had: a retry starts from its tip
+   * (ADR-0054). A record that names a child holds a code root, on a path that
+   * child's own run is tied to, whether or not a Stop has yet taken it off
+   * `active` (ADR-0055 D17).
    */
   private continuableRun(root: string): IsolationRun | null {
     const run = this.run;
-    return run && run.workspaceRoot === root && (hasReverted(run) || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
+    return run && run.workspaceRoot === root && (hasReverted(run) || hasLedgeredLanding(run) || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
   }
 
   /**
@@ -1338,12 +1342,14 @@ export class IsolationRunController {
    * how they consent to it (ADR-0028), so the next run is minted from HEAD, as
    * after a reload (ADR-0013), and no start in it is held for that
    * configuration. Any other start continues the run, and the hold stands. A
-   * run that reverted a task, or whose landing was cut short, continues: its
-   * branch holds what HEAD may not (ADR-0054).
+   * run that reverted a task is spent the same way: its reverts are on the
+   * integration branch git finds in HEAD, and the record of a later attempt
+   * the revert left is a kept one, which keeps the run (ADR-0054). One whose
+   * landing was cut short continues: its branch holds what HEAD may not.
    */
   private async spentRun(root: string): Promise<IsolationRun | null> {
     const run = this.continuableRun(root);
-    if (!run || hasReverted(run) || run.landing) return null;
+    if (!run || run.landing) return null;
     if (!(await this.leavesNothing(run)) || this.run !== run) return null;
     const held = await this.isolation.userBranchHolds(run).catch(() => false);
     return this.run === run && held ? run : null;

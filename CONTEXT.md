@@ -2632,12 +2632,13 @@ it belongs to.
 It persists as `LegacyPlanState.isolation` (`{ run, resolvers }`), written from
 the orchestrator at persist time and saved whenever it changes; adopting a saved
 plan prunes the run's orphans. A plan's record is *continued* rather than
-replaced while anything has landed on it — a resumed plan's dependents need
-their predecessors' work, which a fresh branch from the checked-out commit does
-not have — unless git finds all of it in the user's branch, nothing else is
-left in the run (no task live, no worktree holding work that never landed, none
-seating a child), and the start that decides the next run is a person's own of
-a task in a worktree: that run then mints its own from HEAD, as a Stop leaves no
+replaced while anything has landed on it, by its records or its ledger once a
+held start has replaced the landed task's record — a resumed plan's dependents
+need their predecessors' work, which a fresh branch from the checked-out commit
+does not have — unless git finds all of it, its reverts included, in the user's
+branch, nothing else is left in the run (no task live, no worktree holding work
+that never landed, none seating a child), and the start that decides the next
+run is a person's own of a task in a worktree: that run then mints its own from HEAD, as a Stop leaves no
 close to clear the old one up, and no task of it is held for configuration the
 old run landed. Any other start continues the old run, a model's or the
 scheduler's, or a person's of an ops, read-only or script task, so a start held
