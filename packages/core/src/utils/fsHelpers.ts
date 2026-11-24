@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 
 export const STATE_DIR = '.ordewell';
@@ -44,20 +45,42 @@ export function getStateDir(baseDir?: string): string {
 const IGNORE_FILE = '.gitignore';
 
 /**
- * Ignores the state directory's contents except this file and `skills/`, so a
- * project's skills are committed and reach every task worktree through git —
- * the bootstrap never links `.ordewell/` (ADR-0013). Plans and sessions stay
+ * Ignores the state directory's contents except `skills/`, so a project's
+ * skills are committed and reach every task worktree through git — the
+ * bootstrap never links `.ordewell/` (ADR-0013). Plans and sessions stay
  * uncommittable without touching a file the developer wrote; editing their
- * root `.gitignore` would be the intrusive version of this.
+ * root `.gitignore` would be the intrusive version of this. The file does not
+ * un-ignore itself: git still applies an ignored `.gitignore`, and each
+ * machine's Ordewell writes its own, so `git status` lists nothing here until
+ * a skill exists.
  */
-export const STATE_DIR_IGNORE = '*\n!.gitignore\n!skills/\n!skills/**\n';
+export const STATE_DIR_IGNORE = '*\n!skills/\n!skills/**\n';
+
+/** What 0.14.11 wrote: the rules file carved out, so git listed `.ordewell/`. */
+const PREVIOUS_IGNORE = '*\n!.gitignore\n!skills/\n!skills/**\n';
 
 /** What older builds wrote: everything ignored, the rules file included. */
 const LEGACY_IGNORES = new Set(['*', '*\n']);
 
+/** True when git tracks the file; false outside a repository or when git is missing. */
+function isTrackedByGit(file: string): boolean {
+  const env = { ...process.env };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX']) delete env[key];
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', '--', path.basename(file)], {
+      cwd: path.dirname(file), env, stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Idempotent, and never overwrites a file the developer customised (to commit
- * their plans deliberately, say). Only the exact legacy rule is upgraded.
+ * their plans deliberately, say). Only text a build generated is upgraded, and the
+ * previous text only while git does not track it (rewriting a tracked file
+ * would show as a modification).
  */
 export function ensureStateDirIgnored(baseDir?: string): void {
   const dir = getStateDir(baseDir);
@@ -71,5 +94,8 @@ export function ensureStateDirIgnored(baseDir?: string): void {
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
   }
-  if (LEGACY_IGNORES.has(fs.readFileSync(file, 'utf8'))) fs.writeFileSync(file, STATE_DIR_IGNORE);
+  const current = fs.readFileSync(file, 'utf8');
+  if (LEGACY_IGNORES.has(current) || (current === PREVIOUS_IGNORE && !isTrackedByGit(file))) {
+    fs.writeFileSync(file, STATE_DIR_IGNORE);
+  }
 }

@@ -245,5 +245,5 @@ writing or changing an ADR. In short:
   it permits without an ADR.
 - Sessions persist to `.ordewell/` and are gitignored. Nothing there is a
   fixture; do not commit it. The exceptions are `.ordewell/skills/`, which is
-  committed by design (ADR-0024), and the generated `.ordewell/.gitignore` that
-  carves it out.
+  committed by design (ADR-0024). The generated `.ordewell/.gitignore` ignores
+  itself and is not committed: each machine's Ordewell writes its own.

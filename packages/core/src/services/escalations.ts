@@ -560,7 +560,7 @@ export function escalations(input: EscalationInput): Escalation[] {
     options: [mergeOption(input)],
   }];
   // Below Act no one but the user answers the planner, so a run with nothing left to move ends on its reply (ADR-0029).
-  const planner: Escalation[] = run.plannerWaits === undefined || run.open || run.advancing ? [] : [{
+  const planner: Escalation[] = run.plannerWaits === undefined || run.advancing ? [] : [{
     id: `planner:${run.plannerWaits}`,
     kind: 'planner',
     reason: 'The planner waits on you: its last reply, to a run update, asks what comes next. Reply to the planner to continue.',

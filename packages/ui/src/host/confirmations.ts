@@ -96,10 +96,11 @@ export function isolationBlockedConfirmation(message: string): ConfirmationReque
  * Merge all, mid-run or once it is over (ADR-0020). `target` and `rule` are
  * the handoff's own wording, from core's `mergeTarget` and `checkoutRule`.
  */
-export function mergeAllConfirmation(target: string, rule: string, midRun: boolean): ConfirmationRequest<'merge'> {
-  return yes('merge_all', midRun
+export function mergeAllConfirmation(target: string, rule: string, midRun: boolean, trailerDisclosure?: string): ConfirmationRequest<'merge'> {
+  const said = trailerDisclosure ? ` ${trailerDisclosure}` : '';
+  return yes('merge_all', (midRun
     ? `Merge what the run has landed so far into ${target}.${rule} This cannot be undone from Ordewell. The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch.`
-    : `Merge the isolated run into ${target}.${rule} This cannot be undone from Ordewell. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.`,
+    : `Merge the isolated run into ${target}.${rule} This cannot be undone from Ordewell. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.`) + said,
   'merge', 'Merge');
 }
 

@@ -61,6 +61,7 @@ import { RUN_SETTINGS_DEFAULTS, runSettingsOf, type GlobalRunSettings, type User
 import { SkillsService } from './SkillsService';
 import { resolveSkillInvocation, type SkillInvocation } from './skillInvocation';
 import { plannedSkillLookup, type SkillCatalogLookup } from './taskSkills';
+import { claimTrailerDisclosure, TRAILER_DISCLOSURE } from './TrailerDisclosure';
 import { surfacePlan, type RunActivity, type RunMergeView, type RunView, type SessionBroadcaster, type SessionMessage, type SessionNotice } from './SessionMessage';
 import { EMPTY_RUN, reduceRun } from './runView';
 import { SessionEventRelay } from './SessionEventRelay';
@@ -570,6 +571,8 @@ export function createSession(deps: SessionDeps): Session {
     settings: deps.settings,
     // Read through the Session, which holds the plan; the catalog is built first.
     planRunners: (): RunnerId[] => session.planState?.runners ?? [],
+    // Read at each call, so an agent the runner list finds signed in again is offered again (ADR-0052).
+    withheld: (runner) => (recordedRunnerAuth(runner, deps.workspaceRoot())?.state === 'signed-out' ? 'signed out' : undefined),
     liveRunner: (taskId) => orchestrator.getAttempt(taskId) !== undefined,
   });
 
@@ -1524,6 +1527,8 @@ export class Session {
       this.conversation.recordExecution(record, text);
       return true;
     }, () => this.broadcast({ type: 'execution_action', record, text }), 'after');
+    // The user's own act on the run answers a reply that waits on them (ADR-0053), and may move nothing else the list reads.
+    if (record.actor === 'user') this.events.waitsMayHaveChanged(this.plan);
   }
 
   /** Whether the user approved this task to run; see {@link ApprovalRecord.isApproved}. */
@@ -1853,6 +1858,8 @@ export class Session {
           return true;
         });
         this.broadcast({ type: 'isolation_merge', result, trigger });
+        // No confirmation was asked of an automatic merge, so the trailer is disclosed beside it (ADR-0030).
+        if (result.outcome === 'merged' && claimTrailerDisclosure({ trailerOn: this.plannedWithTrailer() })) this.notice('info', TRAILER_DISCLOSURE);
         this.announceClosed();
         if (result.outcome !== 'merged') this.supervision.observe({ kind: 'auto_merge_stopped', ...(taskId === undefined ? {} : { taskId }), detail: mergeStopped(result) });
       },
@@ -2176,14 +2183,14 @@ export class Session {
   }
 
   /**
-   * The runners a first turn may plan for. None requested means every enabled
+   * The runners a first turn may plan for. None requested means every offered
    * one, read here, after the planner gate: until the installed-agent probe
    * answers, the enabled default is a stale guess a request must not freeze.
    */
   private chosenRunners(requested: RunnerId[] | undefined): RunnerId[] {
-    const enabled = this.catalog.enabledRunners();
-    const chosen = requested ? requested.filter((r) => enabled.includes(r)) : enabled;
-    if (chosen.length === 0) throw new Error(noRunnerEnabled(enabled));
+    const offered = this.catalog.offeredRunners();
+    const chosen = requested ? requested.filter((r) => offered.includes(r)) : offered;
+    if (chosen.length === 0) throw new Error(noRunnerEnabled(offered, this.catalog.withheld().map((w) => w.reason)));
     return chosen;
   }
 
@@ -3266,12 +3273,17 @@ export class Session {
 /**
  * The refusal of a goal with no enabled runner to plan for, with the way on:
  * the runners that are enabled when the request named others, else where to
- * turn one on or how to get one. Every surface shows it as it is.
+ * turn one on or how to get one. An enabled agent left out for its sign-in
+ * is named with why, and signing it in is a way on (ADR-0052). Every surface
+ * shows it as it is.
  */
-function noRunnerEnabled(enabled: readonly RunnerId[]): string {
-  const lead = 'None of the requested runners are enabled.';
+function noRunnerEnabled(enabled: readonly RunnerId[], withheld: readonly string[] = []): string {
+  const lead = withheld.length > 0
+    ? `None of the requested runners can be planned for. ${withheld.join('; ')}.`
+    : 'None of the requested runners are enabled.';
   const switchOn = 'under Runners (/runners in the terminal UI)';
   if (enabled.length === 0) {
+    if (withheld.length > 0) return `${lead} Sign in to one and send the goal again, or turn on another ${switchOn}.`;
     return `${lead} Turn one on ${switchOn}, or install a coding agent such as Claude Code or Codex and run /refresh.`;
   }
   const names = enabled.map((id) => RUNNER_LABELS[id] ?? id);

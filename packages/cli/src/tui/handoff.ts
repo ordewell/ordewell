@@ -3,7 +3,7 @@ import { say } from './transcript';
 import { sanitize } from './ansi';
 import type { Key } from './keys';
 import { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeOutcome, mergeTarget, repairedLanded, repairedNotice } from '@ordewell/core';
-import type { IsolationMergeResult } from '@ordewell/core';
+import { claimTrailerDisclosure, TRAILER_DISCLOSURE, type IsolationMergeResult } from '@ordewell/core';
 import type { HandoffView, Overlay, PickerItem, TuiState } from './state';
 
 /**
@@ -99,6 +99,18 @@ export function handoffArrived(state: TuiState, handoff: HandoffView): TuiState 
   return state.overlay ? told : { ...told, overlay: { kind: 'handoff', index: 0, diff: null } };
 }
 
+/**
+ * The sentence naming the `Planned-with` trailer, for the first merge
+ * confirmation on this machine (ADR-0030), else ''. Only once the saved run
+ * settings are known: a state that has not read them cannot say whether the
+ * trailer is on. The claim is made as the confirmation is built, which is
+ * where it is shown.
+ */
+function trailerSaid(state: TuiState): string {
+  if (!state.runSettingsKnown) return '';
+  return claimTrailerDisclosure({ trailerOn: state.runSettings.plannedWithTrailer }) ? ` ${TRAILER_DISCLOSURE}` : '';
+}
+
 export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
   const { sessionId } = state;
   const handoff = currentHandoff(state);
@@ -118,7 +130,7 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             overlay: {
               kind: 'confirm',
               title: isRepoGroup(handoff) ? 'Merge what has landed into your branches?' : 'Merge what has landed into your branch?',
-              message: `Merge ${handoffBranchName(handoff)} as it stands now into ${mergeTarget(handoff)}.${checkoutRule(handoff)} The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch for the next Merge all. A merge that conflicts is aborted, and your ${isRepoGroup(handoff) ? 'trees stay' : 'tree stays'} as ${isRepoGroup(handoff) ? 'they were' : 'it was'}.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranchName(handoff)} as it stands now into ${mergeTarget(handoff)}.${checkoutRule(handoff)} The run goes on: tasks waiting for Merge all start once it has merged, and later tasks land on the same branch for the next Merge all. A merge that conflicts is aborted, and your ${isRepoGroup(handoff) ? 'trees stay' : 'tree stays'} as ${isRepoGroup(handoff) ? 'they were' : 'it was'}.${repairedNotice(handoff)}${trailerSaid(state)}`,
               action: { kind: 'merge-run' },
             },
           },
@@ -132,13 +144,13 @@ export function runHandoffAction(state: TuiState, id: HandoffActionId): Step {
             ? {
               kind: 'confirm',
               title: 'Merge all into your branches?',
-              message: `Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} It checks every repository first and merges none unless every repository can take it; on git older than 2.38 it goes repository by repository and stops at the first that fails. A merge that conflicts is aborted, and your trees stay as they were. Once every repository has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}${trailerSaid(state)}`,
               action: { kind: 'merge-run' },
             }
             : {
               kind: 'confirm',
               title: 'Merge into your branch?',
-              message: `Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}`,
+              message: `Merge ${handoffBranchName(handoff)} into ${mergeTarget(handoff)}.${checkoutRule(handoff)} If it conflicts the merge is aborted and your tree stays as it was. Once it has merged, the run's worktrees and branches are removed unless a task still has work in its worktree that has not landed: then the run stays, and so does that work.${repairedNotice(handoff)}${trailerSaid(state)}`,
               action: { kind: 'merge-run' },
             },
         },
