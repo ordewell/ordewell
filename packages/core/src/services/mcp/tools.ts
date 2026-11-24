@@ -175,7 +175,7 @@ const waitForInput = z.object({
 // and a text reply take the same tasks; what a field means is the plan's rules'
 // to judge (`PlanChangeCheck`, ADR-0022 P2), by the message that says why.
 const submitPlanInput = z.object({
-  tasks: z.array(taskSpecSchema()).min(1).describe('The whole plan, in order.'),
+  tasks: z.array(taskSpecSchema()).min(1),
 });
 
 const editPlanInput = z.object({
@@ -756,7 +756,7 @@ export const PLANNER_TOOLS: readonly McpTool<PlannerToolHandler>[] = [
     listRunnersInput, (h) => h.listRunners?.bind(h), PLANNER_READ_ONLY),
   tool('list_models', 'List the models a runner may use right now, with labels and thinking-effort variants.',
     listModelsInput, (h) => h.listModels?.bind(h), PLANNER_READ_ONLY),
-  tool('submit_plan', 'Submit the whole plan. It is checked against the live runners and models and, once accepted, is the current plan at once, its tasks named in the answer; an error names the task, the field and what would be accepted, and changes nothing.',
+  tool('submit_plan', 'Submit the whole plan, in order: checked against the live runners and models, once accepted it is the current plan, its tasks named in the answer; an error names the task, field and what is accepted, and changes nothing.',
     submitPlanInput, (h) => h.submitPlan?.bind(h), PLANNER_READ_ONLY),
   tool('edit_plan', 'Change the current plan with task operations: update, add, remove, reorder, merge, split or rearm. Each call is checked and applied at once, whole or not at all, and answers with the tasks it added and the task each handle names; an error changes nothing.',
     editPlanInput, (h) => h.editPlan?.bind(h), PLANNER_READ_ONLY),
@@ -793,7 +793,7 @@ export const PLANNER_RESEARCH_AGENT = tool<PlannerToolHandler, typeof spawnResea
 
 /** A task as a planner that may delegate writes it: the same list, and `type` takes one more value (ADR-0055 D1). */
 const delegatingSubmitPlanInput = z.object({
-  tasks: z.array(taskSpecSchema({ delegates: true })).min(1).describe('The whole plan, in order.'),
+  tasks: z.array(taskSpecSchema({ delegates: true })).min(1),
 });
 
 const delegatingAnswerCheckpointInput = answerCheckpointInput.extend({

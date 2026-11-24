@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createTask, flattenTasks, type Task } from '../../models/Task';
 import { afterAllReader, resolveAfterAll } from '../AfterAll';
 import { findDependencyCycle } from '../PlanTree';
+import { PlanStore } from '../PlanStore';
 
 function task(id: string, patch: Partial<Task> = {}): Task {
   return createTask({ id, title: id.toUpperCase(), prompt: 'p', assignedRunner: 'claude-code', ...patch });
@@ -106,8 +107,15 @@ describe('"*" in a dependency list', () => {
     expect(afterAllReader(plan)({ id: 'new', dependencies: ['*'] })).toEqual(['a', 'b']);
   });
 
-  it('hands back a plan without "*" as the same array', () => {
+  it('hands back a plan without "*" as the same array, so a session saved before it reads as it did', () => {
     const plan = [task('a'), task('b', { dependencies: ['a'] })];
     expect(resolveAfterAll(plan)).toBe(plan);
+  });
+
+  it('is saved as written: the store keeps "*" through a load, an added task and a snapshot', () => {
+    const store = new PlanStore();
+    store.load([task('a', { order: 1 }), task('check', { order: 2, dependencies: ['*'] })], ['claude-code']);
+    store.add({ title: 'Late', prompt: 'p', assignedRunner: 'claude-code' });
+    expect(store.snapshot().find((t) => t.id === 'check')!.dependencies).toEqual(['*']);
   });
 });

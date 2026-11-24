@@ -17,8 +17,8 @@ const plan = (check: Partial<Task> = {}): Task[] => [
 
 function applied(tasks: Task[], ops: Parameters<typeof applyTaskOps>[1]): Task[] {
   const result = applyTaskOps(tasks, ops, ['claude-code']);
-  if (!result.ok) throw new Error(result.errors.map((e) => e.message).join('; '));
-  return result.tasks;
+  if (!result.ok) throw new Error(result.errors.join('; '));
+  return [...result.tasks];
 }
 
 const covered = (tasks: Task[], id = 'suite'): readonly string[] => afterAllReader(tasks)(tasks.find((t) => t.id === id)!);

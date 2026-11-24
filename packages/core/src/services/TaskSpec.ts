@@ -48,7 +48,7 @@ const TASK_FIELDS: Record<string, TaskField> = {
   title: { schema: z.string(), must: 'text' },
   description: { schema: z.string(), must: 'text' },
   type: { schema: z.enum(taskKinds(false)), delegating: z.enum(taskKinds(true)), must: 'a kind of task' },
-  dependencies: { schema: z.array(ref), must: REFS },
+  dependencies: { schema: z.array(ref).describe('"*" means every task not run after this one.'), must: REFS },
   prompt: { schema: z.string(), must: 'text' },
   userSteps: { schema: z.array(z.looseObject({ order: z.number().optional(), instruction: z.string() })), must: 'a list of steps, as [{"instruction": "..."}]' },
   assignedRunner: { schema: z.string(), must: 'a runner id' },
