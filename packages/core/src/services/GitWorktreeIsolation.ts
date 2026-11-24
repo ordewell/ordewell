@@ -972,7 +972,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * branch carries that the integration branch does not, or edits in its
    * worktree. Only an attempt that left neither behind is safe to prune.
    */
-  private async holdsUnlandedWork(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
+  async holdsUnlandedWork(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
     for (const repo of run.repos) {
       const entry = record.repos[repo.path];
       if (!entry) continue;

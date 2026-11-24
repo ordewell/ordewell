@@ -291,6 +291,84 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
     });
   });
 
+  describe('a start held for configuration the run landed, once the user\'s branch holds it', () => {
+    /**
+     * t1 lands `.claude-plugin/plugin.json`; t2, which comes after it, is held
+     * at its start, its worktree kept with nothing in it but what landed.
+     */
+    async function heldRun() {
+      const root = repo();
+      const { runner } = writingRunner({ t1: { write: ['.claude-plugin/plugin.json'] }, t2: { write: ['checked.txt'] } });
+      const isolation = createWorktreeIsolation({ config: fakeConfig({ worktreeIsolation: true }), resolvePath: async () => process.env.PATH ?? '' });
+      const orchestrator = TaskOrchestrator.compose({ config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root });
+      orchestrator.loadPlan([
+        createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' }),
+        createTask({ id: 't2', order: 2, title: 'Check the plugin', prompt: 'check it', dependencies: ['t1'] }),
+      ]);
+      await orchestrator.approveReview();
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.claude-plugin/plugin.json'));
+      const run = orchestrator.runs.planIsolation!.run;
+      return { root, runner, orchestrator, runId: run.id, integration: run.repos[0].integrationBranch };
+    }
+
+    /** Started again, t2 runs and lands, in a run cut from what HEAD is now; the run it was held in is gone. */
+    async function startedFromHead({ root, runner, orchestrator, runId }: Awaited<ReturnType<typeof heldRun>>, start: () => Promise<unknown>) {
+      const head = git(root, 'rev-parse', 'HEAD');
+      await start();
+      await vi.waitFor(() => expect({ status: orchestrator.storeInstance.get('t2')?.status, hold: orchestrator.holdReason('t2') }).toEqual({ status: 'completed', hold: null }));
+      expect(runner.spawn).toHaveBeenCalledTimes(2);
+      const run = orchestrator.runs.planIsolation!.run;
+      expect(run.id).not.toBe(runId);
+      expect(run.repos[0].baseRef).toBe(head);
+      expect(git(root, 'branch', '--list', `ordewell/${runId}/*`)).toBe('');
+    }
+
+    it('starts again in a run from HEAD once Merge all brought the configuration in and the run was stopped', async () => {
+      const held = await heldRun();
+      const { root, orchestrator, integration } = held;
+      // As the supervisor did: Merge all on the idle run, which stays open for the held task, then Stop.
+      expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+      orchestrator.stop();
+      expect(orchestrator.runs.isOpen).toBe(false);
+      expect(git(root, 'rev-parse', 'HEAD')).toBe(git(root, 'rev-parse', integration));
+
+      await startedFromHead(held, () => orchestrator.forceStartTask('t2'));
+    });
+
+    it('starts again in a run from HEAD once the user merged the configuration in by hand', async () => {
+      const held = await heldRun();
+      const { root, orchestrator, integration } = held;
+      orchestrator.stop();
+      git(root, 'merge', '-q', '--ff-only', integration);
+
+      await startedFromHead(held, () => orchestrator.forceStartTask('t2'));
+    });
+
+    it('starts again when the plan is executed after a Stop and a Merge all', async () => {
+      const held = await heldRun();
+      const { orchestrator } = held;
+      orchestrator.stop();
+      expect(await orchestrator.mergeRun()).toEqual({ outcome: 'merged' });
+
+      await startedFromHead(held, () => orchestrator.start());
+    });
+
+    it('still holds the start in the run it continues while the user\'s branch does not hold the configuration', async () => {
+      const { root, runner, orchestrator, runId } = await heldRun();
+      const head = git(root, 'rev-parse', 'HEAD');
+      orchestrator.stop();
+      expect(orchestrator.holdReason('t2')).toBeNull();
+
+      await orchestrator.forceStartTask('t2');
+
+      await vi.waitFor(() => expect(orchestrator.holdReason('t2')).toContain('.claude-plugin/plugin.json'));
+      expect(runner.spawn).toHaveBeenCalledTimes(1);
+      expect(orchestrator.runs.planIsolation!.run.id).toBe(runId);
+      expect(git(root, 'rev-parse', 'HEAD')).toBe(head);
+      expect(existsSync(join(root, '.claude-plugin'))).toBe(false);
+    });
+  });
+
   it('starts with configuration already present in the base', async () => {
     const root = repo(undefined, { '.mcp.json': '{}' });
     const { runner } = writingRunner({ t1: { write: [] } });
@@ -463,6 +541,51 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
 
     expect(runs.planIsolation!.run.repos[0].integrationBranch).not.toBe(integration);
     expect(git(root, 'show', `${integration}:landed.txt`)).toBe('landed');
+  });
+
+  it('a merged run whose held start left work in its worktree stays, worktree and all, and the next start continues it', async () => {
+    const root = repo();
+    const runs = controllerOver(root);
+    const t1 = createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' });
+    const t2 = createTask({ id: 't2', order: 2, title: 'Check the plugin', prompt: 'check it' });
+    await runs.decide(async () => undefined);
+    const landed = await runs.attemptCwd(t1, 'fresh', runs.decision);
+    mkdirSync(join(landed.cwd, '.claude-plugin'));
+    writeFileSync(join(landed.cwd, '.claude-plugin', 'plugin.json'), '{}\n');
+    expect(await runs.integrate(t1)).toBe('merged');
+    // Prepared and left `active`, as a start held at launch leaves it, then edited there.
+    const held = await runs.attemptCwd(t2, 'fresh', runs.decision);
+    writeFileSync(join(held.cwd, 'draft.txt'), 'not landed\n');
+    const runId = runs.planIsolation!.run.id;
+    runs.interrupt();
+
+    expect(await runs.merge()).toEqual({ outcome: 'merged' });
+    await runs.decide(async () => undefined);
+
+    expect(runs.planIsolation!.run.id).toBe(runId);
+    expect(runs.taskState('t2')).toBe('active');
+    expect(readFileSync(join(held.cwd, 'draft.txt'), 'utf8')).toBe('not landed\n');
+  });
+
+  it('a merged run whose held start left nothing in its worktree is cleared up at Merge all', async () => {
+    const root = repo();
+    const runs = controllerOver(root);
+    const t1 = createTask({ id: 't1', order: 1, title: 'Bump the plugin', prompt: 'write the manifest' });
+    await runs.decide(async () => undefined);
+    const landed = await runs.attemptCwd(t1, 'fresh', runs.decision);
+    mkdirSync(join(landed.cwd, '.claude-plugin'));
+    writeFileSync(join(landed.cwd, '.claude-plugin', 'plugin.json'), '{}\n');
+    expect(await runs.integrate(t1)).toBe('merged');
+    const held = await runs.attemptCwd(createTask({ id: 't2', order: 2, title: 'Check the plugin', prompt: 'check it' }), 'fresh', runs.decision);
+    runs.interrupt();
+
+    expect(await runs.merge()).toEqual({ outcome: 'merged' });
+
+    expect(runs.planIsolation).toBeNull();
+    expect(existsSync(held.cwd)).toBe(false);
+    expect(git(root, 'branch', '--list', 'ordewell/*')).toBe('');
+    await runs.decide(async () => undefined);
+    expect(runs.planIsolation!.run.repos[0].baseRef).toBe(git(root, 'rev-parse', 'HEAD'));
   });
 
   it('a run started after one that landed nothing replaces it whole', async () => {

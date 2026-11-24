@@ -8,6 +8,20 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A task held because an earlier task changed agent configuration starts
+  again once your branch holds that change.** After the run's work was merged
+  (by Merge all or by hand) and the run stopped, starting the held task again
+  kept the old run and held it again every time, until the session was
+  reloaded. The next start now begins a new run from your branch. The same goes
+  for any run: once your branch holds everything it landed and nothing else is
+  left in it, the next start begins a new run, as reopening the session already
+  did. The empty worktree a held start leaves no longer keeps a merged run from
+  being cleared up; one that holds work that never landed still keeps the whole
+  run, as do landed work your branch does not hold yet and a kept or failed
+  task.
+
 ## [0.14.11] - 2026-11-24
 
 ### Added

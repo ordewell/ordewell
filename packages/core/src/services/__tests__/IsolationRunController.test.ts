@@ -670,6 +670,81 @@ describe('IsolationRunController', () => {
       expect(ops(isolation)).not.toContain('discard');
       expect(notifications.warn).toHaveBeenCalledWith('The last run\'s worktrees are left in place: Task "Task t1" is still running or waiting on you there.');
     });
+
+    describe('an attempt left active with nothing live in it, as a start held at launch leaves one (ADR-0028)', () => {
+      /** t1 landed and is in HEAD; t2's start was held, its record left `active`, and the run stopped. */
+      async function stoppedMerged(t2HoldsWork: boolean) {
+        const env = await closedRun('active');
+        env.isolation.unlandedWork = new Set(t2HoldsWork ? ['t2'] : []);
+        env.isolation.mergedByHand.add('t1');
+        return env;
+      }
+
+      it('is no holdout at Merge all once git finds nothing in its worktree', async () => {
+        const { runs, isolation, listener } = await stoppedMerged(false);
+
+        expect(await runs.merge()).toEqual({ outcome: 'merged' });
+
+        expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
+        expect(runs.planIsolation).toBeNull();
+        expect(runs.mergedRun).toBe('run1');
+        expect(listener.closed).toHaveBeenCalledTimes(1);
+      });
+
+      it('keeps the run at Merge all while its worktree holds work that never landed', async () => {
+        const { runs, isolation, notifications } = await stoppedMerged(true);
+
+        expect(await runs.merge()).toEqual({ outcome: 'merged' });
+
+        expect(ops(isolation)).not.toContain('discard');
+        expect(runs.taskIsolation('t2')).toMatchObject({ state: 'active' });
+        expect(notifications.info).toHaveBeenCalledWith('The run is not cleared up: Task "Task t2" holds work that has not landed, so its worktree stays, and so do the run\'s branches.');
+      });
+
+      it('leaves the next run to mint from HEAD, replacing the stopped run with all it landed merged', async () => {
+        const { runs, isolation } = await stoppedMerged(false);
+
+        expect(await runs.decide(async () => undefined)).toEqual({ epoch: 2, mode: 'isolated' });
+
+        expect(runs.planIsolation?.run.id).toBe('run2');
+        expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
+      });
+
+      it.each([
+        ['its worktree holds work that never landed', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.unlandedWork = new Set(['t2']); }],
+        ['landed work is not in HEAD', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.mergedByHand.clear(); }],
+        ['the attempt was kept', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { await env.runs.release('t2', { keep: true }); }],
+        ['the task is live', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.live.add('t2'); }],
+      ])('leaves the next run to continue the stopped run while %s', async (_why, arrange) => {
+        const env = await stoppedMerged(false);
+        await arrange(env);
+
+        await env.runs.decide(async () => undefined);
+
+        expect(env.runs.planIsolation?.run.id).toBe('run1');
+        expect(ops(env.isolation).filter((op) => op === 'startRun')).toHaveLength(1);
+        expect(ops(env.isolation)).not.toContain('discard');
+      });
+
+      it('leaves the next run to continue a stopped run that failed a landing, its failed task held out', async () => {
+        const env = setup();
+        env.isolation.unlandedWork = new Set();
+        env.isolation.outcomes.set('t2', 'failed');
+        await env.runs.decide(async () => undefined);
+        for (const t of [task('t1', 1), task('t2', 2)]) {
+          await env.runs.attemptCwd(t, 'fresh', env.runs.decision);
+          await env.runs.integrate(t);
+        }
+        env.isolation.mergedByHand.add('t1');
+        env.runs.interrupt();
+
+        await env.runs.decide(async () => undefined);
+
+        expect(env.runs.taskState('t2')).toBe('failed');
+        expect(env.runs.planIsolation?.run.id).toBe('run1');
+        expect(ops(env.isolation)).not.toContain('discard');
+      });
+    });
   });
 
   describe('integrate', () => {

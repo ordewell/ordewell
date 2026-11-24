@@ -54,9 +54,18 @@ everything below applies per repo of the group.
   once it has reverted one
   ([ADR-0054](0054-a-landed-task-reverts-on-the-integration-branch-before-merge-all.md)):
   its branch then holds commits no record names, and a retry starts from its
-  tip. A record with nothing landed holds only superseded attempts and is
-  discarded whole before a new one is minted. `discardRun` is how a user starts
-  over.
+  tip. Once the user's branch holds everything the run landed and nothing else
+  is left in it (no task live, no worktree holding work that never landed), a
+  branch cut from HEAD holds that work too, so the next run's first start
+  mints one there and the old run goes as a replaced run does. Continued, its
+  base would stay behind the user's branch, and a start held for configuration
+  one of its tasks landed would be held again at every start
+  ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
+  That is how a run a Stop ended is cleared up, since a Stop hands nothing over
+  and no close follows it; a run that reverted a task still continues, as HEAD
+  may not hold its reverts. A record with nothing landed holds only superseded
+  attempts and is discarded whole before a new one is minted. `discardRun` is
+  how a user starts over.
 - **Naming and location.** A task's worktrees are made by `prepare` when the task
   starts, not when the run opens. They live together in one *task
   workspace*, `.ordewell/worktrees/<run-id>/<order>-<slug>/`, each at its repo's
@@ -306,7 +315,10 @@ everything below applies per repo of the group.
   above instead of handed over. So is a settled run whose session is loaded
   after the user merged it: the saved record cannot know what was merged since,
   so adopting a run asks git again, and a run still holding kept or conflicted
-  work stays. A handoff names only landed work not yet merged; a repo whose
+  work stays. An attempt left `active` with nothing live in it, as a start held
+  at launch leaves one, holds work only where git finds some on its branch or
+  in its worktree, as the prune of an adopted run judges it. A handoff names
+  only landed work not yet merged; a repo whose
   integration branch is gone has nothing Merge all could merge, so its landed
   work counts as merged there, while a repo git cannot read at all counts as not
   merged. A surface's handoff shrinks with each status update, which says what
@@ -641,3 +653,4 @@ literal git command lines or private fields.
 - 2026-11-18 — a running change task is told where its siblings land and takes in what it needs with `Merge: <subject> (take in landed work)`; a task's diff and its host view start at its fork point, past what it took in.
 - 2026-11-18 — the fork point is read from the run's recorded landings, never the integration branch; a parent and its subtask are told of each other; a take-in counts as dependence for a revert.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
+- 2026-11-24 — a run whose landed work the user's branch holds, with nothing live or unlanded left in it, is replaced at the next run's start rather than continued, and an attempt left `active` with nothing in its worktree, as a start held for configuration leaves one, no longer keeps a merged run from being cleared up (ADR-0028).

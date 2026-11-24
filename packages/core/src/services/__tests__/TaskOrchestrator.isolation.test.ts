@@ -300,7 +300,8 @@ describe('TaskOrchestrator with worktree isolation', () => {
     expect(spawn).toHaveBeenCalledTimes(3);
     const afterFailure = isolation.calls.slice(isolation.calls.findIndex((c) => c.op === 'release' && c.keep));
     expect(afterFailure.map((c) => c.op + ('taskId' in c ? `:${c.taskId}` : ''))).toEqual([
-      'release:t1', 'findInHead', 'handoff', 'release:t1', 'isActive', 'sweep', 'prepare:t1',
+      // The run the retry opens asks what HEAD holds before it continues this one.
+      'release:t1', 'findInHead', 'handoff', 'release:t1', 'findInHead', 'isActive', 'sweep', 'prepare:t1',
     ]);
     expect(afterFailure[3]).toEqual({ op: 'release', taskId: 't1', keep: false });
     expect(spawn.mock.calls[2][0].cwd).toBe('/fake-worktrees/run1/1-t1');

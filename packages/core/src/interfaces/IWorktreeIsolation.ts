@@ -783,6 +783,14 @@ export interface IWorktreeIsolation {
    */
   pruneOrphans(run: IsolationRun): Promise<IsolationPruneResult>;
 
+  /**
+   * Whether a task's record holds work nobody else has, as {@link pruneOrphans}
+   * judges an `active` one: commits its branch carries that the integration
+   * branch does not, or edits in its worktree. A worktree git cannot read
+   * holds work.
+   */
+  holdsUnlandedWork(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean>;
+
   /** Unified diff of each repo's integration branch against its base ref. */
   reviewDiff(run: IsolationRun): Promise<string>;
   taskDiff?(run: IsolationRun, taskId: string, options: TaskDiffRead): Promise<TaskDiffResult>;

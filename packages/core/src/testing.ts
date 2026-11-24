@@ -528,6 +528,8 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   sweepError: Error | null = null;
   /** What `pruneOrphans` reports as kept back from the sweep. */
   keptOnPrune: IsolationPruneResult['kept'] = [];
+  /** Task ids whose worktree `holdsUnlandedWork` finds work in; null, every task's, as for a worktree git cannot read. */
+  unlandedWork: Set<string> | null = null;
   /**
    * What every removal — a `release` that removes, `discard`, `pruneOrphans` —
    * reports it kept back. A refused task keeps its record, as git's does.
@@ -737,6 +739,9 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   async pruneOrphans(): Promise<IsolationPruneResult> {
     this.log({ op: 'pruneOrphans' });
     return { kept: [...this.keptOnPrune], ...this.removed() };
+  }
+  async holdsUnlandedWork(_run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
+    return this.unlandedWork?.has(record.taskId) ?? true;
   }
   async reviewDiff(): Promise<string> { this.log({ op: 'reviewDiff' }); return ''; }
   async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult> {

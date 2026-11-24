@@ -2634,7 +2634,10 @@ the orchestrator at persist time and saved whenever it changes; adopting a saved
 plan prunes the run's orphans. A plan's record is *continued* rather than
 replaced while anything has landed on it — a resumed plan's dependents need
 their predecessors' work, which a fresh branch from the checked-out commit does
-not have — and a record with nothing landed is discarded whole when the next run
+not have — unless the user's branch holds all of it and nothing else is left in
+the run, no task live and no worktree holding work that never landed: the next
+run then mints its own from HEAD, as a Stop leaves no close to clear the old one
+up. A record with nothing landed is discarded whole when the next run
 mints its own. One with landed work that cannot be continued (it ran from another
 workspace path) loses its worktrees, and its integration branch in each repo
 whose HEAD already contains it; it keeps the others. A run closes

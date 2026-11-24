@@ -566,7 +566,10 @@ export class IsolationRunController {
     const found = await this.findLanded(run);
     if (this.run !== run) return 'unchanged';
     const outcome = found ? 'changed' : 'unchanged';
-    if (this.isOpen || !this.allMerged(run) || this.holdouts(run).length > 0) return outcome;
+    if (this.isOpen || !this.allMerged(run)) return outcome;
+    const holdouts = await this.holdouts(run);
+    if (this.run !== run) return 'unchanged';
+    if (this.isOpen || holdouts.length > 0) return outcome;
     // The record goes before git deletes the run's worktrees and branches: a
     // start that comes in meanwhile then mints a fresh run from HEAD instead
     // of continuing one whose branches are being deleted under it.
@@ -1133,8 +1136,11 @@ export class IsolationRunController {
    * than leaving that work to a deletion.
    */
   private async clearMerged(run: IsolationRun): Promise<void> {
+    const holdouts = await this.holdouts(run);
+    // A start that opened while git was asked decides about this run itself.
+    if (this.run !== run || this.isOpen) return;
     const live = this.liveRecords(run);
-    const unlanded = this.holdouts(run).filter((r) => !live.includes(r));
+    const unlanded = holdouts.filter((r) => !live.includes(r));
     if (live.length > 0 || unlanded.length > 0) {
       const why = [
         ...(live.length > 0 ? [`${tasksNamed(live)} ${live.length === 1 ? 'is' : 'are'} still running or waiting on you`] : []),
@@ -1147,10 +1153,22 @@ export class IsolationRunController {
     if (await this.discardMerged(run)) this.forget(run.id);
   }
 
-  /** The records that keep a settled run from being cleared up: live, or holding work that never landed. */
-  private holdouts(run: IsolationRun): IsolationTaskRecord[] {
+  /**
+   * The records that keep a settled run from being cleared up: live, or
+   * holding work that never landed. An `active` record with nothing live in
+   * it is an attempt that ended with its worktree in place, as a start held at
+   * launch leaves one (ADR-0028): it holds work only where git finds some, as
+   * the prune of an adopted run decides.
+   */
+  private async holdouts(run: IsolationRun): Promise<IsolationTaskRecord[]> {
     const live = this.liveTasks();
-    return Object.values(run.tasks).filter((r) => live.has(r.taskId) || r.status !== 'merged');
+    const holdouts: IsolationTaskRecord[] = [];
+    for (const record of Object.values(run.tasks)) {
+      const holds = live.has(record.taskId)
+        || (record.status === 'active' ? await this.isolation.holdsUnlandedWork(run, record).catch(() => true) : record.status !== 'merged');
+      if (holds) holdouts.push(record);
+    }
+    return holdouts;
   }
 
   /** The run's worktrees and merged branches go; false, said, when git would not let them. */
@@ -1195,9 +1213,11 @@ export class IsolationRunController {
     this.listener.closed();
   }
 
-  private async assess(root: string): Promise<RunDecision> {
+  /** `spent` is the plan's run when {@link spentRun} found nothing left in it, which a new run replaces. */
+  private async assess(root: string, spent: IsolationRun | null = null): Promise<RunDecision> {
     const availability = await this.isolation.isActive(root);
-    const continued = this.continuableRun(root);
+    const run = this.continuableRun(root);
+    const continued = run === spent ? null : run;
     const continuing = continued !== null;
     // A continued run keeps the group it started with.
     if (availability.active) {
@@ -1214,7 +1234,7 @@ export class IsolationRunController {
 
   private async activate(resume: () => Promise<void>, activation: number): Promise<IsolationStart> {
     const root = this.workspaceRoot();
-    const decision = await this.assess(root);
+    const decision = await this.assess(root, await this.spentRun(root));
     const interrupted = () => activation !== this.activations;
     // Only a close with nothing after it: a stop or a plan load since has the last word.
     const ended = (): 'interrupted' | 'closed' => activation === this.closedActivation && this.activations === activation + 1 ? 'closed' : 'interrupted';
@@ -1289,10 +1309,32 @@ export class IsolationRunController {
   }
 
   /**
+   * The plan's run, when the user's branch holds everything it landed and
+   * nothing else is left in it: no task live, no worktree holding work that
+   * never landed. Its close would have cleared it up, but a Stop ends a run
+   * with no close. Continued, it would keep a base the user's branch has moved
+   * past, and a start held for configuration one of its tasks landed would be
+   * held again at every start, where a new run from a branch that holds it is
+   * how the user takes it on (ADR-0028). So the next run is minted from HEAD,
+   * as after a reload (ADR-0013). A run that reverted a task continues: its
+   * branch holds the reverts, which HEAD may not (ADR-0054). Asked of git, so
+   * only as a run opens.
+   */
+  private async spentRun(root: string): Promise<IsolationRun | null> {
+    const run = this.continuableRun(root);
+    if (!run || hasReverted(run)) return null;
+    await this.refreshInHead();
+    if (this.run !== run || !this.allMerged(run)) return null;
+    const holdouts = await this.holdouts(run);
+    return this.run === run && holdouts.length === 0 ? run : null;
+  }
+
+  /**
    * A run with no records at all holds only superseded attempts, so it goes —
    * but its integration branch only where the user's HEAD contains it, as does
    * that of a run that cannot be continued for another reason (it ran from a
-   * different workspace path): only the user gives landed work up.
+   * different workspace path, or the user's branch holds all it landed): only
+   * the user gives landed work up.
    *
    * False when `interrupted` came while git was minting: a newer activation
    * may be minting its own run, so this one is never installed over it, and
