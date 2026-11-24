@@ -1522,13 +1522,15 @@ export class Session {
    * rather than thrown: a Stop that took must not answer as refused.
    */
   private recordExecution(record: ExecutionRecord, text: string): void {
+    // The user's own act on the run answers a reply that waits on them (ADR-0053), and may move nothing else the list reads:
+    // with no such reply there is nothing for it to clear, and no update is owed.
+    const answers = record.actor === 'user' && this.plannerWaits().plannerWaits !== undefined;
     this.supervision.executed(record);
     this.mutatePlan(() => {
       this.conversation.recordExecution(record, text);
       return true;
     }, () => this.broadcast({ type: 'execution_action', record, text }), 'after');
-    // The user's own act on the run answers a reply that waits on them (ADR-0053), and may move nothing else the list reads.
-    if (record.actor === 'user') this.events.waitsMayHaveChanged(this.plan);
+    if (answers) this.events.waitsMayHaveChanged(this.plan);
   }
 
   /** Whether the user approved this task to run; see {@link ApprovalRecord.isApproved}. */
