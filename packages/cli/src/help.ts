@@ -137,10 +137,10 @@ Run options:
   --unattended        Return, exit 3, when the run waits on a person (a checkpoint,
                       an input, an approval, a task on hold) that nobody unattended
                       answers: at Act once the supervisor's turn on it left it
-                      standing, below Act at once. A manual task, a merge gate or
-                      a task waiting to be started counts once nothing else can
-                      run. The run stays in the daemon as it is: nothing is
-                      answered, stopped or skipped
+                      standing, below Act at once. A manual task, a merge gate,
+                      a task waiting to be started or one with nothing to run
+                      counts once nothing else can run. The run stays in the
+                      daemon as it is: nothing is answered, stopped or skipped
   It returns once the run's end stands: with the supervisor at Act, after the
   closing turn it is woken to, following the run on if that turn continues it.
   Without --unattended, a wait on a person is waited out, however long.

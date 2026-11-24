@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { makeSession, FakeRunnerSession, taskOf, fakeConfig, testWorkspace } from './sessionTestKit';
+import { heldPlanner } from './supervisorTestKit';
+import { FakeWorktreeIsolation } from '../../testing';
 import { createTask, type LegacyPlanState, type Task } from '../../models/Task';
 import type { IRunner } from '../../interfaces/IRunner';
+import type { IConfig } from '../../interfaces/IConfig';
+import type { IsolationMergeResult, IsolationRun } from '../../interfaces/IWorktreeIsolation';
+import { RUN_SETTINGS_DEFAULTS, type GlobalRunSettings } from '../SettingsService';
+import type { TaskOrchestrator } from '../TaskOrchestrator';
 import type { ExecutionActor } from '../../models/Execution';
 import type { ExecutionCommand } from '../ExecutionCommands';
 import type { Session } from '../createSession';
@@ -21,14 +27,22 @@ const task = (id: string, order: number, over: Partial<Task> = {}) =>
   createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, assignedRunner: 'claude-code', taskMode: 'acceptEdits', ...over });
 const manual = (id: string, order: number, over: Partial<Task> = {}) => task(id, order, { type: 'user', assignedRunner: undefined, taskMode: undefined, prompt: undefined, ...over });
 
-function plan(tasks: Task[]): LegacyPlanState {
+function plan(tasks: Task[], over: Partial<LegacyPlanState> = {}): LegacyPlanState {
   const now = new Date().toISOString();
-  return { tasks, generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now };
+  return { tasks, generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now, ...over };
 }
 
 type StatusUpdate = Extract<SessionMessage, { type: 'status_update' }>;
 
-function setup(maxParallelSessions = 3) {
+interface Setup {
+  maxParallelSessions?: number;
+  aiService?: ReturnType<typeof heldPlanner>['aiService'];
+  isolation?: FakeWorktreeIsolation;
+  settings?: Partial<GlobalRunSettings>;
+  config?: Partial<IConfig>;
+}
+
+function setup(maxParallelSessions = 3, options: Setup = {}) {
   const sessions: FakeRunnerSession[] = [];
   const spawn = vi.fn(async (opts: Parameters<IRunner['spawn']>[0]) => {
     const runnerSession = new FakeRunnerSession(`s${sessions.length + 1}`, opts.taskId);
@@ -45,14 +59,23 @@ function setup(maxParallelSessions = 3) {
     const statuses = Object.fromEntries(built.session.planTasks.map((t) => [t.id, t.status]));
     updates.push({ update: msg, statuses });
   };
-  const made = makeSession({ runner, scriptRunner: runner, broadcast, config: fakeConfig({ autonomousMode: true, maxParallelSessions }) });
+  const made = makeSession({
+    runner, scriptRunner: runner, broadcast,
+    config: fakeConfig({ autonomousMode: true, maxParallelSessions, ...options.config }),
+    aiService: options.aiService,
+    isolation: options.isolation,
+    ...(options.isolation ? { workspaceRoot: () => '/repo' } : {}),
+    settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', ...options.settings } }),
+  });
   built.session = made;
+  const workspace = options.isolation ? '/repo' : testWorkspace;
   return {
     session: made,
     spawn,
     updates,
     latest: (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!,
-    load: (tasks: Task[]) => made.loadPlan(plan(tasks), 'goal', testWorkspace, { persist: false }),
+    orchestrator: (made as unknown as { orchestrator: TaskOrchestrator }).orchestrator,
+    load: (tasks: Task[], over: Partial<LegacyPlanState> = {}) => made.loadPlan(plan(tasks, over), 'goal', workspace, { persist: false }),
     run: (command: ExecutionCommand) => made.execute(command, USER),
     status: (id: string) => taskOf(made, id)!.status,
     lastUpdate: () => updates.at(-1)?.update,
@@ -138,5 +161,101 @@ describe('a run nothing waits in', () => {
     await vi.waitFor(() => expect(env.session.activity.scheduled).toBe(false));
 
     expect(env.session.activity.waitsOnUser).toBe(false);
+  });
+});
+
+/**
+ * What still moves the run though nothing is at work and nothing is ready: the
+ * check reads each before it says the run waits on the user, and a follower
+ * that believed it then would return from a run that goes on.
+ */
+describe('a pending manual task, with the run moved on by something else', () => {
+  /** A run that waits on the user: u1 is manual, and t2 needs it. */
+  async function waitingOnUser(options: Setup = {}) {
+    const env = setup(3, options);
+    env.load([manual('u1', 1), task('t2', 2, { dependencies: ['u1'] })]);
+    await env.run({ command: 'run_plan' });
+    await vi.waitFor(() => expect(env.session.activity.waitsOnUser).toBe(true));
+    return env;
+  }
+
+  it('does not wait on the user while a start is admitted and not yet claimed', async () => {
+    const env = await waitingOnUser();
+
+    // What the command seam holds while a start it carries out awaits before it claims (ExecutionCommands).
+    const admission = env.orchestrator.admitStart();
+    expect(env.session.activity).toMatchObject({ starting: true, waitsOnUser: false });
+
+    admission.release();
+    expect(env.session.activity.waitsOnUser).toBe(true);
+  });
+
+  it('does not wait on the user while a planner turn holds starts, though nothing is ready to start', async () => {
+    const planner = heldPlanner();
+    const env = await waitingOnUser({ aiService: planner.aiService });
+
+    const turn = env.session.continueConversation('look at the plan again');
+    await vi.waitFor(() => expect(planner.calls).toHaveLength(1));
+    expect(env.orchestrator.startsHeld).toBe(true);
+    expect(env.session.activity.waitsOnUser).toBe(false);
+    expect(env.session.runSnapshot()).toMatchObject({ activity: { waitsOnUser: false } });
+
+    planner.calls[0].finish({ kind: 'message', text: 'Nothing to change.', researchLog: [] });
+    await turn;
+    expect(env.orchestrator.startsHeld).toBe(false);
+    await vi.waitFor(() => expect(env.session.activity.waitsOnUser).toBe(true));
+  });
+
+  it('does not say it waits on the user while an automatic Merge all at a gate is under way', async () => {
+    let releaseMerge!: () => void;
+    const mergeHeld = new Promise<void>((resolve) => { releaseMerge = resolve; });
+    let mergeStarted = false;
+    class HeldMerge extends FakeWorktreeIsolation {
+      override async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult> {
+        mergeStarted = true;
+        await mergeHeld;
+        return super.mergeIntoCheckedOut(run);
+      }
+    }
+    const env = setup(3, { isolation: new HeldMerge(), settings: { mergeAtGatesAutomatically: true }, config: { worktreeIsolation: true } });
+    env.load([manual('u1', 1), task('a1', 2), task('o2', 3, { ops: true, dependencies: ['a1'] })]);
+    await env.run({ command: 'run_plan' });
+    await vi.waitFor(() => expect(env.status('a1')).toBe('in_progress'));
+
+    env.latest('a1').reportComplete({ status: 'done', summary: 'done' });
+    await vi.waitFor(() => expect(mergeStarted).toBe(true));
+    await vi.waitFor(() => expect(env.status('a1')).toBe('completed'));
+    // What the merge's own events send while it is held, a by-hand wait listed beside the gate's.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(env.orchestrator.isMerging).toBe(true);
+    expect(env.session.activity.waitsOnUser).toBe(false);
+    const duringMerge = env.updates.length;
+
+    releaseMerge();
+    await vi.waitFor(() => expect(env.spawn.mock.calls.map(([opts]) => opts.taskId)).toContain('o2'));
+    // Every update from a1's end until o2 started, the merge's included, said the run moves on its own.
+    const started = env.updates.findIndex(({ statuses }) => statuses.o2 === 'in_progress');
+    const said = started < 0 ? env.updates : env.updates.slice(0, started);
+    expect(said.length).toBeGreaterThanOrEqual(duringMerge);
+    expect(said.some(({ update }) => update.escalations?.some((e) => e.kind === 'by-hand'))).toBe(true);
+    expect(said.filter(({ update }) => update.activity?.waitsOnUser).map(({ statuses }) => statuses)).toEqual([]);
+  });
+
+  it('waits on the user in a carried loop with no scheduler, once its next round waits to be started', async () => {
+    const env = setup();
+    env.load(
+      [task('check', 1, { loop: { body: ['fix'], maxRounds: 3 } }), task('fix', 2, { dependencies: ['check'] })],
+      { approvedTasks: ['check'] },
+    );
+    expect(await env.run({ command: 'run_task', task: 'check' })).toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(env.status('check')).toBe('in_progress'));
+
+    env.latest('check').reportComplete({ status: 'failed', summary: 'Found it.', reason: 'Found it.' });
+    await vi.waitFor(() => expect(env.status('check')).toBe('failed'));
+    await vi.waitFor(() => expect(env.session.escalations().map((e) => [e.kind, e.task?.id])).toContainEqual(['unapproved', 'fix']));
+
+    // No scheduler drives this run: only the carried loop starts anything, and nothing of it can start unasked.
+    expect(env.session.activity).toMatchObject({ scheduled: false, running: false, waitsOnUser: true });
+    await vi.waitFor(() => expect(env.lastUpdate()?.activity?.waitsOnUser).toBe(true));
   });
 });

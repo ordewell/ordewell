@@ -261,6 +261,22 @@ describe('ordewell run --unattended when a manual task holds the run', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('keeps following when the run moves again with the manual task still listed', async () => {
+    const { api, send, close } = daemon('off');
+    const follower = await run(api, ['--unattended']);
+
+    send(update(waitingOnUser, byHand));
+    await vi.advanceTimersByTimeAsync(500);
+    // Another manual task was marked complete, and what needed only it started: this one is still the user's.
+    send(update(moving, byHand));
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(follower.returned()).toBe(false);
+    close();
+    await follower.done;
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it('does not count a manual task from a daemon that cannot say the run waits on the user', async () => {
     const { api, send, close } = daemon('off');
     const follower = await run(api, ['--unattended']);
