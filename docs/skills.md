@@ -104,9 +104,10 @@ that has already been committed; add a new one.
 | workspace | `<workspace>/.ordewell/skills/` | Committed to git, so a team shares them. |
 
 The rest of `.ordewell/` (plans, sessions, worktrees) stays ignored; only
-`skills/` is carved out in `.ordewell/.gitignore`. A `.gitignore` you have
-edited yourself is left alone, so if you customised it, add `!skills/` and
-`!skills/**` there.
+`skills/` is carved out in `.ordewell/.gitignore`, which ignores itself: you
+do not commit it, and each machine's Ordewell writes its own. A `.gitignore`
+you have edited yourself, or one git already tracks, is left alone, so if you
+customised it, add `!skills/` and `!skills/**` there.
 
 When a global and a workspace skill share a name, **the global one wins**. The
 workspace copy is reported as shadowed, so it is never silently lost. Rename
