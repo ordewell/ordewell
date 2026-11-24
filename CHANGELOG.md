@@ -30,6 +30,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   lost.** The clear-up forgot the plan's run once git had finished, even when a
   start had opened a new one meanwhile, which left that run's branches with no
   record naming them.
+- **`ordewell run --unattended` returns when a manual task holds the run.** A
+  pending manual task that every task left needs used to leave it following
+  for good, with no exit status, and so did a second one on the same session.
+  Once nothing else can run, it now returns with exit status 3, naming the
+  manual task and the `ordewell complete` or `ordewell skip` that releases it.
+  A merge gate, a task waiting to be started and one with nothing to run count
+  the same way. While a task runs or another can start, it keeps following.
+  Without `--unattended`, `ordewell run` names the manual task and waits.
 
 ## [0.14.11] - 2026-11-24
 

@@ -848,7 +848,20 @@ export class TaskOrchestrator {
       scheduled: this.isScheduling,
       resumable: this.awaitsResume,
       advancesOnItsOwn: this.advancesOnItsOwn,
+      waitsOnUser: this.waitsOnUser,
     };
+  }
+
+  /**
+   * What {@link settleRun} finds before it waits on the user, read whenever
+   * asked rather than kept, so no later start or stop leaves it stale: a run
+   * the scheduler drives, or a carried loop, with nothing at work or admitted,
+   * no planner turn holding starts and no Merge all under way, and nothing that
+   * moves unasked. Each is cheap until nothing is at work, so the readiness
+   * {@link movesUnasked} reads last is judged only then.
+   */
+  private get waitsOnUser(): boolean {
+    return this.startsOnTick && this.admissions === 0 && this.startHolds === 0 && !this.merging && !this.movesUnasked;
   }
 
   /**
