@@ -30,13 +30,60 @@ const AGENT_TOOL_LABELS = /^(agent|task|subagent|spawn_?agent)$/i;
  */
 const RESEARCH_AGENT_TOOL = /^(?:(?:mcp__)?ordewell_{1,2})?spawn_research_agent$/i;
 
+/**
+ * The top-level tasks with "*" read into their dependencies as core reads it
+ * (packages/core/src/services/AfterAll.ts, ADR-0077): every other top-level
+ * task but research tasks, loop bodies, "*" tasks and what comes after one,
+ * after the ids it names. "Comes after" is read on the stated edges, a whole
+ * top-level task at a time. A plan without "*" comes back as it is.
+ */
+export function readAfterAll(tasks) {
+  const holds = (t) => Array.isArray(t.dependencies) && t.dependencies.includes('*');
+  if (!tasks.some(holds)) return tasks;
+  const rootOf = new Map();
+  for (const top of tasks) for (const t of flatten([top])) rootOf.set(t.id, top.id);
+  const waiters = new Map();
+  for (const top of tasks) {
+    for (const t of flatten([top])) {
+      for (const dep of t.dependencies ?? []) {
+        const root = rootOf.get(dep);
+        if (root === undefined || root === top.id) continue;
+        waiters.set(root, new Set([...(waiters.get(root) ?? []), top.id]));
+      }
+    }
+  }
+  const followers = (id) => {
+    const found = new Set();
+    for (const queue = [...(waiters.get(id) ?? [])]; queue.length > 0;) {
+      const next = queue.pop();
+      if (found.has(next)) continue;
+      found.add(next);
+      queue.push(...(waiters.get(next) ?? []));
+    }
+    return found;
+  };
+  const outside = new Set();
+  for (const top of tasks) {
+    if (top.research === true) outside.add(top.id);
+    for (const id of Array.isArray(top.loop?.body) ? top.loop.body : []) outside.add(id);
+    if (!holds(top)) continue;
+    outside.add(top.id);
+    for (const id of followers(top.id)) outside.add(id);
+  }
+  const rest = tasks.map((t) => t.id).filter((id) => !outside.has(id));
+  return tasks.map((t) => (holds(t) ? { ...t, dependencies: [...new Set([...t.dependencies.filter((d) => d !== '*'), ...rest])] } : t));
+}
+
 /** The session pieces every metric reads, from a `GET /api/sessions/:id` body or a saved session file. */
 export function sessionParts(session, researchLog) {
   const plan = session?.plan ?? {};
   const conversation = session?.conversation ?? {};
+  // The daemon serves the phase-tagged plan, whose tasks before approval are `pendingTasks`; a saved file's are `tasks`.
+  const written = [plan.pendingTasks, plan.tasks].find(Array.isArray) ?? [];
   return {
-    // The daemon serves the phase-tagged plan, whose tasks before approval are `pendingTasks`; a saved file's are `tasks`.
-    tasks: [plan.pendingTasks, plan.tasks].find(Array.isArray) ?? [],
+    // Every metric and key reads the edges a "*" stands for; `afterAll` counts the tasks that wrote one.
+    tasks: readAfterAll(written),
+    afterAll: written.filter((t) => Array.isArray(t.dependencies) && t.dependencies.includes('*')).length,
     history: conversation.conversationHistory ?? plan.conversationHistory ?? [],
     researchLog: researchLog ?? conversation.researchLog ?? plan.researchLog ?? [],
     usage: conversation.plannerUsage ?? plan.plannerUsage ?? null,
@@ -408,6 +455,7 @@ export function runMetrics(session, { researchLog, driver = {}, autoMerge = true
     criticalPath: criticalPath(top),
     changePath: changePath(top),
     endsInCheck: endsInCheck(top),
+    afterAllTasks: parts.afterAll,
     researchTasks,
     readOnlyTasks: all.filter(isReadOnly).length,
     loopTasks: all.filter(isLoop).length,
