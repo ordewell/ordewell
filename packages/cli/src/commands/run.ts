@@ -1,7 +1,7 @@
 import { flag, hasFlag, readLastSession, workspaceOf } from '../utils';
 import { iconFor } from '../utils/output';
 import type { ApiClient } from '../apiClient';
-import { CLOSING_TURN_BOUND_MS, WAKE_DEBOUNCE_MS, handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type Escalation, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
+import { CLOSING_TURN_BOUND_MS, WAKE_DEBOUNCE_MS, handoffBranchName, holdLabel, isRepoGroup, loopBodyLabel, loopBodyRound, loopCheckLabel, loopCheckState, repairWaitLabel, repoResultLines, scriptTaskText, skippedLabel, SUPERVISOR_LEVEL_LABEL, taskStartedNotice, truncateCheckpointSummary, WAITS_FOR_APPROVAL_LABEL, walkPlan, type Escalation, type EscalationKind, type ExecutionSummary, type SerializedTaskStatus, type SupervisorLevel } from '@ordewell/core';
 import { allTasksOf } from '../utils/tasks';
 import { connect, headlessSignedOut } from './shared';
 import { taskHandoffLines } from './taskHandoff';
@@ -63,17 +63,59 @@ export const RUN_FAILED_EXIT = 2;
  */
 export const RUN_WAITS_EXIT = 3;
 
-/** The waits on a person `--unattended` returns on: what a script would otherwise follow for good. */
-const PERSON_WAITS: ReadonlySet<Escalation['kind']> = new Set<Escalation['kind']>(['checkpoint', 'input', 'approval', 'on-hold']);
-
 /**
- * What alone keeps a task from starting: a manual task, a merge gate, a task
- * waiting to be started, nothing to run. Listed as soon as nothing else holds the task, so
- * `--unattended` counts one only once the daemon says the run waits on the
- * user (`waitsOnUser`): beside work still going on it is not the run's wait.
- * No supervisor is woken to one (ADR-0057 R4).
+ * What each escalation is to `--unattended`, written out so that a kind core
+ * adds fails to compile until someone decides (as `ONLY_A_PERSON` in core's
+ * escalations does). The run never ends behind a person's wait: TaskOrchestrator
+ * waits on the user for a task that is not failed, so a kind left out is
+ * followed for good.
+ *
+ * `person`: a wait a person answers, counted as soon as it is listed, though
+ * other tasks may still run. At Act the supervisor is woken to each, so the
+ * follower waits for its turn on it.
+ *
+ * `start`: what alone keeps a task from starting. Listed as soon as nothing
+ * else holds the task, so it counts only once the daemon says the run waits on
+ * the user (`waitsOnUser`): beside work still going on it is not the run's
+ * wait. No supervisor is woken to one (ADR-0057 R4).
+ *
+ * `none`: no reason to return, each for the reason beside it.
  */
-const START_WAITS: ReadonlySet<Escalation['kind']> = new Set<Escalation['kind']>(['by-hand', 'merge-gate', 'unapproved', 'no-prompt']);
+const UNATTENDED_WAIT: Record<EscalationKind, 'person' | 'start' | 'none'> = {
+  checkpoint: 'person',
+  input: 'person',
+  approval: 'person',
+  'on-hold': 'person',
+  conflict: 'person',
+  'landing-failed': 'person',
+  'files-changed': 'person',
+  // Listed only with no reset time: a run held for one resumes by itself, and lists none.
+  'usage-limit': 'person',
+  'by-hand': 'start',
+  'merge-gate': 'start',
+  unapproved: 'start',
+  'no-prompt': 'start',
+  // A task's end: once nothing else can move, the run ends on it, and exits 2.
+  failed: 'none',
+  'out-of-rounds': 'none',
+  // The run's own, with no task: a dirty tree's block has its own event, which
+  // the follower answers or stops on; Merge all is listed only once nothing
+  // moves the run and no merge gate stands in its place, and a planner reply
+  // only once the run is no longer open, so the run's end has come for both.
+  'blocked-run': 'none',
+  'merge-all': 'none',
+  planner: 'none',
+};
+
+const isStartWait = (kind: EscalationKind): boolean => UNATTENDED_WAIT[kind] === 'start';
+
+/** What a task's own wait is called on its line, for the waits only a person moves on. */
+const OWN_WAIT_LABEL: Partial<Record<EscalationKind, string>> = {
+  conflict: 'Landing conflict',
+  'landing-failed': 'Landing refused',
+  'files-changed': 'Changed your checkout',
+  'usage-limit': 'Usage limit',
+};
 
 /**
  * How long a wait has to stand before `--unattended` returns on it: the status
@@ -117,7 +159,7 @@ function whoReleases(level: SupervisorLevel | null): string {
 function releasing(wait: Escalation, ref: string): string {
   const commands = wait.options.flatMap((o) => (o.id === 'retry' ? ['retry'] : o.id === 'force-start' ? ['force-start'] : o.id === 'complete' ? ['complete'] : []));
   const all = [...commands, 'skip'].map((c) => `\`ordewell ${c} ${ref}\``);
-  return `${all.slice(0, -1).join(', ')} or ${all[all.length - 1]}`;
+  return all.length === 1 ? all[0] : `${all.slice(0, -1).join(', ')} or ${all[all.length - 1]}`;
 }
 
 /** The run's level, as the session holds it; null when the daemon cannot say. */
@@ -265,18 +307,18 @@ async function followRun(
     if (level !== 'act') return all.map(({ wait }) => wait);
     const turned = ({ turnsBefore }: { turnsBefore: number }): boolean => turnsEnded > turnsBefore && turnsBegun === turnsEnded;
     // No turn is woken to a start wait, but one in flight, or owed to a person's wait beside it, may still move the run.
-    const owed = all.some((s) => !START_WAITS.has(s.wait.kind) && !turned(s));
-    return all.filter((s) => (START_WAITS.has(s.wait.kind) ? turnsBegun === turnsEnded && !owed : turned(s))).map(({ wait }) => wait);
+    const owed = all.some((s) => !isStartWait(s.wait.kind) && !turned(s));
+    return all.filter((s) => (isStartWait(s.wait.kind) ? turnsBegun === turnsEnded && !owed : turned(s))).map(({ wait }) => wait);
   };
   const judgeWaits = (): void => {
     if (!unattended) return;
     clearTimeout(standsCheck);
     const waits = unanswered();
-    const stands = level === 'act' && waits.some((w) => START_WAITS.has(w.kind)) ? START_WAIT_STANDS_AT_ACT_MS : WAIT_STANDS_MS;
+    const stands = level === 'act' && waits.some((w) => isStartWait(w.kind)) ? START_WAIT_STANDS_AT_ACT_MS : WAIT_STANDS_MS;
     if (waits.length > 0) standsCheck = setTimeout(() => { if (unanswered().length > 0) noteWaits(); }, stands);
   };
   const noteEscalations = (list: readonly Escalation[]): void => {
-    const counted = (w: Escalation): boolean => PERSON_WAITS.has(w.kind) || (runWaitsOnUser && START_WAITS.has(w.kind));
+    const counted = (w: Escalation): boolean => UNATTENDED_WAIT[w.kind] === 'person' || (runWaitsOnUser && isStartWait(w.kind));
     standing = new Map(list.filter((w) => counted(w) && w.task).map((w) => [w.id, standing.get(w.id) ?? { wait: w, turnsBefore: turnsBegun }]));
     judgeWaits();
   };
@@ -351,6 +393,13 @@ async function followRun(
         if (wait.kind === 'by-hand') {
           waitsSaid.add(wait.id);
           process.stderr.write(`· Yours to do: ${wait.task.ref} ${wait.task.title}: a manual task: ${releasing(wait, bare(wait.task.ref))} releases it and what needs it. Nobody does it unattended: it waits until you do.\n`);
+          continue;
+        }
+        const own = OWN_WAIT_LABEL[wait.kind];
+        if (own) {
+          waitsSaid.add(wait.id);
+          // The inbox offers what no command does: a resolver task, landing the kept work, a resume.
+          process.stderr.write(`· ${own}: ${wait.task.ref} ${wait.task.title}: ${wait.reason.replace(/[.\s]+$/, '')}: \`ordewell tui\`, then \`/inbox\`, answers it, or ${releasing(wait, bare(wait.task.ref))} releases it and what needs it.${whoAnswers(level)}\n`);
           continue;
         }
         if (wait.kind !== 'input' && wait.kind !== 'approval') continue;

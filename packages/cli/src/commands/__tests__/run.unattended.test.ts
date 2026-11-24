@@ -349,3 +349,132 @@ describe('ordewell run --unattended when a manual task holds the run', () => {
     expect(process.exitCode).toBeUndefined();
   });
 });
+
+/** A task's own wait as the daemon lists it: its task is awaiting the user, and nothing but a person moves it on. */
+const ownWait = (kind: 'conflict' | 'landing-failed' | 'files-changed' | 'usage-limit', reason: string, options: Escalation['options']): Escalation => ({
+  id: `${kind}:t1:1`, kind, task: { id: 't1', ref: '#1', title: 'Migrate the schema' }, attempt: 1, reason, options,
+});
+const SKIP_OPTION = { id: 'skip', label: 'Skip', note: 'optional' } as const;
+const RETRY_OPTION = { id: 'retry', label: 'Retry' } as const;
+const conflict = ownWait('conflict', 'Its work could not land: it conflicts with what landed before it.', [{ id: 'resolve-conflict', label: 'Add a resolver task' }, RETRY_OPTION, SKIP_OPTION]);
+const landingFailed = ownWait('landing-failed', 'It passed, but git refused to land its work, which is kept. Fix what git said, then land it.', [{ id: 'land', label: 'Land its work' }, RETRY_OPTION, SKIP_OPTION]);
+const filesChanged = ownWait('files-changed', 'It changed tracked files in your checkout, and nothing was committed.', [RETRY_OPTION, SKIP_OPTION, { id: 'complete', label: 'Mark complete', confirm: 'Mark it complete?' }]);
+const usageLimit = ownWait('usage-limit', 'Paused on its runner\'s usage limit, with no resume scheduled.', [{ id: 'resume', label: 'Resume now', note: 'optional' }, SKIP_OPTION]);
+const failed: Escalation = {
+  id: 'failed:f2:1', kind: 'failed', task: { id: 'f2', ref: '#2', title: 'Seed the data' }, attempt: 1, reason: 'It broke.', options: [RETRY_OPTION, SKIP_OPTION],
+};
+
+/** The line each says as it is listed: what waits, on which task, and what answers it. */
+const OWN_WAITS: [string, Escalation, string][] = [
+  ['a landing conflict', conflict, '· Landing conflict: #1 Migrate the schema: Its work could not land: it conflicts with what landed before it: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1` or `ordewell skip 1` releases it and what needs it.'],
+  ['a landing git refused', landingFailed, '· Landing refused: #1 Migrate the schema: It passed, but git refused to land its work, which is kept. Fix what git said, then land it: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1` or `ordewell skip 1` releases it and what needs it.'],
+  ['an ops task that changed tracked files', filesChanged, '· Changed your checkout: #1 Migrate the schema: It changed tracked files in your checkout, and nothing was committed: `ordewell tui`, then `/inbox`, answers it, or `ordewell retry 1`, `ordewell complete 1` or `ordewell skip 1` releases it and what needs it.'],
+  ['a usage limit with no reset time', usageLimit, '· Usage limit: #1 Migrate the schema: Paused on its runner\'s usage limit, with no resume scheduled: `ordewell tui`, then `/inbox`, answers it, or `ordewell skip 1` releases it and what needs it.'],
+];
+
+describe('ordewell run --unattended when a task\'s own wait holds the run', () => {
+  describe.each(OWN_WAITS)('on %s', (_what, wait, line) => {
+    it.each<SupervisorLevel>(['off', 'watch'])('returns 3 at %s once the wait stands, saying what waits and what answers it', async (level) => {
+      const { api, send } = daemon(level);
+      const follower = await run(api, ['--unattended']);
+
+      send(update(waitingOnUser, wait));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(follower.returned()).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(follower.returned()).toBe(true);
+      await follower.done;
+      expect(process.exitCode).toBe(RUN_WAITS_EXIT);
+      expect(api.endExecutionStream).toHaveBeenCalledWith('s1');
+      const out = written.join('');
+      expect(out).toContain(`${line} Nobody answers it unattended: it waits until someone does. \`ordewell supervisor act\` lets the supervisor answer in new sessions.\n`);
+      expect(out).toContain(`· Waits on a person: #1 Migrate the schema: ${wait.reason.replace(/[.\s]+$/, '')}.\n`);
+    });
+
+    it('returns 3 at Act only after a supervisor turn begun once the wait stood has ended', async () => {
+      const { api, send } = daemon('act');
+      const follower = await run(api, ['--unattended']);
+
+      // A turn begun before the wait is not its turn, though it ends after it.
+      send(turn('w0'), update(waitingOnUser, wait), turn('w0', true));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(follower.returned()).toBe(false);
+      expect(written.join('')).toContain(`${line} The supervisor has been woken to answer it.\n`);
+
+      // Never while its turn runs.
+      send(turn('w1'));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(follower.returned()).toBe(false);
+
+      send(turn('w1', true));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(follower.returned()).toBe(true);
+      await follower.done;
+      expect(process.exitCode).toBe(RUN_WAITS_EXIT);
+    });
+
+    it('returns 3 beside a failed task, which alone would end the run', async () => {
+      const { api, send } = daemon('watch');
+      const follower = await run(api, ['--unattended']);
+
+      send(update(waitingOnUser, wait, failed));
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(follower.returned()).toBe(true);
+      await follower.done;
+      expect(process.exitCode).toBe(RUN_WAITS_EXIT);
+    });
+  });
+
+  it.each<SupervisorLevel>(['off', 'watch', 'act'])('keeps following at %s a run held on a usage limit that has a reset time: it resumes by itself', async (level) => {
+    const { api, send, close } = daemon(level);
+    const follower = await run(api, ['--unattended']);
+
+    // Held, the run lists no escalation: the reset resumes the task.
+    send({
+      type: 'status_update',
+      tasks: [{ id: 't1', title: 'Migrate the schema', status: 'awaiting_user', verdict: null, awaitingReason: 'usage-limit', resumeAt: new Date(Date.now() + 3_600_000).toISOString() } as unknown as never],
+      activity: { ...waitingOnUser, waitsOnUser: false },
+      escalations: [],
+    });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+    expect(follower.returned()).toBe(false);
+    close();
+    await follower.done;
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it.each<[string, Escalation]>([
+    ['an approval', { ...input, id: 'approval:t1:1:a1', kind: 'approval', approval: 'a1', reason: 'Its runner asks: run npm publish' }],
+    ['a merge gate', { ...byHand, id: 'merge-gate:u1:0', kind: 'merge-gate', reason: 'Waits for Merge all: the work of #0 is not merged into your branch yet.' }],
+    ['a task waiting to be started', { ...byHand, id: 'unapproved:u1:0', kind: 'unapproved', reason: 'Added since you approved the plan, so it waits for you to start it.' }],
+    ['a task with nothing to run', { ...byHand, id: 'no-prompt:u1:0', kind: 'no-prompt', reason: 'It has no prompt, so there is nothing to run.' }],
+  ])('still returns 3 on %s', async (_what, wait) => {
+    const { api, send } = daemon('watch');
+    const follower = await run(api, ['--unattended']);
+
+    send(update(waitingOnUser, wait));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(follower.returned()).toBe(true);
+    await follower.done;
+    expect(process.exitCode).toBe(RUN_WAITS_EXIT);
+  });
+
+  it.each<[string, Escalation]>([
+    ['a failed task', failed],
+    ['a loop out of rounds', { ...failed, id: 'out-of-rounds:f2:1', kind: 'out-of-rounds', reason: 'Its loop ran out of rounds: it failed round 3 of 3.' }],
+  ])('does not count %s, which ends the run by itself', async (_what, wait) => {
+    const { api, send, close } = daemon('watch');
+    const follower = await run(api, ['--unattended']);
+
+    send(update(waitingOnUser, wait));
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    expect(follower.returned()).toBe(false);
+    close();
+    await follower.done;
+  });
+});
