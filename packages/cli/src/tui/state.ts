@@ -425,6 +425,12 @@ export interface ForcedPrompt {
   text: string;
 }
 
+/** A turn failure drawn ahead of its saved copy: its text, and the id of the user line the turn answered (null before any). */
+export interface FailureAhead {
+  text: string;
+  afterUser: string | null;
+}
+
 /**
  * The plan below a root that is on screen (ADR-0055 D20). `TuiState` always
  * holds the plan being viewed, so the panes and keys read it as they read a
@@ -677,6 +683,12 @@ export interface TuiState {
    * It holds what the send took, so a send that itself fails can give it back.
    */
   forceSendPending: ForcedPrompt | null;
+  /**
+   * A turn's failure this view drew from the call's answer before the daemon's
+   * saved copy of it arrived on the stream: the text, and the user line the
+   * turn answered (see `reducers/turnFailure.ts`).
+   */
+  failureAhead: FailureAhead | null;
   toast: string;
   rows: number;
   cols: number;
@@ -930,6 +942,7 @@ export const STATE_SCOPE = {
   stopArmToken: 'screen',
   stopRequested: 'session',
   forceSendPending: 'session',
+  failureAhead: 'session',
   toast: 'screen',
   rows: 'screen',
   cols: 'screen',
@@ -1034,6 +1047,7 @@ export function initialState(overrides: Partial<TuiState> = {}): TuiState {
     stopArmToken: 0,
     stopRequested: false,
     forceSendPending: null,
+    failureAhead: null,
     toast: '',
     rows: 24,
     cols: 80,
