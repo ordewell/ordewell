@@ -63,7 +63,10 @@ is one runner per API provider, under the provider's own id and name.**
   the enabled set is the coding agents found installed, then the runner of every
   provider configured in the host's own environment (`defaultEnabledRunners`):
   the process's, which `~/.ordewell/.env` fills in the CLI and the daemon, and
-  what the host holds for the runner (`hostCredentials.ts`). A workspace's
+  what the host holds for the runner (`hostCredentials.ts`). VS Code lends
+  that file's keys there rather than into its environment, last and only
+  where the start's environment has none, each with the endpoint saved
+  beside it. A workspace's
   variables (`.ordewell/env`, an `.envrc`,
   [ADR-0016](../platform/0016-per-workspace-environment.md)) list the runner and
   start it in that workspace, but enable nothing: the set is one per host. A
@@ -530,3 +533,4 @@ comes from that call.
 - 2026-11-21 — a notice on a compacting step gives the fill after it, the context phrases take a limit reached or too little left, and the budget and context answers are given once between them.
 - 2026-11-21 — DeepSeek's own API gets every turn's reasoning back, not only a tool-calling turn's; `taskReasoningKept` (default `all`) lets a request hint a stepped boundary before which older reasoning may go, honoured only through OpenRouter on probed upstreams of a probed model.
 - 2026-11-22 — the written-call detector is shared with the API planner and takes `<invoke>`, DSML and whole-reply JSON calls besides `<tool_call>`.
+- 2026-11-25 — VS Code lends the keys saved in `~/.ordewell/.env` to the runner, each with its saved endpoint.

@@ -156,7 +156,7 @@ export { resolveProvider, fetchAllProviderModels, collectProviderCredentials, to
 export type { ProviderModelLists, FetchAllProviderModelsOptions, AllProviderModels, OrchestratorOption, ProviderModelsResult, ProviderCredentialSource } from './services/ProviderRouting';
 export { ALL_PROVIDERS, getProviderMeta, isApiProvider, isPlannerBackend, prefixModelId, stripModelPrefix, resolveProviderFromPrefix, isOpenAiProvider, isCliProvider, runnerForProvider, providerForRunner, plannerBackendEntries, configuredProviders, PROVIDER_LABEL, PROVIDER_SHORT_LABEL, HARNESS_PLANNER_REASON, HARNESS_PLANNER_UNAVAILABLE_REASON, PROVIDER_PRIORITY, PROVIDER_DETECT_PRIORITY, CLI_PROVIDERS, type ByPlannerBackend } from './services/ProviderRegistry';
 export type { ProviderRegistration, PlannerUsability, PlannerBackendEntry } from './services/ProviderRegistry';
-export { endpointUrlProblem } from './services/apiProviders';
+export { endpointUrlProblem, vendorApiKeyIn, vendorBaseUrlIn } from './services/apiProviders';
 export {
   admitSettingsEnv,
   SETTINGS_ENV_ALLOWLIST,

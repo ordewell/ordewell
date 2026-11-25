@@ -56,6 +56,9 @@ export class ModelDiscovery {
 
   private async push(): Promise<void> {
     const d = this.deps;
+    // A key saved, replaced or removed from Desktop or the TUI since the last
+    // look is read here, and handled as a key saved in this window would be.
+    if (d.config.reloadSavedCredentials()) await d.onApiKeySaved();
     d.modelResolver.refreshRunnerModels();
     // The runner list is being refreshed, so the host is asked again: a user
     // who fixed it while the window was open sees the modes come back.
