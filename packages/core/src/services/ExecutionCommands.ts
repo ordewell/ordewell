@@ -209,9 +209,10 @@ export interface ExecutionHost {
    * Execute while a run is under way: the run takes in the tasks approved, each
    * starting once its dependencies finish. The user's Execute approves every
    * task first, `approved` of which had waited; the planner's approves none, and
-   * `left` still wait. Answers the line that says so.
+   * `left` still wait. Answers the line that says so. `actor` is who asked: a
+   * run the join opens is a person's start only when it is the user's own.
    */
-  joinRun(approved: number, left: number): Promise<string>;
+  joinRun(approved: number, left: number, actor: ExecutionActor): Promise<string>;
   /** `note` is a model's note for the attempt it starts, a stopped task's (ADR-0029). */
   startTask(taskId: string, actor: ExecutionActor, note?: RetryNote): Promise<void>;
   /** `actor` is who stopped it: the user's stop holds the supervisor back from it (ADR-0029). */
@@ -978,7 +979,7 @@ export class ExecutionCommands {
             const startedNothing = waiting.length === 0 && this.orchestrator.scheduledRun;
             // The fresh chance is the user's to ask for: autorun's join leaves a failure as it is (ADR-0053).
             if (actor.kind === 'user') this.orchestrator.readyFailed();
-            const joined = await this.host.joinRun(waiting.length, 0);
+            const joined = await this.host.joinRun(waiting.length, 0, actor);
             return { message: this.host.runBlocked() ? this.voiceOf(actor).blockedRun : joined, ...(startedNothing ? { startedNothing } : {}) };
           },
         };
@@ -992,7 +993,7 @@ export class ExecutionCommands {
       }
       return {
         act: async () => {
-          await (unattended ? this.host.joinRun(waiting.length, 0) : this.host.joinRun(0, waiting.length));
+          await (unattended ? this.host.joinRun(waiting.length, 0, actor) : this.host.joinRun(0, waiting.length, actor));
           if (this.host.runBlocked()) return { message: this.voiceOf(actor).blockedRun };
           const held = unattended || waiting.length === 0 ? '' : ` ${capitalize(named(waiting))} ${waiting.length === 1 ? 'was' : 'were'} added after the user ran the plan, so ${waiting.length === 1 ? 'it waits' : 'they wait'} until they start ${waiting.length === 1 ? 'it' : 'them'} or run the plan again.`;
           const under = live.length === 0 ? '' : `${named(live)} ${live.length === 1 ? 'is' : 'are'} already running, and `;
@@ -1171,7 +1172,7 @@ export class ExecutionCommands {
     if (waitOf(this.orchestrator.startWaits(task), 'no-prompt')) return { refusal: noPromptRefusal(label, task) };
     return {
       act: async () => {
-        const queued = await this.controls.forceStartTask(task.id, 'user');
+        const queued = await this.controls.forceStartTask(task.id, 'person');
         if (queued) return { message: queued, payload: { kind: 'queued', line: queued } };
         if (this.host.runBlocked()) return { message: USER_VOICE.blockedRun };
         return { message: this.running(task.id) ? `Started ${label}.` : `${capitalize(label)} is back in the run and starts when a slot is free.` };
@@ -1185,7 +1186,7 @@ export class ExecutionCommands {
       act: async () => {
         // The plan's own mark beside the record the seam keeps: planner starts read it (ADR-0029).
         this.approvals.approvePlan();
-        await this.controls.approveReview('user');
+        await this.controls.approveReview('person');
         return { message: this.host.runBlocked() ? USER_VOICE.blockedRun : 'The plan runs: each task starts once its dependencies finish.' };
       },
     };

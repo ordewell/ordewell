@@ -1400,7 +1400,7 @@ describe('the command seam\'s extension points', () => {
     const { commands, host, approvals } = seam({ host: { autorun: () => true }, approvals: { planApproved: false, waitsForApproval: () => false } });
 
     expect(await commands.run({ command: 'run_plan' }, PLANNER)).toMatchObject({ ok: true });
-    expect(host.joinRun).toHaveBeenCalledWith(0, 0);
+    expect(host.joinRun).toHaveBeenCalledWith(0, 0, PLANNER);
     expect(approvals.approve).toHaveBeenCalledWith(['t1']);
     expect(approvals.approvePlan).toHaveBeenCalled();
   });

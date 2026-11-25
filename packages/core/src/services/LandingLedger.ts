@@ -21,6 +21,14 @@ export const startedOlder = (run: IsolationRun): boolean => run.carried === unde
 /** Whether a revert was committed on the run: its branch holds commits no record names, so it carries on with no record left. */
 export const hasReverted = (run: IsolationRun): boolean => run.reverted === true;
 
+/**
+ * Whether the ledger names a merge on the run's branch, a record of its task
+ * left or not: a retry, a Continue or a start after Mark not done replaces a
+ * landed task's record, and its merges stay on the branch. A revert, which
+ * lets one go, marks the run {@link hasReverted}.
+ */
+export const hasLedgeredLanding = (run: IsolationRun): boolean => Object.keys(run.landings ?? {}).length > 0 || Object.keys(run.carried ?? {}).length > 0;
+
 /** What a task landed as: its record while it has one, else what the ledger kept once a retry dropped it. */
 export function landedTaskOf(run: IsolationRun | null | undefined, taskId: string): LandedTask | undefined {
   return run?.tasks[taskId] ?? run?.landedTasks?.[taskId];

@@ -91,6 +91,60 @@ function readDirs(root: string): Array<{ dir: string; prefix: string }> {
   return dirs;
 }
 
+const HELD_FOR = 'repository configuration ';
+/** What a hold for configuration with no base commit says, as it did before a spent run could be replaced: see {@link configHoldReason}. */
+const FROM_CHECKOUT = '; remove it to continue, or start a new run once your branch holds it';
+/** What a subplanner can do of its own with a task held for configuration (ADR-0055 D20). */
+const IN_CHILD_PLAN = 'The subplanner can make this task read-only, which loads no project configuration, and start it, or take it out of the plan and say why in its report; a person can ask it to with a message';
+
+/**
+ * Where a start's configuration check found what differs from where its run
+ * started (ADR-0028): `base`, in a worktree's tree, against the base commit
+ * the run recorded; `live`, against what a directory with no base commit
+ * held when the run first launched a task: the checkout an ops or shared task
+ * runs in, and the `.claude` and `.opencode` a worktree links from it.
+ */
+export interface StartConfigFound {
+  base: readonly string[];
+  live: readonly string[];
+}
+
+/**
+ * Why a start is held for configuration that would reach its launch without
+ * a person's consent (ADR-0028), and what releases it, by what tripped it.
+ * Configuration in the tree, which the run's base lacks, goes with the run: a
+ * run begun from the user's branch, which only a person's own start of a
+ * task in a worktree begins from a run that is spent (ADR-0013), has a base
+ * that holds it. Configuration found only against a first look at a
+ * directory with no base commit is said as it was before: that look is the
+ * run's, and the next run takes its own (ADR-0028). In a child plan the
+ * subplanner starts the tasks (ADR-0055 D20), and a read-only task loads no
+ * project configuration (ADR-0046), so the hold says it can make the task
+ * one. Read after "is on hold: ", so it opens in lower case.
+ */
+export function configHoldReason({ base, live }: StartConfigFound, inChildPlan = false): string {
+  const paths = [...new Set([...base, ...live])].sort();
+  const held = `${HELD_FOR}${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started`;
+  if (base.length === 0) return inChildPlan ? `${held}${FROM_CHECKOUT}. ${IN_CHILD_PLAN}` : `${held}${FROM_CHECKOUT}`;
+  if (inChildPlan) return `${held}. ${IN_CHILD_PLAN}`;
+  return `${held}; remove it to continue, or merge everything this run landed into your branch, with Merge all or a merge of your own (a squash or a rebase does not count), stop the run and start this task yourself: your own start of a task that works in a worktree then begins a new run from your branch, whose base holds this configuration, provided nothing of this run is left: no task running, and no work that never landed, this task's own included, no kept attempt and no delegated task's child plan. Where this task holds such work of its own, a Continue keeps it, and the run with it, so it is held again there; a fresh start (Start now, Retry or Run) discards that work and is held once more, and your next start then begins the new run`;
+}
+
+/** Whether a hold is {@link configHoldReason}'s. */
+export function isConfigHold(reason: string | undefined): boolean {
+  return reason?.startsWith(HELD_FOR) === true;
+}
+
+/** Whether a hold is {@link configHoldReason}'s in a child plan. */
+export function isChildPlanConfigHold(reason: string | undefined): boolean {
+  return isConfigHold(reason) && reason!.includes(IN_CHILD_PLAN);
+}
+
+/** Whether a hold is {@link configHoldReason}'s for configuration with no base commit alone, whose release is the next run's. */
+export function isCheckoutConfigHold(reason: string | undefined): boolean {
+  return isConfigHold(reason) && reason!.includes(FROM_CHECKOUT);
+}
+
 /** What a check reads of the run: where a task's worktrees are and the base each one started from. */
 export type StartConfigRuns = Pick<IsolationRunController, 'taskRepos' | 'workspaceOf'>;
 
@@ -111,6 +165,8 @@ export type StartConfigRuns = Pick<IsolationRunController, 'taskRepos' | 'worksp
  */
 export class TaskStartConfig {
   private readonly live = new Map<string, Map<string, string>>();
+  /** What each {@link check} found against the run's base, by the paths it answered. */
+  private readonly againstBase = new WeakMap<readonly string[], readonly string[]>();
 
   /**
    * `epoch` names the run the check belongs to; a new run takes a new
@@ -119,7 +175,8 @@ export class TaskStartConfig {
    * worktree prepared for it.
    */
   async check(runs: StartConfigRuns, taskId: string, where: { epoch: number; root: string; cwd: string | null; worktree: boolean }): Promise<string[]> {
-    const found = where.worktree ? await this.gitDifferences(runs, taskId) : [];
+    const base = where.worktree ? await this.gitDifferences(runs, taskId) : [];
+    const found = [...base];
     const id = String(where.epoch);
     const checkout = readDirs(where.root).flatMap(({ dir, prefix }) =>
       this.liveDifferences(`${id}:checkout:${dir}`, dir).map((name) => `${prefix}${name}`));
@@ -131,7 +188,15 @@ export class TaskStartConfig {
       const cwd = where.cwd ?? runs.workspaceOf(taskId);
       if (cwd) found.push(...this.worktreeDifferences(id, cwd, where.root));
     }
-    return [...new Set(found)].sort();
+    const paths = [...new Set(found)].sort();
+    this.againstBase.set(paths, [...new Set(base)].sort());
+    return paths;
+  }
+
+  /** What a {@link check} answered, by what each path was compared with ({@link StartConfigFound}). */
+  found(paths: readonly string[]): StartConfigFound {
+    const base = this.againstBase.get(paths) ?? [];
+    return { base, live: paths.filter((name) => !base.includes(name)) };
   }
 
   /** The baselines go with the plan they belong to. */

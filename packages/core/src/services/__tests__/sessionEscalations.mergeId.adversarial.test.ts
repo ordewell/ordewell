@@ -61,22 +61,26 @@ function setup(autoMerge = false, isolation = new FakeWorktreeIsolation()) {
 describe('adversarial: one Merge all per run is not one Merge all per id', () => {
   it('tells again when more work lands after a Merge all, which keeps the run\'s id', async () => {
     const env = setup();
-    env.load([task('t1', 1), task('t2', 2)]);
+    env.load([task('t1', 1), task('t2', 2), task('t3', 3)]);
     await env.started();
+    await vi.waitFor(() => expect(env.attempts('t3')).toBe(1));
     env.latest('t1').reportComplete({ status: 'done', summary: 'ok' });
     await env.fail('t2');
-    await vi.waitFor(() => expect(env.session.escalations().some((e) => e.kind === 'merge-all')).toBe(true));
+    await env.fail('t3');
+    const mergeAll = () => env.session.escalations().filter((e) => e.kind === 'merge-all');
+    await vi.waitFor(() => expect(mergeAll()).toHaveLength(1));
 
-    const first = env.session.escalations().find((e) => e.kind === 'merge-all')!;
+    const [first] = mergeAll();
     await vi.waitFor(() => expect(env.told()).toContain(first.id));
     expect(await env.session.answerEscalation(first.id, 'merge-all')).toMatchObject({ ok: true });
-    // The retry continues the same run, as a run with a holdout is continued.
+    // The retry continues the same run: t3's failed attempt is a holdout, and a run with one is continued.
     expect(await env.session.answerEscalation('failed:t2:1', 'retry')).toMatchObject({ ok: true });
     await vi.waitFor(() => expect(env.attempts('t2')).toBe(2));
     env.latest('t2').reportComplete({ status: 'done', summary: 'fixed' });
 
-    await vi.waitFor(() => expect(env.session.escalations().map((e) => e.kind)).toEqual(['merge-all']));
-    const second = env.session.escalations()[0];
+    await vi.waitFor(() => expect(mergeAll()).toHaveLength(1));
+    await vi.waitFor(() => expect(mergeAll()[0].id).not.toBe(first.id));
+    const [second] = mergeAll();
     expect(second.id.split(':').slice(0, 2)).toEqual(first.id.split(':').slice(0, 2));
     expect(second.id).not.toBe(first.id);
     await vi.waitFor(() => expect(env.told().filter((id) => id === second.id)).toHaveLength(1));
