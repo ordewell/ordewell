@@ -20,8 +20,10 @@ import {
   signatureChecks,
   publisherNamesIn,
   signingProblems,
+  measureDaemonStart,
   smokeDaemon,
   smokePty,
+  timeRefusedConnect,
 } from './desktop-package-check.mjs';
 
 const temp = [];
@@ -292,6 +294,51 @@ describe('smokeDaemon', () => {
     const result = await smokeDaemon(entry);
     assert.equal(result.ok, false);
     assert.match(result.message, /exited early.*hono/s);
+  });
+});
+
+describe('measureDaemonStart', () => {
+  it('times a refused connect, the PID file and a 250 ms poll of a daemon that listens late', async () => {
+    const dir = scratch();
+    const entry = join(dir, 'main.js');
+    // As the daemon does: listen, then write the PID file it was given.
+    writeFileSync(entry, [
+      "const http = require('node:http');",
+      "const fs = require('node:fs');",
+      "const arg = (name) => process.argv[process.argv.indexOf(name) + 1];",
+      "setTimeout(() => {",
+      "  http.createServer((req, res) => { res.statusCode = 401; res.end(); }).listen(Number(arg('--port')), '127.0.0.1', () => {",
+      "    fs.writeFileSync(arg('--pid-file'), String(process.pid));",
+      "  });",
+      "}, 300);",
+    ].join('\n'));
+    const lines = await measureDaemonStart(entry, { attempts: 1 });
+    assert.match(lines[0], /^a refused connect to 127\.0\.0\.1 on a closed port: \d+ ms \(ECONNREFUSED\)$/);
+    assert.match(lines[1], /^a refused connect to localhost on a closed port: \d+ ms \(/);
+    const pid = /^daemon start to its PID file: (\d+) ms$/.exec(lines[2]);
+    assert.ok(pid, lines[2]);
+    assert.ok(Number(pid[1]) >= 250, lines[2]);
+    const poll = /^daemon start to the first answer of a 250 ms HTTP poll: (\d+) ms \(probe (\d+);/.exec(lines[3]);
+    assert.ok(poll, lines[3]);
+    assert.ok(Number(poll[2]) >= 2, lines[3]);
+    assert.match(lines[4], /^the poll answered -?\d+ ms after the PID file appeared$/);
+  });
+
+  it('reports a daemon that dies at load as lines, never as a throw', async () => {
+    const dir = scratch();
+    const entry = join(dir, 'main.js');
+    writeFileSync(entry, "throw new Error(\"Cannot find module 'hono'\");");
+    const lines = await measureDaemonStart(entry, { attempts: 1, limitMs: 5_000 });
+    assert.match(lines[2], /wrote no PID file within 5000 ms \(it exited\)/);
+    assert.match(lines[3], /had no answer within 5000 ms/);
+  });
+});
+
+describe('timeRefusedConnect', () => {
+  it('says how long a closed port took to refuse', async () => {
+    const result = await timeRefusedConnect('127.0.0.1', 1, 5_000);
+    assert.equal(typeof result.ms, 'number');
+    assert.notEqual(result.outcome, 'connected');
   });
 });
 
