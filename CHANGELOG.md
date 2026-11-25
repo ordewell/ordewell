@@ -8,6 +8,27 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Signing in to Cursor or Cline from VS Code no longer spins until the
+  terminal closes.** The login runs as the terminal's own process, the same
+  binary the agent check found, and its exit is checked at once: a login that
+  exits 0 rechecks the agent, and one that fails says its exit code (ADR-0052).
+- **VS Code hands Cline a provider key saved in `~/.ordewell/.env`.** The
+  desktop app and the terminal already did; VS Code keeps that file out of its
+  environment, so Cline read as needing a key there. Each key goes only to
+  Cline's default endpoint for it, and no key from VS Code's secret storage or
+  settings is lent (ADR-0060).
+- **Cline's "API key needed" offers Set up Cline, and no longer blames Cline.**
+  When Ordewell has no provider key it can hand Cline, every picker, the send
+  refusal, the error banner, and the desktop launcher's card and Settings row
+  say "API key needed" and offer Set up Cline, which runs `cline auth`; each
+  says to choose an API provider and enter its key. Add key now opens only the
+  key entry. In VS Code it used to run Cline's login under that name. A setup
+  that still leaves no key now says Ordewell lacks one, not "Cline still
+  reports not logged in." A Cline account sign-in alone is not enough, and the
+  words say so (ADR-0052, ADR-0060).
+
 ## [0.14.13] - 2026-11-25
 
 ### Added
@@ -245,20 +266,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
-- **Cline's "API key needed" offers Set up Cline, and no longer blames Cline.**
-  When Ordewell has no provider key it can hand Cline, every picker, the send
-  refusal, the error banner, and the desktop launcher's card and Settings row
-  say "API key needed" and offer Set up Cline, which runs `cline auth`; each
-  says to choose an API provider and enter its key. Add key now opens only the
-  key entry. In VS Code it used to run Cline's login under that name. A setup
-  that still leaves no key now says Ordewell lacks one, not "Cline still
-  reports not logged in." A Cline account sign-in alone is not enough, and the
-  words say so (ADR-0052, ADR-0060).
-- **The "tools failed on every call" notice is said only when it is true.**
-  It ignores a Codex planner's `run_command` whose command ran and exited
-  non-zero, and a turn whose calls were refused while the session holds a plan
-  (a planner asking to start the run itself). It names the log of the process
-  that runs the session and the planner picker on every surface (ADR-0022).
 - **A Codex planner's failed tool calls read as failed.** codex-cli 0.171's
   shape for a reply Ordewell marked as an error showed it as answered, and a
   call Codex ended at its tool deadline failed the whole turn with
