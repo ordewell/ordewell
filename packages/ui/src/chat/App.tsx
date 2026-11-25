@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState, { type SignedOutPlannerRow } from './components/EmptyState';
-import PlannerLoginAction from './components/PlannerLogin';
+import ErrorSignIn, { ErrorSignInContext, type ErrorSignInActions } from './components/ErrorSignIn';
 import GetStarted, { type RedetectState } from './components/GetStarted';
 import { orNames } from './runnerNames';
 import ChatInput from './components/ChatInput';
@@ -88,43 +88,6 @@ const AGENT_DEFAULT_LABEL = AGENT_DEFAULT_MODEL[0].toUpperCase() + AGENT_DEFAULT
  * it failed with a Retry, so the first screen never waits on an answer that
  * is not coming.
  */
-/**
- * The way out of an error the failure itself says is that agent's sign-in
- * (ADR-0052): keyed by the agent it names, never by the planner picked since.
- * The login is the pills' own, so one in flight anywhere waits here too; it
- * sends nothing when it ends, as the refused message waits for its sender.
- */
-function ErrorSignIn({ signIn, pending, done, failure, onLogIn, onKey }: {
-  signIn: RunnerSignIn;
-  pending: boolean;
-  done: boolean;
-  failure?: string;
-  onLogIn: (runner: string) => void;
-  onKey: (provider: string) => void;
-}) {
-  const action = signInAction(signIn);
-  if (done) return <p className="error-sign-in-outcome" role="status">Signed in to {signIn.label}. Send your message again.</p>;
-  return (
-    <>
-      {failure !== undefined && <p className="error-sign-in-outcome" role="status">{failure}</p>}
-      {action === 'login' && (
-        <PlannerLoginAction
-          className="error-sign-in"
-          label="Sign in"
-          pending={pending}
-          onLogIn={() => onLogIn(signIn.runner)}
-          ariaLabel={pending ? `Signing in to ${signIn.label}` : `Sign in to ${signIn.label}`}
-        />
-      )}
-      {action === 'key' && signIn.key && (
-        <button type="button" className="error-sign-in" aria-label={`Add a key for ${signIn.label}`} onClick={() => onKey(signIn.key!.provider)}>
-          Add key
-        </button>
-      )}
-    </>
-  );
-}
-
 function Detecting({ error, onRetry }: { error: string | null; onRetry: () => void }) {
   if (error === null) return <>{DETECTING_AGENTS}</>;
   return (
@@ -994,6 +957,15 @@ export default function App({ layout = 'chat', selection, goal }: {
     return byRunner;
   }, [planner.backends, handleRunnerLogin, runners]);
 
+  /** Every error's sign-in, the banner's and a signed-out turn's, shares the pills' login. */
+  const errorSignIn = useMemo<ErrorSignInActions>(() => ({
+    pending: pendingLogin,
+    done: loginDone,
+    failure: loginFailure,
+    onLogIn: handleRunnerLogin,
+    onKey: (provider) => bridge.post({ type: 'sendMessage', text: `/key-set ${provider}`, runners }),
+  }), [pendingLogin, loginDone, loginFailure, handleRunnerLogin, runners]);
+
 
   /**
    * Every signed-out coding agent, not only the one planning: the login is each
@@ -1357,6 +1329,7 @@ export default function App({ layout = 'chat', selection, goal }: {
     />}
     {/* Hidden, not unmounted: the composer's draft and the scroll position are the root's own. */}
     <SpeakerLabelsContext.Provider value={layout === 'conversation'}>
+    <ErrorSignInContext.Provider value={errorSignIn}>
     <div className={`chat-container chat-layout-${layout}`} tabIndex={-1} hidden={inChild} ref={chatContainerRef}>
       {!inChild && childNotice.message && <p role="status">{childNotice.message}</p>}
       <ChildQuestions tree={childTree.children} onOpen={openChild} />
@@ -1643,16 +1616,7 @@ export default function App({ layout = 'chat', selection, goal }: {
           <div className="error-state">
             <div className="error-icon">!</div>
             <p className="error-message">{error}</p>
-            {host.errorSignIn && (
-              <ErrorSignIn
-                signIn={host.errorSignIn}
-                pending={pendingLogin[host.errorSignIn.runner] === true}
-                done={loginDone[host.errorSignIn.runner] === true}
-                failure={loginFailure[host.errorSignIn.runner]}
-                onLogIn={handleRunnerLogin}
-                onKey={(provider) => bridge.post({ type: 'sendMessage', text: `/key-set ${provider}`, runners })}
-              />
-            )}
+            {host.errorSignIn && <ErrorSignIn signIn={host.errorSignIn} />}
             <button onClick={handleTryAgain}>Try Again</button>
           </div>
         )}
@@ -1731,6 +1695,7 @@ export default function App({ layout = 'chat', selection, goal }: {
         skills={skills}
       />
     </div>
+    </ErrorSignInContext.Provider>
     </SpeakerLabelsContext.Provider>
     </OpenPatchContext.Provider>
     </DelegationOfferedContext.Provider>

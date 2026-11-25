@@ -1,4 +1,5 @@
 import type { AccountLimitSnapshot } from '../models/AccountLimits';
+import type { RunnerSignIn } from './signInHint';
 import type { AwaitingReason, ConversationMessage, LegacyPlanState, PlanState, PendingPlanTurn, PlannerCompaction, ReplyRun, ResearchStep, RunnerId, RunSettings, SkillLoadNotice, SubagentOutcome, Task, TaskSkillNotice, TaskSnapshot, Verdict } from '../models/Task';
 import type { SessionBilling, AttemptUsage, ContextFill, ModelUsage, PlanUsage, UsageTotals } from '../models/Usage';
 import type { ExecutionRecord } from '../models/Execution';
@@ -236,7 +237,7 @@ export type SessionMessage =
    * runs (a note the conversation wrote, an older daemon) the message is
    * authoritative over the turn's final segment.
    */
-  | { type: 'planner_message'; content: string; timestamp: string; turnId?: string; supervisor?: true; runs?: ReplyRun[] }
+  | { type: 'planner_message'; content: string; timestamp: string; turnId?: string; supervisor?: true; runs?: ReplyRun[]; signIn?: RunnerSignIn }
   /**
    * A planner turn began. Emitted once per turn by whoever runs the turn,
    * before any other message carrying its `turnId`. `prompt` is the user's

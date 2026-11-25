@@ -16,6 +16,7 @@ import type { IsolatedExecution, PlannerModes } from './plannerModes';
 import type { PlannerToolHandler } from './mcp';
 import type { SkillInfo } from './SkillsService';
 import type { TaskRunnerConfig, UsageLimitSignal } from './harness/AgentAdapter';
+import type { RunnerSignIn } from './signInHint';
 import type { PlannerContextDeps } from './plannerContextBudget';
 import type { ConversationCompactionHost } from './budgetedChat';
 import type { PlannerReadLimit } from './plannerReadLimit';
@@ -164,13 +165,15 @@ export type ConversationTurn =
    * `aborted`: the call was stopped, and `text` is only what it had by then.
    * `failed`: the call ended without a reply (a dead agent, a usage limit),
    * and `text` says why; `usageLimit`, where the runner also said in a field
-   * whether that was its usage limit (see {@link TurnFailure}).
+   * whether that was its usage limit (see {@link TurnFailure}); `signIn`,
+   * where the runner's manifest says the failure is its user being signed
+   * out, that agent and its ways in (ADR-0052).
    * `runs`, on every kind: the reply's runs the turn's surviving calls
    * streamed, in order, and last a note written in the planner's place when
    * `text` is one. An envelope's own run is not among them. Absent from a
    * backend that does not report runs.
    */
-  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean; usageLimit?: UsageLimitSignal | false; runs?: TurnRun[] }
+  | { kind: 'message'; text: string; researchLog: ResearchLogEntry[]; aborted?: boolean; failed?: boolean; usageLimit?: UsageLimitSignal | false; signIn?: RunnerSignIn; runs?: TurnRun[] }
   | { kind: 'plan'; tasks: Task[]; text: string; researchLog: ResearchLogEntry[]; runs?: TurnRun[] }
   | { kind: 'task_ops'; ops: import('./TaskOps').TaskOp[]; text: string; researchLog: ResearchLogEntry[]; runs?: TurnRun[] }
   | { kind: 'task_query'; query: import('./TaskQuery').TaskQuery; text: string; researchLog: ResearchLogEntry[]; runs?: TurnRun[] };
