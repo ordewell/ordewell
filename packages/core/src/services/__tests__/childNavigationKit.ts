@@ -100,15 +100,16 @@ export function tree(turns: Record<string, Turn[]>, { runner, tasks = [delegated
   const root = repo();
   const planners = Object.fromEntries(Object.entries(turns).map(([id, script]) => [id, scriptedPlanner(script)]));
   const frames: SessionMessage[] = [];
+  const config = fakeConfig({ maxParallelSessions: parallel, autonomousMode: autonomous });
   const parent = makeSession({
     runner, isolation: isolation(), workspaceRoot: () => root, saveSession, openTaskLog, leaseHost: new LeaseHost(), sessionId: 'session-root', broadcast: (frame) => frames.push(frame),
-    config: fakeConfig({ maxParallelSessions: parallel, autonomousMode: autonomous }),
+    config,
     settings: () => ({ run: { ...RUN_SETTINGS_DEFAULTS, supervisorLevel: 'off', delegationTokens: 5_000_000, mergeAtGatesAutomatically: false } }),
     delegationOffered: true,
     childDeps: (task) => ({ aiService: { reset: vi.fn(), ...planners[task.id].service } as unknown as IAiService, fsAdapter: { ...fakeFs(), getWorkspaceRoot: () => root } }),
   });
   parent.loadPlan(planOf(tasks), 'the root goal', root, { sessionId: 'session-root' });
-  return { root, parent, planners, frames };
+  return { root, parent, planners, frames, config };
 }
 
 export const WAIT = { timeout: 20_000 };

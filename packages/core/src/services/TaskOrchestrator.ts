@@ -582,6 +582,8 @@ export class TaskOrchestrator {
         recordHandoff: options.recordHandoff ?? (() => undefined),
         taskLog: options.taskLog ?? { attempts: () => [], events: () => [] },
         autonomous: options.autonomous ?? (() => options.config.autonomousMode),
+        // A child's config is made from its parent's, its level left to the root's (subplannerConfig), so this reads the user's level.
+        rootAutonomous: () => options.config.autonomousMode,
         ...(options.research ? { research: options.research } : {}),
         ...(options.taskShell ? { taskShell: options.taskShell } : {}),
         ...(options.unsealedRefusal ? { unsealedRefusal: options.unsealedRefusal } : {}),

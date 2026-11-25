@@ -151,8 +151,8 @@ function places(c: Case, own: string[]): { root: string; worktree: string; first
 
 const TITLE = 'Use the settings';
 
-/** What a case can leave unreadable at the launch: the registry the runner's modes are read from, the task's mode, the level. */
-interface Unread { registry?: null; noMode?: true; autonomous?: () => boolean }
+/** What a case can leave unreadable at the launch: the registry the runner's modes are read from, the task's mode, the node's level, the user's. */
+interface Unread { registry?: null; noMode?: true; autonomous?: () => boolean; rootAutonomous?: () => boolean }
 
 function taskOf(c: Case, unread: Unread): Task {
   const other = c.runner === 'claude-code' ? 'codex' : 'claude-code';
@@ -221,6 +221,7 @@ async function decideIn(c: Case, unread: Unread, where: ReturnType<typeof places
   const attempts = new Attempts({
     notifications: fakeNotification(), runner, scriptRunner: runner, childPlanRunner: runner,
     autonomous: unread.autonomous ?? (() => c.full),
+    rootAutonomous: unread.rootAutonomous ?? (() => c.full),
     store, output: new BufferedTaskOutputSource(), runs, leases, landing,
     registry: unread.registry === null ? null : new RunnerRegistry(),
     workspaceRoot: () => where.root,
@@ -284,11 +285,17 @@ describe.skipIf(!hasGit)('a launch in Full whose level or mode cannot be read', 
     ['no registry to read the runner\'s modes from', { registry: null }],
     ['a task with no mode', { noMode: true }],
     ['a level that cannot be read', { autonomous: () => { throw new Error('unreadable'); } }],
+    ['a user\'s level that cannot be read', { rootAutonomous: () => { throw new Error('unreadable'); } }],
   ];
 
   it.each(unreadable)('is held as the check says: %s', async (_name, unread) => {
     // The same launch with both facts read goes ahead, so what holds it is what could not be read.
     expect(await decide(differing)).toMatchObject({ held: false, launched: true, notices: [expect.any(String)] });
     expect(await decide(differing, unread)).toEqual({ held: true, launched: false, notices: [] });
+  });
+
+  it('is held where the node\'s mandate reads Full and the user\'s level is Guarded', async () => {
+    // A child plan's mandate keeps the autonomy it opened with; the user's level is the one lowered since.
+    expect(await decide(differing, { rootAutonomous: () => false })).toEqual({ held: true, launched: false, notices: [] });
   });
 });

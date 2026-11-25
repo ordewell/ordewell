@@ -141,9 +141,13 @@ export function unheldConfigNotice(title: string, paths: readonly string[]): str
   return `Task "${title}" starts with ${HELD_FOR}${quoted(paths)}, which differs from where this run started. In Full a task in its runner's Full mode is not held for it, so later tasks in Full load it without a hold too when they run in such a mode.`;
 }
 
-/** What a task's end says of configuration in the checkout that differs from the run's first look at it (ADR-0028): a write a landing does not carry. */
+/**
+ * What a task's end says of configuration in the checkout that differs from
+ * the run's first look at it (ADR-0028): a write a landing does not carry. The
+ * checkout is shared, so the task named is when it was found, not who wrote it.
+ */
 export function checkoutConfigNotice(title: string, paths: readonly string[]): string {
-  return `As task "${title}" ends, ${HELD_FOR}${quoted(paths)} in your checkout differs from where this run started; a later task that starts there, or reads it through a worktree's link, can load it.`;
+  return `As task "${title}" ends, ${HELD_FOR}${quoted(paths)} in your checkout differs from where this run started; this task, another task, a script or you may have written it. A later task that starts there, or reads it through a worktree's link, can load it.`;
 }
 
 /** What a landing says that added, changed or removed configuration (ADR-0028), in Guarded and in Full. */

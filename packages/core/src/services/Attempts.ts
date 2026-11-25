@@ -375,6 +375,12 @@ export interface AttemptsDeps {
   research?: Pick<ResearchTasks, 'started'>;
   /** This node's autonomy, as its mandate reads it (ADR-0056 M6). */
   autonomous: () => boolean;
+  /**
+   * The user's level, the root's setting, read as a task launches: a child's
+   * mandate keeps the autonomy it opened with, so a level lowered since must
+   * still hold that child's launches for configuration (ADR-0028).
+   */
+  rootAutonomous: () => boolean;
   /** Why a script that would land its work may not run unsealed now; absent at a root, whose scripts ADR-0035 answers for. */
   unsealedRefusal?: (task: Readonly<Task>) => string | null;
   host: AttemptsHost;
@@ -961,16 +967,17 @@ export class Attempts {
 
   /**
    * Whether the launch's runner does not ask before a command, so a hold for
-   * configuration keeps no question in place (ADR-0028): this node's autonomy is
-   * Full as it launches, and the mode its runner starts in is one that
-   * runner's manifest tags for Full. A delegated task's own start is a child
-   * plan, whose tasks have no mode yet, and a fact that cannot be read is
-   * not taken as proof, so either launch is held as the check says.
+   * configuration keeps no question in place (ADR-0028): the user's level and
+   * this node's autonomy are both Full as it launches, and the mode its runner
+   * starts in is one that runner's manifest tags for Full. A delegated task's
+   * own start is a child plan, whose tasks have no mode yet, and a fact that
+   * cannot be read is not taken as proof, so either launch is held as the
+   * check says.
    */
   private launchesUnasked(task: Task, attempt: TaskAttempt): boolean {
     if (attempt.delegated || attempt.script) return false;
     try {
-      if (this.deps.autonomous() !== true) return false;
+      if (this.deps.rootAutonomous() !== true || this.deps.autonomous() !== true) return false;
       return offeredForFull(this.deps.registry?.get(attempt.runner)?.manifest.modes, this.modeOf(task, attempt));
     } catch {
       return false;
@@ -978,11 +985,12 @@ export class Attempts {
   }
 
   /**
-   * What an attempt that ran leaves in the checkout's configuration as it ends
-   * (ADR-0028): an ops task's write there, or one through the `.claude` or
-   * `.opencode` a worktree links from it, which a landing does not carry. Compared
-   * with the run's first look, as a later start's check compares it, and said
-   * once per path in the run, unless a launch said it already.
+   * What the checkout's configuration holds as an attempt that ran ends
+   * (ADR-0028): a write there, or through the `.claude` or `.opencode` a
+   * worktree links from it, which a landing does not carry. Compared with the
+   * run's first look, as a later start's check compares it, and said once per
+   * path in the run, unless a launch said it already. Whoever wrote it, this
+   * attempt, another, a script or the user, the first end after it says it.
    */
   private tellCheckoutConfig(taskId: string, attempt: TaskAttempt): void {
     if (!checksConfig(attempt.kind, attempt.script)) return;

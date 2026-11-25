@@ -199,7 +199,7 @@ describe.skipIf(!hasGit)('isolated execution against a real repository', () => {
       expect(readFileSync(join(root, '.claude', 'settings.json'), 'utf8')).toBe('written by t1\n');
       expect(runner.spawn).toHaveBeenCalledTimes(1);
       // No landing carries a write through the link, so t1's end says it (ADR-0028).
-      expect(warned()).toContain('As task "Add config" ends, repository configuration ".claude/settings.json" in your checkout differs from where this run started; a later task that starts there, or reads it through a worktree\'s link, can load it.');
+      expect(warned()).toContain('As task "Add config" ends, repository configuration ".claude/settings.json" in your checkout differs from where this run started; this task, another task, a script or you may have written it. A later task that starts there, or reads it through a worktree\'s link, can load it.');
       expect(warned().filter((line) => line.includes(' landed a change to repository configuration '))).toEqual([]);
     });
 

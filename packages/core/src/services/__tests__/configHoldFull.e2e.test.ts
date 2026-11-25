@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { cleanUp, hasGit, heldPlan, HOOK, ok, USER, type HeldTask } from './heldConfigKit';
 
 /**
@@ -6,8 +8,9 @@ import { cleanUp, hasGit, heldPlan, HOOK, ok, USER, type HeldTask } from './held
  * git: in Full, a start the check would have held goes ahead in its runner's
  * Full mode and says so once per path in the run; a landing that changes
  * configuration says so in either level, with no later start needed; and a
- * write into the checkout, which no landing carries, is said as its task
- * ends, and again by the next start in Full that reads it.
+ * write into the checkout, which no landing carries, is said as the next
+ * task ends, whoever wrote it, and again by the next start in Full that
+ * reads it.
  */
 
 afterEach(cleanUp);
@@ -99,7 +102,7 @@ describe.skipIf(!hasGit)('a run that changes configuration, in Full and in Guard
     await vi.waitFor(() => expect([held.statusOf('t1'), held.statusOf('t2')]).toEqual(['completed', 'completed']), WAIT);
 
     expect(held.inCheckout('.mcp.json')).toBe('{}\n');
-    expect(ended(held.told())).toEqual(['As task "Write the server" ends, repository configuration ".mcp.json" in your checkout differs from where this run started; a later task that starts there, or reads it through a worktree\'s link, can load it.']);
+    expect(ended(held.told())).toEqual(['As task "Write the server" ends, repository configuration ".mcp.json" in your checkout differs from where this run started; this task, another task, a script or you may have written it. A later task that starts there, or reads it through a worktree\'s link, can load it.']);
     expect(unheld(held.told())).toEqual([expect.stringMatching(/^Task "Use the server" starts with repository configuration "\.mcp\.json", which differs/)]);
     expect(held.holdOf('t2')).toBeNull();
   });
@@ -112,5 +115,27 @@ describe.skipIf(!hasGit)('a run that changes configuration, in Full and in Guard
     expect(ended(held.told())).toEqual([expect.stringMatching(/^As task "Write the server" ends, repository configuration "\.mcp\.json" in your checkout/)]);
     expect(unheld(held.told())).toEqual([]);
     expect(held.spawns('t2')).toBe(0);
+  });
+
+  it('in Guarded, says a write through a worktree\'s link as the first task ends, naming no writer, and once', async () => {
+    const held = heldPlan([
+      { id: 't1', title: 'Write the hook' },
+      { id: 't2', title: 'Write a note' },
+    ], { ...GUARDED, hold: ['t1', 't2'] });
+    // An ignored `.claude` in the checkout, which each worktree links.
+    mkdirSync(join(held.root, '.claude'));
+    appendFileSync(join(held.root, '.git', 'info', 'exclude'), '.claude/\n');
+    await ok(held.session, { command: 'run_plan' }, USER);
+    await vi.waitFor(() => expect([...held.spawned].sort()).toEqual(['t1', 't2']), WAIT);
+
+    // t1 writes the hook through its link and keeps running; t2, which wrote no configuration, ends first.
+    writeFileSync(join(held.lastCwd('t1'), HOOK), '{}\n');
+    expect(existsSync(join(held.root, HOOK))).toBe(true);
+    held.release('t2');
+    await vi.waitFor(() => expect(held.statusOf('t2')).toBe('completed'), WAIT);
+    held.release('t1');
+    await vi.waitFor(() => expect(held.statusOf('t1')).toBe('completed'), WAIT);
+
+    expect(ended(held.told())).toEqual([`As task "Write a note" ends, repository configuration "${HOOK}" in your checkout differs from where this run started; this task, another task, a script or you may have written it. A later task that starts there, or reads it through a worktree's link, can load it.`]);
   });
 });

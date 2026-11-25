@@ -93,6 +93,7 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     scriptRunner: runner,
     childPlanRunner: runner,
     autonomous: () => false,
+    rootAutonomous: () => false,
     store,
     output: new BufferedTaskOutputSource(),
     runs,

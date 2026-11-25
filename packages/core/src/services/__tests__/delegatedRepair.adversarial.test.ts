@@ -111,6 +111,7 @@ function setup() {
     notifications: { info() {}, warn() {}, error() {}, confirm: async () => undefined },
     runner, scriptRunner: runner, childPlanRunner: runner,
     autonomous: () => false,
+    rootAutonomous: () => false,
     store,
     output: new BufferedTaskOutputSource(),
     runs,

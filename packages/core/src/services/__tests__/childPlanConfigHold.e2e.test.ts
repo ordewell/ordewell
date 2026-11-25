@@ -11,7 +11,7 @@ import { dirname, join } from 'path';
 import type { IRunner } from '../../interfaces/IRunner';
 import { FakeRunnerSession, removeDir } from '../../testing';
 import { closeSessions, type PlannerTurn as Turn } from './sessionTestKit';
-import { roots, delegated, childTask, SUBMIT, tree, WAIT } from './childNavigationKit';
+import { roots, deferred, delegated, childTask, SUBMIT, tree, WAIT } from './childNavigationKit';
 
 afterEach(async () => {
   await closeSessions();
@@ -28,19 +28,23 @@ const HOOK = '.claude/settings.json';
 const SIGNAL = new AbortController().signal;
 const ASKED = 'b is held for the hook a added: make it read-only and start it.';
 
-/** A runner that writes `a`'s hook or each other task's file and reports done, noting each spawn and whether the hook was where it started. */
-function hookRunner() {
+/**
+ * A runner that writes `a`'s hook or each other task's file and reports done,
+ * noting each spawn and whether the hook was where it started; `a` waits for
+ * `aMay` first.
+ */
+function hookRunner(aMay: Promise<void> = Promise.resolve()) {
   const spawns: { taskId: string; hook: boolean; options: SpawnOptions }[] = [];
   const runner: IRunner = {
     spawn: vi.fn(async (options: SpawnOptions) => {
       spawns.push({ taskId: options.taskId, hook: existsSync(join(options.cwd, HOOK)), options });
       const session = new FakeRunnerSession(`s-${options.taskId}-${spawns.length}`, options.taskId);
-      setTimeout(() => {
+      void (options.taskId === 'a' ? aMay : Promise.resolve()).then(() => setTimeout(() => {
         const file = options.taskId === 'a' ? HOOK : `${options.taskId}.txt`;
         mkdirSync(dirname(join(options.cwd, file)), { recursive: true });
         writeFileSync(join(options.cwd, file), options.taskId === 'a' ? '{"hooks":{}}\n' : `written by ${options.taskId}\n`);
         session.reportComplete({ status: 'done', summary: 'Done.' });
-      }, 5);
+      }, 5));
       return session;
     }),
     stop: vi.fn(),
@@ -88,6 +92,31 @@ describe.skipIf(!hasGit)('a child plan\'s task held for configuration its siblin
     // Claude Code's read-only mode, against a's own, Guarded's.
     expect(spawns.map((s) => s.options.mode)).toEqual(['auto', 'plan']);
     await vi.waitFor(() => expect(child.view().run.tasks.find((t) => t.id === 'b')?.status).toBe('completed'), WAIT);
+    parent.destroy();
+  });
+
+  it('is held when the user lowers the level to Guarded after the child plan opened in Full', async () => {
+    const release = deferred();
+    const { runner, spawns } = hookRunner(release.promise);
+    // Full as the child opens, so its mandate holds Full; the user's level is read again at each launch (ADR-0028).
+    const { parent, config } = tree({ d: [SUBMIT([childTask('a', 1), childTask('b', 2, ['a'])]), ...Array.from({ length: 8 }, () => asked)] }, {
+      runner, tasks: [delegated({ grants: ['delegate'] })], autonomous: true,
+    });
+    await parent.execute({ command: 'run_plan' }, { kind: 'user' });
+    await vi.waitFor(async () => expect((await parent.children.list()).length).toBe(1), WAIT);
+    await vi.waitFor(() => expect(spawns.map((s) => s.taskId)).toEqual(['a']), WAIT);
+    const [entry] = await parent.children.list();
+    const child = (await parent.children.find(entry.sessionId))!;
+    const holdOfB = () => child.view().run.tasks.find((t) => t.id === 'b')?.holdReason ?? '';
+
+    config.autonomousMode = false;
+    release.resolve();
+    await vi.waitFor(() => expect(holdOfB() !== '' || spawns.length > 1).toBe(true), WAIT);
+
+    expect(spawns.map((s) => s.taskId)).toEqual(['a']);
+    expect(holdOfB()).toBe(`repository configuration "${HOOK}" differs from where this run started. The subplanner can make this task read-only, which loads no project configuration, and start it, or take it out of the plan and say why in its report; a person can ask it to with a message`);
+    // a launched in its runner's Full mode, as the child's mandate still reads.
+    expect(spawns[0].options.mode).toBe('bypassPermissions');
     parent.destroy();
   });
 });

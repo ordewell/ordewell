@@ -400,10 +400,15 @@ specifies.
   launch-time consent it does not have.
 - **Where the boundary sits.** In Guarded, configuration introduced during a
   run holds a later launch that reads it until the user consents to it, but
-  for the exceptions the last item below names. Before a change or ops
-  task's runner is spawned, the directories it reads are compared with where
-  the run started, untracked and ignored files included, for the paths that
-  can run code or redirect the runner: `.mcp.json`, `.claude/settings.json`,
+  for the exceptions the items below name: a run with no recorded base, a
+  diff git cannot take, a restarted daemon, which takes the checkout's
+  baseline anew, a directory of a worktree between the repository's top and
+  the one its runner starts in, which is not compared, and a script or
+  read-only task, which is not checked.
+  Before a change or ops task's runner is spawned, the directories it reads
+  are compared with where the run started, untracked and ignored files
+  included, for the paths that can run code or redirect the runner:
+  `.mcp.json`, `.claude/settings.json`,
   `.claude/settings.local.json`, `.claude/hooks/`, `.claude/plugins/`,
   `.claude-plugin/`, a `plugin.json` or `marketplace.json` under `.claude/`,
   OpenCode's `opencode.json` and its plugin, tool and agent directories, `.codex/`,
@@ -437,12 +442,14 @@ specifies.
     checked before its attempt reopens, and a held start keeps its worktree. A
     script task has no runner and a read-only task withholds project
     configuration (ADR-0046), so neither is checked.
-  - *In Full* a launch is not held when both are true as it launches: its
-    node's autonomy is Full (a child plan's is its own mandate's), and the
-    mode its runner starts in is one that runner's manifest tags for Full
-    (`autonomous`: Claude Code's `bypassPermissions`, Codex's `fullAccess`,
-    OpenCode's `build`, Pi's `agent`, the built-in runner's `full`, and the
-    other runners' Allow all). Claude Code's launches with
+  - *In Full* a launch is not held when both are true as it launches: the
+    level is Full, the user's and, in a child plan, its own mandate's too,
+    which keeps the autonomy the child opened with, so a level the user
+    lowered since holds its launches; and the mode its runner starts in is
+    one that runner's manifest tags for Full (`autonomous`: Claude Code's
+    `bypassPermissions`, Codex's `fullAccess`, OpenCode's `build`, Pi's
+    `agent`, the built-in runner's `full`, and the other runners' Allow
+    all). Claude Code's launches with
     `--permission-mode bypassPermissions` and Codex's with
     `danger-full-access` and approvals never: neither runner asks before a
     command there, so a hold stopped the run without keeping a question in
@@ -459,18 +466,23 @@ specifies.
   - *What the user is told*, in either level. A landing that adds, changes or
     removes one of these paths says so as it lands, naming the task and each
     path, read from the file list its count of the change already takes from
-    git. A write a landing does not carry (an ops task's in the checkout, or a
-    task's through the `.claude` or `.opencode` a worktree links from it) is
-    compared with the run's first look at the checkout as the task that ran
-    ends, and said once per path in the run, naming that task; a launch in
-    Full that reads it says it again, as above. Not said: a removal at a
+    git. A write a landing does not carry (an ops task's in the checkout, a
+    task's through the `.claude` or `.opencode` a worktree links from it, a
+    script's or the user's own) is found by comparing the checkout with the
+    run's first look at it as each attempt the check applies to ends, once
+    its runner has started, and said once per path in the run, by the first
+    such end after it unless a launch in Full has said it already. The
+    checkout is shared, so the task that end names is when the write was
+    found, not who wrote it, and the notice says so; a launch in Full that
+    reads it says it again, as above. Not said: a removal at a
     launch, since neither comparison lists a path that is gone (git's is of
     what was added or changed, the live one of what a directory holds), so
     a removal is told at its landing alone; an ignored file a task writes in
     its own worktree, which does not land, so its landing does not say it,
     while the next start in that worktree is checked for it as above; and a
-    script task's write into the checkout as the script ends, which the next
-    launch in Full that reads it says instead.
+    script task's write into the checkout as the script ends, which the first
+    checked end after it says instead, and a launch in Full that reads it as
+    above.
 - **A name cannot be taken over.** A Claude change or ops task launch reads
   the working directory's `.mcp.json` and refuses to start when it declares a
   server named `ordewell`. Claude takes MCP servers from that file and the
@@ -536,9 +548,9 @@ specifies.
   place, and the notices now tell the user, at either level, what the hold
   told them.
 - **Exempt by the level alone.** Rejected: a task keeps the mode it was
-  planned in (ADR-0001), so one planned in Guarded, or moved to a mode that
-  asks, still asks before a command after the level is raised, and a hook it
-  loads would act before that question.
+  planned in (ADR-0001), so one planned in Guarded in a mode that asks, or
+  moved to one, still asks before a command after the level is raised, and a
+  hook it loads would act before that question.
 - **Drop the hold in Guarded too.** Rejected: there a settings write inside a
   worktree is not asked on Codex, OpenCode or Pi, and the next launch would
   run its hook or start its server as it starts, before an approval is asked
@@ -629,4 +641,4 @@ specifies.
 - 2026-11-18 — a Pi planner or read-only task starts with `--no-approve` and no extension but Ordewell's, out of reach of the repository's `.pi/`; a planner's context files are injected by Ordewell; a change task's start is held for `.pi/` config added during the run (#78).
 - 2026-11-20 — every Pi start names its session directory, which a repository's `.pi/settings.json` could otherwise move; a read-only task's Pi starts with `--no-context-files` too, its context files handed over as text; a server in the user's Pi `mcp.json` that would displace Ordewell's fails the start (#78).
 - 2026-11-21 — on Windows every Pi start sets `NoDefaultCurrentDirectoryInExePath`, so a repository's `rg.exe` or `fd.exe` is never the search program Pi starts by bare name.
-- 2026-11-25 — in Full a start whose task runs in its runner's Full mode is no longer held for configuration that differs from where its run started, and says so instead; a landing that changes such configuration, and a task that leaves it changed in the checkout, say so in either level. The owner's reason: in Guarded a settings write inside a worktree is not asked on Codex, OpenCode or Pi, and the next launch runs its hook or starts its MCP server as it starts, before an approval is asked for, so the hold keeps "it asks before running a command" true; in Full Claude Code launches with `bypassPermissions` and Codex with `danger-full-access` and approvals never, so there the hold stopped the run without keeping a question in place, and it was what told the user a task had changed agent settings.
+- 2026-11-25 — in Full a start whose task runs in its runner's Full mode is no longer held for configuration that differs from where its run started, and says so instead; a landing that changes such configuration says so in either level, and configuration changed in the checkout is said as a later task ends, whoever wrote it. The owner's reason: in Guarded a settings write inside a worktree is not asked on Codex, OpenCode or Pi, and the next launch runs its hook or starts its MCP server as it starts, before an approval is asked for, so the hold keeps "it asks before running a command" true; in Full Claude Code launches with `bypassPermissions` and Codex with `danger-full-access` and approvals never, so there the hold stopped the run without keeping a question in place, and it was what told the user a task had changed agent settings.

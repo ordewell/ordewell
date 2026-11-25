@@ -31,8 +31,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   starts, with a warning naming the task and each file, once per file in the
   run. In Guarded, and in Full for a task in another mode or a delegated task's
   own start, the start is held as before. At either level, a task whose landing
-  adds, changes or removes such a file now says so as it lands, and a task that
-  leaves one changed in your checkout says so as it ends.
+  adds, changes or removes such a file now says so as it lands, and a change to
+  one in your checkout is said as a later task ends, whoever wrote it.
 
 - **`ordewell run` names `ordewell continue` where it answers a wait without
   the TUI.** The line for a task whose landing git refused now says that
