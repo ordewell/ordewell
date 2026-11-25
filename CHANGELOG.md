@@ -8,6 +8,8 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.14.13] - 2026-11-25
+
 ### Added
 
 - **The desktop app labels agent settings in its lists of changed files.** In
@@ -5545,7 +5547,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.12...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.13...HEAD
+[0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13
 [0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
 [0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10

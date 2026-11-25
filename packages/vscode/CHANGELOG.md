@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.14.13] - 2026-11-25
+
+### Changed
+
+- **Planner and runner pickers show readiness and recovery.** Ready runners
+  appear first; blocked runners remain visible with a status and a way back.
+  Sign-in refusals offer Sign in for the named agent and recheck it after login.
+- **VS Code reads provider keys saved by Desktop and the terminal in
+  `~/.ordewell/.env`.** It rereads the file on model refresh, after
+  SecretStorage, the setting and the environment; a saved key stays with its
+  saved endpoint or the provider's default.
+
+### Fixed
+
+- **VS Code asks for a folder before project-backed actions.** With no folder
+  open, sending, Execute, loading or saving a session offers Open Folder and
+  keeps the draft instead of using the extension host's working directory.
+
 ## [0.14.12] - 2026-11-25
 
 ### Added
@@ -1967,7 +1985,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.12...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.13...HEAD
+[0.14.13]: https://github.com/ordewell/ordewell/compare/v0.14.12...v0.14.13
 [0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
 [0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
