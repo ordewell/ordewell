@@ -23,6 +23,20 @@ const cursorSignedOut: PlannerBackend = {
   readiness: { kind: 'blocked', why: 'signed-out', signIn: { runner: 'cursor-agent', label: 'Cursor', login: ['cursor-agent', 'login'] } },
 };
 
+/**
+ * Cline as a host lists it when its credential hook found no provider key: the
+ * verdict and readiness discovery records (`signedOutAuth` with `needsKey`),
+ * and the hook's own refusal as the runner's discovery error.
+ */
+const CLINE_SIGN_IN = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true as const };
+const clineNoKey: PlannerBackend = {
+  id: 'cline', label: 'Cline', kind: 'harness', runner: 'cline', usable: true,
+  auth: { state: 'signed-out', loginCommand: ['cline', 'auth'], detail: 'no provider key', signIn: CLINE_SIGN_IN },
+  readiness: { kind: 'blocked', why: 'no-credential', signIn: CLINE_SIGN_IN },
+};
+const CLINE_REFUSAL = 'Cline has no provider key Ordewell can hand it: Ordewell holds none for a provider Cline offers, and `/home/u/.cline/data/settings/providers.json` is missing. Run `cline auth` and choose a provider with its API key (a Cline or ClinePass account sign-in leaves no key Ordewell can read), or save the key of a provider Cline offers, such as OpenRouter, with `/key-set` in the terminal or the Desktop app, or set CLINE_PROVIDER and CLINE_API_KEY in Ordewell\'s environment.';
+const CLINE_SET_UP = 'Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.';
+
 const plannerItem = (label: string): HTMLElement | undefined =>
   [...document.querySelectorAll<HTMLElement>('.planner-pill-item')].find((item) => item.querySelector('.planner-pill')?.textContent === label);
 const plannerPill = (label: string) => plannerItem(label)?.querySelector<HTMLButtonElement>('.planner-pill') ?? null;
@@ -172,25 +186,70 @@ describe('every planner status, in the shared words', () => {
     }
   });
 
-  it("says API key needed for Cline with its credential hook's own hint, and opens the key entry", () => {
-    const hint = 'Cline has no provider key Ordewell can hand it. Add one with /key-set, or sign in with `cline auth`.';
-    post({
-      type: 'setPlannerBackends',
-      backends: [claude, harness('cline', 'Cline', { kind: 'blocked', why: 'no-credential' }, { state: 'signed-out' })],
-      provider: 'claude-code', runner: 'claude-code',
-    });
-    post({ type: 'setModelDiscoveryErrors', errors: {}, runnerErrors: { cline: hint } });
+  it("says API key needed for Cline and offers Set up Cline, which runs its setup and never a key entry that cannot reach it", () => {
+    post({ type: 'setPlannerBackends', backends: [claude, clineNoKey], provider: 'claude-code', runner: 'claude-code' });
+    post({ type: 'setModelDiscoveryErrors', errors: {}, runnerErrors: { cline: CLINE_REFUSAL } });
     const cline = plannerItem('Cline');
 
     expect(choiceStatus(cline)?.textContent).toBe('API key needed');
-    expect(choiceStatus(cline)?.title).toBe(hint);
-    expect(plannerPill('Cline')!.title).toBe(hint);
-    expect(recovery(cline)?.textContent).toBe('Add key');
-    expect(recovery(cline)?.getAttribute('aria-label')).toBe('Add a key for Cline');
+    expect(choiceStatus(cline)?.title).toBe(CLINE_SET_UP);
+    expect(plannerPill('Cline')!.title).toBe(CLINE_SET_UP);
+    expect(recovery(cline)?.textContent).toBe('Set up Cline');
+    expect(recovery(cline)?.getAttribute('aria-label')).toBe('Set up Cline with a provider API key');
     api.post.mockClear();
     fireEvent.click(recovery(cline)!);
-    expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key-set' }));
-    expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setPlanner' }));
+    expect(api.post.mock.calls).toEqual([[{ type: 'loginPlanner', runner: 'cline' }]]);
+    // While it runs the button says what it is doing, not that Cline is signing in.
+    expect(recovery(plannerItem('Cline'))?.getAttribute('aria-label')).toBe('Setting up Cline');
+    expect(recovery(plannerItem('Cline'))?.textContent).toBe('Setting up…');
+  });
+
+  it('offers the same Set up Cline on the Runners pill, refusing to switch it on', () => {
+    post({ type: 'setPlannerBackends', backends: [claude, clineNoKey], provider: 'claude-code', runner: 'claude-code' });
+    post({
+      type: 'setRunners',
+      runners: [
+        { id: 'cline', displayName: 'Cline', enabled: false, readiness: clineNoKey.readiness },
+        { id: 'claude-code', displayName: 'Claude Code', enabled: true, readiness: { kind: 'ready' } },
+      ],
+    });
+    const cline = runnerItem('Cline');
+
+    expect(choiceStatus(cline)?.textContent).toBe('API key needed');
+    expect(recovery(cline)?.textContent).toBe('Set up Cline');
+    api.post.mockClear();
+    fireEvent.click(runnerPill('Cline')!);
+    expect(api.post).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'setRunnerEnabled' }));
+    fireEvent.click(recovery(cline)!);
+    expect(api.post.mock.calls).toEqual([[{ type: 'loginPlanner', runner: 'cline' }]]);
+  });
+
+  it('keeps Add key for an agent Ordewell hands a key, opening the key entry on its vendor', () => {
+    const qwenSignIn = { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter' as const, label: 'OpenRouter', others: 'any OpenAI-compatible provider' }, byHand: 'run qwen and sign in there', needsKey: true as const };
+    post({
+      type: 'setPlannerBackends',
+      backends: [claude, harness('qwen-code', 'Qwen Code', { kind: 'blocked', why: 'no-credential', signIn: qwenSignIn }, { state: 'signed-out', detail: 'no provider key', signIn: qwenSignIn })],
+      provider: 'claude-code', runner: 'claude-code',
+    });
+    const qwen = plannerItem('Qwen Code');
+
+    expect(choiceStatus(qwen)?.textContent).toBe('API key needed');
+    expect(recovery(qwen)?.textContent).toBe('Add key');
+    expect(recovery(qwen)?.getAttribute('aria-label')).toBe('Add a key for Qwen Code');
+    api.post.mockClear();
+    fireEvent.click(recovery(qwen)!);
+    expect(api.post).toHaveBeenCalledWith(expect.objectContaining({ type: 'sendMessage', text: '/key-set openrouter' }));
+  });
+
+  it('says Signed out with Sign in for Cline when Cline itself refused as signed out', () => {
+    const signIn = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'] };
+    post({
+      type: 'setPlannerBackends',
+      backends: [claude, harness('cline', 'Cline', { kind: 'blocked', why: 'signed-out', signIn }, { state: 'signed-out', loginCommand: ['cline', 'auth'], detail: 'not logged in', signIn })],
+      provider: 'claude-code', runner: 'claude-code',
+    });
+    expect(choiceStatus(plannerItem('Cline'))?.textContent).toBe('Signed out');
+    expect(recovery(plannerItem('Cline'))?.textContent).toBe('Sign in');
   });
 
   it('keeps the planner in effect selected and flagged when it is blocked, with its way back', () => {

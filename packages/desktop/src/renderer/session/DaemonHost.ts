@@ -1,11 +1,11 @@
 import type {
   AdoptSessionResponse, AiProvider, AnswerEscalationRequest, ConversationForkResponse, ConversationRewindResponse, ExecutionCommand, ExecutionSummary, GlobalRunSettings, PlanResponse, RunnerId, RunTask,
   SessionHeld, SessionMessage, RunnerCommand, SessionResponse, SettingsResponse, SettingsUpdateResponse, StreamStamp, SurfacePlan,
-  SurfacePlanState, Task,
+  SurfacePlanState, Task, RunnerSignIn,
 } from '@ordewell/core';
 import {
   DaemonRefusal, DELEGATION_OFFERED, isProviderRunner, loopRemovalRefusal, providerRunnerLoginNote, providerRunnerNamed, ReconnectBackoff, rejoinPlanTree,
-  signInAction, signInOfVerdict, VENDORS, walkPlan,
+  runnerEntryReadiness, signInAction, signInOfVerdict, VENDORS, walkPlan,
 } from '@ordewell/core/plan-utils';
 import { INITIAL_HOST_STATE, reduceHost, type ChatBridge, type HostState } from '@ordewell/ui';
 import {
@@ -1422,9 +1422,14 @@ export class DaemonHost {
   }
 
   /** The daemon's recheck of one runner's sign-in, the user's recovery after a login that exited cleanly (ADR-0052). */
-  private async recheckRunner(runner: string): Promise<'signed-in' | 'signed-out' | 'unknown' | undefined> {
+  private async recheckRunner(runner: string): Promise<{ state: 'signed-in' | 'signed-out' | 'unknown'; signIn?: RunnerSignIn } | undefined> {
     const list = await callDaemon('runners.list', { workspace: this.workspace, recheck: runner });
-    return list.runners.find((entry) => entry.id === runner)?.auth?.state;
+    const entry = list.runners.find((row) => row.id === runner);
+    if (!entry?.auth) return undefined;
+    // The readiness carries the ways in marked as a missing key, which the verdict alone may not.
+    const readiness = runnerEntryReadiness(entry);
+    const signIn = readiness.kind === 'blocked' ? readiness.signIn : entry.auth.signIn;
+    return { state: entry.auth.state, ...(signIn ? { signIn } : {}) };
   }
 
   /**

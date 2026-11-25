@@ -20,10 +20,19 @@ const signedOut: RunnerView = {
   readiness: { kind: 'blocked', why: 'signed-out', signIn: cursorSignIn },
 };
 const noModel: RunnerView = { id: 'pi', name: 'Pi', enabled: true, auth: { state: 'unknown' }, readiness: { kind: 'no-usable-model' } };
+// Cline as the daemon lists it when its credential hook found no provider key: Cline was never asked.
+const clineSignIn = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true as const };
 const noKey: RunnerView = {
   id: 'cline', name: 'Cline', enabled: false,
-  auth: { state: 'signed-out', signIn: { runner: 'cline', label: 'Cline', key: { provider: 'openrouter', label: 'OpenRouter' } } },
-  readiness: { kind: 'blocked', why: 'no-credential', signIn: { runner: 'cline', label: 'Cline', key: { provider: 'openrouter', label: 'OpenRouter' } } },
+  auth: { state: 'signed-out', loginCommand: ['cline', 'auth'], detail: 'no provider key', signIn: clineSignIn },
+  readiness: { kind: 'blocked', why: 'no-credential', signIn: clineSignIn },
+};
+// An agent Ordewell hands a key, whose way back is the key entry.
+const qwenSignIn = { runner: 'qwen-code', label: 'Qwen Code', key: { provider: 'openrouter' as const, label: 'OpenRouter' }, byHand: 'run qwen and sign in there', needsKey: true as const };
+const qwenNoKey: RunnerView = {
+  id: 'qwen-code', name: 'Qwen Code', enabled: false,
+  auth: { state: 'signed-out', detail: 'no provider key', signIn: qwenSignIn },
+  readiness: { kind: 'blocked', why: 'no-credential', signIn: qwenSignIn },
 };
 const failed: RunnerView = { id: 'gemini-cli', name: 'Gemini CLI', enabled: true, auth: { state: 'unknown' }, readiness: { kind: 'discovery-failed' } };
 const pending: RunnerView = { id: 'qwen-code', name: 'Qwen Code', enabled: true, auth: { state: 'unknown' }, readiness: { kind: 'pending' } };
@@ -103,8 +112,24 @@ describe('/runners', () => {
   it('lists the choosable first and keeps blocked agents with their command', () => {
     const picker = pickerOf(open([signedOut, noKey, ready, noModel, failed]));
     expect(picker.items.map((i) => i.id)).toEqual(['codex', 'gemini-cli', 'cursor-agent', 'cline', 'pi']);
-    expect(picker.items.find((i) => i.id === 'cline')).toMatchObject({ detail: 'API key needed · /key-set', warn: true });
+    // Cline's key comes from its own setup, which `/login cline` runs: the key entry cannot reach it.
+    expect(picker.items.find((i) => i.id === 'cline')).toMatchObject({ detail: 'API key needed · /login cline', warn: true });
     expect(picker.items.find((i) => i.id === 'gemini-cli')?.detail).toBe("Couldn't load models · /refresh");
+  });
+
+  it('keeps /key-set for an agent Ordewell hands a key', () => {
+    expect(pickerOf(open([ready, qwenNoKey])).items.find((i) => i.id === 'qwen-code')).toMatchObject({ detail: 'API key needed · /key-set', warn: true });
+  });
+
+  it('refuses switching on a Cline with no key for the key it lacks and its setup, not as signed out', () => {
+    const opened = open([ready, noKey]);
+    const picker = pickerOf(opened);
+    const out = press({ ...opened, overlay: { kind: 'picker', picker: { ...picker, index: rowOf(picker.items, 'cline') } } }, 'char', ' ');
+    expect(pickerOf(out.state).chosen).toEqual(['codex']);
+    expect(lastMessage(out.state)).toMatchObject({
+      role: 'error',
+      text: 'Cline has no provider API key Ordewell can hand it. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough. Then pick it again.',
+    });
   });
 
   it('refuses switching a blocked agent on, with its way in, and leaves the ticks alone', () => {

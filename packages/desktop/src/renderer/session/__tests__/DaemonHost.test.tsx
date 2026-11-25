@@ -1189,6 +1189,35 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
     expect(daemon.calls('runners.list').filter(([params]) => (params as { recheck?: string } | undefined)?.recheck === 'cursor-agent')).toHaveLength(1);
   });
 
+  // Cline as the daemon lists it when its credential hook found no provider key: Cline was never asked.
+  const clineSignIn = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true };
+  const clineNoKey = {
+    id: 'cline', name: 'Cline', enabled: true,
+    auth: { state: 'signed-out', loginCommand: ['cline', 'auth'], detail: 'no provider key', signIn: clineSignIn },
+    readiness: { kind: 'blocked', why: 'no-credential', signIn: clineSignIn },
+  };
+
+  it("says Ordewell still has no key when Cline's setup exits cleanly and the recheck still finds none, never that Cline refused", async () => {
+    const daemon = fakeDaemon({
+      'runners.list': ok({ runners: [clineNoKey], orchestratorModel: '' }),
+      'models.list': MODELS,
+      'settings.get': ok(SETTINGS),
+    });
+    const openLogin = vi.fn(async () => ({ ended: Promise.resolve(0) }));
+    const host = hostWithOptions({ openLogin, pollMs: 60_000 });
+    const seen = watch(host);
+    await act(() => host.handle({ type: 'ready' }));
+
+    await act(() => host.handle({ type: 'loginPlanner', runner: 'cline' }));
+
+    expect(openLogin).toHaveBeenCalledWith('cline', 'Cline');
+    expect(daemon.calls('runners.list').filter(([params]) => (params as { recheck?: string } | undefined)?.recheck === 'cline')).toHaveLength(1);
+    expect(seen).toContainEqual({
+      type: 'plannerLoginEnded', runner: 'cline', ok: false,
+      message: 'The Cline setup finished, but Ordewell still has no provider API key it can hand Cline. Set it up with /login cline, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.',
+    });
+  });
+
   it('keeps the blocker after a login that was cancelled: no recheck is asked', async () => {
     const daemon = fakeDaemon({
       'runners.list': ok({ runners: [cursor('signed-out')], orchestratorModel: '' }),

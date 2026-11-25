@@ -27,6 +27,21 @@ export interface RunnerSignIn {
   key?: { provider: AiProvider; label: string; others?: string };
   /** How the agent signs in where Ordewell runs nothing for it, as a clause. */
   byHand?: string;
+  /**
+   * Its credential hook found no key Ordewell could hand it (ADR-0060, R9):
+   * the agent was never asked, so this is no sign-out, and a way in counts
+   * only if it leaves a key that hook reads.
+   */
+  needsKey?: true;
+}
+
+/**
+ * A key-less agent whose own setup is the only way to store a key Ordewell
+ * reads (Cline's `cline auth`): Ordewell's key entry has no route to it, so
+ * its login is offered as that setup, never as a sign-in or a key entry.
+ */
+export function setsUpKey(signIn: RunnerSignIn | undefined): signIn is RunnerSignIn & { login: string[] } {
+  return signIn?.needsKey === true && !signIn.key && (signIn.login?.length ?? 0) > 0;
 }
 
 /**
@@ -97,10 +112,30 @@ export function signInOf(manifest: RunnerManifest, keyRoute?: KeySignInRoute): R
   };
 }
 
-/** "X is not signed in." and every way in the surface can offer, its own first, then the agent's. */
+/**
+ * "X is not signed in." and every way in the surface can offer, its own first,
+ * then the agent's; for an agent that only lacks a key it can be handed, what
+ * it lacks instead, since saying it is signed out would blame the agent.
+ */
 export function describeSignIn(signIn: RunnerSignIn, syntax: SignInSyntax): string {
   const ways = describeSignInWays(signIn, syntax);
-  return `${signIn.label} is not signed in.${ways ? ` ${ways}` : ''}`;
+  return `${describeSignInLead(signIn)}${ways ? ` ${ways}` : ''}`;
+}
+
+/** The hint's first sentence alone: what keeps the agent out, before any way in. */
+export function describeSignInLead(signIn: RunnerSignIn): string {
+  return setsUpKey(signIn) ? `${signIn.label} has no provider API key Ordewell can hand it.` : `${signIn.label} is not signed in.`;
+}
+
+/**
+ * What a host says when the agent's own login exited cleanly and the recheck
+ * still finds it blocked (ADR-0052): for an agent that only lacks a key, that
+ * Ordewell still holds none it can hand over and the setup to run again, since
+ * the agent itself was never asked and reported nothing.
+ */
+export function describeLoginStillBlocked(label: string, signIn: RunnerSignIn | undefined, syntax: SignInSyntax): string {
+  if (!setsUpKey(signIn)) return `${label} still reports not logged in.`;
+  return `The ${label} setup finished, but Ordewell still has no provider API key it can hand ${label}. ${describeSignInWays(signIn, syntax)}`;
 }
 
 /**
@@ -108,6 +143,13 @@ export function describeSignIn(signIn: RunnerSignIn, syntax: SignInSyntax): stri
  * whose sign-in nobody could read, which saying "not signed in" would misstate.
  */
 export function describeSignInWays(signIn: RunnerSignIn, syntax: SignInSyntax): string {
+  if (setsUpKey(signIn)) {
+    // An account the setup signs in to leaves no key the hook reads, so only a provider's key is named.
+    const own = commandLine(signIn.login);
+    const surface = syntax.login(signIn.runner);
+    const run = surface ? `Set it up with ${surface}, or run ${own},` : `Run ${own}`;
+    return `${run} and choose an API provider and enter its key; an account sign-in alone is not enough.`;
+  }
   const routes: string[] = [];
   if (signIn.login) {
     const own = commandLine(signIn.login);

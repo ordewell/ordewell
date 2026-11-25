@@ -2,7 +2,7 @@ import type { AiProvider, IConfig, PlannerBackendId } from '../interfaces/IConfi
 import { CLI_PROVIDERS, getProviderMeta, isApiProvider, isCliProvider, runnerForProvider } from './ProviderRegistry';
 import { recordedRunnerAuth, runnerSignIn, type RunnerAuth } from './runnerAuth';
 import { signedInInstalledAgent } from './InstalledPlanner';
-import { describeSignIn, describeSignInWays, HEADLESS_CLI_SIGN_IN, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
+import { describeSignIn, describeSignInLead, describeSignInWays, HEADLESS_CLI_SIGN_IN, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './signInHint';
 
 /** What the preflight reads: the planner choice and whatever it needs to be reachable. */
 export type PlannerReadinessConfig = Pick<IConfig, 'aiProvider' | 'planningModel' | 'openaiCompatibleBaseUrl' | 'getProviderApiKey'>;
@@ -155,7 +155,7 @@ export function describePlannerNotReady(reason: PlannerNotReady, commands: Plann
     const ways = describeSignInWays(reason.signIn, commands);
     const login = ways ? `, or ${ways[0].toLowerCase()}${ways.slice(1, -1)}` : '';
     const pick = commands.pickPlanner.replace('<id>', reason.signedIn.provider);
-    return `${reason.signIn.label} is not signed in. ${reason.signedIn.label} is signed in: switch with ${pick}${login}. Then try again.`;
+    return `${describeSignInLead(reason.signIn)} ${reason.signedIn.label} is signed in: switch with ${pick}${login}. Then try again.`;
   }
   if (reason.code === 'no_model') {
     // An API planner has no default model on purpose, so the refusal names

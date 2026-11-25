@@ -25,7 +25,7 @@ import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, DisplayBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, orderByChoice, runnerChoice, runnerEntryChoice, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerChoice, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, orderByChoice, runnerChoice, runnerEntryChoice, setsUpKey, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerChoice, type RunnerSignIn } from '@ordewell/core/plan-utils';
 import RunnerChoiceNote, { type RunnerRecoveryView } from './components/RunnerChoiceNote';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock, withRunStatus } from './planDock';
@@ -949,6 +949,8 @@ export default function App({ layout = 'chat', selection, goal }: {
       byRunner[runner] = {
         label: backend.label,
         hint,
+        ...(setsUpKey(signIn) ? { setsUp: true } : {}),
+        ...(provider ? { keyProvider: provider } : {}),
         ...(action === 'login' ? { logIn: () => handleRunnerLogin(runner) } : {}),
         // A key needs no runner process, so nothing waits on it: the key entry is the whole action.
         ...(action === 'key' && provider ? { logIn: () => bridge.post({ type: 'sendMessage', text: `/key-set ${provider}`, runners }) } : {}),
@@ -984,6 +986,7 @@ export default function App({ layout = 'chat', selection, goal }: {
           pending: Boolean(pendingLogin[runner]),
           failure: loginFailure[runner],
           hint: signInByRunner[runner]?.hint,
+          ...(signInByRunner[runner]?.setsUp ? { setsUp: true } : {}),
           ...(signInByRunner[runner]?.logIn ? { onLogIn: signInByRunner[runner].logIn } : {}),
         };
       });
@@ -1026,12 +1029,17 @@ export default function App({ layout = 'chat', selection, goal }: {
    */
   const recoveryFor = useCallback((runner: string, choice: RunnerChoice | undefined): RunnerRecoveryView | undefined => {
     switch (choice?.recovery?.kind) {
-      case 'sign-in': {
+      // Set up runs the same login as Sign in: for an agent whose own setup is its only way to a key.
+      case 'sign-in':
+      case 'set-up': {
         const logIn = signInByRunner[runner]?.logIn;
         return logIn ? { run: logIn, pending: Boolean(pendingLogin[runner]) } : undefined;
       }
-      case 'add-key':
-        return { run: signInByRunner[runner]?.logIn ?? (() => bridge.post({ type: 'sendMessage', text: '/key-set', runners })), pending: Boolean(pendingLogin[runner]) };
+      case 'add-key': {
+        // Only ever the key entry, on the agent's own vendor where it has one: never its login.
+        const provider = signInByRunner[runner]?.keyProvider;
+        return { run: () => bridge.post({ type: 'sendMessage', text: provider ? `/key-set ${provider}` : '/key-set', runners }) };
+      }
       case 'refresh-models':
       case 'retry':
         return { run: handleModelsRefreshNeeded };
@@ -1040,8 +1048,13 @@ export default function App({ layout = 'chat', selection, goal }: {
     }
   }, [signInByRunner, pendingLogin, runners, handleModelsRefreshNeeded]);
 
-  /** The longer words behind a row's status: a credential hook's own (Cline's) before the generic sign-in hint. */
+  /**
+   * The longer words behind a row's status: for an agent set up by its own
+   * login, the key it needs and that setup; else a credential hook's own words
+   * before the generic sign-in hint.
+   */
   const choiceDetail = useCallback((runner: string, choice: RunnerChoice | undefined): string | undefined => {
+    if (choice?.recovery?.kind === 'set-up') return signInByRunner[runner]?.hint ?? runnerDiscoveryErrors[runner];
     if (choice?.status === 'no-credential') return runnerDiscoveryErrors[runner] ?? signInByRunner[runner]?.hint;
     if (choice?.status === 'signed-out') return signInByRunner[runner]?.hint;
     if (choice?.status === 'no-usable-model' || choice?.status === 'discovery-failed') return runnerDiscoveryErrors[runner];
@@ -1403,7 +1416,7 @@ export default function App({ layout = 'chat', selection, goal }: {
                   const way = signedOut ? signInByRunner[runnerId] : undefined;
                   const recovery = recoveryFor(runnerId, choice);
                   // A login's failure is said under the capsule that asked for it.
-                  const canLogIn = recovery !== undefined && (choice?.recovery?.kind === 'sign-in' || choice?.recovery?.kind === 'add-key');
+                  const canLogIn = recovery !== undefined && (choice?.recovery?.kind === 'sign-in' || choice?.recovery?.kind === 'set-up' || choice?.recovery?.kind === 'add-key');
                   const statusId = `planner-choice-${runnerId}`;
                   return (
                     <span className={`planner-pill-item${canLogIn ? ' has-login' : ''}`} key={b.id} data-runner={runnerId}>
@@ -1495,7 +1508,7 @@ export default function App({ layout = 'chat', selection, goal }: {
               // agent in, exactly as the planner pill beside it does.
               const way = signedOut ? signInByRunner[r.id] : undefined;
               const recovery = recoveryFor(r.id, choice);
-              const canLogIn = recovery !== undefined && (choice?.recovery?.kind === 'sign-in' || choice?.recovery?.kind === 'add-key');
+              const canLogIn = recovery !== undefined && (choice?.recovery?.kind === 'sign-in' || choice?.recovery?.kind === 'set-up' || choice?.recovery?.kind === 'add-key');
               const statusId = `runner-choice-${r.id}`;
               const title = choiceDetail(r.id, choice) ?? (way
                 ? way.hint

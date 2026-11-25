@@ -14,13 +14,16 @@ export interface RunnerRowChoice {
   item: Pick<PickerItem, 'warn' | 'disabled' | 'refusal'>;
 }
 
-/** The terminal command a row's recovery is: `/login`, `/key-set` or `/refresh`. */
+/** The terminal command a row's recovery is: `/login` (a sign-in or the agent's setup), `/key-set` or `/refresh`. */
 function recoveryCommand(row: RunnerView, choice: RunnerChoice): string | undefined {
   switch (choice.recovery?.kind) {
     case 'sign-in': {
       const action = signInAction(signInOfVerdict(row.id, row.name, row.auth));
       return action === 'login' ? `/login ${row.id}` : action === 'key' ? '/key-set' : undefined;
     }
+    // The agent's own setup is its way to a key Ordewell reads, and `/login` runs it.
+    case 'set-up':
+      return `/login ${row.id}`;
     case 'add-key':
       return '/key-set';
     case 'refresh-models':
