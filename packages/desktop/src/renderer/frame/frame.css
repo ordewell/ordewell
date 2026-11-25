@@ -172,6 +172,40 @@ kbd.frame-menu-hint { font-family: inherit; }
 .frame-body[inert] { opacity: 0.6; }
 .frame-body[inert] * { cursor: default; }
 
+/*
+ * The wait for the daemon (DaemonWait.tsx): a card over the inert body, in
+ * the body's own grid cell, drawn only once the wait has lasted a moment.
+ * The layer takes the pointer the inert body would not have used, to show
+ * the busy cursor; the title bar and the status bar stay as they are.
+ */
+.frame-wait {
+  grid-row: 3;
+  grid-column: 1;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: var(--ow-space-4);
+  cursor: progress;
+}
+.frame-wait-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ow-space-2);
+  max-width: min(520px, 100%);
+  padding: var(--ow-space-3) var(--ow-space-4);
+  border: 1px solid var(--ow-surface-card-border);
+  border-radius: var(--ow-radius-lg);
+  background: var(--ow-surface-card);
+  box-shadow: var(--ow-elevation-card);
+  color: var(--ow-fg);
+}
+.frame-wait-line { display: flex; align-items: center; gap: var(--ow-space-2); margin: 0; }
+/* The card is already late by its own delay: its mark turns from the start. Reduced motion still stills it (design.css). */
+.frame-wait-line .ow-loading-mark { animation-delay: 0s, 0s; }
+.frame-wait-log { margin: 0; color: var(--ow-fg-secondary); overflow-wrap: anywhere; }
+
 /* Activity bar: 52 wide, 44 square items, the shown one marked by a bar in its area's hue. */
 .frame-activity {
   display: flex;

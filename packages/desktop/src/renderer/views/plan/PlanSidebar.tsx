@@ -1,5 +1,6 @@
 import { Plus } from 'lucide-react';
 import { IconButton, LoadingState, StatusIndicator, type StatusId } from '@ordewell/ui/design';
+import type { DaemonStatus } from '../../../shared/bridge';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { daemonHost, type DaemonHost } from '../../session/DaemonHost';
 import { joinedShort } from '../../session/holder';
@@ -59,8 +60,22 @@ function listedRun(session: SessionRow): { status: StatusId; word: string } | un
 }
 
 /** The workspace's sessions, newest first: a click opens one, taking its lease. */
+/**
+ * What the list says while it has nothing to show and the daemon cannot be
+ * asked: on a start, that the daemon is on its way; once one has gone, that
+ * the list comes back with it.
+ */
+function awayWords(status: DaemonStatus | undefined): string {
+  if (status === undefined) return 'Connecting to the daemon. Sessions show here once it answers.';
+  if (status.state === 'connecting') {
+    return status.starting ? 'The daemon is starting. Sessions show here once it answers.' : 'Connecting to the daemon. Sessions show here once it answers.';
+  }
+  return 'Sessions show here once the daemon is back.';
+}
+
 export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
-  const connected = useDaemonStatus()?.state === 'connected';
+  const daemon = useDaemonStatus();
+  const connected = daemon?.state === 'connected';
   const { sessionId, goal, state, link, readOnly } = useSession(host);
   const joined = link?.kind === 'joined' ? joinedShort(link.holder) : undefined;
   // A read-only view draws its holder's saved file and hears none of its run, so its row is the list's to say, as any other's.
@@ -78,7 +93,7 @@ export function Sessions({ host }: { host: DaemonHost }): JSX.Element {
   const sessions = useSessionList(host.workspace, connected, ownId, JSON.stringify([sessionId, goal, planStatus, progress !== undefined]));
 
   // The Reconnecting bar speaks for the daemon (W15): this list keeps what it last read, dimmed and inert, and claims no wait of its own.
-  if (!connected && !Array.isArray(sessions)) return <p className="frame-empty">Sessions show here once the daemon is back.</p>;
+  if (!connected && !Array.isArray(sessions)) return <p className="frame-empty">{awayWords(daemon)}</p>;
   if (sessions === undefined) return <LoadingState label="Loading sessions…" />;
   if (typeof sessions === 'string') return <p className="frame-empty error">{sessions}</p>;
   if (sessions.length === 0) return <p className="frame-empty">No sessions yet. Describe a goal to the planner.</p>;

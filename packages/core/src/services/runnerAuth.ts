@@ -61,9 +61,11 @@ const AUTH_TIMEOUT_MS = 8000;
  * pipes. A status command that ignores SIGTERM, or leaves a child holding the
  * pipes, would keep the probe pending past its budget and stall the runner
  * list and every turn that rechecks a signed-out planner. The hard timer
- * answers `unknown` on the budget's own edge and kills what is left.
+ * answers `unknown` on the budget's own edge and kills what is left. No
+ * console window on Windows, where a GUI host would flash one per probe.
+ * Exported for its test.
  */
-const defaultExec: RunnerAuthExec = (command, args, options) =>
+export const defaultExec: RunnerAuthExec = (command, args, options) =>
   new Promise((resolve) => {
     let settled = false;
     const settle = (result: RunnerAuthExecResult): void => {
@@ -72,7 +74,7 @@ const defaultExec: RunnerAuthExec = (command, args, options) =>
       clearTimeout(timer);
       resolve(result);
     };
-    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8', windowsVerbatimArguments: options.verbatim }, (err, stdout, stderr) => {
+    const child = execFile(command, args, { timeout: options.timeout, env: options.env, encoding: 'utf8', windowsVerbatimArguments: options.verbatim, windowsHide: true }, (err, stdout, stderr) => {
       const raw = (err as { code?: unknown } | null)?.code;
       // A signal or a spawn failure has no numeric code; either way nothing
       // trustworthy came back, so it is not an exit status to read.

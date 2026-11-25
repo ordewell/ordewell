@@ -4,8 +4,10 @@ import { dirname, join, resolve } from 'path';
 import { createServer } from 'net';
 import {
   DAEMON_CONTRACT,
+  DAEMON_STILL_WAITING_MS,
   DEFAULT_DAEMON_PORT,
   daemonLogPath,
+  daemonStillWaitingLine,
   daemonPidFilePath,
   globalDataDir,
   isDaemonRunning,
@@ -63,8 +65,8 @@ export function daemonCommand(
   return { file: process.execPath, args: sea ? ['__daemon', ...daemonArgs] : [serverPath(), ...daemonArgs] };
 }
 
-/** The poll (of 500 ms each) after which a start that has not answered says so: about five seconds in. */
-const STILL_WAITING_POLL = 10;
+/** The poll (of 500 ms each) after which a start that has not answered says so: about five seconds in, as the desktop app's card. */
+const STILL_WAITING_POLL = DAEMON_STILL_WAITING_MS / 500;
 
 export async function startDaemon(
   port: number = DEFAULT_PORT,
@@ -129,7 +131,7 @@ export async function startDaemon(
     }
     // A cold start can take a while, and the terminal UI draws nothing until
     // it answers: past a few seconds, say what the wait is and where to look.
-    if (i === STILL_WAITING_POLL) say(`Still waiting for the daemon on port ${port} to answer. Its log: ${daemonLogPath()}`);
+    if (i === STILL_WAITING_POLL) say(daemonStillWaitingLine(port, daemonLogPath()));
   }
 
   const failure = `Server did not respond within 15s. Check logs: ${daemonLogPath()}`;
