@@ -5,16 +5,18 @@ import {
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
   type ExecutionCommand, type ExecutionSummary, type OverrideDirection,
-  recordedRunnerAuth, runnerForProvider, type RunnerInstallation,
+  recordedRunnerAuth, runnerForProvider, RunnerSignedOutError, verifyRunnerSignIn, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
 import { VsCodeConfig } from '../adapters/VsCodeConfig';
 import { VsCodeFileSystem } from '../adapters/VsCodeFileSystem';
+import { admitWorkspaceFolder } from '../adapters/workspaceFolder';
 import {
   removeTaskConfirmation, TaskActions, TaskControls, type SessionCue, type TaskActionPort, type TaskControlPort, type TurnOutcome,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
+import { showPickRefusal } from '../runnerPick';
 import { markWalkthroughStep } from '../firstRun';
 import { handleIsolationBlocked } from './isolation';
 import { taskFromDraft } from './taskEdit';
@@ -33,6 +35,8 @@ export interface PlanManagerDeps {
    * and that happens outside this process.
    */
   runnerInstallation?: Pick<RunnerInstallation, 'refresh' | 'plannerUsability'>;
+  /** Refuse moving a task onto a runner whose readiness blocks a new pick (ADR-0052); absent, every move is let through. */
+  refuseBlockedRunner?: (runner: string) => Promise<void>;
   notifications: INotification;
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
@@ -123,7 +127,15 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   // The session refuses a turn on a planner that cannot plan; the chat says
   // so with its own commands, and as the way out rather than a failure.
   if (err instanceof PlannerNotReadyError) {
-    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS), 'planner_not_ready');
+    const said = describePlannerNotReady(err.reason, CHAT_COMMANDS);
+    if (err.reason.code === 'signed_out') deps.chatProvider.showError(said, 'planner_not_ready', err.reason.signIn);
+    else deps.chatProvider.showError(said, 'planner_not_ready');
+    return;
+  }
+  // The agent refused to start as signed out: its words are the sign-in hint,
+  // and the agent it names is the one the error's Sign in runs (ADR-0052).
+  if (err instanceof RunnerSignedOutError) {
+    deps.chatProvider.showError(err.message, undefined, err.signIn);
     return;
   }
   const message = err instanceof Error ? err.message : String(err);
@@ -150,15 +162,19 @@ export function plannerPreflightError(config: PlanManagerDeps['config'], workspa
  * that route stays refused until a runner-list refresh.
  */
 export function recheckSignedOutPlanner(
-  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation' | 'refreshPlannerState'>,
+  deps: Pick<PlanManagerDeps, 'config' | 'fsAdapter' | 'runnerInstallation' | 'refreshPlannerState'> & Partial<Pick<PlanManagerDeps, 'modelResolver'>>,
 ): Promise<void> | null {
   const installation = deps.runnerInstallation;
   if (!installation) return null;
   const runner = runnerForProvider(deps.config.aiProvider);
   const root = deps.fsAdapter.getWorkspaceRoot();
   if (!runner || recordedRunnerAuth(runner, root)?.state !== 'signed-out') return null;
-  installation.refresh();
-  return installation.plannerUsability(runner).then(async () => {
+  // A status-less agent is asked by its own ACP handshake (ADR-0052): a
+  // refresh alone keeps its refusal, as it should.
+  return verifyRunnerSignIn(runner, {
+    installation: { refresh: () => installation.refresh(), runnerUsability: (r) => installation.plannerUsability(r) },
+    ...(deps.modelResolver ? { resolver: deps.modelResolver } : {}),
+  }).then(async () => {
     // The gate re-probed so the turn can go ahead; the pill and empty state
     // must stop saying signed out too, or they offer a login already done.
     if (recordedRunnerAuth(runner, root)?.state !== 'signed-out') await deps.refreshPlannerState?.();
@@ -194,11 +210,18 @@ function adoptTurnPlan(prior: string, plan: LegacyPlanState, deps: PlanManagerDe
 /** Said with each user message, so the planner names VS Code's controls whatever host holds the session (ADR-0030). */
 const FROM_VSCODE = { surface: 'vscode' } as const;
 
+/**
+ * A turn refused before it began, so nothing was sent: the chat gives the
+ * message back to the composer, as it does for a planner that cannot plan.
+ */
+const NO_FOLDER_TURN: TurnOutcome = { ok: false, code: 'planner_not_ready' };
+
 export async function handleStartPlanning(
   userDescription: string,
   deps: PlanManagerDeps,
   pendingRunners?: RunnerId[],
 ): Promise<void> {
+  if (!admitWorkspaceFolder()) return;
   const runners = resolveRunnerSet(deps, pendingRunners, deps.getCurrentPlan().runners);
   if (!runners) {
     return;
@@ -225,6 +248,7 @@ export async function handleContinueConversation(
   text: string,
   deps: PlanManagerDeps,
 ): Promise<void> {
+  if (!admitWorkspaceFolder()) return;
   // A reply is a planner turn too, and the signed-out refusal's way back runs
   // in another process: ask again before the session's gate judges.
   const recheck = recheckSignedOutPlanner(deps);
@@ -245,6 +269,7 @@ export async function handleSendMessageNow(
   text: string,
   deps: PlanManagerDeps,
 ): Promise<TurnOutcome> {
+  if (!admitWorkspaceFolder()) return NO_FOLDER_TURN;
   const recheck = recheckSignedOutPlanner(deps);
   if (recheck) await recheck;
   return inPlannerTurn(deps, async () => {
@@ -269,6 +294,8 @@ export async function handleApprovePlan(deps: PlanManagerDeps, requestId?: numbe
   // must not make its late answer speak for the one now on screen.
   const session = deps.session;
   try {
+    // A run starts runners in the project and saves the session there.
+    if (!admitWorkspaceFolder()) return;
     // A run under way keeps going: Execute then approves what waits for approval, and the session says how many (#95).
     if (session.isExecuting) {
       try {
@@ -335,7 +362,10 @@ export async function handleSendMessage(
   deps: PlanManagerDeps,
   pendingRunners: RunnerId[] | undefined,
   setPendingRunners: (r: RunnerId[] | undefined) => void,
-): Promise<void> {
+): Promise<TurnOutcome> {
+  // Checked before anything reads the plan: with no folder there is no
+  // project to plan in, and the refused message goes back to the composer.
+  if (!admitWorkspaceFolder()) return NO_FOLDER_TURN;
   setPendingRunners(pendingRunners);
 
   const plan = deps.getCurrentPlan();
@@ -351,6 +381,8 @@ export async function handleSendMessage(
   } else {
     await handleStartPlanning(text, deps, pendingRunners);
   }
+  // A turn that started reported its own failure.
+  return { ok: true };
 }
 
 /** The Session's plan becomes the host's, and the webview is shown it. */
@@ -373,10 +405,15 @@ function settleDirectEdit(deps: PlanManagerDeps): void {
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
   try {
+    // Moving a task onto another runner is a new pick (ADR-0052); its own runner is kept.
+    if (edit.kind === 'runner' && deps.refuseBlockedRunner) {
+      const task = flattenTasks(deps.session.planTasks).find((t) => t.id === taskId);
+      if (task && task.assignedRunner !== edit.runner) await deps.refuseBlockedRunner(edit.runner);
+    }
     // The Session derives the card's not-started precondition itself.
     await deps.session.cardEdit(taskId, edit);
   } catch (err) {
-    void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
+    if (!showPickRefusal(err, deps.chatProvider)) void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
   }
   settleDirectEdit(deps);
 }
@@ -573,6 +610,7 @@ export function taskControlPort(deps: PlanManagerDeps): TaskControlPort {
     cancelPlannerResend: async () => { deps.session.cancelPlannerResend(); },
     // A planner turn: it streams to the chat as any does, and fails as one.
     retryPlannerCompaction: async () => {
+      if (!admitWorkspaceFolder()) return;
       try {
         // The retry is a planner turn too, and the signed-out refusal's
         // login runs outside this host: ask the account again before the

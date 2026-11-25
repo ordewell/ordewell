@@ -13,6 +13,7 @@ import { ChildViewHost } from './providers/ChildViewHost';
 import { ChildTaskLogs } from './providers/ChildTaskLogs';
 import { routeWebviewMessage, sendNextHeldPrompt, type WebviewRouterDeps } from './plan/webviewRouter';
 import { loginPlanner } from './plan/PlannerLogin';
+import { refuseBlockedRunner, showPickRefusal } from './runnerPick';
 import { saveCurrentSession, restoreState, persistState, type PersistenceDeps } from './state/StatePersistence';
 import { ModelDiscovery, sendModelConfig } from './ModelDiscovery';
 import { PlannerSelection } from './PlannerSelection';
@@ -164,6 +165,13 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   const persist = (): void => persistState(persistenceDeps());
   const saveSession = (): string | null => saveCurrentSession(persistenceDeps());
 
+  /** A new pick of `runner` refused while its readiness blocks one, judged as the daemon judges it (ADR-0052). */
+  const refuseRunner = (runner: string): Promise<void> => refuseBlockedRunner(
+    runner,
+    services.runnerRegistry.get(runner)?.manifest.displayName ?? runner,
+    { runnerInstallation: services.runnerInstallation, modelResolver: services.modelResolver, workspaceRoot: () => services.fsAdapter.getWorkspaceRoot() },
+  );
+
   const managerDeps: PlanManagerDeps = {
     get session(): Session { return requireSession(); },
     chatProvider: services.chatProvider,
@@ -173,6 +181,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     fsAdapter: services.fsAdapter,
     runner: services.runner,
     runnerInstallation: services.runnerInstallation,
+    refuseBlockedRunner: refuseRunner,
     notifications: services.notifications,
     getCurrentPlan: () => state.plan,
     setCurrentPlan,
@@ -244,6 +253,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
     runnerInstallation: services.runnerInstallation,
     chatProvider: services.chatProvider,
     sendModelConfig: () => sendModelConfig(services.config, services.chatProvider, services.modelResolver),
+    refuseBlockedRunner: refuseRunner,
     log,
   });
   const discovery = new ModelDiscovery({
@@ -319,6 +329,7 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
   function runPlannerLogin(runner?: string): Promise<void> {
     return loginPlanner({
       runnerInstallation: services.runnerInstallation,
+      modelResolver: services.modelResolver,
       runnerRegistry: services.runnerRegistry,
       config: services.config,
       workspaceRoot: () => services.fsAdapter.getWorkspaceRoot(),
@@ -341,6 +352,10 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       setPlanner: async (provider, requestId) => {
         try {
           await planner.apply(provider);
+        } catch (err) {
+          // A refused new pick says why, with that agent's Sign in; the pill
+          // settles on the planner held, which `apply` has re-sent.
+          if (!showPickRefusal(err, services.chatProvider)) throw err;
         } finally {
           // The chat keeps the model picker closed until this request is
           // answered; a refused switch has already re-sent the planner held.
@@ -365,6 +380,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
       loginPlanner: runPlannerLogin,
       setRunnerEnabled: async (runnerId, enabled, requestId) => {
         try {
+          // Switching on is a new pick (ADR-0052); one already on stays on, and off is never refused.
+          if (enabled && !services.config.enabledRunners.includes(runnerId)) await refuseRunner(runnerId);
           const saved = await setRunnerEnabled(
             {
               runnerRegistry: services.runnerRegistry,
@@ -382,6 +399,8 @@ export function createExtension(services: ExtensionServices, vscodeApi: typeof v
           // An id nothing names is a stale click or a hand-made message: no
           // manifest owns it, so there is nothing to save.
           if (!saved) log(`Ignored a request to switch the unknown runner "${runnerId}" ${enabled ? 'on' : 'off'}.`);
+        } catch (err) {
+          if (!showPickRefusal(err, services.chatProvider)) throw err;
         } finally {
           // The pill shows the click until this request is answered, so the
           // answer goes out whatever happened: the runner as saved now, which

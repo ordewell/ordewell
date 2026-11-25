@@ -1,5 +1,6 @@
 import type { ResearchStep, ResearchStepOutcome, SkillLoadNotice } from '../models/Task';
 import type { UsageLine } from '../models/Usage';
+import type { RunnerSignIn } from '../services/signInHint';
 import type { CompactionBlock, MessageBlock, MessageRole, PlanMarkerStatus, SkillLoadBlock, SubagentBlock, ToolBlock, ToolStatus, UsageBlock } from './blocks';
 import { diffStat, outputLines, toolHeadline } from './format';
 import { isFileEditTool } from '../services/harness/agentTools';
@@ -14,6 +15,14 @@ import { ranSealed, withoutSealedMark } from '../services/researchStepSummary';
 /** A line that is done: nothing streams into it any more. */
 export function settledMessage(id: string, role: MessageRole, text: string, turnId?: string): MessageBlock {
   return { type: 'message', id, role, text, streaming: false, ...(turnId ? { turnId } : {}) };
+}
+
+/**
+ * A planner reply's failure that is its runner signed out (ADR-0052): drawn as
+ * an error, with that agent's ways in, where the reply would have stood.
+ */
+export function signedOutFailure(id: string, text: string, signIn: RunnerSignIn, turnId?: string): MessageBlock {
+  return { ...settledMessage(id, 'error', text, turnId), signIn };
 }
 
 /** The user's message, marked with the skills it loaded when it loaded any, and when it was force sent. */

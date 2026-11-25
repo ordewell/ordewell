@@ -34,6 +34,20 @@ function modeText(mode: RunnerMode | undefined): string | undefined {
 export interface RunnerOption {
   id: string;
   displayName: string;
+  /**
+   * The short status of a runner a new assignment is refused on (ADR-0052).
+   * A task already on it keeps it, flagged; any other task cannot be moved there.
+   */
+  blocked?: string;
+}
+
+/** One option of a task's Runner dropdown: a blocker named, and refused unless it is the task's own. */
+export function RunnerOptionItem({ runner, assigned }: { runner: RunnerOption; assigned: string }) {
+  return (
+    <option value={runner.id} disabled={runner.blocked !== undefined && runner.id !== assigned}>
+      {runner.blocked ? `${runner.displayName} — ${runner.blocked}` : runner.displayName}
+    </option>
+  );
 }
 
 /**
@@ -777,9 +791,7 @@ export default function TaskCard({ task, run, runsByTask, models, modes, modelsB
                 <label htmlFor={`task-runner-${task.id}`}>Runner</label>
                 <select className="ow-select" id={`task-runner-${task.id}`} value={task.assignedRunner}
                   onChange={(e) => onRunnerChange(task.id, e.target.value)}>
-                  {runnerOptions.map((r) => (
-                    <option key={r.id} value={r.id}>{r.displayName}</option>
-                  ))}
+                  {runnerOptions.map((r) => <RunnerOptionItem key={r.id} runner={r} assigned={task.assignedRunner} />)}
                 </select>
               </div>
             )}

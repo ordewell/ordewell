@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import {
   clipboardCopyCommand, getProviderMeta, isApiProvider, isCliProvider, isUserMessage, mergeOutcome, confirmedOverride, newTaskFields, taskActionCommand, TERMINAL_UI_COMMANDS, type HasBinFn, type SerializedConversationMessage, type SurfacePlan,
   type PlannerModelRecall,
-  type RunnersResponse, type ExecutionSummary,
+  type RunnersResponse, type ExecutionSummary, type SettingsUpdateResponse,
 } from '@ordewell/core';
 import { describeConnectionRefused, isConnectionRefused } from '../daemon';
 import { RequestTimeoutError, UnreadableResponseError, deliveryOf, type ApiClient } from '../apiClient';
@@ -590,7 +590,19 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // and is remembered for this provider, the way VS Code's
       // `PlannerSelection.setModel` remembers a pick.
       const env = { AI_PROVIDER: effect.provider, ORCHESTRATOR_MODEL: effect.modelId, ORDEWELL_PLANNER_EFFORT: effect.effort };
-      const settings = await api.updateSettings({ env });
+      let settings: SettingsUpdateResponse;
+      try {
+        settings = await api.updateSettings({ env });
+      } catch (err) {
+        // The stepper showed the pick before this answer. A refused one, say a
+        // runner blocked since its row was read (ADR-0052), is undone by the
+        // daemon's own word, and the rows are read again so they show why.
+        if (!isConnectionRefused(err)) {
+          await loadRunners(deps).catch(() => undefined);
+          await reloadSettings(deps);
+        }
+        throw err;
+      }
       persistAfterDaemon(deps, env);
       dispatchSettings(deps, {
         ...settings,
@@ -663,7 +675,10 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       // leave the revival to a later /refresh.
       let refreshed: RunnersResponse | undefined;
       try {
-        refreshed = await loadRunners(deps);
+        // A login that finished is the user's recovery: the daemon forgets the
+        // refusal it recorded and asks the agent again (ADR-0052). One that
+        // failed or was cancelled is not, so its blocker stays.
+        refreshed = await loadRunners(deps, result.ok ? { recheck: effect.runner } : undefined);
       } catch (err) {
         if (!isConnectionRefused(err)) throw err;
       }
@@ -967,7 +982,7 @@ async function perform(effect: Performed, deps: EffectDeps): Promise<void> {
       return;
 
     case 'refresh':
-      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId), loadModels(deps), loadIsolationPreview(deps)]);
+      await Promise.all([loadRunnersThenSettings(deps, effect.sessionId, effect.recheck?.length ? { recheck: effect.recheck.join(',') } : undefined), loadModels(deps), loadIsolationPreview(deps)]);
       if (effect.announce) dispatch({ type: 'notice', message: 'Refreshed runners, settings, models and repositories.' });
       return;
 
@@ -1293,8 +1308,8 @@ async function loadSessions(deps: EffectDeps): Promise<void> {
   deps.dispatch({ type: 'sessionsLoaded', sessions: list });
 }
 
-async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
-  const state = await deps.api.getRunners();
+async function loadRunners(deps: EffectDeps, options?: { recheck?: string }): Promise<RunnersResponse> {
+  const state = await deps.api.getRunners(undefined, options);
   deps.dispatch({
     type: 'runnersLoaded',
     // The daemon's own rows, auth included: re-typing the bag here is how the
@@ -1310,8 +1325,8 @@ async function loadRunners(deps: EffectDeps): Promise<RunnersResponse> {
  * change who plans, so the settings are read once it has answered: read beside
  * it, they would still name the planner from before an agent was installed.
  */
-async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string): Promise<void> {
-  await loadRunners(deps);
+async function loadRunnersThenSettings(deps: EffectDeps, sessionId?: string, options?: { recheck?: string }): Promise<void> {
+  await loadRunners(deps, options);
   await loadSettings(deps, sessionId);
 }
 

@@ -108,6 +108,48 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   longer flash a console window on Windows** when the daemon runs without
   one, as the desktop app's does. Codex's and ACP agents' model lists, read
   from a long-running agent process, still spawn as before.
+- **A coding agent's recorded sign-out stays until there is newer evidence.**
+  For an agent with no status command (Cursor, Copilot CLI, Cline, Gemini CLI,
+  Qwen Code), a probe that could not tell no longer erased a sign-out that a
+  turn, a refused start or model discovery had recorded. Now only newer
+  evidence replaces it: a sign-in check you ask for, a finished login or a
+  saved key. The runner list, the planner gate and the catalog read the same
+  record. Before a send, the agent's own handshake is asked once again, so a
+  sign-in done outside Ordewell lets the send through. `/login` and `/refresh`
+  in the TUI, and Log in in the desktop app and VS Code, check again.
+- **The desktop app and VS Code offer Sign in for the agent a planner refusal
+  names.** The error now carries that agent's sign-in as data. It no longer
+  reads the message text or uses the planner picked since. A planner turn that
+  ends signed out, such as Claude Code's "Not logged in" mid-turn, now shows
+  as the chat's error with the same Sign in, live and when the session is
+  reopened, instead of as a planner reply. The terminal UI shows it as an
+  error line. Nothing is sent again after you sign in. A refused start now
+  answers daemon clients with a 409 `runner_signed_out`, not a 500.
+- **Planner and runner pickers in all three apps list ready runners first and
+  keep blocked ones visible with one status and a way back.** The statuses
+  are Signed out (Sign in), API key needed (Add key), No usable model (Refresh
+  models), Couldn't load models (Retry), Checking models…, Sign-in not checked
+  and Uses agent default. The daemon checks each new planner pick, each runner
+  switched on and each task moved to another runner again when it writes it,
+  and refuses only a runner that is signed out, has no key or has no usable
+  model. A choice already made is kept. The desktop app's Settings checks a
+  runner switch against the window's own workspace.
+- **The terminal UI shows a failed first planner turn's error once.** It used
+  to show twice: once from the daemon's saved error and once from the failed
+  call. A later turn that fails with the same words still shows its own.
+- **VS Code reads the provider keys the desktop app and the TUI save in
+  `~/.ordewell/.env`.** A key saved there, such as OpenRouter's, was missing
+  from VS Code's planner and runner pickers. The file is the last source,
+  after SecretStorage, the setting and the environment, and it is read again
+  on each model refresh. A saved key goes only to its saved endpoint (or the
+  vendor's default), so a workspace setting or workspace environment cannot
+  send it somewhere else.
+- **VS Code asks for a folder before it starts a planner turn in a window with
+  no folder open.** It used the extension host's working directory instead,
+  `/` when VS Code was started from the Dock, and the first message failed
+  creating `/.ordewell`. Sending, Execute, loading or saving a session and the
+  other actions that need a project now show one warning with Open Folder, and
+  your draft is kept.
 
 ## [0.14.12] - 2026-11-25
 

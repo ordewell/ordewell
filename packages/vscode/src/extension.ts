@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
 import { spawn as nodeSpawn } from 'child_process';
+import * as os from 'os';
 import { createIsolationPreview, AccountLimitMonitor, claudeAccountLimitCollector, codexAccountLimitCollector, openCodeGoAccountLimitCollector, createSession, CodexSandboxAvailability, RunnerRegistry, removedPluginNotice, ModelResolver, RunnerInstallation, SettingsService, PlannerModelMemory, StructuredRunner, runnerForProvider, processLeaseHost, setHostCredentials, workspaceEnvOf } from '@ordewell/core';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { VsCodeConfig, moveAutonomyFromVsCodeSetting, moveEnabledRunnersFromVsCodeSetting } from './adapters/VsCodeConfig';
 import { VsCodeFileSystem } from './adapters/VsCodeFileSystem';
+import { workspaceFolderRoot } from './adapters/workspaceFolder';
 import { SecretStore } from './adapters/SecretStore';
 import { VsCodeNotification } from './adapters/VsCodeNotification';
 import { startExtensionVersionCheck } from './versionCheck';
@@ -45,13 +47,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     // The keys stay out of this process's environment, which every child and
     // every other extension here inherits: the built-in runner is lent them (ADR-0070).
-    setHostCredentials(() => config.heldProviderEnv());
+    setHostCredentials((env) => config.heldProviderEnv(env));
     const runnerRegistry = new RunnerRegistry();
     const fsAdapter = new VsCodeFileSystem();
     // Read from the account the runners use, as the login probe below is: a
     // workspace's CLAUDE_CONFIG_DIR moves Claude's picker lineup with it.
     modelResolver = new ModelResolver(runnerRegistry, config, {
       env: async () => ({ ...process.env, ...(await workspaceEnvOf(fsAdapter.getWorkspaceRoot())) }),
+      // What its ACP handshake hears is the sign-in verdict for this workspace's account (ADR-0052).
+      workspace: () => fsAdapter.getWorkspaceRoot(),
     });
     const settingsService = new SettingsService();
     await moveAutonomyFromVsCodeSetting(settingsService);
@@ -77,7 +81,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       codexSandbox: new CodexSandboxAvailability(
         runnerRegistry,
         { spawn: nodeSpawn, fetch: globalThis.fetch },
-        { cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(), env: process.env },
+        // The probe spawns Codex, which needs a real directory: with no folder
+        // open, the temp one its account read uses too, never the host's cwd.
+        { cwd: workspaceFolderRoot() ?? os.tmpdir(), env: process.env },
       ),
       fsAdapter,
       notifications: new VsCodeNotification(),

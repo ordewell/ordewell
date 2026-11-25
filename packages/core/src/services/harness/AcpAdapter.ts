@@ -34,7 +34,7 @@ import { instructionsBlock, isRecord } from './repoConfig';
 import { awaitAttach, listed, MCP_ATTACH_TIMEOUT_MS, SessionNotResumable, type AttachState } from './ordewellBinding';
 import { settleWithin } from './settleWithin';
 import { compareVersions } from '../../utils/version';
-import { describeSignIn, signInOf, TERMINAL_UI_SIGN_IN } from '../signInHint';
+import { describeSignIn, RunnerSignedOutError, signInOf, TERMINAL_UI_SIGN_IN, type RunnerSignIn } from '../signInHint';
 import { acpPrivateDir, type AcpPrivateDir } from './acpPrivateDir';
 import { dirname } from 'path';
 import { spawnedCommand } from '../../plugins/types';
@@ -487,7 +487,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     });
     if (!opened.ok) {
       this.sessionRefused = true;
-      throw new Error(isAuthRequired(opened) ? this.signedOut() : `${this.name} could not open a session: ${this.reason(opened)}`);
+      throw isAuthRequired(opened) ? this.signedOutError() : new Error(`${this.name} could not open a session: ${this.reason(opened)}`);
     }
   }
 
@@ -513,7 +513,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
     });
     if (!resumed.ok) {
       this.sessionRefused = true;
-      throw new Error(isAuthRequired(resumed) ? this.signedOut() : `${this.name} could not resume session ${id}: ${this.reason(resumed)}`);
+      throw isAuthRequired(resumed) ? this.signedOutError() : new Error(`${this.name} could not resume session ${id}: ${this.reason(resumed)}`);
     }
   }
 
@@ -525,7 +525,7 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    */
   private async initialize(): Promise<void> {
     const answered = await this.setupCall('initialize', { ...ACP_INITIALIZE_PARAMS });
-    if (!answered.ok) throw new Error(isAuthRequired(answered) ? this.signedOut() : `${this.name} could not start: ${this.reason(answered)}`);
+    if (!answered.ok) throw isAuthRequired(answered) ? this.signedOutError() : new Error(`${this.name} could not start: ${this.reason(answered)}`);
     const parsed = parseAcp(initializeResponseSchema, answered.result);
     if (!parsed.ok) throw new Error(`${this.name} answered initialize in a shape Ordewell cannot read: ${parsed.error}`);
     const { protocolVersion, agentCapabilities, agentInfo } = parsed.value;
@@ -584,7 +584,16 @@ export class AcpAdapter extends StdioAgentAdapter implements TaskModeAgentAdapte
    * headless CLI re-words it (ADR-0052).
    */
   private signedOut(): string {
-    return describeSignIn(signInOf(this.profile.manifest, this.profile.signInRoute), TERMINAL_UI_SIGN_IN);
+    return describeSignIn(this.signIn(), TERMINAL_UI_SIGN_IN);
+  }
+
+  /** A refused start as the shared type, so a host records it without reading its words (#49 F2). */
+  private signedOutError(): RunnerSignedOutError {
+    return new RunnerSignedOutError(this.signIn(), this.signedOut());
+  }
+
+  private signIn(): RunnerSignIn {
+    return signInOf(this.profile.manifest, this.profile.signInRoute);
   }
 
   /**

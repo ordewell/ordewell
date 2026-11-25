@@ -8,7 +8,7 @@ import { isExecutableResolved, planDirectLaunch, type LaunchDeps } from '../util
 import { compareVersions } from '../utils/version';
 import type { ExecImpl } from './ModelDiscovery';
 import { connectorFor } from './harness/connectors';
-import { readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
+import { forgetRunnerAuth, readRunnerAuth, recordedRunnerAuth, recordRunnerAuth, runnerAuthClock, type RunnerAuth, type RunnerAuthExec } from './runnerAuth';
 import { VENDORS, vendorConfiguredIn } from './apiProviders';
 import { withHostCredentials } from './hostCredentials';
 
@@ -86,11 +86,24 @@ function unconfiguredReason(manifest: RunnerManifest): string {
   return `No ${manifest.displayName} key is set: add one with /key-set.`;
 }
 
+/**
+ * The recorded verdict, with the ways in the probe read from the manifest when
+ * the record carries none: a session discovery saw open says signed in and
+ * nothing else, and a row must still offer its login (ADR-0052).
+ */
+function withWaysIn(recorded: RunnerAuth | undefined, probed: RunnerAuth): RunnerAuth {
+  if (!recorded) return probed;
+  if (recorded.signIn || !probed.signIn) return recorded;
+  return { ...recorded, signIn: probed.signIn, ...(probed.loginCommand ? { loginCommand: probed.loginCommand } : {}) };
+}
+
 export class RunnerInstallation {
   private cache: Map<string, { installed: boolean; at: number; version?: string }> = new Map();
   private inflight: Map<string, Promise<boolean>> = new Map();
   private authCache: Map<string, { auth: RunnerAuth; at: number }> = new Map();
   private authInflight: Map<string, Promise<RunnerAuth>> = new Map();
+  /** When {@link recheck} last asked about each workspace's runner, so a probe begun before it is not cached after it. */
+  private rechecked: Map<string, number> = new Map();
   private registry: RunnerRegistry;
   private execImpl: ExecImpl;
   private now: () => number;
@@ -170,7 +183,10 @@ export class RunnerInstallation {
     // a directory to the profile is only seen once the shell is asked again.
     clearAugmentedPathCache();
     // A login can change in either direction while a host runs, and a refresh
-    // is the moment the user expects a fixed one to show.
+    // is the moment the user expects a fixed one to show. Only the probes are
+    // forgotten: a turn's or discovery's refusal stays recorded, since a
+    // status-less agent's probe answers nothing that could replace it, and a
+    // runner with a status command answers for itself (ADR-0052).
     this.authCache.clear();
   }
 
@@ -241,9 +257,11 @@ export class RunnerInstallation {
   }
 
   /**
-   * The runner's own login verdict, cached briefly and asked once when several
+   * The runner's login verdict, cached briefly and asked once when several
    * callers arrive together. Recorded per workspace for the synchronous planner
-   * gate, which cannot await this.
+   * gate, which cannot await this, and answered from that record: a turn's or
+   * discovery's refusal outranks a status command that cannot say (ADR-0052),
+   * so a refresh or the TTL asks again without erasing it.
    */
   private async authFor(runner: string, manifest: RunnerManifest): Promise<RunnerAuth> {
     // Capture the scope once: the folder can move while the status command
@@ -251,17 +269,12 @@ export class RunnerInstallation {
     const workspace = this.workspace();
     const key = `${workspace ?? ''}\u0000${runner}`;
     const cached = this.authCache.get(key);
-    if (cached && this.now() - cached.at < AUTH_TTL_MS) {
-      // A record that is not this probe's was left since by a turn the agent
-      // refused, which outranks its status command: the flag and its way in
-      // show at once, not a TTL later (ADR-0052).
-      const since = recordedRunnerAuth(runner, workspace);
-      return since && since !== cached.auth ? since : cached.auth;
-    }
+    if (cached && this.now() - cached.at < AUTH_TTL_MS) return withWaysIn(recordedRunnerAuth(runner, workspace), cached.auth);
 
     const existing = this.authInflight.get(key);
     if (existing) return existing;
 
+    const asOf = runnerAuthClock();
     const probe = (async () => {
       try {
         return await readRunnerAuth(manifest, {
@@ -275,14 +288,38 @@ export class RunnerInstallation {
         return { state: 'unknown' as const };
       }
     })().then((auth) => {
-      this.authCache.set(key, { auth, at: this.now() });
       this.authInflight.delete(key);
-      recordRunnerAuth(runner, auth, workspace);
-      return auth;
+      recordRunnerAuth(runner, auth, workspace, { source: 'status', asOf });
+      // An answer asked before a recheck or login is no answer about now.
+      if (!this.clearedSince(key, asOf)) this.authCache.set(key, { auth, at: this.now() });
+      return withWaysIn(recordedRunnerAuth(runner, workspace), auth);
     });
 
     this.authInflight.set(key, probe);
     return probe;
+  }
+
+  private clearedSince(key: string, asOf: number): boolean {
+    return (this.rechecked.get(key) ?? 0) > asOf;
+  }
+
+  /**
+   * Ask about one runner's sign-in again because its user asked: a login that
+   * finished, or an explicit recheck (ADR-0052). Unlike {@link refresh}, the
+   * runner-list refresh every surface calls on its own, this forgets what a
+   * turn or discovery recorded for this workspace, so the agent reads as its
+   * status command now answers, or `unknown` (not checked) where it has none:
+   * a terminal's exit alone never reads as signed in. The next refusal records
+   * the blocker again.
+   */
+  async recheck(runner: string): Promise<RunnerUsability> {
+    const workspace = this.workspace();
+    const key = `${workspace ?? ''}\u0000${runner}`;
+    forgetRunnerAuth(runner, workspace);
+    this.rechecked.set(key, runnerAuthClock());
+    this.authCache.delete(key);
+    this.authInflight.delete(key);
+    return this.runnerUsability(runner);
   }
 
   /**

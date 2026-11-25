@@ -62,7 +62,7 @@ describe('the daemon\'s runner list', () => {
     setEnv({ OPENROUTER_API_KEY: 'sk-or-test' });
     const p = pool();
     expect(await p.getInstalledRunners()).toEqual([
-      { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, plans: false, provider: 'openrouter' },
+      { id: 'openrouter', name: 'OpenRouter', enabled: true, auth: { state: 'signed-in' }, readiness: { kind: 'ready' }, plans: false, provider: 'openrouter' },
     ]);
     p.destroyAll();
   });

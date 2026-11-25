@@ -744,9 +744,9 @@ function pickerRows(list: PickerRowList, room: number, inner: number): string[] 
     const number = numbered ? `${String(i + 1).padStart(digits)}. ` : '';
     const mark = chosen ? `${chosen.includes(item.id) ? style.green('[✓]') : style.grey('[ ]')} ` : '';
     const name = truncate(item.label, Math.max(1, labelWidth - (current ? 2 : 0)));
-    // A warn row is still selectable, so its label takes the red while its
+    // A warn row takes the red on its label, a blocked one included, while its
     // detail keeps the list's usual paint: the detail is guidance, not the alarm.
-    const painted = item.disabled
+    const painted = item.disabled && !item.warn
       ? style.grey(name)
       : item.warn
         ? style.red(active ? style.bold(name) : name)

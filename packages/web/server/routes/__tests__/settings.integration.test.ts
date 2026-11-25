@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SettingsService, type SettingsUpdateResponse } from '@ordewell/core';
+import { RunnerInstallation, SettingsService, type SettingsUpdateResponse } from '@ordewell/core';
 import { OrchestratorPool } from '../../pool/orchestratorPool';
 import { settingsRoute } from '../settings';
 
@@ -22,11 +22,15 @@ describe('settings route with persisted planner memory', () => {
     }
     process.env.ORDEWELL_SETTINGS_PATH = path.join(dir, 'settings.json');
     process.env.AI_PROVIDER = 'claude-code';
+    // Every agent installed with its sign-in unread, which never refuses a
+    // pick (ADR-0052): what these cases judge is the catalog, not this host's logins.
+    vi.spyOn(RunnerInstallation.prototype, 'runnerUsability').mockResolvedValue({ usable: true, auth: { state: 'unknown' } });
     pool = new OrchestratorPool();
     app = new Hono().route('/api/settings', settingsRoute(pool));
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     pool.destroyAll();
     for (const key of keys) {
       if (saved[key] === undefined) delete process.env[key];

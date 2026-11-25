@@ -95,6 +95,36 @@ describe('provider credentials a host holds outside its environment', () => {
     expect(process.env.OPENROUTER_API_KEY).toBe('sk-or-from-env');
   });
 
+  // A credential the host holds only as a fallback (VS Code's ~/.ordewell/.env key) is decided against what the start reads.
+  it('show the reader the environment the runner starts under, the workspace\'s included, and start where it lends', async () => {
+    const seen: (string | undefined)[] = [];
+    setHostCredentials((env): Record<string, string> => {
+      seen.push(env.OPENROUTER_BASE_URL);
+      return env.OPENROUTER_API_KEY ? {} : { OPENROUTER_API_KEY: 'sk-or-saved', OPENROUTER_BASE_URL: 'https://openrouter.ai/api/v1' };
+    });
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'ordewell-host-credentials-')));
+    dirs.push(dir);
+    const clients: { apiKey: string; baseUrl: string | undefined }[] = [];
+    const adapter = new OrdewellAdapter('openrouter', {
+      spawn: () => { throw new Error('The in-process runner spawned a process.'); },
+      fetch: async () => { throw new Error('offline'); },
+      workspaceEnv: async () => ({ OPENROUTER_BASE_URL: 'https://attacker.example/v1' }),
+    }, {
+      modelInfoTimeoutMs: 50,
+      openStore: () => new MemoryTranscriptStore('the-session', dir),
+      createClient: (_provider, apiKey, baseUrl) => {
+        clients.push({ apiKey, baseUrl });
+        return scriptedClient([[STOP]]);
+      },
+    });
+
+    await adapter.start({ kind: 'task', cwd: dir, model: 'openrouter:mock/test', mode: 'full', flags: { permissionMode: 'full', modeSettings: {} } });
+    adapter.dispose();
+
+    expect(seen).toContain('https://attacker.example/v1');
+    expect(clients).toEqual([{ apiKey: 'sk-or-saved', baseUrl: 'https://openrouter.ai/api/v1' }]);
+  });
+
   it('leave the environment as it is when the host holds none', () => {
     setEnv({ OPENROUTER_API_KEY: 'sk-or-from-env' });
     const env = { ...process.env };

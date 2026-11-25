@@ -109,7 +109,7 @@ describe('VsCodeConfig never hands a detected coding agent a stale vendor model'
     } as unknown as ChatViewProvider;
     const planner = new PlannerSelection({
       config,
-      modelResolver: { plannerCatalog: async () => [] } as never,
+      modelResolver: { getRunnerUnlisted: () => ({}), plannerCatalog: async () => [] } as never,
       plannerModelMemory: new PlannerModelMemory(new SettingsService()),
       runnerInstallation: { plannerUsability: async () => ({ usable: true }) } as never,
       chatProvider,
