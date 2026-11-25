@@ -1,5 +1,5 @@
 import {
-  CLI_PROVIDERS, getProviderMeta, isAgentPick, plannerBackendEntries, runnerForProvider, selectPlanner,
+  CLI_PROVIDERS, getProviderMeta, isAgentPick, plannerBackendEntries, runnerForProvider, runnerReadiness, selectPlanner,
   type PlannerBackendId, type ModelResolver, type PlannerModelMemory,
   type PlannerSelectionChange, type PlannerSelectionResult, type PlannerUsability, type RunnerInstallation,
 } from '@ordewell/core';
@@ -14,6 +14,8 @@ export interface PlannerSelectionDeps {
   chatProvider: ChatViewProvider;
   /** Push the chosen model and its provider label to the webview. */
   sendModelConfig: () => void;
+  /** Refuse a switch to a coding agent whose readiness blocks a new pick (ADR-0052); absent, every switch is let through. */
+  refuseBlockedRunner?: (runner: string) => Promise<void>;
   log: (msg: string) => void;
 }
 
@@ -50,7 +52,13 @@ export class PlannerSelection {
       const runner = runnerForProvider(id)!;
       usability[runner] = await this.deps.runnerInstallation.plannerUsability(runner);
     }));
-    return plannerBackendEntries(usability, this.deps.config.configuredProviders);
+    // Each agent's readiness, from the same probe and this window's discovery
+    // answers its pick is judged by, for the pickers to word (ADR-0052).
+    const unlisted = this.deps.modelResolver.getRunnerUnlisted();
+    return plannerBackendEntries(usability, this.deps.config.configuredProviders).map((entry) => {
+      const status = entry.kind === 'harness' && entry.runner ? usability[entry.runner] : undefined;
+      return status ? { ...entry, readiness: runnerReadiness(status, unlisted[entry.runner!]) } : entry;
+    });
   }
 
   /** Switch who plans, landing on what that backend remembers (ADR-0009). */
@@ -105,6 +113,10 @@ export class PlannerSelection {
     const { config, plannerModelMemory } = this.deps;
     // The model as the extension reads it, a Gemini id normalized.
     const current = { ...config.planner, model: config.orchestratorModel };
+    // A switch to a coding agent is a new pick; staying on the planner in
+    // effect, whatever has become of it since, is not (ADR-0052).
+    const incoming = change.provider !== undefined && change.provider !== current.provider ? runnerForProvider(change.provider) : undefined;
+    if (incoming) await this.deps.refuseBlockedRunner?.(incoming);
     const catalog = await this.deps.modelResolver.plannerCatalog(change.provider ?? current.provider);
     const result = selectPlanner(current, change, plannerModelMemory, catalog);
     const { next } = result;

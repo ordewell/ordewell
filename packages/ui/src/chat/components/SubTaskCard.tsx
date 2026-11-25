@@ -5,7 +5,7 @@ import TaskAssignment, { TaskAssignmentReadout } from './TaskAssignment';
 import TaskHandoff from './TaskHandoff';
 import { cardEditable, pausedOnLimit, taskRefOf, taskRowView } from '@ordewell/core/plan-utils';
 import type { Task, DiscoveredModel, TaskModelAssignment, TaskRowAction, AssignmentScope } from '@ordewell/core';
-import { StatusBadge, TaskActions, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
+import { RunnerOptionItem, StatusBadge, TaskActions, TaskMarkControl, TaskRevertControl, UsageLimitControls, runnerOptionsFor, statusBadge } from './TaskCard';
 import { AssignmentFlag, IsolationBadges, TaskCheck } from './TaskSummary';
 import type { RunnerMode, RunnerOption, RunnerSignInView, TaskCardRun } from './TaskCard';
 import { checkLabel, verdictSummary } from '../checkLabel';
@@ -179,9 +179,7 @@ export default function SubTaskCard({ task, parentTask, tasks, models, modes, ru
                 <label htmlFor={`subtask-runner-${task.id}`}>Runner</label>
                 <select className="ow-select" id={`subtask-runner-${task.id}`} value={task.assignedRunner}
                   onChange={(e) => onRunnerChange(task.id, e.target.value)}>
-                  {runnerOptions.map((r) => (
-                    <option key={r.id} value={r.id}>{r.displayName}</option>
-                  ))}
+                  {runnerOptions.map((r) => <RunnerOptionItem key={r.id} runner={r} assigned={task.assignedRunner} />)}
                 </select>
               </div>
             )}

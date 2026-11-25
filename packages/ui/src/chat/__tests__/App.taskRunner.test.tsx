@@ -66,3 +66,34 @@ describe('per-task runner change', () => {
     expect(screen.getByText(/Claude Sonnet 4\.5/)).toBeTruthy();
   });
 });
+
+describe('a task runner choice that is blocked (ADR-0052)', () => {
+  beforeEach(() => {
+    render(<App />);
+    send({ type: 'setRunners', runners: [
+      { id: 'cursor-agent', displayName: 'Cursor', enabled: true, readiness: { kind: 'blocked', why: 'signed-out' } },
+      { id: 'claude-code', displayName: 'Claude Code', enabled: true, readiness: { kind: 'ready' } },
+      { id: 'codex', displayName: 'Codex', enabled: true, readiness: { kind: 'sign-in-unknown' } },
+    ] });
+  });
+
+  it('lists ready runners first, names the blocker, and refuses moving a task onto it', () => {
+    send({ type: 'planUpdated', plan });
+    act(() => { fireEvent.click(screen.getByText('Only task')); });
+    const select = screen.getByLabelText('Runner') as HTMLSelectElement;
+
+    expect([...select.options].map((o) => [o.text, o.disabled])).toEqual([
+      ['Claude Code', false], ['Codex', false], ['Cursor — Signed out', true],
+    ]);
+  });
+
+  it("keeps a task's own blocked runner selected, flagged, and its card editable", () => {
+    send({ type: 'planUpdated', plan: { ...plan, tasks: [{ ...plan.tasks[0], assignedRunner: 'cursor-agent' }] } });
+    act(() => { fireEvent.click(screen.getByText('Only task')); });
+    const select = screen.getByLabelText('Runner') as HTMLSelectElement;
+
+    expect(select.value).toBe('cursor-agent');
+    expect([...select.options].find((o) => o.value === 'cursor-agent')?.disabled).toBe(false);
+    expect([...select.options].find((o) => o.value === 'cursor-agent')?.text).toBe('Cursor — Signed out');
+  });
+});

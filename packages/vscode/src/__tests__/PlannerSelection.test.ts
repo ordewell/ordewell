@@ -21,7 +21,7 @@ function setup(
   const setPlannerBackends = vi.fn();
   const selection = new PlannerSelection({
     config: new VsCodeConfig(),
-    modelResolver: { plannerCatalog: async (provider: PlannerBackendId) => (runnerModels[runnerForProvider(provider) ?? ''] ?? []).map((m) => ({ id: m.modelId, variants: m.variants })) } as never,
+    modelResolver: { getRunnerUnlisted: () => ({}), plannerCatalog: async (provider: PlannerBackendId) => (runnerModels[runnerForProvider(provider) ?? ''] ?? []).map((m) => ({ id: m.modelId, variants: m.variants })) } as never,
     plannerModelMemory: memory,
     runnerInstallation: { plannerUsability: async () => usability ?? { usable: true, ...(auth ? { auth } : {}) } } as never,
     chatProvider: { setPlannerBackends } as never,

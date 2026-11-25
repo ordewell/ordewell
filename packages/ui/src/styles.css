@@ -1627,7 +1627,7 @@ body.vscode-high-contrast-light .disclosure:hover {
    a pending state it may never show. The row's action below keeps its wider
    "Signing in…" reservation. */
 .planner-pill-login::after {
-  content: 'Log in';
+  content: 'Sign in';
   padding-left: 0;
 }
 
@@ -1647,6 +1647,47 @@ body.vscode-high-contrast-light .disclosure:hover {
 
 .planner-pill-login:focus-visible {
   outline-offset: -2px;
+}
+
+/* A picker row's short status, inside its capsule beside the name (ADR-0052):
+   the words say it, the colour only reinforces them. */
+.runner-choice-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px 0 2px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.runner-choice-status.tone-error {
+  color: var(--ow-status-error, var(--red));
+}
+
+.runner-choice-status.tone-warning {
+  color: var(--warning-text);
+}
+
+/* A recovery that is no sign-in (a retry, a refresh) is no red action. */
+.runner-choice-recovery.tone-warning,
+.runner-choice-recovery.tone-muted {
+  background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
+}
+
+.runner-choice-recovery.tone-warning:hover:not(:disabled),
+.runner-choice-recovery.tone-muted:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+}
+
+.runner-choice-recovery.tone-warning::before,
+.runner-choice-recovery.tone-muted::before {
+  background: var(--border-color);
+}
+
+/* A row that refuses a new pick stays focusable, so its status is still read. */
+.planner-pill[aria-disabled='true'],
+.runner-pill[aria-disabled='true'] {
+  cursor: not-allowed;
 }
 
 /* The row's variant: the same tonal action, sized for the text line it shares. */

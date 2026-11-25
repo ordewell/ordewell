@@ -177,6 +177,27 @@ ornament; its label is red. Enter on a blocked row, ticking it on in `/runners`,
 and change nothing. A pick the daemon refuses reads the planner and the runner
 rows again, so the stepper's early display of it is undone.
 
+The Desktop and VS Code chat's planner and Runners pills put the status inside
+the row's capsule, after the name, in the error colour for a blocker and muted
+for the neutral ones, with the recovery as the capsule's last segment: `Cursor
+Signed out [Sign in]`. Sign in and Add key run that agent's login or key entry,
+Refresh models and Retry ask the host to detect the agents and their catalogs
+again; none re-picks or sends anything once it is done. A row that refuses a new
+pick keeps its pill focusable with `aria-disabled` and names the status in
+`aria-describedby`, so the recovery beside it stays reachable by keyboard and
+screen reader. A task card's Runner dropdown names a blocker as `Cursor —
+Signed out` and disables it, except on the task already on it. The planner's
+model list says nothing while its agent's models are asked for or it runs on its
+own default, and tells a failed load (Retry) from a catalog that listed nothing
+(Refresh models); a credential hook's own words (Cline's) are the status's
+detail. The Desktop reads each row's `readiness` from the daemon's list; VS Code
+words its own from the same probe and discovery answers
+(`runnerReadiness`) and judges each new pick with the daemon's check
+(`refuseBlockedPick`). A pick either host refuses shows its refusal in the
+chat's error, with the refused agent's Sign in from
+`runnerNotReady.readiness.signIn`, as any refusal that names a signed-out agent
+does.
+
 ### The way in, worded once
 
 A verdict carries its agent's ways in as data, `RunnerSignIn`, built by
@@ -214,13 +235,13 @@ by-hand route is no news to someone who may be signed in already.
 | Surface | The flag | Signing in |
 |---|---|---|
 | TUI | a red welcome line per signed-out agent, the active planner first, and the red name of every signed-out runner its Runners row shows; the selected planner's value in the Setup block is red, and so is the confirmation notice of a pick, while its agent is signed out; the planner, `/runners` and task-runner pickers list it below the choosable rows as `Signed out · /login <runner>`, choosable only where it is already the user's choice (*Picking a runner*) | `/login` for the active planner, `/login <runner>` by id or display label, `/key-set` for a key-based agent |
-| VS Code | a red dot and a **Log in** segment on every signed-out pill, planner or runner, titled with the hint; the empty state lists one row per signed-out agent, the active planner first, each with the hint and its own action; a task that failed on a signed-out agent has **Log in** beside Retry | that pill's, row's or card's button: the agent's login, or the key entry for a key-based agent |
+| VS Code | a red dot, the status and a **Sign in** segment on every signed-out pill, planner or runner, titled with the hint (*Picking a runner*); the empty state lists one row per signed-out agent, the active planner first, each with the hint and its own action; a task that failed on a signed-out agent has **Log in** beside Retry | that pill's, row's or card's button: the agent's login, or the key entry for a key-based agent |
 | Headless CLI | `ordewell runners` prints the hint under a signed-out row, and the login under an unknown one | the agent's own command, or `ordewell key set` |
 
 The welcome's line is the hint, the planner's first, then one for every other
 signed-out agent in the runner list's order, each naming its own `/login
-<runner>`. VS Code renders the login as the second segment of the pill's own
-capsule, beside the name, and as a button on the empty-state row, so one agent's
+<runner>`. VS Code renders the login as the last segment of the pill's own
+capsule, after the name and its status, and as a button on the empty-state row, so one agent's
 fix never reads as a second control. Its Log in runs the agent's login when
 Ordewell can run one and opens the key entry (`/key-set <provider>`) for a key-based
 agent; one whose only way in is by hand gets the hint and no button. An agent
@@ -537,3 +558,4 @@ art for the TTL and the refresh trigger.
 - 2026-11-25 — a recorded verdict keeps its evidence: a status-less probe's `unknown` no longer erases a turn's or discovery's refusal on refresh or expiry; an ACP start refusal and discovery's handshake are recorded by type; the send recheck asks the handshake, and a finished login or explicit recheck (`runners.list?recheck=`) is the only reset.
 - 2026-11-25 — a refusal that names a signed-out agent offers that agent's Sign in on the Desktop and VS Code chat's error; a refused start reaches daemon clients as `runner_signed_out` with its `signIn`.
 - 2026-11-25 — one choice rule for every picker (`runnerChoice`): ready choices first, blocked ones kept visible with one status and their recovery; a new planner pick, runner switched on or task assignment of a signed-out, keyless or modelless runner is refused, and judged again at the daemon's write (`runner_not_ready`); choices already made are kept.
+- 2026-11-25 — the Desktop and VS Code pickers read the same choice rule: each row's status and recovery in its capsule, a blocked row refused as a new pick but focusable, the model list told by readiness; VS Code judges its own picks with the daemon's `refuseBlockedPick`, and a refused pick offers that agent's Sign in.
