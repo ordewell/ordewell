@@ -15,6 +15,8 @@ export { truncateCheckpointSummary, CHECKPOINT_TRUNCATE_LENGTH, IDLE_ACTIVITY, e
 // The first-run feedback notice's words and links (ADR-0075), which a renderer draws.
 export { FIRST_RUN_FEEDBACK, FEEDBACK_DISCUSSION_URL, REPOSITORY_URL, type FeedbackAction } from './services/feedbackNotice';
 export { capConflictFiles } from './services/conflictFiles';
+// Which changed files agents load when they start (ADR-0028), so a list of changes marks them.
+export { isAgentSettingsPath } from './services/repositoryRunnerConfig';
 // What the planner's decision record still holds (ADR-0067): a surface shows it without the superseded entries.
 export { live as standingRecord } from './services/decisionRecord';
 export { describeMergeResult, mergeOutcome, blockNotice, blockNotices, repairedLanded, repairedNotice } from './services/mergeResultNotice';

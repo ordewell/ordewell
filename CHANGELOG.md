@@ -8,6 +8,16 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **The desktop app labels agent settings in its lists of changed files.** In
+  Changes, a task's files, the whole run's and the files Merge all names as your
+  uncommitted changes the run also changed mark a file agents load when they
+  start (`.mcp.json`, `.claude/settings.json` and Claude's hooks and plugins,
+  `opencode.json`, `.codex/`, and Pi's settings, MCP config and extensions) in
+  the workspace's folder with an *agent settings* label, whose tooltip asks you
+  to review it before you merge.
+
 ### Changed
 
 - **In Full, a task in its runner's Full mode starts though agent settings

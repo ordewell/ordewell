@@ -17,6 +17,7 @@ export {
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize, type ButtonBusyMotion } from './design/Button';
 export { Badge, type BadgeProps, type BadgeTone } from './design/Badge';
 export { RUNNER_NAMES, runnerName, RunnerBadge, type RunnerBadgeProps } from './design/runners';
+export { AGENT_SETTINGS_LABEL, AGENT_SETTINGS_HINT, AgentSettingsBadge, type AgentSettingsBadgeProps } from './design/agentSettings';
 export { DEFAULT_MODEL_LABEL, modelLabel, modelShortLabel, effortLabel } from './design/assignment';
 export {
   SectionHeader, Card, EmptyState, Toolbar, Kbd,

@@ -517,7 +517,10 @@ your own editor.
 In a run scope, Changes lists the changed files of a task or of the whole run,
 with Monaco's diff beside it, side by side or inline. A line comment is sent to
 the task as a message quoting the file and line. *Review & Merge all* opens the
-preflight described below.
+preflight described below. A file agents load when they start, such as
+`.mcp.json` or `.claude/settings.json` in the workspace's folder, carries an
+*agent settings* label in these lists and in the preflight's list of your
+uncommitted files the run also changed.
 
 On *Your checkout*, Changes is your own working tree: staged, unstaged,
 untracked and conflicted files, the commit box (`⌘⏎`/`Ctrl+Enter` commits),

@@ -105,7 +105,7 @@ export { describeIsolationPreview } from './services/isolationPreviewText';
 export type { IsolationPreviewNotice } from './services/isolationPreviewText';
 export { isolationViewOfPlan, migratePlanIsolation } from './services/isolationRecord';
 export { capConflictFiles } from './services/conflictFiles';
-export { repositoryRunnerConfigPaths } from './services/repositoryRunnerConfig';
+export { isAgentSettingsPath, repositoryRunnerConfigPaths } from './services/repositoryRunnerConfig';
 export { checkoutRule, handoffBaseLine, handoffBranchName, isRepoGroup, mergeBesideOpsConfirmation, mergePastChecksConfirmation, mergeTarget, repoBaseLine, repoResultLines, reposWithWork } from './services/mergeWording';
 export type { HandoffForkRepo, MergeWordingHandoff } from './services/mergeWording';
 export type { Adr0013PlanIsolation, Adr0013IsolationRun, Adr0013TaskRecord } from './services/isolationRecord';

@@ -149,6 +149,8 @@
 .ow-badge-failed { color: var(--ow-status-failed); }
 .ow-badge-passed { color: var(--ow-status-passed); }
 .ow-badge-merge { color: var(--ow-status-merge); }
+/* In a file's row its words never give way to the path's: the path is the one that shortens. */
+.ow-agent-settings { flex: none; }
 
 /* A runner's colour, on its own tint, beside its name; an unknown runner stays neutral. */
 .ow-runner-claude-code { background: var(--ow-runner-claude-code-tint); color: var(--ow-runner-claude-code); }

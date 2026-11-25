@@ -46,3 +46,21 @@ export function runnerConfigFromTop(paths: readonly string[], prefix: string): s
   return [...new Set(paths.filter((name) => repositoryRunnerConfigPaths([name]).length > 0
     || (prefix !== '' && name.startsWith(prefix) && repositoryRunnerConfigPaths([name.slice(prefix.length)]).length > 0)))].sort();
 }
+
+/**
+ * Whether `file`, named from a repository's top in either separator, is
+ * runner configuration that agents load when they start: one of the top's
+ * own, or of a directory from the top down to `workspace`, the workspace's
+ * folder from the top (`''` at the top), the directories the launch check
+ * reads (ADR-0028). A name given from the workspace's folder is asked with no
+ * `workspace`: the folder's own configuration then reads as a top's.
+ */
+export function isAgentSettingsPath(file: string, workspace = ''): boolean {
+  const name = file.replace(/\\/g, '/');
+  const levels = workspace.replace(/\\/g, '/').split('/').filter((part) => part !== '' && part !== '.');
+  for (let depth = 0; depth <= levels.length; depth++) {
+    const prefix = levels.slice(0, depth).map((part) => `${part}/`).join('');
+    if (name.startsWith(prefix) && repositoryRunnerConfigPaths([name.slice(prefix.length)]).length > 0) return true;
+  }
+  return false;
+}

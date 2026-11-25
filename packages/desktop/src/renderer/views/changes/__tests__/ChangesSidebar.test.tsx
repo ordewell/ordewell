@@ -9,7 +9,8 @@ import { registerViews } from '../../index';
 import { resetTaskViews } from '../../task/taskView';
 import { fakeDaemon, ok, surfacePlan, surfaceTask } from '../../../session/__tests__/fakeDaemon';
 import { fileTabId } from '../../explorer/fileTabs';
-import { ChangesList } from '../ChangesSidebar';
+import { ChangesList, TaskChanges } from '../ChangesSidebar';
+import { AGENT_SETTINGS_HINT } from '@ordewell/ui/design';
 import { HANDOFF, runTask, runView, worktree } from './fixtures';
 
 // Monaco needs a browser; the frame's views are registered here, but none opens a file.
@@ -67,8 +68,8 @@ function reviewDaemon(answers: Parameters<typeof fakeDaemon>[0] = {}) {
   });
 }
 
-async function mounted() {
-  const daemon = reviewDaemon();
+async function mounted(answers: Parameters<typeof fakeDaemon>[0] = {}) {
+  const daemon = reviewDaemon(answers);
   const host = new DaemonHost(WORKSPACE, async () => null);
   hosts.push(host);
   await act(() => host.open('s1'));
@@ -113,6 +114,41 @@ describe('the Changes sidebar', () => {
     expect(login.getByLabelText('12 added, 3 removed')).toBeInTheDocument();
     expect(login.queryByLabelText('Modified')).not.toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Whole run vs base' })).getByLabelText('Modified')).toBeInTheDocument();
+  });
+
+  it('labels a file agents load when they start, in a task\'s list and the whole run\'s, and no other file', async () => {
+    const settings = {
+      'plans.taskDiff': (params: RouteParams | undefined) => ok({
+        available: true,
+        text: params?.taskId === 't3' ? '[repo .] src/sso.ts: +40 -0\n[repo .] .claude/settings.json: +3 -0\n' : TASK_DIFFS[String(params?.taskId)] ?? '',
+      }),
+      'git.diff': (params: RouteParams | undefined) => params?.scope === 'integration'
+        ? ok({ files: [{ path: 'src/login.tsx', status: 'M', added: 12, removed: 3 }, { path: '.mcp.json', status: 'A', added: 5, removed: 0 }] })
+        : gitDiff(params),
+    };
+    await mounted(settings);
+    const sso = within(screen.getByRole('region', { name: 'Task #3: Wire SSO' }));
+    const label = within(await sso.findByRole('button', { name: /settings\.json/ })).getByText('agent settings');
+    expect(label.closest('[title]')).toHaveAttribute('title', 'Agents load this file when they start. Review it before you merge.');
+    expect(within(sso.getByRole('button', { name: /sso\.ts/ })).queryByText('agent settings')).not.toBeInTheDocument();
+
+    const run = within(screen.getByRole('region', { name: 'Whole run vs base' }));
+    expect(within(await run.findByRole('button', { name: /\.mcp\.json/ })).getByText('agent settings').closest('[title]')).toHaveAttribute('title', AGENT_SETTINGS_HINT);
+    expect(within(run.getByRole('button', { name: /login\.tsx/ })).queryByText('agent settings')).not.toBeInTheDocument();
+  });
+
+  it('labels the same file in a task tab\'s Changes view, the list the sidebar draws', async () => {
+    const daemon = reviewDaemon({ 'plans.taskDiff': ok({ available: true, text: '[repo .] .codex/config.toml: +1 -0\n[repo .] docs/.claude-notes.md: +4 -0\n' }) });
+    const host = new DaemonHost(WORKSPACE, async () => null);
+    hosts.push(host);
+    await act(() => host.open('s1'));
+    await act(async () => {
+      daemon.push('s1', { type: 'connected', sessionId: 's1' }, { type: 'run_snapshot', sessionId: 's1', view: runView(TASKS, HANDOFF), stream: 'd1', seq: 0 });
+    });
+    const store = new FrameStore({ workspace: WORKSPACE, platform: 'linux' });
+    render(<FrameProvider value={store}><TaskChanges api={store.api} host={host} task={TASKS[2]!} label="3" /></FrameProvider>);
+    expect(within(await screen.findByRole('button', { name: /config\.toml/ })).getByText('agent settings')).toBeInTheDocument();
+    expect(within(screen.getByRole('button', { name: /claude-notes\.md/ })).queryByText('agent settings')).not.toBeInTheDocument();
   });
 
   it('filters on file or task, and a task named shows all its files', async () => {
