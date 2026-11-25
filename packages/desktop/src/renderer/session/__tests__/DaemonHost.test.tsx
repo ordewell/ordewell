@@ -1466,7 +1466,7 @@ describe('DaemonHost sign-in, keys and planner controls', () => {
 
     await act(() => host.handle({ type: 'setRunnerEnabled', runnerId: 'codex', enabled: true, requestId: 'r1' }));
 
-    expect(daemon.calls('runners.setEnabled')).toEqual([[{ id: 'codex' }, { enabled: true }]]);
+    expect(daemon.calls('runners.setEnabled')).toEqual([[{ id: 'codex', workspace: WORKSPACE }, { enabled: true }]]);
     expect(seen).toContainEqual({ type: 'runnerChoiceSaved', requestId: 'r1', runnerId: 'codex', enabled: true });
   });
 

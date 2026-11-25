@@ -1,5 +1,5 @@
 import type { AccountLimitSnapshot, GlobalRunSettings, IsolationPreview,
-  AiProvider, RunnerAuth, RunnerCommand, RunnerSignIn, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
+  AiProvider, RunnerAuth, RunnerCommand, RunnerReadiness, RunnerSignIn, DisplayBlock, DiscoveredModel, PromptHold, RunnerId, RunActivity, RunView, SurfacePlan,
   TaskModelAssignment, ChildPlanEntry, ChildPlanView, CardEdit,
 } from '@ordewell/core';
 
@@ -18,14 +18,22 @@ export interface PlannerBackend {
   runner?: string;
   usable: boolean;
   reason?: string;
-  /** The runner's own login verdict: a signed-out agent stays usable and is flagged, never blocked. */
+  /** The runner's own login verdict: a signed-out agent stays usable and is flagged. */
   auth?: RunnerAuth;
+  /**
+   * Harness planners only: the runner's readiness as its host judges it
+   * (ADR-0052), which the picker words with core's `runnerEntryChoice`. A
+   * host that sends none is read from `auth` alone.
+   */
+  readiness?: RunnerReadiness;
 }
 
 export interface RunnerMeta {
   id: string;
   displayName: string;
   enabled: boolean;
+  /** The runner's readiness as its host judges it (ADR-0052); absent from a host that predates it. */
+  readiness?: RunnerReadiness;
 }
 
 export interface RunnerModeMeta {

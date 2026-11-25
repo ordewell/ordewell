@@ -69,10 +69,8 @@ import {
   forgetSignedOutRunnerAuth,
   recheckRunnerSignIn,
   verifyRunnerSignIn,
-  runnerChoice,
-  runnerChoiceRefusal,
+  refuseBlockedPick,
   runnerReadiness,
-  RunnerNotReadyError,
   type RunnerRecheck,
   type PlannerBackendId,
   type PlannerModelCandidate,
@@ -1140,12 +1138,12 @@ export class OrchestratorPool {
   async refuseBlockedRunner(runner: string, workspace: string | undefined): Promise<void> {
     const manifest = this.registry.getManifest(runner);
     if (!manifest) return;
-    const usability = recordedRunnerAuth(runner, workspace)?.state === 'signed-out'
-      ? await verifyRunnerSignIn(runner, this.signInCheck(workspace))
-      : await this.installationFor(workspace).runnerUsability(runner);
-    const readiness = runnerReadiness(usability, this.resolverFor(workspace).getRunnerUnlisted()[runner]);
-    if (runnerChoice(readiness).group !== 'blocked') return;
-    throw new RunnerNotReadyError(runner, readiness, runnerChoiceRefusal(manifest.displayName, readiness) ?? `${manifest.displayName} cannot be picked now.`);
+    const resolver = this.resolverFor(workspace);
+    await refuseBlockedPick(runner, manifest.displayName, {
+      ...this.signInCheck(workspace),
+      ...(workspace !== undefined ? { workspace } : {}),
+      unlisted: () => resolver.getRunnerUnlisted(),
+    });
   }
 
   /** {@link refuseBlockedRunner} for a task edit: only a move onto another runner is a new pick. */
