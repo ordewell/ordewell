@@ -90,6 +90,8 @@ interface WorldOptions {
   runners?: { runners: Array<Record<string, unknown>>; orchestratorModel?: string };
   /** A route that never answers, to prove a read is bounded. */
   hang?: 'settings' | 'runners' | 'models' | 'prefs';
+  /** A runner the daemon holds signed out in this workspace: switching it on there is refused, as ADR-0052 says. */
+  signedOutIn?: { runner: string; workspace: string; error: string };
 }
 
 function world(theme: 'system' | 'light' | 'dark' = 'dark', options: WorldOptions = {}): World {
@@ -111,7 +113,13 @@ function world(theme: 'system' | 'light' | 'dark' = 'dark', options: WorldOption
       if (change.modelAllowlist) settings = { ...settings, modelAllowlist: { ...settings.modelAllowlist, ...change.modelAllowlist } as SettingsResponse['modelAllowlist'] };
       return ok({ ...settings });
     },
-    'runners.setEnabled': () => ok({ ok: true }),
+    'runners.setEnabled': (params, body) => {
+      const out = options.signedOutIn;
+      if (out && params?.id === out.runner && params.workspace === out.workspace && (body as { enabled?: boolean }).enabled) {
+        return { ok: false, status: 409, error: out.error, data: { error: out.error } };
+      }
+      return ok({ ok: true });
+    },
   });
   let prefs = { theme, layouts: {}, notifications: true, keepRunningInTray: false, settingsAdvancedOpen: options.advancedOpen ?? false, editorCommand: '' };
   const get = vi.fn(() => options.hang === 'prefs' ? never() : Promise.resolve(prefs));
@@ -262,7 +270,7 @@ describe('the Settings view', () => {
     await waitFor(() => expect(w.daemon.calls('settings.update').at(-1)?.[1]).toMatchObject({ env: { ORDEWELL_MAX_PARALLEL: '4' } }));
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Codex/ }));
-    await waitFor(() => expect(w.daemon.calls('runners.setEnabled')).toContainEqual([{ id: 'codex' }, { enabled: true }]));
+    await waitFor(() => expect(w.daemon.calls('runners.setEnabled')).toContainEqual([{ id: 'codex', workspace: WORKSPACE }, { enabled: true }]));
   });
 
   it('asks before the supervisor may act or autorun turns on, as the chat\'s Run block does, and Cancel saves nothing', async () => {
@@ -299,6 +307,17 @@ describe('the Settings view', () => {
     fireEvent.change(parallel, { target: { value: '5' } });
     fireEvent.blur(parallel);
     await waitFor(() => expect(daemonHost(WORKSPACE).getSnapshot().state.runSettings?.maxParallel).toBe(5));
+  });
+
+  it('switches a runner on for the window\'s workspace, so a runner signed out there is refused and stays off', async () => {
+    const error = 'Codex is signed out. Run codex login, then try again.';
+    const { w } = await mount('dark', { signedOutIn: { runner: 'codex', workspace: WORKSPACE, error } });
+    const codex = await screen.findByRole('checkbox', { name: /Codex/ });
+
+    fireEvent.click(codex);
+    expect(await screen.findByText(error)).toBeInTheDocument();
+    expect(w.daemon.calls('runners.setEnabled')).toEqual([[{ id: 'codex', workspace: WORKSPACE }, { enabled: true }]]);
+    expect(codex).not.toBeChecked();
   });
 
   it('words each signed-out runner as core does, and its Log in asks the session host', async () => {

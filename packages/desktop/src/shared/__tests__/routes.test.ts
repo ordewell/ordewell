@@ -93,7 +93,8 @@ describe('buildRequest: the IPC allowlist', () => {
 
   it('refuses a param the route does not read', () => {
     expect(refused(buildRequest('sessions.list', { workspace: '/w', admin: '1' }))).toBe('sessions.list: unknown param admin');
-    expect(refused(buildRequest('runners.setEnabled', { id: 'claude-code', workspace: '/w' }))).toBe('runners.setEnabled: unknown param workspace');
+    expect(refused(buildRequest('runners.setEnabled', { id: 'claude-code', workspace: '/w', admin: '1' }))).toBe('runners.setEnabled: unknown param admin');
+    expect(refused(buildRequest('server.info', { workspace: '/w' }))).toBe('server.info: unknown param workspace');
   });
 
   it('refuses a param that is not a string', () => {
