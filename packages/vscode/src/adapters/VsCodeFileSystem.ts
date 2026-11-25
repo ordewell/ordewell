@@ -24,6 +24,16 @@ import {
   type ShellLaunch,
   type ToolOutcome,
 } from '@ordewell/core';
+import { workspaceFolderRoot } from './workspaceFolder';
+
+/**
+ * The root of a window that has never had a folder: inside this module's own
+ * file, so it names no directory anyone has and none can be made there. Core's
+ * session needs a root to be built, and the host admits nothing that would
+ * write under it (`admitWorkspaceFolder`); anything that slipped past would
+ * fail on ENOTDIR instead of writing into the extension host's cwd (task #47).
+ */
+const NO_FOLDER_ROOT = path.join(__filename, 'no-workspace-folder');
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const SEARCH_TIMEOUT_MS = 20_000;
@@ -91,10 +101,22 @@ function run(
  * `BaseFileSystem`; the adapter never re-derives containment.
  */
 export class VsCodeFileSystem extends BaseFileSystem {
+  /** The folder this window last had open: the project a session it already holds is bound to. */
+  private boundRoot: string | undefined;
+
   constructor(private readonly fixedRoot?: string) { super(); }
 
+  /**
+   * The open folder, read live. Once the last folder is removed, the one it
+   * last had: what the host still saves for the session it holds stays with
+   * that session's project rather than moving anywhere else, and new turns
+   * are refused at the host's boundary.
+   */
   getWorkspaceRoot(): string {
-    return this.fixedRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    if (this.fixedRoot !== undefined) return this.fixedRoot;
+    const live = workspaceFolderRoot();
+    if (live !== undefined) this.boundRoot = live;
+    return this.boundRoot ?? NO_FOLDER_ROOT;
   }
 
   rootedAt(workspace: string): VsCodeFileSystem { return new VsCodeFileSystem(workspace); }
