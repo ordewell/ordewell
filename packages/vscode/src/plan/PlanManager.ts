@@ -5,7 +5,7 @@ import {
   saveState, clearState, ModelResolver, RunnerRegistry, plannerNotReadyFor, describePlannerNotReady, CHAT_COMMANDS,
   createEmptyPlan, installedPlannerAnswered, isRunnerApproval, loopRemovalRefusal, PlannerNotReadyError, PlannerTurnDiscardedError, PlannerTurnStoppedError, type INotification, type IRunner,
   type ExecutionCommand, type ExecutionSummary, type OverrideDirection,
-  recordedRunnerAuth, runnerForProvider, verifyRunnerSignIn, type RunnerInstallation,
+  recordedRunnerAuth, runnerForProvider, RunnerSignedOutError, verifyRunnerSignIn, type RunnerInstallation,
 } from '@ordewell/core';
 import type { TaskDraft, TaskEdit, WebviewToHost } from '@ordewell/ui/protocol';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
@@ -124,7 +124,15 @@ export function reportPlannerError(err: unknown, deps: PlanManagerDeps): void {
   // The session refuses a turn on a planner that cannot plan; the chat says
   // so with its own commands, and as the way out rather than a failure.
   if (err instanceof PlannerNotReadyError) {
-    deps.chatProvider.showError(describePlannerNotReady(err.reason, CHAT_COMMANDS), 'planner_not_ready');
+    const said = describePlannerNotReady(err.reason, CHAT_COMMANDS);
+    if (err.reason.code === 'signed_out') deps.chatProvider.showError(said, 'planner_not_ready', err.reason.signIn);
+    else deps.chatProvider.showError(said, 'planner_not_ready');
+    return;
+  }
+  // The agent refused to start as signed out: its words are the sign-in hint,
+  // and the agent it names is the one the error's Sign in runs (ADR-0052).
+  if (err instanceof RunnerSignedOutError) {
+    deps.chatProvider.showError(err.message, undefined, err.signIn);
     return;
   }
   const message = err instanceof Error ? err.message : String(err);

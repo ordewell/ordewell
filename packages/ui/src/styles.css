@@ -2771,6 +2771,16 @@ section.isolation-notice {
   background: var(--accent);
 }
 
+/* What the error's own sign-in came to, under the error it answers. */
+.error-sign-in-outcome {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+  max-width: 380px;
+  line-height: 1.5;
+}
+
 /* ---- Warning State ---- */
 .warning-state {
   display: flex;
