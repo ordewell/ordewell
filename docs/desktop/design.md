@@ -1424,6 +1424,18 @@ left as it was:
     one.
   - *Restart daemon*, on a mismatch when no run is live there.
 - **Loading.** The bar is itself the loading state.
+  - *On a start* there is no bar: nothing has gone away. The frame is dimmed
+    and inert as above, and `aria-busy`. After 400 ms, so a start that answers
+    at once shows nothing more, a card over the frame names the wait in core's
+    words (`startupWait.ts`), "Starting Ordewell's daemon on port 3742…" or
+    "Connecting to Ordewell's daemon on port 3742…", beside the shared
+    loading mark, which holds still under `prefers-reduced-motion`; the
+    pointer over it is the progress cursor. Five seconds in, the terminal's
+    threshold, it adds the terminal's line, "Still waiting for the daemon on
+    port 3742 to answer. Its log: …". The card has no action, and the title
+    bar and status bar keep theirs. Before the page's script has run, the
+    window shows the mark and "Starting Ordewell…" on its own background,
+    from `index.html`.
 - **Empty.** Not applicable.
 - **Error.** A port held by something else, or a token the app cannot read,
   shows as a card with the fix (`ORDEWELL_PORT`).

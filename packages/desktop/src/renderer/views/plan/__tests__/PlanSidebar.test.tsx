@@ -141,6 +141,34 @@ describe('Sessions', () => {
     expect(screen.getByRole('button', { name: /Ship the parser/ })).toBeDisabled();
     expect(screen.queryByText(/Waiting|Loading/)).not.toBeInTheDocument();
   });
+
+  it('says the daemon is starting on a first start, before it has listed anything', async () => {
+    const daemon = fakeDaemon({ 'sessions.list': () => ok([]) });
+    daemon.setStatus({ state: 'connecting', port: 3700, starting: true });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    render(<Sessions host={host} />);
+    expect(await screen.findByText('The daemon is starting. Sessions show here once it answers.')).toBeInTheDocument();
+    expect(screen.queryByText(/once the daemon is back/)).not.toBeInTheDocument();
+  });
+
+  it('says it is connecting while it looks for a daemon already running', async () => {
+    const daemon = fakeDaemon({ 'sessions.list': () => ok([]) });
+    daemon.setStatus({ state: 'connecting', port: 3700 });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    render(<Sessions host={host} />);
+    expect(await screen.findByText('Connecting to the daemon. Sessions show here once it answers.')).toBeInTheDocument();
+  });
+
+  it('says the list comes back with the daemon on a reconnect that has nothing listed', async () => {
+    const daemon = fakeDaemon({ 'sessions.list': () => ok([]) });
+    daemon.setStatus({ state: 'reconnecting', port: 3700, attempt: 1, canStart: false });
+    const host = new DaemonHost('/work/acme');
+    hosts.push(host);
+    render(<Sessions host={host} />);
+    expect(await screen.findByText('Sessions show here once the daemon is back.')).toBeInTheDocument();
+  });
 });
 
 describe('the Sessions sidebar in the frame', () => {

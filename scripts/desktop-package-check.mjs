@@ -12,7 +12,9 @@
 // every build has its baked update gate held to what it was (ADR-0063 H9).
 import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { get } from 'node:http';
+import { connect, createServer } from 'node:net';
+import { performance } from 'node:perf_hooks';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -232,6 +234,104 @@ export async function smokeDaemon(entry) {
   }
 }
 
+/** How long a TCP connect to `host`:`port` takes to be refused, or what else became of it. */
+export function timeRefusedConnect(host, port, timeoutMs = 5_000) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    const socket = connect({ host, port });
+    const done = (outcome) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve({ ms: Math.round(performance.now() - started), outcome });
+    };
+    const timer = setTimeout(() => done('timeout'), timeoutMs);
+    socket.once('connect', () => done('connected'));
+    socket.once('error', (err) => done(err.code ?? err.message));
+  });
+}
+
+/** One HTTP GET to the daemon, as the app's probe asks: any answer counts, a refusal or a timeout does not. */
+function answers(port, timeoutMs) {
+  return new Promise((resolve) => {
+    const request = get({ host: '127.0.0.1', port, path: '/api/server', timeout: timeoutMs }, (response) => {
+      response.resume();
+      resolve(true);
+    });
+    request.once('timeout', () => { request.destroy(); resolve(false); });
+    request.once('error', () => resolve(false));
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * How a start of the unpacked daemon looks from the desktop app, in numbers,
+ * for this runner's OS: how long a refused connect takes on a closed port, by
+ * 127.0.0.1 and by localhost; when the daemon's PID file, which it writes once
+ * it listens, appears; and when the app's former wait, an HTTP probe then a
+ * 250 ms sleep, would first have had an answer. Both waits run side by side
+ * from the same start. Printed only: a timing never fails the check, and an
+ * error here is a line of output, not a failure.
+ */
+export async function measureDaemonStart(entry, { pollMs = 250, probeTimeoutMs = 2_000, limitMs = 30_000, attempts = 3 } = {}) {
+  const lines = [];
+  const closed = await freePort();
+  for (const host of ['127.0.0.1', 'localhost']) {
+    const tries = [];
+    for (let i = 0; i < attempts; i++) tries.push(await timeRefusedConnect(host, closed));
+    lines.push(`a refused connect to ${host} on a closed port: ${tries.map((t) => `${t.ms} ms`).join(', ')} (${[...new Set(tries.map((t) => t.outcome))].join(', ')})`);
+  }
+
+  const home = mkdtempSync(join(tmpdir(), 'ordewell-desktop-timing-'));
+  const pidFile = join(home, 'daemon.pid');
+  const port = await freePort();
+  const started = performance.now();
+  const since = () => Math.round(performance.now() - started);
+  const child = spawn(process.execPath, [entry, '--port', String(port), '--pid-file', pidFile], {
+    cwd: home,
+    env: { ...process.env, HOME: home, USERPROFILE: home, ORDEWELL_NO_VERSION_CHECK: '1' },
+    stdio: 'ignore',
+  });
+  let exited = false;
+  child.once('exit', () => { exited = true; });
+  try {
+    const watchPidFile = (async () => {
+      while (!exited && since() < limitMs) {
+        if (existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() !== '') return since();
+        await sleep(10);
+      }
+      return undefined;
+    })();
+    const poll = (async () => {
+      let probes = 0;
+      while (!exited && since() < limitMs) {
+        probes += 1;
+        if (await answers(port, probeTimeoutMs)) return { at: since(), probes };
+        await sleep(pollMs);
+      }
+      return { at: undefined, probes };
+    })();
+    const [pidAt, polled] = await Promise.all([watchPidFile, poll]);
+    lines.push(pidAt === undefined
+      ? `the daemon wrote no PID file within ${limitMs} ms${exited ? ' (it exited)' : ''}`
+      : `daemon start to its PID file: ${pidAt} ms`);
+    lines.push(polled.at === undefined
+      ? `a ${pollMs} ms HTTP poll had no answer within ${limitMs} ms (${polled.probes} probes)`
+      : `daemon start to the first answer of a ${pollMs} ms HTTP poll: ${polled.at} ms (probe ${polled.probes}; ${polled.probes - 1} refused or timed out first)`);
+    if (pidAt !== undefined && polled.at !== undefined) lines.push(`the poll answered ${polled.at - pidAt} ms after the PID file appeared`);
+  } finally {
+    if (!exited) {
+      child.kill();
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 5_000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+      });
+    }
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  return lines;
+}
+
 /**
  * Load the unpacked node-pty with a plain Node and run a shell through it. The
  * addon is N-API, so the Node that runs this loads what Electron will; it
@@ -448,6 +548,12 @@ export async function checkDesktopPackage(root, platform = process.platform) {
     const result = await smokeDaemon(entry);
     if (result.ok) ok(`the unpacked daemon answers (HTTP ${result.status} without its token)`);
     else failures.push(`unpacked daemon: ${result.message}`);
+    // Numbers for how the app learns its daemon is up on this OS. Never a failure.
+    try {
+      for (const line of await measureDaemonStart(entry)) console.log(`  time  ${line}`);
+    } catch (err) {
+      console.log(`  time  not measured: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   const unpacked = dirs.map((dir) => join(dir, 'app.asar.unpacked', 'node_modules')).find((path) => existsSync(join(path, 'node-pty')));

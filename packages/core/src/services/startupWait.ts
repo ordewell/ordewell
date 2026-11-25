@@ -20,3 +20,14 @@ export function daemonWaitLine(port: number, starting: boolean): string {
     ? `Starting Ordewell's daemon on port ${port}…`
     : `Connecting to Ordewell's daemon on port ${port}…`;
 }
+
+/**
+ * How long a daemon start goes unanswered before the wait names the log:
+ * the terminal's tenth poll of 500 ms, about five seconds in.
+ */
+export const DAEMON_STILL_WAITING_MS = 5_000;
+
+/** Said once a start has waited `DAEMON_STILL_WAITING_MS`: what the wait is and where to look. */
+export function daemonStillWaitingLine(port: number, logPath: string): string {
+  return `Still waiting for the daemon on port ${port} to answer. Its log: ${logPath}`;
+}

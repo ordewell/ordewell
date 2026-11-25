@@ -6,6 +6,7 @@ import {
   augmentedPath,
   DAEMON_CONTRACT,
   daemonLogPath,
+  daemonPidFilePath,
   probeDaemon,
   readDaemonToken,
   readLiveHolder,
@@ -17,7 +18,7 @@ import { EVENTS, type RecentWorkspace } from '../shared/bridge';
 import { buildRequest, type RouteId, type RouteParams } from '../shared/routes';
 import { DaemonManager } from './daemon/DaemonManager';
 import { RENDERER_TIMING_SOURCE, rendererDelay } from './rendererTiming';
-import { forkBundledDaemon } from './daemon/forkDaemon';
+import { forkBundledDaemon, pidNamedIn } from './daemon/forkDaemon';
 import { findLiveRuns, type LiveRun } from './daemon/liveRuns';
 import { HolderConnections } from './daemon/holders';
 import { DaemonProxy } from './daemon/proxy';
@@ -159,6 +160,8 @@ async function main(): Promise<void> {
     stopExternal: stopDaemonAt,
     liveRuns: () => findLiveRuns(get),
     logPath: daemonLogPath(),
+    // The file forkBundledDaemon names with --pid-file, which the daemon writes once it listens.
+    pidFileOwner: (p) => pidNamedIn(daemonPidFilePath(p)),
   });
   late.daemon = daemon;
   daemon.onStatus((status) => startupLog.record('daemon.status', { state: status.state }));

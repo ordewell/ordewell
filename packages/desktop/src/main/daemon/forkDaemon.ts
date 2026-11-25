@@ -1,4 +1,5 @@
 import { createWriteStream, existsSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { utilityProcess } from 'electron';
@@ -24,6 +25,21 @@ export function bundledDaemonEntry(): string {
     return unpackedFromAsar(join(dirname(require.resolve('@ordewell/web/package.json')), 'dist', 'server', 'main.js'));
   } catch {
     return join(__dirname, '..', '..', '..', 'web', 'dist', 'server', 'main.js');
+  }
+}
+
+/**
+ * The PID a daemon's PID file names, read without blocking main: undefined
+ * when the file is missing or names no positive integer, as core's
+ * `readPidFile` reads it. A start polls this while its child comes up, so it
+ * learns the child listens without a connection being refused.
+ */
+export async function pidNamedIn(file: string): Promise<number | undefined> {
+  try {
+    const pid = parseInt((await readFile(file, 'utf8')).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
   }
 }
 
