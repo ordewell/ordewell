@@ -3,14 +3,14 @@ import { execFileSync } from 'child_process';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import type { Duplex } from 'stream';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   GeminiService, ModelResolver, OpenAiService, createTask, mintDaemonToken, saveSession,
   type ConversationRequest, type ConversationTurn, type IConfig, type IRunner, type LegacyPlanState,
 } from '@ordewell/core';
-import { FakeRunnerSession, homeEnv, setEnv } from '@ordewell/core/testing';
+import { FakeRunnerSession, homeEnv, removeDir, setEnv } from '@ordewell/core/testing';
 import { attachWsHandler, createApp } from '../../../../web/server/app';
 import { createRequestListener } from '../../../../web/server/nodeAdapter';
 import { OrchestratorPool } from '../../../../web/server/pool/orchestratorPool';
@@ -238,7 +238,8 @@ export async function firstRunBRun(settings: MachineSettings = {}) {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       restoreEnv();
-      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      // Windows keeps the project busy (EBUSY) while git work the pool started winds down: wait it out without blocking the loop it needs.
+      await removeDir(dir);
       vi.restoreAllMocks();
     },
   };
