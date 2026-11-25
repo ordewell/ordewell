@@ -344,9 +344,8 @@ the record says signed out, never on a list), so a sign-in done in another
 terminal is seen without a recheck. An ask that gets no answer keeps the
 blocker. The user's explicit recovery (`recheckRunnerSignIn`) forgets the
 record for that runner and workspace first and then asks the same way: a login
-that finished (the TUI's `/login` when its child exits 0, the desktop's login
-terminal when its process exits 0, VS Code's when its terminal closes, since its
-login runs inside a shell whose exit is not the login's), and the TUI's explicit
+that finished (the TUI's `/login` when its child exits 0, and the desktop's and
+VS Code's login terminals when their process, the login itself, exits 0), and the TUI's explicit
 `/refresh`, which rechecks every agent it shows signed out. The daemon takes it
 as `runners.list?recheck=<runner>[,<runner>]`. Where nothing can say, the agent
 reads `unknown`, never signed in on a terminal's exit alone; the user can send
@@ -362,16 +361,18 @@ the manifest's login args in this terminal: the alt screen and raw mode are
 suspended, the child inherits stdio, cwd, PATH and the workspace environment,
 and the TUI resumes in a `finally` so a failed spawn cannot leave the terminal
 behind. Ctrl-C belongs to the child while it runs. VS Code's Log in, on any pill
-or empty-state row, opens an integrated terminal named `<Label> login` with the
-workspace's cwd and environment, sends the argv once, and polls the runner's
-status verdict every two seconds for up to five minutes; a login the probe does
-not confirm, or whose terminal closes, ends as a visible failure; for an agent
-with no status command, whose poll can never confirm, the closed terminal is
-rechecked once as above and its answer is the outcome. On Windows that
-terminal is cmd.exe whatever the user's default: Windows PowerShell prefers an
-npm-installed agent's `.ps1` shim to the `.cmd` beside it, and its default
-Restricted execution policy refuses to run it, so the login died before the
-agent started.
+or empty-state row, opens a transient integrated terminal named `<Label> login`
+whose process is the login itself: the agent's file, found on the probe's
+augmented PATH (absolute on POSIX, by `planDirectLaunch`'s routes on Windows, so
+an npm `.cmd` shim starts its target and a lone `.cmd` runs through cmd.exe),
+with the argv's arguments, the workspace's cwd and environment, and no shell in
+between. A shell would outlive the login, so its end was never seen, and would
+find the name again after its startup files ran. While it runs, a runner with a
+status command is polled every two seconds; it ends at the first of a confirmed
+sign-in, the process's exit, or five minutes, when the terminal is disposed and
+the login with it. An exit 0 is rechecked once as above and its answer is the
+outcome; a nonzero exit, a closed terminal or the timeout ends as a visible
+failure and keeps what was recorded.
 
 Neither path writes the planner choice: signing a named agent in leaves
 `aiProvider` alone, so "Claude plans while Codex signs in" works. Success is
@@ -572,3 +573,4 @@ art for the TTL and the refresh trigger.
 - 2026-11-25 — one choice rule for every picker (`runnerChoice`): ready choices first, blocked ones kept visible with one status and their recovery; a new planner pick, runner switched on or task assignment of a signed-out, keyless or modelless runner is refused, and judged again at the daemon's write (`runner_not_ready`); choices already made are kept.
 - 2026-11-25 — a planner turn its agent ended signed out mid-session keeps its failure once as the conversation's error, carrying that agent's `signIn`, and the Desktop and VS Code chat offer its Sign in there.
 - 2026-11-25 — the Desktop and VS Code pickers read the same choice rule: each row's status and recovery in its capsule, a blocked row refused as a new pick but focusable, the model list told by readiness; VS Code judges its own picks with the daemon's `refuseBlockedPick`, and a refused pick offers that agent's Sign in.
+- 2026-11-25 — VS Code's login runs as its terminal's own process rather than text typed into a shell, so its exit ends the wait: an exit 0 is rechecked, any other end keeps the blocker, and the timeout disposes the terminal.

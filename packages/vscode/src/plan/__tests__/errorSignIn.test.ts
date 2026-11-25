@@ -58,26 +58,24 @@ describe('the sign-in an error asks for', () => {
     const closeListeners: Array<(t: unknown) => void> = [];
     const terminal = {
       exitStatus: undefined as { code: number } | undefined,
-      sent: [] as string[],
-      sendText(text: string) { this.sent.push(text); },
-      show: vi.fn(),
+      // The login is the terminal's own process, and it exits once in view.
+      show: vi.fn(() => {
+        terminal.exitStatus = { code: 0 };
+        for (const cb of closeListeners) cb(terminal);
+      }),
     };
     const post = vi.fn();
     const recheck = vi.fn(async () => { rechecked = true; return { usable: true, auth: { state: 'signed-in' as const } }; });
     const deps = {
       runnerInstallation: {
         runnerUsability: vi.fn(async (runner: string) => {
-          // The terminal closes once the login has started.
-          if (terminal.sent.length > 0 && !terminal.exitStatus) {
-            terminal.exitStatus = { code: 0 };
-            for (const cb of closeListeners) cb(terminal);
-          }
           return { usable: true, auth: { state: rechecked ? 'signed-in' : 'signed-out', loginCommand: runner === 'cursor-agent' ? CURSOR.login : ['claude', 'auth', 'login'] } };
         }),
         refresh: vi.fn(),
         recheck,
       },
       runnerRegistry: new RunnerRegistry(),
+      launch: { resolvePath: async () => '/fake/bin', exists: (file: string) => file === '/fake/bin/cursor-agent' },
       config: { aiProvider: 'claude-code' },
       workspaceRoot: () => '/ws',
       env: async () => ({}),
@@ -95,7 +93,7 @@ describe('the sign-in an error asks for', () => {
 
     await loginPlanner(deps, CURSOR.runner);
 
-    expect(terminal.sent).toEqual(['cursor-agent login']);
+    expect(deps.window.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ shellPath: '/fake/bin/cursor-agent', shellArgs: ['login'] }));
     expect(recheck).toHaveBeenCalledWith('cursor-agent');
     expect(post).toHaveBeenLastCalledWith({ type: 'plannerLoginEnded', runner: 'cursor-agent', ok: true });
   });
