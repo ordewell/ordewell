@@ -50,6 +50,15 @@ export function resolveDefaultMode(
   return undefined;
 }
 
+/**
+ * Whether `id` is a mode `modes` tags for Full (`autonomous`). Only the tag
+ * counts: the positional fallback {@link resolveDefaultMode} takes on an
+ * untagged manifest says nothing of what the mode asks before it acts.
+ */
+export function offeredForFull(modes: readonly RunnerModeInfo[] | undefined, id: string | undefined): boolean {
+  return id !== undefined && modes?.some((m) => m.id === id && m.autonomous === true) === true;
+}
+
 /** The user-facing name of the `autonomousMode` boolean's two states. */
 export function autonomyLevelLabel(autonomous: boolean): 'Full' | 'Guarded' {
   return autonomous ? 'Full' : 'Guarded';

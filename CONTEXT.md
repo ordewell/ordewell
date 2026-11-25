@@ -1627,7 +1627,10 @@ and its plugin and tool directories; Codex's `.codex/`; Pi's
 (`repositoryRunnerConfigPaths`). A *planner* loads none of it (ADR-0028); a
 change or ops task loads it as its runner does, so a start whose runner
 directory differs from where the run started in one of these paths is held
-for the user's consent. A read-only task withholds it and is never held.
+for the user's consent: in Guarded, and in Full for a task outside its
+runner's Full mode. In Full a start in that mode goes ahead and the user is
+told, once per path in the run; a landing that changes such a path says so
+at either level. A read-only task withholds it and is never held.
 *Avoid:* "project settings" (it names one file, not hooks, plugins and servers
 together), "trusted config" (no runner's trust dialog decides it).
 

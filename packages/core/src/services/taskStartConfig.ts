@@ -124,10 +124,35 @@ export interface StartConfigFound {
  */
 export function configHoldReason({ base, live }: StartConfigFound, inChildPlan = false): string {
   const paths = [...new Set([...base, ...live])].sort();
-  const held = `${HELD_FOR}${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started`;
+  const held = `${HELD_FOR}${quoted(paths)} differs from where this run started`;
   if (base.length === 0) return inChildPlan ? `${held}${FROM_CHECKOUT}. ${IN_CHILD_PLAN}` : `${held}${FROM_CHECKOUT}`;
   if (inChildPlan) return `${held}. ${IN_CHILD_PLAN}`;
   return `${held}; remove it to continue, or merge everything this run landed into your branch, with Merge all or a merge of your own (a squash or a rebase does not count), stop the run and start this task yourself: your own start of a task that works in a worktree then begins a new run from your branch, whose base holds this configuration, provided nothing of this run is left: no task running, and no work that never landed, this task's own included, no kept attempt and no delegated task's child plan. Where this task holds such work of its own, a Continue keeps it, and the run with it, so it is held again there; a fresh start (Start now, Retry or Run) discards that work and is held once more, and your next start then begins the new run`;
+}
+
+const quoted = (paths: readonly string[]): string => paths.map((p) => JSON.stringify(p)).join(', ');
+
+/**
+ * What a launch says that the check found configuration for and that goes
+ * ahead (ADR-0028): one in Full whose task runs in its runner's Full mode,
+ * whose runner does not ask before a command there.
+ */
+export function unheldConfigNotice(title: string, paths: readonly string[]): string {
+  return `Task "${title}" starts with ${HELD_FOR}${quoted(paths)}, which differs from where this run started. In Full a task in its runner's Full mode is not held for it, so later tasks in Full load it without a hold too when they run in such a mode.`;
+}
+
+/**
+ * What a task's end says of configuration in the checkout that differs from
+ * the run's first look at it (ADR-0028): a write a landing does not carry. The
+ * checkout is shared, so the task named is when it was found, not who wrote it.
+ */
+export function checkoutConfigNotice(title: string, paths: readonly string[]): string {
+  return `As task "${title}" ends, ${HELD_FOR}${quoted(paths)} in your checkout differs from where this run started; this task, another task, a script or you may have written it. A later task that starts there, or reads it through a worktree's link, can load it.`;
+}
+
+/** What a landing says that added, changed or removed configuration (ADR-0028), in Guarded and in Full. */
+export function landedConfigNotice(title: string, paths: readonly string[]): string {
+  return `Task "${title}" landed a change to ${HELD_FOR}${quoted(paths)}, which a runner loads as it starts.`;
 }
 
 /** Whether a hold is {@link configHoldReason}'s. */
@@ -165,6 +190,8 @@ export type StartConfigRuns = Pick<IsolationRunController, 'taskRepos' | 'worksp
  */
 export class TaskStartConfig {
   private readonly live = new Map<string, Map<string, string>>();
+  /** What a notice has said, by run, by where it said it and by path. */
+  private readonly told = new Set<string>();
   /** What each {@link check} found against the run's base, by the paths it answered. */
   private readonly againstBase = new WeakMap<readonly string[], readonly string[]>();
 
@@ -199,9 +226,34 @@ export class TaskStartConfig {
     return { base, live: paths.filter((name) => !base.includes(name)) };
   }
 
-  /** The baselines go with the plan they belong to. */
+  /**
+   * What the checkout's configuration holds that differs from the run's first
+   * look at it, at each level {@link check} reads there: what a task wrote
+   * that a landing does not carry, in the checkout or through a worktree's link to
+   * it. Only where a check took that look, so this never takes one.
+   */
+  checkoutChanges(epoch: number, root: string): string[] {
+    const id = String(epoch);
+    return [...new Set(readDirs(root).flatMap(({ dir, prefix }) =>
+      this.sinceBaseline(`${id}:checkout:${dir}`, dir).map((name) => `${prefix}${name}`)))].sort();
+  }
+
+  /**
+   * Of `paths`, those no notice has said yet in run `epoch`, now said: a
+   * launch says each once per run, and an end says only what neither a
+   * launch nor an earlier end has.
+   */
+  untold(epoch: number, at: 'launch' | 'end', paths: readonly string[]): string[] {
+    const said = (where: 'launch' | 'end', name: string) => this.told.has(`${epoch}:${where}:${name}`);
+    const fresh = paths.filter((name) => !said('launch', name) && (at === 'launch' || !said('end', name)));
+    for (const name of fresh) this.told.add(`${epoch}:${at}:${name}`);
+    return fresh;
+  }
+
+  /** The baselines go with the plan they belong to, and what was said with them. */
   clear(): void {
     this.live.clear();
+    this.told.clear();
   }
 
   /**
@@ -229,13 +281,18 @@ export class TaskStartConfig {
   }
 
   private liveDifferences(key: string, dir: string): string[] {
-    const now = liveConfig(dir);
-    const before = this.live.get(key);
-    if (!before) {
-      this.live.set(key, now);
+    if (!this.live.has(key)) {
+      this.live.set(key, liveConfig(dir));
       return [];
     }
-    return [...now].filter(([name, hash]) => before.get(name) !== hash).map(([name]) => name);
+    return this.sinceBaseline(key, dir);
+  }
+
+  /** What `dir` holds that differs from the baseline under `key`; nothing where none was taken. */
+  private sinceBaseline(key: string, dir: string): string[] {
+    const before = this.live.get(key);
+    if (!before) return [];
+    return [...liveConfig(dir)].filter(([name, hash]) => before.get(name) !== hash).map(([name]) => name);
   }
 
   private async gitDifferences(runs: StartConfigRuns, taskId: string): Promise<string[]> {

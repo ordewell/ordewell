@@ -439,6 +439,12 @@ export class IsolationRunController {
     return totalChange(Object.values(this.run?.tasks[taskId]?.repos ?? {}).map((entry) => entry.change));
   }
 
+  /** The repository runner configuration the task's latest landing added, changed or removed (ADR-0028), in the run's repo order. */
+  landedConfigOf(taskId: string): string[] {
+    const record = this.run?.tasks[taskId];
+    return record ? this.run!.repos.flatMap((repo) => record.repos[repo.path]?.config ?? []) : [];
+  }
+
   /** The files the task's last repair resolved. */
   repairedFilesOf(taskId: string): string[] {
     return this.run?.tasks[taskId]?.repairedFiles ?? [];

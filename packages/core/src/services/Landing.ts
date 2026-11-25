@@ -11,6 +11,7 @@ import type { HandoffChange, HandoffCommit } from '../models/Handoff';
 import { landingMessage } from './landingMessage';
 import { underProtectedPath } from '../models/Delegation';
 import { IDENTITY_FIX, lacksIdentity } from './gitIdentity';
+import { landedConfigNotice } from './taskStartConfig';
 
 /** Which repair of a task an attempt is, of the most `conflictRepairAttempts` allows. */
 export interface RepairAttempt {
@@ -22,7 +23,7 @@ export interface RepairAttempt {
 export interface LandingMessage {
   level: 'info' | 'warn' | 'error';
   text: string;
-  /** Also handed to a surface that shows no toasts: ADR-0015 logs every conflict repair as a notice. */
+  /** Also handed to a surface that shows no toasts: ADR-0015 logs every conflict repair as a notice, and ADR-0028 a landing that changes runner configuration. */
   repairLog?: true;
 }
 
@@ -158,10 +159,17 @@ export class Landing {
     return this.landed(task, [{ level: 'info', text: `Task "${task.title}" landed after repairing a conflict${files.length > 0 ? ` in ${capConflictFiles(files)}` : ''}.`, repairLog: true }]);
   }
 
-  /** A landing that went through, with what git counted it brought. */
+  /**
+   * A landing that went through, with what git counted it brought, and what
+   * of it is runner configuration said, whatever the level: in Full a later
+   * start can go ahead without a hold, and a landing no task follows would
+   * otherwise go unsaid (ADR-0028).
+   */
   private landed(task: Readonly<Task>, messages: LandingMessage[]): LandingOutcome {
     const change = this.runs.landedChangeOf(task.id);
-    return { kind: 'landed', messages, ...(change ? { change } : {}) };
+    const config = this.runs.landedConfigOf(task.id);
+    const said = config.length > 0 ? [...messages, { level: 'warn' as const, text: landedConfigNotice(task.title, config), repairLog: true as const }] : messages;
+    return { kind: 'landed', messages: said, ...(change ? { change } : {}) };
   }
 
   /** A repair lands after the verdict that held the work to its protected paths, so it is held to them here (ADR-0055 D7, D14). */

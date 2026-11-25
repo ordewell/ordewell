@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MergePreflightResponse } from '@ordewell/core';
 import type { ConfirmationRequest } from '@ordewell/ui/host';
@@ -61,6 +61,17 @@ describe('Merge all', () => {
     render(asked[0]!.body);
     expect(screen.getByRole('list', { name: 'Where it lands' })).toHaveTextContent('Lands on main in the workspace');
     expect(daemon.calls('plans.isolationMerge')).toEqual([[{ sessionId: 's1' }, {}]]);
+  });
+
+  it('labels an overlapping file agents load when they start, and no other', async () => {
+    const { asked, run } = await setup({ ...CLEAN, repos: [{ repo: '.', branch: 'main', overlap: ['.claude/settings.json', 'src/login.tsx'], otherDirty: false }] }, null);
+    await run();
+    render(asked[0]!.body);
+    const [settings, login] = within(screen.getByRole('list', { name: 'Your uncommitted files in the workspace the run also changed' })).getAllByRole('listitem');
+    expect(settings).toHaveTextContent('.claude/settings.json');
+    expect(within(settings!).getByText('agent settings').closest('[title]')).toHaveAttribute('title', 'Agents load this file when they start. Review it before you merge.');
+    expect(login).toHaveTextContent('src/login.tsx');
+    expect(within(login!).queryByText('agent settings')).not.toBeInTheDocument();
   });
 
   it('stashes only the overlapping files, merges, then gives them back by the stash it made', async () => {

@@ -3,7 +3,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, GitMerge, GitPullRequestArrow
 import { taskRowView, titledRefs, walkPlan } from '@ordewell/core/plan-utils';
 import type { RunTask, RunView, Task, TaskType } from '@ordewell/core';
 import { TaskSummary } from '@ordewell/ui';
-import { Badge, Button, EmptyState, Icon, IconButton, SectionHeader, statusOf } from '@ordewell/ui/design';
+import { AgentSettingsBadge, Badge, Button, EmptyState, Icon, IconButton, SectionHeader, statusOf } from '@ordewell/ui/design';
 import type { FrameApi, Unregister } from '../../frame/api';
 import { SectionHead } from '../../frame/Sidebar';
 import { useDisclosure } from '../../frame/store';
@@ -166,6 +166,8 @@ function Files({ list, note, scope, tag, filter, open, empty }: {
                 </span>
                 <span className="changes-file-name">{name}</span>
                 {where && <span className="changes-file-dir muted">{where}</span>}
+                {/* A task's list names a file from the workspace's folder, or from the top when it lies beside it, and the run's from the folder: the folder's own configuration and the top's are what this marks. */}
+                <AgentSettingsBadge path={file.path} />
                 <Counts file={file} />
               </button>
             </li>

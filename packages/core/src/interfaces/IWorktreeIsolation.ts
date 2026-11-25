@@ -124,6 +124,12 @@ export interface IsolationTaskRepo {
   landedTip?: string;
   /** What the task's latest landing brought onto this repo's integration branch, as git counts it; absent before it landed here, where git could not say, and in older saved runs. */
   change?: HandoffChange;
+  /**
+   * The repository runner configuration that landing added, changed or removed
+   * here (ADR-0028), named as the launch check names it;
+   * absent where it brought none, where git could not say, and in older saved runs.
+   */
+  config?: string[];
 }
 
 export interface IsolationTaskRecord {

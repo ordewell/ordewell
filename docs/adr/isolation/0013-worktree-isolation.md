@@ -78,6 +78,10 @@ everything below applies per repo of the group.
   configuration one of its tasks landed would be held again at each start,
   where a person's start of a run whose base holds it is how they consent to
   it ([ADR-0028](../planner-envelope/0028-planners-never-run-repository-config.md)).
+  Such a hold is Guarded's, and Full's for a task outside its runner's Full
+  mode: in Full a start in that mode goes ahead and says what differs
+  (ADR-0028), and who replaces a spent run is decided as this paragraph
+  says at either level.
   The release is the run's: the new run's base holds that configuration, so
   no worktree of it is held for it, whoever starts the task. The planner's,
   the supervisor's and autorun's starts, a dependent's Ordewell drains from
@@ -701,3 +705,4 @@ literal git command lines or private fields.
 - 2026-11-18 — the commits a revert makes are kept per repository and the fork point reads them beside the landings, so a take-in past a sibling's revert does not read that revert as the task's own change.
 - 2026-11-24 — the generated `.ordewell/.gitignore` ignores itself, so it is no longer swept into a landing (the hazard ADR-0055 recorded) or listed by `git status`.
 - 2026-11-24 — a run git finds wholly in the user's branch, with nothing live, unlanded, kept or seating a child left in it, the held task's own work included, is replaced rather than continued when a person's own start of a task in a worktree decides the next run, reverted or not; the planner's, the supervisor's and autorun's starts continue it, as they do a run whose ledger names a landing no record speaks for, and a merged run a held start is in stays at its clear-up; a hold for configuration in the checkout or linked from it, and the other ways configuration reaches a task with no person's start, are as they were (ADR-0028).
+- 2026-11-25 — a start is held for configuration where ADR-0028 still checks it, in Guarded and in Full outside a runner's Full mode; a start in Full in that mode goes ahead and says so; who replaces a spent run is as it was.

@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { defaultExecFile } from '../gitExec';
-import { landedChange, patchFiles, readSavedPatch } from '../taskDiffRead';
+import { landedChange, landedFiles, patchFiles, readSavedPatch } from '../taskDiffRead';
 
 /**
  * `task_diff` on a read-only task that saved a patch (ADR-0050): its worktree
@@ -162,5 +162,21 @@ describe('landedChange', () => {
     const tip = git(repo, 'rev-parse', 'HEAD').trim();
 
     expect(await landedChange(invoker, repo, tip)).toEqual({ files: 2, added: 1, removed: 1, binary: 1 });
+  });
+
+  it('names every path the count read, one the merge removed included, from the repository\'s top (ADR-0028)', async () => {
+    git(repo, 'checkout', '-q', '-b', 'removal');
+    mkdirSync(join(repo, 'sub', '.claude'), { recursive: true });
+    writeFileSync(join(repo, 'sub', '.claude', 'settings.json'), '{}\n');
+    git(repo, 'rm', '-q', 'sibling.txt');
+    git(repo, 'add', '-A');
+    commit('remove and add');
+    git(repo, 'checkout', '-q', 'integration');
+    git(repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'merge', '-q', '--no-ff', '--no-edit', 'removal');
+    const tip = git(repo, 'rev-parse', 'HEAD').trim();
+
+    const landed = await landedFiles(invoker, repo, tip);
+    expect(landed.paths.sort()).toEqual(['sibling.txt', 'sub/.claude/settings.json']);
+    expect(landed.change).toEqual(await landedChange(invoker, repo, tip));
   });
 });
