@@ -1,5 +1,6 @@
 import { LegacyPlanState, Session, SessionHeldError, describeHeld, saveState, loadState, saveSession, loadSession, isUserMessage } from '@ordewell/core';
 import type { ChatViewProvider } from '../providers/ChatViewProvider';
+import { workspaceFolderRoot } from '../adapters/workspaceFolder';
 
 export interface PersistenceDeps {
   session: Session;
@@ -36,6 +37,12 @@ export function saveCurrentSession(deps: PersistenceDeps): string | null {
 }
 
 export function restoreState(deps: PersistenceDeps): void {
+  // A window with no folder has no project to resume, and is not told so
+  // until it asks for one (task #47).
+  if (workspaceFolderRoot() === undefined) {
+    deps.log('No folder open: no session to restore.');
+    return;
+  }
   deps.log('Attempting to restore state...');
   // Keyed by workspace root, never process.cwd(): the extension host's cwd is
   // shared across windows, so an unkeyed state file leaks one workspace's

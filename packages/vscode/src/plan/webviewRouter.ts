@@ -227,9 +227,8 @@ function chatSession(deps: WebviewRouterDeps): ChatSessionHost {
     converse: async (text, turn) => {
       markWalkthroughStep('goalGiven');
       if (turn.now) return handleSendMessageNow(text, deps);
-      await handleSendMessage(text, deps, turn.runners ? [...turn.runners] : deps.getPendingRunners(), deps.setPendingRunners);
-      // Only a Send now's outcome is read, for its give-back; this turn reported its own failure.
-      return { ok: true };
+      // A turn that started reported its own failure; one refused before it began is given back.
+      return handleSendMessage(text, deps, turn.runners ? [...turn.runners] : deps.getPendingRunners(), deps.setPendingRunners);
     },
   });
 }

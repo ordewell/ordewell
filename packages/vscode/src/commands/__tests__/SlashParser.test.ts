@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { window, commands, __quickPicks, __resetQuickPicks } from '../../test/vscode.mock';
+import { window, commands, __quickPicks, __resetQuickPicks, __setWorkspaceFolders } from '../../test/vscode.mock';
 import { handleSlashCommand, isKnownSlashCommand, type SlashDeps } from '../SlashParser';
 import { saveSession, type DiscoveredModel, type LegacyPlanState } from '@ordewell/core';
 
@@ -72,7 +72,7 @@ describe('/sessions', () => {
         fs.writeFileSync(file, JSON.stringify(data));
       }
       const other = files.find((f) => f.endsWith('_bbbb0002.json'))!;
-      vi.spyOn(process, 'cwd').mockReturnValue(ws);
+      __setWorkspaceFolders([ws]);
       (window.showQuickPick as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(async (items: Array<{ sessionId: string }>) => items.find((i) => i.sessionId === 'session-aaaa0001'));
       (commands.executeCommand as unknown as ReturnType<typeof vi.fn>).mockClear();
       reads.byFile.clear();
@@ -81,6 +81,28 @@ describe('/sessions', () => {
 
       expect(commands.executeCommand).toHaveBeenCalledWith('ordewell.loadSessionById', 'session-aaaa0001');
       expect(reads.byFile.get(other)).toBe(1);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  // Task #47: the list was read from the extension host's cwd, `/` for a
+  // VS Code started from the Dock.
+  it('with no folder open lists nothing and asks for a folder, whatever the cwd holds', async () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-slash-cwd-'));
+    try {
+      saveSession({ tasks: [], runners: ['claude-code'], status: 'draft', generatedAt: '2026-01-01T00:00:00Z', lastUpdated: '2026-01-01T00:00:00Z' } as unknown as LegacyPlanState, 'g', ws, 'session-cwd00001');
+      vi.spyOn(process, 'cwd').mockReturnValue(ws);
+      __setWorkspaceFolders(undefined);
+      const showQuickPick = window.showQuickPick as unknown as ReturnType<typeof vi.fn>;
+      const showWarningMessage = window.showWarningMessage as unknown as ReturnType<typeof vi.fn>;
+      showQuickPick.mockClear();
+      showWarningMessage.mockClear();
+
+      await handleSlashCommand('/sessions', makeDeps());
+
+      expect(showQuickPick).not.toHaveBeenCalled();
+      expect(showWarningMessage.mock.calls.filter(([text]) => String(text).startsWith('Ordewell needs an open folder'))).toHaveLength(1);
     } finally {
       vi.mocked(process.cwd).mockRestore();
       fs.rmSync(ws, { recursive: true, force: true });
