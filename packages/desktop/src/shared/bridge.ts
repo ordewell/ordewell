@@ -64,8 +64,12 @@ export interface DaemonIdentityView {
  * draw its card (design W15) without asking again.
  */
 export type DaemonStatus =
-  /** `starting`: the port was free, so this app forked its bundled daemon and waits for it to answer. */
-  | { state: 'connecting'; port: number; starting?: boolean }
+  /**
+   * `starting`: the port was free, so this app forked its bundled daemon and
+   * waits for it to answer; `logPath` is where that daemon writes, for a wait
+   * that goes on.
+   */
+  | { state: 'connecting'; port: number; starting?: boolean; logPath?: string }
   /** `owned`: this app started it and stops it on quit (ADR-0063 H2). */
   | { state: 'connected'; port: number; owned: boolean; daemon: DaemonIdentityView }
   /** An attached daemon went away: main probes again. `canStart` once the port is free. */

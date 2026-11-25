@@ -267,17 +267,29 @@ Settings panel are what give way, and below a short panel's floor so does the
 conversation.
 
 **`ordewell run` says each wait, and `--unattended` stops following one.** The
-follower prints a line for each checkpoint, input, approval and task on hold as
-the list names it: the task, why, the command that answers or releases it, and
-who can. By default it keeps following for as long as the wait lasts.
-`ordewell run --unattended`, which a script opts into, returns with exit status
-3 once such a wait stands that nobody unattended answers: at Act once a
+follower prints a line for each checkpoint, input, approval, task on hold,
+landing conflict, landing git refused, ops task that changed tracked files,
+usage limit with no reset time and manual task as the list names it: the task,
+why, the command that answers or releases it, and who can. By default it keeps following for as long as the wait
+lasts. `ordewell run --unattended`, which a script opts into, returns with exit
+status 3 once such a wait stands that nobody unattended answers: at Act once a
 supervisor turn begun after the wait was listed has ended and left it standing,
-below Act at once. A wait has to stand for two seconds first, since the update
-that drops an answered one may trail the answer. It is the follower that stops,
-not the wait: nothing is answered, stopped or skipped, the run stays in the
-daemon as it was, and a person answers it there as before. So it is neither a
-deadline nor a default answer.
+below Act at once. The CLI classes every escalation kind in one table, so a
+kind added to the list does not compile until it is decided: a task's wait is
+counted at once, a task's end (failed, out of rounds) ends the run by itself,
+and the run's own (a blocked start, Merge all, the planner) is not counted.
+What alone keeps a task from starting (a manual task, a merge
+gate, a task waiting to be started, one with nothing to run) is listed while
+other work still runs, so it counts only once the status update says the run
+waits on the user (`activity.waitsOnUser`: nothing at work or on its way, no
+planner turn or Merge all holding a start, nothing able to start). No
+supervisor is woken to one, so at Act it waits only for a turn in flight, one
+owed to a person's wait beside it, and the merge window of a wake the idle run
+owes. A wait has to stand for two seconds first, since the update that drops an
+answered one may trail the answer. It is the follower that stops, not the wait:
+nothing is answered, stopped or skipped, the run stays in the daemon as it was,
+and a person answers it there as before. So it is neither a deadline nor a
+default answer.
 
 ## Telling a person
 
@@ -514,4 +526,6 @@ reader takes it (`workspaceEnv.test.ts`, `VsCodeConfig.test.ts`).
 - 2026-11-01 — VS Code draws the list as a control on the usage line with a dropdown upward, closed by default, and `/inbox` turns the view off and on (#30).
 - 2026-11-14 — a planner reply to a wake-up below Act that leaves nothing to run is listed as `planner`, answered in the conversation (ADR-0029).
 - 2026-11-17 — `ordewell run` names a task on hold with the commands that release it, and `--unattended` returns with exit status 3 on a wait nobody unattended answers, leaving the run as it is.
+- 2026-11-24 — `ordewell run` names a manual task, and `--unattended` returns on one, or on another wait that alone keeps a task from starting, once the run waits on the user.
 - 2026-11-24 — the planner's reply to the end-of-run wake-up alone is no wait, a reply to a failure's still is, and the user's own act on the run clears it as a message does.
+- 2026-11-24 — `--unattended` returns on a landing conflict, a landing git refused, an ops task that changed tracked files and a usage limit with no reset time, and the CLI classes every escalation kind in one table.

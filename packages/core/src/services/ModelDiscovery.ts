@@ -31,14 +31,16 @@ export type ExecImpl = (
 // Discovery must find `claude`/`opencode` wherever the user installed them,
 // even when the host process (GUI-launched VS Code, service-launched web
 // server) inherits a minimal PATH — hence the augmented PATH.
-const defaultExec: ExecImpl = async (command, options) => {
+// No console window on Windows: a GUI host (the desktop app's daemon) would
+// otherwise flash one for every probe. Exported for its test.
+export const defaultExec: ExecImpl = async (command, options) => {
   const PATH = await augmentedPath();
   // `opencode models --verbose` (v1) and `opencode api model.list` (v2) emit a
   // JSON block per model and grow with every provider the user enables
   // (~0.5MB with three providers today);
   // node's default 1MB maxBuffer would kill the child mid-stream and silently
   // degrade discovery to the variant-less plain parser.
-  const { stdout } = await execAsync(command, { timeout: options?.timeout, maxBuffer: 32 * 1024 * 1024, env: withPath(options?.env ?? process.env, PATH) });
+  const { stdout } = await execAsync(command, { timeout: options?.timeout, maxBuffer: 32 * 1024 * 1024, env: withPath(options?.env ?? process.env, PATH), windowsHide: true });
   return { stdout: String(stdout) };
 };
 

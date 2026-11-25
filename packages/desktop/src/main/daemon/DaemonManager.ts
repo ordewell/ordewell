@@ -21,10 +21,19 @@ export interface DaemonManagerDeps {
   /** Runs live on the connected daemon; undefined when that cannot be told. */
   liveRuns(): Promise<LiveRun[] | undefined>;
   logPath: string;
+  /**
+   * The PID the port's PID file names, or undefined when it names none. The
+   * daemon writes that file only once it listens (web `daemon.ts`), so a
+   * start waits on it and then asks over HTTP once, rather than polling the
+   * port. Absent, a start is polled over HTTP throughout.
+   */
+  pidFileOwner?: (port: number) => Promise<number | undefined>;
   /** Defaults to setTimeout; a test drives it by hand. */
   setTimer?: (fn: () => void, ms: number) => () => void;
   readyTimeoutMs?: number;
   pollMs?: number;
+  /** How often a start reads the PID file while it waits for its child to listen. */
+  listenPollMs?: number;
   heartbeatMs?: number;
   reconnectMs?: number;
 }
@@ -56,6 +65,7 @@ export class DaemonManager {
   private readonly setTimer: (fn: () => void, ms: number) => () => void;
   private readonly readyTimeoutMs: number;
   private readonly pollMs: number;
+  private readonly listenPollMs: number;
   private readonly heartbeatMs: number;
   private readonly reconnectMs: number;
 
@@ -64,6 +74,7 @@ export class DaemonManager {
     this.setTimer = deps.setTimer ?? defaultTimer;
     this.readyTimeoutMs = deps.readyTimeoutMs ?? 15_000;
     this.pollMs = deps.pollMs ?? 250;
+    this.listenPollMs = deps.listenPollMs ?? 50;
     this.heartbeatMs = deps.heartbeatMs ?? 5_000;
     this.reconnectMs = deps.reconnectMs ?? 2_000;
   }
@@ -264,7 +275,7 @@ export class DaemonManager {
 
   private async startOnce(): Promise<void> {
     if (this.shuttingDown) return;
-    this.set({ state: 'connecting', port: this.port, starting: true });
+    this.set({ state: 'connecting', port: this.port, starting: true, logPath: this.deps.logPath });
     let child: OwnedProcess;
     try {
       child = this.deps.fork(this.port);
@@ -280,7 +291,18 @@ export class DaemonManager {
     });
 
     const deadline = Date.now() + this.readyTimeoutMs;
+    // Nothing is asked over TCP until the child says it listens: its PID in
+    // the port's PID file. A child that exits, and the deadline, end the wait
+    // too, and the probe below then judges the port exactly as it always has.
+    let listening = this.deps.pidFileOwner === undefined;
     while (!this.shuttingDown) {
+      if (!listening) {
+        listening = exited || Date.now() >= deadline || await this.listens(child);
+        if (!listening) {
+          await this.sleep(this.listenPollMs);
+          continue;
+        }
+      }
       const probe = await this.deps.probe(this.port);
       if (probe.kind === 'daemon' && probe.identity.pid === child.pid) {
         this.holding = 'owned';
@@ -313,6 +335,21 @@ export class DaemonManager {
         return;
       }
       await this.sleep(this.pollMs);
+    }
+  }
+
+  /**
+   * Whether the port's PID file names this child. A file left by a daemon that
+   * died names another PID, and one another client's daemon wrote names its
+   * own: neither is this child listening.
+   */
+  private async listens(child: OwnedProcess): Promise<boolean> {
+    const pid = child.pid;
+    if (pid === undefined || !this.deps.pidFileOwner) return false;
+    try {
+      return (await this.deps.pidFileOwner(this.port)) === pid;
+    } catch {
+      return false;
     }
   }
 

@@ -2644,11 +2644,23 @@ it belongs to.
 It persists as `LegacyPlanState.isolation` (`{ run, resolvers }`), written from
 the orchestrator at persist time and saved whenever it changes; adopting a saved
 plan prunes the run's orphans. A plan's record is *continued* rather than
-replaced while anything has landed on it — a resumed plan's dependents need
-their predecessors' work, which a fresh branch from the checked-out commit does
-not have — and a record with nothing landed is discarded whole when the next run
-mints its own. One with landed work that cannot be continued (it ran from another
-workspace path) loses its worktrees, and its integration branch in each repo
+replaced while anything has landed on it, by its records or its ledger once a
+held start has replaced the landed task's record — a resumed plan's dependents
+need their predecessors' work, which a fresh branch from the checked-out commit
+does not have — unless git finds all of it, its reverts included, in the user's
+branch, nothing else is left in the run (no task live, no worktree holding work
+that never landed, the held task's own included, none kept and none seating a
+child), and the start that decides the next run is a person's own of a task in
+a worktree: that run then mints its own from HEAD, as a Stop leaves no close to
+clear the old one up, and its base holds the configuration the old run landed.
+The planner's, the supervisor's and autorun's starts, a queued dependent's, and
+a person's of an ops, read-only or script task continue the old run, so a start
+held for configuration its base lacks is held again there. A hold for
+configuration in the checkout, or linked from it, is the run's first look at
+it, which the next run anyone opens after a Stop takes again (ADR-0028). A
+record with nothing landed
+is discarded whole when the next run mints its own. One with landed work that
+cannot be continued (it ran from another workspace path) loses its worktrees, and its integration branch in each repo
 whose HEAD already contains it; it keeps the others. A run closes
 when its last attempt ends, however it ends — verdict, cancel, Mark complete or a
 failed spawn — so the next one decides its own mode. The field belongs to one

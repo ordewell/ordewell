@@ -3,6 +3,28 @@ import type { ExecutionCommandName, ExecutionRecord } from '../models/Execution'
 import { repeatingChecks } from './blocking';
 import { afterAllReader } from './AfterAll';
 import type { StartWait } from './readiness';
+import { isCheckoutConfigHold, isChildPlanConfigHold, isConfigHold } from './taskStartConfig';
+
+/**
+ * What a supervisor is told of a start held for configuration in a
+ * worktree's tree (ADR-0028): what the user's start does, and what its own
+ * starts do, as the enumeration of who replaces a run shows
+ * (heldConfigStart.enumeration).
+ */
+const CONFIG_RELEASE = 'Leave this hold to the user: once their branch holds everything this run landed, merged and not squashed or rebased, and nothing of this run is left (no task running, no work that never landed, the held task\'s own included, no kept attempt and no delegated task\'s child plan), their own start of a task that works in a worktree begins a new run from their branch, whose base holds the configuration. A retry_task or run_task of yours starts it in this run, where it is held again. Tell the user what it is held for.';
+
+/** Of one held for configuration in the checkout, or linked into a worktree from it, whose release is the next run's: leave it to the user. */
+const CHECKOUT_RELEASE = 'Leave this hold to the user, who can remove the configuration or start a new run once their branch holds it. Tell the user what it is held for.';
+
+/**
+ * In a child plan the subplanner starts the tasks (ADR-0055 D20), and a
+ * read-only task loads no project configuration (ADR-0046), so the task can
+ * run as one, or go.
+ */
+const CHILD_CONFIG_RELEASE = 'If its work allows, make it read-only with edit_plan, which loads no project configuration, and start it with run_task; otherwise take it out with edit_plan and say why in your report.';
+
+/** What releases a hold for configuration, where it was held and by what. */
+const configRelease = (reason: string | undefined): string => (isChildPlanConfigHold(reason) ? CHILD_CONFIG_RELEASE : isCheckoutConfigHold(reason) ? CHECKOUT_RELEASE : CONFIG_RELEASE);
 
 /**
  * A task that holds a run idle (ADR-0057 R4): pulled out of the scheduler, or
@@ -119,12 +141,16 @@ function endedNote(ended: boolean): string {
 
 /** The calls that release a task standing this way. */
 function releaseLine(block: StandingBlock['block']): string {
+  if (block.kind === 'on-hold' && isConfigHold(block.reason)) return configRelease(block.reason);
   const release = block.kind === 'waiting' && block.reason === 'checkpoint'
     ? 'answer it with answer_checkpoint'
     : block.kind === 'waiting'
       ? 'message_task its runner with what to do next, or call retry_task from "fresh" with a message, your note on what to do differently'
       : 'call retry_task from "fresh" with a message, your note on what to do differently, or edit it with edit_plan and call retry_task in the same reply';
-  return `Release it: ${release}; or skip_task it with your reason; or tell the user.`;
+  // The supervisor skips only a task that already needs someone, and a hold is not that (ADR-0029): skipping a held one is the user's.
+  return block.kind === 'on-hold'
+    ? `Release it: ${release}; or tell the user, who can skip it.`
+    : `Release it: ${release}; or skip_task it with your reason; or tell the user.`;
 }
 
 /** One key per distinct set of holds: the same tasks, held the same way. */
@@ -180,6 +206,11 @@ export function runHeldDetail(holds: readonly RunHold[], describe: (taskId: stri
       : `is ${WAITING_WORDS[hold.reason ?? 'input']},`;
     return `Task ${describe(taskId)} ${what} and ${back}.`;
   });
-  const release = holds.some((h) => h.hold.kind === 'on-hold') ? ' A task on hold starts again only once it is retried or force started, or skipped, which releases what needs it.' : '';
+  const onHold = holds.filter((h) => h.hold.kind === 'on-hold');
+  const forConfig = onHold.filter((h) => isConfigHold(h.hold.reason));
+  const release = [
+    ...(onHold.length > forConfig.length ? [' A task on hold starts again once it is retried or force started; the user can also skip it, which releases what needs it.'] : []),
+    ...[...new Set(forConfig.map((h) => configRelease(h.hold.reason)))].map((line) => ` ${line}`),
+  ].join('');
   return `the run is idle: nothing is running and nothing can start. ${sentences.join(' ')}${release}`;
 }

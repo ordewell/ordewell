@@ -972,7 +972,7 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
    * branch carries that the integration branch does not, or edits in its
    * worktree. Only an attempt that left neither behind is safe to prune.
    */
-  private async holdsUnlandedWork(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
+  async holdsUnlandedWork(run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
     for (const repo of run.repos) {
       const entry = record.repos[repo.path];
       if (!entry) continue;
@@ -999,6 +999,26 @@ class GitWorktreeIsolation implements IWorktreeIsolation {
       const rel = (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p).replace(/\/+$/, '');
       return !linked.has(rel) && !linked.has(rel.split('/')[0]);
     });
+  }
+
+  /**
+   * Strict, since a yes lets a run's branches go: a detached HEAD, an
+   * integration branch git cannot find, a tip HEAD lacks or that only a review
+   * or another branch holds, is no, in any one repository. A squash merge
+   * leaves the tip out of HEAD, so it is no too: the run then goes on, as it
+   * would have.
+   */
+  async userBranchHolds(run: IsolationRun): Promise<boolean> {
+    if (run.repos.length === 0) return false;
+    for (const repo of run.repos) {
+      if (!(await this.tryGit(repo.root, ['symbolic-ref', '-q', 'HEAD'])).ok) return false;
+      const tip = await this.tryGit(repo.root, ['rev-parse', '--verify', '-q', `refs/heads/${repo.integrationBranch}^{commit}`]);
+      if (!tip.ok) return false;
+      const merge = tip.stdout.trim();
+      if ((await this.isAncestor(repo.root, merge, 'HEAD')) !== 'yes') return false;
+      if ((await this.inUserBranch(repo, merge)) !== true) return false;
+    }
+    return true;
   }
 
   async findInHead(run: IsolationRun): Promise<string[]> {

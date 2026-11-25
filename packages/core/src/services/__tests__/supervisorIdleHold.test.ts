@@ -279,6 +279,20 @@ describe('a task the supervisor stopped, left standing at Act', () => {
 
   const SUPERVISOR = { kind: 'supervisor', level: 'act' } as const;
 
+  it('names only the calls the supervisor\'s tools take for a held task: a retry, never its own skip (ADR-0029)', async () => {
+    const env = await stoppedWhileOthersRun();
+    const wake = env.planner.calls[1].message;
+    expect(wake).toContain('Task #1 "Task t1" is still on hold');
+    expect(wake).toContain('call retry_task from "fresh" with a message');
+    expect(wake).toContain('or tell the user, who can skip it.');
+    expect(wake).not.toContain('skip_task');
+
+    const skip = await env.session.execute({ command: 'skip_task', task: 't1', reason: 'not needed' }, SUPERVISOR);
+    expect(skip.ok).toBe(false);
+    const retry = await env.session.execute({ command: 'retry_task', task: 't1', from: 'fresh', message: 'Use ./lib.' }, SUPERVISOR);
+    expect(retry.ok, retry.message).toBe(true);
+  });
+
   /** The supervisor retries task 1 with a note, and `by` stops that attempt. */
   async function notedThenStopped(by: ExecutionActor = { kind: 'user' }): Promise<Env> {
     const env = await noted();

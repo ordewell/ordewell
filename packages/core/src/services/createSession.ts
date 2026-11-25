@@ -1255,7 +1255,7 @@ export class Session {
         .filter(({ request }) => isRunnerApproval(request) && request.taskId === taskId)
         .map(({ id, request }) => ({ id, subject: request.subject })),
       runPlan: (actor) => this.runWholePlan(runOrigin(actor), this.failuresLeftBy(actor)),
-      joinRun: (approved, left) => this.joinRun(approved, left),
+      joinRun: (approved, left, actor) => this.joinRun(approved, left, actor),
       startTask: (taskId, actor, note) => this.startOneTask(taskId, runOrigin(actor), note),
       stopTask: (taskId, actor) => {
         // Before it ends: its release can outlast a held event's timer, which must find the stop.
@@ -2761,12 +2761,13 @@ export class Session {
    * usage limit holds stays held, and the line says so, since nothing it names
    * starts before the reset.
    */
-  private async joinRun(approved: number, left: number): Promise<string> {
+  private async joinRun(approved: number, left: number, actor: ExecutionActor): Promise<string> {
     const scheduling = this.orchestrator.scheduledRun;
     this.turnEffects.ran(this.orchestrator.admittedNow());
     await this.saves.control(async () => {
       this.record.approvePlan();
-      await this.orchestrator.joinRun('user');
+      // Any other join opens a run as the user's, as it always has; only theirs is a person's, whose starts as it ticks may take on configuration (ADR-0028).
+      await this.orchestrator.joinRun(actor.kind === 'user' ? 'person' : 'user');
     });
     const line = approved === 0
       ? left > 0 ? `The plan is ${scheduling ? 'already ' : ''}running; ${left} ${left === 1 ? 'task waits' : 'tasks wait'} for your approval.`

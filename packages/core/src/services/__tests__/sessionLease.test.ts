@@ -489,6 +489,8 @@ describe('leasedIsolation (ADR-0049)', () => {
     await isolation.isActive('/repo');
     await isolation.reviewDiff(run);
     expect(git.calls.map((c) => c.op)).toEqual(['isActive', 'reviewDiff']);
+    git.unlandedWork = new Set(['t1']);
+    expect(await isolation.holdsUnlandedWork(run, run.tasks.t1)).toBe(true);
 
     held = null;
     await isolation.prepare(t1, run);

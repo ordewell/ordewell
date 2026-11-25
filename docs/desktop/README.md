@@ -659,6 +659,13 @@ package rather than the product: `~/Library/Application Support/@ordewell/deskto
 on macOS, `%APPDATA%\@ordewell\desktop` on Windows and
 `~/.config/@ordewell/desktop` on Linux.
 
+While a project window waits for the daemon the app starts, it says so over
+the dimmed window, and after about five seconds names that log, as
+`ordewell tui` does. The app learns the daemon is up from the PID file the
+daemon writes once it listens (`~/.ordewell/server.pid`, or
+`server-<port>.pid`), and then asks it once over HTTP, rather than polling
+the port every 250 ms.
+
 For intermittent slow launches, `startup.log` in that same folder records
 window, login-shell PATH and daemon startup stages, plus the duration of the
 reads that load a project and its harnesses. It records route names, never

@@ -482,7 +482,7 @@ export type FakeIsolationCall =
   | { op: 'prepare' | 'reopen' | 'verifyRepair'; taskId: string }
   | { op: 'integrate'; taskId: string }
   | { op: 'release'; taskId: string; keep: boolean }
-  | { op: 'handoff' | 'pruneOrphans' | 'reviewDiff' | 'mergeIntoCheckedOut' | 'sweep' | 'findInHead' | 'snapshotTree' | 'changedSince' }
+  | { op: 'handoff' | 'pruneOrphans' | 'reviewDiff' | 'mergeIntoCheckedOut' | 'sweep' | 'findInHead' | 'snapshotTree' | 'changedSince' | 'userBranchHolds' }
   | { op: 'discard'; integration: IntegrationDisposal }
   | { op: 'readLanded' | 'revert'; taskIds: readonly string[] };
 
@@ -528,6 +528,10 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   sweepError: Error | null = null;
   /** What `pruneOrphans` reports as kept back from the sweep. */
   keptOnPrune: IsolationPruneResult['kept'] = [];
+  /** Task ids whose worktree `holdsUnlandedWork` finds work in; null, every task's, as for a worktree git cannot read. */
+  unlandedWork: Set<string> | null = null;
+  /** What `userBranchHolds` answers: no unless a test says git finds every integration tip in the user's branch. */
+  branchHolds = false;
   /**
    * What every removal — a `release` that removes, `discard`, `pruneOrphans` —
    * reports it kept back. A refused task keeps its record, as git's does.
@@ -737,6 +741,13 @@ export class FakeWorktreeIsolation implements IWorktreeIsolation {
   async pruneOrphans(): Promise<IsolationPruneResult> {
     this.log({ op: 'pruneOrphans' });
     return { kept: [...this.keptOnPrune], ...this.removed() };
+  }
+  async holdsUnlandedWork(_run: IsolationRun, record: IsolationTaskRecord): Promise<boolean> {
+    return this.unlandedWork?.has(record.taskId) ?? true;
+  }
+  async userBranchHolds(): Promise<boolean> {
+    this.log({ op: 'userBranchHolds' });
+    return this.branchHolds;
   }
   async reviewDiff(): Promise<string> { this.log({ op: 'reviewDiff' }); return ''; }
   async mergeIntoCheckedOut(run: IsolationRun): Promise<IsolationMergeResult> {

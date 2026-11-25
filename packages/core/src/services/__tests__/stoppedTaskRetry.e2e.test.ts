@@ -90,6 +90,98 @@ async function stoppedWithCommits() {
   return { root, session, requests, first };
 }
 
+/**
+ * t0 lands; t1, beside it, fails with commits in its worktree, which is kept,
+ * and the run ends on that failure. Then the user merges what landed with
+ * Merge all, which leaves the run for its failed task.
+ */
+async function failedBesideMerged() {
+  const root = repo();
+  const requests: RunnerSpawnOptions[] = [];
+  const sessionsOf = new Map<string, FakeRunnerSession>();
+  const runner: IRunner = {
+    spawn: vi.fn(async (opts) => {
+      requests.push(opts);
+      const runnerSession = new FakeRunnerSession(`s${requests.length}`, opts.taskId, opts.resumeSessionId ?? `native-${requests.length}`);
+      sessionsOf.set(opts.taskId, runnerSession);
+      return runnerSession;
+    }),
+    stop: vi.fn(),
+    stopAll: vi.fn(),
+    activeCount: 0,
+  };
+  let ids = 0;
+  const config = fakeConfig({ worktreeIsolation: true, autonomousMode: true });
+  const session = makeSession({
+    runner,
+    config,
+    isolation: createWorktreeIsolation({ config, resolvePath: async () => process.env.PATH ?? '', mintRunId: () => `run-${++ids}` }),
+    workspaceRoot: () => root,
+  });
+  sessions.push(session);
+  const now = new Date().toISOString();
+  const plan: LegacyPlanState = {
+    tasks: [
+      createTask({ id: 't0', order: 1, title: 'Write the docs', prompt: 'Write the docs', assignedRunner: 'claude-code', taskMode: 'acceptEdits' }),
+      createTask({ id: 't1', order: 2, title: 'Build the module', prompt: 'Build the module', assignedRunner: 'claude-code', taskMode: 'acceptEdits' }),
+    ],
+    generatedAt: now, status: 'approved', runners: ['claude-code'], lastUpdated: now,
+  };
+  session.loadPlan(plan, 'goal', root, { persist: false });
+  await session.execute({ command: 'run_plan' }, { kind: 'user' });
+  await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 20_000 });
+  const docs = requests.find((r) => r.taskId === 't0')!.cwd!;
+  writeFileSync(join(docs, 'docs.txt'), 'docs\n');
+  sessionsOf.get('t0')!.reportComplete({ status: 'done', summary: 'Wrote the docs.' });
+  await vi.waitFor(() => expect(taskOf(session, 't0')!.status).toBe('completed'), { timeout: 20_000 });
+  const first = requests.find((r) => r.taskId === 't1')!.cwd!;
+  writeFileSync(join(first, 'module.txt'), 'module work\n');
+  git(first, 'add', 'module.txt');
+  git(first, 'commit', '-q', '-m', 'module work so far');
+  sessionsOf.get('t1')!.emitExit(1);
+  await vi.waitFor(() => expect(taskOf(session, 't1')!.status).toBe('failed'), { timeout: 20_000 });
+  await vi.waitFor(() => expect(session.runSnapshot().activity?.running).toBe(false), { timeout: 20_000 });
+  expect(await session.execute({ command: 'merge_all' }, { kind: 'user' })).toMatchObject({ ok: true });
+  expect(readFileSync(join(root, 'docs.txt'), 'utf8')).toBe('docs\n');
+  expect(session.planState?.isolation?.run.id).toBe('run-1');
+  return { root, session, requests };
+}
+
+describe.skipIf(!hasGit)('a task failed beside landed work the user merged, retried from "fresh"', () => {
+  it('by the user, starts in a new run from their branch, and names its integration branch and the preserved one', async () => {
+    const { root, session, requests } = await failedBesideMerged();
+
+    const outcome = await session.execute({ command: 'retry_task', task: 't1', from: 'fresh', message: 'Build on the module work' }, { kind: 'user' });
+
+    await vi.waitFor(() => expect(requests).toHaveLength(3), { timeout: 20_000 });
+    expect(session.planState?.isolation?.run.id).toBe('run-2');
+    expect(session.planState?.isolation?.run.repos[0].baseRef).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(existsSync(join(requests[2].cwd!, 'docs.txt'))).toBe(true);
+    expect(existsSync(join(requests[2].cwd!, 'module.txt'))).toBe(false);
+    expect(outcome).toEqual({
+      ok: true,
+      message: 'Retrying task #2 "Build the module". It starts from the integration tip, branch `ordewell/run-2/integration`, not from the earlier attempt\'s worktree: '
+        + 'the work that attempt had not landed is on branch `ordewell-preserved/run-1/2-build-the-module`, not in the new worktree. '
+        + 'If it should build on that work, tell it with message_task to merge that branch.',
+    });
+    expect(git(root, 'rev-parse', '--verify', '--quiet', 'refs/heads/ordewell/run-2/integration')).not.toBe('');
+    expect(git(root, 'show', 'ordewell-preserved/run-1/2-build-the-module:module.txt')).toBe('module work');
+    expect(git(root, 'branch', '--list', 'ordewell/run-1/*')).toBe('');
+  });
+
+  it('by the supervisor, continues the run it failed in, which the user\'s own start alone replaces (ADR-0028)', async () => {
+    const { root, session, requests } = await failedBesideMerged();
+
+    const outcome = await session.execute({ command: 'retry_task', task: 't1', from: 'fresh', message: 'Build on the module work' }, SUPERVISOR);
+
+    await vi.waitFor(() => expect(requests).toHaveLength(3), { timeout: 20_000 });
+    expect(session.planState?.isolation?.run.id).toBe('run-1');
+    expect(outcome.message).toContain('branch `ordewell/run-1/integration`');
+    expect(git(root, 'rev-parse', '--verify', '--quiet', 'refs/heads/ordewell/run-1/integration')).not.toBe('');
+    expect(git(root, 'show', 'ordewell-preserved/run-1/2-build-the-module:module.txt')).toBe('module work');
+  });
+});
+
 describe.skipIf(!hasGit)('a task stopped mid-attempt, retried', () => {
   it('from "session" continues in a worktree that holds the stopped attempt\'s commits', async () => {
     const { session, requests, first } = await stoppedWithCommits();

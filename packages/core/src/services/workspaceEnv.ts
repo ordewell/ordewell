@@ -41,10 +41,11 @@ export interface WorkspaceEnvDeps {
   home: string;
 }
 
-function defaultDeps(): WorkspaceEnvDeps {
+/** The real dependencies; `run` opens no console window on Windows. Exported for its test. */
+export function defaultDeps(): WorkspaceEnvDeps {
   return {
     run: (command, args, opts) => new Promise((resolve) => {
-      execFile(command, args, { ...opts, timeout: DIRENV_TIMEOUT_MS, encoding: 'utf8' }, (err, stdout, stderr) => {
+      execFile(command, args, { ...opts, timeout: DIRENV_TIMEOUT_MS, encoding: 'utf8', windowsHide: true }, (err, stdout, stderr) => {
         const code = err ? (typeof (err as NodeJS.ErrnoException & { code?: unknown }).code === 'number' ? Number((err as { code: number }).code) : -1) : 0;
         resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
       });

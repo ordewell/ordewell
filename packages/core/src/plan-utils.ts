@@ -62,7 +62,7 @@ export { scriptTaskText } from './models/ScriptTask';
 export { describeRunnerSignIn, describeSignIn, describeSignInWays, signInAction, signInOfVerdict, TERMINAL_UI_SIGN_IN, type RunnerSignIn, type SignInSyntax } from './services/signInHint';
 // The one readiness-to-choice rule (ADR-0052), for a webview's planner and runner pickers.
 export { orderByChoice, runnerChoice, runnerChoiceRefusal, runnerEntryChoice, runnerEntryReadiness, runnerReadiness, type RunnerChoice, type RunnerReadiness, type RunnerReadinessFields, type RunnerRecoveryKind } from './services/runnerChoice';
-export { daemonWaitLine, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
+export { daemonWaitLine, daemonStillWaitingLine, DAEMON_STILL_WAITING_MS, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL } from './services/startupWait';
 // The vendors' labels and key variables, pure data a webview may hold: the key entry names the vendor it is for.
 export { VENDORS, PROVIDER_PRIORITY, endpointUrlProblem, type ProviderRegistration } from './services/apiProviders';
 export { AGENT_DEFAULT_MODEL, AGENT_SIGN_IN_NOTE, agentInstallRoutes, describeUnusedPlanningKey, type AgentInstallRoute } from './services/plannerNotices';

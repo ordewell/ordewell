@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## [0.14.12] - 2026-11-25
+
+### Added
+
+- A finished task's card shows how many files it changed and how many lines
+  it added and removed.
+- A Codex planner's tool calls are logged in the extension host's log, and a
+  turn whose calls all failed ends with a notice naming that log.
+- The first merge that writes the `Planned-with: Ordewell` line says so once,
+  and names `ordewell trailer off`.
+
+### Changed
+
+- **Execute Plan** is the one control that runs a plan: the *Ordewell: Approve
+  Plan* command is gone from the Command Palette, and the walkthrough's last
+  step is *Run the plan*. With autorun off, the planner submits its plan with
+  the outline instead of asking you to confirm the outline first.
+- The default planner skips a coding agent known to be signed out, and a
+  signed-out agent is not offered to the planner until it reads as signed in
+  again.
+- The planner picker says what it knows about sign-in: *signed in · no API key
+  needed* or *sign-in not checked · no API key needed*.
+- The planner's tool calls no longer wait on other agents' model lists, so one
+  CLI that hangs while listing its models no longer stalls planning.
+
+### Fixed
+
+- A Codex planner's failed tool calls read as failed, and a call that reached
+  Codex's tool deadline no longer fails the whole turn.
+- Try Again after a failed turn sends the message again without drawing it a
+  second time.
+- Typing `/` lists a skill that shares a built-in command's name once, as the
+  built-in.
+
 ## [0.14.11] - 2026-11-24
 
 ### Added
@@ -1933,7 +1967,8 @@ First public release.
 Full project changelog:
 https://github.com/ordewell/ordewell/blob/main/CHANGELOG.md
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.11...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.12...HEAD
+[0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
 [0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9

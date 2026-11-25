@@ -5,6 +5,7 @@ import type { DaemonStatus } from '../../shared/bridge';
 import { ActivityBar } from './ActivityBar';
 import { Banners } from './Banners';
 import { CommandPalette } from './CommandPalette';
+import { DaemonWait } from './DaemonWait';
 import { isMac, matchesChord, parseChord } from './keys';
 import { paneSizes, shown } from './layout';
 import { PlanPanel, PlanRail } from './PlanPanel';
@@ -136,12 +137,14 @@ export function Frame({ daemon }: { daemon: DaemonStatus | undefined }): JSX.Ele
   const drop = useFolderDrop(store);
   const docked = shown(layout);
   const closeDrawer = (): void => store.dispatch({ type: 'closeDrawer' });
+  // The first wait for the daemon: the body stays inert as for any absence, and says it is busy rather than broken.
+  const starting = daemon?.state === 'connecting';
 
   return (
     <div className="frame" onDragOver={drop.onDragOver} onDrop={drop.onDrop}>
       <TitleBar />
       <Banners />
-      <div className="frame-body" {...(readOnly ? { inert: '' } : {})}>
+      <div className="frame-body" {...(readOnly ? { inert: '' } : {})} aria-busy={starting ? 'true' : undefined}>
         <ActivityBar />
         {docked.sidebar && (
           <>
@@ -170,6 +173,7 @@ export function Frame({ daemon }: { daemon: DaemonStatus | undefined }): JSX.Ele
           </>
         ) : <PlanRail />}
       </div>
+      <DaemonWait daemon={daemon} />
       <StatusBar daemon={daemon} />
       {overlay === 'palette' && <CommandPalette />}
       <div className="frame-live" role="status" aria-live="polite" aria-atomic="true">

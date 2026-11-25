@@ -69,6 +69,7 @@ function setup(opts: { tasks?: Task[]; runners?: string[]; spawn?: Spawn; repair
     recordedTasks: () => [],
     skillLayout: () => ({ repos: [], worktrees: false }),
     inRepoGroup: false,
+    inChildPlan: false,
     epoch: 1,
     stillToLetGo: async () => undefined,
   };

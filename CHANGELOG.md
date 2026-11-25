@@ -8,6 +8,85 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **`ordewell run` names `ordewell continue` where it answers a wait without
+  the TUI.** The line for a task whose landing git refused now says that
+  `ordewell continue <id> "<message>"` lands its kept work and runs nothing
+  again, and the line for a usage limit with no reset time, when the paused
+  task has a saved session of its own runner, that it resumes the task in that
+  session with the message, so a run in CI or a script can be answered from
+  the shell; without such a session the line names the retry that releases the
+  task, and no continue. A landing conflict and an ops task that changed
+  tracked files name none: `ordewell continue` refuses both, and only the
+  TUI's `/inbox` adds a resolver task. Below Act, the line `ordewell run`
+  starts with no longer lists only checkpoints, inputs and approvals among the
+  waits that last until someone answers them.
+
+### Fixed
+
+- **A task held for configuration an earlier task landed, which its run's base
+  lacks, starts again once your branch holds everything the run landed and you
+  start it yourself.** After the run's work was merged (by Merge all or by
+  hand) and the run stopped, starting the held task again kept the old run and
+  held it again every time, until the session was reloaded. Your own Run, Start
+  now, Retry or Continue of a task that works in a worktree now begins a new
+  run from your branch, provided git finds everything the old run landed in
+  it, its reverts included (a squash or a rebase leaves it out), and nothing
+  else is left in the run: no task running, no worktree holding work that
+  never landed, the held task's own included, no kept attempt and no delegated
+  task's child plan. A Continue of the held task keeps its own such work, and
+  is held again; a fresh start of it discards that work and is held once
+  more, and your next start begins the new run. That run starts from your
+  branch, which holds the configuration. The planner's, the supervisor's and
+  autorun's starts, a dependent's that Ordewell drains from its queue, and
+  your own start of an ops, read-only or script task continue the old run,
+  where the task is held again. The hold now says so, and in a child plan it
+  says what its subplanner can do instead. A hold for configuration in your
+  checkout, which an ops task works
+  in and a worktree links its `.claude` and `.opencode` from, is as it was:
+  the next run anyone starts after a Stop looks at the checkout afresh, and
+  the hold says, as before, to remove the configuration or start a new run.
+- **A run is kept when a held start replaced the only record of what it
+  landed.** Once the start of a task that had landed was held (a Continue, or
+  a start after Mark not done), the next start by anyone began a new run from
+  your branch. Where your branch held the run's work, a start by the
+  supervisor or the planner then ran the task with configuration no person had
+  let in; where it did not, the task started without its own earlier work, and
+  the old run's integration branch was left with nothing naming it. Such a run
+  now goes on, and the start is held again there; the entry above says what
+  begins a new one.
+- **The supervisor is no longer told to skip a task on hold,** which its
+  `skip_task` refuses. It is told to retry the task, or to tell you, who can
+  skip it; of a task held for configuration, it is told to leave the hold to
+  you.
+- **A start made while Merge all was clearing up a finished run is no longer
+  lost.** The clear-up forgot the plan's run once git had finished, even when a
+  start had opened a new one meanwhile, which left that run's branches with no
+  record naming them.
+- **The desktop app no longer looks frozen while its daemon starts.** Before
+  its script has run, a window shows the Ordewell mark and "Starting
+  Ordewell…" on its own background instead of an empty page. A project window
+  waiting for the daemon is dimmed and busy as before, and after a moment a
+  card over it names the wait ("Starting Ordewell's daemon on port 3742…");
+  five seconds in, it adds where the daemon's log is, in the line `ordewell
+  tui` prints. The Sessions sidebar says the daemon is starting, not that it
+  is "back". Nothing becomes usable any sooner or later: what waited for the
+  daemon still does.
+- **The desktop app waits for the daemon it started on its PID file.** While
+  that daemon comes up, the app reads the PID file the daemon writes once it
+  listens, every 50 ms, then asks it once over HTTP. Before, it asked over
+  HTTP every 250 ms, so it can now learn the daemon is up up to about one
+  such interval sooner. Giving up after 15 seconds, a port another program
+  holds, a daemon someone else started and a refused token end as they did.
+- **Checking whether coding agents are installed and signed in, listing
+  models through an agent's command line, and reading a workspace's direnv no
+  longer flash a console window on Windows** when the daemon runs without
+  one, as the desktop app's does. Codex's and ACP agents' model lists, read
+  from a long-running agent process, still spawn as before.
+
+## [0.14.12] - 2026-11-25
+
 ### Added
 
 - **Finished tasks show what they changed.** Each task that lands now shows
@@ -23,12 +102,14 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   session (the daemon's, or VS Code's extension host), never its content. The
   terminal UI's status line reads, for example, `Planning… 1m 12s ·
   run_command running 58s`, or says how long nothing has arrived. A turn
-  whose Ordewell calls all failed now ends with a notice naming the log; a
+  whose Ordewell calls all failed, while the session holds no plan, now ends
+  with a notice naming the log and the planner picker on every surface; a
   command that ran and exited non-zero is not counted as a failed call
   (ADR-0022). The status line detail is terminal-only for now; the desktop and
   VS Code show the plain planning state.
 - **Typing `/` in the desktop app lists the workspace's skills**, as VS Code
-  does, and its task cards show them.
+  does, and its task cards show them. A skill that shares a built-in command's
+  name is listed once, as the built-in.
 - **The first merge that writes the `Planned-with: Ordewell` line says so
   once.** Its confirmation gains a sentence naming the line and
   `ordewell trailer off`; with automatic merging the sentence appears once as
@@ -67,9 +148,10 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   records a second "You started the plan." (ADR-0030).
 - **A session is saved when its first message is admitted.** It appears in the
   list while the planner works and keeps your goal if the first turn fails or
-  you stop it, with an error entry saying it went unanswered; the desktop
-  lists it as *No plan yet*. Stop now reaches the
-  daemon during the first turn on the desktop (ADR-0029).
+  you stop it, with an error entry saying it went unanswered. On the desktop
+  it reads *Planning* while the planner works on it, and is listed as *No
+  plan yet* if no plan came of it. Stop now reaches the daemon during the
+  first turn on the desktop (ADR-0029).
 - **A message the planner refuses because it is not ready comes back.** The
   text returns to the composer, with anything queued behind it, instead of
   staying drawn as sent. A Send during a running turn that is refused this way
@@ -95,11 +177,6 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 
 ### Fixed
 
-- **The "tools failed on every call" notice is said only when it is true.**
-  It ignores a Codex planner's `run_command` whose command ran and exited
-  non-zero, and a turn whose calls were refused while the session holds a plan
-  (a planner asking to start the run itself). It names the log of the process
-  that runs the session and the planner picker on every surface (ADR-0022).
 - **A Codex planner's failed tool calls read as failed.** codex-cli 0.171's
   shape for a reply Ordewell marked as an error showed it as answered, and a
   call Codex ended at its tool deadline failed the whole turn with
@@ -108,9 +185,7 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
 - **The desktop app's first turn.** A failed turn's error shows once, after
   its message, and Try Again sends the message again without drawing or
   saving it a second time; a message queued behind the failed one closes
-  the error once it goes, Try Again with it. While the planner works
-  on the first message the session reads *Planning*. Typing `/` lists a
-  skill that shares a built-in command's name once, as the built-in.
+  the error once it goes, Try Again with it.
 - **The terminal UI's welcome names the current base commit after a merge**
   and on `/new`, not the one it read at launch.
 - **`.ordewell/.gitignore` no longer shows up in `git status`.** Its rules
@@ -118,6 +193,25 @@ While Ordewell is pre-1.0, minor versions may contain breaking changes.
   now ignores itself: do not commit it, each machine writes its own. The
   previous text is upgraded in place unless git tracks the file or you edited
   it (ADR-0013).
+- **`ordewell run --unattended` returns when a manual task holds the run.** A
+  pending manual task that every task left needs used to leave it following
+  for good, with no exit status, and so did a second one on the same session.
+  Once nothing else can run, it now returns with exit status 3, naming the
+  manual task and the `ordewell complete` or `ordewell skip` that releases it.
+  A merge gate, a task waiting to be started and one with nothing to run count
+  the same way. While a task runs or another can start, it keeps following.
+  Without `--unattended`, `ordewell run` names the manual task and waits.
+- **`ordewell run --unattended` returns when a landing or a usage limit holds
+  the run.** A task whose work conflicted as it landed, one git refused to land
+  (no author identity in CI, say), an ops task that changed tracked files in
+  your checkout and a task paused on a usage limit with no reset time used to
+  leave it following for good at every supervisor level, and so did a failed
+  task beside one of them. It now returns with exit status 3 on each, as on a
+  checkpoint: below Act once the wait stands, at Act once the supervisor's turn
+  on it has left it standing, though other tasks of the run may still be
+  running. `ordewell run` prints a line for each, naming the task and what
+  answers it. A usage limit with a reset time still resumes by itself, and is
+  followed.
 
 ## [0.14.11] - 2026-11-24
 
@@ -5385,7 +5479,8 @@ First public release.
 - Deep-interview planning modes: `grill-me`, PRD drafting, TDD augmentation,
   review and verify.
 
-[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.11...HEAD
+[Unreleased]: https://github.com/ordewell/ordewell/compare/v0.14.12...HEAD
+[0.14.12]: https://github.com/ordewell/ordewell/compare/v0.14.11...v0.14.12
 [0.14.11]: https://github.com/ordewell/ordewell/compare/v0.14.10...v0.14.11
 [0.14.10]: https://github.com/ordewell/ordewell/compare/v0.14.9...v0.14.10
 [0.14.9]: https://github.com/ordewell/ordewell/compare/v0.14.8...v0.14.9

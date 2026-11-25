@@ -62,7 +62,7 @@ Tasks (<id> is an order number or a task ID):
   ordewell force-start <id>       Approve a task and start it now, or once its dependencies finish (asks past a merge gate)
   ordewell run-task <id>          Run only one task
   ordewell retry <id>             Re-run a failed task
-  ordewell continue <id> <msg>    Continue a finished task in its saved runner session
+  ordewell continue <id> <msg>    Continue a finished task in its saved runner session, resume one paused on a usage limit, or land the kept work git refused
   ordewell checkpoint <id> approve|reject [reason]  Answer the checkpoint a task waits at${DELEGATION_OFFERED ? ' (a delegated task\'s approve takes --raise <tokens> and --answer <words>)' : ''}
   ordewell cancel <id>            Kill a running task
 
@@ -134,10 +134,15 @@ Run options:
   --stash             Stash a dirty tree and continue in the task's worktree
   --without-isolation Run the plan in your checkout; tasks share it
   --unattended        Return, exit 3, when the run waits on a person (a checkpoint,
-                      an input, an approval, a task on hold) that nobody unattended
+                      an input, an approval, a task on hold, a landing conflict, a
+                      landing git refused, an ops task that changed tracked files,
+                      a usage limit with no reset time) that nobody unattended
                       answers: at Act once the supervisor's turn on it left it
-                      standing, below Act at once. The run stays in the daemon as
-                      it is: nothing is answered, stopped or skipped
+                      standing, below Act at once, though other tasks of the run
+                      may still be running. A manual task, a merge gate,
+                      a task waiting to be started or one with nothing to run
+                      counts once nothing else can run. The run stays in the
+                      daemon as it is: nothing is answered, stopped or skipped
   It returns once the run's end stands: with the supervisor at Act, after the
   closing turn it is woken to, following the run on if that turn continues it.
   Without --unattended, a wait on a person is waited out, however long.

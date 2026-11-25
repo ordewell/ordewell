@@ -461,6 +461,14 @@ export interface RunActivity {
    * here: overriding the failed task is the way out.
    */
   advancesOnItsOwn: boolean;
+  /**
+   * The run the scheduler drives moves only when a person acts: nothing is at
+   * work or on its way, no planner turn or Merge all holds a start back, and
+   * nothing can start. What tells a manual task's wait that holds the run from
+   * one beside work still going on, for a follower nobody answers
+   * (`ordewell run --unattended`). Absent from an older daemon.
+   */
+  waitsOnUser?: boolean;
 }
 
 /** A run with nothing at work and nothing on its way. */

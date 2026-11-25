@@ -19,7 +19,7 @@ const task = (id: string, order: number, over: Partial<Task> = {}) =>
   createTask({ id, order, title: `Task ${id}`, prompt: `do ${id}`, ...over });
 const ops = (id: string, order: number, over: Partial<Task> = {}) => task(id, order, { ops: true, ...over });
 
-function setup(isolation = new FakeWorktreeIsolation()) {
+function setup(isolation = new FakeWorktreeIsolation(), root = { path: '/repo' }) {
   const sessions: FakeRunnerSession[] = [];
   const spawn = vi.fn(async (o: Parameters<IRunner['spawn']>[0]) => {
     const session = new FakeRunnerSession(`s${sessions.length + 1}`, o.taskId);
@@ -28,7 +28,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
   });
   const runner: IRunner = { spawn, stop: vi.fn(), stopAll: vi.fn(), activeCount: 0 };
   const orchestrator = TaskOrchestrator.compose({
-    config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => '/repo',
+    config: fakeConfig(), notifications: fakeNotification(), runner, output: new BufferedTaskOutputSource(), isolation, workspaceRoot: () => root.path,
   });
   const latest = (taskId: string) => sessions.filter((s) => s.taskId === taskId).at(-1)!;
   const status = (taskId: string) => orchestrator.storeInstance.get(taskId)!.status;
@@ -37,7 +37,7 @@ function setup(isolation = new FakeWorktreeIsolation()) {
     latest(taskId).reportComplete({ status: 'done', summary: '' });
     await vi.waitFor(() => expect(status(taskId)).toBe('completed'));
   };
-  return { orchestrator, isolation, sessions, latest, status, started, pass };
+  return { orchestrator, isolation, sessions, latest, status, started, pass, root };
 }
 
 describe('a reverted task behind a dependency, after a withdrawn force start', () => {
@@ -108,7 +108,7 @@ describe('a reverted task behind a dependency, after a withdrawn force start', (
 describe('a resolver start a dirty tree parked, replayed after the revert retired it', () => {
   async function parked(start: (env: ReturnType<typeof setup>, resolver: string) => Promise<unknown>, over: Partial<Task> = {}) {
     const env = setup();
-    const { orchestrator, isolation, started, pass } = env;
+    const { orchestrator, isolation, started, pass, root } = env;
     orchestrator.loadPlan([task('t1', 1)]);
     await orchestrator.approveReview();
     await vi.waitFor(() => expect(started('t1')).toBe(1));
@@ -119,10 +119,11 @@ describe('a resolver start a dirty tree parked, replayed after the revert retire
     orchestrator.storeInstance.update(resolver.id, over.status ? { status: over.status, runnerSessionId: 'saved' } : {});
     orchestrator.runs.linkResolver(resolver.id, 't1');
 
-    // A dirty tree parks a start only where no run goes on: its records gone, as a retry's are, over merges a revert can still take.
+    // A dirty tree parks a start only where no run goes on: one that ran from another workspace path, over merges a revert can still take, its records gone, as a retry's are. A run its ledger names a landing of goes on wherever its records went (ADR-0013).
     const run = orchestrator.runs.planIsolation!.run;
     (run.landedTasks ??= {}).t1 = run.tasks.t1;
     delete run.tasks.t1;
+    root.path = '/moved';
 
     const blocked: string[] = [];
     orchestrator.subscribe({ onIsolationBlocked: ({ reason }) => blocked.push(reason) });

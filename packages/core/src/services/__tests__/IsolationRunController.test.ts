@@ -670,6 +670,125 @@ describe('IsolationRunController', () => {
       expect(ops(isolation)).not.toContain('discard');
       expect(notifications.warn).toHaveBeenCalledWith('The last run\'s worktrees are left in place: Task "Task t1" is still running or waiting on you there.');
     });
+
+    describe('an attempt left active with nothing live in it, as a start held at launch leaves one (ADR-0028)', () => {
+      /** t1 landed and is in HEAD, as its record and git both say; t2's start was held, its record left `active`, and the run stopped. */
+      async function stoppedMerged(t2HoldsWork: boolean) {
+        const env = await closedRun('active');
+        env.isolation.unlandedWork = new Set(t2HoldsWork ? ['t2'] : []);
+        env.isolation.mergedByHand.add('t1');
+        env.isolation.branchHolds = true;
+        return env;
+      }
+
+      it.each([false, true])('keeps the run at Merge all, its worktree holding work or not (%s): cleared up, it would give any start a run from HEAD', async (holdsWork) => {
+        const { runs, isolation, listener, notifications } = await stoppedMerged(holdsWork);
+
+        expect(await runs.merge()).toEqual({ outcome: 'merged' });
+
+        expect(ops(isolation)).not.toContain('discard');
+        expect(runs.taskIsolation('t2')).toMatchObject({ state: 'active' });
+        expect(listener.closed).not.toHaveBeenCalled();
+        expect(notifications.info).toHaveBeenCalledWith('The run is not cleared up: Task "Task t2" was held at its start, so its worktree stays, and so do the run\'s branches.');
+      });
+
+      it('leaves a person\'s start that decides the next run to mint it from HEAD, replacing the stopped run with all it landed merged', async () => {
+        const { runs, isolation } = await stoppedMerged(false);
+
+        expect(await runs.decide(async () => undefined, true)).toEqual({ epoch: 2, mode: 'isolated' });
+
+        expect(runs.planIsolation?.run.id).toBe('run2');
+        expect(isolation.calls).toContainEqual({ op: 'discard', integration: 'delete-merged' });
+      });
+
+      it('leaves a run any other start decides to continue the stopped run, never asking git whether it is spent', async () => {
+        const { runs, isolation } = await stoppedMerged(false);
+        const asked = ops(isolation).filter((op) => op === 'findInHead').length;
+
+        runs.open();
+        await runs.decide(async () => undefined);
+
+        expect(runs.planIsolation?.run.id).toBe('run1');
+        expect(ops(isolation).filter((op) => op === 'findInHead')).toHaveLength(asked);
+        expect(ops(isolation)).not.toContain('userBranchHolds');
+        expect(ops(isolation)).not.toContain('discard');
+      });
+
+      it.each([
+        ['its worktree holds work that never landed', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.unlandedWork = new Set(['t2']); }],
+        // The records still say it is: git alone decides (rule 1).
+        ['git finds landed work missing from HEAD', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.isolation.branchHolds = false; }],
+        ['the attempt was kept', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { await env.runs.release('t2', { keep: true }); }],
+        ['the task is live', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.live.add('t2'); }],
+        // A child's code root, whatever git finds in it (ADR-0055 D17): a Continue held at its start leaves the record so.
+        ['its worktree seats a child', async (env: Awaited<ReturnType<typeof stoppedMerged>>) => { env.runs.hostChild('t2', () => 'child-1'); }],
+      ])('leaves even a person\'s start that decides the next run to continue the stopped run while %s', async (_why, arrange) => {
+        const env = await stoppedMerged(false);
+        await arrange(env);
+
+        await env.runs.decide(async () => undefined, true);
+
+        expect(env.runs.planIsolation?.run.id).toBe('run1');
+        expect(ops(env.isolation).filter((op) => op === 'startRun')).toHaveLength(1);
+        expect(ops(env.isolation)).not.toContain('discard');
+      });
+
+      it('keeps, at Merge all and at a person\'s next start, a run whose held start seats a child, its code root with it', async () => {
+        const env = await stoppedMerged(false);
+        env.runs.hostChild('t2', () => 'child-1');
+
+        expect(await env.runs.merge()).toEqual({ outcome: 'merged' });
+        await env.runs.decide(async () => undefined, true);
+
+        expect(env.runs.planIsolation?.run.id).toBe('run1');
+        expect(env.runs.childSession('t2')).toBe('child-1');
+        expect(ops(env.isolation)).not.toContain('discard');
+      });
+
+      it('leaves a person\'s start to continue a stopped run that failed a landing, its failed task held out', async () => {
+        const env = setup();
+        env.isolation.unlandedWork = new Set();
+        env.isolation.branchHolds = true;
+        env.isolation.outcomes.set('t2', 'failed');
+        await env.runs.decide(async () => undefined);
+        for (const t of [task('t1', 1), task('t2', 2)]) {
+          await env.runs.attemptCwd(t, 'fresh', env.runs.decision);
+          await env.runs.integrate(t);
+        }
+        env.isolation.mergedByHand.add('t1');
+        env.runs.interrupt();
+
+        await env.runs.decide(async () => undefined, true);
+
+        expect(env.runs.taskState('t2')).toBe('failed');
+        expect(env.runs.planIsolation?.run.id).toBe('run1');
+        expect(ops(env.isolation)).not.toContain('discard');
+      });
+    });
+
+    it('leaves the run a start mints while Merge all clears the last one up in force', async () => {
+      const env = setup();
+      await env.runs.decide(async () => undefined);
+      await env.runs.attemptCwd(task('t1', 1), 'fresh', env.runs.decision);
+      await env.runs.integrate(task('t1', 1));
+      env.runs.interrupt();
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => { open = resolve; });
+      const discard = env.isolation.discard.bind(env.isolation);
+      const discarding = vi.spyOn(env.isolation, 'discard').mockImplementationOnce(async (run, opts) => { await gate; return discard(run, opts); });
+
+      const merging = env.runs.merge();
+      await vi.waitFor(() => expect(discarding).toHaveBeenCalledOnce());
+      const deciding = env.runs.decide(async () => undefined);
+      expect(await deciding).toEqual({ epoch: 2, mode: 'isolated' });
+      open();
+      expect(await merging).toEqual({ outcome: 'merged' });
+
+      expect(env.runs.planIsolation?.run.id).toBe('run2');
+      expect(env.runs.isolating).toBe(true);
+      expect(env.listener.closed).not.toHaveBeenCalled();
+      expect(env.runs.mergedRun).toBeNull();
+    });
   });
 
   describe('integrate', () => {

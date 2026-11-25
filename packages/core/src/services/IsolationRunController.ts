@@ -34,7 +34,7 @@ import { describeMergeResult, repairedLanded } from './mergeResultNotice';
 import type { ChildSessionPlace } from '../utils/sessionStore';
 import { quotedList } from '../utils/quotedList';
 import { changedReposOf, handoffOf, layoutOf, PrepareFailedError, SELF_REPO, taskIsolationsOf } from './isolationRecord';
-import { hasReverted, keepLandedOn, revertReach } from './LandingLedger';
+import { hasLedgeredLanding, hasReverted, keepLandedOn, revertReach } from './LandingLedger';
 import type { LandingSubject } from './landingMessage';
 import { revertScope, type RevertScope, type RevertScopeInput } from './taskRevert';
 import { handoffBranchName } from './mergeWording';
@@ -354,6 +354,9 @@ export class IsolationRunController {
 
   get isOpen(): boolean { return this.mode !== null; }
 
+  /** This is a child plan's run (ADR-0055 D11), whose tasks its subplanner starts (D20). */
+  get inChildPlan(): boolean { return this.stateRoot !== undefined; }
+
   /** How many runs have opened: what tells one run's launches from the next one's. */
   get epoch(): number { return this.opened; }
 
@@ -636,13 +639,19 @@ export class IsolationRunController {
    * tasks never asks. `resume` is what a dirty tree parks until the user
    * chooses how to go on. An interrupted activation is refused separately
    * from one parked on a dirty tree, so an explicit start never disappears.
+   *
+   * `consent`: the start asking is a person's own, of a task whose launch in
+   * a worktree the configuration check reads, so if it is the one that
+   * decides, it may replace a spent run ({@link spentRun}). Only the start
+   * that decides is judged: one that comes while another decides, or after,
+   * takes that decision, whoever opened the run (ADR-0028).
    */
-  decide(resume: () => Promise<void>): Promise<IsolationStart> {
+  decide(resume: () => Promise<void>, consent = false): Promise<IsolationStart> {
     this.open();
     if (this.opening) return this.opening;
     if (this.decided) return Promise.resolve(this.decision);
     if (this.blockedStart) return Promise.resolve('blocked');
-    const opening = this.activate(resume, this.activations).finally(() => {
+    const opening = this.activate(resume, this.activations, consent).finally(() => {
       if (this.opening === opening) this.opening = null;
     });
     this.opening = opening;
@@ -1133,26 +1142,53 @@ export class IsolationRunController {
 
   /**
    * Clear a settled run up once everything it landed is merged — and only
-   * when nothing else is left in it: a live task, or a worktree holding work
-   * that never landed, keeps the whole run, worktrees and branches, rather
-   * than leaving that work to a deletion.
+   * when nothing else is left in it: a live task, a worktree holding work
+   * that never landed, or one a start held at launch left, keeps the whole
+   * run, worktrees and branches. A held start's worktree may hold nothing,
+   * but cleared up, its run would give any start a new one from HEAD, which
+   * {@link spentRun} leaves to a person's own start of a task in a worktree
+   * (ADR-0028).
    */
   private async clearMerged(run: IsolationRun): Promise<void> {
+    // A plan loaded, or a start opened, while the merge went decides about this run itself.
+    if (this.run !== run || this.isOpen) return;
     const live = this.liveRecords(run);
-    const unlanded = this.holdouts(run).filter((r) => !live.includes(r));
-    if (live.length > 0 || unlanded.length > 0) {
+    const left = this.holdouts(run).filter((r) => !live.includes(r));
+    const held = left.filter((r) => r.status === 'active');
+    const unlanded = left.filter((r) => r.status !== 'active');
+    if (left.length > 0 || live.length > 0) {
       const why = [
         ...(live.length > 0 ? [`${tasksNamed(live)} ${live.length === 1 ? 'is' : 'are'} still running or waiting on you`] : []),
         ...(unlanded.length > 0 ? [`${tasksNamed(unlanded)} ${unlanded.length === 1 ? 'holds' : 'hold'} work that has not landed`] : []),
+        ...(held.length > 0 ? [`${tasksNamed(held)} ${held.length === 1 ? 'was' : 'were'} held at ${held.length === 1 ? 'its' : 'their'} start`] : []),
       ];
-      const one = live.length + unlanded.length === 1;
+      const one = live.length + left.length === 1;
       this.tell('info', `The run is not cleared up: ${why.join(', and ')}, so ${one ? 'its worktree stays' : 'their worktrees stay'}, and so do the run's branches.`);
       return;
     }
-    if (await this.discardMerged(run)) this.forget(run.id);
+    // The record goes before git deletes the run's worktrees and branches, as
+    // an adopted run's does: a start that comes in meanwhile mints a fresh run
+    // from HEAD, which stays in force, instead of continuing this one.
+    const adoption = this.adoptions;
+    const resolvers = this.resolvers;
+    this.run = null;
+    this.resolvers = {};
+    this.merged = run.id;
+    const discarded = await this.discardMerged(run);
+    // A plan loaded meanwhile has a record of its own.
+    if (this.adoptions !== adoption) return;
+    if (this.run !== null) {
+      // That start's run is the plan's now; only the links to this one's branches end.
+      if (Object.keys(resolvers).length > 0) this.listener.resolversEnded(Object.keys(resolvers));
+      return;
+    }
+    this.resolvers = resolvers;
+    // Refused: the record is the one pointer to what could not be let go.
+    if (!discarded) { this.run = run; this.merged = null; return; }
+    this.forget(run.id);
   }
 
-  /** The records that keep a settled run from being cleared up: live, or holding work that never landed. */
+  /** The records that keep a settled run from being cleared up: live, or not landed, a held start's included. */
   private holdouts(run: IsolationRun): IsolationTaskRecord[] {
     const live = this.liveTasks();
     return Object.values(run.tasks).filter((r) => live.has(r.taskId) || r.status !== 'merged');
@@ -1200,9 +1236,11 @@ export class IsolationRunController {
     this.listener.closed();
   }
 
-  private async assess(root: string): Promise<RunDecision> {
+  /** `spent` is the plan's run when {@link spentRun} found nothing left in it, which a new run replaces. */
+  private async assess(root: string, spent: IsolationRun | null = null): Promise<RunDecision> {
     const availability = await this.isolation.isActive(root);
-    const continued = this.continuableRun(root);
+    const run = this.continuableRun(root);
+    const continued = run === spent ? null : run;
     const continuing = continued !== null;
     // A continued run keeps the group it started with.
     if (availability.active) {
@@ -1217,9 +1255,9 @@ export class IsolationRunController {
     return { mode: 'shared', reason: availability.reason, repos: availability.repos ?? [] };
   }
 
-  private async activate(resume: () => Promise<void>, activation: number): Promise<IsolationStart> {
+  private async activate(resume: () => Promise<void>, activation: number, consent: boolean): Promise<IsolationStart> {
     const root = this.workspaceRoot();
-    const decision = await this.assess(root);
+    const decision = await this.assess(root, consent ? await this.spentRun(root) : null);
     const interrupted = () => activation !== this.activations;
     // Only a close with nothing after it: a stop or a plan load since has the last word.
     const ended = (): 'interrupted' | 'closed' => activation === this.closedActivation && this.activations === activation + 1 ? 'closed' : 'interrupted';
@@ -1283,21 +1321,72 @@ export class IsolationRunController {
    * means a resumed plan's dependents must start from a tip that holds their
    * predecessors' work, and anything held — a kept attempt, a conflict, a
    * repair — is work the user may still want, which a fresh run's mint would
-   * delete. Only a run with no records at all is superseded, and not one that
-   * reverted the tasks it had: a retry starts from its tip (ADR-0054). A record
-   * that names a child holds a code root, on a path that child's own run is tied
-   * to, whether or not a Stop has yet taken it off `active` (ADR-0055 D17).
+   * delete. So does one whose ledger names a landing no record speaks for any
+   * more, as a held start of the task that landed leaves it, since records
+   * alone never say a run is spent ({@link spentRun}). Only a run with no
+   * records but superseded attempts, and nothing landed, is superseded, and
+   * not one that reverted the tasks it had: a retry starts from its tip
+   * (ADR-0054). A record that names a child holds a code root, on a path that
+   * child's own run is tied to, whether or not a Stop has yet taken it off
+   * `active` (ADR-0055 D17).
    */
   private continuableRun(root: string): IsolationRun | null {
     const run = this.run;
-    return run && run.workspaceRoot === root && (hasReverted(run) || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
+    return run && run.workspaceRoot === root && (hasReverted(run) || hasLedgeredLanding(run) || Object.values(run.tasks).some((r) => r.status !== 'active' || r.childSession)) ? run : null;
+  }
+
+  /**
+   * The plan's run, when nothing is left in it a new run would lose: no record
+   * holds anything ({@link leavesNothing}), and git finds every repository's
+   * integration tip in the user's branch, which records alone cannot say: a
+   * retry drops a landed task's record, and its landing stays on the branch.
+   * Asked by a person's own start as it decides the run, and by no other:
+   * continued, the run keeps a base the user's branch has moved past, and a
+   * start held for configuration one of its tasks landed is held again at
+   * each start. A new run from a branch that holds the configuration, which a
+   * person starts, is how they consent to it (ADR-0028), so the next run is
+   * minted from HEAD, as after a reload (ADR-0013), and its base holds that
+   * configuration. A start that does not ask continues a run that can be
+   * continued, where the hold stands. A
+   * run that reverted a task is spent the same way: its reverts are on the
+   * integration branch git finds in HEAD, and the record of a later attempt
+   * the revert left is a kept one, which keeps the run (ADR-0054). One whose
+   * landing was cut short continues: its branch holds what HEAD may not.
+   */
+  private async spentRun(root: string): Promise<IsolationRun | null> {
+    const run = this.continuableRun(root);
+    if (!run || run.landing) return null;
+    if (!(await this.leavesNothing(run)) || this.run !== run) return null;
+    const held = await this.isolation.userBranchHolds(run).catch(() => false);
+    return this.run === run && held ? run : null;
+  }
+
+  /**
+   * Whether the run's records hold nothing a new run would lose: no task
+   * live, no record off `active` but landed ones, none that seats a child,
+   * whose code root its worktree is (ADR-0055 D17), or keeps branches a
+   * conflict's fall-back left, and no `active` one whose branch or worktree
+   * git finds work in. An `active` one with neither is an attempt that ended
+   * with its worktree as it was cut, as a start held at launch leaves one
+   * (ADR-0028). What the run landed is git's to say ({@link spentRun}).
+   */
+  private async leavesNothing(run: IsolationRun): Promise<boolean> {
+    const live = this.liveTasks();
+    for (const record of Object.values(run.tasks)) {
+      if (live.has(record.taskId) || record.childSession || (record.continuationWork?.length ?? 0) > 0) return false;
+      if (record.status === 'merged') continue;
+      if (record.status !== 'active') return false;
+      if (await this.isolation.holdsUnlandedWork(run, record).catch(() => true)) return false;
+    }
+    return true;
   }
 
   /**
    * A run with no records at all holds only superseded attempts, so it goes —
    * but its integration branch only where the user's HEAD contains it, as does
    * that of a run that cannot be continued for another reason (it ran from a
-   * different workspace path): only the user gives landed work up.
+   * different workspace path, or the user's branch holds all it landed): only
+   * the user gives landed work up.
    *
    * False when `interrupted` came while git was minting: a newer activation
    * may be minting its own run, so this one is never installed over it, and

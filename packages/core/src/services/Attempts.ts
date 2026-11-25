@@ -15,12 +15,12 @@ import type { PlanStore } from './PlanStore';
 import type { RunnerRegistry } from '../plugins/RunnerRegistry';
 import type { IsolationDecision, IsolationRunController } from './IsolationRunController';
 import type { Landing, LandingOutcome } from './Landing';
-import { TaskStartConfig } from './taskStartConfig';
+import { configHoldReason, TaskStartConfig, type StartConfigFound } from './taskStartConfig';
 import { taskRefOf } from './TaskRefs';
 import { classifyRunnerStop, PROVIDER_RETRY_DELAYS_MS, stopsRunner, type AttemptEnd, type TurnFailure } from './runnerExit';
 import type { ResearchTasks } from './ResearchTasks';
 import {
-  composeAttemptPrompt, attemptWorkspace, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
+  composeAttemptPrompt, attemptWorkspace, checksConfig, checksTree, classifyAttempt, handoffKept, landsNothing, mergeExcludes, repairsChild, takesSkills, writesCommit,
   type AttemptKind, type Continuation, type TaskWork,
 } from './attemptKind';
 import { resolveTaskSkills, TaskSkillsError, type SkillLookup } from './taskSkills';
@@ -56,8 +56,8 @@ import { compactionStartOf } from './compactionStart';
 import { modeRefusalOf, modeRefusedReason } from './modeRefusal';
 
 class TaskStartConfigError extends Error {
-  constructor(paths: string[]) {
-    super(`repository configuration ${paths.map((p) => JSON.stringify(p)).join(', ')} differs from where this run started; remove it to continue, or start a new run once your branch holds it`);
+  constructor(found: StartConfigFound, inChildPlan: boolean) {
+    super(configHoldReason(found, inChildPlan));
   }
 }
 
@@ -317,7 +317,7 @@ export interface AttemptsDeps {
   store: PlanStore;
   output: TaskOutputSource;
   /** The run an attempt works in. */
-  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openWorktreesOf' | 'skillLayout' | 'inRepoGroup' | 'taskRepos' | 'workspaceOf' | 'epoch' | 'stillToLetGo'>;
+  runs: Pick<IsolationRunController, 'snapshotWorkspace' | 'filesChangedSince' | 'openWorktreesOf' | 'skillLayout' | 'inRepoGroup' | 'taskRepos' | 'workspaceOf' | 'epoch' | 'stillToLetGo' | 'inChildPlan'>;
   /** What becomes of a workspace an attempt ended while opening, and how work kept elsewhere comes back to one. */
   leases: Pick<ExecutionBackend, 'letGo' | 'collect'>;
   /** This node's side of the tree's ledger; absent at the root, and on a flat run, which has none (ADR-0056 M5). */
@@ -888,9 +888,9 @@ export class Attempts {
       if (kind.kind === 'continuation' || attempt.delegated) await this.windDowns.get(task.id);
       // A fresh attempt by any route starts its child over; a Continue, which is another kind, reopens it.
       if (kind.kind === 'delegated') await this.deps.discardChild?.(task);
-      if (!attempt.script && kind.kind === 'repair') {
+      if (kind.kind === 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd: null, worktree: true });
-        if (paths.length) throw new TaskStartConfigError(paths);
+        if (paths.length) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
       }
       const intent = attemptWorkspace(kind);
       if (intent.kind === 'worktree' && !attempt.isolationDecision) throw new Error('No isolation decision was taken for this attempt.');
@@ -906,10 +906,9 @@ export class Attempts {
       const { cwd, worktree, previousWork, writable } = attempt.opened.workspace;
       attempt.cwd = cwd;
       attempt.worktree = worktree;
-      // A read-only task withholds project configuration (ADR-0046), so none reaches it.
-      if (!attempt.script && kind.kind !== 'repair' && !landsNothing(kind)) {
+      if (kind.kind !== 'repair' && checksConfig(kind, attempt.script)) {
         const paths = await this.startConfig.check(runs, task.id, { epoch: runs.epoch, root: this.deps.workspaceRoot(), cwd, worktree });
-        if (paths.length) throw new TaskStartConfigError(paths);
+        if (paths.length) throw new TaskStartConfigError(this.startConfig.found(paths), runs.inChildPlan);
       }
       if (checksTree(kind)) attempt.snapshot = await runs.snapshotWorkspace();
       if (this.live.get(task.id) !== attempt) return await this.leaveEnded(task, attempt);
