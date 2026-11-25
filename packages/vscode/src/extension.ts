@@ -45,7 +45,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     // The keys stay out of this process's environment, which every child and
     // every other extension here inherits: the built-in runner is lent them (ADR-0070).
-    setHostCredentials(() => config.heldProviderEnv());
+    setHostCredentials((env) => config.heldProviderEnv(env));
     const runnerRegistry = new RunnerRegistry();
     const fsAdapter = new VsCodeFileSystem();
     // Read from the account the runners use, as the login probe below is: a

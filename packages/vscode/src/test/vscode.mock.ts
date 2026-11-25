@@ -28,7 +28,9 @@ export function __resetConfig(): void {
 export const workspace = {
   getConfiguration(_section?: string) {
     return {
+      // The workspace's value over the user's, as VS Code reads a setting.
       get<T>(key: string, defaultValue?: T): T {
+        if (key in workspaceValues) return workspaceValues[key] as T;
         return (key in configValues ? configValues[key] : defaultValue) as T;
       },
       // A value a test set reads as the user's own (global) one; anything else as unset.

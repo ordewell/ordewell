@@ -1,13 +1,33 @@
 import * as vscode from 'vscode';
-import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf, PROVIDER_PRIORITY } from '@ordewell/core';
+import { type AiProvider, type PlannerBackendId, BaseConfig, DEFAULT_MAX_PARALLEL, DEFAULT_RUNNERS, defaultEnabledRunners, parseMaxParallel, normalizeGeminiModel, isApiProvider, getProviderMeta, configuredProviders, parseApprovalModeSetting, DEFAULT_WEB_READ_BUDGET, SettingsService, notifyCommandOf, PROVIDER_PRIORITY, PROVIDER_CREDENTIAL_ENV, globalEnvFile, readEnvFile, vendorApiKeyIn, vendorBaseUrlIn } from '@ordewell/core';
 import type { ConfiguredPlanner, ProviderModelLists, ResolvedPlanner } from '@ordewell/core';
 import { SecretStore, type ApiProvider, type SecretKey } from './SecretStore';
+
+/**
+ * The provider keys and endpoints saved in `~/.ordewell/.env`, where Desktop's
+ * key entry and the TUI's /key-set keep them, read the way the CLI and the
+ * daemon read the file. A file that is missing or cannot be read saves none:
+ * the window still starts, on its own keys.
+ */
+export function readSavedCredentials(file: string = globalEnvFile()): Record<string, string> {
+  let saved: Record<string, string>;
+  try {
+    saved = readEnvFile(file);
+  } catch {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(saved).filter(([key, value]) => PROVIDER_CREDENTIAL_ENV.has(key) && value.trim() !== ''));
+}
+
+const CUSTOM_URL_VAR = getProviderMeta('openai_compatible').baseUrlEnvVar ?? '';
 
 export class VsCodeConfig extends BaseConfig {
   private get config() { return vscode.workspace.getConfiguration('ordewell'); }
 
   private _providerModelLists: ProviderModelLists | null = null;
   private _pick: { model: string; provider: PlannerBackendId } | undefined;
+  /** What `~/.ordewell/.env` saved when last read: at startup, and on each discovery refresh. */
+  private saved: Record<string, string>;
 
   /**
    * `readAgentCatalog` reads the model ids a coding agent's discovery last
@@ -17,8 +37,51 @@ export class VsCodeConfig extends BaseConfig {
   constructor(
     private readonly secretStore?: SecretStore,
     private readonly readAgentCatalog: (provider: PlannerBackendId) => readonly string[] = () => [],
+    private readonly readSaved: () => Record<string, string> = readSavedCredentials,
   ) {
     super();
+    this.saved = readSaved();
+  }
+
+  /**
+   * Read `~/.ordewell/.env` again, so a key saved, replaced or removed from
+   * another surface since is what this window plans and runs with. Answers
+   * whether it changed.
+   */
+  reloadSavedCredentials(): boolean {
+    const next = this.readSaved();
+    const canonical = (vars: Record<string, string>) => JSON.stringify(Object.entries(vars).sort(([a], [b]) => a.localeCompare(b)));
+    const changed = canonical(next) !== canonical(this.saved);
+    this.saved = next;
+    return changed;
+  }
+
+  /**
+   * Whether `provider` is set up by the saved file alone. That file is the
+   * last place a key is read from, after SecretStorage, the setting and the
+   * host's environment; Custom is set up by its endpoint, so it is the file's
+   * when neither its setting nor the environment names one.
+   */
+  private fromSaved(provider: AiProvider): boolean {
+    if (provider === 'openai_compatible') return !this.ownCustomEndpoint() && Boolean(this.saved[CUSTOM_URL_VAR]);
+    return !this.ownApiKey(provider) && vendorApiKeyIn(this.saved, provider) !== '';
+  }
+
+  /**
+   * A saved key goes only where it was saved for: the file's own endpoint, or
+   * the provider's default. Read together, so no workspace setting or
+   * workspace env can send it elsewhere.
+   */
+  private savedApiKey(provider: AiProvider): string {
+    return this.fromSaved(provider) ? vendorApiKeyIn(this.saved, provider) : '';
+  }
+
+  private savedBaseUrl(provider: AiProvider): string {
+    return this.fromSaved(provider) ? vendorBaseUrlIn(this.saved, provider) : '';
+  }
+
+  private ownCustomEndpoint(): string {
+    return this.config.get<string>('openaiCompatibleBaseUrl', '') || super.openaiCompatibleBaseUrl;
   }
 
   protected agentCatalog(provider: PlannerBackendId): readonly string[] {
@@ -33,6 +96,7 @@ export class VsCodeConfig extends BaseConfig {
       this.config.get<string>('openAiApiKey', '') ||
       process.env.OPENROUTER_API_KEY ||
       process.env.OPENAI_API_KEY ||
+      this.savedApiKey('openrouter') ||
       ''
     );
   }
@@ -42,14 +106,15 @@ export class VsCodeConfig extends BaseConfig {
       this.secretStore?.get('geminiKey') ||
       this.config.get<string>('apiKey', '') ||
       process.env.GEMINI_API_KEY ||
+      this.savedApiKey('google') ||
       ''
     );
   }
 
-  get openAiBaseUrl() { return this.config.get<string>('openAiBaseUrl', '') || super.openAiBaseUrl; }
-  get openAiApiKey() { return this.secretStore?.get('openrouterKey') || this.config.get<string>('openAiApiKey', '') || super.openAiApiKey; }
-  get openaiCompatibleBaseUrl() { return this.config.get<string>('openaiCompatibleBaseUrl', '') || super.openaiCompatibleBaseUrl; }
-  get openaiCompatibleApiKey() { return this.secretStore?.get('openaiCompatibleKey') || this.config.get<string>('openaiCompatibleApiKey', '') || super.openaiCompatibleApiKey; }
+  get openAiBaseUrl() { return this.savedBaseUrl('openrouter') || this.config.get<string>('openAiBaseUrl', '') || super.openAiBaseUrl; }
+  get openAiApiKey() { return this.secretStore?.get('openrouterKey') || this.config.get<string>('openAiApiKey', '') || super.openAiApiKey || this.savedApiKey('openrouter'); }
+  get openaiCompatibleBaseUrl() { return this.ownCustomEndpoint() || this.savedBaseUrl('openai_compatible'); }
+  get openaiCompatibleApiKey() { return this.getProviderApiKey('openai_compatible'); }
 
   // --- Registry-driven provider config ---
 
@@ -67,6 +132,8 @@ export class VsCodeConfig extends BaseConfig {
   }
 
   getProviderBaseUrl(provider: AiProvider): string {
+    const saved = this.savedBaseUrl(provider);
+    if (saved) return saved;
     const meta = getProviderMeta(provider);
     if (meta?.vscodeBaseUrlKey) {
       const v = this.config.get<string>(meta.vscodeBaseUrlKey, '');
@@ -76,6 +143,13 @@ export class VsCodeConfig extends BaseConfig {
   }
 
   getProviderApiKey(provider: AiProvider): string {
+    // Custom's saved key belongs to its saved endpoint, and to no other.
+    if (provider === 'openai_compatible' && this.fromSaved(provider)) return vendorApiKeyIn(this.saved, provider);
+    return this.ownApiKey(provider) || this.savedApiKey(provider);
+  }
+
+  /** The key this window holds itself: SecretStorage, then the setting, then the host's environment. */
+  private ownApiKey(provider: AiProvider): string {
     const meta = getProviderMeta(provider);
     if (meta?.secretStoreKey) {
       const v = this.secretStore?.get(meta.secretStoreKey as SecretKey);
@@ -90,56 +164,56 @@ export class VsCodeConfig extends BaseConfig {
 
   // --- New preset config getters ---
 
-  get openaiBaseUrl() { return this.config.get<string>('openaiBaseUrl', '') || super.openaiBaseUrl; }
-  get openaiApiKey() { return this.secretStore?.get('openaiKey') || this.config.get<string>('openaiApiKey', '') || super.openaiApiKey; }
+  get openaiBaseUrl() { return this.savedBaseUrl('openai') || this.config.get<string>('openaiBaseUrl', '') || super.openaiBaseUrl; }
+  get openaiApiKey() { return this.secretStore?.get('openaiKey') || this.config.get<string>('openaiApiKey', '') || super.openaiApiKey || this.savedApiKey('openai'); }
 
-  get xaiBaseUrl() { return this.config.get<string>('xaiBaseUrl', '') || super.xaiBaseUrl; }
-  get xaiApiKey() { return this.secretStore?.get('xaiKey') || this.config.get<string>('xaiApiKey', '') || super.xaiApiKey; }
+  get xaiBaseUrl() { return this.savedBaseUrl('xai') || this.config.get<string>('xaiBaseUrl', '') || super.xaiBaseUrl; }
+  get xaiApiKey() { return this.secretStore?.get('xaiKey') || this.config.get<string>('xaiApiKey', '') || super.xaiApiKey || this.savedApiKey('xai'); }
 
-  get groqBaseUrl() { return this.config.get<string>('groqBaseUrl', '') || super.groqBaseUrl; }
-  get groqApiKey() { return this.secretStore?.get('groqKey') || this.config.get<string>('groqApiKey', '') || super.groqApiKey; }
+  get groqBaseUrl() { return this.savedBaseUrl('groq') || this.config.get<string>('groqBaseUrl', '') || super.groqBaseUrl; }
+  get groqApiKey() { return this.secretStore?.get('groqKey') || this.config.get<string>('groqApiKey', '') || super.groqApiKey || this.savedApiKey('groq'); }
 
-  get deepseekBaseUrl() { return this.config.get<string>('deepseekBaseUrl', '') || super.deepseekBaseUrl; }
-  get deepseekApiKey() { return this.secretStore?.get('deepseekKey') || this.config.get<string>('deepseekApiKey', '') || super.deepseekApiKey; }
+  get deepseekBaseUrl() { return this.savedBaseUrl('deepseek') || this.config.get<string>('deepseekBaseUrl', '') || super.deepseekBaseUrl; }
+  get deepseekApiKey() { return this.secretStore?.get('deepseekKey') || this.config.get<string>('deepseekApiKey', '') || super.deepseekApiKey || this.savedApiKey('deepseek'); }
 
-  get togetherBaseUrl() { return this.config.get<string>('togetherBaseUrl', '') || super.togetherBaseUrl; }
-  get togetherApiKey() { return this.secretStore?.get('togetherKey') || this.config.get<string>('togetherApiKey', '') || super.togetherApiKey; }
-  get mistralBaseUrl() { return this.config.get<string>('mistralBaseUrl', '') || super.mistralBaseUrl; }
-  get mistralApiKey() { return this.secretStore?.get('mistralKey') || this.config.get<string>('mistralApiKey', '') || super.mistralApiKey; }
-  get anthropicBaseUrl() { return this.config.get<string>('anthropicBaseUrl', '') || super.anthropicBaseUrl; }
-  get anthropicApiKey() { return this.secretStore?.get('anthropicKey') || this.config.get<string>('anthropicApiKey', '') || super.anthropicApiKey; }
-  get fireworksBaseUrl() { return this.config.get<string>('fireworksBaseUrl', '') || super.fireworksBaseUrl; }
-  get fireworksApiKey() { return this.secretStore?.get('fireworksKey') || this.config.get<string>('fireworksApiKey', '') || super.fireworksApiKey; }
-  get perplexityBaseUrl() { return this.config.get<string>('perplexityBaseUrl', '') || super.perplexityBaseUrl; }
-  get perplexityApiKey() { return this.secretStore?.get('perplexityKey') || this.config.get<string>('perplexityApiKey', '') || super.perplexityApiKey; }
-  get zhipuBaseUrl() { return this.config.get<string>('zhipuBaseUrl', '') || super.zhipuBaseUrl; }
-  get zhipuApiKey() { return this.secretStore?.get('zhipuKey') || this.config.get<string>('zhipuApiKey', '') || super.zhipuApiKey; }
-  get kimiBaseUrl() { return this.config.get<string>('kimiBaseUrl', '') || super.kimiBaseUrl; }
-  get kimiApiKey() { return this.secretStore?.get('kimiKey') || this.config.get<string>('kimiApiKey', '') || super.kimiApiKey; }
-  get cerebrasBaseUrl() { return this.config.get<string>('cerebrasBaseUrl', '') || super.cerebrasBaseUrl; }
-  get cerebrasApiKey() { return this.secretStore?.get('cerebrasKey') || this.config.get<string>('cerebrasApiKey', '') || super.cerebrasApiKey; }
-  get deepinfraBaseUrl() { return this.config.get<string>('deepinfraBaseUrl', '') || super.deepinfraBaseUrl; }
-  get deepinfraApiKey() { return this.secretStore?.get('deepinfraKey') || this.config.get<string>('deepinfraApiKey', '') || super.deepinfraApiKey; }
-  get doubaoBaseUrl() { return this.config.get<string>('doubaoBaseUrl', '') || super.doubaoBaseUrl; }
-  get doubaoApiKey() { return this.secretStore?.get('doubaoKey') || this.config.get<string>('doubaoApiKey', '') || super.doubaoApiKey; }
-  get qwenBaseUrl() { return this.config.get<string>('qwenBaseUrl', '') || super.qwenBaseUrl; }
-  get qwenApiKey() { return this.secretStore?.get('qwenKey') || this.config.get<string>('qwenApiKey', '') || super.qwenApiKey; }
-  get hunyuanBaseUrl() { return this.config.get<string>('hunyuanBaseUrl', '') || super.hunyuanBaseUrl; }
-  get hunyuanApiKey() { return this.secretStore?.get('hunyuanKey') || this.config.get<string>('hunyuanApiKey', '') || super.hunyuanApiKey; }
-  get baichuanBaseUrl() { return this.config.get<string>('baichuanBaseUrl', '') || super.baichuanBaseUrl; }
-  get baichuanApiKey() { return this.secretStore?.get('baichuanKey') || this.config.get<string>('baichuanApiKey', '') || super.baichuanApiKey; }
-  get minimaxBaseUrl() { return this.config.get<string>('minimaxBaseUrl', '') || super.minimaxBaseUrl; }
-  get minimaxApiKey() { return this.secretStore?.get('minimaxKey') || this.config.get<string>('minimaxApiKey', '') || super.minimaxApiKey; }
-  get yiBaseUrl() { return this.config.get<string>('yiBaseUrl', '') || super.yiBaseUrl; }
-  get yiApiKey() { return this.secretStore?.get('yiKey') || this.config.get<string>('yiApiKey', '') || super.yiApiKey; }
-  get stepfunBaseUrl() { return this.config.get<string>('stepfunBaseUrl', '') || super.stepfunBaseUrl; }
-  get stepfunApiKey() { return this.secretStore?.get('stepfunKey') || this.config.get<string>('stepfunApiKey', '') || super.stepfunApiKey; }
-  get siliconflowBaseUrl() { return this.config.get<string>('siliconflowBaseUrl', '') || super.siliconflowBaseUrl; }
-  get siliconflowApiKey() { return this.secretStore?.get('siliconflowKey') || this.config.get<string>('siliconflowApiKey', '') || super.siliconflowApiKey; }
-  get cohereBaseUrl() { return this.config.get<string>('cohereBaseUrl', '') || super.cohereBaseUrl; }
-  get cohereApiKey() { return this.secretStore?.get('cohereKey') || this.config.get<string>('cohereApiKey', '') || super.cohereApiKey; }
-  get novitaBaseUrl() { return this.config.get<string>('novitaBaseUrl', '') || super.novitaBaseUrl; }
-  get novitaApiKey() { return this.secretStore?.get('novitaKey') || this.config.get<string>('novitaApiKey', '') || super.novitaApiKey; }
+  get togetherBaseUrl() { return this.savedBaseUrl('together') || this.config.get<string>('togetherBaseUrl', '') || super.togetherBaseUrl; }
+  get togetherApiKey() { return this.secretStore?.get('togetherKey') || this.config.get<string>('togetherApiKey', '') || super.togetherApiKey || this.savedApiKey('together'); }
+  get mistralBaseUrl() { return this.savedBaseUrl('mistral') || this.config.get<string>('mistralBaseUrl', '') || super.mistralBaseUrl; }
+  get mistralApiKey() { return this.secretStore?.get('mistralKey') || this.config.get<string>('mistralApiKey', '') || super.mistralApiKey || this.savedApiKey('mistral'); }
+  get anthropicBaseUrl() { return this.savedBaseUrl('anthropic') || this.config.get<string>('anthropicBaseUrl', '') || super.anthropicBaseUrl; }
+  get anthropicApiKey() { return this.secretStore?.get('anthropicKey') || this.config.get<string>('anthropicApiKey', '') || super.anthropicApiKey || this.savedApiKey('anthropic'); }
+  get fireworksBaseUrl() { return this.savedBaseUrl('fireworks') || this.config.get<string>('fireworksBaseUrl', '') || super.fireworksBaseUrl; }
+  get fireworksApiKey() { return this.secretStore?.get('fireworksKey') || this.config.get<string>('fireworksApiKey', '') || super.fireworksApiKey || this.savedApiKey('fireworks'); }
+  get perplexityBaseUrl() { return this.savedBaseUrl('perplexity') || this.config.get<string>('perplexityBaseUrl', '') || super.perplexityBaseUrl; }
+  get perplexityApiKey() { return this.secretStore?.get('perplexityKey') || this.config.get<string>('perplexityApiKey', '') || super.perplexityApiKey || this.savedApiKey('perplexity'); }
+  get zhipuBaseUrl() { return this.savedBaseUrl('zhipu') || this.config.get<string>('zhipuBaseUrl', '') || super.zhipuBaseUrl; }
+  get zhipuApiKey() { return this.secretStore?.get('zhipuKey') || this.config.get<string>('zhipuApiKey', '') || super.zhipuApiKey || this.savedApiKey('zhipu'); }
+  get kimiBaseUrl() { return this.savedBaseUrl('kimi') || this.config.get<string>('kimiBaseUrl', '') || super.kimiBaseUrl; }
+  get kimiApiKey() { return this.secretStore?.get('kimiKey') || this.config.get<string>('kimiApiKey', '') || super.kimiApiKey || this.savedApiKey('kimi'); }
+  get cerebrasBaseUrl() { return this.savedBaseUrl('cerebras') || this.config.get<string>('cerebrasBaseUrl', '') || super.cerebrasBaseUrl; }
+  get cerebrasApiKey() { return this.secretStore?.get('cerebrasKey') || this.config.get<string>('cerebrasApiKey', '') || super.cerebrasApiKey || this.savedApiKey('cerebras'); }
+  get deepinfraBaseUrl() { return this.savedBaseUrl('deepinfra') || this.config.get<string>('deepinfraBaseUrl', '') || super.deepinfraBaseUrl; }
+  get deepinfraApiKey() { return this.secretStore?.get('deepinfraKey') || this.config.get<string>('deepinfraApiKey', '') || super.deepinfraApiKey || this.savedApiKey('deepinfra'); }
+  get doubaoBaseUrl() { return this.savedBaseUrl('doubao') || this.config.get<string>('doubaoBaseUrl', '') || super.doubaoBaseUrl; }
+  get doubaoApiKey() { return this.secretStore?.get('doubaoKey') || this.config.get<string>('doubaoApiKey', '') || super.doubaoApiKey || this.savedApiKey('doubao'); }
+  get qwenBaseUrl() { return this.savedBaseUrl('qwen') || this.config.get<string>('qwenBaseUrl', '') || super.qwenBaseUrl; }
+  get qwenApiKey() { return this.secretStore?.get('qwenKey') || this.config.get<string>('qwenApiKey', '') || super.qwenApiKey || this.savedApiKey('qwen'); }
+  get hunyuanBaseUrl() { return this.savedBaseUrl('hunyuan') || this.config.get<string>('hunyuanBaseUrl', '') || super.hunyuanBaseUrl; }
+  get hunyuanApiKey() { return this.secretStore?.get('hunyuanKey') || this.config.get<string>('hunyuanApiKey', '') || super.hunyuanApiKey || this.savedApiKey('hunyuan'); }
+  get baichuanBaseUrl() { return this.savedBaseUrl('baichuan') || this.config.get<string>('baichuanBaseUrl', '') || super.baichuanBaseUrl; }
+  get baichuanApiKey() { return this.secretStore?.get('baichuanKey') || this.config.get<string>('baichuanApiKey', '') || super.baichuanApiKey || this.savedApiKey('baichuan'); }
+  get minimaxBaseUrl() { return this.savedBaseUrl('minimax') || this.config.get<string>('minimaxBaseUrl', '') || super.minimaxBaseUrl; }
+  get minimaxApiKey() { return this.secretStore?.get('minimaxKey') || this.config.get<string>('minimaxApiKey', '') || super.minimaxApiKey || this.savedApiKey('minimax'); }
+  get yiBaseUrl() { return this.savedBaseUrl('yi') || this.config.get<string>('yiBaseUrl', '') || super.yiBaseUrl; }
+  get yiApiKey() { return this.secretStore?.get('yiKey') || this.config.get<string>('yiApiKey', '') || super.yiApiKey || this.savedApiKey('yi'); }
+  get stepfunBaseUrl() { return this.savedBaseUrl('stepfun') || this.config.get<string>('stepfunBaseUrl', '') || super.stepfunBaseUrl; }
+  get stepfunApiKey() { return this.secretStore?.get('stepfunKey') || this.config.get<string>('stepfunApiKey', '') || super.stepfunApiKey || this.savedApiKey('stepfun'); }
+  get siliconflowBaseUrl() { return this.savedBaseUrl('siliconflow') || this.config.get<string>('siliconflowBaseUrl', '') || super.siliconflowBaseUrl; }
+  get siliconflowApiKey() { return this.secretStore?.get('siliconflowKey') || this.config.get<string>('siliconflowApiKey', '') || super.siliconflowApiKey || this.savedApiKey('siliconflow'); }
+  get cohereBaseUrl() { return this.savedBaseUrl('cohere') || this.config.get<string>('cohereBaseUrl', '') || super.cohereBaseUrl; }
+  get cohereApiKey() { return this.secretStore?.get('cohereKey') || this.config.get<string>('cohereApiKey', '') || super.cohereApiKey || this.savedApiKey('cohere'); }
+  get novitaBaseUrl() { return this.savedBaseUrl('novita') || this.config.get<string>('novitaBaseUrl', '') || super.novitaBaseUrl; }
+  get novitaApiKey() { return this.secretStore?.get('novitaKey') || this.config.get<string>('novitaApiKey', '') || super.novitaApiKey || this.savedApiKey('novita'); }
 
   /**
    * Providers with a non-empty key (or, for openai_compatible, a base URL)
@@ -157,8 +231,14 @@ export class VsCodeConfig extends BaseConfig {
    * then the VS Code setting, as `getProviderApiKey` reads a key. Lent to the
    * built-in runner alone (ADR-0070), so it lists, discovers and starts on the
    * key the planner uses; a key the environment holds it reads there already.
+   *
+   * Last, what `~/.ordewell/.env` saved, for a provider neither this window
+   * nor `runnerEnv` (the host's environment under the workspace's) has a key
+   * for, so a workspace's own key still wins for its runner. A saved key is
+   * lent with its saved endpoint, or the provider's default, written out so a
+   * workspace's base URL cannot send it elsewhere.
    */
-  heldProviderEnv(): Record<string, string> {
+  heldProviderEnv(runnerEnv: Readonly<Record<string, string | undefined>> = process.env): Record<string, string> {
     const config = this.config;
     const setting = (key: string | undefined) => (key ? config.get<string>(key, '').trim() : '');
     const env: Record<string, string> = {};
@@ -168,8 +248,18 @@ export class VsCodeConfig extends BaseConfig {
       if (key) env[meta.apiKeyEnvVar] = key;
       const url = setting(meta.vscodeBaseUrlKey);
       if (url && meta.baseUrlEnvVar) env[meta.baseUrlEnvVar] = url;
+      if (this.lendsSaved(provider, { ...runnerEnv, ...env })) {
+        env[meta.apiKeyEnvVar] = vendorApiKeyIn(this.saved, provider);
+        if (meta.baseUrlEnvVar) env[meta.baseUrlEnvVar] = vendorBaseUrlIn(this.saved, provider);
+      }
     }
     return env;
+  }
+
+  /** Whether the runner, under `env`, would have `provider` only from the saved file. */
+  private lendsSaved(provider: AiProvider, env: Readonly<Record<string, string | undefined>>): boolean {
+    if (provider === 'openai_compatible') return !env[CUSTOM_URL_VAR]?.trim() && Boolean(this.saved[CUSTOM_URL_VAR]);
+    return vendorApiKeyIn(env, provider) === '' && vendorApiKeyIn(this.saved, provider) !== '';
   }
 
   setProviderModelLists(lists: ProviderModelLists): void {

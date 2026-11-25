@@ -168,6 +168,7 @@ function fakeConfig() {
     get configuredProviders() { return values.configuredProviders as ApiProvider[]; },
     get maxParallelSessions() { return values.maxParallelSessions as number; },
     unusedPlanningKey: () => null,
+    reloadSavedCredentials: () => false,
     update: vi.fn(async (key: string, value: unknown) => { values[key] = value; }),
     onDidChange: vi.fn((listener: () => void) => { listeners.push(listener); return { dispose: vi.fn() }; }),
   };
