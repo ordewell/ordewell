@@ -1,6 +1,6 @@
 import type { AiProvider } from '@ordewell/core';
 import {
-  describeSignInWays, RUNNER_INSTALL_DOCS, signInAction, signInOfVerdict, type SignInSyntax,
+  describeSignInWays, RUNNER_INSTALL_DOCS, setsUpKey, signInAction, signInOfVerdict, type SignInSyntax,
 } from '@ordewell/core/plan-utils';
 import type { StatusId } from '@ordewell/ui/design';
 import type { DaemonCallResult, RecentGit } from '../../shared/bridge';
@@ -148,8 +148,11 @@ export interface RunnerCardModel {
   command?: string;
   /** The runner's own install page, for a missing one. */
   docs?: string;
-  /** The button a signed-out agent gets: its login, or the key entry. */
-  action?: 'login' | 'key';
+  /**
+   * The button a signed-out agent gets: its login, the key entry, or, for an
+   * agent that only lacks a key Ordewell cannot hand it, the same login as its setup.
+   */
+  action?: 'login' | 'key' | 'set-up';
   /** The vendor a key entry is for. */
   provider?: AiProvider;
   /** The agent's name, for the key entry's wording. */
@@ -169,6 +172,14 @@ const WELCOME_SIGN_IN: SignInSyntax = {
   keyVerb: 'use',
 };
 
+/**
+ * The card's and the login dialog's words for the ways in. An agent that only
+ * lacks a key (`setUp`, its name) has its login as its Set up button (ADR-0060).
+ */
+export function welcomeSignIn(setUp?: string): SignInSyntax {
+  return setUp === undefined ? WELCOME_SIGN_IN : { ...WELCOME_SIGN_IN, login: () => `the Set up ${setUp} button` };
+}
+
 export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
   const version = line.version ? { version: line.version } : {};
   // An agent Ordewell cannot start is no better for being signed in, and a login
@@ -186,18 +197,20 @@ export function runnerCard(line: RunnerLine, name: string): RunnerCardModel {
       // The agent's own ways in, worded once by core (ADR-0052): a key-based
       // agent names the key entry, never a CLI sign-in it does not have.
       const signIn = line.signIn ?? signInOfVerdict(line.id, name, line.loginCommand ? { loginCommand: line.loginCommand } : undefined);
-      const hint = signIn ? describeSignInWays(signIn, WELCOME_SIGN_IN) : '';
-      const action = signInAction(signIn);
+      // Never asked, so never signed out: it lacks a key, as the chat's picker says (runnerChoice).
+      const setsUp = setsUpKey(signIn);
+      const hint = signIn ? describeSignInWays(signIn, welcomeSignIn(setsUp ? name : undefined)) : '';
+      const action = setsUp ? 'set-up' : signInAction(signIn);
       return {
         id: line.id,
         tone: 'attention',
-        word: 'Signed out',
+        word: setsUp ? 'API key needed' : 'Signed out',
         ...version,
         ...(hint ? { hint } : {}),
         ...(line.loginCommand ? { command: line.loginCommand.join(' ') } : {}),
         ...(action ? { action } : {}),
         ...(action === 'key' && signIn?.key ? { provider: signIn.key.provider, runnerLabel: name } : {}),
-        ...(action === 'login' ? { runnerLabel: name } : {}),
+        ...(action === 'login' || action === 'set-up' ? { runnerLabel: name } : {}),
       };
     }
     case 'unknown':

@@ -80,6 +80,44 @@ describe('the launcher\'s login terminal', () => {
     expect(onSignedIn).not.toHaveBeenCalled();
   });
 
+  describe('an agent that only lacks a provider key (Cline, ADR-0060)', () => {
+    // The row the daemon really sends for a Cline with no key its hook can read.
+    const KEYLESS = { runner: 'cline', label: 'Cline', login: ['cline', 'auth'], needsKey: true };
+    const keylessRow = {
+      id: 'cline', name: 'Cline', enabled: true,
+      auth: { state: 'signed-out', detail: 'no provider key', loginCommand: ['cline', 'auth'], signIn: KEYLESS },
+      readiness: { kind: 'blocked', why: 'no-credential', signIn: KEYLESS },
+    };
+
+    it('says a setup that still left no key is what Ordewell lacks, never that Cline is not logged in', async () => {
+      const w = world(false);
+      w.daemon.call.mockImplementation(async () => ok({ runners: [keylessRow] }));
+      render(<LoginDialog runner="cline" label="Cline" setsUp platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={vi.fn()} />);
+      expect(screen.getByRole('dialog', { name: 'Set up Cline' })).toBeInTheDocument();
+      await vi.waitFor(() => expect(w.events).toHaveLength(1));
+
+      act(() => w.events[0]!({ kind: 'exit', exitCode: 0 }));
+
+      await vi.waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+        'Cline is not set up yet. The Cline setup finished, but Ordewell still has no provider API key it can hand Cline. '
+        + 'Set it up with the Set up Cline button, or run cline auth, and choose an API provider and enter its key; an account sign-in alone is not enough.',
+      ));
+      expect(screen.queryByText(/still reports not logged in/)).toBeNull();
+      expect(w.daemon.call).toHaveBeenCalledWith('runners.list', { recheck: 'cline' });
+    });
+
+    it('points a closed setup back at Set up Cline, not Log in', async () => {
+      const w = world(false);
+      w.daemon.call.mockImplementation(async () => ok({ runners: [keylessRow] }));
+      render(<LoginDialog runner="cline" label="Cline" setsUp platform="darwin" pollMs={5} onClose={vi.fn()} onSignedIn={vi.fn()} />);
+      await vi.waitFor(() => expect(w.events).toHaveLength(1));
+
+      act(() => w.events[0]!({ kind: 'exit', exitCode: 1 }));
+
+      await seen("The agent's own command is in the terminal above. Close this, then choose Set up Cline to run it again.");
+    });
+  });
+
   it('pastes through the bridge, and says why a paste failed while the sign-in waits on', async () => {
     world(false);
     const readText = vi.fn(async (): Promise<ClipboardReadResult> => ({ ok: true, text: 'ABCD-1234' }));
