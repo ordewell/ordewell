@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import EmptyState, { type SignedOutPlannerRow } from './components/EmptyState';
-import PlannerLoginAction from './components/PlannerLogin';
 import ErrorSignIn, { ErrorSignInContext, type ErrorSignInActions } from './components/ErrorSignIn';
 import GetStarted, { type RedetectState } from './components/GetStarted';
 import { orNames } from './runnerNames';
@@ -26,7 +25,8 @@ import RunSettingsBlock from './components/RunSettingsBlock';
 import type { RunnerSignInView } from './components/TaskCard';
 import type { TaskDraft } from './components/NewTaskCard';
 import type { ChildPlanEntry, ChildPlanView, CompactionBlock, DisplayBlock, GlobalRunSettings, RunSettings, Task, TaskModelAssignment, RunnerId, RunnerAuth, SurfaceTask, DiscoveredModel, AiProvider } from '@ordewell/core';
-import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import { accountLimitsOf, AGENT_DEFAULT_MODEL, compactionText, DETECTING_AGENTS, DETECTING_AGENTS_DETAIL, describeRunnerSignIn, describeUnusedPlanningKey, keyTipContext, orderByChoice, runnerChoice, runnerEntryChoice, signInAction, signInOfVerdict, SUPERVISOR_LEVEL_LABEL, TERMINAL_UI_SIGN_IN, type ComposerTipContext, type RunnerChoice, type RunnerSignIn } from '@ordewell/core/plan-utils';
+import RunnerChoiceNote, { type RunnerRecoveryView } from './components/RunnerChoiceNote';
 import { DelegationOfferedContext, useDelegationOffered } from './delegationOffered';
 import { planSummaryLabel, nextDock, withRunStatus } from './planDock';
 import { OpenPatchContext } from './openPatch';
@@ -35,7 +35,7 @@ import { INBOX_OFF_NOTE, useInboxPrefs } from './inboxView';
 import { useEscalationAnswers } from './components/escalationAnswers';
 import { ROOT_ANSWERS, useChildAnswers, useChildDrafts } from './childDrafts';
 import { isBuiltinSlashCommand, slashHelp } from '../shared/slashCommands';
-import type { EscalationAnswer, HostToWebview, SettingsChange } from '../shared/protocol';
+import type { EscalationAnswer, HostToWebview, PlannerBackend, SettingsChange } from '../shared/protocol';
 import { applyConversationPatch, EMPTY_PATCHED_VIEW, patchedBlocks } from '../shared/conversationPatch';
 import { useChatBridge } from '../bridge';
 import { ModelDiscoveryContext } from './modelLoading';
@@ -74,6 +74,9 @@ function runSettingsSummary(run: GlobalRunSettings | undefined, runSettings: Run
     </>
   );
 }
+
+/** A row with nothing to say: choosable, no status. */
+const READY_CHOICE: RunnerChoice = runnerChoice({ kind: 'ready' });
 
 /** The chat's planner picker, as the desktop app and VS Code both spell it. */
 const CHAT_PICK_PLANNER = '/planner';
@@ -988,6 +991,99 @@ export default function App({ layout = 'chat', selection, goal }: {
     return rows.sort((a, b) => Number(b.id === activePlanner) - Number(a.id === activePlanner));
   }, [planner.backends, activePlanner, pendingLogin, loginFailure, signInByRunner]);
 
+  /**
+   * Each coding agent as every picker offers it (ADR-0052), from core's one
+   * readiness-to-choice rule, keyed by runner id. The planner list is the one
+   * a host sends again after a login, a key or a refresh, so its word wins; a
+   * runner with neither a readiness nor a sign-in verdict has nothing to say.
+   */
+  const choiceByRunner = useMemo<Record<string, RunnerChoice>>(() => {
+    const byRunner: Record<string, RunnerChoice> = {};
+    for (const r of runnerList) {
+      if (r.readiness) byRunner[r.id] = runnerEntryChoice({ id: r.id, name: r.displayName, readiness: r.readiness });
+    }
+    for (const b of planner.backends) {
+      if (b.kind !== 'harness') continue;
+      const runner = b.runner ?? b.id;
+      byRunner[runner] = runnerEntryChoice({
+        id: runner, name: b.label, usable: b.usable,
+        ...(b.reason ? { reason: b.reason } : {}), ...(b.auth ? { auth: b.auth } : {}), ...(b.readiness ? { readiness: b.readiness } : {}),
+      });
+    }
+    return byRunner;
+  }, [runnerList, planner.backends]);
+
+  /** A planner row's choice: a vendor has no sign-in of its own, so it is always choosable. */
+  const plannerChoice = useCallback(
+    (b: PlannerBackend): RunnerChoice => (b.kind === 'harness' ? choiceByRunner[b.runner ?? b.id] : undefined) ?? READY_CHOICE,
+    [choiceByRunner],
+  );
+
+  /**
+   * A row's one way back, through the paths the hosts already answer: the
+   * agent's own login or key entry, or the refresh that asks every agent and
+   * catalog again. None re-picks or sends anything once it is done.
+   */
+  const recoveryFor = useCallback((runner: string, choice: RunnerChoice | undefined): RunnerRecoveryView | undefined => {
+    switch (choice?.recovery?.kind) {
+      case 'sign-in': {
+        const logIn = signInByRunner[runner]?.logIn;
+        return logIn ? { run: logIn, pending: Boolean(pendingLogin[runner]) } : undefined;
+      }
+      case 'add-key':
+        return { run: signInByRunner[runner]?.logIn ?? (() => bridge.post({ type: 'sendMessage', text: '/key-set', runners })), pending: Boolean(pendingLogin[runner]) };
+      case 'refresh-models':
+      case 'retry':
+        return { run: handleModelsRefreshNeeded };
+      default:
+        return undefined;
+    }
+  }, [signInByRunner, pendingLogin, runners, handleModelsRefreshNeeded]);
+
+  /** The longer words behind a row's status: a credential hook's own (Cline's) before the generic sign-in hint. */
+  const choiceDetail = useCallback((runner: string, choice: RunnerChoice | undefined): string | undefined => {
+    if (choice?.status === 'no-credential') return runnerDiscoveryErrors[runner] ?? signInByRunner[runner]?.hint;
+    if (choice?.status === 'signed-out') return signInByRunner[runner]?.hint;
+    if (choice?.status === 'no-usable-model' || choice?.status === 'discovery-failed') return runnerDiscoveryErrors[runner];
+    return undefined;
+  }, [runnerDiscoveryErrors, signInByRunner]);
+
+  /**
+   * Why the planner's model list is empty, by its agent's readiness (ADR-0052):
+   * still being asked and an agent on its own default are no failure, and a
+   * load that failed is told apart from a catalog that listed nothing. Null
+   * says nothing is wrong.
+   */
+  const emptyModelsSay = useMemo<React.ReactNode>(() => {
+    if (!planner.runner) return <>No models available. Add an API key with <code>/key-set</code>, or pick a coding agent above.</>;
+    const runner = planner.runner;
+    const label = activeBackend?.label ?? runner;
+    switch (choiceByRunner[runner]?.status) {
+      case 'pending':
+      case 'agent-default':
+        return null;
+      case 'discovery-failed':
+        return <>Couldn't load models for {label}.{' '}<button type="button" className="btn-secondary" onClick={handleModelsRefreshNeeded}>Retry</button></>;
+      case 'no-usable-model':
+        return <>{label} lists no usable model.{' '}<button type="button" className="btn-secondary" onClick={handleModelsRefreshNeeded}>Refresh models</button></>;
+      default:
+        return runnerDiscoveryErrors[runner] ?? <>No models discovered for this agent yet: run <code>/refresh</code>.</>;
+    }
+  }, [planner.runner, activeBackend, choiceByRunner, runnerDiscoveryErrors, handleModelsRefreshNeeded]);
+
+  /**
+   * A task card's Runner options: the choosable first, and a blocked runner
+   * named with its status. Only a blocker is said there: the dropdown has no
+   * room for a way back, which the Runners pills beside it carry.
+   */
+  const taskRunnerOptions = useMemo(
+    () => orderByChoice(runnerList, (r) => choiceByRunner[r.id] ?? READY_CHOICE).map((r) => {
+      const choice = choiceByRunner[r.id];
+      return { id: r.id, displayName: r.displayName, ...(choice?.group === 'blocked' && choice.text ? { blocked: choice.text } : {}) };
+    }),
+    [runnerList, choiceByRunner],
+  );
+
   const runnerLabelMap = useMemo<Record<string, string>>(() => {
     const m: Record<string, string> = {};
     for (const r of runnerList) m[r.id] = r.displayName;
@@ -1053,7 +1149,7 @@ export default function App({ layout = 'chat', selection, goal }: {
         runActive={isExecuting || starting || activity.advancesOnItsOwn}
         taskOutput={taskOutput}
         runnerLabels={runnerLabelMap}
-        runners={runnerList}
+        runners={taskRunnerOptions}
         runnerScope={runnerScope}
         onRunnerChange={handleRunnerChange}
         onDependenciesChange={handleDependenciesChange}
@@ -1291,36 +1387,39 @@ export default function App({ layout = 'chat', selection, goal }: {
           {offeredBackends.length > 0 ? (
             <>
               <div className="planner-backends">
-                {offeredBackends.map((b) => {
+                {orderByChoice(offeredBackends, plannerChoice).map((b) => {
                   const runnerId = b.runner ?? b.id;
                   const signingIn = Boolean(pendingLogin[runnerId]);
                   const signedOut = b.auth?.state === 'signed-out';
+                  const active = b.id === activePlanner;
+                  const choice = b.kind === 'harness' ? choiceByRunner[runnerId] : undefined;
+                  // The planner in effect stays choosable and only flagged: it is
+                  // the user's choice already, and staying on it is no new pick.
+                  // Only a confirmed blocker refuses; an unusable agent is refused at its start, as before.
+                  const refused = !active && choice?.group === 'blocked';
                   // The login is this agent's own and never selects the planner
                   // (ADR-0009); it stays offered here even while the empty state
                   // carries the same action, as long as there is a command to run.
                   const way = signedOut ? signInByRunner[runnerId] : undefined;
-                  const canLogIn = way?.logIn !== undefined;
+                  const recovery = recoveryFor(runnerId, choice);
+                  // A login's failure is said under the capsule that asked for it.
+                  const canLogIn = recovery !== undefined && (choice?.recovery?.kind === 'sign-in' || choice?.recovery?.kind === 'add-key');
+                  const statusId = `planner-choice-${runnerId}`;
                   return (
                     <span className={`planner-pill-item${canLogIn ? ' has-login' : ''}`} key={b.id} data-runner={runnerId}>
-                      <span className={`planner-pill-group${signedOut ? ' signed-out' : ''}${b.id === activePlanner ? ' active' : ''}`}>
+                      <span className={`planner-pill-group${signedOut ? ' signed-out' : ''}${active ? ' active' : ''}`}>
                         <button
                           type="button"
-                          className={`planner-pill${b.id === activePlanner ? ' active' : ''}${signedOut ? ' signed-out' : ''}${pendingPlanner?.provider === b.id ? ' pending' : ''}`}
-                          title={way ? way.hint : b.reason}
-                          onClick={() => handlePlannerChange(b.id)}
+                          className={`planner-pill${active ? ' active' : ''}${signedOut ? ' signed-out' : ''}${pendingPlanner?.provider === b.id ? ' pending' : ''}`}
+                          title={choiceDetail(runnerId, choice) ?? way?.hint ?? b.reason}
+                          aria-disabled={refused ? true : undefined}
+                          aria-describedby={choice?.text ? statusId : undefined}
+                          onClick={() => { if (!refused) handlePlannerChange(b.id); }}
                         >
                           {signedOut && <span className="planner-auth-dot" aria-hidden="true" />}
                           {b.label}
                         </button>
-                        {canLogIn && (
-                          <PlannerLoginAction
-                            className="planner-pill-login"
-                            onLogIn={() => way?.logIn?.()}
-                            pending={signingIn}
-                            ariaLabel={signingIn ? `Signing in to ${b.label}` : `Log in to ${b.label}`}
-                            title={signingIn ? `Signing in to ${b.label}` : `Log in to ${b.label}`}
-                          />
-                        )}
+                        {choice && <RunnerChoiceNote id={statusId} choice={choice} label={b.label} title={choiceDetail(runnerId, choice)} {...(recovery ? { recovery } : {})} />}
                       </span>
                       {canLogIn && (
                         <span className="planner-pill-failure-slot">
@@ -1352,12 +1451,8 @@ export default function App({ layout = 'chat', selection, goal }: {
                   <button type="button" className="btn-secondary" onClick={handleModelsRefreshNeeded}>Retry</button>
                 </div>
               )}
-              {!switchingTo && modelDiscovery?.state !== 'loading' && modelDiscovery?.state !== 'failed' && orchestratorModels.length === 0 && (
-                <div className="model-discovery-error" role="alert">
-                  {planner.runner
-                    ? (runnerDiscoveryErrors[planner.runner] ?? <>No models discovered for this agent yet: run <code>/refresh</code>.</>)
-                    : <>No models available. Add an API key with <code>/key-set</code>, or pick a coding agent above.</>}
-                </div>
+              {!switchingTo && modelDiscovery?.state !== 'loading' && modelDiscovery?.state !== 'failed' && orchestratorModels.length === 0 && emptyModelsSay !== null && (
+                <div className="model-discovery-error" role="alert">{emptyModelsSay}</div>
               )}
               {!switchingTo && modelDiscovery?.state !== 'loading' && Object.keys(modelDiscoveryErrors).length > 0 && !planner.runner && (
                 <div className="model-discovery-error" role="alert">
@@ -1385,42 +1480,42 @@ export default function App({ layout = 'chat', selection, goal }: {
             The planner assigns only the ones switched on.
           </div>
           <div className="runner-pills" data-runners={runnersKnown ? 'known' : 'checking'}>
-            {runnerList.map((r) => {
+            {orderByChoice(runnerList, (r) => choiceByRunner[r.id] ?? READY_CHOICE).map((r) => {
               const on = runners.includes(r.id);
               // Never emptied from here: with no runner on, no surface could assign a task.
               const last = on && runners.length === 1;
               const auth = runnerAuth[r.id];
               const signedOut = auth?.state === 'signed-out';
               const signingIn = Boolean(pendingLogin[r.id]);
+              const choice = choiceByRunner[r.id];
+              // Switching on is a new pick, refused while it is blocked; one
+              // already on stays on, flagged, and can always be switched off.
+              const refused = !on && choice?.group === 'blocked';
               // A login never switches the runner on or off: it only signs that
               // agent in, exactly as the planner pill beside it does.
               const way = signedOut ? signInByRunner[r.id] : undefined;
-              const canLogIn = way?.logIn !== undefined;
-              const title = way
+              const recovery = recoveryFor(r.id, choice);
+              const canLogIn = recovery !== undefined && (choice?.recovery?.kind === 'sign-in' || choice?.recovery?.kind === 'add-key');
+              const statusId = `runner-choice-${r.id}`;
+              const title = choiceDetail(r.id, choice) ?? (way
                 ? way.hint
                 : last
                   ? `${r.displayName} is the only runner on: switch another on first`
                   : on
                     ? `Stop assigning tasks to ${r.displayName}, on every surface`
-                    : `Click to enable ${r.displayName} as a runner on every surface`;
+                    : `Click to enable ${r.displayName} as a runner on every surface`);
               return (
                 <span className={`runner-pill-item${canLogIn ? ' has-login' : ''}`} key={r.id} data-runner={r.id}>
                   <span className={`runner-pill-group${on ? ' on' : ' disabled'}${r.id in pendingRunners ? ' pending' : ''}${signedOut ? ' signed-out' : ''}`}>
                     <button className={`runner-pill ${on ? 'on' : 'disabled'}${r.id in pendingRunners ? ' pending' : ''}${signedOut ? ' signed-out' : ''}`}
-                      onClick={() => { if (!last) handleRunnerPill(r.id, !on); }}
+                      onClick={() => { if (!last && !refused) handleRunnerPill(r.id, !on); }}
                       aria-pressed={on}
+                      aria-disabled={refused ? true : undefined}
+                      aria-describedby={choice?.text ? statusId : undefined}
                       title={title}>
                       <span className={`runner-dot${signedOut ? ' planner-auth-dot' : ''}`} aria-hidden={signedOut ? true : undefined} /> {r.displayName}
                     </button>
-                    {canLogIn && (
-                      <PlannerLoginAction
-                        className="planner-pill-login runner-pill-login"
-                        onLogIn={() => way?.logIn?.()}
-                        pending={signingIn}
-                        ariaLabel={signingIn ? `Signing in to ${r.displayName}` : `Log in to ${r.displayName}`}
-                        title={signingIn ? `Signing in to ${r.displayName}` : `Log in to ${r.displayName}`}
-                      />
-                    )}
+                    {choice && <RunnerChoiceNote id={statusId} className="runner-pill-login" choice={choice} label={r.displayName} title={choiceDetail(r.id, choice)} {...(recovery ? { recovery } : {})} />}
                   </span>
                   {canLogIn && (
                     <span className="planner-pill-failure-slot runner-pill-failure-slot">

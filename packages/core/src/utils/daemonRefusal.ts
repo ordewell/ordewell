@@ -26,11 +26,14 @@ export class DaemonRefusal extends Error {
   get plannerNotReady(): PlannerNotReady | undefined { return this.fields.plannerNotReady; }
   /**
    * The agent this refusal names as signed out, with its ways in: a preflight's
-   * `signed_out` reason or a start the agent refused (ADR-0052).
+   * `signed_out` reason, a start the agent refused, or a new pick a stale
+   * picker offered and the daemon refused (ADR-0052).
    */
   get signIn(): RunnerSignIn | undefined {
     const reason = this.fields.plannerNotReady;
-    return reason?.code === 'signed_out' ? reason.signIn : this.fields.signIn;
+    if (reason?.code === 'signed_out') return reason.signIn;
+    const picked = this.fields.runnerNotReady?.readiness;
+    return this.fields.signIn ?? (picked?.kind === 'blocked' ? picked.signIn : undefined);
   }
   /** With `session_held`: the host that runs the session (ADR-0049). */
   get sessionHeld(): SessionHeld | undefined { return this.fields.sessionHeld; }

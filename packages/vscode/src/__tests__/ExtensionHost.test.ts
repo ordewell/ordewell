@@ -1857,3 +1857,97 @@ describe('the repositories notice on a webview that is reloaded', () => {
     }
   });
 });
+
+/**
+ * VS Code judges a new pick by the same readiness rule the daemon does
+ * (ADR-0052), and hands the webview each agent's readiness for its pickers.
+ * Driven through the real router, PlannerSelection, ModelDiscovery and chat
+ * provider; only the agents' probes are fakes.
+ */
+describe("VS Code's pickers, by each agent's readiness", () => {
+  const CURSOR_LOGIN = ['cursor-agent', 'login'];
+  const hosts: Array<ReturnType<typeof harness>> = [];
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const h of hosts.splice(0)) { h.host.dispose(); fs.rmSync(h.workspace, { recursive: true, force: true }); }
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Claude Code signed in and Cursor signed out, both installed, Claude Code the only runner on. */
+  function readinessHost() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ordewell-readiness-'));
+    dirs.push(dir);
+    const file = new SettingsService(path.join(dir, 'settings.json'));
+    file.setEnabledRunners(['claude-code']);
+    const installation = fakeRunnerInstallation(['claude-code', 'cursor-agent']);
+    const usability = async (runner?: string): Promise<PlannerUsability> => (runner === 'cursor-agent'
+      ? { usable: true, auth: { state: 'signed-out', loginCommand: CURSOR_LOGIN } }
+      : { usable: true, auth: { state: 'signed-in' } });
+    installation.plannerUsability.mockImplementation(usability);
+    installation.runnerUsability.mockImplementation(usability);
+    const chat = liveChat();
+    const h = harness({ settingsService: file, chatProvider: chat.provider, runnerInstallation: installation, modelResolver: fakeResolver({ 'claude-code': models, 'cursor-agent': models }) });
+    hosts.push(h);
+    h.config.values.aiProvider = 'claude-code';
+    Object.defineProperty(h.config.config, 'enabledRunners', { get: () => file.getEnabledRunners() ?? defaultEnabledRunners() });
+    const last = <T extends HostToWebview['type']>(type: T) =>
+      chat.posted.filter((m): m is Extract<HostToWebview, { type: T }> => m.type === type).at(-1);
+    return { h, chat, file, last };
+  }
+  const CURSOR_SIGN_IN = { runner: 'cursor-agent', label: 'Cursor', login: CURSOR_LOGIN };
+
+  it("sends each agent's readiness with the planner and runner lists", async () => {
+    const r = readinessHost();
+    await r.h.host.start();
+
+    await vi.waitFor(() => expect(r.last('setPlannerBackends')?.backends.find((b) => b.id === 'cursor-agent')?.readiness)
+      .toEqual({ kind: 'blocked', why: 'signed-out' }));
+    expect(r.last('setPlannerBackends')?.backends.find((b) => b.id === 'claude-code')?.readiness).toEqual({ kind: 'ready' });
+    await vi.waitFor(() => expect(r.last('setRunners')?.runners.find((x) => x.id === 'cursor-agent')?.readiness)
+      .toEqual({ kind: 'blocked', why: 'signed-out' }));
+  });
+
+  it('refuses a new planner pick of a blocked agent, offers its Sign in, and keeps the planner', async () => {
+    const r = readinessHost();
+    await r.h.host.start();
+
+    r.chat.send({ type: 'setPlanner', provider: 'cursor-agent', requestId: 'pick-1' });
+
+    await vi.waitFor(() => expect(r.chat.posted).toContainEqual({ type: 'plannerChoiceSaved', requestId: 'pick-1' }));
+    expect(r.last('showError')).toEqual(expect.objectContaining({ signIn: CURSOR_SIGN_IN }));
+    expect(r.last('showError')?.error).toMatch(/Cursor is not signed in.*Then pick it again\./);
+    expect(r.h.config.config.update).not.toHaveBeenCalledWith('aiProvider', 'cursor-agent');
+    expect(r.last('setPlannerBackends')?.provider).toBe('claude-code');
+  });
+
+  it('refuses switching a blocked agent on, and answers the pill with it still off', async () => {
+    const r = readinessHost();
+    await r.h.host.start();
+
+    r.chat.send({ type: 'setRunnerEnabled', runnerId: 'cursor-agent', enabled: true, requestId: 'on-1' });
+
+    await vi.waitFor(() => expect(r.chat.posted).toContainEqual({ type: 'runnerChoiceSaved', requestId: 'on-1', runnerId: 'cursor-agent', enabled: false }));
+    expect(r.last('showError')).toEqual(expect.objectContaining({ signIn: CURSOR_SIGN_IN }));
+    expect(r.file.getEnabledRunners()).toEqual(['claude-code']);
+  });
+
+  it('refuses moving a task onto a blocked agent, and leaves a task already on it alone', async () => {
+    const r = readinessHost();
+    const cardEdit = vi.fn(async () => {});
+    Object.assign(r.h.session.spies, {
+      cardEdit,
+      planTasks: [
+        createTask({ id: 't1', order: 1, title: 'On Claude', assignedRunner: 'claude-code' }),
+        createTask({ id: 't2', order: 2, title: 'On Cursor', assignedRunner: 'cursor-agent' }),
+      ],
+    });
+    await r.h.host.start();
+
+    r.chat.send({ type: 'editTask', taskId: 't1', edit: { kind: 'runner', runner: 'cursor-agent' } });
+    await vi.waitFor(() => expect(r.last('showError')).toEqual(expect.objectContaining({ signIn: CURSOR_SIGN_IN })));
+    expect(cardEdit).not.toHaveBeenCalled();
+
+    r.chat.send({ type: 'editTask', taskId: 't2', edit: { kind: 'runner', runner: 'cursor-agent' } });
+    await vi.waitFor(() => expect(cardEdit).toHaveBeenCalledWith('t2', { kind: 'runner', runner: 'cursor-agent' }));
+  });
+});

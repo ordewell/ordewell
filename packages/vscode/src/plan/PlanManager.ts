@@ -16,6 +16,7 @@ import {
   removeTaskConfirmation, TaskActions, TaskControls, type SessionCue, type TaskActionPort, type TaskControlPort, type TurnOutcome,
 } from '@ordewell/ui/host';
 import { confirm } from './confirm';
+import { showPickRefusal } from '../runnerPick';
 import { markWalkthroughStep } from '../firstRun';
 import { handleIsolationBlocked } from './isolation';
 import { taskFromDraft } from './taskEdit';
@@ -34,6 +35,8 @@ export interface PlanManagerDeps {
    * and that happens outside this process.
    */
   runnerInstallation?: Pick<RunnerInstallation, 'refresh' | 'plannerUsability'>;
+  /** Refuse moving a task onto a runner whose readiness blocks a new pick (ADR-0052); absent, every move is let through. */
+  refuseBlockedRunner?: (runner: string) => Promise<void>;
   notifications: INotification;
   getCurrentPlan: () => LegacyPlanState;
   setCurrentPlan: (plan: LegacyPlanState) => void;
@@ -402,10 +405,15 @@ function settleDirectEdit(deps: PlanManagerDeps): void {
  */
 export async function handleTaskEdit(taskId: string, edit: TaskEdit, deps: PlanManagerDeps): Promise<void> {
   try {
+    // Moving a task onto another runner is a new pick (ADR-0052); its own runner is kept.
+    if (edit.kind === 'runner' && deps.refuseBlockedRunner) {
+      const task = flattenTasks(deps.session.planTasks).find((t) => t.id === taskId);
+      if (task && task.assignedRunner !== edit.runner) await deps.refuseBlockedRunner(edit.runner);
+    }
     // The Session derives the card's not-started precondition itself.
     await deps.session.cardEdit(taskId, edit);
   } catch (err) {
-    void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
+    if (!showPickRefusal(err, deps.chatProvider)) void vscode.window.showWarningMessage(err instanceof Error ? err.message : String(err));
   }
   settleDirectEdit(deps);
 }
