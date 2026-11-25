@@ -27,7 +27,8 @@ function RunnerCardView({ line, busy, onRetry, onLogin, onKey }: {
   line: RunnerLine;
   busy: boolean;
   onRetry(): void;
-  onLogin(): void;
+  /** Runs the agent's own login: its sign-in, or for a key-less agent its setup (`setsUp`). */
+  onLogin(setsUp: boolean): void;
   onKey(provider: AiProvider): void;
 }): JSX.Element {
   const name = line.name || runnerName(line.id);
@@ -46,7 +47,10 @@ function RunnerCardView({ line, busy, onRetry, onLogin, onKey }: {
       {card.tone !== 'passed' && line.state !== 'off' && (
         <span className="welcome-card-actions">
           {card.action === 'login' && (
-            <Button size="sm" icon={LogIn} disabled={busy} onClick={onLogin}>Log in</Button>
+            <Button size="sm" icon={LogIn} disabled={busy} onClick={() => onLogin(false)}>Log in</Button>
+          )}
+          {card.action === 'set-up' && (
+            <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => onLogin(true)}>Set up {name}</Button>
           )}
           {card.action === 'key' && card.provider && (
             <Button size="sm" icon={KeyRound} disabled={busy} onClick={() => { onKey(card.provider as AiProvider); }}>Set API key…</Button>
@@ -88,7 +92,7 @@ function ReadyRunners({ lines, busy, onRetry, onLogin, onKey }: {
   lines: RunnerLine[];
   busy: boolean;
   onRetry(): void;
-  onLogin(line: RunnerLine): void;
+  onLogin(line: RunnerLine, setsUp: boolean): void;
   onKey(line: RunnerLine, provider: AiProvider): void;
 }): JSX.Element {
   const { shown, more } = runnerGroups(lines);
@@ -98,7 +102,7 @@ function ReadyRunners({ lines, busy, onRetry, onLogin, onKey }: {
       line={line}
       busy={busy}
       onRetry={onRetry}
-      onLogin={() => onLogin(line)}
+      onLogin={(setsUp) => onLogin(line, setsUp)}
       onKey={(provider) => onKey(line, provider)}
     />
   ));
@@ -124,7 +128,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
   const connected = status?.state === 'connected';
   const [state, setState] = useState<RunnersState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
-  const [login, setLogin] = useState<{ runner: string; label: string } | null>(null);
+  const [login, setLogin] = useState<{ runner: string; label: string; setsUp: boolean } | null>(null);
   const [keyError, setKeyError] = useState<string | undefined>(undefined);
   const [keyWarning, setKeyWarning] = useState<string | undefined>(undefined);
   const [keyNext, setKeyNext] = useState<string | undefined>(undefined);
@@ -210,7 +214,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
               lines={state.lines}
               busy={busy}
               onRetry={retry}
-              onLogin={(line) => setLogin({ runner: line.id, label: line.name || runnerName(line.id) })}
+              onLogin={(line, setsUp) => setLogin({ runner: line.id, label: line.name || runnerName(line.id), setsUp })}
               onKey={(line, provider) => { void setKey({ provider, runnerLabel: runnerName(line.id) }); }}
             />
           ) : (
@@ -231,6 +235,7 @@ export function RunnerRow({ status, platform }: { status: DaemonStatus | undefin
         <LoginDialog
           runner={login.runner}
           label={login.label}
+          setsUp={login.setsUp}
           platform={platform}
           onClose={() => setLogin(null)}
           onSignedIn={() => { void load(); }}
